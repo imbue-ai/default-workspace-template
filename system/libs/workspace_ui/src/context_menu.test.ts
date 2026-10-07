@@ -12,25 +12,14 @@ import {
   installElementContextMenu,
   type ContextMenuConnection,
 } from "./context_menu";
-import type { ContextMenuRow } from "./context_menu_rows";
-import { installLinkRouting, pageLinkRoutingContext } from "./links";
 import { REFERENCE_ID_PATTERN } from "./element_reference";
 
 const HANDSHAKE = { clientId: "client-1", windowId: "win-1", desktopId: "home", app: "docs", path: "/" };
 
-let connection: ContextMenuConnection & {
-  draftText: ReturnType<typeof vi.fn<(text: string) => void>>;
-  sendMessage: ReturnType<typeof vi.fn<(type: string, fields: Readonly<Record<string, unknown>>) => void>>;
-};
+let connection: ContextMenuConnection & { draftText: ReturnType<typeof vi.fn<(text: string) => void>> };
 
 function fakeConnection(isFramed: boolean): typeof connection {
-  return {
-    isFramed,
-    draftText: vi.fn<(text: string) => void>(),
-    openPath: vi.fn(),
-    sendMessage: vi.fn<(type: string, fields: Readonly<Record<string, unknown>>) => void>(),
-    openLink: vi.fn(),
-  };
+  return { isFramed, draftText: vi.fn<(text: string) => void>() };
 }
 let uninstall: (() => void) | null = null;
 
@@ -66,53 +55,21 @@ afterEach(() => {
 });
 
 describe("installElementContextMenu", () => {
-  it("opens a link from the menu as a click on it would be routed: a routed file link through the connection", () => {
-    document.body.innerHTML = '<div class="message"><a id="file" href="/home/user/plan%201.md">plan</a></div>';
-    const stopRouting = installLinkRouting(
-      document.body,
-      ".message a[href]",
-      pageLinkRoutingContext(window, connection),
-    );
+  it("opens a link from the menu by clicking it, so the page's link rule follows it as it would a click", () => {
+    document.body.innerHTML = '<div class="message"><a id="file" href="file:///home/user/plan.md">plan</a></div>';
+    const linkClicks: Event[] = [];
+    // Stands in for the app contract's listener, which takes a link's click instead of the page.
+    const takeClick = (event: Event): void => {
+      if (!(event.target instanceof HTMLAnchorElement)) return;
+      event.preventDefault();
+      linkClicks.push(event);
+    };
+    window.addEventListener("click", takeClick);
     uninstall = installElementContextMenu({ connection, handshake: () => HANDSHAKE });
     rightClick(document.getElementById("file") as Element);
     row("open-link").click();
-    stopRouting();
-    expect(connection.sendMessage.mock.calls).toEqual([["open:file", { path: "/home/user/plan 1.md" }]]);
-  });
-
-  it("says why Open link did nothing for a link the workspace cannot open", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    document.body.innerHTML = '<a id="script" href="javascript:void(0)">run</a>';
-    uninstall = installElementContextMenu({ connection, handshake: () => HANDSHAKE });
-    rightClick(document.getElementById("script") as Element);
-    row("open-link").click();
-    expect(
-      [connection.sendMessage, connection.openPath, connection.openLink].map((fn) => vi.mocked(fn).mock.calls),
-    ).toEqual([[], [], []]);
-    expect(warn.mock.calls.map((call) => String(call[0]))).toEqual([
-      "[context-menu] Open link ignored: javascript:void(0) is not a link the workspace can open",
-    ]);
-    warn.mockRestore();
-  });
-
-  it("installs on a document with no window, where Open link warns rather than routing", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const windowless = document.implementation.createHTMLDocument("");
-    windowless.body.innerHTML = '<a id="file" href="/home/user/plan.md">plan</a>';
-    const opened: ContextMenuRow[] = [];
-    uninstall = installElementContextMenu({
-      connection,
-      handshake: () => HANDSHAKE,
-      document: windowless,
-      open: (rows) => opened.push(...rows),
-    });
-    rightClick(windowless.getElementById("file") as Element);
-    const openLink = opened.find((candidate) => candidate.kind === "action" && candidate.key === "open-link");
-    expect(openLink?.kind).toBe("action");
-    if (openLink?.kind === "action") openLink.onSelect();
-    expect(connection.sendMessage).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Open link ignored"));
-    warn.mockRestore();
+    window.removeEventListener("click", takeClick);
+    expect(linkClicks.map((event) => event.target)).toEqual([document.getElementById("file")]);
   });
 
   it("opens the menu at the pointer on a right-click, with the reference rows last", () => {

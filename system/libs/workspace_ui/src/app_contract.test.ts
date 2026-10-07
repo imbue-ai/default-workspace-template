@@ -4,7 +4,7 @@
 // window and a payload -- so these tests dispatch real MessageEvents at a real (jsdom)
 // window whose parent is stood in for.
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SHELL_CAPABILITIES,
   SHELL_CLOSE_REQUEST,
@@ -206,5 +206,117 @@ describe("connectToShell", () => {
     live.disconnect();
     deliver({ type: SHELL_SHOWN }, parent);
     expect(onShown).not.toHaveBeenCalled();
+  });
+});
+
+describe("a framed page's link clicks", () => {
+  /** Whether each click was cancelled, as the last listener of its bubbling sees it; the click is then cancelled, so
+   *  the test document never navigates. */
+  let cancelled: boolean[] = [];
+  const observeClick = (event: Event): void => {
+    cancelled.push(event.defaultPrevented);
+    event.preventDefault();
+  };
+  let opened: ReturnType<typeof vi.spyOn>;
+
+  function connect(): { postMessage: ReturnType<typeof vi.fn> } {
+    const parent = framed();
+    connection = connectToShell({});
+    window.addEventListener("click", observeClick);
+    window.addEventListener("auxclick", observeClick);
+    return parent;
+  }
+
+  function click(html: string, init: MouseEventInit = {}, type: "click" | "auxclick" = "click"): void {
+    document.body.innerHTML = html;
+    const target = document.querySelector("[data-click]") ?? document.querySelector("a, area");
+    target?.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, composed: true, ...init }));
+  }
+
+  beforeEach(() => {
+    cancelled = [];
+    opened = vi.spyOn(window, "open").mockImplementation(() => null);
+  });
+
+  afterEach(() => {
+    window.removeEventListener("click", observeClick);
+    window.removeEventListener("auxclick", observeClick);
+    opened.mockRestore();
+    document.body.innerHTML = "";
+  });
+
+  it.each([
+    ["a local URL", "http://localhost:5173/preview?x=1"],
+    ["a file URL", "file:///home/user/workspace/plan.md"],
+    ["another app's address", "http://files-ab12cd34.host-0123.localhost:8421/home/user/?view"],
+  ])("hands %s to the shell and keeps the page where it is", (_what, href) => {
+    const parent = connect();
+    click(`<a href="${href}"><span data-click>open</span></a>`);
+    expect(sentAfterConnect(parent)).toEqual([[{ type: SHELL_OPEN_LINK, url: new URL(href).href }, "*"]]);
+    expect(cancelled).toEqual([true]);
+    expect(opened).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a web link", "https://example.com/docs"],
+    ["mailto", "mailto:someone@example.com"],
+  ])("opens %s in a new browsing context, which Imbue Studio sends to the user's browser", (_what, href) => {
+    const parent = connect();
+    click(`<a href="${href}">out</a>`);
+    expect(opened.mock.calls).toEqual([[new URL(href).href, "_blank", "noopener"]]);
+    expect(sentAfterConnect(parent)).toEqual([]);
+    expect(cancelled).toEqual([true]);
+  });
+
+  it("leaves a plain click on a link to the page's own origin to the page", () => {
+    const parent = connect();
+    click('<a href="/docs/intro?tab=2">intro</a>');
+    expect(sentAfterConnect(parent)).toEqual([]);
+    expect(cancelled).toEqual([false]);
+  });
+
+  it.each<[string, string, MouseEventInit, "click" | "auxclick"]>([
+    ["a link naming a new browsing context", ' target="_blank"', {}, "click"],
+    ["a link naming the top browsing context", ' target="_top"', {}, "click"],
+    ["a command-click", "", { metaKey: true }, "click"],
+    ["a control-click", "", { ctrlKey: true }, "click"],
+    ["a shift-click", "", { shiftKey: true }, "click"],
+    ["a middle click", "", { button: 1 }, "auxclick"],
+  ])("opens a page of its own app beside it for %s", (_what, attributes, init, type) => {
+    const parent = connect();
+    click(`<a href="/docs/intro?tab=2#part"${attributes}>intro</a>`, init, type);
+    expect(sentAfterConnect(parent)).toEqual([
+      [{ type: SHELL_OPEN, path: "/docs/intro?tab=2", ifPresent: "focus" }, "*"],
+    ]);
+    expect(cancelled).toEqual([true]);
+  });
+
+  it("leaves a click the page handled, a download, another scheme, and a right-button click to the page", () => {
+    const parent = connect();
+    document.body.innerHTML = '<a id="handled" href="http://localhost:5173/">handled</a>';
+    document.getElementById("handled")?.addEventListener("click", (event) => event.preventDefault());
+    document.getElementById("handled")?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    click('<a href="http://localhost:5173/report.csv" download>report</a>');
+    click('<a href="javascript:void(0)">run</a>');
+    click('<a href="http://localhost:5173/">menu</a>', { button: 2 }, "auxclick");
+    expect(sentAfterConnect(parent)).toEqual([]);
+    expect(opened).not.toHaveBeenCalled();
+    expect(cancelled).toEqual([true, false, false, false]);
+  });
+
+  it("leaves every link click alone on a top-level page, and once disconnected", () => {
+    connection = connectToShell({});
+    window.addEventListener("click", observeClick);
+    click('<a href="http://localhost:5173/">local</a>');
+    click('<a href="https://example.com/">out</a>');
+    const parent = framed();
+    const live = connectToShell({});
+    live.disconnect();
+    click('<a href="http://localhost:5173/">local</a>');
+    expect(parent.postMessage.mock.calls).toEqual([
+      [{ type: SHELL_CAPABILITIES, navigation: false, closeChord: false }, "*"],
+    ]);
+    expect(opened).not.toHaveBeenCalled();
+    expect(cancelled).toEqual([false, false, false]);
   });
 });

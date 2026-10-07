@@ -114,4 +114,24 @@ describe("startInnerFrameRelay", () => {
     expect(selected).toEqual(["agent-2", "agent-4"]);
     expect(parent.postMessage).not.toHaveBeenCalled();
   });
+
+  it("opens a page's web link in a new tab itself when no shell frames the root, and forwards it when one does", () => {
+    const opened = vi.spyOn(window, "open").mockImplementation(() => null);
+    const inner = { name: "inner" };
+    startInnerFrameRelay(
+      (source) => source === (inner as unknown as MessageEventSource),
+      () => undefined,
+    );
+
+    deliver({ type: "shell:open-link", url: "http://localhost:5173/preview" }, inner);
+    deliver({ type: "shell:open-link", url: "file:///home/user/plan.md" }, inner);
+    const parent = framed();
+    deliver({ type: "shell:open-link", url: "http://localhost:5173/other" }, inner);
+
+    expect(opened.mock.calls).toEqual([["http://localhost:5173/preview", "_blank", "noopener"]]);
+    expect(parent.postMessage.mock.calls).toEqual([
+      [{ type: "shell:open-link", url: "http://localhost:5173/other" }, "*"],
+    ]);
+    opened.mockRestore();
+  });
 });

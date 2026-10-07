@@ -22,8 +22,6 @@ import { initShellPermissionResolutions } from "./views/permission-card";
 import { connectChatToShell, getShellHandshake, isFrameRendered, isShellAbove } from "./shell";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
 import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
-import { installLinkRouting, pageLinkRoutingContext } from "@imbue/workspace-ui/src/links";
-import { MESSAGE_LINK_SELECTOR } from "./markdown";
 import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
 import { prependToComposer } from "./views/MessageInput";
 import { COMPACT_MEDIA_QUERY, isCompactLayout } from "./compactLayout";
@@ -74,14 +72,14 @@ async function bootstrap(): Promise<void> {
     isPresenceReported: isChatPage,
     path: isChatPage ? `/${chatId}` : `/${chatId}.${agentId}.${sessionId}`,
   });
-  // What links and the element menu act through: framed only when a shell stands above the page, so a link takes the
-  // page's own fallbacks, and a sub-agent view's draft rows grey, under a root opened on its own.
-  const linkConnection = { ...connection, isFramed: isShellAbove(window) };
+  // What the element menu acts through: framed only when a shell stands above the page, so a sub-agent view's draft
+  // rows grey under a root opened on its own.
+  const menuConnection = { ...connection, isFramed: isShellAbove(window) };
   // The element menu (element-reference-menu plan section 7.3): a chat page drafts a reference straight into its
   // own composer (which attaches it as a file), whoever frames it; a sub-agent view has no composer and asks the
   // shell, through the root.
   installElementContextMenu({
-    connection: linkConnection,
+    connection: menuConnection,
     handshake: getShellHandshake,
     draft: isChatPage ? (text) => prependToComposer(chatId, text) : undefined,
     isDraftAvailable: isChatPage ? () => true : undefined,
@@ -94,9 +92,6 @@ async function bootstrap(): Promise<void> {
   window.matchMedia(COMPACT_MEDIA_QUERY).addEventListener("change", () => m.redraw());
   const rootElement = document.getElementById("app");
   if (rootElement) {
-    // A link in a message opens inside the workspace or in the user's browser, and never takes the chat's own page
-    // with it.
-    installLinkRouting(rootElement, MESSAGE_LINK_SELECTOR, pageLinkRoutingContext(window, linkConnection));
     m.mount(rootElement, ChatDocument(chatId, agentId, sessionId));
     await runHook("ready");
   }

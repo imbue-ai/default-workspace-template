@@ -18,6 +18,12 @@
  * `frame-ancestors` policy means only a workspace-family document can frame this page at all.
  * Unknown types are ignored and shipped types never change meaning; the contract evolves by
  * adding types.
+ *
+ * A framed page's link clicks follow one rule, so no app carries link code of its own
+ * (``followLinkClick``): a link to the page's own origin navigates the page, or opens a window
+ * of its app for a new-window click; an external link opens in a new browsing context, which
+ * Imbue Studio sends to the user's browser; any other link (a local URL, another app's address,
+ * a ``file:`` URL) goes to the shell, which opens it where it belongs.
  */
 
 /** Shell to app: sent after every `load` of the frame; says which window, desktop, path, and client this page is in. */
@@ -47,10 +53,23 @@ export const SHELL_DRAFT_TEXT = "shell:draft-text";
 /** App to shell: a message for whichever apps registered its type (``open:file``, ...; desktop-interface
  *  contracts.md section 5.6), so a page says what it wants done without naming the app that does it. */
 export const SHELL_MESSAGE = "shell:message";
-/** App to shell: open a local URL, or a link to one of the workspace's app addresses (another app's page) or another
- *  workspace's, which only the shell can put on screen: it opens the app's window there (for a local URL, the app
- *  registered at its port, else the workspace's browser), or says why it cannot. */
+/** App to shell: open a link that is neither the page's own nor external -- a local URL, one of the workspace's app
+ *  addresses (another app's page) or another workspace's, a ``file:`` URL -- which only the shell can put on screen:
+ *  it opens the app's window there (for a local URL, the app registered at its port, else the workspace's browser),
+ *  the file in the File Viewer, or says why it cannot. */
 export const SHELL_OPEN_LINK = "shell:open-link";
+
+/** The bare host names of this machine (a ``*.localhost`` host is local too). */
+export const LOCAL_HOSTNAMES: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/** Whether ``url`` leaves this machine, so it opens in the user's own browser: exactly the rule Imbue Studio's
+ *  ``isExternalUrl`` applies to a popup (``link-externality-vectors.json`` keeps the two in step). */
+export function isExternalUrl(url: URL): boolean {
+  if (url.protocol === "mailto:" || url.protocol === "tel:") return true;
+  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+  const host = url.hostname.toLowerCase();
+  return !LOCAL_HOSTNAMES.has(host) && !host.endsWith(".localhost");
+}
 
 /**
  * What the shell says about the frame it created: the client, the window, its desktop, the app
@@ -146,9 +165,72 @@ function checkedCapabilities(handlers: ShellConnectionHandlers): ShellCapabiliti
   return capabilities;
 }
 
+/** The schemes a framed page hands on when a link to them is clicked; any other (``javascript:``, ``blob:``,
+ *  ``data:``) is left to the page. */
+const HANDED_ON_SCHEMES: ReadonlySet<string> = new Set(["http:", "https:", "file:", "mailto:", "tel:"]);
+const PRIMARY_BUTTON = 0;
+const MIDDLE_BUTTON = 1;
+
+/** The link a click landed in, if any (through shadow roots too). */
+function clickedLink(event: MouseEvent): HTMLAnchorElement | HTMLAreaElement | null {
+  for (const target of event.composedPath()) {
+    if ((target instanceof HTMLAnchorElement || target instanceof HTMLAreaElement) && target.hasAttribute("href")) {
+      return target;
+    }
+  }
+  return null;
+}
+
+/** Whether a click asks for another window rather than this page: a middle or modified click, or a link that names
+ *  another browsing context (``_top`` and ``_parent`` included, which would take the shell's page). */
+function isNewWindowClick(event: MouseEvent, link: HTMLAnchorElement | HTMLAreaElement): boolean {
+  const target = link.target.toLowerCase();
+  return (
+    event.button === MIDDLE_BUTTON ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.shiftKey ||
+    (target !== "" && target !== "_self")
+  );
+}
+
+/** Follow a framed page's link click by the contract's rule (see the module docs); a click the page already handled
+ *  (``defaultPrevented``), a download link, or a link to a scheme the rule does not hand on is left alone. */
+function followLinkClick(
+  event: MouseEvent,
+  view: Window,
+  send: (type: string, payload: Record<string, unknown>) => void,
+): void {
+  if (event.defaultPrevented) return;
+  if (event.button !== (event.type === "auxclick" ? MIDDLE_BUTTON : PRIMARY_BUTTON)) return;
+  const link = clickedLink(event);
+  if (link === null || link.hasAttribute("download")) return;
+  let url: URL;
+  try {
+    url = new URL(link.href);
+  } catch {
+    return;
+  }
+  if (!HANDED_ON_SCHEMES.has(url.protocol)) return;
+  const isNewWindow = isNewWindowClick(event, link);
+  if (url.origin === view.location.origin) {
+    if (!isNewWindow) return;
+    event.preventDefault();
+    send(SHELL_OPEN, { path: `${url.pathname}${url.search}`, ifPresent: "focus" });
+    return;
+  }
+  event.preventDefault();
+  if (isExternalUrl(url)) {
+    view.open(url.href, "_blank", "noopener");
+    return;
+  }
+  send(SHELL_OPEN_LINK, { url: url.href });
+}
+
 /**
  * Connect this page to the shell that frames it. Safe to call on a top-level page: nothing
- * arrives, and every send is a no-op, so an app behaves the same visited directly.
+ * arrives, and every send is a no-op, so an app behaves the same visited directly. A framed
+ * page's link clicks follow the contract's rule from here on (see the module docs).
  */
 export function connectToShell(handlers: ShellConnectionHandlers): ShellConnection {
   const capabilities = checkedCapabilities(handlers);
@@ -190,7 +272,14 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     boundWindow.parent.postMessage({ type, ...payload }, "*");
   }
 
+  // On the window, the last stop of a click's bubbling, so the page's own handlers see it first.
+  const onLinkClick = (event: MouseEvent): void => followLinkClick(event, boundWindow, send);
+
   boundWindow.addEventListener("message", onMessage);
+  if (isFramed) {
+    boundWindow.addEventListener("click", onLinkClick);
+    boundWindow.addEventListener("auxclick", onLinkClick);
+  }
   send(SHELL_CAPABILITIES, { navigation: capabilities.navigation, closeChord: capabilities.closeChord });
   return {
     isFramed,
@@ -202,6 +291,10 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     sendMessage: (type: string, fields: Readonly<Record<string, unknown>>) =>
       send(SHELL_MESSAGE, { message: { ...fields, type } }),
     openLink: (url: string) => send(SHELL_OPEN_LINK, { url }),
-    disconnect: () => boundWindow.removeEventListener("message", onMessage),
+    disconnect: () => {
+      boundWindow.removeEventListener("message", onMessage);
+      boundWindow.removeEventListener("click", onLinkClick);
+      boundWindow.removeEventListener("auxclick", onLinkClick);
+    },
   };
 }

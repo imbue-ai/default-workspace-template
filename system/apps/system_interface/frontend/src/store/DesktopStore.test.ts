@@ -1357,6 +1357,18 @@ describe("links Imbue Studio hands over", () => {
   const SHELL_HOST = `system-interface-aa11bb22.${COORDINATE}`;
   const FILES_APP = appRecord("files", { label: "files-ab12cd34" });
 
+  it("opens a file URL in the File Viewer through open:file, with its path decoded and sent as the page's app", async () => {
+    const store = await startedStore();
+
+    await store.openLink("file:///home/user/my%20notes/plan.md", SHELL_HOST, "chat");
+    await store.openLink("file:///home/user/workspace/data/", SHELL_HOST, null);
+
+    expect(api.relayedMessages).toEqual([
+      { type: "open:file", clientId: CLIENT, payload: { path: "/home/user/my notes/plan.md" }, sender: "chat" },
+      { type: "open:file", clientId: CLIENT, payload: { path: "/home/user/workspace/data" }, sender: "embedder" },
+    ]);
+  });
+
   it("opens a local URL in the workspace's browser through open:url, sent as the embedder's", async () => {
     const store = await startedStore();
 

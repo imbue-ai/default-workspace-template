@@ -9,11 +9,11 @@
  * an app an agent built -- takes the renderer here, a fixed card of buttons with inline styles.
  * Built as its own library entry into the shell's static output and served by every app at
  * ``/_static/context_menu.js`` from its own origin, beside ``app_contract.js``; so it imports
- * the reference, row, and link modules alone, and touches no message primitive (a draft and an
- * opened link go through the connection the page already holds).
+ * the reference and row modules alone, and touches no message primitive (the draft goes
+ * through the connection the page already holds, and an opened link is a click on it, which
+ * the app contract follows).
  */
 
-import type { OpenIfPresent } from "./app_contract";
 import { scopeOfHandshake, type ReferenceHandshake, type ReferenceScope } from "./element_reference";
 import {
   elementMenuRows,
@@ -22,15 +22,11 @@ import {
   type ContextMenuTarget,
   type OpenLink,
 } from "./context_menu_rows";
-import { pageLinkRoutingContext, routeLinkElement } from "./links";
 
-/** The connection the page holds to the shell: what the installer drafts and opens links through. */
+/** The connection the page holds to the shell: what the installer drafts through. */
 export interface ContextMenuConnection {
   readonly isFramed: boolean;
   draftText(text: string): void;
-  openPath(path: string, ifPresent: OpenIfPresent): void;
-  sendMessage(type: string, fields: Readonly<Record<string, unknown>>): void;
-  openLink(url: string): void;
 }
 
 /** Where the menu opens: the pointer's viewport position. */
@@ -86,16 +82,7 @@ function routesOf(options: ContextMenuOptions): {
   return {
     draft: options.draft ?? ((text: string) => connection.draftText(text)),
     isDraftAvailable: options.isDraftAvailable ?? (() => connection.isFramed),
-    openLink: (anchor) => {
-      const view = anchor.ownerDocument.defaultView;
-      if (view === null) {
-        console.warn(`[context-menu] Open link ignored: ${anchor.href} is in a document with no window`);
-        return;
-      }
-      if (!routeLinkElement(anchor, pageLinkRoutingContext(view, connection))) {
-        console.warn(`[context-menu] Open link ignored: ${anchor.href} is not a link the workspace can open`);
-      }
-    },
+    openLink: (anchor) => anchor.click(),
   };
 }
 

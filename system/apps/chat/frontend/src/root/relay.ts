@@ -14,7 +14,9 @@
  * root's path for it (``/?chat=<id>``), and the root that already frames a chat list selects
  * that chat in place, exactly as its own New chat button does, rather than asking the shell for
  * a second root window. Everything else a page posts -- its capabilities, its location -- is the
- * root's to know and stops here; the root reports its own.
+ * root's to know and stops here; the root reports its own. A root opened on its own has no shell
+ * to forward to, so it opens a page's web ``shell:open-link`` in a new browser tab itself, as a
+ * page with no shell around it does; a ``file:`` link has nowhere to open there.
  *
  * Trust: only a message whose source is one of the root's own inner frames is acted on, and a
  * forwarded one is forwarded only to ``window.parent``.
@@ -83,8 +85,20 @@ export function startInnerFrameRelay(
       selectChat(decision.chatId);
       return;
     }
-    if (window.parent === window) return;
+    if (window.parent === window) {
+      const url = webLinkToOpen(event.data);
+      if (url !== null) window.open(url, "_blank", "noopener");
+      return;
+    }
     if (!isForwardedToShell(event.data)) return;
     window.parent.postMessage(event.data, "*");
   });
+}
+
+/** The http(s) URL of a ``shell:open-link``, or null for any other message or URL. */
+function webLinkToOpen(data: unknown): string | null {
+  if (data === null || typeof data !== "object") return null;
+  const message = data as { type?: unknown; url?: unknown };
+  if (message.type !== SHELL_OPEN_LINK || typeof message.url !== "string") return null;
+  return /^https?:\/\//i.test(message.url) ? message.url : null;
 }

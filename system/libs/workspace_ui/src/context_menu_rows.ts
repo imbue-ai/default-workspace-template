@@ -180,7 +180,7 @@ export function canReadClipboard(): boolean {
   return typeof navigator !== "undefined" && typeof navigator.clipboard?.readText === "function";
 }
 
-/** Open a link the menu was opened on, as a click on it would be (links.ts ``routeLinkElement``). */
+/** Open a link the menu was opened on, as a click on it would. */
 export type OpenLink = (anchor: HTMLAnchorElement) => void;
 
 /** The standard rows the target admits (section 3.3), in the order the native menu lists them. */

@@ -17,7 +17,7 @@ import type {
   WindowOpenOutcome,
   WindowOpenRequest,
 } from "../model/api";
-import { OPEN_URL_MESSAGE, classifyLink } from "@imbue/workspace-ui/src/links";
+import { OPEN_FILE_MESSAGE, OPEN_URL_MESSAGE, classifyLink } from "@imbue/workspace-ui/src/links";
 import { StalePlacementsSaveError } from "../model/api";
 import {
   NO_DRAFT_APP_REASON,
@@ -1023,14 +1023,18 @@ export class DesktopStore {
     return true;
   }
 
-  /** Open a link where it belongs in this workspace: a local URL at an app's registered backend port as that app's
-   *  window at its path, any other local URL in the workspace's browser (``open:url``), one of this workspace's app
-   *  addresses as that app's window at its path. Another workspace's address is refused with a notice.
+  /** Open a link where it belongs in this workspace: a file in the File Viewer (``open:file``), a local URL at an
+   *  app's registered backend port as that app's window at its path, any other local URL in the workspace's browser
+   *  (``open:url``), one of this workspace's app addresses as that app's window at its path. Another workspace's
+   *  address is refused with a notice.
    *  ``workspaceHost`` is this page's own host, which says which workspace it is; ``senderApp`` is the app whose page
    *  asked, or null for the Imbue Studio chrome, and names the ``open:url`` it sends. */
   async openLink(url: string, workspaceHost: string, senderApp: string | null): Promise<void> {
     const target = classifyLink(url, workspaceHost);
     switch (target.kind) {
+      case "file":
+        await this.deliverMessage({ type: OPEN_FILE_MESSAGE, path: target.path }, senderApp ?? EMBEDDER_SENDER);
+        return;
       case "local-url": {
         const backendWindow = windowAtBackendUrl(openableApps(this.state), target.url);
         if (backendWindow !== null) {
@@ -1056,7 +1060,6 @@ export class DesktopStore {
         this.toast(`Nothing in this workspace is at ${url}`);
         return;
       case "external":
-      case "file":
         console.warn(`[si] an opened link was ignored: ${url} is no address of this machine`);
         return;
     }

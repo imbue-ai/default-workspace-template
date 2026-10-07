@@ -8,7 +8,7 @@
  * derivation is unit-testable without a DOM.
  */
 
-import { LOCAL_HOSTNAMES } from "@imbue/workspace-ui/src/links";
+import { LOCAL_HOSTNAMES } from "@imbue/workspace-ui/src/app_contract";
 import { deriveAppOrigin, workspaceHostCoordinate } from "@imbue/workspace-ui/src/origin";
 import type { AppRecord } from "./records";
 

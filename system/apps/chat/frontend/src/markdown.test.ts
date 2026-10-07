@@ -40,29 +40,30 @@ describe("renderMarkdown links", () => {
     return container;
   }
 
-  it("opens only external links in a new browsing context, with no opener or referrer", () => {
+  it("opens every web link in a new browsing context, with no opener or referrer, should nothing route it", () => {
     const anchors = render(
-      "[Docs](https://example.com/docs), [mail](mailto:a@example.com), [call](tel:+15551234) and [x](HTTPS://EXAMPLE.COM)",
+      "[Docs](https://example.com/docs), [mail](mailto:a@example.com), [call](tel:+15551234), [app](http://localhost:3000/) and [api](http://127.0.0.1:8080/x)",
     ).querySelectorAll("a");
     expect(Array.from(anchors, (a) => a.getAttribute("href"))).toEqual([
       "https://example.com/docs",
       "mailto:a@example.com",
       "tel:+15551234",
-      "HTTPS://EXAMPLE.COM",
+      "http://localhost:3000/",
+      "http://127.0.0.1:8080/x",
     ]);
     expect(Array.from(anchors, (a) => [a.getAttribute("target"), a.getAttribute("rel")])).toEqual(
-      Array(4).fill(["_blank", "noopener noreferrer"]),
+      Array(5).fill(["_blank", "noopener noreferrer"]),
     );
   });
 
-  it("keeps a file or local link's real target, with nothing that would open it in the browser", () => {
+  it("names a file by its file URL, whether written as an absolute path or as a file URL", () => {
     const anchors = render(
-      "[Q4 report](/home/user/workspace/data/documents/q4.pdf), [app](http://localhost:3000/) and [api](http://127.0.0.1:8080/x)",
+      "[Q4 report](/home/user/workspace/data/my%20docs/q4.pdf), [folder](/home/user/workspace/data/) and [notes](file:///home/user/workspace/notes.md)",
     ).querySelectorAll("a");
     expect(Array.from(anchors, (a) => a.getAttribute("href"))).toEqual([
-      "/home/user/workspace/data/documents/q4.pdf",
-      "http://localhost:3000/",
-      "http://127.0.0.1:8080/x",
+      "file:///home/user/workspace/data/my%20docs/q4.pdf",
+      "file:///home/user/workspace/data",
+      "file:///home/user/workspace/notes.md",
     ]);
     expect(Array.from(anchors, (a) => [a.hasAttribute("target"), a.hasAttribute("download")])).toEqual(
       Array(3).fill([false, false]),
@@ -74,7 +75,7 @@ describe("renderMarkdown links", () => {
     "[guide](docs/guide.md:12)",
     "[report](q4.md:12)",
     "[section](#usage)",
-    "[local](file:///home/user/workspace/notes.md)",
+    "[remote file](file://server.example/share/notes.md)",
     "[text me](sms:+15551234)",
     "[cdn](//cdn.example.com/lib.js)",
   ])("renders %s as its label text with no link", (source) => {

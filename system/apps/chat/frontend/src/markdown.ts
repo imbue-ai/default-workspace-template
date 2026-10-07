@@ -1,7 +1,7 @@
 import m from "mithril";
 import DOMPurify from "dompurify";
 import { Marked } from "marked";
-import { classifyLink } from "@imbue/workspace-ui/src/links";
+import { classifyLink, fileUrl } from "@imbue/workspace-ui/src/links";
 import { openImageLightbox } from "./lightbox";
 import { isBlockExpanded, setBlockExpanded } from "./views/expansion-state";
 
@@ -12,12 +12,14 @@ const marked = new Marked({
 
 const TOOL_CALL_PREFIX = "Tool call: ";
 
-/** The links of rendered markdown (a message, a step's narration): the ones the chat routes when clicked. */
-export const MESSAGE_LINK_SELECTOR = ".markdown-content a[href]";
+// DOMPurify's own default (3.x ``IS_ALLOWED_URI``) plus ``file:``, so a message's ``file:`` link reaches
+// ``rewritePathLinks`` rather than losing its target.
+const ALLOWED_URI_REGEXP =
+  /^(?:(?:(?:f|ht)tps?|file|mailto|tel|callto|sms|cid|xmpp|matrix):|[^a-z]|[a-z+.-]+(?:[^a-z+.:-]|$))/i;
 
 export function renderMarkdown(source: string): string {
   const rawHtml = marked.parse(source) as string;
-  const fragment = DOMPurify.sanitize(rawHtml, { RETURN_DOM_FRAGMENT: true });
+  const fragment = DOMPurify.sanitize(rawHtml, { RETURN_DOM_FRAGMENT: true, ALLOWED_URI_REGEXP });
   rewritePathLinks(fragment);
   // The fragment belongs to DOMPurify's inert document. Serializing it through a live-document
   // element would adopt its <img>s into the page, and an adopted image starts fetching.
@@ -27,45 +29,38 @@ export function renderMarkdown(source: string): string {
 }
 
 /**
- * Keep a clicked message link from replacing the conversation.
+ * Give each message link the target the workspace opens it at, and keep a click on it from replacing the conversation.
  *
- * A link keeps its real target, so hovering it and copying its address show where it goes; the
- * page's link routing (``installLinkRouting``) takes the click. Only a link the desktop app sends
- * to the user's browser (an external web, mailto or tel link) opens in a new browsing context, so
- * the desktop app turns it away from a window of its own and a plain browser keeps the chat. A
- * file path or a link to a local address opens inside the workspace instead. Anything else (a
- * relative path, a fragment, another scheme) cannot open anything, so it is unwrapped to its text.
+ * An absolute path names a file of the workspace (see the show-files-in-chat skill), so it becomes that file's
+ * ``file:`` URL, which the app contract hands to the shell to open in the File Viewer, as it does a local URL; every
+ * other link keeps its real target, so hovering it and copying its address show where it goes, and opens in a new
+ * browsing context should nothing route it (a chat opened on its own). Anything else (a relative path, a fragment,
+ * another scheme) cannot open anything, so it is unwrapped to its text.
  */
 function rewritePathLinks(root: DocumentFragment): void {
   for (const anchor of Array.from(root.querySelectorAll("a"))) {
     const target = classifyLink(anchor.getAttribute("href") ?? "", window.location.host);
-    switch (target.kind) {
-      case "unroutable":
-        anchor.replaceWith(...Array.from(anchor.childNodes));
-        break;
-      case "external":
-        anchor.setAttribute("target", "_blank");
-        anchor.setAttribute("rel", "noopener noreferrer");
-        break;
-      case "file":
-      case "local-url":
-      case "app-address":
-      case "other-workspace":
-        anchor.removeAttribute("target");
-        anchor.removeAttribute("download");
-        break;
+    anchor.removeAttribute("download");
+    if (target.kind === "unroutable") {
+      anchor.replaceWith(...Array.from(anchor.childNodes));
+    } else if (target.kind === "file") {
+      anchor.setAttribute("href", fileUrl(target.path));
+      anchor.removeAttribute("target");
+    } else {
+      anchor.setAttribute("target", "_blank");
+      anchor.setAttribute("rel", "noopener noreferrer");
     }
   }
 }
 
 /**
- * Append a per-message ``requested_at`` query parameter to chat file URLs.
+ * Append a per-message ``requested_at`` query parameter to chat image URLs.
  *
- * Chat markdown references a file by its absolute on-disk path, which the
+ * Chat markdown references an image by its absolute on-disk path, which the
  * backend serves with a one-year ``immutable`` cache policy. If an agent
  * overwrites a previously referenced file, a *new* message reusing that path
  * would otherwise render the browser's stale cached copy. Tagging each message's
- * image ``src`` and link ``href`` with the message's post time makes its URL
+ * image ``src`` with the message's post time makes its URL
  * unique per message: a new message's URL has never been cached, so the browser
  * fetches the file's current bytes, while re-rendering the *same* message reuses
  * its stable URL (and the immutable cache) without refetching. The parameter is
@@ -81,12 +76,10 @@ export function requestedAtUrl(value: string, requestedAt: string): string | nul
 }
 
 function appendRequestedAt(container: HTMLElement, requestedAt: string): void {
-  const tagAttribute = (element: Element, attribute: string): void => {
-    const tagged = requestedAtUrl(element.getAttribute(attribute) ?? "", requestedAt);
-    if (tagged !== null) element.setAttribute(attribute, tagged);
-  };
-  for (const image of Array.from(container.querySelectorAll("img"))) tagAttribute(image, "src");
-  for (const anchor of Array.from(container.querySelectorAll("a"))) tagAttribute(anchor, "href");
+  for (const image of Array.from(container.querySelectorAll("img"))) {
+    const tagged = requestedAtUrl(image.getAttribute("src") ?? "", requestedAt);
+    if (tagged !== null) image.setAttribute("src", tagged);
+  }
 }
 
 function hasToolCallLine(textContent: string): boolean {
