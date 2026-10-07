@@ -5,9 +5,11 @@ from typing import Any
 
 import pytest
 
+from imbue.chat.chat_handoffs import is_genuine_user_turn
 from imbue.chat.harnesses.claude.session_parser import _SYNTHETIC_MODEL
 from imbue.chat.harnesses.claude.session_parser import parse_line_detail
 from imbue.chat.harnesses.claude.session_parser import parse_lines
+from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.tool_output import _MAX_ECHOED_REQUEST_PROBES
 
 
@@ -757,8 +759,9 @@ def test_compaction_summary_user_message_emitted_as_status() -> None:
     assert "is_meta" not in events[0] and "is_compact_summary" not in events[0]
 
 
-def test_compaction_command_and_output_dropped() -> None:
-    """The /compact command and <local-command-stdout> compaction output are dropped."""
+def test_compaction_command_is_hidden_non_turn_tail_and_output_dropped() -> None:
+    """Both /compact command forms arrive as hidden, non-turn-tail user messages, which the page counts
+    as the /compact's own arrival; the <local-command-stdout> compaction output is dropped."""
     cmd_line = _make_user_line(
         "uuid-cmd",
         "2026-01-01T00:00:00Z",
@@ -771,7 +774,14 @@ def test_compaction_command_and_output_dropped() -> None:
         "<local-command-stdout>\x1b[2mCompacted (ctrl+o to see full summary)\x1b[22m</local-command-stdout>",
     )
     events = parse_lines([cmd_line, plain_cmd_line, out_line])
-    assert len(events) == 0
+    assert [(event["event_id"], event["type"], event["content"]) for event in events] == [
+        ("uuid-cmd-user", "user_message", "/compact"),
+        ("uuid-cmd2-user", "user_message", "/compact"),
+    ]
+    for event in events:
+        assert event["display"] == DisplayKind.HIDDEN
+        assert event["non_turn_tail"] is True
+        assert not is_genuine_user_turn(event)
 
 
 

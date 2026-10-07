@@ -474,11 +474,11 @@ def _parse_user_message(
                 existing_event_ids.add(event_id)
                 new_events.append((timestamp, event))
         else:
-            is_compaction = _is_compaction_command(raw_text, text) or _is_compaction_output(raw_text)
-            if not is_compaction and text and not is_interrupt_sentinel_text(text):
+            is_compaction_command = _is_compaction_command(raw_text, text)
+            if not _is_compaction_output(raw_text) and text and not is_interrupt_sentinel_text(text):
                 event_id = _make_event_id(uuid, "user")
                 if event_id not in existing_event_ids:
-                    event = {
+                    event: dict[str, Any] = {
                         "timestamp": timestamp,
                         "type": "user_message",
                         "event_id": event_id,
@@ -487,16 +487,25 @@ def _parse_user_message(
                         "content": text,
                         "message_uuid": uuid,
                     }
-                    # Claude Code's own markers (``isMeta`` for framework-injected,
-                    # model-only messages) are read HERE and become the shared render decision;
-                    # the raw flags never cross the wire. Explicit detectors win over
-                    # isMeta (Stop-hook feedback deliberately surfaces as a chip). (The
-                    # interrupt sentinel above is NOT isMeta, so it keeps its own guard.)
-                    stamp_user_message_display(
-                        event,
-                        text,
-                        is_meta=bool(raw.get("isMeta")),
-                    )
+                    if is_compaction_command:
+                        # Claude Code runs /compact itself and no reply follows, so it renders
+                        # nowhere and is not a turn tail. It is still emitted: it is the transcript
+                        # arrival that retires the page's "Sending..." bubble for the /compact, which
+                        # would otherwise take the arrival of the next message and leave that
+                        # message showing twice.
+                        event["display"] = DisplayKind.HIDDEN
+                        event["non_turn_tail"] = True
+                    else:
+                        # Claude Code's own markers (``isMeta`` for framework-injected,
+                        # model-only messages) are read HERE and become the shared render decision;
+                        # the raw flags never cross the wire. Explicit detectors win over
+                        # isMeta (Stop-hook feedback deliberately surfaces as a chip). (The
+                        # interrupt sentinel above is NOT isMeta, so it keeps its own guard.)
+                        stamp_user_message_display(
+                            event,
+                            text,
+                            is_meta=bool(raw.get("isMeta")),
+                        )
                     if session_id is not None:
                         event["session_id"] = session_id
                     existing_event_ids.add(event_id)
