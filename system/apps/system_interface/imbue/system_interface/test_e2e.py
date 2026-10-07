@@ -14,7 +14,6 @@ from __future__ import annotations
 import contextlib
 import json
 import re
-import shutil
 import threading
 import urllib.error
 import urllib.parse
@@ -46,6 +45,7 @@ from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.config import Config
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.identity import RequestIdentity
+from imbue.system_interface.shell.testing import DUFS_BINARY
 from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.shell.testing import message_handling_app
 from imbue.system_interface.shell.testing import registry_row_toml
@@ -2427,7 +2427,6 @@ def test_an_apps_links_open_by_the_app_contract_with_no_link_code_of_its_own(tmp
 # The File Viewer (``system/apps/files``): dufs over a folder of the test's own, with the workspace's vendored and
 # patched frontend, registered as the ``files`` app. The workspace image installs dufs; elsewhere these tests skip.
 _FILES_APP_NAME = "files"
-_DUFS_BINARY = shutil.which("dufs")
 # dufs answers a client it takes for a script (curl and the like) with a bare "Not Found" instead of the assets'
 # ``404.html``, so a direct request says it is a browser.
 _BROWSER_USER_AGENT = (
@@ -2477,7 +2476,7 @@ def _wait_for_window_at(base_url: str, window_id: str, path: str) -> dict[str, A
     return _window_record(base_url, window_id)
 
 
-@pytest.mark.skipif(_DUFS_BINARY is None, reason="dufs is not installed (the workspace image installs it)")
+@pytest.mark.skipif(DUFS_BINARY is None, reason="dufs is not installed (the workspace image installs it)")
 @pytest.mark.timeout(120, func_only=False)
 def test_the_file_viewer_opens_files_in_workspace_windows_and_raises_one_already_on_the_page(
     tmp_path: Path, page: Page
@@ -2540,7 +2539,7 @@ def test_the_file_viewer_opens_files_in_workspace_windows_and_raises_one_already
         assert page.context.pages == [page], "a File Viewer click opened a browser window of its own"
 
 
-@pytest.mark.skipif(_DUFS_BINARY is None, reason="dufs is not installed (the workspace image installs it)")
+@pytest.mark.skipif(DUFS_BINARY is None, reason="dufs is not installed (the workspace image installs it)")
 @pytest.mark.timeout(90, func_only=False)
 def test_the_file_viewer_answers_a_missing_path_with_its_own_page_naming_it_and_the_nearest_folder(
     tmp_path: Path, page: Page
