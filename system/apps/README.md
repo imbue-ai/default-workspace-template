@@ -15,7 +15,7 @@ Built-in apps:
   follows the workspace's agent observer (the `agent-observer` program, one
   `mngr observe` per workspace), serves the chat pages and their API on port
   8010, and owns the provider accounts. Its frontend, the shell's, and the
-  Getting Started app's are builds of one npm workspace (`system/package.json`)
+  Getting Started and Activity apps' are builds of one npm workspace (`system/package.json`)
   sharing the `system/libs/workspace_ui` library.
 - `getting_started/` - The Getting Started page: the "Start something" intents
   and the "Start from a template" shelves (the published template catalog it
@@ -25,6 +25,12 @@ Built-in apps:
   first desktop for the first client that connects, and remembers having done
   so under `data/.state/getting-started/`. Served on port 8030 by the
   `getting-started` package.
+- `activity/` - System Monitor (the Activity app): what is using the workspace's memory and disk, grouped
+  into chats (every harness), apps and background services, with the processes
+  and readings behind each figure one click away. Idle chats can be stopped
+  through the chat app's own route. It reads everything on request and holds
+  nothing, so it declares `stop_when_no_windows`. Served on port 8040 by the
+  `activity` package.
 - `terminal/` - The terminal (ttyd over the web), including its named
   persistent sessions; a Python package with two entry points: `terminal-app`
   serves the wrapper pages (each frames one session's ttyd page) over the
