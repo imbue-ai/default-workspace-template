@@ -540,13 +540,13 @@ export function isTailTurnSettled(activityState: string | null | undefined): boo
 }
 
 /** Walk the visible transcript into ordered sections. `toolResults` resolves tk
- *  command outputs (and is reused by the renderer). `agentIsIdle` settles the
- *  spinner on the tail section. All decoration is derived from the transcript;
+ *  command outputs (and is reused by the renderer). `isTailSettled` (see
+ *  `isTailTurnSettled`) settles the spinner on the tail section. All decoration is derived from the transcript;
  *  there is no enrichment argument. */
 export function buildSections(
   events: TranscriptEvent[],
   toolResults: Map<string, ToolResultEvent>,
-  agentIsIdle: boolean,
+  isTailSettled: boolean,
 ): SectionView[] {
   const { deco, knownSteps, createdOrder } = buildDecorationMap(events, toolResults);
 
@@ -753,7 +753,7 @@ export function buildSections(
       resolutionsByRequestId,
       secretNotesByRequestId,
       b === lastBuilder ? pending : [],
-      agentIsIdle,
+      isTailSettled,
       b === lastBuilder,
     ),
   );
@@ -851,14 +851,14 @@ function finalizeSection(
   resolutionsByRequestId: ReadonlyMap<string, RequestResolution>,
   secretNotesByRequestId: ReadonlyMap<string, string>,
   pending: { id: string; title: string }[],
-  agentIsIdle: boolean,
+  isTailSettled: boolean,
   is_tail: boolean,
 ): SectionView {
   // The live frontier step (the open step the agent is actively on) -- the only
   // one that may show a spinner. Computed up front because the live step is
   // treated specially below: prose it just spoke is in-flight narration, not a
   // closing remark, since the step has not closed.
-  const frontierId = is_tail && !agentIsIdle ? section.current_step_id : null;
+  const frontierId = is_tail && !isTailSettled ? section.current_step_id : null;
 
   // A fresh start asked for no summary and delivered no prompt: there was no handoff to show, so
   // its node comes off the timeline rather than standing as an empty line.

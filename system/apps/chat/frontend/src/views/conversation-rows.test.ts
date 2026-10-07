@@ -132,7 +132,7 @@ describe("buildConversationRows", () => {
       ),
     ];
 
-    const rows = buildConversationRows("agent-1", events, /* agentIsIdle */ true);
+    const rows = buildConversationRows("agent-1", events, /* isTailSettled */ true);
 
     const userRow = rows.find((r) => r.key === "u-t1");
     expect(userRow).toBeDefined();

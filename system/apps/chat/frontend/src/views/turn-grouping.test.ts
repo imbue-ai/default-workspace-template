@@ -213,12 +213,12 @@ function closeOut(id: string, title?: string, summary?: string): string {
 
 /** Build the toolResults map from the event list (as ChatPanel does) and run.
  *  No enrichment argument -- structure and decoration both come from the walk. */
-function run(events: TranscriptEvent[], agentIsIdle = true) {
+function run(events: TranscriptEvent[], isTailSettled = true) {
   const toolResults = new Map<string, ToolResultEvent>();
   for (const e of events) {
     if (e.type === "tool_result") toolResults.set(e.tool_call_id, e);
   }
-  return buildSections(events, toolResults, agentIsIdle);
+  return buildSections(events, toolResults, isTailSettled);
 }
 
 function stepItems(items: TimelineItem[]): StepNode[] {
@@ -1079,7 +1079,7 @@ describe("audit regressions", () => {
       assistantText("t6", "Working on step 2", "reply"),
       summary,
     ];
-    const sections = run(events, /* agentIsIdle */ false);
+    const sections = run(events, /* isTailSettled */ false);
     expect(sections.length).toBe(1);
     const steps = stepItems(sections[0].items);
     // Steps must appear exactly once: cod-step-s1, cod-step-s2, and pending cod-step-s3

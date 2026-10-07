@@ -11,8 +11,8 @@
  *
  * Structure and decoration both come from the transcript walk (tk prints its
  * step decoration on stdout, which buildSections parses); there is no
- * side-channel enrichment. `agentIsIdle` settles the frontier spinner on the
- * tail turn. The pre-login auth-error prefix is hidden here (a no-op for a
+ * side-channel enrichment. `isTailSettled` settles the frontier spinner on the
+ * tail turn (see `isTailTurnSettled`). The pre-login auth-error prefix is hidden here (a no-op for a
  * subagent, which never has one) so the two views stay byte-identical.
  */
 
@@ -285,12 +285,12 @@ function buildRows(
 export function buildConversationRows(
   chatId: string,
   events: TranscriptEvent[],
-  agentIsIdle: boolean,
+  isTailSettled: boolean,
 ): RowDescriptor[] {
   const toolResults = buildToolResultsWithSkillExpansions(events);
   const hiddenEventIds = computeAuthErrorHiddenEventIds(events);
   const visibleEvents = hiddenEventIds.size > 0 ? events.filter((e) => !hiddenEventIds.has(e.event_id)) : events;
-  const sections = buildSections(visibleEvents, toolResults, agentIsIdle);
+  const sections = buildSections(visibleEvents, toolResults, isTailSettled);
   return buildRows(chatId, sections, toolResults);
 }
 
