@@ -9,8 +9,6 @@ The chat app records each compaction it asks for in ``compaction_request.json`` 
 the cause survives the chat app's memory of the request.
 """
 
-import os
-import tempfile
 from datetime import datetime
 from datetime import timezone
 from enum import auto
@@ -30,6 +28,7 @@ from imbue.chat.harnesses.events import DisplayKind
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
+from imbue.mngr.utils.file_utils import atomic_write
 
 # The content every harness's parser gives its compacted event.
 CONTEXT_COMPACTED_CONTENT: Final[str] = "Context was compacted"
@@ -129,17 +128,10 @@ def read_compaction_signal(path: Path, now: float) -> CompactionSignal | None:
 
 def write_compaction_request(path: Path, cause: CompactionCause, requested_at: float) -> None:
     """Record a compaction the chat asked for at ``path``, replacing the previous one atomically."""
-    content = _RawCompactionRequest(
+    request = _RawCompactionRequest(
         cause=cause, requested_at=datetime.fromtimestamp(requested_at, tz=timezone.utc).isoformat()
-    ).model_dump_json()
-    file_descriptor, temp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    temp_path = Path(temp_name)
-    try:
-        with os.fdopen(file_descriptor, "w") as handle:
-            handle.write(content)
-        os.replace(temp_path, path)
-    finally:
-        temp_path.unlink(missing_ok=True)
+    )
+    atomic_write(path, request.model_dump_json())
 
 
 def read_compaction_request(path: Path, now: float) -> CompactionRequest | None:

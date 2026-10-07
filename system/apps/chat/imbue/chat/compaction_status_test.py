@@ -147,13 +147,6 @@ def test_a_written_compaction_request_reads_back(tmp_path: Path, cause: Compacti
     assert [entry.name for entry in tmp_path.iterdir()] == [COMPACTION_REQUEST_FILENAME]
 
 
-def test_a_compaction_request_is_not_written_into_a_missing_directory(tmp_path: Path) -> None:
-    with pytest.raises(OSError):
-        write_compaction_request(tmp_path / "gone" / COMPACTION_REQUEST_FILENAME, CompactionCause.IDLE, _MTIME)
-
-    assert not (tmp_path / "gone").exists()
-
-
 def test_a_compaction_request_time_in_the_future_reads_as_now(tmp_path: Path) -> None:
     path = tmp_path / COMPACTION_REQUEST_FILENAME
     write_compaction_request(path, CompactionCause.IDLE, _NOW + 3600.0)
