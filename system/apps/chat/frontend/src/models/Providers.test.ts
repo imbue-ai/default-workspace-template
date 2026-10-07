@@ -130,6 +130,37 @@ describe("whenAccountsReadyToChoose", () => {
   });
 });
 
+describe("adoptLanes", () => {
+  let providers: typeof import("./Providers");
+
+  beforeEach(async () => {
+    mockRequest.mockReset();
+    vi.resetModules();
+    providers = await import("./Providers");
+  });
+
+  it("takes a list another page fetched, so the chooser opens on it without fetching again", async () => {
+    const lanes = [{ id: "claude" }] as unknown as Parameters<typeof providers.adoptLanes>[0];
+
+    providers.adoptLanes(lanes);
+    await providers.loadLanes();
+
+    expect(providers.areLanesLoaded()).toBe(true);
+    expect(providers.getLanes()).toBe(lanes);
+    expect(mockRequest).not.toHaveBeenCalled();
+  });
+
+  it("keeps a list this page already fetched", async () => {
+    const fetched = [{ id: "codex" }];
+    mockRequest.mockResolvedValueOnce({ lanes: fetched });
+    await providers.loadLanes();
+
+    providers.adoptLanes([{ id: "claude" }] as unknown as Parameters<typeof providers.adoptLanes>[0]);
+
+    expect(providers.getLanes()).toBe(fetched);
+  });
+});
+
 describe("startFlow", () => {
   beforeEach(() => {
     vi.useFakeTimers();

@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import type { ChatPageEmbedApi } from "../embedApi";
+import type { Lane } from "../models/Providers";
 import { InnerFramePool, MAX_HELD_FRAMES } from "./framePool";
 
 const HANDSHAKE: ShellHandshake = {
@@ -47,6 +48,7 @@ function loadPage(chatId: string): { [K in keyof ChatPageEmbedApi]: ReturnType<t
     prependDraft: vi.fn(),
     setCompact: vi.fn(),
     accountsChanged: vi.fn(),
+    adoptLanes: vi.fn(),
   };
   const frame = frameOf(chatId);
   const contentWindow = frame.contentWindow;
@@ -174,5 +176,18 @@ describe("InnerFramePool", () => {
 
     expect(pageA.accountsChanged).toHaveBeenCalledTimes(1);
     expect(pageC.accountsChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands the root's provider list to every loaded page, and to a page when it loads", () => {
+    const lanes = [{ id: "claude" }] as unknown as Lane[];
+    pool.show("agent-a");
+    const pageA = loadPage("agent-a");
+
+    pool.setLanes(lanes);
+    pool.show("agent-b");
+    const pageB = loadPage("agent-b");
+
+    expect(pageA.adoptLanes).toHaveBeenCalledWith(lanes);
+    expect(pageB.adoptLanes).toHaveBeenCalledWith(lanes);
   });
 });

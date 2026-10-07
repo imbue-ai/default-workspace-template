@@ -158,6 +158,13 @@ export function areLanesLoaded(): boolean {
   return lanesLoaded;
 }
 
+/** Take a lane list another page of this app already fetched, so this page need not fetch it again. */
+export function adoptLanes(given: Lane[]): void {
+  if (lanesLoaded) return;
+  lanes = given;
+  lanesLoaded = true;
+}
+
 export async function loadLanes(): Promise<void> {
   if (lanesLoaded) return;
   const body = await m.request<{ lanes: Lane[] }>({ method: "GET", url: apiUrl("/api/lanes") });

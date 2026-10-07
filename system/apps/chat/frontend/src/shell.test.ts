@@ -16,9 +16,11 @@ const getChatById = vi.fn();
 const addChatsUpdatedListener = vi.fn();
 vi.mock("./models/Chats", () => ({ createChat, getChatById, addChatsUpdatedListener }));
 const loadAccounts = vi.fn(async () => {});
+const adoptLanes = vi.fn();
 vi.mock("./models/Providers", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./models/Providers")>()),
   loadAccounts,
+  adoptLanes,
 }));
 vi.mock("./presence", () => ({
   startPresenceReporting: vi.fn(),
@@ -190,6 +192,19 @@ describe("the embed API", () => {
 
     expect(loadAccounts).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(redraw).toHaveBeenCalled());
+  });
+
+  it("takes the root's provider list and redraws", async () => {
+    framed();
+    const { connectChatToShell } = await loadShell();
+    connection = connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
+    redraw.mockClear();
+    const lanes = [{ id: "claude" }] as unknown as Parameters<typeof adoptLanes>[0];
+
+    window.chatPageEmbed?.adoptLanes(lanes);
+
+    expect(adoptLanes).toHaveBeenCalledWith(lanes);
+    expect(redraw).toHaveBeenCalled();
   });
 
   it("is absent on a top-level visit, which no root drives", async () => {

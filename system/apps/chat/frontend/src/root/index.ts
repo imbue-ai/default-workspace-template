@@ -44,7 +44,9 @@ import {
 import type { AppliedIntake, PendingIntake } from "../models/Chats";
 import {
   accountForFirstSend,
+  areLanesLoaded,
   closeProviderChooser,
+  getLanes,
   getSelectedAccount,
   isProviderChooserOpen,
   loadAccountsWithRetry,
@@ -414,8 +416,12 @@ const ChatRoot: m.Component = {
           ? m(ProviderChooserModal, {
               onDismiss: closeProviderChooser,
               // However the chooser closes (dismissed, done, or an account picked), a sign-in made in it does not
-              // reach the chat pages' own account lists, so they read theirs again.
-              onremove: () => pool?.accountsChanged(),
+              // reach the chat pages' own account lists, so they read theirs again; the provider list it fetched
+              // goes to them as is.
+              onremove: () => {
+                if (areLanesLoaded()) pool?.setLanes(getLanes());
+                pool?.accountsChanged();
+              },
             })
           : null,
         pendingPick === null

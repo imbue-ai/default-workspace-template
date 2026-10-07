@@ -9,6 +9,7 @@
  */
 
 import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
+import type { Lane } from "./models/Providers";
 
 export interface ChatPageEmbedApi {
   /** The handshake the shell gave the root, passed down so the page adopts the same client. */
@@ -23,6 +24,8 @@ export interface ChatPageEmbedApi {
   setCompact(isCompact: boolean): void;
   /** The root's provider chooser closed: re-read the account list, which a sign-in there does not reach. */
   accountsChanged(): void;
+  /** The provider list the root fetched, so this page's chooser opens on it rather than fetching it again. */
+  adoptLanes(lanes: Lane[]): void;
 }
 
 declare global {
