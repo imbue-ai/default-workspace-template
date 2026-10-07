@@ -661,13 +661,15 @@ def _cancel_compaction_with_chord(
     restart_drain_to_base: Callable[[], str],
     try_message_lock: Callable[[], AbstractContextManager[bool]],
     get_in_flight_block: Callable[[], str],
+    is_compaction_in_flight: Callable[[], bool],
     now: Callable[[], float],
 ) -> str:
     """Cancel a compaction running with no turn in flight and an empty mirror; return the block.
 
     The same bounded under-lock re-check as the turn's chord path: a message that parked while we
-    waited routes to the base (a chord would flush it into a new turn), and a lock held past the
-    wait takes the hammer with the in-flight send folded in.
+    waited routes to the base (a chord would flush it into a new turn), a lock held past the wait
+    takes the hammer with the in-flight send folded in, and a compaction that finished meanwhile
+    with no turn started is a no-op.
     """
     process_marker = agent_state_dir / CLAUDE_PROCESS_STARTED_MARKER_FILENAME
     if not is_tap_binding_active(keybindings_path, process_marker):
@@ -679,6 +681,8 @@ def _cancel_compaction_with_chord(
             return _combine_return_block(restart_drain_to_base(), get_in_flight_block())
         if len(watcher.get_queued_messages()) > 0:
             return restart_drain_to_base()
+        if not is_compaction_in_flight() and not (agent_state_dir / ACTIVE_MARKER_FILENAME).exists():
+            return ""
     _record_stop(str(agent_state_dir), now=now)
     if not press_chord():
         return _drain_to_base_under_message_lock(watcher, restart_drain_to_base, try_message_lock, get_in_flight_block)
@@ -714,7 +718,8 @@ def execute_claude_stop_to_composer(
     - Mirror EMPTY, no ``active`` marker, compacting -> the chord, which cancels the compaction
       (a sweep's or a composer's /compact fires no ``UserPromptSubmit``, so no ``active`` marker
       exists while it runs). Nothing on disk confirms a cancelled compaction, so the chord is
-      not watched; an inactive binding or a failed press falls back to the base, which ends it.
+      not watched; an inactive binding or a failed press falls back to the base, which ends it,
+      and a compaction that ended while the stop waited for the lock is a no-op.
     - Mirror EMPTY, no ``active`` marker, not compacting -> ``""``: no turn, nothing queued;
       composer untouched.
     - Mirror EMPTY, a dialog / inactive binding / no live session -> the base (same bounded-lock
@@ -761,6 +766,7 @@ def execute_claude_stop_to_composer(
                 restart_drain_to_base=restart_drain_to_base,
                 try_message_lock=try_message_lock,
                 get_in_flight_block=get_in_flight_block,
+                is_compaction_in_flight=is_compaction_in_flight,
                 now=now,
             )
         # No turn in flight, no compaction, and nothing queued: a pure no-op.

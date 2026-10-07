@@ -709,6 +709,26 @@ def test_stop_with_no_open_turn_while_compacting_presses_the_chord(tmp_path: Pat
     assert lock_record == ["enter", "exit"]
 
 
+def test_stop_while_compacting_is_a_noop_when_the_compaction_ended_during_the_lock_wait(tmp_path: Path) -> None:
+    """A compaction that finished while the stop waited for the lock leaves nothing to cancel: no chord."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path, active=False)
+    recorder = _StopRecorder()
+    in_flight_readings = iter([True, False])
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([[]], None),
+        press_chord=recorder.press_chord,
+        mark_idle=recorder.mark_idle,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: nullcontext(True),
+        is_compaction_in_flight=lambda: next(in_flight_readings),
+    )
+    assert block == ""
+    assert recorder.presses == []
+    assert recorder.base_calls == 0
+
+
 def test_stop_while_compacting_restarts_a_message_queued_behind_it(tmp_path: Path) -> None:
     """A message that parked while the stop waited for the lock goes back to the composer, not into a new turn."""
     state_dir, keybindings_path = _make_agent_paths(tmp_path, active=False)
