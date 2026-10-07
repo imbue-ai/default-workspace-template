@@ -4216,7 +4216,7 @@ def test_a_compact_command_before_the_first_reply_is_declined_and_not_sent(
                 .post(f"/api/chats/{agent_info.id}/message", json={"message": "/compact"})
             )
 
-        assert response.status_code == 500
+        assert response.status_code == 409
         assert response.get_json() == {"detail": "Nothing to compact yet.", "kind": "nothing_to_compact"}
         assert messenger.sent == []
         assert agent_info.id not in manager._compaction_pending_by_agent

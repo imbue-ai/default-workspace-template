@@ -447,10 +447,12 @@ pending request, since a cancelled compaction reports no completion; a stop that
 found nothing to interrupt leaves them alone. Codex and Pi interrupts do not
 cancel a compaction (`can_interrupt_compaction`), so their stop button is hidden
 while they compact. A `/compact` typed in a Claude chat's composer before the
-agent's first reply is declined with "Nothing to compact yet." and never reaches
-Claude, which would refuse it only after its `PreCompact` hook had written the
-marker; a `/compact` Claude Code refuses for any other reason leaves the status
-up until the 10-minute timeout or the stop button clears it.
+agent's first reply is declined with "Nothing to compact yet." (a 409 with
+`kind: nothing_to_compact`, which the composer shows as a declined-command
+notice, keeping the typed text) and never reaches Claude, which would refuse it
+only after its `PreCompact` hook had written the marker; a `/compact` Claude
+Code refuses for any other reason leaves the status up until the 10-minute
+timeout or the stop button clears it.
 
 **Why a chat was compacted.** The "Context was compacted" pill has a "why?"
 button whose popover reads the event's `compaction_cause`:

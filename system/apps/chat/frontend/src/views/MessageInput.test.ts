@@ -784,6 +784,33 @@ describe("MessageInput send failure notice", () => {
     expect(text).toContain("Force");
   });
 
+  it("shows a /compact with nothing to compact yet as a declined command, keeping the typed text", async () => {
+    mocks.sendMessage.mockRejectedValueOnce({
+      response: { detail: "Nothing to compact yet.", kind: "nothing_to_compact" },
+      toString: () => "Nothing to compact yet.",
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const component = MessageInput();
+
+    const after = await typeAndSend(component, "agent-1", "/compact");
+
+    const text = renderedText(after);
+    expect(text).toContain("/compact wasn't sent");
+    expect(text).toContain("Nothing to compact yet.");
+    expect(text).not.toContain("Couldn't send your message");
+    expect(text).not.toContain("Retry");
+    expect(text).not.toContain("Force");
+    expect(text).not.toContain("terminal");
+    expect(findByTag(after, "textarea")?.attrs?.value).toBe("/compact");
+    expect(error).not.toHaveBeenCalled();
+    error.mockRestore();
+
+    (findByClass(after, "notice-dismiss")!.attrs!.onclick as () => void)();
+    expect(renderedText(component.view!({ attrs: { chatId: "agent-1" } } as never))).not.toContain(
+      "/compact wasn't sent",
+    );
+  });
+
   it("removes the delivered message even when Force drained a queue block above it", async () => {
     // Force prepends the rescued queue block BEFORE sending, so the delivered message is no
     // longer at the front of the composer -- a prefix-only strip would leave it there, sent and
