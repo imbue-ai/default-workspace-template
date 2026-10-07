@@ -228,37 +228,38 @@ describe("user-message-display compaction pill Why? popover", () => {
 
   type WhyButtonVnode = m.Vnode<{ onclick: () => void; "aria-expanded": string; "aria-label": string }>;
 
-  /** The "Why?" button's vnode (a Button component, so found by the marker in its `extra`). */
-  function findWhyButton(node: unknown): WhyButtonVnode | null {
+  type AttrsVnode = { attrs?: Record<string, unknown>; children?: unknown };
+
+  /** The first vnode in the tree, depth first, whose attrs `matches` accepts. */
+  function findVnode(node: unknown, matches: (attrs: Record<string, unknown>) => boolean): AttrsVnode | null {
     if (node == null || typeof node !== "object") return null;
     if (Array.isArray(node)) {
       for (const child of node) {
-        const found = findWhyButton(child);
+        const found = findVnode(child, matches);
         if (found !== null) return found;
       }
       return null;
     }
-    const v = node as { attrs?: { extra?: unknown }; children?: unknown };
-    if (typeof v.attrs?.extra === "string" && v.attrs.extra.includes("compaction-why-button")) {
-      return v as WhyButtonVnode;
-    }
-    return findWhyButton(v.children);
+    const v = node as AttrsVnode;
+    if (v.attrs !== undefined && matches(v.attrs)) return v;
+    return findVnode(v.children, matches);
+  }
+
+  /** The "Why?" button's vnode (a Button component, so found by the marker in its `extra`). */
+  function findWhyButton(node: unknown): WhyButtonVnode | null {
+    const found = findVnode(
+      node,
+      (attrs) => typeof attrs.extra === "string" && attrs.extra.includes("compaction-why-button"),
+    );
+    return found === null ? null : (found as unknown as WhyButtonVnode);
   }
 
   function findPopover(node: unknown): m.Vnode | null {
-    if (node == null || typeof node !== "object") return null;
-    if (Array.isArray(node)) {
-      for (const child of node) {
-        const found = findPopover(child);
-        if (found !== null) return found;
-      }
-      return null;
-    }
-    const v = node as { attrs?: { className?: unknown }; children?: unknown };
-    if (typeof v.attrs?.className === "string" && v.attrs.className.includes("compaction-why-popover")) {
-      return v as m.Vnode;
-    }
-    return findPopover(v.children);
+    const found = findVnode(
+      node,
+      (attrs) => typeof attrs.className === "string" && attrs.className.includes("compaction-why-popover"),
+    );
+    return found === null ? null : (found as m.Vnode);
   }
 
   /** The open popover mounted into a detached element, since its body is trusted markdown HTML. */
