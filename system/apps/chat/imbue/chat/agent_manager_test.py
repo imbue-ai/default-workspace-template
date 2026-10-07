@@ -5621,8 +5621,7 @@ def test_an_interrupt_clears_the_compacting_marker_and_the_pending_request(
     marker = _write_compacting_marker(state_dir, "manual")
     agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic())
     assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
-    agent_info = agent_manager.get_agent_info_by_id(agent_id)
-    assert agent_info is not None
+    agent_info = _compaction_agent_info(agent_manager, agent_id)
 
     agent_manager.clear_compaction_after_interrupt(agent_info)
 
@@ -5646,8 +5645,7 @@ def test_an_interrupt_that_cannot_remove_the_marker_still_clears_the_request(
 ) -> None:
     agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path)
     agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic())
-    agent_info = agent_manager.get_agent_info_by_id(agent_id)
-    assert agent_info is not None
+    agent_info = _compaction_agent_info(agent_manager, agent_id)
     # A directory where the marker file should be: unlinking it fails with an OSError.
     blocked_state_dir = tmp_path / "blocked"
     (blocked_state_dir / COMPACTING_MARKER_FILENAME).mkdir(parents=True)
@@ -5774,8 +5772,7 @@ def test_is_compaction_in_flight_reads_a_fresh_marker_or_a_live_request(
     agent_manager: AgentManager, tmp_path: Path
 ) -> None:
     agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
-    agent_info = agent_manager.get_agent_info_by_id(agent_id)
-    assert agent_info is not None
+    agent_info = _compaction_agent_info(agent_manager, agent_id)
     assert not agent_manager.is_compaction_in_flight(agent_info)
 
     stale_marker = _write_compacting_marker(
