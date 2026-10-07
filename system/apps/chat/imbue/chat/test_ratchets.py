@@ -56,20 +56,6 @@ def test_prevent_bare_except() -> None:
 
 
 def test_prevent_broad_exception_catch() -> None:
-    # One for the intentional catch-all wrapping the creation thread's body in
-    # agent_manager._run_creation. The thread runs with is_checked=False, so any
-    # exception that escapes is silently swallowed; without that catch-all a bug
-    # anywhere inside leaves the chat's page waiting on its create forever,
-    # because the provisional chat is never settled and provisional_chat_completed
-    # never fires. Treat this one as load-bearing rather than sloppy.
-    # One for auth_flows._credentials_restored_on_error, which puts the previous
-    # credential back on any failure of the write inside it and re-raises: a
-    # half-written credential in a live account's folder would break every agent
-    # bound to it, silently, at its next turn.
-    # One for antigravity's flush worker in watcher._run_flush_worker:
-    # same thread-boundary shape. The worker is the ONLY thing that ever delivers
-    # a held message, so an escaping exception would strand every queued message
-    # for the life of the process; it logs and keeps looping instead.
     rc.check_broad_exception_catch(_DIR, snapshot(6))
 
 
