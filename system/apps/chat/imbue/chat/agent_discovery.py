@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from collections.abc import Iterator
 from collections.abc import Sequence
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -26,6 +28,7 @@ from imbue.mngr.api.list import list_agents
 from imbue.mngr.api.message import MessageResult
 from imbue.mngr.api.message import send_key_chord_to_agents
 from imbue.mngr.api.message import send_message_to_agents
+from imbue.mngr.api.providers import close_provider_instances_for_context
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.config.data_types import PluginConfigT
 from imbue.mngr.config.loader import load_config
@@ -66,32 +69,47 @@ class AgentInfo(FrozenModel):
     create_time: datetime | None = Field(default=None, description="When the agent was created, if known")
 
 
-def _get_mngr_context() -> tuple[MngrContext, ConcurrencyGroup]:
-    # strict=False: a settings file written for a newer mngr than the one this
-    # process imported must degrade to a logged warning, not a parse error. This
-    # server re-reads `.mngr/settings.toml` through long-lived in-memory code, so
-    # during an update the file can briefly be newer than the code -- and a strict
-    # parse would turn every agent listing and message send into a 500, taking
-    # down the very chat channel needed to finish the update. `mngr config set`
-    # and the CLI keep strict parsing; only this live read degrades.
+@contextmanager
+def mngr_context(
+    close_providers: Callable[[MngrContext], None] = close_provider_instances_for_context,
+) -> Iterator[MngrContext]:
+    """A fresh mngr context for one operation, released on exit.
+
+    mngr caches every provider it builds against a context, keyed by the context's identity,
+    and only ``close_provider_instances_for_context`` removes them; without the close, each
+    operation's context, its providers and the output of every process its group ran stay in
+    that cache for the life of the server. Nothing from the context may be used after the block.
+
+    The group is exited by hand rather than with ``with cg:``: its ``__exit__`` wraps an
+    in-flight exception in a ``ConcurrencyExceptionGroup``, which would turn the ``MngrError``
+    callers catch (an ``AgentNotFoundError``, say) into an uncaught group.
+
+    ``close_providers`` exists so a test can substitute a close that fails; production callers
+    pass nothing.
+    """
     cg = ConcurrencyGroup(name="chat-app")
     cg.__enter__()
     try:
-        pm = get_or_create_plugin_manager()
-        mngr_ctx = load_config(pm, cg, is_interactive=False, strict=False)
-    except BaseException:
+        # strict=False: a settings file written for a newer mngr than the one this
+        # process imported must degrade to a logged warning, not a parse error. This
+        # server re-reads `.mngr/settings.toml` through long-lived in-memory code, so
+        # during an update the file can briefly be newer than the code -- and a strict
+        # parse would turn every agent listing and message send into a 500, taking
+        # down the very chat channel needed to finish the update. `mngr config set`
+        # and the CLI keep strict parsing; only this live read degrades.
+        mngr_ctx = load_config(get_or_create_plugin_manager(), cg, is_interactive=False, strict=False)
+        try:
+            yield mngr_ctx
+        finally:
+            close_providers(mngr_ctx)
+    finally:
         cg.__exit__(None, None, None)
-        raise
-    return mngr_ctx, cg
 
 
 def read_plugin_config(name: str, config_type: type[PluginConfigT]) -> PluginConfigT:
     """A plugin's config as this workspace's mngr resolves it: its defaults when no config file sets it."""
-    mngr_ctx, cg = _get_mngr_context()
-    try:
+    with mngr_context() as mngr_ctx:
         return mngr_ctx.get_plugin_config(name, config_type)
-    finally:
-        cg.__exit__(None, None, None)
 
 
 def _read_claude_config_dir_from_env(env_file: Path) -> Path | None:
@@ -156,8 +174,7 @@ def discover_agents(
     exclude_filters: tuple[str, ...] = (),
 ) -> list[AgentInfo]:
     """List all mngr-managed agents."""
-    mngr_ctx, cg = _get_mngr_context()
-    try:
+    with mngr_context() as mngr_ctx:
         result = list_agents(
             mngr_ctx=mngr_ctx,
             is_streaming=False,
@@ -166,11 +183,8 @@ def discover_agents(
             provider_names=provider_names,
             error_behavior=ErrorBehavior.CONTINUE,
         )
-    finally:
-        cg.__exit__(None, None, None)
-
-    # Use default host dir from mngr config for local agents
-    default_host_dir = mngr_ctx.config.default_host_dir
+        # Use default host dir from mngr config for local agents
+        default_host_dir = mngr_ctx.config.default_host_dir
 
     agents: list[AgentInfo] = []
     for agent_details in result.agents:
@@ -354,8 +368,7 @@ class MngrMessenger(FrozenModel):
         resolves to exactly the intended agent, never fanning out across same-named
         agents on other hosts. STOPPED agents are auto-started (`is_start_desired=True`).
         """
-        mngr_ctx, cg = _get_mngr_context()
-        try:
+        with mngr_context() as mngr_ctx:
             if known_locations:
                 result = self.send(known_locations, message, mngr_ctx)
                 if result.successful_agents:
@@ -365,8 +378,6 @@ class MngrMessenger(FrozenModel):
             if result.successful_agents:
                 return None
             return _first_failure(result)
-        finally:
-            cg.__exit__(None, None, None)
 
     def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
         """Press ``key`` into the agent with ``agent_id`` at ``known_locations``, else discovery.
@@ -376,14 +387,11 @@ class MngrMessenger(FrozenModel):
         text and never auto-starts a stopped agent. Returns True when the chord reached the
         agent.
         """
-        mngr_ctx, cg = _get_mngr_context()
-        try:
+        with mngr_context() as mngr_ctx:
             if known_locations and self.press(known_locations, key, mngr_ctx).successful_agents:
                 return True
             matches = self.discover(agent_id, mngr_ctx)
             return bool(self.press(matches, key, mngr_ctx).successful_agents)
-        finally:
-            cg.__exit__(None, None, None)
 
 
 def start_agent(agent_name: str) -> None:
@@ -405,8 +413,7 @@ def start_agent(agent_name: str) -> None:
     Raises ``MngrError`` (e.g. ``AgentNotFoundError`` if the agent does
     not exist, or a start failure) -- callers surface these to the user.
     """
-    mngr_ctx, cg = _get_mngr_context()
-    try:
+    with mngr_context() as mngr_ctx:
         address = AgentAddress(agent=AgentName(agent_name))
         host_ref, agent_ref = find_one_agent(address, mngr_ctx)
         resolve_to_started_host_and_running_agent(
@@ -415,5 +422,3 @@ def start_agent(agent_name: str) -> None:
             allow_auto_start=True,
             mngr_ctx=mngr_ctx,
         )
-    finally:
-        cg.__exit__(None, None, None)
