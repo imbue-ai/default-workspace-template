@@ -60,15 +60,12 @@
       };
       document.querySelector(".asked-path").textContent = decode(location.pathname);
 
-      // The same beacon the listing and file pages post, so the window keeps this address and
-      // is titled after the name that was asked for.
-      if (window.parent !== window) {
-        const title = segments.length === 0 ? "Files" : decode(segments[segments.length - 1]);
-        window.parent.postMessage(
-          { type: "shell:location", path: location.pathname + location.search, title },
-          "*",
-        );
-      }
+      // The same app contract the listing and file pages speak (shell.js), and the same beacon, so
+      // the window keeps this address and is titled after the name that was asked for.
+      const title = segments.length === 0 ? "Files" : decode(segments[segments.length - 1]);
+      import("/home/user/workspace/system/apps/system_interface/imbue/system_interface/static/_static/app_contract.js")
+        .then(({ connectToShell }) => connectToShell({}).location(location.pathname + location.search, title))
+        .catch((error) => console.warn("[files] the app contract did not load", error));
 
       // Walk up to the first folder that exists. A folder's listing is asked for with a trailing
       // slash, since dufs answers a missing one that way with a listing whose ``dir_exists`` is
