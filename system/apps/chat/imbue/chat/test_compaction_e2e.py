@@ -60,7 +60,8 @@ pytestmark = [
 _COMPACTING_LABEL = "Compacting…"
 _COMPACTING_THEN_REPLYING_LABEL = "Compacting, then replying…"
 
-# The "Why?" popover's text for each cause, as ``compactionCauseText`` in ``user-message-display.ts`` words it.
+# The "Why?" popover's text for each cause as the page renders it: the markdown ``compactionCauseText`` in
+# ``user-message-display.ts`` returns, with its inline code read as plain text.
 _CAUSE_TEXT_BY_CAUSE: Mapping[str | None, str] = {
     "idle": "Compacted while idle to keep replies fast and cheap. Change this under Auto-compact in the model menu.",
     "manual": "Compacted because you asked (/compact).",
