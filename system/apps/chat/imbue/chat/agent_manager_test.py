@@ -3871,8 +3871,9 @@ def _recorded_chat(
     broadcaster: WebSocketBroadcaster,
     mngr_binary: str | None = None,
     store: InMemoryChatRecordStore | None = None,
+    archived_state: str = "STOPPED",
 ) -> tuple[AgentManager, InMemoryChatRecordStore, str, str]:
-    """A manager tracking a chat that moved from ``first`` (archived, stopped) to ``second`` (running)."""
+    """A manager tracking a chat that moved from ``first`` (archived, ``archived_state``) to ``second`` (running)."""
     store = store if store is not None else InMemoryChatRecordStore()
     manager = AgentManager.build(
         broadcaster, chat_record_store=store, mngr_binary=mngr_binary if mngr_binary is not None else "mngr"
@@ -3882,7 +3883,7 @@ def _recorded_chat(
         manager,
         first,
         name=f"archived-1-Chat-1-{first}",
-        state="STOPPED",
+        state=archived_state,
         labels={
             "account": "acct-1",
             "archived_at": "2026-09-01T13:01:00+00:00",
@@ -3981,7 +3982,7 @@ def test_the_verbs_of_a_recorded_chat_act_on_the_right_agents(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
-    manager, store, first, second = _recorded_chat(broadcaster, mngr_binary)
+    manager, store, first, second = _recorded_chat(broadcaster, mngr_binary, archived_state="WAITING")
     try:
         manager.rename_chat(first, "New Name")
         with manager._lock:
@@ -3989,7 +3990,7 @@ def test_the_verbs_of_a_recorded_chat_act_on_the_right_agents(
         assert manager.has_pending_permission(ChatId(first))
         assert not manager.has_pending_permission(ChatId(second))
         # A sign-in restarts the chat's active agent and never its archived member, though
-        # both carry an ``account`` label.
+        # both carry an ``account`` label and both are live.
         assert manager.restart_agents_on_account("acct-1") == 0
         assert manager.restart_agents_on_account("acct-2") == 1
         manager.stop_chat(ChatId(first))
