@@ -19,6 +19,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from playwright.sync_api import Page
@@ -54,7 +55,6 @@ pytestmark = [
     ),
 ]
 
-_AGENT_NAME = "compaction-probe"
 _STAND_IN_API_KEY = "sk-ant-api03-stand-in-compaction"
 _REPLY_TEXT = "pong"
 _SUMMARY_TEXT = "Stand-in summary: the user asked for a one-word reply and got it."
@@ -159,14 +159,14 @@ def _prepare_mngr_profile(host_dir: Path, api: StandInAnthropicApi) -> None:
 
 
 @contextmanager
-def _real_claude_agent(project_dir: Path, log_path: Path) -> Iterator[AgentInfo]:
+def _real_claude_agent(project_dir: Path, log_path: Path, agent_name: str) -> Iterator[AgentInfo]:
     try:
         with open(log_path, "ab") as log:
             created = subprocess.run(
                 [
                     "mngr",
                     "create",
-                    _AGENT_NAME,
+                    agent_name,
                     "--type",
                     "claude",
                     "--no-connect",
@@ -181,12 +181,12 @@ def _real_claude_agent(project_dir: Path, log_path: Path) -> Iterator[AgentInfo]
                 timeout=_CREATE_TIMEOUT_SECONDS,
             )
         assert created.returncode == 0, f"mngr create failed:\n{log_path.read_text()[-4000:]}"
-        (agent,) = [candidate for candidate in discover_agents() if candidate.name == _AGENT_NAME]
+        (agent,) = [candidate for candidate in discover_agents() if candidate.name == agent_name]
         yield agent
     finally:
         with open(log_path, "ab") as log:
             subprocess.run(
-                ["mngr", "destroy", _AGENT_NAME, "--force"],
+                ["mngr", "destroy", agent_name, "--force"],
                 cwd=project_dir,
                 env=_subprocess_env(),
                 stdout=log,
@@ -230,7 +230,9 @@ def test_a_compact_typed_in_a_real_claude_chat_shows_compacting_then_lands_the_p
         _prepare_mngr_profile(Path(os.environ["MNGR_HOST_DIR"]), api)
         try:
             with (
-                _real_claude_agent(project_dir, tmp_path / "mngr.log") as agent,
+                _real_claude_agent(
+                    project_dir, tmp_path / "mngr.log", f"compaction-probe-{uuid4().hex[:12]}"
+                ) as agent,
                 _chat_app_over(agent, tmp_path / "chats") as served,
             ):
                 page.goto(f"{served.http_url}{chat_root_path(ChatId(agent.id))}")
