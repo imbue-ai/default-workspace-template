@@ -230,9 +230,7 @@ def test_a_compact_typed_in_a_real_claude_chat_shows_compacting_then_lands_the_p
         _prepare_mngr_profile(Path(os.environ["MNGR_HOST_DIR"]), api)
         try:
             with (
-                _real_claude_agent(
-                    project_dir, tmp_path / "mngr.log", f"compaction-probe-{uuid4().hex[:12]}"
-                ) as agent,
+                _real_claude_agent(project_dir, tmp_path / "mngr.log", f"compaction-probe-{uuid4().hex}") as agent,
                 _chat_app_over(agent, tmp_path / "chats") as served,
             ):
                 page.goto(f"{served.http_url}{chat_root_path(ChatId(agent.id))}")
