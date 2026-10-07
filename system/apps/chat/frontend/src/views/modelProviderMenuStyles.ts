@@ -244,9 +244,9 @@ export const FAST_LIMIT_INPUT_EXTRA =
  *  auto-compact submenus. Laid out like the limit row, so the settings under the choices read as
  *  a set; `whitespace-nowrap` because the label and the segments are one line. */
 export const DEFAULT_ROW = `${ROW_STATIC} whitespace-nowrap`;
-/** The phone layout's effort segments, small enough to end a row the height of the others: a
- *  24px segment in a 2px-padded, bordered well is 30px of the row's 32. A fixed width per
- *  segment, so the chosen one's heavier weight does not shift its neighbours. */
+/** The default row's segments: the segmented control at a size that ends a row the height of the
+ *  others, since a 24px segment in a 2px-padded, bordered well is 30px of the row's 32. A fixed
+ *  width per segment, so the chosen one's heavier weight does not shift its neighbours. */
 export const DEFAULT_SEGMENTS = `${SEGMENTS_WELL} ml-auto shrink-0 gap-0.5 p-[2px]`;
 const DEFAULT_SEGMENT_SHAPE = `${SEGMENT_SHAPE} h-6 w-10 text-(length:--font-size-helper)`;
 export const DEFAULT_SEGMENT = `${DEFAULT_SEGMENT_SHAPE} ${SEGMENT_OFF}`;
