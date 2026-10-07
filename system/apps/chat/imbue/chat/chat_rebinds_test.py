@@ -19,11 +19,13 @@ from imbue.chat.accounts import Account
 from imbue.chat.accounts import AccountError
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
+from imbue.chat.chat_autocompact import ChatAutocompactState
 from imbue.chat.chat_rebinds import RebindCancelledError
 from imbue.chat.chat_rebinds import RebindDeps
 from imbue.chat.chat_rebinds import RebindRunner
 from imbue.chat.chat_rebinds import rebind_cancel_refused_detail
 from imbue.chat.chat_rebinds import relabel_account_command
+from imbue.chat.chat_rebinds import relabel_autocompact_command
 from imbue.chat.chat_rebinds import start_command
 from imbue.chat.chat_records import ChatAgentEntry
 from imbue.chat.chat_records import ChatRecord
@@ -302,6 +304,7 @@ def _runner(workspace: _FakeWorkspace, **overrides: Any) -> RebindRunner:
 
 def test_the_relabel_and_start_argv_are_accepted_by_the_live_cli() -> None:
     assert_mngr_argv_valid(relabel_account_command("mngr", "agent-1", "acct-2"))
+    assert_mngr_argv_valid(relabel_autocompact_command("mngr", "agent-1", ChatAutocompactState(is_enabled=False)))
     assert_mngr_argv_valid(start_command("mngr", "Chat-1"))
 
 
