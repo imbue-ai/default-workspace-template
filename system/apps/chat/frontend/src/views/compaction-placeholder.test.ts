@@ -13,6 +13,7 @@ const agentState = vi.hoisted(() => ({
 }));
 vi.mock("../models/Chats", () => ({
   getChatById: () => ({ active_agent: agentState, handoff: null }),
+  getQueuedMessagesForChat: () => agentState.queued_messages,
 }));
 
 import { DEFAULT_CHAT_SETTINGS, resetChatSettingsForTests, updateChatSettings } from "../models/ChatSettings";

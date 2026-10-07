@@ -15,7 +15,7 @@ import m from "mithril";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
 import { isCompactionStatusShownIn } from "../models/ChatSettings";
 import { COMPACTING_STATE } from "../models/activityState";
-import { getChatById } from "../models/Chats";
+import { getChatById, getQueuedMessagesForChat } from "../models/Chats";
 import type { TranscriptEvent } from "../models/Response";
 import { compactingLabel } from "./ActivityIndicator";
 import { isStatusUserMessage } from "./message-classification";
@@ -41,7 +41,7 @@ function CompactionPlaceholder(initial: m.Vnode<CompactionPlaceholderAttrs>): m.
     view(vnode) {
       const { chatId, events } = vnode.attrs;
       if (newestCompactionPillId(events) !== pillIdAtMount) return null;
-      const hasQueuedMessages = (getChatById(chatId)?.active_agent.queued_messages ?? []).length > 0;
+      const hasQueuedMessages = getQueuedMessagesForChat(chatId).length > 0;
       return m(
         "div",
         { class: "compaction-placeholder my-3 flex justify-center", role: "status", "aria-live": "polite" },

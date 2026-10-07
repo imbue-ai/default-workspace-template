@@ -24,6 +24,7 @@ const agentState: { activity_state: string | null; harness: string; queued_messa
 const handoffState: { handoff: unknown } = { handoff: null };
 vi.mock("../models/Chats", () => ({
   getChatById: () => ({ active_agent: agentState, handoff: handoffState.handoff }),
+  getQueuedMessagesForChat: () => agentState.queued_messages,
 }));
 vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),

@@ -30,7 +30,7 @@ import m from "mithril";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
 import type { ToolCall, TranscriptEvent } from "../models/Response";
 import { COMPACTING_STATE } from "../models/activityState";
-import { getChatById } from "../models/Chats";
+import { getChatById, getQueuedMessagesForChat } from "../models/Chats";
 import { isCompactionStatusShownIn } from "../models/ChatSettings";
 import { handoffPhaseText } from "./handoff-phase";
 import { resolutionRequestIdOf } from "./message-classification";
@@ -246,7 +246,7 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
         return renderStrip(handoffPhaseText(chat.handoff, chat.active_agent.harness), `HANDOFF_${chat.handoff.phase}`);
       }
       const state = chat?.active_agent.activity_state ?? null;
-      const label = labelForActivityState(state, events, (chat?.active_agent.queued_messages ?? []).length > 0);
+      const label = labelForActivityState(state, events, getQueuedMessagesForChat(chatId).length > 0);
 
       if (state === COMPACTING_STATE) {
         cancelRelease();
