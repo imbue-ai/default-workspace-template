@@ -100,8 +100,10 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.observe import acquire_observe_lock
 from imbue.mngr.api.observe import release_observe_lock
+from imbue.mngr.api.providers import _instance_cache
 from imbue.mngr.errors import AgentIdNotFoundError
 from imbue.mngr.primitives import AgentId
+from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config as ShellConfig
@@ -167,6 +169,15 @@ def prepare_isolated_mngr_host_dir(host_dir: Path) -> None:
         "is_allowed_in_pytest = true\n\n[providers.modal]\nis_enabled = false\n\n[providers.docker]\nis_enabled = false\n"
     )
     (profile_dir / "tmux_onboarding_shown").write_text("")
+
+
+def provider_cache_keys() -> frozenset[tuple[ProviderInstanceName, int]]:
+    """The keys of mngr's provider-instance cache: one ``(provider name, id(mngr_ctx))`` per cached provider.
+
+    mngr offers no public view of the cache, so this reads its private dict, without the cache's
+    lock: fine in a single-threaded test.
+    """
+    return frozenset(_instance_cache)
 
 
 def is_e2e_browser_installed() -> bool:
