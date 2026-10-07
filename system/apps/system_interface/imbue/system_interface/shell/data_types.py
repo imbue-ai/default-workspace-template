@@ -2,6 +2,7 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from typing import Any
 from typing import Final
+from typing import Literal
 
 from app_manifest.manifest import DefaultShortcut
 from app_manifest.manifest import EntryMode
@@ -69,6 +70,17 @@ class ClientRecord(FrozenModel):
     entries: dict[str, EntryPresentation] = Field(
         default_factory=dict, description="The client's presentation of each pinned entry, by app name"
     )
+    shown_history: tuple[str, ...] = Field(
+        default=(),
+        description="What the client has shown on the phone layout, most recent last: window ids and 'home', "
+        "each at most once",
+    )
+
+
+class ClientShownRequest(FrozenModel):
+    """The body of ``POST /api/clients/<client_id>/shown``: the window the client now shows, or None for home."""
+
+    window_id: WindowId | None = Field(description="The window shown, or None for the home grid")
 
 
 class UserRecord(FrozenModel):
@@ -163,6 +175,14 @@ class ClientStateReport(FrozenModel):
     previous_desktop: str = Field(default="", description="The desktop it was on before, empty on connect")
 
 
+class PopOutStateReport(FrozenModel):
+    """The inbound ``client_state`` WebSocket message of a pop-out's page (desktop contracts.md section 6): the
+    client it belongs to, and no desktop, since the client's active desktop is its main window's."""
+
+    client_id: ClientId = Field(description="The client the pop-out belongs to")
+    is_pop_out: Literal[True] = Field(description="Marks the report as a pop-out's")
+
+
 class ClientActivityReport(FrozenModel):
     """The body of ``POST /api/client-activity`` (desktop contracts.md section 5.1): a message a client sent."""
 
@@ -189,7 +209,9 @@ class ClientReportOutcome(FrozenModel):
 
 
 # The launch path every app that declares none has, at its root, synthesized by the shell (desktop
-# contracts.md section 2). ``label`` is ``Open <display name>`` per app, filled in by ``effective_launch_paths``.
+# contracts.md section 2). Its ``label`` is the app's display name, filled in by
+# ``effective_launch_paths``: the row stands in a list beside rows an app labelled for itself, where
+# a verb reads as a different KIND of row rather than as the same row with a word in front of it.
 OPEN_LAUNCH_PATH_VALUE: Final[LaunchPathValue] = LaunchPathValue("/")
 
 
@@ -200,9 +222,7 @@ def effective_launch_paths(row: RegistryRow) -> tuple[RegistryLaunchPath, ...]:
         return row.launch_paths
     display = str(row.display_name) if row.display_name is not None else str(row.name)
     return (
-        RegistryLaunchPath(
-            id=OPEN_LAUNCH_PATH_ID, label=NonEmptyStr(f"Open {display}"), path=OPEN_LAUNCH_PATH_VALUE, params=()
-        ),
+        RegistryLaunchPath(id=OPEN_LAUNCH_PATH_ID, label=NonEmptyStr(display), path=OPEN_LAUNCH_PATH_VALUE, params=()),
     )
 
 
@@ -310,6 +330,15 @@ class DesktopsDocument(FrozenModel):
     desktops: tuple[Desktop, ...] = Field(description="Every desktop, in creation order; the first is the fallback")
 
 
+class DefaultShortcutsOfferedDocument(FrozenModel):
+    """The whole of ``default_shortcuts_offered.json``: the apps whose default shortcut the shell has offered."""
+
+    version: int = Field(description="The file format version")
+    apps: tuple[AppName, ...] = Field(
+        description="Every app whose default shortcut the shell has put on a desktop or found there, sorted"
+    )
+
+
 class WindowPlacement(FrozenModel):
     """Where one client keeps one window: its frame, state, and whether it is minimized."""
 
@@ -354,6 +383,9 @@ class WindowOpenRequest(FrozenModel):
     client_id: ClientId = Field(description="The requesting client, whose placement is written at once")
     if_present: IfPresent = Field(
         default=IfPresent.FOCUS, description="Focus a window already at the path, or open another"
+    )
+    minimized: bool = Field(
+        default=False, description="Whether a window this open creates is placed minimized for the client"
     )
 
 

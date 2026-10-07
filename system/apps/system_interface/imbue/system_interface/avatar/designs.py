@@ -60,7 +60,7 @@ class BundledDesign(FrozenModel):
     eyes_y: int = Field(description="Both eyes' centre, y")
 
 
-DEFAULT_DESIGN_ID: Final[DesignId] = DesignId("gummy-seal")
+GUMMY_SEAL_DESIGN_ID: Final[DesignId] = DesignId("gummy-seal")
 
 BUNDLED_DESIGNS: Final[tuple[BundledDesign, ...]] = (
     BundledDesign(
@@ -96,7 +96,7 @@ BUNDLED_DESIGNS: Final[tuple[BundledDesign, ...]] = (
         eyes_y=64,
     ),
     BundledDesign(
-        id=DEFAULT_DESIGN_ID,
+        id=GUMMY_SEAL_DESIGN_ID,
         label="Gummy seal",
         filename="15-gummy-seal.svg",
         eyes_left_x=36,
@@ -120,6 +120,25 @@ BUNDLED_DESIGNS: Final[tuple[BundledDesign, ...]] = (
         eyes_y=54,
     ),
 )
+
+# The imbue character: the one avatar the shell draws itself, as a physics rig in its own bundle, rather than as
+# a drawing this module animates through the shared stylesheet. It is listed, chosen, and stored exactly like any
+# other design -- only the drawing of it differs, and only in the client (see the frontend's `AvatarImage`).
+#
+# The asset is a still of its resting pose, for the places that need a picture rather than a rig: the chooser's
+# preview, and the image route. It is generated from the rig itself (the frontend's `src/views/character/stillFrame.ts`
+# says how) so it cannot drift from the pose the character actually holds; do not hand-edit it.
+LIVE_DESIGN_ID: Final[DesignId] = DesignId("imbue-character")
+LIVE_DESIGN_LABEL: Final[str] = "Imbue"
+_LIVE_DESIGN_FILENAME: Final[str] = "imbue-character.svg"
+
+DEFAULT_DESIGN_ID: Final[DesignId] = LIVE_DESIGN_ID
+
+
+def live_design_source() -> str:
+    """The still the shell serves for the character."""
+    return (ASSET_DIRECTORY / _LIVE_DESIGN_FILENAME).read_text(encoding="utf-8")
+
 
 # Deliberately a drawing format, not an embedded document: no scripts, style attributes, arbitrary stylesheets,
 # SMIL, hrefs, image loads, foreign content, or filters. defusedxml refuses DTDs and entities; a presentation URL
@@ -279,7 +298,7 @@ def _apply_bundled_expression(root: Element, design: BundledDesign, is_awake: bo
 
 def _apply_bundled_motion(root: Element, design: BundledDesign) -> None:
     """The seal paddles its flippers; every other bundled design has a motion of its own in the shared sheet."""
-    if design.id == DEFAULT_DESIGN_ID:
+    if design.id == GUMMY_SEAL_DESIGN_ID:
         body = root.find(f"{{{SVG_NAMESPACE}}}g[@class='{_BODY_CLASS}']")
         if body is None:
             raise InvalidShellValueError(f"bundled design {design.id} has no {_BODY_CLASS} group")
@@ -296,6 +315,11 @@ def _apply_bundled_motion(root: Element, design: BundledDesign) -> None:
 def render_design_svg(svg: str, mood: AvatarMood, is_preview: bool, design_id: str) -> str:
     """One isolated image of a design wearing ``mood``: the source stays untouched, the copy carries the mood, the
     shared stylesheet, and (for a bundled design) its expression and motion; a preview holds every pose still."""
+    return tostring(render_design_element(svg, mood, is_preview, design_id), encoding="unicode")
+
+
+def render_design_element(svg: str, mood: AvatarMood, is_preview: bool, design_id: str) -> Element:
+    """``render_design_svg``'s image as a tree, for a caller that places it inside a drawing of its own."""
     root = parse_design_svg(svg)
     root.set("data-mood", mood.value)
     styles = list(root.iter(_STYLE_TAG))
@@ -311,4 +335,4 @@ def render_design_svg(svg: str, mood: AvatarMood, is_preview: bool, design_id: s
             _apply_bundled_motion(root, design)
     if is_preview:
         SubElement(root, _STYLE_TAG).text = _PREVIEW_CSS
-    return tostring(root, encoding="unicode")
+    return root

@@ -22,8 +22,6 @@ from host_backup.config import (
     write_default_restic_env_template,
 )
 
-# --- parse_restic_env_file ---
-
 
 def test_parse_restic_env_file_handles_plain_keys() -> None:
     parsed = parse_restic_env_file(
@@ -48,9 +46,6 @@ def test_parse_restic_env_file_ignores_keyless_lines() -> None:
     assert parse_restic_env_file("=novalue\nGOOD=value\n") == {"GOOD": "value"}
 
 
-# --- load_restic_env ---
-
-
 def test_load_restic_env_returns_empty_when_absent(tmp_path: Path) -> None:
     assert load_restic_env(tmp_path / "missing.env") == {}
 
@@ -62,9 +57,6 @@ def test_load_restic_env_reads_existing(tmp_path: Path) -> None:
         "RESTIC_PASSWORD": "p",
         "AWS_ACCESS_KEY_ID": "k",
     }
-
-
-# --- missing_required_restic_keys ---
 
 
 def test_missing_required_restic_keys_reports_repo_and_password_when_empty() -> None:
@@ -96,9 +88,6 @@ def test_missing_required_restic_keys_treats_empty_value_as_missing() -> None:
     assert missing_required_restic_keys(env) == ["RESTIC_REPOSITORY"]
 
 
-# --- load_backup_config (tolerant loading) ---
-
-
 def test_load_backup_config_returns_defaults_when_absent(tmp_path: Path) -> None:
     config = load_backup_config(tmp_path / "missing.toml")
     assert config == BackupConfig()
@@ -126,6 +115,22 @@ def test_load_backup_config_applies_user_settings(tmp_path: Path) -> None:
     assert config.retention.keep_daily == 30
     assert config.retention.restore_marker_max_age_days == 7.0
     assert config.minimum_backup_gap_seconds == 60.0
+
+
+def test_extra_excludes_add_to_the_default_excludes(tmp_path: Path) -> None:
+    path = tmp_path / "backup.toml"
+    path.write_text("extra_excludes = ['**/data/.apps/pr-review/repos']\n")
+    config = load_backup_config(path)
+    assert config.effective_excludes == BackupConfig().excludes + (
+        "**/data/.apps/pr-review/repos",
+    )
+
+
+def test_extra_excludes_add_to_user_replaced_excludes(tmp_path: Path) -> None:
+    path = tmp_path / "backup.toml"
+    path.write_text("excludes = ['**/only-this']\nextra_excludes = ['**/and-this']\n")
+    config = load_backup_config(path)
+    assert config.effective_excludes == ("**/only-this", "**/and-this")
 
 
 def test_load_backup_config_applies_restore_marker_max_age(tmp_path: Path) -> None:
@@ -185,9 +190,6 @@ def test_load_backup_config_skips_invalid_retention_but_applies_valid_fields(
     assert config.retention.keep_hourly == 24
 
 
-# --- backwards-compatibility shims for pre-refactor bootstraps ---
-
-
 def _shim_snapshot_settings() -> SnapshotSettings:
     # Constructed exactly the way an old bootstrap constructs it.
     return SnapshotSettings(
@@ -223,9 +225,6 @@ def test_shim_render_default_backup_toml_is_comment_only(tmp_path: Path) -> None
     path = tmp_path / "backup.toml"
     path.write_text(rendered)
     assert load_backup_config(path) == BackupConfig()
-
-
-# --- service events-dir publish / resolve (host-backup-now discovery) ---
 
 
 def test_resolve_service_events_dir_prefers_published_pointer(

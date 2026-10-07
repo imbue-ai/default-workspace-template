@@ -16,6 +16,7 @@ from flask import Response
 from flask import request
 from flask import send_file
 from flask import send_from_directory
+from flask.typing import ResponseReturnValue
 from loguru import logger as _loguru_logger
 from pydantic import ValidationError
 from simple_websocket import ConnectionClosed
@@ -24,11 +25,18 @@ from werkzeug.exceptions import NotFound
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import attach_state
 from imbue.system_interface.app_context import get_state
+from imbue.system_interface.avatar.icons import DEFAULT_ICON_SIZE
+from imbue.system_interface.avatar.routes import icon_png_response
 from imbue.system_interface.avatar.routes import register_avatar_routes
+from imbue.system_interface.avatar.routes import selected_design_id
 from imbue.system_interface.avatar.status import avatar_status_wire_json
 from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
+from imbue.system_interface.documents import MANIFEST_PATH
+from imbue.system_interface.documents import SHELL_BACKGROUND_COLOR
+from imbue.system_interface.documents import TOUCH_ICON_PATH
 from imbue.system_interface.documents import document_response
 from imbue.system_interface.documents import inject_base_path_meta_tag
+from imbue.system_interface.documents import inject_install_tags
 from imbue.system_interface.documents import inject_meta_tag
 from imbue.system_interface.presence import PresenceOutcome
 from imbue.system_interface.presence import PresentUser
@@ -38,6 +46,7 @@ from imbue.system_interface.request_helpers import error_response
 from imbue.system_interface.request_helpers import handle_unhandled_exception
 from imbue.system_interface.request_helpers import json_response
 from imbue.system_interface.shell.data_types import ClientStateReport
+from imbue.system_interface.shell.data_types import PopOutStateReport
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
@@ -349,14 +358,20 @@ def _inject_preview_meta_tag(html_content: str, is_preview: bool) -> str:
     return inject_meta_tag(html_content, PREVIEW_META_TAG, PREVIEW_META_CONTENT)
 
 
+def _root_path() -> str:
+    """The path prefix the shell is served under, with no trailing slash (empty at the origin's root)."""
+    return (request.script_root or "").rstrip("/")
+
+
 def _index() -> Response:
     state = get_state()
     index_path = state.static_directory / "index.html"
     if index_path.exists():
         staleness = _shell_update_staleness()
-        root_path = (request.script_root or "").rstrip("/")
+        root_path = _root_path()
         html_content = index_path.read_text()
         html_content = inject_base_path_meta_tag(html_content, root_path)
+        html_content = inject_install_tags(html_content, state.workspace_name.resolve(), root_path)
         html_content = _inject_update_staleness_meta_tag(html_content, staleness)
         html_content = _inject_preview_meta_tag(html_content, state.is_preview)
         return document_response(html_content, is_frontend_built=True)
@@ -468,6 +483,44 @@ def _presence_heartbeat_endpoint() -> Response:
     return json_response({"identity": identity.model_dump(exclude_none=True)})
 
 
+# The icon sizes the manifest offers: the touch icon's, and the two an installing browser asks a manifest for.
+_MANIFEST_ICON_SIZES: Final[tuple[int, ...]] = (DEFAULT_ICON_SIZE, 192, 512)
+_MANIFEST_MIMETYPE: Final[str] = "application/manifest+json"
+
+
+def _touch_icon() -> ResponseReturnValue:
+    """The selected avatar as the home-screen icon iOS asks the page for."""
+    return icon_png_response(selected_design_id(_shell()), DEFAULT_ICON_SIZE)
+
+
+def _web_manifest() -> Response:
+    """The web app manifest: the workspace's name, the shell's root as where it opens and what it covers, standalone,
+    the page colour, and the selected avatar's icons."""
+    root = f"{_root_path()}/"
+    name = get_state().workspace_name.resolve()
+    design_id = selected_design_id(_shell())
+    manifest = {
+        "name": name,
+        "short_name": name,
+        "start_url": root,
+        "scope": root,
+        "display": "standalone",
+        "background_color": SHELL_BACKGROUND_COLOR,
+        "theme_color": SHELL_BACKGROUND_COLOR,
+        "icons": [
+            {
+                "src": f"{root}api/avatars/{design_id}/icon.png?size={size}",
+                "sizes": f"{size}x{size}",
+                "type": "image/png",
+            }
+            for size in _MANIFEST_ICON_SIZES
+        ],
+    }
+    response = Response(json.dumps(manifest), mimetype=_MANIFEST_MIMETYPE)
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 def _serve_shell_module(basename: str) -> Response:
     """Serve one of the browser-side modules every app serves (the contract, desktop contracts.md section 7, and
     the element context menu) from the shell's own origin.
@@ -533,7 +586,8 @@ def _handle_client_state_message(
     ``client_state`` is the only message type clients send: it registers the browser's client id and the
     desktop it is on, on connect and on every switch. Registration feeds the broadcaster's client registry
     (which targets layout ops), the client record, and the client-activity log (a ``desktop_switch`` when
-    the report names a different previous desktop).
+    the report names a different previous desktop). A pop-out's report registers its connection under its
+    client and nothing more: the client's record and active desktop are its main window's.
     """
     try:
         parsed = json.loads(raw_message)
@@ -543,8 +597,11 @@ def _handle_client_state_message(
     if not isinstance(parsed, dict) or parsed.get("type") != "client_state":
         _loguru_logger.warning("Ignored unexpected WebSocket message type from client: {!r}", parsed)
         return False
+    body = {key: value for key, value in parsed.items() if key != "type"}
+    if body.get("is_pop_out") is True:
+        return _register_pop_out(body, client_queue, shell, is_first_report)
     try:
-        report = ClientStateReport.model_validate({key: value for key, value in parsed.items() if key != "type"})
+        report = ClientStateReport.model_validate(body)
     except ValidationError as e:
         _loguru_logger.warning("Ignored a malformed client_state report: {}", e.errors()[0]["msg"])
         return False
@@ -564,6 +621,23 @@ def _handle_client_state_message(
         )
         return True
     _log_client_switches(report, client_queue, shell)
+    return True
+
+
+def _register_pop_out(
+    body: dict[str, Any],
+    client_queue: "queue.Queue[str | None]",
+    shell: ShellState,
+    is_first_report: bool,
+) -> bool:
+    try:
+        report = PopOutStateReport.model_validate(body)
+    except ValidationError as e:
+        _loguru_logger.warning("Ignored a malformed pop-out client_state report: {}", e.errors()[0]["msg"])
+        return False
+    shell.broadcaster.set_pop_out_info(client_queue, str(report.client_id))
+    if is_first_report:
+        _loguru_logger.info("WS pop-out registered: client_id={} (conn {})", report.client_id, id(client_queue))
     return True
 
 
@@ -653,7 +727,7 @@ def _run_ws_broadcast_loop(websocket: Any, shell: ShellState, initial_presence: 
         _loguru_logger.info(
             "WS /api/ws connection closed (conn {}, client_id={}, reason: {})",
             id(client_queue),
-            client_info["client_id"] if client_info is not None else "<unregistered>",
+            client_info.client_id if client_info is not None else "<unregistered>",
             disconnect_reason,
         )
         ws_broadcaster.unregister(client_queue)
@@ -676,6 +750,8 @@ def create_application(state: SystemInterfaceState) -> Flask:
 
     application.add_url_rule("/", view_func=_index, methods=["GET"])
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
+    application.add_url_rule(TOUCH_ICON_PATH, view_func=_touch_icon, methods=["GET"])
+    application.add_url_rule(MANIFEST_PATH, view_func=_web_manifest, methods=["GET"])
     application.add_url_rule("/api/health", view_func=_health_endpoint, methods=["GET"])
     application.add_url_rule(APP_CONTRACT_ROUTE, view_func=_serve_app_contract, methods=["GET"])
     application.add_url_rule(CONTEXT_MENU_ROUTE, view_func=_serve_context_menu, methods=["GET"])

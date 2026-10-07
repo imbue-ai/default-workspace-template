@@ -15,7 +15,7 @@ The five principles of the workspace app model decide every question below: one 
 Two more are specific to this design:
 
 6. **The URL is the state.** A window is an app and a path, the page reports where it is, and every client follows. An app that keeps its state in its URL is shareable with no further work.
-7. **Rendering never rewrites truth.** Fitting a window to a smaller backdrop, placing a shortcut whose cell is off the grid, and forcing a window maximized in compact mode are all read-time policies; only the user's own gesture writes a frame or a cell.
+7. **Rendering never rewrites truth.** Fitting a window to a smaller backdrop, and placing a shortcut whose cell is off the grid are read-time policies, as is a phone showing a window its layout has minimized; only the user's own gesture writes a frame or a cell.
 
 ## 2. Glossary
 
@@ -34,7 +34,7 @@ The full definitions are in [concepts.md](concepts.md); this table is the vocabu
 | Launcher | The taskbar's text field and the menu it opens |
 | Tray widget | One component of the system tray; V1: Desktops |
 | Live page | The one iframe a client keeps for one window |
-| Compact mode, touch mode | Render policies from viewport width and pointer type |
+| Phone layout, touch mode | Render policies from the viewport's size and the pointer type |
 
 Retired: project, view, Everything, tab, panel, pane, instance (in the shell), address, dock (both senses), rail, New Tab page, seed layout, device kind.
 
@@ -49,6 +49,7 @@ An app that declares no launch path has one synthesized by the shell, `open`, la
 Section 8 has the manifest; contracts.md section 2 has the exact fields.
 
 The inventory is the registry plus liveness, refreshed when the registry file changes and on the liveness sweep, and pushed as `apps_updated`.
+A read of the registry that changes its rows also reconciles the desktops with it (3.2).
 It carries no lists of anything inside an app.
 
 ### 3.2 Desktops
@@ -58,6 +59,15 @@ The id is the slugified name and never changes; two names that shorten to one id
 Every desktop is shared: a window holds a resource (a terminal, a browser) for everyone, so a desktop that only one person could see would still be everyone's, and there is no private mode. What keeps users out of each other's way is that each arriving user gets a desktop of their own (3.10).
 A fresh workspace, and a workspace whose state directory holds no `desktops.json`, gets one desktop named `Home` with the theme's default wallpaper and the seeded shortcuts of 3.6.
 It is created on the first read of the desktops after the inventory has read the registry once, so its shortcuts are seeded from the apps that are actually registered rather than from an empty registry at boot.
+Apps register one at a time as their programs finish starting, so an app may register after `Home` was seeded; its default shortcut is added then rather than waited for.
+The shell records every app whose default shortcut it has offered in `default_shortcuts_offered.json`: the apps each new desktop was seeded with, and every app added as follows.
+On every read of the desktops and after every change of the registry's rows, each app with a default shortcut (3.6) that is not recorded has it added to every desktop, and is then recorded.
+A desktop that already holds a shortcut of that `(app, launch)` gets nothing.
+A desktop whose shortcuts are exactly the seed of the recorded apps that are registered is seeded again from every registered app, so it reads in launcher order however late each app registered.
+Any other desktop gets the shortcut at the first free cell in reading order, and nothing on it moves.
+A recorded app is never added again: a shortcut the user removed stays removed when its app registers again, on every boot and across restarts, and an app that deregisters changes nothing.
+A state directory holding `desktops.json` but no record counts every app with a shortcut on any desktop as recorded.
+A desktop created when no other desktop stands, such as `Home` seeded over a missing or unusable `desktops.json`, starts the record over from the apps it is seeded with.
 Deleting the last desktop is refused with `409`.
 Deleting a desktop closes its windows (their pages are destroyed in every client) and removes every client's layout of it; clients on it switch to the first remaining desktop.
 
@@ -102,7 +112,10 @@ A shortcut is `{target, mode, cell}` where `target` is `{kind: "launch", app, la
 `focus` raises the most recently focused window of that app in this client's layout of this desktop (restoring it when minimized) and runs the launch path only when there is none; `new` always runs it.
 A desktop holds at most one shortcut per `(app, launch)`.
 
-A new desktop is seeded from every registered, non-internal app's `default_shortcut`, in registry order, laid out in reading order from the grid origin.
+Every registered, non-internal app has at most one default shortcut: its manifest's `default_shortcut` when it declares one, whether or not that launch path takes typed or drafted text (none when it names a launch path the app does not offer); otherwise, when its row names a `program`, its first launch path that takes no text (one declaring neither a `text_param` nor a `draft_param`), or its first launch path when every one takes text, in `focus` mode. A shortcut of a launch path that takes text runs it with no text.
+A row naming no program and declaring no `default_shortcut` has none: such a row is a preview frame, an isolated test server, or an app registered before manifests without `forward_port.py --program`, while an app built from a manifest names one, and so does an app registered before manifests with `--program`.
+A new desktop is seeded from every app's default shortcut, in launcher order (by `launcher_rank`, lowest first, then the apps that declare none; registry order breaks every tie), laid out in reading order from the grid origin.
+An app that registers after a desktop was made is added to it as 3.2 says.
 The grid is `columns = max(1, floor((width - inset) / cell_width))` by `rows = max(1, floor((height - inset) / cell_height))` over the backdrop, with the cell size and inset from the theme (contracts.md section 10).
 Rendering places every shortcut that has a free cell inside the grid at its cell, then every other shortcut at the nearest free cell to its clamped cell (Euclidean distance in cell units, ties by column then row); no two shortcuts ever draw in one cell, and nothing is written.
 Dragging a shortcut writes its cell; dropping it on an occupied cell moves the occupant to the nearest free cell (that occupant's cell is written too).
@@ -123,6 +136,7 @@ The backdrop draws the wallpaper with `cover` fit, centred, over the theme's bac
 | What is inside an app, and its own verbs on those things | The app, in its pages |
 | Desktops: name, colour, glyph, wallpaper, shortcuts and cells | Shell, shared |
 | Which desktop was made for which user | Shell, in `users.json` |
+| Which apps' default shortcuts have been offered | Shell, in `default_shortcuts_offered.json` |
 | Which windows a desktop holds; each window's path and title | Shell, shared; the page reports path and title |
 | Each client's placements and stacking order; the active desktop | Shell, per client |
 | Taskbar entries, tray widgets, the launcher's contents | Derived in the browser |
@@ -133,8 +147,8 @@ The backdrop draws the wallpaper with `cover` fit, centred, over the theme's bac
 - The shell imports nothing from `imbue.mngr` or any app, never runs the `mngr` binary, names no app, and has no vocabulary for what is inside an app. The existing ratchets (`test_project_ratchets.py`) hold, and the instance vocabulary leaves the package.
 - The shell's state lives under `data/.state/system_interface/` and `data/.apps/system_interface/`; it reads and writes nothing under an mngr directory.
 - The only app the shell needs to boot and render is itself. With no other app registered, a desktop shows its wallpaper and an empty launcher.
-- A page's iframe is created once per window per client and is never re-parented; only a window's close, or its desktop's deletion, destroys it.
-- Rendering never writes: no frame, cell, or state is rewritten by a fit, a clamp, or a compact-mode override.
+- A page's iframe is created once per window per client and is never re-parented; only a window's close, or its desktop's deletion, destroys it. The phone layout is the exception: it keeps only the shown window's page and the pinned chat window's, and destroys the rest (`plan-phone-interface.md`).
+- Rendering never writes: no frame, cell, or state is rewritten by a fit or a clamp, and a phone showing a window writes no placement.
 - `postMessage` and `message` listeners exist only in the contract module, the shell's relay, the embed module, and an app's own declared relay module (the chat root page's), enforced by `test_embed_ratchets.py`.
 
 ### 3.10 Users and their desktops
@@ -161,7 +175,7 @@ Every other client has no placement and shows the window minimized in its taskba
 An agent op names the client it targets, which is the requesting client for this purpose.
 
 The cascade rule: the frame is the theme's default window size in fractions, at the cascade origin stepped once per window this client already has placed on the desktop, cycling after six.
-In compact mode the frame is written the same way and rendered maximized.
+A phone opens every window on the first desktop, placed minimized for itself alone (`plan-phone-interface.md`).
 
 The requesting client's live page for the window is created at the app origin plus the path (plus query params for a launch path) as soon as the placement lands.
 Other clients create the page when the window is first restored there, and keep it from then on.
@@ -229,8 +243,8 @@ Creating switches the creating client to the new desktop.
 
 ### 4.9 Shortcut gestures
 
-Single click selects; double click, Enter, or Space runs; on touch a tap runs, since a finger has no double tap worth asking for and nothing to select for; a drag beyond the threshold lifts the icon, shows the target cell, and drops it there; right-click or long-press opens the shortcut menu (Open, the complementary mode, Remove).
-Adding a shortcut: the launcher's tiles offer "Add to desktop" for each launch path, placed at the first free cell in reading order.
+Single click selects; double click, Enter, or Space runs; on touch a tap runs, since a finger has no double tap worth asking for and nothing to select for; a drag beyond the threshold lifts the icon, shows the target cell, and drops it there; right-click or long-press opens the shortcut menu (Open, the complementary mode, Remove from desktop).
+Adding a shortcut: the right-click menu of the launcher row of an app's default shortcut (3.6), and of a taskbar entry of the app, offers "Add to desktop", placed at the first free cell in reading order in the shortcut's mode, or "Remove from desktop" when the active desktop holds it (launcher plan section 4.2); no other launch path is offered.
 
 ### 4.10 The taskbar
 
@@ -239,11 +253,11 @@ Entry click: restore and raise when minimized, minimize when focused, raise othe
 Entry context menu: Restore or Minimize, Maximize or Restore, Close.
 A pinned window's entry is always present and may be drawn in the bar in a style or floating above the windows, as the client chooses; its menu's Close minimizes it rather than closing it, and it adds the presentation verbs (pinned-taskbar-entries plan sections 4.2 and 4.4).
 The tray's widgets are Presence (one profile picture per connected user, the viewer's own last and ringed, drawn only while two or more are connected; the share identity spec) and Desktops (concepts.md 2.8); each is one component with one popover, and adding another is adding a component to a list.
-The taskbar is always visible in V1; auto-hide is deferred.
+The taskbar is always visible on the desktop layout; auto-hide is deferred. A phone draws its own bar instead (`plan-phone-interface.md`).
 
 ### 4.11 The launcher
 
-The launcher field is a text input at the taskbar's left, with the placeholder "Start app or send message...".
+The launcher field is a text input at the taskbar's left, with the placeholder "Open an app or send a message".
 Focusing it opens a menu above it; typing filters the menu's rows (launcher-and-getting-started plan sections 3.1 and 3.5).
 The rows: one per launch path of every non-internal app, ranked apps first; a row per window of every desktop while typing (title and app name, switching desktop on choice); and, at the foot, the free-text rows, one per launch path that declares a `text_param`, which send the typed text (the chat's new chat as the primary, run by Enter with nothing else highlighted, and its send to an existing chat as the secondary, run by Ctrl+Enter).
 One row is always highlighted; the arrows move it, Enter runs it, a click runs the clicked row.
@@ -251,14 +265,14 @@ A choice opens a window on the active desktop and closes the menu; Escape and a 
 The "Start something" intents and the template shelves that were the New Tab page's are the Getting Started app's, which starts a chat with a seeded text through `shell:start-with-text`.
 The menu is never persisted and never a window.
 
-### 4.12 Compact mode and touch mode
+### 4.12 The phone layout and touch mode
 
-Compact mode is on while the viewport is narrower than the compact breakpoint; touch mode is on while the primary pointer is coarse.
-Both are `matchMedia` subscriptions that set `data-compact` and `data-touch` on the root element; every style keys off those attributes, and every behaviour reads the same two flags, so there is one source for each.
+A phone-sized viewport gets the phone layout instead of the desktop, as `plan-phone-interface.md` specifies.
+Touch mode is on while the primary pointer is coarse.
+Both are `matchMedia` subscriptions that set `data-phone` and `data-touch` on the root element; every style keys off those attributes, and every behaviour reads the same two flags, so there is one source for each.
 
-Compact: every window renders `MAXIMIZED` whatever its placement says, and the placement is not rewritten; the taskbar uses the compact height and shows icons only; the launcher field collapses to an icon that expands over the entries when tapped; the grid uses the compact cell size; window drag, resize, and snapping are off while shortcut drag stays on; the maximize and restore controls are hidden; minimize, close, and the taskbar are how windows are switched.
 Touch: hit targets are at least the theme's touch target size; long-press replaces right-click on windows, entries, and shortcuts; hover-revealed controls are always shown; resize handles are hidden; the inert-page rule and the shield work unchanged, since touch fires pointer events.
-A phone is both; a narrow desktop window is compact only; a touch laptop is touch only.
+A phone is both; a desktop browser window as small as a phone is phone only; a touch laptop or a tablet is touch only.
 
 ### 4.13 Keyboard
 
@@ -271,7 +285,7 @@ Window cycling and keyboard move and resize are deferred.
 
 ### 5.1 State files
 
-Under `data/.state/system_interface/`: `desktops.json`, `placements/<desktop_id>/<client_id>.json`, `clients.json`, `users.json` (the desktop made for each visiting user, 3.10), and the client-activity event log as today.
+Under `data/.state/system_interface/`: `desktops.json`, `default_shortcuts_offered.json` (the apps whose default shortcut the shell has offered, 3.2), `placements/<desktop_id>/<client_id>.json`, `clients.json`, `users.json` (the desktop made for each visiting user, 3.10), and the client-activity event log as today.
 Under `data/.apps/system_interface/`: `wallpapers/`.
 The old `projects.json`, `layouts/`, and `migrated.json` are ignored and left in place; a `CLEANUP:` note names them for deletion once migration lands.
 The boot-time `migrate_workspace_layouts.py` is removed from bootstrap and the apply, and deleted.
@@ -350,8 +364,8 @@ Touch needs nothing extra beyond `touch-action: none` on handles.
 ### 6.6 Theme and metrics
 
 `theme/default.css` extends `base.css` with the desktop tokens of contracts.md section 11.
-`metrics.ts` reads the ones behaviour needs (title bar height, taskbar heights, cell sizes, inset, minimum window size, minimum visible title width, snap threshold, drag threshold, touch target size) from `getComputedStyle(document.documentElement)` once at boot and again on `data-compact` or `data-touch` change, and hands the store a frozen `ThemeMetrics`.
-No metric is a literal in TypeScript, and the compact breakpoint is the one exception in the other direction: it is a TypeScript constant applied as a `matchMedia` query that sets `data-compact`, and CSS keys off the attribute, so it too lives once.
+`metrics.ts` reads the ones behaviour needs (title bar height, taskbar heights, cell sizes, inset, minimum window size, minimum visible title width, snap threshold, drag threshold, touch target size) from `getComputedStyle(document.documentElement)` once at boot and again on `data-phone` or `data-touch` change, and hands the store a frozen `ThemeMetrics`.
+No metric is a literal in TypeScript, and the phone breakpoint is the one exception in the other direction: it is a TypeScript constant applied as a `matchMedia` query on the viewport's size that sets `data-phone`, and CSS keys off the attribute, so it too lives once.
 
 ## 7. The app contract (v2)
 
@@ -388,7 +402,7 @@ Each keeps its pages, its own state, and its own verbs, and adopts the contract:
 
 The chat app serves three kinds of page on its origin:
 
-- `/` is the **chat root**: the chat list on the left (Gleb's rail, moved into the chat frontend: grouping of helper agents under their lead chat, status dots, rename, stop and start, delete, the account chooser, new-chat rows for chats still waiting for an account), and an inner iframe on the right showing the selected chat's page. The selection is the query parameter `chat`, so the root's path is `/?chat=<chat-id>`, which is what it reports as its location, with the selected chat's display name as the title. With no selection the root shows its list and an empty slot.
+- `/` is the **chat root**: the chat list on the left (Gleb's rail, moved into the chat frontend: grouping of helper agents under their lead chat, status dots, rename, stop and start, delete, the account chooser, new-chat rows for chats still waiting for an account), and an inner iframe on the right showing the selected chat's page. The selection is the query parameter `chat`, so the root's path is `/?chat=<chat-id>`, which is what it reports as its location, with the selected chat's display name as the title. With no selection the root shows the most recent chat, or with no chats one awaiting its first send; on a phone the list is a drawer over the chat, open while nothing is selected.
 - `POST /api/chats/intake` is where a text enters a chat from outside a chat page (the `new`, `send`, and `draft` launch paths, all POST): it creates or picks the chat and answers the root's path with it selected, `/?chat=<id>`, or with a pending intake for the root to finish (`/?intake=<token>`; the post-launch-paths plan section 3).
 - `/<chat-id>` is one chat and nothing else, exactly today's chat page, for direct launches (an agent's `open chat /<id>`, minds deep links, the inner frame); `/<chat-id>.<agent-id>.<session-id>` is a sub-agent view, also as today.
 
@@ -444,7 +458,7 @@ A grep for `dockview`, `New Tab`, and `app:chat?instance` in `apps/minds` finds 
 
 - **Reducers and geometry**: vitest over pure functions, plus the shared JSON vectors of 5.3, which `desktop_document_test.py` runs too.
 - **Backend**: unit tests beside each module; `test_layout_pipeline.py` for every agent op end to end.
-- **End to end**: `test_e2e.py` (Playwright, the real bundle, a registry of stub apps that are static pages speaking the contract): every open path, every window gesture and its persistence across reload, snap and un-snap, a second client seeing a window minimized, URL following across two clients with and without in-app navigation, shortcut drag with collision, desktop create, settings, and delete, the launcher's search and tiles, and the Desktops widget. Every scenario runs again at a phone viewport with touch emulation, asserting compact and touch behaviour.
+- **End to end**: `test_e2e.py` (Playwright, the real bundle, a registry of stub apps that are static pages speaking the contract): every open path, every window gesture and its persistence across reload, snap and un-snap, a second client seeing a window minimized, URL following across two clients with and without in-app navigation, shortcut drag with collision, desktop create, settings, and delete, the launcher's search and tiles, and the Desktops widget. The phone layout's scenarios run at a phone viewport, upright and on its side, with touch emulation (`plan-phone-interface.md`).
 - **Ratchets**: postMessage confinement (now allowing the chat root's relay), the shell names no app, the shell imports no mngr, and a new one: no literal pixel metric in `views/` or `reducers/`.
 - **Selectors** the minds e2e runner and these suites share are data attributes on the taskbar, entries, windows, shortcuts, and launcher, listed in contracts.md section 12.
 
@@ -460,7 +474,7 @@ The order is additive first: the apps learn the new contract and gain their laun
 2. **Manifest and registry, additive.** `launch_paths` beside `actions` in the manifest library, `forward_port.py` copying both, every built-in manifest declaring its launch paths. Verify: registry rows carry both; nothing else changes.
 3. **Apps.** Each built-in gains its pages of section 9 while keeping its instances API: the chat root at `/` and `/new` with the list moved in and the relay module allowlisted; the terminal wrapper and the `terminal-pty` split with `/new`; the browser's `/new`; the files beacon reporting a title; every page reporting path and title and handling navigate where it can. Verify under the old shell: every app still works in its tabs, and each new page works visited directly, on a laptop and on a phone.
 4. **The shell backend, new model beside the old.** `desktops.json`, placements, clients without device kind, the pure editor and the shared geometry vectors, the new routes and socket messages, the op route speaking the new verbs. Old routes still served. Verify: the new routes round-trip in `routes_test.py` and `test_layout_pipeline.py`.
-5. **The shell frontend.** The layered modules of section 6, the theme file, compact and touch modes, the launcher overlay hosting the New Tab sections, the two tray widgets; dockview and the rail deleted; the shell reads only the new routes; the chat page switches to the path form of `shell:open` (`openPath`). Verify by hand, on a laptop and on a phone: every behaviour of section 4 against the built-ins; a chat from a shortcut, from the launcher with a seeded message, from an agent, and from the minds "Ask an agent" path; a sub-agent view in its own window; two clients following one chat root's selection; two terminals and a reload reattaching; a files window reopening at its folder; a browser window following an agent's navigate.
+5. **The shell frontend.** The layered modules of section 6, the theme file, the phone layout and touch mode, the launcher overlay hosting the New Tab sections, the two tray widgets; dockview and the rail deleted; the shell reads only the new routes; the chat page switches to the path form of `shell:open` (`openPath`). Verify by hand, on a laptop and on a phone: every behaviour of section 4 against the built-ins; a chat from a shortcut, from the launcher with a seeded message, from an agent, and from the minds "Ask an agent" path; a sub-agent view in its own window; two clients following one chat root's selection; two terminals and a reload reattaching; a files window reopening at its folder; a browser window following an agent's navigate.
 6. **Deletion.** The shell's instance relay, tab route, projects, layouts, seeds, and migration; every app's instances API, nudge, `subagent` action, and sidecar; the `app_instances` library; the contract module's `open(address)`; `auto_open.py` retargeted to the op route's new `open`; ratchets tightened. Two leftovers of phase 4's side-by-side model go with the projects store: the desktop store's name, colour, and glyph validators become the only copies once `projects.py` and its validators are deleted (the desktop copies were written beside them rather than shared, since the tabbed side was already doomed), and the client record loses `device_kind`, `active_view`, and `previous_view`, with `clients.json` bumped to version 2 and a `client_state` report no longer able to reset a stored device kind. Verify: `test_e2e.py` green with stub apps, and a fresh workspace boots to its default desktop.
 7. **Tooling, docs, cleanup.** `layout.py` and the `manage-desktop` skill, the README and blueprint docs, the update apply's probes, the changelog entries, and the mngr-side list of section 12 filed as its own PR. The op route's read-only verbs (`context`, `desktops`, `list`) settle on the inventory document of contracts.md section 8 here, when `layout.py` learns to print it; phase 4 left `desktops` and `list` answering the desktops alone, since nothing read them yet. Verify: an agent arranges a desktop from a chat with no browser connected, then a browser connects and sees it.
 

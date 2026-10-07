@@ -72,6 +72,64 @@ describe("loadAccountsWithRetry", () => {
   });
 });
 
+describe("whenAccountsReadyToChoose", () => {
+  // A fresh module per test: the first account read it waits for is module state.
+  let providers: typeof import("./Providers");
+
+  beforeEach(async () => {
+    mockRequest.mockReset();
+    vi.resetModules();
+    providers = await import("./Providers");
+  });
+
+  it("settles only once the account list has been read, so a new chat never decides on the empty list", async () => {
+    let answer: (body: typeof ACCOUNTS_BODY) => void = () => {};
+    mockRequest.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    const settled = vi.fn();
+    const ready = providers.whenAccountsReadyToChoose().then(settled);
+
+    const loading = providers.loadAccounts();
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    expect(providers.getSelectedAccount()).toBeNull();
+
+    answer(ACCOUNTS_BODY);
+    await loading;
+    await ready;
+    expect(settled).toHaveBeenCalledOnce();
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+    expect(providers.getSelectedAccount()?.id).toBe("acct-1");
+  });
+
+  it("reads the list again when the first read named no account, so a sign-in on another page counts", async () => {
+    mockRequest.mockResolvedValueOnce({ accounts: [], mru: null }).mockResolvedValueOnce(ACCOUNTS_BODY);
+    await providers.loadAccounts();
+    expect(providers.getSelectedAccount()).toBeNull();
+
+    await providers.whenAccountsReadyToChoose();
+
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+    expect(providers.getSelectedAccount()?.id).toBe("acct-1");
+  });
+
+  it("does not read the list again when it already names an account", async () => {
+    mockRequest.mockResolvedValueOnce(ACCOUNTS_BODY);
+    await providers.loadAccounts();
+
+    await providers.whenAccountsReadyToChoose();
+
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("chooses from the list it has when the second read fails", async () => {
+    mockRequest.mockResolvedValueOnce({ accounts: [], mru: null }).mockRejectedValueOnce(new Error("offline"));
+    await providers.loadAccounts();
+
+    await expect(providers.whenAccountsReadyToChoose()).resolves.toBeUndefined();
+    expect(providers.getSelectedAccount()).toBeNull();
+  });
+});
+
 describe("startFlow", () => {
   beforeEach(() => {
     vi.useFakeTimers();

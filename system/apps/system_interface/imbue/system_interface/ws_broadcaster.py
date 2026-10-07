@@ -6,8 +6,10 @@ from collections.abc import Sequence
 from typing import Any
 
 from loguru import logger as _loguru_logger
+from pydantic import Field
 from pydantic import PrivateAttr
 
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 
 # Per-client buffer depth. Holds at most this many state-change broadcasts before
@@ -34,6 +36,18 @@ def _drain_queue(client_queue: queue.Queue[str | None]) -> None:
             is_drained = True
 
 
+class ConnectionRegistration(FrozenModel):
+    """What one open WebSocket said about itself in its ``client_state`` report (desktop contracts.md section 6)."""
+
+    client_id: str = Field(description="The client the connection's window belongs to")
+    active_desktop: str = Field(
+        description="The desktop the window last reported being on; empty for a pop-out's, which never reports one"
+    )
+    is_pop_out: bool = Field(
+        description="Whether the window is a pulled-out window's own desktop window rather than a desktop's"
+    )
+
+
 class WebSocketBroadcaster(MutableModel):
     """Manages WebSocket clients and broadcasts state updates.
 
@@ -54,12 +68,12 @@ class WebSocketBroadcaster(MutableModel):
     # successful enqueue. A client is only disconnected once its counter reaches
     # ``_MAX_CONSECUTIVE_QUEUE_FULL`` -- a brief stall is tolerated.
     _consecutive_queue_full_by_id: dict[int, int] = PrivateAttr(default_factory=dict)
-    # Self-reported identity of each connected client (client_id, active desktop),
-    # keyed by ``id(queue)``. Populated when the client sends its ``client_state``
-    # registration over the WebSocket; absent for clients that have not registered
-    # (yet). Entries die with the connection, so "connected client on desktop X"
-    # means exactly "an open, registered WebSocket whose latest report named X".
-    _client_info_by_queue_id: dict[int, dict[str, str]] = PrivateAttr(default_factory=dict)
+    # Self-reported identity of each connected window, keyed by ``id(queue)``. Populated when the window
+    # sends its ``client_state`` registration over the WebSocket; absent for windows that have not registered
+    # (yet). Entries die with the connection, so "connected client on desktop X" means exactly "an open,
+    # registered WebSocket whose latest report named X". A pop-out's registration names its client (so ops
+    # targeting the client reach it) and no desktop.
+    _client_info_by_queue_id: dict[int, ConnectionRegistration] = PrivateAttr(default_factory=dict)
 
     def register(self) -> queue.Queue[str | None]:
         """Register a new WebSocket client. Returns a queue to drain for messages."""
@@ -80,30 +94,37 @@ class WebSocketBroadcaster(MutableModel):
                 pass
 
     def set_client_info(self, client_queue: queue.Queue[str | None], client_id: str, active_desktop: str) -> None:
-        """Record (or update) the self-reported identity of one connected client: its id and the desktop it is on."""
+        """Record (or update) the self-reported identity of one connected desktop window: its client and the
+        desktop it is on."""
+        self._register(
+            client_queue, ConnectionRegistration(client_id=client_id, active_desktop=active_desktop, is_pop_out=False)
+        )
+
+    def set_pop_out_info(self, client_queue: queue.Queue[str | None], client_id: str) -> None:
+        """Record one connected pop-out window under its client: ops targeting the client reach it, and it counts
+        toward the client being connected, but it names no desktop."""
+        self._register(client_queue, ConnectionRegistration(client_id=client_id, active_desktop="", is_pop_out=True))
+
+    def _register(self, client_queue: queue.Queue[str | None], registration: ConnectionRegistration) -> None:
         with self._lock:
             if client_queue not in self._client_queues:
                 return
-            self._client_info_by_queue_id[id(client_queue)] = {
-                "client_id": client_id,
-                "active_desktop": active_desktop,
-            }
+            self._client_info_by_queue_id[id(client_queue)] = registration
 
-    def get_connected_client_infos(self) -> list[dict[str, str]]:
-        """A snapshot of every registered client's self-reported identity."""
+    def get_connected_client_infos(self) -> list[ConnectionRegistration]:
+        """A snapshot of every registered window's self-reported identity."""
         with self._lock:
-            return [dict(info) for info in self._client_info_by_queue_id.values()]
+            return list(self._client_info_by_queue_id.values())
 
-    def get_client_info(self, client_queue: queue.Queue[str | None]) -> dict[str, str] | None:
-        """The self-reported identity of one connected client, or None if unregistered."""
+    def get_client_info(self, client_queue: queue.Queue[str | None]) -> ConnectionRegistration | None:
+        """The self-reported identity of one connected window, or None if unregistered."""
         with self._lock:
-            info = self._client_info_by_queue_id.get(id(client_queue))
-            return dict(info) if info is not None else None
+            return self._client_info_by_queue_id.get(id(client_queue))
 
     def connected_client_ids(self) -> set[str]:
-        """The ids of every registered client with at least one open window."""
+        """The ids of every registered client with at least one open window, a pop-out included."""
         with self._lock:
-            return {info["client_id"] for info in self._client_info_by_queue_id.values()}
+            return {info.client_id for info in self._client_info_by_queue_id.values()}
 
     def broadcast(self, message: dict[str, Any]) -> None:
         """Serialize and send a message to all connected clients. Thread-safe."""
@@ -124,7 +145,7 @@ class WebSocketBroadcaster(MutableModel):
             for client_queue in self._client_queues:
                 if target_client_id is not None:
                     info = self._client_info_by_queue_id.get(id(client_queue))
-                    if info is None or info["client_id"] != target_client_id:
+                    if info is None or info.client_id != target_client_id:
                         continue
                 try:
                     client_queue.put_nowait(text)
@@ -212,8 +233,11 @@ class WebSocketBroadcaster(MutableModel):
         requester: str = "",
         target_client_id: str | None = None,
     ) -> None:
-        """Send a transient ``layout_op`` (refresh, the interface reload, a pulled-out window's show) to the browser
-        (desktop contracts.md section 8).
+        """Send a transient ``layout_op`` to the browser (desktop contracts.md section 8): ``refresh`` and the
+        interface reload, which are the whole effect of their ops, and the ``show``, ``open`` (unless minimized),
+        and ``focus`` of a targeted op, which name the window the op put in front of the client after its edit was
+        written, for the phone layout to switch to; a ``show`` also says whether the window is pulled out, since only
+        the client's page can bring a pulled-out window's own desktop window forward.
 
         ``requester`` is the app and marker of the chat that invoked ``system/scripts/layout.py``, spelled
         ``<app>:<marker>``. ``target_client_id`` names the client whose windows apply the op; None reaches

@@ -4,7 +4,8 @@
  * ``DesktopStore``. The App owns the transient interface state no record holds (which menu is
  * open, the launcher's query and highlight, the selected shortcut, the chooser and the designs it lists),
  * measures the backdrop for the store, binds the gesture source to the document, and hosts the
- * live-page layer, reconciling it after every redraw.
+ * live-page layer, reconciling it after every redraw. A phone-sized viewport gets the phone layout instead
+ * (plan-phone-interface.md), over the same store and the same live-page layer.
  */
 
 import m from "mithril";
@@ -12,13 +13,12 @@ import { createMenu } from "@imbue/workspace-ui/src/components/menu";
 import type { MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { anchorForEvent, anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
 import type { MenuAlign, MenuAnchor } from "@imbue/workspace-ui/src/menu-position";
-import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
 import { elementReferenceRows } from "@imbue/workspace-ui/src/context_menu_rows";
 import { describeElement } from "@imbue/workspace-ui/src/element_reference";
 import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { fetchWallpapers, wallpaperBackgroundImage } from "../model/api";
-import { launchPathOf } from "../model/launch";
+import { appShortcutOf, launchPathOf } from "../model/launch";
 import { SHELL_APP_NAME } from "../model/UpdateNotice";
 import type { AvatarDesign, Desktop, DesktopShortcut, WallpaperListing } from "../model/records";
 import { shortcutKey } from "../model/records";
@@ -44,10 +44,11 @@ import {
   secondaryTextRow,
 } from "../reducers/launcherRows";
 import type { LauncherMenuRows, LauncherRow } from "../reducers/launcherRows";
-import { nextDesktopName, nextGlyphIndex } from "../reducers/shortcuts";
+import { findShortcut, nextDesktopName, nextGlyphIndex } from "../reducers/shortcuts";
 import { PINNED_ENTRY_ATTRIBUTE, SHORTCUT_ATTRIBUTE } from "../gestures/pointerGestures";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import { LivePagesLayer, WINDOW_ID_ATTRIBUTE } from "../pages/livePages";
+import type { MountPolicy } from "../pages/livePages";
 import type { DesktopStore } from "../store/DesktopStore";
 import { AVATAR_DESIGN_PROMPT, AvatarChooserDialog } from "./AvatarChooserDialog";
 import { Backdrop } from "./Backdrop";
@@ -57,12 +58,14 @@ import { ReplacedDesktopNotice } from "./ReplacedDesktopNotice";
 import { applyDropStyle, applyLiftStyle } from "./ShortcutIcon";
 import { applyRectStyle } from "./pixelStyle";
 import { SNAP_PREVIEW_ATTRIBUTE, applySnapPreviewStyle } from "./SnapPreview";
+import { PhoneLayout, phoneMountPolicy } from "./phone/PhoneLayout";
 import { SoloView } from "./SoloView";
 import { Taskbar } from "./Taskbar";
+import { Toasts } from "./Toast";
 import type { WindowControl } from "./TitleBar";
 import { UpdateNoticeBanner } from "./UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "./UpdateStalenessBanner";
-import { taskbarEntryMenuRows, windowMenuRows } from "./WindowMenu";
+import { MENU_MIN_WIDTH, openShareSettings, taskbarEntryMenuRows, windowMenuRows } from "./WindowMenu";
 import { windowSizeRow } from "./WindowSizeRow";
 import type { WindowSizeActions } from "./WindowSizeRow";
 import { SQUIGGLE_GLYPHS } from "./squiggles";
@@ -74,6 +77,7 @@ type OpenMenu =
   | { readonly kind: "size"; readonly windowId: string }
   | { readonly kind: "entry"; readonly windowId: string; readonly referenceRows: readonly MenuRow[] }
   | { readonly kind: "shortcut"; readonly shortcut: DesktopShortcut; readonly referenceRows: readonly MenuRow[] }
+  | { readonly kind: "app-shortcut"; readonly app: string; readonly referenceRows: readonly MenuRow[] }
   | { readonly kind: "desktops" }
   | { readonly kind: "desktop"; readonly desktopId: string; readonly referenceRows: readonly MenuRow[] }
   | { readonly kind: "element"; readonly rows: readonly MenuRow[] };
@@ -105,9 +109,6 @@ function withReferenceRows(rows: MenuRow[] | null, referenceRows: readonly MenuR
   return [...rows, { kind: "divider" }, ...referenceRows];
 }
 
-/** The width the desktop's menus never go under, so a menu of two-word verbs is still a card. */
-const MENU_MIN_WIDTH = 176;
-
 /** Set on the desktop's root while a window is being dragged by its title bar, for as long as the
  *  pointer should hold the closed hand (style.css). Written straight onto the element: the drag
  *  paints without redrawing, and mithril leaves an attribute no vnode carries alone. */
@@ -119,6 +120,9 @@ const SHORTCUT_DRAGGING_ATTRIBUTE = "data-shortcut-dragging";
  *  become, so a window the pointer carries is held by it rather than trailing it (style.css). The
  *  snap a release commits is written after the press has ended, and travels the last step. */
 const WINDOW_MOTION_ATTRIBUTE = "data-window-motion";
+
+/** Marks the backdrop, the area above the taskbar whose pixels the desktop's frames are fractions of. */
+export const BACKDROP_AREA_ATTRIBUTE = "data-backdrop-area";
 
 interface SettingsDialogState {
   readonly desktopId: string;
@@ -165,6 +169,8 @@ export function App(): m.Component<AppAttrs> {
   const travellingWindows = new Map<string, number>();
   let travelFrame: number | null = null;
   let detachGestures: (() => void) | null = null;
+  /** The root the gesture source is bound to: the layout's root changes when the phone layout comes or goes. */
+  let gestureRoot: HTMLElement | null = null;
   let uninstallContextMenu: (() => void) | null = null;
   let store: DesktopStore | null = null;
 
@@ -211,6 +217,14 @@ export function App(): m.Component<AppAttrs> {
     }
     openMenu = next;
     menu.open(anchor);
+  }
+
+  /** Bind the gesture source to the layout's root, again whenever the root is a new element. */
+  function bindGestures(current: DesktopStore, root: HTMLElement, gestures: GestureSource): void {
+    if (root === gestureRoot) return;
+    detachGestures?.();
+    gestureRoot = root;
+    detachGestures = gestures.attach(root, gestureListener(current, root));
   }
 
   function closeLauncher(): void {
@@ -280,7 +294,7 @@ export function App(): m.Component<AppAttrs> {
   }
 
   /** Feed ``element``'s size to the store as the backdrop's, now and whenever it changes: the backdrop area of a
-   *  desktop, or the pages host of a solo shell, whose one page is laid over it on every redraw. */
+   *  desktop, or the pages host of a solo shell or a phone, whose one page is laid over it on every redraw. */
   function observeBackdropSize(current: DesktopStore, element: HTMLElement): void {
     const measure = (): void => {
       const box = element.getBoundingClientRect();
@@ -296,8 +310,16 @@ export function App(): m.Component<AppAttrs> {
    *  in the DOM), and place the pages now: when every load had already landed no further redraw follows. */
   function startPagesLayer(current: DesktopStore, host: HTMLElement, attrs: AppAttrs): void {
     pages = new LivePagesLayer(host, current, { host: attrs.host, protocol: attrs.protocol });
+    // Before the first reconcile: under the desktop's policy a phone's first pass would create a page for every
+    // window its layout shows, only for the next pass to destroy them.
+    pages.setMountPolicy(mountPolicyOf(current));
     pages.start();
     pages.reconcile();
+  }
+
+  /** Which pages the layout mounts: the phone's shown page and the pages it keeps, else every page. */
+  function mountPolicyOf(current: DesktopStore): MountPolicy {
+    return current.isPhoneLayout() ? phoneMountPolicy(current) : { kind: "all" };
   }
 
   /** The window a transition belongs to, else null: the chrome's root is the only element whose
@@ -390,16 +412,13 @@ export function App(): m.Component<AppAttrs> {
     const pinnedWindowIdOf = (app: string): string | null => pinnedWindowOf(current.getState(), app)?.id ?? null;
     return {
       thresholdPx: () => current.getMetrics().dragThreshold,
-      isDraggable: (binding) => {
-        if (binding.kind === "shortcut") return true;
-        if (binding.kind === "taskbar-entry") return false;
-        return !current.getState().modes.isCompact;
-      },
+      isDraggable: (binding) => binding.kind !== "taskbar-entry",
       // Inert for the whole press: the pixels before the threshold are spent beside the handle, often
       // over a neighbouring page, and a move the root cannot see is a move the threshold never counts.
       onPressStart: (binding) => {
         const pressedWindowId =
           binding.kind === "window-move" || binding.kind === "window-resize" ? binding.windowId : null;
+        // What the browser would have done with a press whose default the gesture source did not prevent.
         pages?.takeFocusFromOtherPages(pressedWindowId);
         pages?.setGestureActive(true);
         root.setAttribute(WINDOW_MOTION_ATTRIBUTE, "off");
@@ -499,9 +518,8 @@ export function App(): m.Component<AppAttrs> {
             openMenuAt({ kind: "window", windowId: binding.windowId }, anchor);
             break;
           case "shortcut": {
-            const shortcut = activeDesktop(current.getState())?.shortcuts.find(
-              (candidate) => candidate.target.app === binding.app && candidate.target.launch === binding.launch,
-            );
+            const desktop = activeDesktop(current.getState());
+            const shortcut = desktop === null ? undefined : findShortcut(desktop, binding.app, binding.launch);
             if (shortcut !== undefined) {
               openMenuAt({ kind: "shortcut", shortcut, referenceRows: referenceRows() }, anchor);
             }
@@ -521,12 +539,11 @@ export function App(): m.Component<AppAttrs> {
     };
   }
 
-  /** The zone grid's actions for a window, or null where there is nothing to choose: compact mode,
-   *  where every window renders maximized, and a window that has since been closed -- a hover menu
-   *  outlives its trigger, and placing a window that is gone writes a placement nothing owns. */
+  /** The zone grid's actions for a window, or null where there is nothing to choose: a window that has since
+   *  been closed -- a hover menu outlives its trigger, and placing a window that is gone writes a placement
+   *  nothing owns. */
   function sizeActionsOf(current: DesktopStore, windowId: string): WindowSizeActions | null {
     const state = current.getState();
-    if (state.modes.isCompact) return null;
     if (!activeDesktop(state)?.windows.some((candidate) => candidate.id === windowId)) return null;
     return {
       setState: (state) => current.setWindowState(windowId, state),
@@ -556,12 +573,9 @@ export function App(): m.Component<AppAttrs> {
     return windowMenuRows(app, {
       size: sizeActionsOf(current, windowId),
       onSized: () => menu.close(),
-      share:
-        app === undefined || app.critical
-          ? null
-          : () => sendToEmbedder(OPEN_SHARE_SETTINGS, { serviceName: app.name }),
+      share: app === undefined || app.critical ? null : () => openShareSettings(app),
       quit: app !== undefined && current.canStopApp(app) ? () => void current.quitApp(app.name) : null,
-      popOut: current.getCanPopOut() && !state.modes.isCompact ? () => void current.detachWindow(windowId) : null,
+      popOut: current.getCanPopOut() ? () => void current.detachWindow(windowId) : null,
       close: () => void current.closeOrMinimizeWindow(windowId),
     });
   }
@@ -572,41 +586,38 @@ export function App(): m.Component<AppAttrs> {
     if (window === undefined) return null;
     const placement = placementOf(state.layout, windowId);
     const look = entryLook(state, window, appByName(state, window.app));
-    return taskbarEntryMenuRows(
-      {
-        isMinimized: placement.is_minimized,
-        isMaximized: placement.state === "MAXIMIZED",
-        isDetached: placement.is_detached,
-        show: () => current.showDetachedWindow(windowId),
-        showGhost: () => current.showWindowGhost(windowId),
-        bringBack: () => void current.reattachWindow(windowId, null),
-        restore: () => current.restoreWindow(windowId),
-        minimize: () => current.minimizeWindow(windowId),
-        maximize: () => current.setWindowState(windowId, "MAXIMIZED"),
-        unmaximize: () => current.toggleMaximized(windowId),
-        close: () => void current.closeOrMinimizeWindow(windowId),
-        presentation:
-          look === null
-            ? null
-            : {
-                look,
-                setMode: (mode) => void current.setEntryMode(window.app, mode),
-                setStyle: (style) => void current.setEntryStyle(window.app, style),
-                changeAvatar: () => openAvatarChooser(current),
-              },
-      },
-      state.modes.isCompact,
-    );
+    return taskbarEntryMenuRows({
+      isMinimized: placement.is_minimized,
+      isMaximized: placement.state === "MAXIMIZED",
+      isDetached: placement.is_detached,
+      show: () => current.showDetachedWindow(windowId),
+      showGhost: () => current.showWindowGhost(windowId),
+      bringBack: () => void current.reattachWindow(windowId, null),
+      restore: () => current.restoreWindow(windowId),
+      minimize: () => current.minimizeWindow(windowId),
+      maximize: () => current.setWindowState(windowId, "MAXIMIZED"),
+      unmaximize: () => current.toggleMaximized(windowId),
+      close: () => void current.closeOrMinimizeWindow(windowId),
+      presentation:
+        look === null
+          ? null
+          : {
+              look,
+              setMode: (mode) => void current.setEntryMode(window.app, mode),
+              setStyle: (style) => void current.setEntryStyle(window.app, style),
+              changeAvatar: () => openAvatarChooser(current),
+            },
+      desktopShortcut: desktopShortcutRow(current, window.app),
+    });
   }
 
   function rowsOfShortcutMenu(current: DesktopStore, opened: DesktopShortcut): MenuRow[] | null {
     const state = current.getState();
     const desktop = activeDesktop(state);
+    if (desktop === null) return null;
     // The record as it is now (its mode may have flipped elsewhere), and nothing once it is removed.
-    const shortcut = desktop?.shortcuts.find(
-      (candidate) => candidate.target.app === opened.target.app && candidate.target.launch === opened.target.launch,
-    );
-    if (desktop === null || shortcut === undefined) return null;
+    const shortcut = findShortcut(desktop, opened.target.app, opened.target.launch);
+    if (shortcut === undefined) return null;
     const app = appByName(state, shortcut.target.app);
     const launchPath = app === undefined ? null : launchPathOf(app, shortcut.target.launch);
     const recent = app === undefined ? null : mostRecentlyFocusedWindowOfApp(state.layout, desktop, app.name);
@@ -640,16 +651,42 @@ export function App(): m.Component<AppAttrs> {
         onSelect: () => void current.setShortcut(desktop.id, { ...shortcut, mode: otherMode }),
       },
       { kind: "divider" },
-      {
-        kind: "action",
-        key: "remove",
-        label: "Remove",
-        icon: "trash",
-        tone: "danger",
-        onSelect: () => void current.removeShortcut(shortcut.target.app, shortcut.target.launch),
-      },
+      removeFromDesktopRow(current, shortcut.target.app, shortcut.target.launch),
     );
     return rows;
+  }
+
+  function removeFromDesktopRow(current: DesktopStore, app: string, launch: string): MenuRow {
+    return {
+      kind: "action",
+      key: "remove-from-desktop",
+      label: "Remove from desktop",
+      onSelect: () => void current.removeShortcut(app, launch),
+    };
+  }
+
+  /** Add the app's own shortcut (``appShortcutOf``) to the desktop on screen, or take it off when it is there; null
+   *  with no desktop, no such app, or no shortcut the app may have. */
+  function desktopShortcutRow(current: DesktopStore, appName: string): MenuRow | null {
+    const state = current.getState();
+    const desktop = activeDesktop(state);
+    const app = appByName(state, appName);
+    const own = app === undefined ? null : appShortcutOf(app);
+    if (desktop === null || own === null) return null;
+    if (findShortcut(desktop, appName, own.launch) !== undefined) {
+      return removeFromDesktopRow(current, appName, own.launch);
+    }
+    return {
+      kind: "action",
+      key: "add-to-desktop",
+      label: "Add to desktop",
+      onSelect: () => void current.addShortcut(appName, own.launch, own.mode),
+    };
+  }
+
+  function rowsOfAppShortcutMenu(current: DesktopStore, appName: string): MenuRow[] | null {
+    const row = desktopShortcutRow(current, appName);
+    return row === null ? null : [row];
   }
 
   function rowsOfDesktopsMenu(current: DesktopStore): MenuRow[] {
@@ -718,6 +755,8 @@ export function App(): m.Component<AppAttrs> {
         return withReferenceRows(rowsOfEntryMenu(current, open.windowId), open.referenceRows);
       case "shortcut":
         return withReferenceRows(rowsOfShortcutMenu(current, open.shortcut), open.referenceRows);
+      case "app-shortcut":
+        return withReferenceRows(rowsOfAppShortcutMenu(current, open.app), open.referenceRows);
       case "desktops":
         return rowsOfDesktopsMenu(current);
       case "desktop":
@@ -886,28 +925,40 @@ export function App(): m.Component<AppAttrs> {
     }
   }
 
+  /** The element menu over the shell's own chrome (element-reference-menu plan section 6), on the desktop layout
+   *  alone: what a right-click the views do not handle themselves opens, drawn as the desktop's one menu. The phone
+   *  has none, and an install there would still take every right-click and long-press from the browser. The shell
+   *  is no frame's page: its draft route is the store's, and a draft can always go. */
+  function syncElementContextMenu(current: DesktopStore): void {
+    if (current.isPhoneLayout()) {
+      uninstallContextMenu?.();
+      uninstallContextMenu = null;
+      return;
+    }
+    if (uninstallContextMenu !== null) return;
+    uninstallContextMenu = installElementContextMenu({
+      draft: (text) => void current.draftText(text),
+      isDraftAvailable: () => true,
+      scope: (target) => shellReferenceScope(current, target.element),
+      open: (rows, point) => {
+        openMenuAt({ kind: "element", rows }, anchorForPoint(point.x, point.y));
+        m.redraw();
+      },
+    });
+  }
+
   return {
     oncreate(vnode) {
       const current = vnode.attrs.store;
       store = current;
       document.addEventListener("keydown", onDocumentKeyDown);
       document.addEventListener("pointerdown", onDocumentPointerDown, true);
-      const root = vnode.dom as HTMLElement;
-      detachGestures = vnode.attrs.gestures.attach(root, gestureListener(current, root));
-      // The element menu over the shell's own chrome (element-reference-menu plan section 6): what a right-click
-      // the views do not handle themselves opens, drawn as the desktop's one menu. The shell is no frame's page:
-      // its draft route is the store's, and a draft can always go.
-      uninstallContextMenu = installElementContextMenu({
-        draft: (text) => void current.draftText(text),
-        isDraftAvailable: () => true,
-        scope: (target) => shellReferenceScope(current, target.element),
-        open: (rows, point) => {
-          openMenuAt({ kind: "element", rows }, anchorForPoint(point.x, point.y));
-          m.redraw();
-        },
-      });
+      bindGestures(current, vnode.dom as HTMLElement, vnode.attrs.gestures);
+      syncElementContextMenu(current);
     },
-    onupdate() {
+    onupdate(vnode) {
+      if (store !== null) bindGestures(store, vnode.dom as HTMLElement, vnode.attrs.gestures);
+      if (store !== null) syncElementContextMenu(store);
       // The chrome's word on a tear-out arrives between pointer moves (its window has the cursor by then), so
       // the dragged window is painted here too, hidden or shown as the store now has it. Its word can also end
       // the gesture, with no release for the pointer source to end it by, so the window it was dragging is
@@ -917,6 +968,7 @@ export function App(): m.Component<AppAttrs> {
       const windowToPaint = movingWindowId ?? draggedWindowId;
       if (store !== null && windowToPaint !== null) paintWindow(store, windowToPaint);
       draggedWindowId = movingWindowId;
+      if (store !== null) pages?.setMountPolicy(mountPolicyOf(store));
       pages?.reconcile();
     },
     onremove() {
@@ -936,7 +988,7 @@ export function App(): m.Component<AppAttrs> {
       const soloWindowId = current.getSoloWindowId();
       if (soloWindowId !== null) {
         // A pulled-out window's own desktop window: that one window edge to edge, and the banners above it.
-        return m("div", { class: "app-layout flex h-screen flex-col bg-page" }, [
+        return m("div", { class: "app-layout flex h-dvh flex-col bg-page" }, [
           m(UpdateStalenessBanner),
           m(UpdateNoticeBanner, { store: current }),
           m(SoloView, {
@@ -948,7 +1000,18 @@ export function App(): m.Component<AppAttrs> {
               observeBackdropSize(current, host);
             },
           }),
+          m(Toasts, { toasts: current.toasts.current(), placementClass: "fixed bottom-(--desk-toast-gap)" }),
         ]);
+      }
+      if (current.isPhoneLayout()) {
+        return m(PhoneLayout, {
+          store: current,
+          onPagesHostCreated: (host) => {
+            startPagesLayer(current, host, vnode.attrs);
+            // The host shrinks under a soft keyboard and turns with the phone; the shown page follows it.
+            observeBackdropSize(current, host);
+          },
+        });
       }
       const desktop: Desktop | null = activeDesktop(state);
       const placements = activePlacements(state);
@@ -972,7 +1035,7 @@ export function App(): m.Component<AppAttrs> {
       return m(
         "div",
         {
-          class: "app-layout flex h-screen flex-col bg-page bg-cover bg-center bg-(image:--desk-default-wallpaper)",
+          class: "app-layout flex h-dvh flex-col bg-page bg-cover bg-center bg-(image:--desk-default-wallpaper)",
           style: wallpaperStyle,
         },
         [
@@ -981,7 +1044,7 @@ export function App(): m.Component<AppAttrs> {
           m(
             "div",
             {
-              "data-backdrop-area": "",
+              [BACKDROP_AREA_ATTRIBUTE]: "",
               class: "backdrop-area relative min-h-0 flex-1 overflow-hidden",
               oncreate: (created: m.VnodeDOM) => {
                 backdropArea = created.dom as HTMLElement;
@@ -1037,12 +1100,17 @@ export function App(): m.Component<AppAttrs> {
                 ? m(LauncherMenu, {
                     menu: launcher,
                     highlightIndex: launcherHighlightIndex(launcher.rows),
-                    isCompact: state.modes.isCompact,
                     isApplePlatform: isApplePlatform(),
                     bottomOffsetPx: launcherFieldRise,
                     onRun: (row) => runLauncherRow(current, row),
                     onHighlight: (index) => {
                       launcherHighlight = index;
+                    },
+                    onAppShortcutContextMenu: (app, x, y, target) => {
+                      openMenuAt(
+                        { kind: "app-shortcut", app, referenceRows: referenceRowsFor(current, target, x, y) },
+                        anchorForPoint(x, y),
+                      );
                     },
                   })
                 : null,
@@ -1051,12 +1119,10 @@ export function App(): m.Component<AppAttrs> {
           m(Taskbar, {
             entries: barEntries(state),
             avatar: state.avatar,
-            isCompact: state.modes.isCompact,
             openEntryMenuWindowId: openMenu?.kind === "entry" ? openMenu.windowId : null,
             launcher: {
               query: launcherQuery,
               isOpen: isLauncherOpen,
-              isCompact: state.modes.isCompact,
               onOpen: () => current.openLauncher(),
               onClose: closeLauncher,
               onQuery: (query) => {
@@ -1071,7 +1137,10 @@ export function App(): m.Component<AppAttrs> {
               onRunSecondary: () => runSecondaryRow(current),
               onRise: (rise) => {
                 launcherFieldRise = rise;
-                m.redraw();
+                // Told from the field's render hooks, where no redraw can run; m.redraw() would wait for the next
+                // frame and paint one with the menu where the field was. A microtask runs once the render is over,
+                // still before the browser paints, so the menu moves in the frame the field did.
+                queueMicrotask(() => m.redraw.sync());
               },
             },
             tray: {
@@ -1092,6 +1161,10 @@ export function App(): m.Component<AppAttrs> {
             },
             onEntryClick,
             onEntryContextMenu,
+          }),
+          m(Toasts, {
+            toasts: current.toasts.current(),
+            placementClass: "fixed bottom-[calc(var(--desk-taskbar-height)+var(--desk-toast-gap))]",
           }),
           menuRows === null ? null : menu.view(menuRows),
           settingsDialog === null ? null : settingsDialogView(current, settingsDialog),

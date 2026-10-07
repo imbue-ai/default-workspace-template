@@ -47,6 +47,7 @@ vi.mock("../models/Providers", () => ({
   setDefaultAccount: () => Promise.resolve(),
   loadAccounts: () => Promise.resolve(),
   accountForAgent: (id?: string) => providerState.accounts.find((a) => (a as { id: string }).id === id) ?? null,
+  isAccountSignedOut: () => false,
   openProviderChooser: (intent: (typeof chooserOpens)[number] = {}) => chooserOpens.push(intent),
   deleteAccount: (id: string) => {
     deleted.push(id);

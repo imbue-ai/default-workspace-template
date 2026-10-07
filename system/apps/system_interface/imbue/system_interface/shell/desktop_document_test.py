@@ -31,6 +31,9 @@ from imbue.system_interface.shell.desktop_document import FitMetrics
 from imbue.system_interface.shell.desktop_document import GridDimensions
 from imbue.system_interface.shell.desktop_document import GridMetrics
 from imbue.system_interface.shell.desktop_document import PINNED_WINDOW_FRAME
+from imbue.system_interface.shell.desktop_document import apps_with_a_default_shortcut
+from imbue.system_interface.shell.desktop_document import apps_with_a_shortcut_on
+from imbue.system_interface.shell.desktop_document import apps_with_their_default_shortcut_on
 from imbue.system_interface.shell.desktop_document import cascade_frame
 from imbue.system_interface.shell.desktop_document import clamp_frame_into_unit_square
 from imbue.system_interface.shell.desktop_document import default_launch_path_id
@@ -52,6 +55,7 @@ from imbue.system_interface.shell.desktop_document import reading_order_cell
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
 from imbue.system_interface.shell.desktop_document import snap_zone_for_release
 from imbue.system_interface.shell.desktop_document import unsnap_frame
+from imbue.system_interface.shell.desktop_document import with_default_shortcuts_offered
 from imbue.system_interface.shell.desktop_document import with_pinned_windows_ensured
 from imbue.system_interface.shell.desktop_document import with_pinned_windows_placed
 from imbue.system_interface.shell.desktop_document import with_shortcut
@@ -76,7 +80,10 @@ from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState
 from imbue.system_interface.shell.primitives import WindowTitle
+from imbue.system_interface.shell.testing import BUILTIN_SHORTCUT_APPS_BEFORE_CHAT
 from imbue.system_interface.shell.testing import TEST_NOW
+from imbue.system_interface.shell.testing import builtin_chat_row_toml
+from imbue.system_interface.shell.testing import builtin_registry_rows
 from imbue.system_interface.shell.testing import desktop_with_windows
 from imbue.system_interface.shell.testing import placement_record
 from imbue.system_interface.shell.testing import registry_row_toml
@@ -489,6 +496,152 @@ def test_a_new_desktop_is_seeded_from_every_non_internal_default_shortcut_in_one
         "extra": "open",
         "odd": None,
     }
+
+
+def test_each_app_is_seeded_with_its_default_shortcut_preferring_one_taking_no_text(tmp_path: Path) -> None:
+    rows = read_registry(
+        write_registry(
+            tmp_path / "apps.toml",
+            # A user-built app: a manifest with no launch paths and no default shortcut.
+            registry_row_toml("notes", "http://localhost:1", program="notes"),
+            registry_row_toml(
+                "recipes",
+                "http://localhost:2",
+                program="recipes",
+                launch_paths=[("browse", "Browse", "/"), ("add", "Add a recipe", "/add")],
+            ),
+            # A preview frame or an isolated test server registers with no program.
+            registry_row_toml("preview-1", "http://localhost:3"),
+            registry_row_toml("vm-exec", "http://localhost:4", program="vm-exec", is_internal=True),
+            # With no default declared, the first launch path taking no typed or drafted text is the shortcut...
+            registry_row_toml(
+                "journal",
+                "http://localhost:5",
+                program="journal",
+                launch_paths=[("write", "Write", "/write"), ("draft", "Draft", "/draft"), ("read", "Read", "/")],
+                launch_params={"write": ["entry"], "draft": ["entry"]},
+                launch_text_params={"write": "entry"},
+                launch_draft_params={"draft": "entry"},
+            ),
+            # ...or the first launch path of all, when every one takes text.
+            registry_row_toml(
+                "asker",
+                "http://localhost:6",
+                program="asker",
+                launch_paths=[("ask", "Ask", "/ask")],
+                launch_params={"ask": ["question"]},
+                launch_text_params={"ask": "question"},
+            ),
+            # A declared default shortcut stands even when its launch path takes text.
+            registry_row_toml(
+                "intake",
+                "http://localhost:7",
+                program="intake",
+                default_shortcut=("send", "new"),
+                launch_paths=[("send", "Send", "/send"), ("home", "Home", "/")],
+                launch_params={"send": ["message"]},
+                launch_text_params={"send": "message"},
+            ),
+        )
+    )
+
+    seeded = seed_desktop_shortcuts(rows)
+
+    assert [(str(shortcut.target.app), str(shortcut.target.launch), shortcut.mode) for shortcut in seeded] == [
+        ("notes", "open", ShortcutMode.FOCUS),
+        ("recipes", "browse", ShortcutMode.FOCUS),
+        ("journal", "read", ShortcutMode.FOCUS),
+        ("asker", "ask", ShortcutMode.FOCUS),
+        ("intake", "send", ShortcutMode.NEW),
+    ]
+    assert apps_with_a_default_shortcut(rows) == {"notes", "recipes", "journal", "asker", "intake"}
+
+
+def _targets_and_cells(desktop: Desktop) -> list[tuple[str, str, int, int]]:
+    return [
+        (str(shortcut.target.app), str(shortcut.target.launch), shortcut.cell.column, shortcut.cell.row)
+        for shortcut in desktop.shortcuts
+    ]
+
+
+def test_an_untouched_desktop_seeded_before_a_late_app_registered_is_seeded_again_in_launcher_order(
+    tmp_path: Path,
+) -> None:
+    before_chat, with_chat = builtin_registry_rows(tmp_path)
+    home = _desktop_with_shortcuts(*seed_desktop_shortcuts(before_chat))
+    offered = apps_with_a_default_shortcut(before_chat)
+    assert offered == set(BUILTIN_SHORTCUT_APPS_BEFORE_CHAT)
+
+    reconciled = with_default_shortcuts_offered(home, with_chat, offered)
+
+    assert reconciled.shortcuts == seed_desktop_shortcuts(with_chat)
+    assert _targets_and_cells(reconciled) == [
+        ("chat", "root", 0, 0),
+        ("getting-started", "open", 1, 0),
+        ("files", "new", 2, 0),
+        ("browser", "new", 3, 0),
+        ("terminal", "new", 4, 0),
+    ]
+    assert reconciled.shortcuts[0].mode is ShortcutMode.NEW
+
+
+def test_a_touched_desktop_gets_a_late_apps_shortcut_at_the_next_free_cell_with_nothing_else_moved(
+    tmp_path: Path,
+) -> None:
+    before_chat, with_chat = builtin_registry_rows(tmp_path)
+    seeded = _desktop_with_shortcuts(*seed_desktop_shortcuts(before_chat))
+    touched = with_shortcut_moved(seeded, AppName("getting-started"), LaunchPathId("open"), GridCell(column=0, row=2))
+
+    reconciled = with_default_shortcuts_offered(touched, with_chat, apps_with_a_default_shortcut(before_chat))
+
+    assert reconciled.shortcuts[:-1] == touched.shortcuts
+    (chat,) = (shortcut for shortcut in reconciled.shortcuts if shortcut.target.app == "chat")
+    assert chat == reconciled.shortcuts[-1]
+    assert (chat.target.launch, chat.mode, chat.cell) == ("root", ShortcutMode.NEW, next_shortcut_cell(touched))
+    assert chat.cell == GridCell(column=0, row=0)
+
+
+def test_a_late_apps_shortcut_is_not_added_where_its_target_already_is(tmp_path: Path) -> None:
+    before_chat, with_chat = builtin_registry_rows(tmp_path)
+    placed_by_hand = _desktop_with_shortcuts(
+        *seed_desktop_shortcuts(before_chat), _shortcut("chat", "root", 6, 3, ShortcutMode.FOCUS)
+    )
+
+    reconciled = with_default_shortcuts_offered(placed_by_hand, with_chat, apps_with_a_default_shortcut(before_chat))
+
+    assert reconciled is placed_by_hand
+
+
+def test_an_offered_app_an_internal_app_and_an_app_without_a_usable_default_shortcut_are_never_added(
+    tmp_path: Path,
+) -> None:
+    rows = read_registry(
+        write_registry(
+            tmp_path / "apps.toml",
+            builtin_chat_row_toml(),
+            registry_row_toml("hidden", "http://localhost:2", is_internal=True, default_shortcut=("open", "focus")),
+            registry_row_toml("plain", "http://localhost:3"),
+            registry_row_toml("odd", "http://localhost:5", default_shortcut=("make", "focus")),
+        )
+    )
+    # The user removed the chat's shortcut after it was offered: an empty desktop the seed no longer matches.
+    emptied = _desktop_with_shortcuts()
+
+    assert with_default_shortcuts_offered(emptied, rows, {AppName("chat")}) is emptied
+    assert apps_with_a_default_shortcut(rows) == {"chat"}
+
+
+def test_the_apps_on_a_desktop_are_every_app_with_a_shortcut_or_only_those_holding_their_default_one(
+    tmp_path: Path,
+) -> None:
+    _, with_chat = builtin_registry_rows(tmp_path)
+    desktop = _desktop_with_shortcuts(
+        _shortcut("chat", "new", 0, 0), _shortcut("files", "new", 1, 0), _shortcut("unregistered", "open", 2, 0)
+    )
+
+    assert apps_with_a_shortcut_on([desktop, _desktop_with_shortcuts()]) == {"chat", "files", "unregistered"}
+    # The chat's default shortcut is its ``root`` launch path, not ``new``.
+    assert apps_with_their_default_shortcut_on(desktop, with_chat) == {"files"}
 
 
 # Layouts

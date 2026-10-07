@@ -1,0 +1,1 @@
+The imbue character is now the default avatar: a workspace with no avatar selection (or one naming a design that no longer exists) draws the character, and the phone's home-screen icon and the web manifest follow it. `GET /api/avatars` answers `"default": "imbue-character"`. A workspace that already chose a design, the gummy seal included, keeps its choice.

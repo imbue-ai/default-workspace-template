@@ -22,8 +22,7 @@ from typing import Any
 import pytest
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
-
-from conftest import run_in_background
+from script_modules_testing import run_in_background
 
 _CHAT_ID = "agent-0123456789abcdef0123456789abcdef"
 _SCRIPT = Path(__file__).parent / "run_in_background.py"

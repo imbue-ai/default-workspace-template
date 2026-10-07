@@ -118,8 +118,12 @@ RUN bash /home/user/workspace/system/scripts/build_workspace.sh
 # volume mount; any image-layer content sitting at /home/user/workspace/ would
 # be shadowed by the mount. /docker_build_code holds the workspace
 # until first boot, where the post-host-create seed step (see below)
-# atomically relocates it onto the volume.
-RUN mv /home/user/workspace /docker_build_code
+# atomically relocates it onto the volume. The empty directory is recreated
+# here because it is the WORKDIR of every later step: docker's builder would
+# create it for the next step itself, but a builder that runs the steps one
+# container at a time (Modal, through offload in CI) refuses to start a step
+# whose working directory is gone.
+RUN mv /home/user/workspace /docker_build_code && mkdir /home/user/workspace
 
 # The user-data layout: the per-host persistent volume mounts at /home/user
 # (the ONE persistent tree -- workspace checkout, worktrees, mngr state at

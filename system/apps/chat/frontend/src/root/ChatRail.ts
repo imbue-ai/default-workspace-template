@@ -3,32 +3,34 @@
  * the one the root shows marked, and starting a new one at the head. Picking a row shows
  * that chat in the root's inner frame.
  *
- * The rows are ordered and grouped by ``rows.ts``. The rail collapses to a strip of monograms
- * and status marks on a toggle (and by default on a phone), kept per browser. A row is
- * renameable in place (double-click, or the pencil under the pointer), and a right-click opens
- * a menu: rename, stop or restart, delete (which asks first). A stopped chat stays in the
- * list faded with a pause mark; one being deleted is crossed out until the list drops it.
+ * The rows are ordered and grouped by ``rows.ts``. A row is renameable in place (double-click,
+ * or the pencil under the pointer), and a right-click opens a menu: rename, stop or restart,
+ * delete (which asks first). A stopped chat stays in the list faded with a pause mark; one
+ * being deleted is crossed out until the list drops it.
+ *
+ * In the phone layout the same list is the drawer's (``ChatDrawer``): "New chat" is a plus in
+ * its header, and each row carries a kebab offering the right-click menu's verbs, since nothing
+ * on a phone right-clicks. The phone header's kebab offers them too, for the chat on screen
+ * (``rowMenuRows``, ``renameField``).
  */
 
 import m from "mithril";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
-import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { createMenu, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { elementReferenceRows, targetOfEvent } from "@imbue/workspace-ui/src/context_menu_rows";
 import { describeElement, type ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
+import { kebabGlyph, plusGlyph } from "../glyphs";
 import { isUnread } from "./chatUnread";
 import { destroyChat, renameChat, startChat, stopChat } from "./verbs";
 import { isAgentStarted } from "./rows";
 import type { ChatRow } from "./rows";
 
-const COLLAPSED_STORAGE_KEY = "chat-root-rail-collapsed";
-
 export interface ChatRailAttrs {
   /** The rows in display order. */
   rows: readonly ChatRow[];
   selectedChatId: string | null;
-  /** Whether a phone-sized viewport is showing the root: the rail starts collapsed there. */
+  /** Whether the root draws its phone layout, where this list is the drawer's. */
   isCompact: boolean;
   onPick: (chatId: string) => void;
   onNew: () => void;
@@ -54,35 +56,6 @@ function displayStatus(row: ChatRow): string {
   return row.status === "idle" && isUnread(row.chatId) ? "done" : row.status;
 }
 
-function monogramOf(row: ChatRow): string {
-  const title = row.title.trim();
-  return title === "" ? "?" : title.slice(0, 1).toUpperCase();
-}
-
-// Per-browser rail state
-
-let collapsedChoice: boolean | null = null;
-
-function isCollapsed(isCompact: boolean): boolean {
-  if (collapsedChoice !== null) return collapsedChoice;
-  try {
-    const stored = window.localStorage.getItem(COLLAPSED_STORAGE_KEY);
-    if (stored !== null) return stored === "true";
-  } catch {
-    // Storage denied: the default below stands.
-  }
-  return isCompact;
-}
-
-function setCollapsed(collapsed: boolean): void {
-  collapsedChoice = collapsed;
-  try {
-    window.localStorage.setItem(COLLAPSED_STORAGE_KEY, collapsed ? "true" : "false");
-  } catch {
-    // Nothing to do: the rail works, it just will not be remembered.
-  }
-}
-
 // Renames, deletes, and the row menu
 
 interface RenameState {
@@ -97,7 +70,8 @@ const deletingChatIds = new Set<string>();
 // The row whose menu is up, or null. Which row it belongs to is this file's; opening, placing,
 // dismissing and closing are the component's, and its `onClose` keeps the two in step.
 let menuChatId: string | null = null;
-// The reference rows for the element the open menu was opened on, built at the right-click.
+// The reference rows for the element the open menu was opened on, built at the right-click; none
+// for a menu opened from a row's kebab.
 let menuReferenceRows: readonly MenuRow[] = [];
 
 const railMenu = createMenu({
@@ -114,6 +88,16 @@ const railMenu = createMenu({
 
 function beginRename(row: ChatRow): void {
   rename = { chatId: row.chatId, draft: row.title, error: null };
+}
+
+/** Whether ``chatId`` is being deleted: its delete was asked for and has not failed. */
+export function isDeleting(chatId: string): boolean {
+  return deletingChatIds.has(chatId);
+}
+
+/** Whether ``chatId`` is being renamed. */
+export function isRenaming(chatId: string): boolean {
+  return rename !== null && rename.chatId === chatId;
 }
 
 /** Keep the typed name: the field closes at once, and a refusal brings it back with the reason. */
@@ -149,9 +133,12 @@ function setRunningFromMenu(row: ChatRow, isRunning: boolean): void {
   });
 }
 
+/** What a row's menu needs of the root: the rows, the one shown, and how to show another. */
+export type RowMenuContext = Pick<ChatRailAttrs, "rows" | "selectedChatId" | "onPick">;
+
 /** Delete from the menu, after asking. When it is the chat the root shows, the root moves to
  *  the next one in the list first, so it is not left on a page whose chat is gone. */
-function deleteFromMenu(attrs: ChatRailAttrs, row: ChatRow): void {
+function deleteFromMenu(attrs: RowMenuContext, row: ChatRow): void {
   const isConfirmed = window.confirm(
     `Delete "${row.title}"?\n\nThis ends its agent and removes its conversation. It cannot be undone.`,
   );
@@ -169,8 +156,9 @@ function deleteFromMenu(attrs: ChatRailAttrs, row: ChatRow): void {
   });
 }
 
-/** The rows a chat's context menu offers, ending with the reference rows for the element right-clicked. */
-function rowMenuRows(attrs: ChatRailAttrs, row: ChatRow): MenuRow[] {
+/** The rows a chat's menu offers, ending with ``referenceRows``: the reference rows for the element right-clicked,
+ *  and none for a menu opened from a kebab. */
+export function rowMenuRows(attrs: RowMenuContext, row: ChatRow, referenceRows: readonly MenuRow[] = []): MenuRow[] {
   const isStopped = row.status === "stopped";
   return [
     { kind: "action", key: "rename", label: "Rename", onSelect: () => beginRename(row) },
@@ -188,7 +176,7 @@ function rowMenuRows(attrs: ChatRailAttrs, row: ChatRow): MenuRow[] {
       tone: "danger",
       onSelect: () => deleteFromMenu(attrs, row),
     },
-    ...(menuReferenceRows.length === 0 ? [] : [{ kind: "divider" } as MenuRow, ...menuReferenceRows]),
+    ...(referenceRows.length === 0 ? [] : [{ kind: "divider" } as MenuRow, ...referenceRows]),
   ];
 }
 
@@ -200,25 +188,6 @@ function referenceRowsForEvent(attrs: ChatRailAttrs, event: MouseEvent): MenuRow
 }
 
 // The status marks
-
-/** A plus, drawn here because the shared icon set has no bare one. */
-function plusGlyph(): m.Vnode {
-  return m(
-    "svg",
-    {
-      width: 16,
-      height: 16,
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": 2,
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      "aria-hidden": "true",
-    },
-    [m("path", { d: "M12 5v14" }), m("path", { d: "M5 12h14" })],
-  );
-}
 
 /** The status mark beside a row: a dot in the status's colour, a check for done, a pause mark
  *  for a stopped chat (paused is what a stop is, since a message resumes it). */
@@ -255,82 +224,95 @@ function statusDot(row: ChatRow, extraClass: string): m.Vnode {
 
 // The component
 
+/** Open a row's menu from its kebab: the same verbs as a right-click, hung off the kebab. */
+function openRowMenu(row: ChatRow, kebab: HTMLElement): void {
+  menuChatId = row.chatId;
+  menuReferenceRows = [];
+  railMenu.open(kebab);
+}
+
 export const ChatRail: m.Component<ChatRailAttrs> = {
   onremove() {
     // A menu still open when the rail unmounts would keep its Escape listener on the window.
     railMenu.dispose();
   },
   view({ attrs }) {
-    const collapsed = isCollapsed(attrs.isCompact);
     pruneDeleting(attrs.rows);
     const menuRow = menuChatId === null ? undefined : attrs.rows.find((row) => row.chatId === menuChatId);
     return m(
       "nav",
       {
         class: [
-          "chat-rail relative flex h-full flex-none flex-col border-r border-default bg-surface",
-          collapsed ? "chat-rail--collapsed w-13" : "w-60",
+          "chat-rail relative flex h-full flex-none flex-col bg-surface",
+          attrs.isCompact ? "w-full" : "w-60 border-r border-default",
         ].join(" "),
         "aria-label": "Chats",
-        "data-collapsed": collapsed ? "true" : "false",
       },
       [
+        attrs.isCompact ? drawerHead(attrs) : railHead(attrs),
         m(
           "div",
           {
-            class: [
-              "chat-rail-head flex flex-none gap-1 p-2",
-              collapsed ? "flex-col items-stretch" : "items-center justify-between",
-            ].join(" "),
+            // A touch's allowed gestures are read from the touched row up to the first scrolling ancestor, this
+            // list, so the drawer's own pan-y must be repeated here for a sideways drag over the rows to reach it.
+            class: `chat-rail-list min-h-0 flex-1 overflow-y-auto px-2 pb-2${attrs.isCompact ? " touch-pan-y" : ""}`,
           },
-          [
-            m(
-              "button",
-              {
-                type: "button",
-                class: [
-                  "chat-rail-new flex flex-none items-center gap-2 rounded-md px-2 py-1.5",
-                  "text-(length:--font-size-row) text-secondary hover:bg-fill-hover hover:text-primary",
-                  collapsed ? "justify-center" : "",
-                ].join(" "),
-                "aria-label": "New chat",
-                ...hoverTooltipAttrs(collapsed ? "New chat" : null, "right"),
-                onclick: () => attrs.onNew(),
-              },
-              [plusGlyph(), collapsed ? null : m("span", "New chat")],
-            ),
-            m(
-              "button",
-              {
-                type: "button",
-                class:
-                  "chat-rail-toggle flex flex-none items-center justify-center rounded-md p-1.5 text-faint hover:bg-fill-hover",
-                "aria-label": collapsed ? "Show chat titles" : "Hide chat titles",
-                ...hoverTooltipAttrs(collapsed ? "Show chat titles" : "Hide chat titles", "right"),
-                onclick: () => {
-                  setCollapsed(!collapsed);
-                  m.redraw();
-                },
-              },
-              m.trust(icon(collapsed ? "chevron-right" : "chevron-left", { size: 16 })),
-            ),
-          ],
+          attrs.rows.map((row) => railRow(attrs, row)),
         ),
-        m(
-          "div",
-          { class: "chat-rail-list min-h-0 flex-1 overflow-y-auto px-2 pb-2" },
-          attrs.rows.map((row) => railRow(attrs, row, collapsed)),
-        ),
-        menuRow === undefined ? null : railMenu.view(rowMenuRows(attrs, menuRow)),
+        menuRow === undefined ? null : railMenu.view(rowMenuRows(attrs, menuRow, menuReferenceRows)),
       ],
     );
   },
 };
 
-function railRow(attrs: ChatRailAttrs, row: ChatRow, collapsed: boolean): m.Vnode {
+function railHead(attrs: ChatRailAttrs): m.Vnode {
+  return m("div", { class: "chat-rail-head flex flex-none items-center gap-1 p-2" }, [
+    m(
+      "button",
+      {
+        type: "button",
+        class: [
+          "chat-rail-new flex flex-none items-center gap-2 rounded-md px-2 py-1.5",
+          "text-(length:--font-size-row) text-secondary hover:bg-fill-hover hover:text-primary",
+        ].join(" "),
+        "aria-label": "New chat",
+        onclick: () => attrs.onNew(),
+      },
+      [plusGlyph(), m("span", "New chat")],
+    ),
+  ]);
+}
+
+/** A button in the phone layout's bars, the header's and the drawer's, which read as one bar. */
+export const BAR_ICON_BUTTON_CLASS =
+  "flex size-9 flex-none items-center justify-center rounded-lg text-primary hover:bg-fill-hover";
+
+/** The drawer's header: its name, and "New chat" as a plus at the far end. As tall as the phone header it opens
+ *  over, so the two read as one bar. */
+function drawerHead(attrs: ChatRailAttrs): m.Vnode {
+  return m(
+    "div",
+    { class: "chat-rail-head flex h-11 flex-none items-center justify-between border-b border-default pr-2 pl-4" },
+    [
+      m("h1", { class: "type-heading text-primary" }, "Chats"),
+      m(
+        "button",
+        {
+          type: "button",
+          class: `chat-rail-new ${BAR_ICON_BUTTON_CLASS}`,
+          "aria-label": "New chat",
+          onclick: () => attrs.onNew(),
+        },
+        plusGlyph(20),
+      ),
+    ],
+  );
+}
+
+function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
   const isSelected = row.chatId === attrs.selectedChatId;
   const isDeleting = deletingChatIds.has(row.chatId);
-  if (!collapsed && rename !== null && rename.chatId === row.chatId) return renameRow(row, isSelected);
+  if (rename !== null && rename.chatId === row.chatId) return renameRow(row, isSelected, attrs.isCompact);
   const status = displayStatus(row);
   return m(
     "button",
@@ -339,7 +321,9 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow, collapsed: boolean): m.Vnod
       type: "button",
       class: [
         "chat-rail-row group flex w-full items-center gap-2 rounded-md py-1.5 text-left",
-        collapsed ? "justify-center px-1" : isAgentStarted(row) ? "chat-rail-row--nested pr-2 pl-5" : "px-2",
+        // A finger's height in the drawer; the rail's rows stay dense under a pointer.
+        attrs.isCompact ? "min-h-11" : "",
+        isAgentStarted(row) ? "chat-rail-row--nested pr-2 pl-5" : "px-2",
         isDeleting
           ? "chat-rail-row--deleting text-danger line-through opacity-50"
           : status === "done"
@@ -353,11 +337,11 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow, collapsed: boolean): m.Vnod
       "data-status": status,
       "aria-current": isSelected ? "true" : undefined,
       "aria-disabled": isDeleting ? "true" : undefined,
-      ...hoverTooltipAttrs(collapsed ? row.title : null, "right"),
+      // In the drawer the chat on screen is picked again to close it.
       onclick: () => {
-        if (!isSelected) attrs.onPick(row.chatId);
+        if (!isSelected || attrs.isCompact) attrs.onPick(row.chatId);
       },
-      ondblclick: collapsed || row.isProvisional ? undefined : () => beginRename(row),
+      ondblclick: row.isProvisional ? undefined : () => beginRename(row),
       oncontextmenu: (event: MouseEvent) => {
         event.preventDefault();
         if (isDeleting || row.isProvisional) return;
@@ -366,98 +350,116 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow, collapsed: boolean): m.Vnod
         railMenu.open(anchorForPoint(event.clientX, event.clientY));
       },
     },
-    collapsed
-      ? [
-          m(
-            "span",
-            {
-              class: "chat-rail-monogram relative flex size-7 items-center justify-center rounded-full bg-fill-hover",
-            },
-            [
-              m("span", { class: "text-[10px] leading-none font-bold" }, monogramOf(row)),
-              statusDot(row, "absolute -right-0.5 -bottom-0.5 ring-2 ring-surface"),
-            ],
-          ),
-        ]
-      : [
-          statusDot(row, "flex-none"),
-          m("span", { class: "chat-rail-title min-w-0 flex-1 truncate text-(length:--font-size-row)" }, row.title),
-          row.isProvisional
-            ? null
-            : m(
-                "span",
-                {
-                  class:
-                    "chat-rail-rename flex-none rounded p-0.5 text-faint opacity-0 hover:bg-fill-hover hover:text-primary " +
-                    "group-hover:opacity-100 focus-visible:opacity-100",
-                  role: "button",
-                  tabindex: 0,
-                  "aria-label": "Rename chat",
-                  onclick: (event: MouseEvent) => {
-                    event.stopPropagation();
-                    beginRename(row);
-                  },
-                  onkeydown: (event: KeyboardEvent) => {
-                    if (event.key !== "Enter" && event.key !== " ") return;
-                    event.preventDefault();
-                    event.stopPropagation();
-                    beginRename(row);
-                  },
-                },
-                m.trust(icon("edit", { size: 13 })),
-              ),
-        ],
+    [
+      statusDot(row, "flex-none"),
+      m("span", { class: "chat-rail-title min-w-0 flex-1 truncate text-(length:--font-size-row)" }, row.title),
+      row.isProvisional || (attrs.isCompact && isDeleting)
+        ? null
+        : attrs.isCompact
+          ? rowKebab(row)
+          : renamePencil(row),
+    ],
   );
 }
 
-function renameRow(row: ChatRow, isSelected: boolean): m.Vnode {
+/** A control inside the row's button, which buttons cannot nest: a span that acts as one. */
+function innerButtonAttrs(label: string, onPress: (element: HTMLElement) => void): m.Attributes {
+  return {
+    role: "button",
+    tabindex: 0,
+    "aria-label": label,
+    onclick: (event: MouseEvent) => {
+      event.stopPropagation();
+      onPress(event.currentTarget as HTMLElement);
+    },
+    onkeydown: (event: KeyboardEvent) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      event.stopPropagation();
+      onPress(event.currentTarget as HTMLElement);
+    },
+  };
+}
+
+function renamePencil(row: ChatRow): m.Vnode {
+  return m(
+    "span",
+    {
+      class:
+        "chat-rail-rename flex-none rounded p-0.5 text-faint opacity-0 hover:bg-fill-hover hover:text-primary " +
+        "group-hover:opacity-100 focus-visible:opacity-100",
+      ...innerButtonAttrs("Rename chat", () => beginRename(row)),
+    },
+    m.trust(icon("edit", { size: 13 })),
+  );
+}
+
+/** The row's verbs on a phone, where the pencil's hover never happens and nothing right-clicks. */
+function rowKebab(row: ChatRow): m.Vnode {
+  return m(
+    "span",
+    {
+      class:
+        "chat-rail-row-menu -my-1 flex flex-none items-center justify-center rounded-md p-1 text-faint " +
+        "hover:bg-fill-hover hover:text-primary",
+      "data-chat-row-menu": row.chatId,
+      ...innerButtonAttrs("Chat actions", (kebab) => openRowMenu(row, kebab)),
+    },
+    kebabGlyph(),
+  );
+}
+
+/** The field a rename is typed into. */
+export function renameField(row: ChatRow): m.Vnode {
   const state = rename;
-  if (state === null) throw new Error("renameRow rendered with no rename in progress");
+  if (state === null) throw new Error("renameField rendered with no rename in progress");
+  return m("input", {
+    class: [
+      "chat-rail-rename-input min-w-0 flex-1 rounded bg-surface px-1 text-(length:--font-size-row) text-primary outline-none ring-1",
+      state.error === null ? "ring-accent" : "ring-danger",
+    ].join(" "),
+    type: "text",
+    value: state.draft,
+    "aria-label": "Chat name",
+    "aria-invalid": state.error === null ? undefined : "true",
+    title: state.error ?? undefined,
+    maxlength: 256,
+    oncreate: ({ dom }: m.VnodeDOM) => {
+      const input = dom as HTMLInputElement;
+      input.focus();
+      input.select();
+    },
+    oninput: (event: InputEvent) => {
+      if (rename === null) return;
+      rename = { ...rename, draft: (event.target as HTMLInputElement).value, error: null };
+    },
+    onkeydown: (event: KeyboardEvent) => {
+      event.stopPropagation();
+      if (event.key === "Enter") {
+        event.preventDefault();
+        commitRename(row);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        rename = null;
+      }
+    },
+    onblur: () => commitRename(row),
+  });
+}
+
+function renameRow(row: ChatRow, isSelected: boolean, isCompact: boolean): m.Vnode {
   return m(
     "div",
     {
       key: row.chatId,
       class: [
         "chat-rail-row chat-rail-row--renaming flex w-full items-center gap-2 rounded-md py-1.5",
+        isCompact ? "min-h-11" : "",
         isAgentStarted(row) ? "pr-2 pl-5" : "px-2",
         isSelected ? "bg-fill-active text-primary" : "text-primary",
       ].join(" "),
       "data-chat-id": row.chatId,
     },
-    [
-      statusDot(row, "flex-none"),
-      m("input", {
-        class: [
-          "chat-rail-rename-input min-w-0 flex-1 rounded bg-surface px-1 text-(length:--font-size-row) text-primary outline-none ring-1",
-          state.error === null ? "ring-accent" : "ring-danger",
-        ].join(" "),
-        type: "text",
-        value: state.draft,
-        "aria-label": "Chat name",
-        "aria-invalid": state.error === null ? undefined : "true",
-        title: state.error ?? undefined,
-        maxlength: 256,
-        oncreate: ({ dom }: m.VnodeDOM) => {
-          const input = dom as HTMLInputElement;
-          input.focus();
-          input.select();
-        },
-        oninput: (event: InputEvent) => {
-          if (rename === null) return;
-          rename = { ...rename, draft: (event.target as HTMLInputElement).value, error: null };
-        },
-        onkeydown: (event: KeyboardEvent) => {
-          event.stopPropagation();
-          if (event.key === "Enter") {
-            event.preventDefault();
-            commitRename(row);
-          } else if (event.key === "Escape") {
-            event.preventDefault();
-            rename = null;
-          }
-        },
-        onblur: () => commitRename(row),
-      }),
-    ],
+    [statusDot(row, "flex-none"), renameField(row)],
   );
 }

@@ -32,7 +32,7 @@ def test_completion_argv_disables_tools_and_sets_system() -> None:
         model="claude-haiku-4-5",
         system="You are a classifier.",
     )
-    assert argv[:3] == ["claude", "-p", "classify this"]
+    assert argv[:2] == ["claude", "-p"]
     assert (
         "--output-format" in argv and argv[argv.index("--output-format") + 1] == "json"
     )
@@ -65,6 +65,23 @@ def test_task_argv_keeps_tools_and_sets_permission_mode() -> None:
     assert "--system-prompt" not in argv
     # A task runs in the repo and its session is resumable like any other.
     assert "--no-session-persistence" not in argv
+
+
+def test_dash_leading_prompt_follows_the_option_terminator() -> None:
+    prompt = "---\nname: some-skill\n---\nSummarize this skill."
+    completion = claude_p._completion_argv(
+        prompt, model="claude-haiku-4-5", system="You summarize."
+    )
+    task = claude_p._task_argv(
+        prompt,
+        model="claude-haiku-4-5",
+        system=None,
+        append_system=None,
+        permission_mode="bypassPermissions",
+    )
+    for argv in (completion, task):
+        assert argv[-2:] == ["--", prompt]
+        assert argv.index("--") == len(argv) - 2
 
 
 def _success_payload(**overrides: object) -> dict[str, object]:

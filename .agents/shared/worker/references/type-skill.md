@@ -71,17 +71,17 @@ belongs to the app itself is that app's own pass.
 
 ## Testing a skill
 
-- Run the skill's own tests by path. The root pytest config recurses into
-  `.agents/`, so a bare root `uv run pytest` would collect the entire monorepo
-  to reach them:
+- While you iterate, run the skill's own tests by path. The root pytest config
+  recurses into `.agents/`, so a bare root `uv run pytest` would collect the
+  entire monorepo to reach them:
 
   ```bash
   uv run pytest .agents/skills/<name>
   ```
 
-  If the reverse lookup above found an app that claims this skill, that app's
-  suite exercises the surface the skill calls, so run it too:
-  `cd system/apps/<package> && uv run pytest`.
+  The gate is `harden-creation.md`'s "The test gate": when the reverse lookup
+  above found an app that claims this skill, `select-tests` runs that app's
+  suite too, since it exercises the surface the skill calls.
 - Validate with `uv run .agents/shared/scripts/validate_skill.py
   .agents/skills/<name>` -- it must print `ok` (see `spec-summary.md` for what it
   checks).

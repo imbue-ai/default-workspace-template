@@ -1,5 +1,6 @@
 from datetime import datetime
 from enum import auto
+from pathlib import Path
 
 from pydantic import Field
 from pydantic import SecretStr
@@ -634,6 +635,13 @@ class ChatCreationOutcome(FrozenModel):
     error: str = Field(
         default="", description="Why the create failed, as the provisional record holds it; '' on success"
     )
+
+
+class ChatAccountBinding(FrozenModel):
+    """The harness and the account folder a chat runs (or is about to run) on."""
+
+    harness: HarnessType = Field(description="The chat's harness")
+    account_dir: Path = Field(description="The account folder the harness's CLI is scoped to")
 
 
 class ProvisionalChatPhase(LowerCaseStrEnum):

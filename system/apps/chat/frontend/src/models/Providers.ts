@@ -5,12 +5,16 @@
  * provider. Several lanes can share a harness (Opencode Go and a raw API key both run on
  * Pi), so the chooser lists lanes, not harnesses.
  *
- * A sign-in has three possible shapes and the server tells us which, per method, so nothing
+ * A sign-in takes one of these shapes and the server tells us which, per method, so nothing
  * here has to know what a harness is:
  *
  *   url_then_code   here is a link; approve in the browser and paste the code back
  *   code_then_wait  here is a link and a one-time code; type it there and we wait
  *   paste           paste a key; no terminal involved
+ *   browser         here is a link; finish in the browser and it completes by itself
+ *
+ * A browser sign-in whose page the server offers as `relay_url` can be handed to the minds
+ * desktop app, which opens it and relays its callback (see `providerRelay.ts`).
  *
  * Flows are single-flight on the server -- it holds one live sign-in at a time -- so this
  * keeps one flow's state and starting another abandons the first.
@@ -19,8 +23,9 @@
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
+import { endProviderRelay } from "./providerRelay";
 
-export type FlowShape = "url_then_code" | "code_then_wait" | "paste";
+export type FlowShape = "url_then_code" | "code_then_wait" | "paste" | "browser";
 export type FlowState = "pending" | "ok" | "failed";
 
 export interface LaneMethod {
@@ -29,6 +34,8 @@ export interface LaneMethod {
   description: string;
   /** Empty unless the provider has to be signed up for before a key exists. */
   signup_url: string;
+  /** Markdown shown while the sign-in waits on the browser; empty when it needs no account setting. */
+  note: string;
   shape: FlowShape;
   is_primary: boolean;
 }
@@ -67,6 +74,8 @@ export interface ProviderAccount {
   name: string;
   /** Already composed server-side ("Anthropic 2 (Claude Code)") -- see accounts_endpoints. */
   label: string;
+  /** The lane method "Sign in again" runs: a key account is given a key again, not a browser sign-in. */
+  reauth_method: string;
 }
 
 interface FlowStart {
@@ -74,6 +83,8 @@ interface FlowStart {
   shape: FlowShape;
   url: string | null;
   code: string | null;
+  /** The page the desktop app can open for this sign-in and relay the callback of. */
+  relay_url: string | null;
 }
 
 interface FlowStatus {
@@ -91,6 +102,10 @@ let defaultAccountId: string | null = null;
 let lanesLoaded = false;
 // Whether the account list has been fetched once, so an empty list can be told from one not read yet.
 let accountsLoaded = false;
+let markAccountsLoaded: () => void = () => {};
+const firstAccountsLoad = new Promise<void>((resolve) => {
+  markAccountsLoaded = resolve;
+});
 
 export function getLanes(): Lane[] {
   return lanes;
@@ -108,6 +123,15 @@ export function getAccounts(): ProviderAccount[] {
 export function accountForAgent(accountId: string | undefined): ProviderAccount | null {
   if (!accountId) return null;
   return accounts.find((candidate) => candidate.id === accountId) ?? null;
+}
+
+/** Whether a chat's `account` label names an account that is no longer signed in (it was signed out).
+ *
+ * False for a chat from before accounts (no label) and until the account list has loaded, when
+ * no account reads as signed in, which says nothing about whether this one is gone.
+ */
+export function isAccountSignedOut(accountId: string | null | undefined): boolean {
+  return !!accountId && areAccountsLoaded() && accountForAgent(accountId) === null;
 }
 
 export function getMruAccountId(): string | null {
@@ -128,6 +152,19 @@ export function areAccountsLoaded(): boolean {
   return accountsLoaded;
 }
 
+/** Settles once the account list can choose a new chat's account, so a list not read yet or read stale is never taken
+ *  for "nothing signed in": after its first read, and after a fresh read when it names no account, since a sign-in
+ *  made on another page (the chat list, another chat) does not reach this page's copy. */
+export async function whenAccountsReadyToChoose(): Promise<void> {
+  await firstAccountsLoad;
+  if (getSelectedAccount() !== null) return;
+  try {
+    await loadAccounts();
+  } catch (error) {
+    console.warn("Could not read the account list again; choosing from the one read before", error);
+  }
+}
+
 export function areLanesLoaded(): boolean {
   return lanesLoaded;
 }
@@ -140,7 +177,11 @@ export async function loadLanes(): Promise<void> {
 }
 
 export async function loadAccounts(): Promise<void> {
-  const body = await m.request<{ accounts: ProviderAccount[]; mru: string | null; default: string | null }>({
+  const body = await m.request<{
+    accounts: ProviderAccount[];
+    mru: string | null;
+    default: string | null;
+  }>({
     method: "GET",
     url: apiUrl("/api/accounts"),
   });
@@ -148,6 +189,7 @@ export async function loadAccounts(): Promise<void> {
   mru = body.mru;
   defaultAccountId = body.default;
   accountsLoaded = true;
+  markAccountsLoaded();
 }
 
 /** Load the account list, retrying a failed fetch with backoff until it succeeds.
@@ -207,7 +249,7 @@ export async function startFlow(laneId: string, methodId: string, accountId?: st
   startGeneration += 1;
   const attempt = startGeneration;
   // Clear stale sign-in state on client before server replaces it.
-  flow = null;
+  releaseFlow();
   m.redraw();
   const started = await m.request<FlowStart>({
     method: "POST",
@@ -259,6 +301,7 @@ async function settle(status: FlowStatus, flowId: string): Promise<void> {
   if (flow.status.state === "ok" || flow.status.state === "failed") return;
   flow = { ...flow, status };
   if (status.state === "ok") {
+    releaseRelay(flow);
     stopPolling();
     // The account the user just created is the one their next chat should use. Without
     // this, someone who picked an account earlier and then added a provider gets the old
@@ -272,7 +315,10 @@ async function settle(status: FlowStatus, flowId: string): Promise<void> {
       chooserOnDismissed = null;
       run(status.account_id);
     }
+    // Nothing left to say, so the chooser goes by itself; a success with a detail stays up to show it.
+    if (status.detail === null) closeProviderChooser();
   } else if (status.state === "failed") {
+    releaseRelay(flow);
     stopPolling();
   }
   m.redraw();
@@ -293,7 +339,7 @@ function startPolling(): void {
         // leaves this screen spinning forever.
         if (error.code === 404 && flow !== null && flow.flow_id === flowId) {
           void settle(
-            { state: "failed", detail: "That sign-in was replaced by a newer one.", account_id: null },
+            { state: "failed", detail: "That sign-in stopped before it finished. Start it again.", account_id: null },
             flowId,
           );
           return;
@@ -315,14 +361,24 @@ export function abortFlow(): void {
   stopPolling();
   if (flow !== null) {
     const id = flow.flow_id;
-    flow = null;
+    releaseFlow();
     m.request({ method: "DELETE", url: apiUrl(`/api/accounts/flow/${id}`) }).catch(() => undefined);
   }
 }
 
 export function clearFlow(): void {
   stopPolling();
+  releaseFlow();
+}
+
+/** Forget the live flow, telling the desktop app to stop relaying it if it might be. */
+function releaseFlow(): void {
+  if (flow !== null) releaseRelay(flow);
   flow = null;
+}
+
+function releaseRelay(ended: FlowStart): void {
+  if (ended.relay_url !== null) endProviderRelay(ended.flow_id);
 }
 
 /**

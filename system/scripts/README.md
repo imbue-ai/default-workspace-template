@@ -24,7 +24,8 @@ Provisioning and utility scripts:
   type's `config_overrides`. Existing reviewer settings still control gates;
   the worker's disabled review/CI/fetch gates are unchanged. mngr's existing
   workspace-trust consent governs hook execution.
-- Claude status line: `claude_status_line.sh`, wired in `.claude/settings.json`.
+- Claude status line: `claude_status_line.sh`, wired in `.claude/settings.json`. It prints
+  nothing; it records each agent's live model state for the chat model bar.
 - Utility scripts: `forward_port.py` (port registry), `layout.py` (the
   desktop's window and shortcut ops), `message_chat.py` (send a message to a chat by its id through
   the chat app, with `mngr message` as the backoff; the in-workspace

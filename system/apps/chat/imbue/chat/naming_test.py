@@ -1,5 +1,8 @@
+import pytest
+
 from imbue.chat.naming import canonical_agent_name
 from imbue.chat.naming import first_free_numbered_name
+from imbue.chat.naming import is_minted_chat_name
 from imbue.chat.naming import is_name_conflict
 
 
@@ -57,3 +60,15 @@ def test_is_name_conflict_compares_canonical_forms_case_insensitively() -> None:
     assert is_name_conflict("chat 2", ("Chat-2",))
     assert is_name_conflict("Chat 2", ("chat 2",))
     assert not is_name_conflict("Chat 2", ("Chat-21", "Chat 1"))
+
+
+@pytest.mark.parametrize("name", ["Chat 1", "Chat 12"])
+def test_is_minted_chat_name_accepts_exactly_what_first_free_numbered_name_mints(name: str) -> None:
+    assert is_minted_chat_name(name)
+
+
+@pytest.mark.parametrize(
+    "name", ["chat 1", "Chat 0", "Chat 01", "Chat-1", "Chat 1 notes", "Rome trip: plan", "Welcome"]
+)
+def test_is_minted_chat_name_rejects_any_other_name(name: str) -> None:
+    assert not is_minted_chat_name(name)

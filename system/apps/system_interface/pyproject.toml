@@ -16,6 +16,8 @@ dependencies = [
     "httpx>=0.27",
     "imbue-common",
     "pydantic-settings>=2.13.1",
+    # The home-screen icon rasterizes the avatar's SVG to PNG; its wheels bundle resvg, so no system library.
+    "resvg-py>=0.5.0",
     "simple-websocket>=1.0",
     "watchdog>=4.0",
     "werkzeug>=3.0",
@@ -40,6 +42,9 @@ dev = [
     "mngr-cli-contract",
     # Keeps tmp_path somewhere a stub executable can run (a workspace container mounts /tmp noexec).
     "pytest-executable-tmp",
+    # Fails a test that skips where the environment is meant to be complete
+    # (the CI job that runs the suites inside the workspace image).
+    "pytest-workspace-env",
     # The tests' polling helper (imbue.mngr.utils.polling); the shell's own code imports
     # nothing from mngr (the import ratchet holds that).
     "imbue-mngr",
@@ -74,7 +79,9 @@ packages = ["imbue"]
 timeout_func_only = true
 markers = [
     "acceptance: marks tests as requiring network access, Modal credentials, etc. These are required to pass in CI",
-    "release: marks tests as being required for release (but not for merging PRs)",
+    "browser: marks tests that drive a browser",
+    "frontend: marks tests that read an app's frontend source",
+    "real_claude: marks tests that run the real claude binary",
     "flaky: marks tests as known-flaky (retried by offload with a separate retry count)",
 ]
 junit_family = "xunit1"
@@ -86,6 +93,11 @@ addopts = [
   "--durations=20",
   "--timeout=10",
   "--timeout-method=signal",
+  # The `browser` and `real_claude` tests are skipped by default. A later `-m` on the
+  # command line replaces this one: `-m ''` runs everything (as CI does), and `-m browser`
+  # runs only the browser tests. A run of only some of the tests needs `--no-cov`, or it
+  # fails the coverage floor below.
+  "-m", "not browser and not real_claude",
 ]
 
 [tool.coverage.run]
@@ -103,6 +115,12 @@ default-flags=["report"]
 default-flags-tui=["report"]
 default-flags-ide=["report"]
 format-command="uv run ruff format --force-exclude --config pyproject.toml --stdin-filename {filename}"
+
+# Makes this directory ty's project (test_no_type_errors runs ty from here). ty
+# skips a pyproject.toml with no [tool.ty] table and keeps searching upward, so
+# without one, a checkout nested in another project (e.g. a clone under mngr's
+# .external_worktrees/) would be checked as part of that project instead.
+[tool.ty]
 
 [tool.pyright]
 venvPath = "."
@@ -143,3 +161,12 @@ known-first-party = [
 
 [tool.coverage.report]
 fail_under = 75
+
+[tool.coverage.paths]
+# Coverage data measured inside the workspace image on Modal (the
+# test-offload CI job) records the sandbox's paths; map them back so
+# the runner can combine the batches and enforce the floor above.
+source = [
+    ".",
+    "/home/user/workspace/system/apps/system_interface/",
+]

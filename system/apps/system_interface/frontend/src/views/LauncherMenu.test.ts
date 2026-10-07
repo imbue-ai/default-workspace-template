@@ -25,7 +25,7 @@ const chatty = chatLikeAppRecord("chatty");
 const terminal = appRecord("terminal", { launch_paths: [launchPathRecord({ id: "new", label: "New Terminal" })] });
 
 function stateWithWindows(): DesktopState {
-  let next = initialDesktopState("client-1", { isCompact: false, isTouch: false });
+  let next = initialDesktopState("client-1", { isPhone: false, isTouch: false });
   next = reduceDesktopState(next, { type: "apps_updated", apps: [terminal, chatty] });
   next = reduceDesktopState(next, {
     type: "desktops_updated",
@@ -43,11 +43,11 @@ function render(
   const attrs: LauncherMenuAttrs = {
     menu,
     highlightIndex: defaultHighlightIndex(menu.rows),
-    isCompact: false,
     isApplePlatform: false,
     bottomOffsetPx: 0,
     onRun: vi.fn(),
     onHighlight: vi.fn(),
+    onAppShortcutContextMenu: vi.fn(),
     ...overrides,
   };
   return { root: mountView(() => m(LauncherMenu, attrs)), attrs };
@@ -126,6 +126,30 @@ describe("the launcher menu", () => {
     disabled.dispatchEvent(new PointerEvent("pointerenter"));
     expect(tooLong.attrs.onRun).not.toHaveBeenCalled();
     expect(tooLong.attrs.onHighlight).not.toHaveBeenCalled();
+  });
+
+  it("reports a right-click on the row of an app's own desktop shortcut, and leaves every other row's alone", () => {
+    const { root, attrs } = render(launcherRowsOf(stateWithWindows(), ""));
+    const row = root.querySelector('[data-launch="terminal:new"]') as HTMLElement;
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 12, clientY: 34 });
+    row.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(attrs.onAppShortcutContextMenu).toHaveBeenCalledWith("terminal", 12, 34, row);
+    // The chat-like app's default shortcut names its text launch path, which has no launcher row, so its root row
+    // (not its shortcut), like a free-text row, keeps the right-click every other surface gets.
+    for (const selector of ['[data-launch="chatty:root"]', '[data-text-action="primary"]']) {
+      const other = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+      root.querySelector(selector)!.dispatchEvent(other);
+      expect(other.defaultPrevented).toBe(false);
+    }
+    expect(attrs.onAppShortcutContextMenu).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the shortcut row's right-click alone with no handler, as the phone's start sheet passes", () => {
+    const { root } = render(launcherRowsOf(stateWithWindows(), ""), { onAppShortcutContextMenu: null });
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    root.querySelector('[data-launch="terminal:new"]')!.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
   });
 
   it("spells the secondary key for the platform and previews the first words of the text", () => {

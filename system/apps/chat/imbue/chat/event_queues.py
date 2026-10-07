@@ -70,6 +70,11 @@ class AgentEventQueues:
                 if not queues:
                     del self._queues[chat_id]
 
+    def has_consumers(self, chat_id: str) -> bool:
+        """Whether any stream is open for ``chat_id``."""
+        with self._lock:
+            return bool(self._queues.get(chat_id))
+
     def broadcast(self, chat_id: str, event: dict[str, Any]) -> None:
         """Deliver one event to every live consumer for ``chat_id`` (the plugin-hook shape)."""
         self.broadcast_batch(chat_id, [event])

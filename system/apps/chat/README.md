@@ -11,7 +11,7 @@ contract; everything about chats lives in this app's own pages and routes.
 
 The `chat` program (declared in `system/supervisord.conf.d/chat.conf`) runs
 `chat-app`, the console script of this package, from its own uv tool environment
-(installed by `system/scripts/build_workspace.sh` with the mngr harness plugins
+(installed by `system/scripts/build_workspace.sh` with the mngr plugins
 `system/config/mngr_plugins.toml` assigns to `chat`). At startup it registers
 its manifest and port 8010 through `system/scripts/forward_port.py`, follows
 the agent lifecycle event file the workspace's `agent-observer` program (`mngr
@@ -22,7 +22,18 @@ observe`, its own supervised service) writes, and serves:
   ordered by recency, with rename, stop and restart, and delete) beside an inner
   frame of the selected chat's page. The selection is the `chat` query parameter,
   so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
-  chat's title. The page is pure: nothing is created or sent by loading it. An
+  chat's title. Loading the page sends and writes nothing. With nothing selected it
+  shows the most recent chat, and with no chats one awaiting its first send
+  (`POST /api/chats/awaiting`, held in memory until that send launches it). At
+  700px wide or less (a phone, or a narrow window) the root takes its phone
+  layout (`frontend/src/compactLayout.ts`, docs/system/blueprint/desktop-interface/plan-phone-interface.md):
+  a 44px header with a list button, the chat's title and a kebab of its verbs,
+  and the list in a drawer over the chat, each row carrying a kebab with the
+  right-click menu's verbs; with nothing selected the drawer is open over an
+  empty chat. The root tells each chat page it frames which layout it is in, and
+  a page in the phone layout opens its model menu from a settings button at the
+  composer's left, with submenus sliding over the card, effort as segments, and
+  the Source view switch as a row. An
   `intake` query parameter names a pending intake (below) the root applies once
   (`docs/system/blueprint/post-launch-paths/`): the text goes into a composer,
   unsent, a chat is picked from a picker the root opens over the list, or a chat
@@ -40,7 +51,8 @@ observe`, its own supervised service) writes, and serves:
 - Every `/api/chats/<chat-id>/...` route (events, streams, sends, model choice,
   the queue actions, presence, destroy, rename, start, stop; the subagent reads under
   `/api/chats/<chat-id>/agents/<agent-id>/subagents/<session-id>/`),
-  `/api/chats/create`, `/api/chats`, `/api/harnesses`, `/api/uploads`,
+  `/api/chats/create`, `/api/chats/awaiting` (the chat an empty chat list opens on), `/api/chats`,
+  `/api/harnesses`, `/api/uploads`,
   `/api/claude-auth`, `/api/accounts`, `/api/lanes`, `/api/latchkey`, and
   `/api/secret-requests` (an agent's `request_secret.py` files a secret request;
   the transcript's secret card submits, declines, and re-reads it).
@@ -173,7 +185,12 @@ opens the dialog's rebind variant, whose picker starts from "Keep the current
 model", for changing account and model in one switch. A chat that has had no
 user turn skips the dialog too: it switches at once, with no summary and no
 handoff prompt, since there is nothing to hand over. Only a switch that will
-write a summary asks.
+write a summary asks. A press that lands before a new chat's transcript has
+loaded waits for that load before deciding. The strip, the "Switch and send"
+button and the model bar's "next" mark show only while the next send is what
+carries the switch out: once its message is sent the chip names the target,
+unmarked, until the new agent reports its model, and a failed switch leaves it
+on the agent the chat still runs on.
 While the chat converges the held messages render from the snapshot's
 `handoff.held_sends` (the message the user switched with stands down once the
 `agent_switch` marker carrying it is on the transcript, where it renders as the
@@ -308,6 +325,38 @@ new chats are set; `/fast on` and `/fast off` typed in the composer choose the
 mode too. The first time auto switches a chat in a workspace, a one-time notice
 over the model bar explains it.
 
+## Chat names
+
+A new chat is minted as "Chat N". Its first message is sent, in the background
+and outside the chat, to the cheapest model the chat's account offers
+(`chat_naming.py`, through the harness's `OneShotCompletion`, from an empty
+directory with no session kept), and the answer, in the form "Short name: brief
+description", renames the chat the way the rail's rename does. Models are named
+by family rather than by id, so a change to a provider's model list moves the
+call to the new model instead of breaking it:
+
+- Claude: `claude -p` with no tools and thinking off, trying the `haiku` alias,
+  then `sonnet`, then the account's default model.
+- Codex: `codex exec`, read-only and ignoring the account's config, on the newest
+  "luna" model in the account's own model list (the sidecar a model probe keeps
+  in the account folder, probed once when there is none) at its lowest reasoning
+  effort; the account's default model when it offers no luna, or refuses it.
+
+The question goes out alongside the send, not after it: the account is known
+from the moment a create starts (`resolve_chat_account_binding`), so a chat still
+coming up is asked about too. The answer is shown in the chat list as soon as it
+arrives (`show_automatic_title`), ahead of the slower `mngr rename` that makes it
+the chat's own name; a rename that does not land takes the shown name back. The
+name is set once and does not follow the chat as its topic drifts. An opening
+with no clear subject ("hi") leaves "Chat N" and the next message is tried, up to
+three messages. Only a chat still wearing a name nobody chose is renamed: exactly
+"Chat N", or a seeded chat's seed title (the Mind app's "Welcome"), named from
+the first message the user sends in it. A name the user or an agent chose is left
+alone. What has been tried is kept in `naming.json` in the chat's folder, so a
+restart neither renames a named chat nor retries past the limit. A harness with
+no `OneShotCompletion` (Pi, Antigravity, OpenCode) keeps the minted name, and a
+secondary chat names nothing.
+
 ## Provider accounts
 
 Accounts live under `~/.minds/accounts` (`accounts.py`): one folder per
@@ -321,6 +370,47 @@ one (the account of the latest sign-in, chat create, or switch); pressing
 another account in that menu switches the chat to it (through the dialog, or at
 once for a chat with nothing to hand over -- see the switch above).
 `system/scripts/migrate_claude_auth.py` imports this package from the root venv.
+
+Removing (signing out of) an account deletes its credential files and its index
+row; its chats keep running, since their harness already holds the credential,
+but take no more of the user's messages. The message route and the intake answer
+409 with `kind: account_signed_out` for a chat whose `account` label names an
+account the index no longer has (a send held for a chat already switching is
+still held), and the composer shows "Choose a provider" in place of the input
+until a switch to another account is armed. A notice the chat app delivers for
+the agent's own secret request still goes through.
+
+A Claude or ChatGPT sign-in finishes in the user's own browser. The CLI (`claude
+auth login`, or a short-lived `codex app-server` for ChatGPT) runs with
+`system/scripts/minds_browser_shim` as `$BROWSER`, which records the page it
+would open; the flow offers it as `relay_url`, and the chooser hands it to the
+minds desktop app (`minds:provider-sign-in` in the embed contract; the chat root passes the desktop app's answer, `minds:provider-sign-in-ack`, down to the chat page that asked, since the shell frames the root and not the page). The desktop
+app opens the page and listens on the loopback port it calls back to, posting
+the callback to `POST /api/accounts/flow/<flow_id>/callback`. That route takes
+the flow's own callback once, replays it against the CLI here
+(`harnesses/sign_in_relay.py`), waits briefly for the flow to settle, and
+answers with the flow's status and provider name; the desktop app turns that
+into the page the browser ends on. The CLI's own answer is not passed back,
+since claude sends the browser to its success page before its token exchange
+has succeeded. When a flow ends the chooser sends `minds:provider-sign-in-end`,
+so the desktop app frees the port.
+
+Every way in stays reachable. With no desktop app to relay, Claude falls back to
+pasting the code its page shows, and ChatGPT to its one-time-code login. While
+the browser is out ("Finish signing in to <provider> in your browser", with
+"Try again", which reopens the same sign-in page, and "Try another way"), "Try another way" shows Claude's code steps for the same
+sign-in (the CLI takes whichever code arrives first) or starts ChatGPT's code
+login, alongside the lane's other methods; a failed sign-in offers the same. A
+Claude sign-in succeeds on the CLI's clean exit with its success line, or, if
+the line was reworded, on its own probe; a denial the browser reports says
+access wasn't approved (claude.ai's own Deny reports nothing, so the chooser
+keeps waiting with Try again). A ChatGPT code login that ChatGPT refuses says to turn on device code
+sign-in for Codex in ChatGPT's security settings. "Sign in again" on an API-key
+account asks for a key again; any other account signs in through its lane's
+first way in (`reauth_method` on each account row).
+
+Only the workspace's owner can deliver a relayed callback: the callback route
+answers 403 to a request whose `X-Imbue-Identity` says `owner: false`.
 
 The same default reaches every `mngr create` in the workspace that names no
 harness and no account -- workers, automations, the caretaker, and the bare
@@ -361,8 +451,14 @@ uv run chat-app --no-register
 
 # Tests
 cd system/apps/chat
-uv run pytest
+uv run pytest                   # skips the browser and real_claude tests
+uv run pytest -m ''             # everything, as CI runs it
+uv run pytest --no-cov -m browser   # just the browser tests
 ```
+
+The suite fails any run that covers less than 75% of the app, so a run of only
+some of its tests needs `--no-cov`. A browser test file named without `-m ''`
+or `-m browser` runs nothing: pytest reports "N deselected".
 
 `--no-register` boots the app without re-pointing the live chat row in the
 registry, for a throwaway boot on another port (`CHAT_PORT`).

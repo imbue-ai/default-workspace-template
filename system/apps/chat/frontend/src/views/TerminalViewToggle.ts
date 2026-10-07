@@ -3,7 +3,8 @@
  *
  * The chat and the terminal are two renderings of one conversation, so this reads as a view
  * setting rather than a place to navigate to -- which is why it is a switch and not a button,
- * and why it sits in the composer's under-bar next to the model.
+ * and why it sits in the composer's under-bar next to the model. In the phone layout the model
+ * menu carries it as a row instead, and it shows here only while the terminal face is up.
  *
  * It is the model menu's switch at its `sm` size, taken from `SWITCH_SIZES` by name rather than
  * scaled here: a track and its knob's throw only agree when they are handed out together.
@@ -14,8 +15,7 @@ import * as css from "./modelProviderMenuStyles";
 
 export interface TerminalViewToggleAttrs {
   on: boolean;
-  /** Receives the click event so the caller can locate its own panel in the DOM. */
-  onToggle: (event: Event) => void;
+  onToggle: () => void;
 }
 
 export const TerminalViewToggle: m.Component<TerminalViewToggleAttrs> = {
@@ -29,7 +29,7 @@ export const TerminalViewToggle: m.Component<TerminalViewToggleAttrs> = {
         class: "terminal-view-toggle",
         "aria-checked": on ? "true" : "false",
         "aria-label": "Source view",
-        onclick: onToggle,
+        onclick: () => onToggle(),
       },
       [
         m("span", { class: "terminal-view-toggle-label" }, "Source view"),

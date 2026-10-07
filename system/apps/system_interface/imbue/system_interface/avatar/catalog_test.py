@@ -12,15 +12,17 @@ from imbue.system_interface.avatar.catalog import MAX_REGISTERED_DESIGNS
 from imbue.system_interface.avatar.catalog import _MAX_CATALOG_BYTES
 from imbue.system_interface.avatar.designs import BUNDLED_DESIGNS
 from imbue.system_interface.avatar.designs import DEFAULT_DESIGN_ID
+from imbue.system_interface.avatar.designs import GUMMY_SEAL_DESIGN_ID
+from imbue.system_interface.avatar.designs import LIVE_DESIGN_ID
 from imbue.system_interface.avatar.primitives import DesignId
 from imbue.system_interface.avatar.testing import MINIMAL_DESIGN_SVG
 from imbue.system_interface.avatar.testing import design_registration
 from imbue.system_interface.shell.errors import InvalidShellValueError
 
 
-def test_the_catalog_lists_the_bundled_designs_then_the_registered_ones(tmp_path: Path) -> None:
+def test_the_catalog_lists_the_character_then_the_bundled_then_the_registered_designs(tmp_path: Path) -> None:
     store = AvatarCatalogStore(directory=tmp_path / "avatars")
-    assert [listing.id for listing in store.entries()] == [design.id for design in BUNDLED_DESIGNS]
+    assert [listing.id for listing in store.entries()] == [LIVE_DESIGN_ID, *(design.id for design in BUNDLED_DESIGNS)]
     store.register(design_registration("mine"))
     listings = store.entries()
     assert listings[-1].id == "mine"
@@ -60,7 +62,7 @@ def test_a_stored_design_outlives_a_change_to_the_shared_stylesheet(tmp_path: Pa
 def test_a_bundled_id_is_never_replaced(tmp_path: Path) -> None:
     store = AvatarCatalogStore(directory=tmp_path / "avatars")
     with pytest.raises(InvalidShellValueError, match="bundled"):
-        store.register(design_registration(str(DEFAULT_DESIGN_ID)))
+        store.register(design_registration(str(GUMMY_SEAL_DESIGN_ID)))
 
 
 def test_the_catalog_never_grows_past_its_bound(tmp_path: Path) -> None:
@@ -78,7 +80,7 @@ def test_an_oversized_catalog_reads_as_empty_but_is_not_overwritten(tmp_path: Pa
     with (directory / "catalog.json").open("wb") as stream:
         stream.truncate(_MAX_CATALOG_BYTES + 1)
     store = AvatarCatalogStore(directory=directory)
-    assert [listing.id for listing in store.entries()] == [design.id for design in BUNDLED_DESIGNS]
+    assert [listing.id for listing in store.entries()] == [LIVE_DESIGN_ID, *(design.id for design in BUNDLED_DESIGNS)]
     with pytest.raises(InvalidShellValueError, match="storage bound"):
         store.register(design_registration("mine"))
 
@@ -101,3 +103,22 @@ def test_a_registration_carries_a_valid_design() -> None:
             svg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><script/></svg>',
             source_path="/tmp/mine.svg",
         )
+
+
+def test_the_character_is_offered_with_a_still_to_preview(tmp_path: Path) -> None:
+    """The character is drawn by the shell's own bundle, but it is listed and served like any other design: the
+    chooser previews the still, and so does any client that cannot run the rig."""
+    store = AvatarCatalogStore(directory=tmp_path / "avatars")
+    listing = next(entry for entry in store.entries() if entry.id == LIVE_DESIGN_ID)
+    assert listing.source_path is None
+    still = store.source(LIVE_DESIGN_ID)
+    assert still is not None
+    assert 'viewBox="0 0 100 100"' in still
+    assert "<script" not in still
+
+
+def test_the_character_cannot_be_registered_over(tmp_path: Path) -> None:
+    store = AvatarCatalogStore(directory=tmp_path / "avatars")
+    with pytest.raises(InvalidShellValueError, match="own character"):
+        store.register(design_registration(str(LIVE_DESIGN_ID)))
+    assert store.source(LIVE_DESIGN_ID) is not None

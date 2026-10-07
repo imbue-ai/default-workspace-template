@@ -20,6 +20,7 @@ from terminal_app.dispatch import (
     warn_if_oom_tag_script_is_missing,
 )
 from terminal_app.errors import UnsafeDispatchPathError
+from terminal_app.pty_page import PTY_PAGE_SCRIPT
 
 _COMMANDS_DIR = Path("/home/user/workspace/data/.state/terminal/commands")
 _SESSIONS_DIR = Path("/home/user/workspace/data/.state/terminal/sessions")
@@ -183,6 +184,48 @@ def test_install_ttyd_web_client_decompresses_the_patched_client(tmp_path: Path)
 
     assert install_ttyd_web_client(gzip.compress(b"<html>patched client</html>"), destination) is True
     assert destination.read_bytes() == b"<html>patched client</html>"
+
+
+def test_install_ttyd_web_client_adds_the_phone_key_script_before_the_body_closes(tmp_path: Path) -> None:
+    destination = tmp_path / "index.html"
+    client = b"<html><body><p>a</p></body><!-- </body> in a comment --></body></html>"
+
+    assert install_ttyd_web_client(gzip.compress(client), destination) is True
+
+    assert destination.read_bytes() == (
+        b"<html><body><p>a</p></body><!-- </body> in a comment -->"
+        + f"<script>{PTY_PAGE_SCRIPT}</script>".encode()
+        + b"</body></html>"
+    )
+
+
+def test_the_packaged_client_is_installed_with_the_phone_key_script(tmp_path: Path) -> None:
+    compressed_client = load_ttyd_web_client(None)
+    assert compressed_client is not None
+    destination = tmp_path / "index.html"
+
+    assert install_ttyd_web_client(compressed_client, destination) is True
+
+    installed = destination.read_bytes()
+    script = f"<script>{PTY_PAGE_SCRIPT}</script>".encode()
+    assert installed.count(script) == 1
+    # After the client's own bundle, so the bundle has run by the time the script does.
+    assert installed.endswith(script + b"</body></html>")
+    assert installed.replace(script, b"") == gzip.decompress(compressed_client)
+
+
+def test_a_client_with_no_body_close_is_installed_as_it_is_with_a_warning(tmp_path: Path) -> None:
+    destination = tmp_path / "index.html"
+    captured: list[str] = []
+    sink_id = logger.add(lambda message: captured.append(str(message)), level="WARNING")
+    try:
+        assert install_ttyd_web_client(gzip.compress(b"<html>no body close</html>"), destination) is True
+    finally:
+        logger.remove(sink_id)
+
+    assert destination.read_bytes() == b"<html>no body close</html>"
+    assert len(captured) == 1
+    assert "without the phone keys" in captured[0]
 
 
 def test_install_ttyd_web_client_falls_back_when_the_archive_will_not_decompress(tmp_path: Path) -> None:
