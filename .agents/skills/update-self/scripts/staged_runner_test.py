@@ -77,7 +77,12 @@ def test_the_staged_runner_delivers_through_the_messenger_of_the_workspace_it_ru
     if is_message_chat_in_tree:
         recording_messengers.install_message_chat(workspace)
     staged = _stage_runner(workspace)
-    env = {key: value for key, value in os.environ.items() if key != "MINDS_CHAT_ID"}
+    # Without the suite's own host, so a suite run by an agent records no test task on it.
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in ("MINDS_CHAT_ID", "MNGR_AGENT_STATE_DIR", "MNGR_HOST_DIR")
+    }
     env["MNGR_AGENT_ID"] = _AGENT_ID
 
     started = subprocess.run(

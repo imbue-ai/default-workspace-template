@@ -9,6 +9,8 @@ reaches the ``fake_mngr`` fixture, never the real ``mngr``.
 from __future__ import annotations
 
 import contextlib
+import datetime
+import json
 import os
 import secrets
 import shlex
@@ -20,6 +22,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from imbue.mngr.api.events import parse_event_line
+from imbue.mngr.hosts.common import (
+    build_background_task_marker_lines_script,
+    get_agent_background_tasks_dir_path,
+    get_agent_state_dir_path,
+    select_live_background_tasks,
+)
+from imbue.mngr.primitives import AgentId, BackgroundTaskSource
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 from script_modules_testing import run_in_background
@@ -66,13 +76,58 @@ def _python_command(source: str) -> list[str]:
 
 
 def _agent_env(**extra: str) -> dict[str, str]:
+    """The suite's environment as an agent with only the identity given here; a suite run by a
+    real agent must not record its test tasks on that agent's host."""
     env = {
         key: value
         for key, value in os.environ.items()
-        if key not in ("MINDS_CHAT_ID", "MNGR_AGENT_ID")
+        if key
+        not in (
+            "MINDS_CHAT_ID",
+            "MNGR_AGENT_ID",
+            "MNGR_AGENT_STATE_DIR",
+            "MNGR_HOST_DIR",
+        )
     }
     env.update(extra)
     return env
+
+
+def _mngr_agent_env(host_dir: Path, agent_id: str) -> dict[str, str]:
+    """The environment mngr gives an agent on a host at ``host_dir``."""
+    return _agent_env(
+        MNGR_AGENT_ID=agent_id,
+        MNGR_HOST_DIR=str(host_dir),
+        MNGR_AGENT_STATE_DIR=str(get_agent_state_dir_path(host_dir, AgentId(agent_id))),
+    )
+
+
+def _pending_markers(host_dir: Path) -> list[Path]:
+    return sorted(host_dir.glob("agents/*/background_tasks/*.json"))
+
+
+def _activity_events(host_dir: Path) -> list[str]:
+    events_path = host_dir / "events" / "mngr" / "activity" / "events.jsonl"
+    return events_path.read_text().splitlines() if events_path.exists() else []
+
+
+def _wait_until_no_marker_is_pending(host_dir: Path) -> None:
+    deadline = time.monotonic() + _DELIVERY_DEADLINE_SECONDS
+    while _pending_markers(host_dir):
+        assert time.monotonic() < deadline, "the task's marker was never removed"
+        time.sleep(0.1)
+
+
+def _command_waiting_for(release: Path) -> list[str]:
+    """A command that runs until ``release`` exists (or a failed test's run times out), so a
+    test can look at the run mid-way."""
+    return _python_command(
+        "import os, time\n"
+        "deadline = time.monotonic() + 30\n"
+        f"while not os.path.exists({str(release)!r}) and time.monotonic() < deadline:\n"
+        "    time.sleep(0.05)\n"
+        "print('released')\n"
+    )
 
 
 def _wait_for_posts(fake_chat_app: Any, count: int) -> list[tuple[str, dict[str, Any]]]:
@@ -243,6 +298,124 @@ def test_a_reused_task_dir_shows_no_exit_code_until_the_new_command_exits(
     assert (task_dir / "exit_code").read_text().strip() == "5"
 
 
+@pytest.mark.usefixtures("fake_mngr")
+def test_the_task_is_pending_on_the_callers_agent_from_the_callers_return_until_it_reports(
+    fake_chat_app: Any, tmp_path: Path
+) -> None:
+    host_dir = tmp_path / "host"
+    release = tmp_path / "release"
+
+    started = _start_runner(
+        tmp_path,
+        _mngr_agent_env(host_dir, _CHAT_ID),
+        "Wait for the worker",
+        *_command_waiting_for(release),
+    )
+
+    assert started.returncode == 0, started.stderr
+    task_id = _task_dir_from(started.stdout, tmp_path).name
+    [marker] = _pending_markers(host_dir)
+    assert marker.parent == get_agent_background_tasks_dir_path(
+        host_dir, AgentId(_CHAT_ID)
+    )
+    recorded = json.loads(marker.read_text())
+    assert recorded["id"] == task_id
+    assert recorded["description"] == "Wait for the worker"
+    # The detached runner, which outlives the caller and holds the report.
+    os.kill(recorded["pid"], 0)
+    assert len(_activity_events(host_dir)) == 1
+
+    release.touch()
+
+    _wait_for_posts(fake_chat_app, 1)
+    _wait_until_no_marker_is_pending(host_dir)
+    events = _activity_events(host_dir)
+    assert len(events) == 2
+    for event in events:
+        record = parse_event_line(event, "mngr/activity")
+        assert record.original_source is None
+        assert record.data["type"] == "activity"
+
+
+@pytest.mark.usefixtures("fake_mngr")
+def test_the_task_is_cleared_from_the_agent_a_handoff_moved_it_to(
+    fake_chat_app: Any, tmp_path: Path
+) -> None:
+    host_dir = tmp_path / "host"
+    release = tmp_path / "release"
+    started = _start_runner(
+        tmp_path,
+        _mngr_agent_env(host_dir, _CHAT_ID),
+        "Wait for the worker",
+        *_command_waiting_for(release),
+    )
+    assert started.returncode == 0, started.stderr
+    [marker] = _pending_markers(host_dir)
+    successor_dir = get_agent_background_tasks_dir_path(
+        host_dir, AgentId(f"agent-{secrets.token_hex(16)}")
+    )
+    successor_dir.mkdir(parents=True)
+    moved = marker.rename(successor_dir / marker.name)
+
+    release.touch()
+
+    _wait_for_posts(fake_chat_app, 1)
+    _wait_until_no_marker_is_pending(host_dir)
+    assert not moved.exists()
+
+
+def test_mngr_reads_a_recorded_task_as_the_agents_pending_task(tmp_path: Path) -> None:
+    agent_id = AgentId(_CHAT_ID)
+    started_at = datetime.datetime(2026, 10, 6, 12, 0, tzinfo=datetime.timezone.utc)
+    run_in_background.write_background_task_marker(
+        get_agent_state_dir_path(tmp_path, agent_id),
+        "20261006T120000Z-0a1b2c",
+        "Wait for\nthe worker",
+        os.getpid(),
+        started_at,
+    )
+    marker_dir = get_agent_background_tasks_dir_path(tmp_path, agent_id)
+
+    marker_lines = subprocess.run(
+        [
+            "sh",
+            "-c",
+            build_background_task_marker_lines_script(shlex.quote(str(marker_dir))),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+
+    [task] = select_live_background_tasks(marker_lines, frozenset({os.getpid()}))
+    assert task.source is BackgroundTaskSource.RUN_IN_BACKGROUND
+    assert task.id == "20261006T120000Z-0a1b2c"
+    assert task.description == "Wait for the worker"
+    assert task.started_at == started_at
+    assert task.pid == os.getpid()
+
+
+def test_a_chat_id_is_refused_from_a_caller_so_every_task_is_its_own_wait(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as usage_exit:
+        run_in_background.main(
+            [
+                "--description",
+                "Say hello",
+                "--chat-id",
+                _CHAT_ID,
+                "--",
+                "echo",
+                "hello",
+            ],
+            environ={"MNGR_AGENT_ID": _CHAT_ID},
+        )
+
+    assert usage_exit.value.code == 2
+    assert "--chat-id" in capsys.readouterr().err
+
+
 def test_a_caller_that_is_not_an_agent_is_refused_before_anything_starts(
     tmp_path: Path,
 ) -> None:
@@ -379,17 +552,20 @@ def test_a_report_for_a_chat_that_no_longer_exists_is_given_up_on_the_first_send
     fake_chat_app: Any, tmp_path: Path
 ) -> None:
     """The chat app does not know the chat and mngr has no agent by its id (the fake mngr sends
-    nothing and exits 0), so the real messenger answers "gone" and the runner stops."""
+    nothing and exits 0), so the real messenger answers "gone" and the runner stops, leaving
+    nothing pending on the agent."""
     fake_chat_app.answers = [(404, {"detail": "Chat not found"})]
+    host_dir = tmp_path / "host"
 
     started = _start_runner(
         tmp_path,
-        _agent_env(MNGR_AGENT_ID=_CHAT_ID),
+        _mngr_agent_env(host_dir, _CHAT_ID),
         "Report to nobody",
         *_python_command("print('done')"),
     )
 
     assert started.returncode == 0, started.stderr
+    assert _pending_markers(host_dir)
     runner_log = _task_dir_from(started.stdout, tmp_path) / "runner.log"
     # The messenger's own 404 window runs first, in real time.
     deadline = time.monotonic() + _DELIVERY_DEADLINE_SECONDS + 10
@@ -401,6 +577,7 @@ def test_a_report_for_a_chat_that_no_longer_exists_is_given_up_on_the_first_send
     log = runner_log.read_text()
     assert "Delivery attempt 1: the chat no longer exists" in log
     assert "retrying" not in log
+    _wait_until_no_marker_is_pending(host_dir)
 
 
 def test_the_runners_band_is_oom_prioritys_user_service_band() -> None:

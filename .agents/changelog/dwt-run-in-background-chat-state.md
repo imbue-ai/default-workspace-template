@@ -1,0 +1,1 @@
+`update-self`'s copy of `run_in_background.py` stays identical to `system/scripts/run_in_background.py`, so the lead waiting on the update's background agent now shows as busy, not waiting for the user, until the report arrives.

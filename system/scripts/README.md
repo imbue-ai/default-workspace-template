@@ -33,7 +33,11 @@ Provisioning and utility scripts:
   the same way, with `mngr create` as the backoff), `run_in_background.py` (run a
   command detached and, when it exits, send its exit code and output to the
   caller's own chat as a message that starts the agent's next turn, on any
-  harness; how a lead waits for a worker's report; vendored byte-identically into
+  harness; how a lead waits for a worker's report; until the report is
+  delivered or given up on, a marker
+  `$MNGR_AGENT_STATE_DIR/background_tasks/run_in_background-<task-id>.json`
+  holding the detached runner's pid tells mngr the caller's agent is busy, i.e.
+  will resume on its own; vendored byte-identically into
   `.agents/skills/update-self/scripts/`, whose staged copy update-self waits
   through), `with_secrets.py` (run a
   command with one `data/.secrets/<name>.env` file's variables in its

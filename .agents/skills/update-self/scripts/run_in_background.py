@@ -23,6 +23,14 @@ command has exited, and ``runner.log``, the detached process's own record of the
 A caller that needs the result mid-turn, before the message can reach it, reads the first
 two.
 
+While the report is pending, the caller's agent is busy: it will resume on its own. The
+script records that for mngr before it returns, as a marker
+``$MNGR_AGENT_STATE_DIR/background_tasks/run_in_background-<task-id>.json`` holding the
+detached process's pid, and removes the marker once the report is delivered or given up on.
+The removal looks under every agent's state dir, since a chat handoff moves the marker to the
+successor that the report then lands on. Each change appends an activity event, so
+``mngr observe`` re-reads the agent at once.
+
 The detached process starts a session of its own, so it outlives the caller's tool call and
 its process group. It also drops the caller's ``MNGR_AGENT_ID`` from its own environment:
 ``mngr stop`` (and a handoff retiring the agent, or a restart after a shed) kills every
@@ -52,6 +60,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import json
 import os
 import secrets
 import shlex
@@ -75,6 +84,16 @@ MESSAGE_CHAT_REL = Path("system") / "scripts" / "message_chat.py"
 
 # The variable mngr tags an agent's processes with and kills them by on a stop.
 AGENT_ID_ENV = "MNGR_AGENT_ID"
+AGENT_STATE_DIR_ENV = "MNGR_AGENT_STATE_DIR"
+HOST_DIR_ENV = "MNGR_HOST_DIR"
+
+# mngr's background-task marker contract (``BACKGROUND_TASKS_DIR_NAME`` in
+# ``imbue.mngr.hosts.common``, and the ``run_in_background`` task source), copied because this
+# script is standard library only; a test reads a marker written here through mngr's own reader.
+BACKGROUND_TASKS_DIR_NAME = "background_tasks"
+BACKGROUND_TASK_SOURCE = "run_in_background"
+# Where the agents' hooks append the event that makes ``mngr observe`` re-read the host's agents.
+ACTIVITY_EVENTS_REL = Path("events") / "mngr" / "activity" / "events.jsonl"
 
 # ``mngr message``'s exit codes, which ``message_chat.py`` passes through.
 EXIT_DELIVERED = 0
@@ -226,6 +245,64 @@ def deliver_report(
         interval = min(interval * 2, DELIVERY_RETRY_MAX_INTERVAL_SECONDS)
 
 
+def background_task_marker_name(task_id: str) -> str:
+    return f"{BACKGROUND_TASK_SOURCE}-{task_id}.json"
+
+
+def write_background_task_marker(
+    agent_state_dir: Path,
+    task_id: str,
+    description: str,
+    pid: int,
+    started_at: datetime.datetime,
+) -> None:
+    """Record the task as pending in the agent's marker dir, atomically: readers only ever see a
+    whole marker."""
+    marker_dir = agent_state_dir / BACKGROUND_TASKS_DIR_NAME
+    marker_dir.mkdir(parents=True, exist_ok=True)
+    marker = marker_dir / background_task_marker_name(task_id)
+    # Not ``*.json``, so no reader picks up the half-written file.
+    staging = marker_dir / f".{marker.name}.tmp"
+    staging.write_text(
+        json.dumps(
+            {
+                "source": BACKGROUND_TASK_SOURCE,
+                "id": task_id,
+                "description": " ".join(description.split()),
+                "started_at": started_at.astimezone(datetime.timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                ),
+                "pid": pid,
+            }
+        ),
+        encoding="utf-8",
+    )
+    staging.replace(marker)
+
+
+def remove_background_task_markers(host_dir: Path, task_id: str) -> None:
+    """Remove the task's marker from every agent's state dir on the host."""
+    marker_name = background_task_marker_name(task_id)
+    for marker_dir in (host_dir / "agents").glob(f"*/{BACKGROUND_TASKS_DIR_NAME}"):
+        (marker_dir / marker_name).unlink(missing_ok=True)
+
+
+def append_activity_event(host_dir: Path) -> None:
+    """One event in the shape the agents' hooks write, so ``mngr observe`` re-reads the agents."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    event = {
+        "source": "mngr/activity",
+        "type": "activity",
+        "event_id": f"evt-{secrets.token_hex(16)}",
+        "timestamp": now.strftime("%Y-%m-%dT%H:%M:%S.")
+        + f"{now.microsecond * 1000:09d}Z",
+    }
+    events_path = host_dir / ACTIVITY_EVENTS_REL
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    with events_path.open("a", encoding="utf-8") as events:
+        events.write(json.dumps(event) + "\n")
+
+
 def move_to_runner_oom_band(oom_score_adj_path: Path) -> None:
     """Lower this process's ``oom_score_adj`` to the runner's band; never raises it.
 
@@ -282,8 +359,10 @@ def run_and_deliver(
     chat_id: str,
     command: Sequence[str],
     command_environ: Mapping[str, str],
+    host_dir: Path | None,
 ) -> int:
-    """Run the command to completion here, in ``command_environ``, then send its report to the chat."""
+    """Run the command to completion here, in ``command_environ``, then send its report to the chat
+    and clear the task's marker from ``host_dir`` (None outside an mngr host: nothing to clear)."""
     output_path = task_dir / OUTPUT_FILE_NAME
     _log(f"Running {shlex.join(command)}")
     started_at = time.monotonic()
@@ -305,13 +384,22 @@ def run_and_deliver(
         encoding="utf-8",
     )
     messenger = messenger_argv(script_repo_root(), chat_id, message_file)
-    if deliver_report(
+    is_delivered = deliver_report(
         messenger, run=_run_messenger, sleep=time.sleep, clock=time.monotonic
-    ):
+    )
+    if is_delivered:
         _log(f"Delivered the report to chat {chat_id}")
-        return 0
-    _log(f"Gave up delivering the report to chat {chat_id}; it is in {message_file}")
-    return 1
+    else:
+        _log(
+            f"Gave up delivering the report to chat {chat_id}; it is in {message_file}"
+        )
+    if host_dir is not None:
+        try:
+            remove_background_task_markers(host_dir, _task_id(task_dir))
+            append_activity_event(host_dir)
+        except OSError as exc:
+            _log(f"Could not clear the task's pending marker: {exc}")
+    return 0 if is_delivered else 1
 
 
 def _start_detached(
@@ -326,7 +414,7 @@ def _start_detached(
     # its environment, so mngr's stop of the caller's agent passes it by.
     agent_id = environ.get(AGENT_ID_ENV, "")
     with (task_dir / RUNNER_LOG_FILE_NAME).open("ab") as runner_log:
-        subprocess.Popen(
+        runner = subprocess.Popen(
             [
                 sys.executable,
                 str(Path(__file__).resolve()),
@@ -347,6 +435,33 @@ def _start_detached(
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
+    started_at = datetime.datetime.now(datetime.timezone.utc)
+    agent_state_dir = environ.get(AGENT_STATE_DIR_ENV, "")
+    host_dir = environ.get(HOST_DIR_ENV, "")
+    if not agent_state_dir or not host_dir:
+        return
+    # The command is already running and will report, so a failure here costs only the busy
+    # state, not the run.
+    try:
+        write_background_task_marker(
+            Path(agent_state_dir),
+            _task_id(task_dir),
+            description,
+            runner.pid,
+            started_at,
+        )
+        append_activity_event(Path(host_dir))
+    except OSError as exc:
+        print(
+            f"run_in_background.py: could not record the task as pending ({exc}); "
+            "it still runs and reports.",
+            file=sys.stderr,
+        )
+
+
+def _task_id(task_dir: Path) -> str:
+    """The run's id: its directory's name, which the marker's file name carries."""
+    return task_dir.resolve().name
 
 
 def _new_task_dir() -> Path:
@@ -368,7 +483,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--chat-id",
         default=None,
-        help="The chat to deliver the result to (default: your own, $MINDS_CHAT_ID or $MNGR_AGENT_ID).",
+        help="Deliver the result to this chat (what the detached copy is passed, having resolved "
+        "the caller's own; only with --foreground).",
     )
     parser.add_argument(
         "--task-dir",
@@ -405,12 +521,17 @@ def main(
     if not command:
         parser.error("no command after `--`")
 
+    if args.chat_id and not args.foreground:
+        parser.error(
+            "--chat-id is the detached copy's own; the result always goes to your own chat"
+        )
+
     resolved_environ = os.environ if environ is None else environ
     chat_id = args.chat_id or own_chat_id(resolved_environ)
     if not chat_id:
         print(
             "run_in_background.py: neither MINDS_CHAT_ID nor MNGR_AGENT_ID is set, so there is no "
-            "chat to deliver the result to. Run it as an agent, or name one with --chat-id.",
+            "chat to deliver the result to. Run it as an agent.",
             file=sys.stderr,
         )
         return EXIT_USAGE
@@ -423,8 +544,14 @@ def main(
         command_environ = dict(resolved_environ)
         if args.agent_id:
             command_environ[AGENT_ID_ENV] = args.agent_id
+        host_dir = resolved_environ.get(HOST_DIR_ENV, "")
         return run_and_deliver(
-            task_dir, args.description, chat_id, command, command_environ
+            task_dir,
+            args.description,
+            chat_id,
+            command,
+            command_environ,
+            Path(host_dir) if host_dir else None,
         )
     _start_detached(task_dir, args.description, chat_id, command, resolved_environ)
     print(
