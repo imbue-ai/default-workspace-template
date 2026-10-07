@@ -4,7 +4,8 @@ The stream keeps mngr's wire vocabulary (``events/services/events.jsonl``, ``ser
 ``service_deregistered``, a ``service`` field); in the shell's own code an app is an app.
 
 Every read of the app registry is announced to ``$MNGR_AGENT_STATE_DIR/events/services/events.jsonl`` as one
-``service_registered`` event per app whose registered fields (URL, label, icon) differ from the last announced,
+``service_registered`` event per app whose registered fields (URL, label, icon, display name) differ from the
+last announced,
 and one ``service_deregistered`` per app that left. Only changed rows are announced: ``forward_port.py`` rewrites
 the whole registry whenever any app registers, so a write says nothing about which apps moved, and an app
 restarting in a loop would otherwise re-announce every app in the file on every restart. The first read after
@@ -66,6 +67,10 @@ class AppRegisteredAnnouncement(EventEnvelope):
         description="The app's unguessable origin label; empty for a legacy row written before labels existed",
     )
     icon: str = Field(default="", description="The app's registered SVG icon markup, verbatim; empty when none")
+    display_name: str = Field(
+        default="",
+        description="What users read for the app; empty for a row registered without a manifest",
+    )
 
 
 class AppDeregisteredAnnouncement(EventEnvelope):
@@ -80,6 +85,7 @@ class AnnouncedRow(FrozenModel):
     url: str = Field(description="The registered URL")
     label: str = Field(description="The origin label")
     icon: str = Field(description="The icon markup, empty when none")
+    display_name: str = Field(description="What users read for the app, empty when the row carries none")
 
 
 class AnnouncementDiff(FrozenModel):
@@ -91,7 +97,9 @@ class AnnouncementDiff(FrozenModel):
 
 @pure
 def announced_row_of(row: RegistryRow) -> AnnouncedRow:
-    return AnnouncedRow(url=str(row.url), label=row.label, icon=row.icon or "")
+    return AnnouncedRow(
+        url=str(row.url), label=row.label, icon=row.icon or "", display_name=str(row.display_name or "")
+    )
 
 
 @pure
@@ -201,6 +209,7 @@ class AppAnnouncementWriter(MutableModel):
                 url=current[name].url,
                 label=current[name].label,
                 icon=current[name].icon,
+                display_name=current[name].display_name,
             ).model_dump_json(by_alias=True)
             for name in diff.changed
         ] + [
