@@ -1,0 +1,166 @@
+/* The page kit's stylesheet (docs/system/blueprint/workspace-themes/, section 5.3): the standard look for an app page
+   built as plain HTML rather than on the shared library, so it wears every workspace theme. Load it first in
+   <head>, then /_static/workspace_theme.js, which puts the theme the page wears after it.
+
+   The tokens are the standard theme's values, the same as system/libs/workspace_ui/src/base.css declares
+   (a test keeps the two equal). Style your own elements with var(--c-...) and the type tokens, never a literal,
+   and mark the elements below with their contract part so a theme can dress them. */
+
+:root {
+  --c-bg: #fafaf8;
+  --c-bg-sidebar: #f3f2ef;
+  --c-fill-hover: rgb(0 0 0 / 0.07);
+  --c-fill-active: rgb(0 0 0 / 0.11);
+  --c-bg-user-bubble: #ededed;
+  --c-bg-composer: #ffffff;
+  --c-bg-chat: #ffffff;
+  --c-bg-code: #f0f0f0;
+  --c-text-primary: #202020;
+  --c-text-secondary: #666666;
+  --c-text-faint: #8c8c8c;
+  --c-border: #e4e3df;
+  --c-border-faint: #efeeeb;
+  --c-border-strong: #cfcdc7;
+  --c-border-code: #e0e0e0;
+  --c-accent: #2f6b4f;
+  --c-accent-hover: #24573f;
+  --c-accent-light: #e9f2ee;
+  --c-surface: #ffffff;
+  --c-surface-secondary: #f3f2ef;
+  --c-stop-button: #64748b;
+  --c-stop-button-hover: #475569;
+  --c-danger: #d83a2c;
+  --c-danger-hover: #b62d22;
+  --c-danger-bg: #fdecea;
+  --c-danger-border: #f4c7c3;
+  --c-warning: #b45309;
+  --c-warning-bg: #fde68a;
+  --c-success: #22a06b;
+  --c-success-bg: #e0f2ea;
+  --c-success-border: #b2decb;
+  --c-step-done: color-mix(in srgb, var(--c-accent) 55%, var(--c-text-faint));
+  --c-step-pending: #c2bfb6;
+  --c-text-on-accent: #ffffff;
+  --c-inverse-surface: #202020;
+  --c-inverse-surface-hover: #383838;
+  --c-shadow-raised: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+  --c-shadow-overlay: 0 0 2px 0 rgba(0, 0, 0, 0.08), 0 3px 8px 2px rgba(0, 0, 0, 0.08);
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "SF Mono", "Cascadia Code", ui-monospace, monospace;
+  --font-display: var(--font-sans);
+  --font-size-heading-lg: 24px;
+  --font-size-heading: 18px;
+  --font-size-body: 14px;
+  --font-size-row: 13px;
+  --font-size-helper: 12px;
+  --weight-regular: 400;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 16px;
+  --dur-fast: 80ms;
+  --dur-base: 120ms;
+  --dur-slow: 200ms;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-body);
+  line-height: 1.5;
+  color: var(--c-text-primary);
+  background: var(--c-bg);
+}
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  font-weight: var(--weight-semibold);
+  line-height: 1.3;
+}
+h1 {
+  font-size: var(--font-size-heading-lg);
+}
+h2 {
+  font-size: var(--font-size-heading);
+}
+a {
+  color: var(--c-accent);
+}
+code,
+pre,
+kbd {
+  font-family: var(--font-mono);
+  background: var(--c-bg-code);
+  border-radius: var(--radius-sm);
+}
+
+/* A push button: <button data-part="button" data-variant="primary|secondary|ghost|destructive">. */
+[data-part="button"] {
+  font: inherit;
+  padding: 6px 14px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+  color: var(--c-text-primary);
+  cursor: pointer;
+}
+[data-part="button"]:not(:disabled):hover {
+  background: var(--c-fill-hover);
+}
+[data-part="button"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+[data-part="button"][data-variant="primary"] {
+  border-color: var(--c-accent);
+  background: var(--c-accent);
+  color: var(--c-text-on-accent);
+}
+[data-part="button"][data-variant="primary"]:not(:disabled):hover {
+  background: var(--c-accent-hover);
+}
+[data-part="button"][data-variant="ghost"] {
+  border-color: transparent;
+  background: transparent;
+}
+[data-part="button"][data-variant="destructive"] {
+  border-color: var(--c-danger);
+  background: var(--c-danger);
+  color: var(--c-text-on-accent);
+}
+
+/* A text field or text area: <input data-part="field">, <textarea data-part="field">. */
+[data-part="field"] {
+  font: inherit;
+  padding: 6px 10px;
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+  color: var(--c-text-primary);
+}
+
+/* A card that opens something, and a selectable row (aria-current="true" on the current one). */
+[data-part="tile"] {
+  padding: 16px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+  background: var(--c-surface);
+  color: inherit;
+  text-align: left;
+}
+[data-part="list-row"] {
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+}
+[data-part="list-row"][aria-current="true"] {
+  background: var(--c-fill-active);
+}
+[data-part="badge"] {
+  padding: 1px 6px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-helper);
+}

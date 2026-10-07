@@ -28,6 +28,11 @@ export const SHELL_SHOWN = "shell:shown";
 export const SHELL_HIDDEN = "shell:hidden";
 /** Shell to app: the close chord fired while this window was focused. */
 export const SHELL_CLOSE_REQUEST = "shell:close-request";
+/** Shell to app: the theme the shell wears, the desktop on screen's (or one Desktop settings is previewing), its
+ *  revision, and whether it is such a preview (docs/system/blueprint/workspace-themes/, section 5.3), sent after the
+ *  handshake and on every change; the page wears it, and remembers it unless it is a preview
+ *  (`themes/themeClient.ts`). */
+export const SHELL_THEME = "shell:theme";
 /** Shell to app: the window's path changed elsewhere; the page should show that path in place. */
 export const SHELL_NAVIGATE = "shell:navigate";
 /** App to shell: what this page can do, sent once on connect. */
@@ -79,6 +84,8 @@ export interface ShellConnectionHandlers {
   onHidden?: () => void;
   onCloseRequest?: () => void;
   onNavigate?: (path: string) => void;
+  /** `isPreview`: the shell shows the theme without having saved it; a page wears it and does not remember it. */
+  onTheme?: (theme: string, revision: string, isPreview: boolean) => void;
   capabilities?: ShellCapabilities;
 }
 
@@ -134,6 +141,37 @@ function checkedCapabilities(handlers: ShellConnectionHandlers): ShellCapabiliti
   return capabilities;
 }
 
+function readTheme(message: Record<string, unknown>): { theme: string; revision: string; isPreview: boolean } | null {
+  if (typeof message.theme !== "string") return null;
+  return {
+    theme: message.theme,
+    revision: typeof message.revision === "string" ? message.revision : "",
+    isPreview: message.isPreview === true,
+  };
+}
+
+/**
+ * Follow the shell's `shell:theme` without connecting to it: for the page kit, which runs beside whatever
+ * `connectToShell` the page makes itself. Answers a function that stops following.
+ */
+export function followShellTheme(onTheme: (theme: string, revision: string, isPreview: boolean) => void): () => void {
+  const boundWindow = window;
+  if (boundWindow.parent === boundWindow) return () => undefined;
+
+  function onMessage(event: MessageEvent): void {
+    if (event.source !== boundWindow.parent) return;
+    const data: unknown = event.data;
+    if (data === null || typeof data !== "object") return;
+    const message = data as Record<string, unknown>;
+    if (message.type !== SHELL_THEME) return;
+    const theme = readTheme(message);
+    if (theme !== null) onTheme(theme.theme, theme.revision, theme.isPreview);
+  }
+
+  boundWindow.addEventListener("message", onMessage);
+  return () => boundWindow.removeEventListener("message", onMessage);
+}
+
 /**
  * Connect this page to the shell that frames it. Safe to call on a top-level page: nothing
  * arrives, and every send is a no-op, so an app behaves the same visited directly.
@@ -163,6 +201,11 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
       case SHELL_CLOSE_REQUEST:
         handlers.onCloseRequest?.();
         return;
+      case SHELL_THEME: {
+        const theme = readTheme(message);
+        if (theme !== null) handlers.onTheme?.(theme.theme, theme.revision, theme.isPreview);
+        return;
+      }
       case SHELL_NAVIGATE: {
         const path = message.path;
         if (typeof path === "string") handlers.onNavigate?.(path);

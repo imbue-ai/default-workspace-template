@@ -50,6 +50,7 @@ import {
   type MenuPoint,
 } from "../menu-position";
 import { Portal } from "../portal";
+import { MENU_ITEM_PART, MENU_PART, MENU_SEPARATOR_PART } from "../themes/parts";
 
 // Chrome
 
@@ -680,24 +681,35 @@ export function createMenu(options: MenuOptions): Menu {
     if (row.trailing === undefined || row.trailing === null) {
       return m(
         "button",
-        { ...buttonAttrs, class: rowClass, ...rowKeyAttr(row.key), ...tooltipAttrs(row.tooltip), ...hover },
+        {
+          ...buttonAttrs,
+          class: rowClass,
+          ...MENU_ITEM_PART,
+          ...rowKeyAttr(row.key),
+          ...tooltipAttrs(row.tooltip),
+          ...hover,
+        },
         label,
       );
     }
     // Trailing content rides BESIDE the button rather than inside it: buttons cannot nest,
     // and a trailing control may be a button of its own. The wrapper takes the slab, the
     // hover and the tone, so the row still lights as one piece under either.
-    return m("div", { class: rowClass, ...rowKeyAttr(row.key), ...tooltipAttrs(row.tooltip), ...hover }, [
-      m(
-        "button",
-        {
-          ...buttonAttrs,
-          class: `${ROW_INNER_BUTTON_CLASS} ${isDisabled ? "cursor-default" : "cursor-pointer"} ${rowGapClass(row.tightGap)}`,
-        },
-        label,
-      ),
-      row.trailing,
-    ]);
+    return m(
+      "div",
+      { class: rowClass, ...MENU_ITEM_PART, ...rowKeyAttr(row.key), ...tooltipAttrs(row.tooltip), ...hover },
+      [
+        m(
+          "button",
+          {
+            ...buttonAttrs,
+            class: `${ROW_INNER_BUTTON_CLASS} ${isDisabled ? "cursor-default" : "cursor-pointer"} ${rowGapClass(row.tightGap)}`,
+          },
+          label,
+        ),
+        row.trailing,
+      ],
+    );
   }
 
   function submenuRow(row: SubmenuRow): m.Vnode {
@@ -708,6 +720,7 @@ export function createMenu(options: MenuOptions): Menu {
         type: "button",
         role: "menuitem",
         class: menuRowClass({ extra: TONE_CLASS.default }),
+        ...MENU_ITEM_PART,
         // The chevron is decoration to a screen reader, so the row says out loud that it is a
         // disclosure.
         "aria-haspopup": "true",
@@ -741,6 +754,7 @@ export function createMenu(options: MenuOptions): Menu {
         role: "menuitem",
         "aria-disabled": "true",
         class: menuRowClass({ inert: true, extra: TONE_CLASS.default }),
+        ...MENU_ITEM_PART,
         ...rowKeyAttr(row.key),
         ...tooltipAttrs(row.tooltip),
         ...hover,
@@ -760,6 +774,7 @@ export function createMenu(options: MenuOptions): Menu {
       "label",
       {
         class: menuRowClass({ extra: TONE_CLASS.default }),
+        ...MENU_ITEM_PART,
         ...rowKeyAttr(row.key),
         ...tooltipAttrs(row.tooltip),
         ...hover,
@@ -802,7 +817,7 @@ export function createMenu(options: MenuOptions): Menu {
       case "check":
         return checkRow(row, hover);
       case "divider":
-        return m("div", { role: "separator", class: menuDividerClass() });
+        return m("div", { role: "separator", class: menuDividerClass(), ...MENU_SEPARATOR_PART });
       case "custom":
         return m("div", { ...rowKeyAttr(row.key), ...hover }, row.render());
     }
@@ -840,6 +855,7 @@ export function createMenu(options: MenuOptions): Menu {
       "div",
       {
         class: options.extraClass === undefined ? MENU_CARD_CLASS : `${MENU_CARD_CLASS} ${options.extraClass}`,
+        ...MENU_PART,
         role: options.role ?? "menu",
         [MENU_PART_ATTR]: "menu",
         style: `left: 0; top: 0; ${sizing}`,
@@ -906,6 +922,7 @@ export function createMenu(options: MenuOptions): Menu {
       "div",
       {
         class: row.extraClass === undefined ? SUBMENU_CARD_CLASS : `${SUBMENU_CARD_CLASS} ${row.extraClass}`,
+        ...MENU_PART,
         role: "menu",
         [MENU_PART_ATTR]: "submenu",
         style: `left: 0; top: 0; ${width === undefined ? "min-width: 180px;" : `width: ${width}px;`} max-height: ${maxHeight}px;`,
