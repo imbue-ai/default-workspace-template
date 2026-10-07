@@ -372,6 +372,52 @@ def test_composer_bar_survives_a_shorter_window(e2e_server: RunningWorkspace, pa
     )
 
 
+def _box(locator: Locator) -> dict[str, float]:
+    box = locator.bounding_box()
+    assert box is not None, f"{locator} is not laid out"
+    return {"left": box["x"], "top": box["y"], "right": box["x"] + box["width"], "bottom": box["y"] + box["height"]}
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_composer_buttons_move_under_text_that_wraps(e2e_server: RunningWorkspace, page: Page) -> None:
+    """Text that fits on one line keeps the composer's buttons beside it. Text that needs a second line, by
+    wrapping or by a line break, gets the composer's full width, with the buttons in a row at the bottom
+    right under it, and they come back beside it once the text fits on one line again."""
+    page.set_viewport_size({"width": 1200, "height": 900})
+    _open_fixture_chat(page, e2e_server)
+    chat = _chat(page)
+    textarea = chat.locator(".message-input-textbox")
+    expect(textarea).to_be_visible(timeout=15000)
+    row = chat.locator(".message-input-row")
+    toolbar = chat.locator(".message-input-toolbar")
+
+    def assert_buttons_beside_text() -> None:
+        expect(row).not_to_have_attribute("data-stacked", "")
+        text_box, toolbar_box = _box(textarea), _box(toolbar)
+        assert toolbar_box["left"] >= text_box["right"] - 1
+        assert toolbar_box["top"] < text_box["bottom"]
+
+    def assert_buttons_under_text() -> None:
+        expect(row).to_have_attribute("data-stacked", "")
+        row_box, text_box, toolbar_box = _box(row), _box(textarea), _box(toolbar)
+        assert text_box["right"] - text_box["left"] >= row_box["right"] - row_box["left"] - 1
+        assert toolbar_box["top"] >= text_box["bottom"] - 1
+        assert abs(toolbar_box["bottom"] - row_box["bottom"]) <= 1
+        assert abs(toolbar_box["right"] - row_box["right"]) <= 1
+
+    textarea.fill("short message")
+    assert_buttons_beside_text()
+
+    textarea.fill("a long message that wraps " * 20)
+    assert_buttons_under_text()
+
+    textarea.fill("first line\nsecond line")
+    assert_buttons_under_text()
+
+    textarea.fill("short message")
+    assert_buttons_beside_text()
+
+
 _TOOL_CALL_SESSION_EVENTS: list[dict[str, Any]] = [
     {
         "type": "user",
