@@ -465,14 +465,15 @@ path below instead.
 
 **When the update touches a critical app (`system/apps/system_interface/`,
 `system/apps/chat/`, `system/apps/terminal/`, `system/apps/terminal_pty/`),
-`system/apps/getting_started/frontend/`, `system/libs/workspace_ui/`, or
-`system/package.json` / `system/package-lock.json` at all** (every critical
-app's tree, plus the Getting Started frontend, the shared library, and the npm
+`system/apps/getting_started/frontend/`, `system/apps/activity/frontend/`,
+`system/libs/workspace_ui/`, or `system/package.json` /
+`system/package-lock.json` at all** (every critical app's tree, plus the
+Getting Started and System Monitor frontends, the shared library, and the npm
 files, whose change rebuilds every frontend bundle), also take the `editing
 critical app <name>` lease for each critical app it touches through the apply,
 as `update-app/references/critical-app.md` does (`<name>` is the app's
 `app.toml` name, so `system/apps/terminal_pty/` is `terminal-pty`; the Getting
-Started frontend, `workspace_ui`, and the npm files count as both
+Started and System Monitor frontends, `workspace_ui`, and the npm files count as both
 `system_interface` and `chat`). Take them all or none, as that reference says:
 check each one in `tk ready` (`grep -E -- "- editing critical app <name>$"`,
 anchored so `terminal` does not match `terminal-pty`'s lease), take them in
@@ -494,9 +495,10 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 ```
 
 When the report names the worker's **built frontend bundles** (the shell's
-`static/`, the chat app's, and the Getting Started app's), append
+`static/`, the chat app's, Getting Started's and System Monitor's), append
 `--worker-bundle system_interface=<path> --worker-bundle chat=<path>
---worker-bundle getting_started=<path>` so the exact builds the worker validated
+--worker-bundle getting_started=<path> --worker-bundle activity=<path>` so the
+exact builds the worker validated
 are installed instead of a live build; the apply installs them only as a set (one
 `npm run build` emits them all), and builds live when any is missing or stale.
 
