@@ -535,7 +535,8 @@ function bootstrap(): void {
   installCursorHidingWhileTyping(document);
   reportLocation();
   const token = pendingToken;
-  // An intake offers the chooser once it settles: one that launches a chat with its message riding the sign-in.
+  // With an intake the chooser waits for it: one that launches a chat opens its own, with the message riding the
+  // sign-in, and one that launches nothing offers it once settled.
   if (token !== null) onceListedAndAccountsLoaded(accountsLoaded, () => void takeIntake(token));
   else void offerChooserWhenNothingSignedIn();
 }
