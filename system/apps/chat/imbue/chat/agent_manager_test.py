@@ -124,6 +124,7 @@ from imbue.chat.testing import seed_failed_chat
 from imbue.chat.testing import utc_iso_seconds_ago
 from imbue.chat.testing import wait_until_true
 from imbue.chat.testing import write_compacting_marker
+from imbue.chat.testing import write_last_compaction_record
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.testing import write_summary_for_request
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -147,7 +148,6 @@ from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_claude.claude_config import COMPACTING_MARKER_FILENAME
-from imbue.mngr_claude.claude_config import LAST_COMPACTION_FILENAME
 from imbue.mngr_codex.app_server_client import CodexModel
 
 # Several tests in this module spin up real watchdog FSEvents observers
@@ -5542,9 +5542,7 @@ def test_a_compacted_event_the_chat_holds_no_cause_for_reads_last_compaction_jso
     expected_cause: str | None,
 ) -> None:
     agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
-    (state_dir / LAST_COMPACTION_FILENAME).write_text(
-        json.dumps({"trigger": record_trigger, "ended_at": utc_iso_seconds_ago(record_seconds_ago)})
-    )
+    write_last_compaction_record(state_dir, record_trigger, ended_seconds_ago=record_seconds_ago)
     event = _compacted_event()
 
     agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [event])
@@ -5572,9 +5570,7 @@ def test_last_compaction_json_written_after_the_request_ends_it_before_the_event
     agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic() - 10.0)
     assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
 
-    (state_dir / LAST_COMPACTION_FILENAME).write_text(
-        json.dumps({"trigger": "manual", "ended_at": utc_iso_seconds_ago(0.0)})
-    )
+    write_last_compaction_record(state_dir, "manual", ended_seconds_ago=0.0)
     agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
 
     assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
@@ -5733,9 +5729,7 @@ def test_a_sweep_compaction_stamped_after_the_managers_memory_is_gone_still_read
     agent_id, state_dir = _tracked_compaction_agent(first_manager, tmp_path)
     first_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic() - 20.0)
     # The sweep sends /compact as a manual command, so mngr's record says manual.
-    (state_dir / LAST_COMPACTION_FILENAME).write_text(
-        json.dumps({"trigger": "manual", "ended_at": utc_iso_seconds_ago(2.0)})
-    )
+    write_last_compaction_record(state_dir, "manual", ended_seconds_ago=2.0)
 
     # The chat app restarted: a new manager, which never saw the request, reads the event.
     second_manager = AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats")
@@ -5756,9 +5750,7 @@ def test_a_compaction_request_from_before_the_window_does_not_name_a_later_compa
         CompactionCause.IDLE,
         time.time() - PENDING_COMPACTION_TIMEOUT_SECONDS - 60,
     )
-    (state_dir / LAST_COMPACTION_FILENAME).write_text(
-        json.dumps({"trigger": "manual", "ended_at": utc_iso_seconds_ago(2.0)})
-    )
+    write_last_compaction_record(state_dir, "manual", ended_seconds_ago=2.0)
     event = _compacted_event(seconds_ago=1.0)
 
     agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [event])
@@ -5770,9 +5762,7 @@ def test_a_compact_typed_in_the_terminal_reads_manual_and_logs_no_finish(
     agent_manager: AgentManager, tmp_path: Path, loguru_records: list[str]
 ) -> None:
     agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
-    (state_dir / LAST_COMPACTION_FILENAME).write_text(
-        json.dumps({"trigger": "manual", "ended_at": utc_iso_seconds_ago(2.0)})
-    )
+    write_last_compaction_record(state_dir, "manual", ended_seconds_ago=2.0)
     event = _compacted_event(seconds_ago=1.0)
 
     agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [event])

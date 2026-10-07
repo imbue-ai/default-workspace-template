@@ -30,6 +30,7 @@ from imbue.chat.activity_state import CompactionCause
 from imbue.chat.auto_open import chat_root_path
 from imbue.chat.chat_autocompact import AUTOCOMPACT_FILENAME
 from imbue.chat.compaction_status import COMPACTION_REQUEST_FILENAME
+from imbue.chat.compaction_status import write_compaction_request
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import FIXTURE_AGENT_ID
@@ -43,8 +44,8 @@ from imbue.chat.testing import running_workspace
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import utc_iso_seconds_ago
 from imbue.chat.testing import write_compacting_marker
+from imbue.chat.testing import write_last_compaction_record
 from imbue.mngr.utils.polling import wait_for
-from imbue.mngr_claude.claude_config import LAST_COMPACTION_FILENAME
 from imbue.system_interface.testing import find_free_port
 
 pytestmark = [
@@ -320,14 +321,9 @@ def _record_compaction_cause(server: RunningWorkspace, cause: str | None) -> Non
     ``last_compaction.json`` (manual, or Claude Code's own ``auto``) for the others, and nothing for an unknown one."""
     state_dir = server.agent_info.agent_state_dir
     if cause == "idle":
-        (state_dir / COMPACTION_REQUEST_FILENAME).write_text(
-            json.dumps({"cause": "idle", "requested_at": utc_iso_seconds_ago(5.0)})
-        )
+        write_compaction_request(state_dir / COMPACTION_REQUEST_FILENAME, CompactionCause.IDLE, time.time() - 5.0)
     elif cause in ("manual", "native"):
-        trigger = "manual" if cause == "manual" else "auto"
-        (state_dir / LAST_COMPACTION_FILENAME).write_text(
-            json.dumps({"trigger": trigger, "ended_at": utc_iso_seconds_ago()})
-        )
+        write_last_compaction_record(state_dir, "manual" if cause == "manual" else "auto")
     else:
         assert cause is None
 

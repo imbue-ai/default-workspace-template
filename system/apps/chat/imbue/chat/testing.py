@@ -108,6 +108,7 @@ from imbue.mngr.errors import AgentIdNotFoundError
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_claude.claude_config import COMPACTING_MARKER_FILENAME
+from imbue.mngr_claude.claude_config import LAST_COMPACTION_FILENAME
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config as ShellConfig
 from imbue.system_interface.server import create_application as create_shell_application
@@ -964,6 +965,13 @@ def write_compacting_marker(state_dir: Path, trigger: str | None = "manual", sta
     marker = state_dir / COMPACTING_MARKER_FILENAME
     marker.write_text(json.dumps(payload))
     return marker
+
+
+def write_last_compaction_record(state_dir: Path, trigger: str = "manual", ended_seconds_ago: float = 0.0) -> Path:
+    """Write the ``last_compaction.json`` mngr's Claude ``PostCompact`` hook writes when a compaction finishes."""
+    record = state_dir / LAST_COMPACTION_FILENAME
+    record.write_text(json.dumps({"trigger": trigger, "ended_at": utc_iso_seconds_ago(ended_seconds_ago)}))
+    return record
 
 
 def compact_summary_record(uuid: str, timestamp: str) -> dict[str, Any]:
