@@ -68,8 +68,7 @@ ENV npm_config_cache=/var/cache/user/npm
 # finishes and keeps only the latest session's leftovers. pytest's own default keeps
 # every test's directory for the last three sessions, and /tmp is a tmpfs: under
 # gVisor each file and directory there also costs sandbox memory that only deleting
-# it gives back, so a few test suites' leftovers grew it by hundreds of MB. Mirrored
-# in .mngr/settings.toml's host_env for agents.
+# it gives back. Mirrored in .mngr/settings.toml's host_env for agents.
 ENV PYTEST_ADDOPTS="-o tmp_path_retention_policy=failed -o tmp_path_retention_count=1"
 
 # Pre-COPY manifest layer.
