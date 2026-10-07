@@ -45,6 +45,7 @@ from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import RunningWorkspace
 from imbue.chat.testing import SummaryWritingMngrMessenger
 from imbue.chat.testing import get_json
+from imbue.chat.testing import is_chat_frontend_built
 from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.testing import running_workspace
 from imbue.mngr.utils.polling import wait_for
@@ -61,9 +62,7 @@ def _playwright_browsers_installed() -> bool:
 
 def _frontends_built() -> bool:
     """Whether both bundles exist: the chat page (``static/chat.html``) and the shell that frames it."""
-    return (Path(__file__).parent / "static" / "chat.html").is_file() and (
-        SHELL_STATIC_DIRECTORY / "index.html"
-    ).is_file()
+    return is_chat_frontend_built() and (SHELL_STATIC_DIRECTORY / "index.html").is_file()
 
 
 pytestmark = [
