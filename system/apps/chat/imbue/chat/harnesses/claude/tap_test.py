@@ -728,6 +728,27 @@ def test_stop_while_compacting_restarts_a_message_queued_behind_it(tmp_path: Pat
     assert recorder.base_calls == 1
 
 
+def test_stop_while_compacting_restarts_when_the_lock_stays_held(tmp_path: Path) -> None:
+    """A send holding the lock past the bounded wait while compacting takes the hammer, and the
+    in-flight send comes back with the block instead of dying with the process."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path, active=False)
+    recorder = _StopRecorder(base_block="")
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([[]], None),
+        press_chord=recorder.press_chord,
+        mark_idle=recorder.mark_idle,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: nullcontext(False),
+        get_in_flight_block=lambda: "still sending this",
+        is_compaction_in_flight=lambda: True,
+    )
+    assert block == "still sending this"
+    assert recorder.base_calls == 1
+    assert recorder.presses == []
+
+
 @pytest.mark.parametrize(
     ("is_bound", "press"),
     [pytest.param(False, lambda: True, id="binding_not_active"), pytest.param(True, lambda: False, id="press_failed")],
