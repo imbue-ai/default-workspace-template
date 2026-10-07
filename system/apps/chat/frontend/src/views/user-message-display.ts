@@ -46,7 +46,7 @@ function renderSystemChip(label: string, body: string, expansionKey: string): m.
 }
 
 /** What the "why?" popover beside a compaction pill says, for who started the compaction. */
-export function compactionCauseText(cause: CompactionCause | null | undefined): string {
+function compactionCauseText(cause: CompactionCause | null | undefined): string {
   switch (cause) {
     case "idle":
       return "Compacted while idle to keep replies fast and cheap. Change this under Auto-compact in the model menu.";
