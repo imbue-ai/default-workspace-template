@@ -200,7 +200,15 @@ def launch(
     raise ChromeStartupError(f"Chromium did not publish a debug port within {_PORT_WAIT_S:.0f}s")
 
 
-def launch_with_sandbox_retry(*, no_sandbox: bool, **kwargs: object) -> ChromeProcess:
+def launch_with_sandbox_retry(
+    *,
+    no_sandbox: bool,
+    executable: str,
+    profile_dir: Path,
+    start_url: str,
+    window_size: "tuple[int, int]",
+    extensions: "tuple[str, ...]" = (),
+) -> ChromeProcess:
     """Launch, retrying once with the sandbox off if a sandboxed attempt fails.
 
     Preserves the accommodation the browser-use path had: as root (or with
@@ -208,10 +216,21 @@ def launch_with_sandbox_retry(*, no_sandbox: bool, **kwargs: object) -> ChromePr
     turn into a 30s hang never happens; any other runtime that also cannot sandbox is
     covered by the retry.
     """
+
+    def attempt(*, without_sandbox: bool) -> ChromeProcess:
+        return launch(
+            executable=executable,
+            profile_dir=profile_dir,
+            start_url=start_url,
+            window_size=window_size,
+            extensions=extensions,
+            no_sandbox=without_sandbox,
+        )
+
     try:
-        return launch(no_sandbox=no_sandbox, **kwargs)  # type: ignore[arg-type]
+        return attempt(without_sandbox=no_sandbox)
     except ChromeStartupError:
         if no_sandbox:
             raise
         logger.warning("sandboxed Chromium launch failed; retrying with --no-sandbox")
-        return launch(no_sandbox=True, **kwargs)  # type: ignore[arg-type]
+        return attempt(without_sandbox=True)

@@ -22,7 +22,7 @@ import socket
 import threading
 import time
 import urllib.request
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Any
 
 import pytest
@@ -68,7 +68,7 @@ async def _create_running(manager: "bsession.BrowserSessionManager", name: str |
 @contextlib.asynccontextmanager
 async def _running_browser(
     manager: "bsession.BrowserSessionManager", *, with_proxy: bool = False
-) -> "AsyncIterator[bsession.LiveBrowser]":
+) -> "AsyncGenerator[bsession.LiveBrowser, None]":
     """A real Chromium launched through ``manager``, which is shut down on exit. Skips the test
     when this host cannot run one. ``with_proxy`` also serves the fleet's CDP proxy, which an
     agent attach goes through."""

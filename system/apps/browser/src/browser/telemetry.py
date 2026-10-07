@@ -38,12 +38,8 @@ import time
 from collections import deque
 from typing import Any
 
+import psutil
 from loguru import logger
-
-try:
-    import psutil
-except ImportError:  # psutil is a dependency, but degrade gracefully if it's ever missing
-    psutil = None  # type: ignore[assignment]
 
 # Process names that make up the browser's own compute (this box: Chromium is "chrome",
 # the Fortress build may appear as "tilion"/"fortress"). Used to attribute vCPU spend.
@@ -213,9 +209,6 @@ class _ResourceSampler(threading.Thread):
         self._proc_cache = found
 
     def run(self) -> None:
-        if psutil is None:
-            logger.warning("psutil unavailable; resource telemetry disabled")
-            return
         daemon = psutil.Process(os.getpid())
         daemon.cpu_percent(None)             # prime the daemon + system references
         psutil.cpu_percent(percpu=True)
