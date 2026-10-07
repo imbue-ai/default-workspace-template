@@ -195,7 +195,7 @@ def _open_autocompact_submenu(chat: FrameLocator) -> Locator:
 
 
 @pytest.mark.timeout(60, func_only=False)
-def test_turning_auto_compact_off_writes_the_chats_setting_and_the_switch_makes_off_the_default(
+def test_turning_auto_compact_off_writes_the_chats_setting_and_the_default_control_makes_off_the_default(
     compaction_server: RunningWorkspace, page: Page
 ) -> None:
     server = compaction_server
@@ -215,8 +215,9 @@ def test_turning_auto_compact_off_writes_the_chats_setting_and_the_switch_makes_
     )
     expect(submenu.locator('[data-autocompact="off"]')).to_have_attribute("aria-checked", "true")
     default_switch = submenu.locator('[data-autocompact-default="off"]')
-    expect(default_switch).to_have_attribute("aria-label", "Use Off for new chats")
+    expect(default_switch).to_have_text("Off")
     expect(default_switch).to_have_attribute("aria-checked", "false")
+    expect(submenu.locator('[data-autocompact-default="on"]')).to_have_attribute("aria-checked", "true")
     assert _settings(server)["autocompact_default"] is True
 
     default_switch.click()
