@@ -6,8 +6,9 @@ icon = "icon.svg"
 critical = true
 priority = "chat"
 launcher_rank = 10
-# A chat drives agents that act on the whole machine, so it is shared only as part of it.
-shareable = false
+# Part of the workspace itself rather than an app built on it, so the Share tab tucks it under its System group
+# rather than offering it up front.
+system = true
 
 # A desktop shortcut opens the chat list; a chat is created only from inside it, or through the
 # intake route below.

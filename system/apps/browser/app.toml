@@ -8,9 +8,9 @@ critical = false
 stop_when_no_windows = false
 priority = "browser"
 launcher_rank = 30
-# The browser is part of the workspace itself rather than an app built on it, so it is shared only as part of the
-# whole machine.
-shareable = false
+# Part of the workspace itself rather than an app built on it, so the Share tab tucks it under its System group
+# rather than offering it up front.
+system = true
 # The one browser lives as long as a window shows it: the shell posts every closed window
 # here and the daemon stops a browser no window shows (docs/system/specs/window-bound-resources.md).
 window_closed_path = "/api/window-closed"
