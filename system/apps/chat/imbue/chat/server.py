@@ -41,7 +41,6 @@ from imbue.chat import secret_requests_endpoints
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import account_exists
 from imbue.chat.activity_state import CompactionCause
-from imbue.chat.activity_state import is_compact_command
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
@@ -64,6 +63,7 @@ from imbue.chat.chat_intakes import most_recently_messaged_chat_id
 from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.chat_transcript import ChatTranscript
 from imbue.chat.chat_transcript import TranscriptSegment
+from imbue.chat.compaction_status import is_compact_command
 from imbue.chat.config import Config
 from imbue.chat.documents import document_response
 from imbue.chat.documents import inject_base_path_meta_tag

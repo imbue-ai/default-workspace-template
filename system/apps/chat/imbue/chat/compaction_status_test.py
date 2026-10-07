@@ -13,6 +13,7 @@ from imbue.chat.compaction_status import CompactionRequest
 from imbue.chat.compaction_status import CompactionTrigger
 from imbue.chat.compaction_status import cause_of_compacting_marker
 from imbue.chat.compaction_status import cause_of_last_compaction
+from imbue.chat.compaction_status import is_compact_command
 from imbue.chat.compaction_status import is_context_compacted_event
 from imbue.chat.compaction_status import read_compaction_request
 from imbue.chat.compaction_status import read_compaction_signal
@@ -260,3 +261,17 @@ def test_cause_of_last_compaction(trigger: CompactionTrigger, expected: Compacti
 )
 def test_is_context_compacted_event(event: dict[str, Any], expected: bool) -> None:
     assert is_context_compacted_event(event) is expected
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        pytest.param("/compact", True, id="bare"),
+        pytest.param("/compact keep the test plan", True, id="with_instructions"),
+        pytest.param("/compacting", False, id="longer_command"),
+        pytest.param(" /compact", False, id="leading_space"),
+        pytest.param("please /compact", False, id="mid_sentence"),
+    ],
+)
+def test_is_compact_command(text: str, expected: bool) -> None:
+    assert is_compact_command(text) is expected

@@ -34,6 +34,8 @@ from imbue.imbue_common.pure import pure
 # The content every harness's parser gives its compacted event.
 CONTEXT_COMPACTED_CONTENT: Final[str] = "Context was compacted"
 
+COMPACT_COMMAND: Final[str] = "/compact"
+
 COMPACTION_CAUSE_FIELD: Final[str] = "compaction_cause"
 
 # The file (in the agent state dir) recording the last compaction the chat app asked for:
@@ -159,6 +161,12 @@ def read_compaction_request(path: Path, now: float) -> CompactionRequest | None:
         logger.warning("Failed to parse the time of the compaction request at {}", path)
         return None
     return CompactionRequest(cause=raw.cause, requested_at=min(requested_at, now))
+
+
+@pure
+def is_compact_command(text: str) -> bool:
+    """Whether composer text is a ``/compact`` command, bare or with instructions."""
+    return text == COMPACT_COMMAND or text.startswith(f"{COMPACT_COMMAND} ")
 
 
 @pure
