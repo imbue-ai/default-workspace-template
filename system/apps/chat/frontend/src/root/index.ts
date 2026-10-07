@@ -236,9 +236,10 @@ function draftInto(chatId: string, text: string): void {
 
 /** Launch a chat awaiting its first send with ``text`` (an intake that could not launch it at once): on the account
  *  the chat was minted for when it names one, else the signed-in account when one has appeared meanwhile, else
- *  through the provider chooser, as the composer's first send does; a dismissed chooser leaves the text in the
- *  composer, where the next send offers the chooser again. A chooser already open (for the New chat button) takes
- *  no second intent, so the text goes to the composer at once. */
+ *  through the provider chooser; a dismissed chooser leaves the text in the composer's draft, which shows once a
+ *  provider is signed in from the button that stands in for the composer until then. A chooser already open (the
+ *  one the root opened as it loaded, or the New chat button's) takes no second intent, so the text goes to the
+ *  composer at once. */
 async function launchWithFirstMessage(chatId: string, text: string): Promise<void> {
   const launchOrDraft = (accountId: string): void => {
     launchChat(chatId, accountId, text).catch((error: unknown) => {
