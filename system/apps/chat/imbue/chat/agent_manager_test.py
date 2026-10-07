@@ -5344,6 +5344,12 @@ def _activity_of(manager: AgentManager, agent_id: str) -> ActivityState | None:
         return manager._activity_state_by_agent.get(agent_id)
 
 
+def _compaction_agent_info(manager: AgentManager, agent_id: str) -> AgentInfo:
+    agent_info = manager.get_agent_info_by_id(agent_id)
+    assert agent_info is not None
+    return agent_info
+
+
 def _log_lines_starting(records: list[str], prefix: str) -> list[str]:
     return [record for record in records if record.split(" ", 1)[1].startswith(prefix)]
 
@@ -5475,7 +5481,7 @@ def test_a_compacted_event_ends_the_pending_compaction_and_carries_its_cause(
     event = _compacted_event()
     other_event = {"type": "assistant_message", "timestamp": _iso_seconds_ago(0.5), "tool_calls": []}
 
-    agent_manager.stamp_compaction_events(agent_id, [event, other_event])
+    agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [event, other_event])
 
     assert event["compaction_cause"] == "idle"
     assert "compaction_cause" not in other_event
@@ -5516,7 +5522,7 @@ def test_the_compacted_event_names_the_cause_the_marker_and_the_chats_request_gi
     marker.unlink()
     agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
     event = _compacted_event()
-    agent_manager.stamp_compaction_events(agent_id, [event])
+    agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [event])
 
     assert event["compaction_cause"] == expected_cause
 
@@ -5543,7 +5549,7 @@ def test_a_compacted_event_the_chat_holds_no_cause_for_reads_last_compaction_jso
     )
     event = _compacted_event()
 
-    agent_manager.stamp_compaction_events(agent_id, [event])
+    agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [event])
 
     assert "compaction_cause" in event
     assert event["compaction_cause"] == expected_cause
@@ -5554,7 +5560,7 @@ def test_a_compacted_event_older_than_the_request_does_not_end_it(agent_manager:
     agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic())
     earlier_event = _compacted_event(seconds_ago=120.0)
 
-    agent_manager.stamp_compaction_events(agent_id, [earlier_event])
+    agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [earlier_event])
 
     assert "compaction_cause" not in earlier_event
     assert agent_id in agent_manager._compaction_pending_by_agent
@@ -5577,7 +5583,7 @@ def test_last_compaction_json_written_after_the_request_ends_it_before_the_event
     assert agent_id not in agent_manager._compaction_pending_by_agent
     # The cause survives until the compacted event arrives (in a chat nobody had open, later).
     event = _compacted_event(seconds_ago=0.0)
-    agent_manager.stamp_compaction_events(agent_id, [event])
+    agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [event])
     assert event["compaction_cause"] == "idle"
 
 
@@ -5631,7 +5637,7 @@ def test_an_interrupt_clears_the_compacting_marker_and_the_pending_request(
     assert cleared_lines == [f"INFO autocompact: compaction cleared by interrupt agent={agent_id}"]
     # The cause survives: a compaction the interrupt came too late for still names it.
     event = _compacted_event(seconds_ago=0.0)
-    agent_manager.stamp_compaction_events(agent_id, [event])
+    agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [event])
     assert event["compaction_cause"] == "manual"
 
 
@@ -5708,7 +5714,7 @@ def test_a_sweep_compaction_stamped_after_the_managers_memory_is_gone_still_read
     _seed_agent(second_manager, agent_id, harness=HarnessType.CLAUDE, state="RUNNING")
     second_manager._ensure_activity_tracking(agent_id)
     event = _compacted_event(seconds_ago=1.0)
-    second_manager.stamp_compaction_events(agent_id, [event])
+    second_manager.stamp_compaction_events(_compaction_agent_info(second_manager, agent_id), [event])
 
     assert event["compaction_cause"] == "idle"
 
@@ -5727,7 +5733,7 @@ def test_a_compaction_request_from_before_the_window_does_not_name_a_later_compa
     )
     event = _compacted_event(seconds_ago=1.0)
 
-    agent_manager.stamp_compaction_events(agent_id, [event])
+    agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [event])
 
     assert event["compaction_cause"] == "manual"
 
@@ -5741,7 +5747,7 @@ def test_a_compact_typed_in_the_terminal_reads_manual_and_logs_no_finish(
     )
     event = _compacted_event(seconds_ago=1.0)
 
-    agent_manager.stamp_compaction_events(agent_id, [event])
+    agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [event])
 
     assert not (state_dir / COMPACTION_REQUEST_FILENAME).exists()
     assert event["compaction_cause"] == "manual"

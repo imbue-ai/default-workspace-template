@@ -76,6 +76,10 @@ class HarnessActivityTracker(ABC):
     # through the chat's own requests).
     compacting_marker_filename: ClassVar[str | None] = None
 
+    # Filename of the record the harness's mngr plugin writes when a compaction finishes
+    # (``{"trigger": ..., "ended_at": ...}``), or None when the harness writes none.
+    last_compaction_filename: ClassVar[str | None] = None
+
     # Signals every harness caches. Declared at class level so a `build()`
     # classmethod (no __init__) can assign them with the type checker happy.
     _has_pending_tool_use: bool

@@ -188,7 +188,6 @@ from imbue.mngr.errors import MngrError
 from imbue.mngr.interfaces.data_types import AgentDetails
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostName
-from imbue.mngr_claude.claude_config import LAST_COMPACTION_FILENAME
 
 # The role template every UI-created agent gets. The harness is chosen separately via
 # `--type` (see `_build_chat_create_command`); only the role varies in the template list,
@@ -583,8 +582,11 @@ class _LiveCompaction(FrozenModel):
     pending_cause: CompactionCause | None = Field(description="The cause of the chat's live request, else None")
 
 
-def _read_last_compaction_cause(state_dir: Path, now: float) -> CompactionCause | None:
-    record = read_compaction_signal(state_dir / LAST_COMPACTION_FILENAME, now)
+def _read_last_compaction_cause(state_dir: Path, record_filename: str | None, now: float) -> CompactionCause | None:
+    """The cause the harness's completion record names, or None when it writes none, is old, or does not say."""
+    if record_filename is None:
+        return None
+    record = read_compaction_signal(state_dir / record_filename, now)
     if record is None or now - record.written_at > LAST_COMPACTION_RECORD_MAX_AGE_SECONDS:
         return None
     return cause_of_last_compaction(record.trigger)
@@ -4305,10 +4307,7 @@ class AgentManager:
         with self._lock:
             pending = self._compaction_pending_by_agent.get(agent_info.id)
         live = self._resolve_live_compaction(
-            agent_info.id,
-            agent_info.agent_state_dir,
-            get_harness_spec(agent_info.harness).tracker_class.compacting_marker_filename,
-            pending,
+            agent_info.id, agent_info.agent_state_dir, get_harness_spec(agent_info.harness).tracker_class, pending
         )
         return live.marker_cause is not None or live.pending_cause is not None
 
@@ -4336,7 +4335,7 @@ class AgentManager:
             _loguru_logger.info("autocompact: compaction cleared by interrupt agent={}", agent_info.id)
         self._recompute_activity_state(agent_info.id, broadcast_on_change=True)
 
-    def stamp_compaction_events(self, agent_id: str, events: list[dict[str, Any]]) -> None:
+    def stamp_compaction_events(self, agent_info: AgentInfo, events: list[dict[str, Any]]) -> None:
         """Stamp the agent's newly parsed compacted events with ``compaction_cause`` and end the compaction.
 
         The events are the stored ones, so a reload sees the same cause. Only events of the
@@ -4345,6 +4344,7 @@ class AgentManager:
         compacted_events = [event for event in events if is_context_compacted_event(event)]
         if not compacted_events:
             return
+        agent_id = agent_info.id
         now = time.time()
         with self._lock:
             pending = self._compaction_pending_by_agent.get(agent_id)
@@ -4355,7 +4355,7 @@ class AgentManager:
         ]
         if not current_events:
             return
-        cause = self._resolve_finished_compaction_cause(agent_id, remembered_cause, pending, current_events, now)
+        cause = self._resolve_finished_compaction_cause(agent_info, remembered_cause, pending, current_events, now)
         for event in current_events:
             event[COMPACTION_CAUSE_FIELD] = None if cause is None else cause.value
         with self._lock:
@@ -4372,7 +4372,7 @@ class AgentManager:
 
     def _resolve_finished_compaction_cause(
         self,
-        agent_id: str,
+        agent_info: AgentInfo,
         remembered_cause: CompactionCause | None,
         pending: tuple[float, CompactionCause] | None,
         events: list[dict[str, Any]],
@@ -4383,29 +4383,32 @@ class AgentManager:
             return remembered_cause
         if pending is not None:
             return pending[1]
-        state_dir = self._get_agent_state_dir(agent_id)
+        state_dir = agent_info.agent_state_dir
         request = read_compaction_request(state_dir / COMPACTION_REQUEST_FILENAME, now)
         if request is not None:
             seconds_since_request = _latest_event_epoch(events, now) - request.requested_at
             if 0.0 <= seconds_since_request <= PENDING_COMPACTION_TIMEOUT_SECONDS:
                 return request.cause
-        return _read_last_compaction_cause(state_dir, now)
+        record_filename = get_harness_spec(agent_info.harness).tracker_class.last_compaction_filename
+        return _read_last_compaction_cause(state_dir, record_filename, now)
 
     def _resolve_live_compaction(
         self,
         agent_id: str,
         state_dir: Path,
-        marker_filename: str | None,
+        tracker_class: type[HarnessActivityTracker],
         pending: tuple[float, CompactionCause] | None,
     ) -> _LiveCompaction:
         """The compaction signals live for the agent right now: a fresh marker's cause and a live request's.
 
-        Also drops a pending request that expired or that a later ``last_compaction.json`` shows
-        finished. Runs outside the lock: it reads files.
+        The tracker class declares the harness's ``compacting`` marker and completion record (both
+        None for a harness whose mngr plugin writes neither). Also drops a pending request that
+        expired or that a later completion record shows finished. Runs outside the lock: it reads files.
         """
         now = time.time()
         live_pending = self._expire_pending_compaction(agent_id, pending)
         pending_cause = None if live_pending is None else live_pending[1]
+        marker_filename = tracker_class.compacting_marker_filename
         if marker_filename is None:
             return _LiveCompaction(marker_cause=None, pending_cause=pending_cause)
         marker = read_compaction_signal(state_dir / marker_filename, now)
@@ -4417,9 +4420,10 @@ class AgentManager:
                 )
             self._log_stale_compacting_marker_once(agent_id, marker, marker_age_seconds)
             return _LiveCompaction(marker_cause=None, pending_cause=pending_cause)
-        if live_pending is None:
-            return _LiveCompaction(marker_cause=None, pending_cause=None)
-        record_modified_at = _read_mtime(state_dir / LAST_COMPACTION_FILENAME)
+        record_filename = tracker_class.last_compaction_filename
+        if live_pending is None or record_filename is None:
+            return _LiveCompaction(marker_cause=None, pending_cause=pending_cause)
+        record_modified_at = _read_mtime(state_dir / record_filename)
         if record_modified_at is not None and record_modified_at >= _monotonic_to_epoch(live_pending[0], now):
             with self._lock:
                 if self._compaction_pending_by_agent.get(agent_id) == live_pending:
@@ -4590,7 +4594,7 @@ class AgentManager:
             and (self._get_agent_state_dir(agent_id) / active_marker_filename).exists()
         )
         live_compaction = self._resolve_live_compaction(
-            agent_id, self._get_agent_state_dir(agent_id), tracker.compacting_marker_filename, pending_compaction
+            agent_id, self._get_agent_state_dir(agent_id), type(tracker), pending_compaction
         )
         with self._lock:
             if agent_id not in self._activity_tracked_agents:

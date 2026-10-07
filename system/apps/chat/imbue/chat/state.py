@@ -163,7 +163,7 @@ class ChatAppState(MutableModel):
                 return existing
 
             def on_events(agent_id: str, events: list[dict[str, Any]]) -> None:
-                self.agent_manager.stamp_compaction_events(agent_id, events)
+                self.agent_manager.stamp_compaction_events(agent_info, events)
                 # Deliver-live-only: session events are persisted in JSONL and recoverable
                 # via the REST /events endpoint, so nothing is buffered for replay. The
                 # fan-out is keyed by chat, so a page's stream follows the chat across a
@@ -213,7 +213,7 @@ class ChatAppState(MutableModel):
         try:
             backlog = watcher.get_all_events()
             # A compaction that finished while no watcher ran (a chat nobody had open) ends here.
-            self.agent_manager.stamp_compaction_events(agent_info.id, backlog)
+            self.agent_manager.stamp_compaction_events(agent_info, backlog)
             self.agent_manager.update_session_events(agent_info.id, backlog)
             watcher.start()
         finally:
