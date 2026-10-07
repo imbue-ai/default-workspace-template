@@ -64,6 +64,14 @@ ENV XDG_CACHE_HOME=/var/cache/user
 ENV UV_CACHE_DIR=/var/cache/user/uv
 ENV npm_config_cache=/var/cache/user/npm
 
+# Every pytest run in the container deletes a passing test's tmp_path as soon as it
+# finishes and keeps only the latest session's leftovers. pytest's own default keeps
+# every test's directory for the last three sessions, and /tmp is a tmpfs: under
+# gVisor each file and directory there also costs sandbox memory that only deleting
+# it gives back, so a few test suites' leftovers grew it by hundreds of MB. Mirrored
+# in .mngr/settings.toml's host_env for agents.
+ENV PYTEST_ADDOPTS="-o tmp_path_retention_policy=failed -o tmp_path_retention_count=1"
+
 # Pre-COPY manifest layer.
 # Copies only the dependency manifests (no application source) so the
 # expensive dependency install below caches against dependency-manifest
