@@ -44,10 +44,10 @@ function loopbackUrl(url: string): URL | null {
   return LOCAL_HOSTNAMES.has(parsed.hostname) ? parsed : null;
 }
 
-/** The window a local URL is a page of: the openable app whose registered backend URL has the URL's scheme and
+/** The window a local URL is a page of: the app of ``apps`` whose registered backend URL has the URL's scheme and
  *  port (on any loopback host name), and the URL's path. This is how a link an agent writes to an app it runs
  *  (``http://localhost:<port>/...``, the only address of it the agent knows) opens as that app's window. Null when
- *  no openable app is registered there. */
+ *  none of ``apps`` is registered there. */
 export function windowAtBackendUrl(
   apps: readonly AppRecord[],
   url: string,
@@ -55,7 +55,6 @@ export function windowAtBackendUrl(
   const link = loopbackUrl(url);
   if (link === null) return null;
   const app = apps.find((candidate) => {
-    if (candidate.internal) return false;
     const backend = loopbackUrl(candidate.url);
     return backend !== null && backend.protocol === link.protocol && backend.port === link.port;
   });

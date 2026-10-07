@@ -1032,7 +1032,7 @@ export class DesktopStore {
     const target = classifyLink(url, workspaceHost);
     switch (target.kind) {
       case "local-url": {
-        const backendWindow = windowAtBackendUrl(this.state.apps, target.url);
+        const backendWindow = windowAtBackendUrl(openableApps(this.state), target.url);
         if (backendWindow !== null) {
           await this.openWindowAt(backendWindow.app.name, backendWindow.path, "focus");
           return;

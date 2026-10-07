@@ -1377,6 +1377,19 @@ describe("links Imbue Studio hands over", () => {
     expect(api.relayedMessages).toEqual([]);
   });
 
+  it("opens a local URL at an internal app's port in the browser, an internal app having no window to open", async () => {
+    const store = await startedStore();
+    socket
+      .deliver()
+      .onAppsUpdated([appRecord("docs"), appRecord("hidden", { url: "http://127.0.0.1:8001", internal: true })]);
+
+    await store.openLink("http://localhost:8001/", SHELL_HOST, "chat");
+
+    expect(api.relayedMessages).toEqual([
+      { type: "open:url", clientId: CLIENT, payload: { url: "http://localhost:8001/" }, sender: "chat" },
+    ]);
+  });
+
   it("opens one of this workspace's app addresses as that app's window at its path, raising one already there", async () => {
     const store = await startedStore();
     socket.deliver().onAppsUpdated([appRecord("docs"), FILES_APP]);
