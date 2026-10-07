@@ -463,13 +463,13 @@ describe("renderPermissionCard", () => {
     expect(textOf(findByClass(vnode, "permission-request-title"))).toBe("Device accounts");
   });
 
-  it("titles a workspace request 'Other machines' with a button and no permission specifics", () => {
+  it("titles a workspace request 'Other workspaces' with a button and no permission specifics", () => {
     const vnode = renderCardFor(
       makeToolCall(PERMISSION_INPUT.length, "permission_request"),
       makeResult(WORKSPACE_OUTPUT),
     );
 
-    expect(textOf(findByClass(vnode, "permission-request-title"))).toBe("Other machines");
+    expect(textOf(findByClass(vnode, "permission-request-title"))).toBe("Other workspaces");
 
     // Neither the verb names nor the target workspace id render on the card.
     expect(

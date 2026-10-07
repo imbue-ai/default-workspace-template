@@ -225,7 +225,7 @@ function launcherSections(attrs: LauncherSectionsAttrs): m.Children {
           textRows.map((row, index) => rowView(row, textFrom + index, attrs)),
         ]),
     rows.length === 0
-      ? m("p", { class: NO_MATCH_CLASS }, isNoMatch ? NO_MATCH_MESSAGE : "No apps are registered on this machine yet.")
+      ? m("p", { class: NO_MATCH_CLASS }, isNoMatch ? NO_MATCH_MESSAGE : "No apps are registered in this workspace yet.")
       : null,
   ];
 }
