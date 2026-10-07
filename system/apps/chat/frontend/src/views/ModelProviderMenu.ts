@@ -520,12 +520,11 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
     return fastModeLabel(state);
   }
 
-  /** The Fast Mode row's submenu: the chat's three modes, the limit auto runs to, and a way to
-   *  make the chat's mode what new chats start in.
+  /** The Fast Mode row's submenu: the chat's three modes, the limit auto runs to, and the mode
+   *  new chats start in.
    *
    * Choosing applies at once (views/fast-mode-limit.ts), so there is nothing to confirm and the
-   * submenu stays up: picking auto is usually followed by setting the limit it runs to, and the
-   * default row reads off whichever mode was just picked. */
+   * submenu stays up: picking auto is usually followed by setting the limit it runs to. */
   function fastModeSubmenu(chatId: string): m.Children {
     const settings = getChatSettings();
     if (settings === null) void ensureChatSettings();
@@ -534,11 +533,6 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
     const effective = settings ?? DEFAULT_CHAT_SETTINGS;
     const state: ChatFastModeState = known ?? { mode: effective.fast_mode_default, is_switched: false };
     const limit = effective.fast_mode_turn_limit;
-    const isDefault = effective.fast_mode_default === state.mode;
-    const currentLabel = FAST_MODE_LABELS[state.mode];
-    // One sentence: the switch below is a bare button with only a knob in it, so this is both
-    // the row's visible label and the switch's accessible name, and the two have to agree.
-    const defaultLabel = `Use ${currentLabel} for new chats`;
     return [
       m(
         "div",
@@ -620,59 +614,58 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
             limit === 1 ? "turn" : "turns",
           ])
         : null,
-      // The switch reads "is what new chats start in the mode I am looking at", so pressing it
-      // moves the setting here -- which is how the setting reaches all three modes, a row at a
-      // time.
       newChatsDefaultRow({
-        rowClass: css.FAST_DEFAULT_ROW,
-        marker: { "data-fast-mode-default": state.mode },
-        label: defaultLabel,
-        isDefault,
-        isLoaded: settings !== null,
-        onPick: (current) => updateChatSettings({ ...current, fast_mode_default: state.mode }),
+        markerClass: "fast-mode-default",
+        groupLabel: "Fast mode for new chats",
+        choices: FAST_MODES.map((mode) => ({
+          value: mode,
+          label: FAST_MODE_LABELS[mode],
+          marker: { "data-fast-mode-default": mode },
+        })),
+        selected: settings?.fast_mode_default ?? null,
+        onPick: (current, mode) => updateChatSettings({ ...current, fast_mode_default: mode }),
       }),
     ];
   }
 
-  /** The row under a submenu's choices that makes the choice on screen what new chats start with:
-   *  the label and a switch. The setting names exactly one choice, so on the choice holding it
-   *  there is no "off" to return to and the switch goes inert. `marker` is the data attribute
-   *  the switch carries. */
-  function newChatsDefaultRow(opts: {
-    rowClass: string;
-    marker: Record<string, string>;
-    label: string;
-    isDefault: boolean;
-    isLoaded: boolean;
-    onPick: (current: ChatSettings) => Promise<unknown>;
+  /** The row at the foot of a submenu naming the choice new chats start with: the workspace
+   *  setting, as segments of its own, independent of the chat's choice above it. `selected` is
+   *  the setting's value, null until the settings load, when no segment is lit and none can be
+   *  pressed. `marker` is the data attribute each segment carries. */
+  function newChatsDefaultRow<T extends string | boolean>(opts: {
+    markerClass: string;
+    groupLabel: string;
+    choices: readonly { value: T; label: string; marker: Record<string, string> }[];
+    selected: T | null;
+    onPick: (current: ChatSettings, value: T) => Promise<unknown>;
   }): m.Vnode {
-    const { isDefault } = opts;
-    return m("div", { class: opts.rowClass }, [
-      m("span", { class: css.ROW_LABEL }, opts.label),
+    return m("div", { class: `${opts.markerClass} ${css.DEFAULT_ROW}` }, [
+      m("span", { class: css.ROW_LABEL }, "New chats start with"),
       m(
-        "span",
-        { class: css.ROW_VALUE_STATIC },
-        m(
-          "button",
-          {
-            type: "button",
-            role: "switch",
-            class: `${css.switchClass("sm", isDefault)} ${isDefault ? css.SWITCH_ON : css.SWITCH_OFF}`,
-            ...opts.marker,
-            "aria-label": opts.label,
-            "aria-checked": isDefault ? "true" : "false",
-            "aria-disabled": isDefault ? "true" : undefined,
-            // Only the not-yet-loaded case is natively disabled, and so faded: there the
-            // switch genuinely cannot be used, and its position is a guess at the defaults.
-            disabled: !opts.isLoaded,
-            onclick: () => {
-              const current = getChatSettings();
-              if (current === null || isDefault) return;
-              void opts.onPick(current);
+        "div",
+        { class: css.DEFAULT_SEGMENTS, role: "radiogroup", "aria-label": opts.groupLabel },
+        opts.choices.map((choice) => {
+          const isSelected = opts.selected === choice.value;
+          return m(
+            "button",
+            {
+              type: "button",
+              key: choice.label,
+              role: "radio",
+              "aria-checked": isSelected ? "true" : "false",
+              "data-selected": isSelected ? "true" : undefined,
+              ...choice.marker,
+              class: isSelected ? css.DEFAULT_SEGMENT_ON : css.DEFAULT_SEGMENT,
+              disabled: opts.selected === null,
+              onclick: () => {
+                const current = getChatSettings();
+                if (current === null || isSelected) return;
+                void opts.onPick(current, choice.value);
+              },
             },
-          },
-          m("span", { class: css.switchKnobClass("sm", isDefault) }),
-        ),
+            choice.label,
+          );
+        }),
       ),
     ]);
   }
@@ -687,8 +680,8 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
     return autocompactLabel(state.is_enabled);
   }
 
-  /** The Auto-compact row's submenu: on or off for this chat, and a way to make the chat's choice
-   *  what new chats start with. A choice applies at once and the submenu stays up. */
+  /** The Auto-compact row's submenu: on or off for this chat, and what new chats start with. A
+   *  choice applies at once and the submenu stays up. */
   function autocompactSubmenu(chatId: string): m.Children {
     const settings = getChatSettings();
     if (settings === null) void ensureChatSettings();
@@ -696,8 +689,6 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
     if (known === null) void ensureAutocompactState(chatId);
     const effective = settings ?? DEFAULT_CHAT_SETTINGS;
     const state: ChatAutocompactState = known ?? { is_enabled: effective.autocompact_default };
-    const isDefault = effective.autocompact_default === state.is_enabled;
-    const defaultLabel = `Use ${autocompactLabel(state.is_enabled)} for new chats`;
     return [
       m(
         "div",
@@ -734,12 +725,15 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       ),
       m("div", { role: "separator", class: menuDividerClass() }),
       newChatsDefaultRow({
-        rowClass: `autocompact-default ${css.ROW_STATIC}`,
-        marker: { "data-autocompact-default": state.is_enabled ? "on" : "off" },
-        label: defaultLabel,
-        isDefault,
-        isLoaded: settings !== null,
-        onPick: (current) => updateChatSettings({ ...current, autocompact_default: state.is_enabled }),
+        markerClass: "autocompact-default",
+        groupLabel: "Auto-compact for new chats",
+        choices: [true, false].map((isEnabled) => ({
+          value: isEnabled,
+          label: autocompactLabel(isEnabled),
+          marker: { "data-autocompact-default": isEnabled ? "on" : "off" },
+        })),
+        selected: settings?.autocompact_default ?? null,
+        onPick: (current, isEnabled) => updateChatSettings({ ...current, autocompact_default: isEnabled }),
       }),
     ];
   }

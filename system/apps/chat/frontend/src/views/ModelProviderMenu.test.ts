@@ -999,34 +999,64 @@ describe("the combo card", () => {
     expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
   });
 
-  it("makes the chat's mode the one new chats start in, and says when it already is", () => {
+  it("names the mode new chats start in, and sets it to any mode whatever the chat's own", () => {
     withFastModel();
     fastModeState.state = { mode: "on", is_switched: false };
     render();
     click(".model-selector-trigger");
     click('[data-menu-row="fast"]');
     const row = document.querySelector<HTMLElement>(".fast-mode-default");
-    expect(row?.textContent).toContain("Use On for new chats");
-    const toggle = document.querySelector<HTMLButtonElement>("[data-fast-mode-default]");
-    if (toggle === null) throw new Error("no default toggle");
-    expect(toggle.getAttribute("aria-checked")).toBe("false");
-    expect(toggle.disabled).toBe(false);
-    click("[data-fast-mode-default]");
-    expect(settingsWrites).toEqual([{ ...DEFAULT_CHAT_SETTINGS, fast_mode_default: "on" }]);
+    if (row === null) throw new Error("no new-chats row");
+    expect(row.textContent).toContain("New chats start with");
+    expect(row.querySelector('[role="radiogroup"]')?.getAttribute("aria-label")).toBe("Fast mode for new chats");
+    const options = [...row.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+    expect(options.map((option) => option.getAttribute("data-fast-mode-default"))).toEqual(["off", "auto", "on"]);
+    expect(options.map((option) => option.textContent)).toEqual(["Off", "Auto", "On"]);
+    // The workspace's setting is the one lit, not the chat's own mode.
+    expect(options.map((option) => option.getAttribute("aria-checked"))).toEqual(["false", "true", "false"]);
+    expect(row.querySelector("[data-selected]")?.getAttribute("data-fast-mode-default")).toBe("auto");
+    expect(options.every((option) => !option.disabled)).toBe(true);
 
-    // Auto is the settings' default, so its toggle is on and has nothing left to do -- but it is
-    // NOT natively disabled, which would fade the setting out at the moment it reads as set.
-    fastModeState.state = { mode: "auto", is_switched: false };
+    // Away from the chat's mode...
+    click('[data-fast-mode-default="off"]');
+    expect(settingsWrites).toEqual([{ ...DEFAULT_CHAT_SETTINGS, fast_mode_default: "off" }]);
+    chatSettingsState.settings = { ...DEFAULT_CHAT_SETTINGS, fast_mode_default: "off" };
     render();
-    expect(document.querySelector(".fast-mode-default")?.textContent).toContain("Use Auto for new chats");
-    const already = document.querySelector<HTMLButtonElement>("[data-fast-mode-default]");
-    if (already === null) throw new Error("no default toggle");
-    expect(already.getAttribute("aria-checked")).toBe("true");
-    expect(already.getAttribute("aria-disabled")).toBe("true");
-    expect(already.disabled).toBe(false);
-    expect(already.className).not.toContain("cursor-pointer");
-    click("[data-fast-mode-default]");
-    expect(settingsWrites).toHaveLength(1);
+    expect(
+      document.querySelector("[data-fast-mode-default][data-selected]")?.getAttribute("data-fast-mode-default"),
+    ).toBe("off");
+    // ...back again, and to the chat's mode.
+    click('[data-fast-mode-default="auto"]');
+    click('[data-fast-mode-default="on"]');
+    expect(settingsWrites.slice(1)).toEqual([
+      { ...DEFAULT_CHAT_SETTINGS, fast_mode_default: "auto" },
+      { ...DEFAULT_CHAT_SETTINGS, fast_mode_default: "on" },
+    ]);
+    // The mode already set is not a change.
+    click('[data-fast-mode-default="off"]');
+    expect(settingsWrites).toHaveLength(3);
+    // None of it touches the chat's own mode.
+    expect(fastModeChoices).toEqual([]);
+  });
+
+  it("leaves the new-chats modes unlit and unpressable until the settings load", () => {
+    withFastModel();
+    chatSettingsState.settings = null;
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="fast"]');
+    const options = [...document.querySelectorAll<HTMLButtonElement>("[data-fast-mode-default]")];
+    expect(options).toHaveLength(3);
+    expect(options.every((option) => option.disabled)).toBe(true);
+    expect(options.every((option) => option.getAttribute("aria-checked") === "false")).toBe(true);
+    expect(document.querySelector("[data-fast-mode-default][data-selected]")).toBeNull();
+    click('[data-fast-mode-default="on"]');
+    expect(settingsWrites).toEqual([]);
+    expect(chatSettingsState.loads).toBeGreaterThan(0);
+
+    chatSettingsState.settings = DEFAULT_CHAT_SETTINGS;
+    render();
+    expect(document.querySelector<HTMLButtonElement>('[data-fast-mode-default="on"]')?.disabled).toBe(false);
   });
 
   it("asks for the chat's fast mode and shows the row unresolved until it is known", () => {
@@ -1087,32 +1117,39 @@ describe("the combo card", () => {
     expect(document.querySelector('[data-menu-part="menu"]')).not.toBeNull();
   });
 
-  it("makes the chat's auto-compact choice the one new chats start with, and says when it already is", () => {
+  it("names what new chats start with for auto-compact, and sets it either way whatever the chat's own", () => {
     catalogState.catalog = catalogOf({ supports_compaction: true });
-    autocompactState.state = { is_enabled: false };
+    autocompactState.state = { is_enabled: true };
     render();
     click(".model-selector-trigger");
     click('[data-menu-row="autocompact"]');
-    expect(document.querySelector(".autocompact-default")?.textContent).toContain("Use Off for new chats");
-    const toggle = document.querySelector<HTMLButtonElement>("[data-autocompact-default]");
-    if (toggle === null) throw new Error("no default toggle");
-    expect(toggle.getAttribute("aria-label")).toBe("Use Off for new chats");
-    expect(toggle.getAttribute("aria-checked")).toBe("false");
-    expect(toggle.disabled).toBe(false);
-    click("[data-autocompact-default]");
-    expect(settingsWrites).toEqual([{ ...DEFAULT_CHAT_SETTINGS, autocompact_default: false }]);
+    const row = document.querySelector<HTMLElement>(".autocompact-default");
+    if (row === null) throw new Error("no new-chats row");
+    expect(row.textContent).toContain("New chats start with");
+    expect(row.querySelector('[role="radiogroup"]')?.getAttribute("aria-label")).toBe("Auto-compact for new chats");
+    const options = [...row.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+    expect(options.map((option) => option.getAttribute("data-autocompact-default"))).toEqual(["on", "off"]);
+    expect(options.map((option) => option.textContent)).toEqual(["On", "Off"]);
+    expect(options.map((option) => option.getAttribute("aria-checked"))).toEqual(["true", "false"]);
+    expect(row.querySelector("[data-selected]")?.getAttribute("data-autocompact-default")).toBe("on");
 
-    // On is the settings' default, so its toggle is on and inert, but not natively disabled.
-    autocompactState.state = { is_enabled: true };
+    // Off for new chats while this chat stays on...
+    click('[data-autocompact-default="off"]');
+    expect(settingsWrites).toEqual([{ ...DEFAULT_CHAT_SETTINGS, autocompact_default: false }]);
+    chatSettingsState.settings = { ...DEFAULT_CHAT_SETTINGS, autocompact_default: false };
     render();
-    expect(document.querySelector(".autocompact-default")?.textContent).toContain("Use On for new chats");
-    const already = document.querySelector<HTMLButtonElement>("[data-autocompact-default]");
-    if (already === null) throw new Error("no default toggle");
-    expect(already.getAttribute("aria-checked")).toBe("true");
-    expect(already.getAttribute("aria-disabled")).toBe("true");
-    expect(already.disabled).toBe(false);
-    click("[data-autocompact-default]");
-    expect(settingsWrites).toHaveLength(1);
+    expect(document.querySelector('[data-autocompact-default="off"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(document.querySelector('[data-autocompact-default="on"]')?.getAttribute("aria-checked")).toBe("false");
+    expect(document.querySelector('[data-autocompact="on"]')?.getAttribute("aria-checked")).toBe("true");
+    // ...and back to on, with the chat turned off.
+    autocompactState.state = { is_enabled: false };
+    render();
+    click('[data-autocompact-default="on"]');
+    expect(settingsWrites[1]).toEqual({ ...DEFAULT_CHAT_SETTINGS, autocompact_default: true });
+    // The setting already in place is not a change, and none of it touches the chat's own.
+    click('[data-autocompact-default="off"]');
+    expect(settingsWrites).toHaveLength(2);
+    expect(autocompactWrites).toEqual([]);
   });
 
   it("asks for the chat's auto-compact setting and shows the row unresolved until it is known", () => {
@@ -1280,6 +1317,17 @@ describe("the phone layout's card", () => {
     } finally {
       delete (HTMLElement.prototype as { inert?: boolean }).inert;
     }
+  });
+
+  it("sets what new chats start with from a submenu slid in over the card", () => {
+    catalogState.catalog = { ...(catalogState.catalog as Record<string, unknown>), supports_compaction: true };
+    renderPhone();
+    tap("[data-composer-settings]");
+    tap('[data-menu-row="autocompact"]');
+    expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
+    expect(document.querySelector('[data-autocompact-default="on"]')?.getAttribute("aria-checked")).toBe("true");
+    tap('[data-autocompact-default="off"]');
+    expect(settingsWrites).toEqual([{ ...DEFAULT_CHAT_SETTINGS, autocompact_default: false }]);
   });
 
   it("carries the Source view switch as a row, whose press turns the card over and closes the menu", () => {
