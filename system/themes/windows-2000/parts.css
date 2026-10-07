@@ -1,0 +1,238 @@
+/* Windows 2000, part by part. win95.css (vendor/win95.css) draws the raised buttons, the menus, the
+   taskbar strip, and the scrollbars; this file draws the four-tone bevels, the caption and its buttons,
+   the sunken fields, and the Explorer-style selection. */
+
+body {
+  font-family: var(--font-sans);
+}
+::selection {
+  background: #0a246a;
+  color: #ffffff;
+}
+code,
+pre,
+kbd {
+  font-family: var(--font-mono);
+}
+
+/* Windows: a face-gray border inside the two outer bevel lines (--desk-window-shadow); the page shows
+   through the frame. */
+[data-part="window-frame"] {
+  border: 2px solid #d4d0c8;
+  background: transparent;
+}
+
+/* The caption: navy fading to sky blue while the window is active, gray fading to silver when not; the
+   title white and bold. */
+[data-part="title-bar"] {
+  gap: 0;
+  padding: 0 2px;
+  border-bottom: 1px solid #d4d0c8;
+  background: linear-gradient(to right, #0a246a, #a6caf0);
+  color: #ffffff;
+}
+[data-part="title-bar"][data-focused="false"] {
+  background: linear-gradient(to right, #808080, #c0c0c0);
+  color: #d4d0c8;
+}
+[data-part="window-icon"] {
+  opacity: 1;
+}
+[data-part="window-icon"] > * {
+  width: 16px;
+  height: 16px;
+}
+[data-part="window-title"] {
+  margin-left: 3px;
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  opacity: 1;
+  color: inherit;
+}
+
+/* Caption buttons: 16 by 14, raised, with the system's pixel glyphs; Close stands apart. */
+[data-part="window-control"] {
+  min-width: 0;
+  min-height: 0;
+  width: 16px;
+  height: 14px;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: center no-repeat #d4d0c8;
+  box-shadow: var(--theme-raised);
+  translate: none;
+}
+[data-part="window-control"] > * {
+  display: none;
+}
+[data-part="window-control"]:active {
+  box-shadow: var(--theme-pressed);
+  background-position: calc(50% + 1px) calc(50% + 1px);
+}
+[data-part="window-control"][data-control="close"] {
+  margin-left: 2px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='7' shape-rendering='crispEdges'%3E%3Cpath d='M0 0h2v1H0zM6 0h2v1H6zM1 1h2v1H1zM5 1h2v1H5zM2 2h4v1H2zM3 3h2v1H3zM2 4h4v1H2zM1 5h2v1H1zM5 5h2v1H5zM0 6h2v1H0zM6 6h2v1H6z'/%3E%3C/svg%3E");
+}
+[data-part="window-control"][data-control="minimize"] {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='7' shape-rendering='crispEdges'%3E%3Cpath d='M1 5h6v2H1z'/%3E%3C/svg%3E");
+}
+[data-part="window-control"][data-control="maximize"] {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='9' shape-rendering='crispEdges'%3E%3Cpath d='M0 0h9v2H0zM0 2h1v7H0zM8 2h1v7H8zM0 8h9v1H0z'/%3E%3C/svg%3E");
+}
+[data-part="window-control"][data-control="restore"] {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' shape-rendering='crispEdges'%3E%3Cpath d='M2 0h6v2H2zM7 2h1v3H7zM6 4h1v1H6zM2 2h1v1H2zM0 3h6v2H0zM0 5h1v3H0zM5 5h1v3H5zM0 7h6v1H0z'/%3E%3C/svg%3E");
+}
+/* The window's own actions (reload, the window menu): white glyphs on the caption, raised under the pointer. */
+[data-part="window-control"]:is([data-control="refresh"], [data-control="menu"]) {
+  width: 18px;
+  height: 16px;
+  margin-left: 2px;
+  background: transparent;
+  box-shadow: none;
+  color: inherit;
+}
+[data-part="window-control"]:is([data-control="refresh"], [data-control="menu"]) > * {
+  display: block;
+}
+[data-part="window-control"]:is([data-control="refresh"], [data-control="menu"]):hover {
+  box-shadow: var(--theme-thin-raised);
+}
+[data-part="window-control"]:is([data-control="refresh"], [data-control="menu"]):active {
+  box-shadow: var(--theme-thin-pressed);
+}
+
+/* Push buttons: win95.css's raised face; pressed, they sink without the library's dither. The default
+   (primary) button wears the black ring Enter would press. */
+[data-part="button"] {
+  font-family: var(--font-sans);
+  font-weight: 400;
+  translate: none;
+  transition: none;
+}
+[data-part="button"]:not(:disabled):active {
+  border-style: solid;
+  border-color: #404040 #ffffff #ffffff #404040;
+  background: #d4d0c8;
+}
+[data-part="button"][data-variant="primary"] {
+  outline: 1px solid #000000;
+  outline-offset: 0;
+}
+/* Icon-only buttons are toolbar buttons: flat, raised under the pointer, sunk while pressed. */
+[data-part="button"][data-shape="icon"] {
+  border: none;
+  background: transparent;
+  color: #000000;
+}
+[data-part="button"][data-shape="icon"]:not(:disabled):hover {
+  box-shadow: var(--theme-thin-raised);
+}
+[data-part="button"][data-shape="icon"]:not(:disabled):active {
+  box-shadow: var(--theme-thin-pressed);
+  background: transparent;
+}
+
+/* Fields: white and sunk. */
+[data-part="field"],
+select {
+  border: none;
+  border-radius: 0;
+  background-color: #ffffff;
+  box-shadow: var(--theme-sunken);
+  font-family: var(--font-sans);
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+/* Menus: win95.css's raised gray card; the row under the pointer turns navy. */
+[data-part="menu"] {
+  padding: 2px;
+  font-family: var(--font-sans);
+}
+[data-part="menu-item"] {
+  border-radius: 0;
+}
+[data-part="menu-item"]:not([aria-disabled="true"]):hover,
+[data-part="menu-item"]:not([aria-disabled="true"]):hover * {
+  background: #0a246a;
+  color: #ffffff;
+}
+
+/* Dialogs: a compact raised gray frame in 8-point type, whose header is a caption across its full width;
+   fields 21px tall and push buttons 75 by 23, as Windows 2000 sized them. */
+[data-part="dialog"] {
+  --font-size-heading-lg: 12px;
+  --font-size-heading: 12px;
+  --font-size-body: 12px;
+  --font-size-row: 12px;
+  --font-size-helper: 11px;
+  padding: 0 10px 10px;
+  border: none;
+  box-shadow: var(--theme-raised), 1px 1px 0 #000000;
+}
+[data-part="dialog-header"] {
+  margin: 3px -7px 10px;
+  padding: 2px 4px;
+  min-height: 18px;
+  background: linear-gradient(to right, #0a246a, #a6caf0);
+}
+[data-part="dialog-title"] {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 700;
+  color: #ffffff;
+}
+[data-part="dialog"] [data-part="field"] {
+  height: 21px;
+  padding: 2px 4px;
+}
+[data-part="dialog"] [data-part="button"][data-shape="text"] {
+  height: 23px;
+  min-width: 75px;
+  padding: 0 8px;
+}
+
+/* The taskbar: win95.css's raised strip; each window a raised button, the active one sunk on a lighter
+   checker. */
+[data-part="taskbar"] {
+  font-family: var(--font-sans);
+}
+[data-part="taskbar-entry"] {
+  border-radius: 0;
+  background: #d4d0c8;
+  box-shadow: var(--theme-raised);
+}
+[data-part="taskbar-entry"][data-focused="true"] {
+  background: url("vendor/assets/background.bmp");
+  box-shadow: var(--theme-pressed);
+  font-weight: 700;
+}
+[data-part="launcher-field"] {
+  border-radius: 0;
+  margin-top: 0;
+}
+
+/* Desktop icon labels: white on the desktop's own blue. */
+[data-part="shortcut-label"] {
+  color: #ffffff;
+}
+
+/* Lists: the current row selected the way Explorer selects a file. */
+[data-part="list-row"][aria-current="true"],
+[data-part="list-row"][aria-current="true"] * {
+  background: #0a246a;
+  color: #ffffff;
+}
+
+/* Tiles: raised panels on the dialog face. */
+[data-part="tile"] {
+  border: none;
+  background: #d4d0c8;
+  box-shadow: var(--theme-raised);
+}
+[data-part="tile"]:active,
+[data-part="tile"][aria-pressed="true"] {
+  box-shadow: var(--theme-pressed);
+}

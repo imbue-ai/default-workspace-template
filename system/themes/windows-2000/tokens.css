@@ -1,0 +1,88 @@
+/* Windows 2000: the 3D face gray, navy selection, Tahoma type (the system ships no font: Tahoma is on macOS and
+   Windows, and Linux falls back to its own sans), and a plain blue desktop. */
+:root {
+  --c-bg: #d4d0c8;
+  --c-bg-sidebar: #d4d0c8;
+  --c-bg-chat: #ffffff;
+  --c-bg-composer: #ffffff;
+  --c-bg-code: #ffffff;
+  /* Tooltip yellow. */
+  --c-bg-user-bubble: #ffffe1;
+  --c-fill-hover: rgb(10 36 106 / 0.1);
+  /* A tint, not the navy selection itself: the interface sets primary (black) text on it. */
+  --c-fill-active: rgb(10 36 106 / 0.22);
+  --c-text-primary: #000000;
+  --c-text-secondary: #000000;
+  --c-text-faint: #808080;
+  --c-border: #808080;
+  --c-border-faint: #d4d0c8;
+  --c-border-strong: #404040;
+  --c-border-code: #808080;
+  --c-accent: #0a246a;
+  --c-accent-hover: #0a246a;
+  --c-accent-light: rgb(10 36 106 / 0.12);
+  --c-surface: #d4d0c8;
+  --c-surface-secondary: #d4d0c8;
+  --c-inverse-surface: #0a246a;
+  --c-inverse-surface-hover: #0a246a;
+  --c-shadow-raised: var(--theme-raised);
+  --c-shadow-overlay: var(--theme-raised), 1px 1px 0 #000000;
+  --font-sans: Tahoma, "MS Sans Serif", "DejaVu Sans", Verdana, sans-serif;
+  --font-mono: "Lucida Console", "Courier New", "DejaVu Sans Mono", monospace;
+  --font-display: Tahoma, "MS Sans Serif", "DejaVu Sans", Verdana, sans-serif;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+
+  /* The Windows 2000 bevels, outermost line first: light and dark edges, then the inner light and
+     shadow lines. */
+  --theme-raised: inset -1px -1px #404040, inset 1px 1px #d4d0c8, inset -2px -2px #808080, inset 2px 2px #ffffff;
+  --theme-pressed: inset -1px -1px #ffffff, inset 1px 1px #404040, inset -2px -2px #d4d0c8, inset 2px 2px #808080;
+  --theme-sunken: inset -1px -1px #ffffff, inset 1px 1px #808080, inset -2px -2px #d4d0c8, inset 2px 2px #404040;
+  --theme-thin-raised: inset -1px -1px #808080, inset 1px 1px #ffffff;
+  --theme-thin-pressed: inset -1px -1px #ffffff, inset 1px 1px #808080;
+
+  --desk-backdrop: #3a6ea5;
+  --desk-default-wallpaper: none;
+  --desk-window-radius: 0px;
+  /* A window's outer two bevel lines, drawn outside its face-gray border (the frame's own background stays
+     clear: the page shows through it). */
+  --desk-window-shadow: -1px -1px 0 #ffffff, 1px 1px 0 #808080, -2px -2px 0 #d4d0c8, 2px 2px 0 #404040;
+  --desk-taskbar-surface: #d4d0c8;
+  --desk-taskbar-entry-shadow: none;
+  --desk-icon-radius: 0px;
+  --desk-icon-shadow: none;
+  --desk-icon-shadow-lifted: none;
+  --desk-shortcut-label-shadow: none;
+  --desk-toast-radius: 0px;
+  --desk-phone-sheet-radius: 0px;
+  --desk-phone-tile-radius: 0px;
+
+  /* The terminal: the Command Prompt's palette, light gray on black. */
+  --term-background: #000000;
+  --term-foreground: #c0c0c0;
+  --term-cursor: #c0c0c0;
+  /* xterm keeps a selected cell's own text color, so the selection is a navy the light gray reads on. */
+  --term-selection: #000080;
+  --term-ansi-0: #000000;
+  --term-ansi-1: #800000;
+  --term-ansi-2: #008000;
+  --term-ansi-3: #808000;
+  --term-ansi-4: #000080;
+  --term-ansi-5: #800080;
+  --term-ansi-6: #008080;
+  --term-ansi-7: #c0c0c0;
+  --term-ansi-8: #808080;
+  --term-ansi-9: #ff0000;
+  --term-ansi-10: #00ff00;
+  --term-ansi-11: #ffff00;
+  --term-ansi-12: #0000ff;
+  --term-ansi-13: #ff00ff;
+  --term-ansi-14: #00ffff;
+  --term-ansi-15: #ffffff;
+}
+/* A touch screen keeps its own finger-sized bar. */
+:root:not([data-touch]) {
+  --desk-title-bar-height: 19px;
+}
