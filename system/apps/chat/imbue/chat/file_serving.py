@@ -3,18 +3,17 @@
 An agent (Claude Code) running in this container can write files and read them
 back, but the browser rendering the chat cannot reach the container's
 filesystem. Markdown like ``![chart](/home/user/workspace/data/images/chart.png)``
-(an inline image) or ``[report](/home/user/workspace/data/documents/report.pdf)`` (a
-file link, which opens in the File Viewer inside the workspace and downloads from
-here only when the chat is opened on its own) makes the browser issue an HTTP GET
-for that path; the chat app runs in the same container as the agent, so it
-answers the GET by streaming the file's bytes. The absolute on-disk path
+(an inline image) makes the browser issue an HTTP GET for that path (a link to a
+file is rendered as its ``file:`` URL and opens in the File Viewer instead); the
+chat app runs in the same container as the agent, so it answers the GET by
+streaming the file's bytes. The absolute on-disk path
 therefore doubles as the URL -- no rewriting, no dedicated directory, no separate
 server.
 
 This hangs off the chat app's path route (see ``server._serve_file_or_document``):
 
 - An image file is served inline so it renders in the chat.
-- Any other existing file is served as an attachment, so a plain markdown link
+- Any other existing file is served as an attachment, so a request for it
   downloads it rather than rendering/executing it in the chat's own origin.
 - A path carrying an image extension with no file behind it 404s, so a typo'd
   image renders a broken image rather than a chat page.
@@ -29,8 +28,9 @@ from flask import send_file
 
 # Long-lived caching for chat files: a served file's URL never changes content,
 # either because agents give each image a unique filename (see the
-# show-files-in-chat skill) or because the frontend tags each message's URL with
-# a per-message ``?requested_at=`` cache key (see ``markdown.appendRequestedAt``).
+# show-files-in-chat skill) or because the frontend tags each message's image
+# URL with a per-message ``?requested_at=`` cache key (see
+# ``markdown.appendRequestedAt``).
 # A one-year max-age plus ``immutable`` lets the browser skip revalidation
 # entirely, so a re-render (or a re-download) never refetches while a new
 # message -- carrying a fresh URL -- always fetches the file's current bytes.
@@ -89,9 +89,7 @@ def _serve_download(file_path: Path) -> Response:
     ``.html`` or scripted file). ``send_file`` derives the download filename from
     the path's basename.
 
-    Cached immutably like inline images so a re-download never refetches; the
-    frontend's per-message ``?requested_at=`` cache key makes a new message's
-    link a distinct URL, so it still fetches the file's current bytes.
+    Cached immutably like inline images, so a re-download never refetches.
     """
     response = send_file(file_path, mimetype="application/octet-stream", as_attachment=True)
     response.headers["X-Content-Type-Options"] = "nosniff"
