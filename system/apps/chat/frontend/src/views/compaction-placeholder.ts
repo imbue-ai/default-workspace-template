@@ -14,9 +14,10 @@
 import m from "mithril";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
 import { isCompactionStatusShownIn } from "../models/ChatSettings";
+import { COMPACTING_STATE } from "../models/activityState";
 import { getChatById } from "../models/Chats";
 import type { TranscriptEvent } from "../models/Response";
-import { COMPACTING_STATE, compactingLabel } from "./ActivityIndicator";
+import { compactingLabel } from "./ActivityIndicator";
 import { isStatusUserMessage } from "./message-classification";
 
 export function newestCompactionPillId(events: readonly TranscriptEvent[]): string | null {

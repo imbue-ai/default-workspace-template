@@ -76,9 +76,9 @@ import type {
   ToolCall,
 } from "../models/Response";
 import type { HandoffState } from "../models/Chats";
+import { COMPACTING_STATE } from "../models/activityState";
 import { SEED_HARNESS } from "../models/Response";
 import { isHandoffPromptChip } from "../models/handoffPrompt";
-import { COMPACTING_STATE } from "./ActivityIndicator";
 import type { RequestResolution } from "./message-classification";
 import { isFiledPermissionRequest } from "./permission-card";
 import { isFiledSecretRequest, parseSecretRequest } from "./secret-card";

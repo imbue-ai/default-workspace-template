@@ -43,7 +43,8 @@ import {
   launchChat,
   whenChatRegistered,
 } from "../models/Chats";
-import { COMPACTING_STATE, isWorkingActivityState } from "./ActivityIndicator";
+import { COMPACTING_STATE } from "../models/activityState";
+import { isWorkingActivityState } from "./ActivityIndicator";
 import { harnessLabel } from "./harness-labels";
 import { handoffComposerPlaceholder } from "./handoff-phase";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";

@@ -29,6 +29,7 @@
 import m from "mithril";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
 import type { ToolCall, TranscriptEvent } from "../models/Response";
+import { COMPACTING_STATE } from "../models/activityState";
 import { getChatById } from "../models/Chats";
 import { isCompactionStatusShownIn } from "../models/ChatSettings";
 import { handoffPhaseText } from "./handoff-phase";
@@ -59,8 +60,6 @@ function pendingToolCall(events: TranscriptEvent[]): ToolCall | null {
   }
   return null;
 }
-
-export const COMPACTING_STATE = "COMPACTING";
 
 const WORKING_ACTIVITY_STATES: ReadonlySet<string> = new Set(["THINKING", "TOOL_RUNNING", COMPACTING_STATE]);
 
