@@ -44,7 +44,7 @@ export const SHELL_START_WITH_TEXT = "shell:start-with-text";
 /** App to shell: draft a text into a chat, unsent (element-reference-menu plan section 5): the shell runs the
  *  pinned app's draft launch path with it, as its own "Design your own..." does, so a page never names the app. */
 export const SHELL_DRAFT_TEXT = "shell:draft-text";
-/** App to shell: a message for whichever apps registered its type (``open:file``, ``open:url``, ...; desktop-interface
+/** App to shell: a message for whichever apps registered its type (``open:file``, ...; desktop-interface
  *  contracts.md section 5.6), so a page says what it wants done without naming the app that does it. */
 export const SHELL_MESSAGE = "shell:message";
 /** App to shell: open a local URL, or a link to one of the workspace's app addresses (another app's page) or another
