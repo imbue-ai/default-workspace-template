@@ -59,6 +59,7 @@ import {
   getChatSettings,
   updateChatSettings,
 } from "../models/ChatSettings";
+import type { ChatSettings } from "../models/ChatSettings";
 import { getEventsForChat } from "../models/Response";
 import { chooseFastMode } from "./fast-mode-limit";
 import { changedAxes, effectiveChoice, setModelChoice } from "../models/ModelSettings";
@@ -620,37 +621,59 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
         : null,
       // The switch reads "is what new chats start in the mode I am looking at", so pressing it
       // moves the setting here -- which is how the setting reaches all three modes, a row at a
-      // time. The setting names exactly one mode, so on the mode holding it there is no "off" to
-      // return to and the switch goes inert.
-      m("div", { class: css.FAST_DEFAULT_ROW }, [
-        m("span", { class: css.ROW_LABEL }, defaultLabel),
-        m(
-          "span",
-          { class: css.ROW_VALUE_STATIC },
-          m(
-            "button",
-            {
-              type: "button",
-              role: "switch",
-              class: `${css.switchClass("sm", isDefault)} ${isDefault ? css.SWITCH_ON : css.SWITCH_OFF}`,
-              "data-fast-mode-default": state.mode,
-              "aria-label": defaultLabel,
-              "aria-checked": isDefault ? "true" : "false",
-              "aria-disabled": isDefault ? "true" : undefined,
-              // Only the not-yet-loaded case is natively disabled, and so faded: there the
-              // switch genuinely cannot be used, and its position is a guess at the defaults.
-              disabled: settings === null,
-              onclick: () => {
-                const current = getChatSettings();
-                if (current === null || current.fast_mode_default === state.mode) return;
-                void updateChatSettings({ ...current, fast_mode_default: state.mode });
-              },
-            },
-            m("span", { class: css.switchKnobClass("sm", isDefault) }),
-          ),
-        ),
-      ]),
+      // time.
+      newChatsDefaultRow({
+        rowClass: css.FAST_DEFAULT_ROW,
+        marker: { "data-fast-mode-default": state.mode },
+        label: defaultLabel,
+        isDefault,
+        isLoaded: settings !== null,
+        onPick: (current) => updateChatSettings({ ...current, fast_mode_default: state.mode }),
+      }),
     ];
+  }
+
+  /** The row under a submenu's choices that makes the choice on screen what new chats start with:
+   *  the label and a switch. The setting names exactly one choice, so on the choice holding it
+   *  there is no "off" to return to and the switch goes inert. `marker` is the data attribute
+   *  the switch carries. */
+  function newChatsDefaultRow(opts: {
+    rowClass: string;
+    marker: Record<string, string>;
+    label: string;
+    isDefault: boolean;
+    isLoaded: boolean;
+    onPick: (current: ChatSettings) => Promise<unknown>;
+  }): m.Vnode {
+    const { isDefault } = opts;
+    return m("div", { class: opts.rowClass }, [
+      m("span", { class: css.ROW_LABEL }, opts.label),
+      m(
+        "span",
+        { class: css.ROW_VALUE_STATIC },
+        m(
+          "button",
+          {
+            type: "button",
+            role: "switch",
+            class: `${css.switchClass("sm", isDefault)} ${isDefault ? css.SWITCH_ON : css.SWITCH_OFF}`,
+            ...opts.marker,
+            "aria-label": opts.label,
+            "aria-checked": isDefault ? "true" : "false",
+            "aria-disabled": isDefault ? "true" : undefined,
+            // Only the not-yet-loaded case is natively disabled, and so faded: there the
+            // switch genuinely cannot be used, and its position is a guess at the defaults.
+            disabled: !opts.isLoaded,
+            onclick: () => {
+              const current = getChatSettings();
+              if (current === null || isDefault) return;
+              void opts.onPick(current);
+            },
+          },
+          m("span", { class: css.switchKnobClass("sm", isDefault) }),
+        ),
+      ),
+    ]);
   }
 
   /** What the Auto-compact row reads, loading the chat's setting the first time it is asked for. */
@@ -709,34 +732,14 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
         "Saves ~50% by compacting right before the cache expires.",
       ),
       m("div", { role: "separator", class: menuDividerClass() }),
-      // It reads "new chats start with the choice I am looking at", so on the choice already
-      // holding the setting it goes inert.
-      m("div", { class: `autocompact-default ${css.ROW_STATIC}` }, [
-        m("span", { class: css.ROW_LABEL }, defaultLabel),
-        m(
-          "span",
-          { class: css.ROW_VALUE_STATIC },
-          m(
-            "button",
-            {
-              type: "button",
-              role: "switch",
-              class: `${css.switchClass("sm", isDefault)} ${isDefault ? css.SWITCH_ON : css.SWITCH_OFF}`,
-              "data-autocompact-default": state.is_enabled ? "on" : "off",
-              "aria-label": defaultLabel,
-              "aria-checked": isDefault ? "true" : "false",
-              "aria-disabled": isDefault ? "true" : undefined,
-              disabled: settings === null,
-              onclick: () => {
-                const current = getChatSettings();
-                if (current === null || current.autocompact_default === state.is_enabled) return;
-                void updateChatSettings({ ...current, autocompact_default: state.is_enabled });
-              },
-            },
-            m("span", { class: css.switchKnobClass("sm", isDefault) }),
-          ),
-        ),
-      ]),
+      newChatsDefaultRow({
+        rowClass: `autocompact-default ${css.ROW_STATIC}`,
+        marker: { "data-autocompact-default": state.is_enabled ? "on" : "off" },
+        label: defaultLabel,
+        isDefault,
+        isLoaded: settings !== null,
+        onPick: (current) => updateChatSettings({ ...current, autocompact_default: state.is_enabled }),
+      }),
     ];
   }
 
