@@ -3951,13 +3951,38 @@ def test_a_recorded_chats_segments_follow_the_record_and_skip_an_agent_mngr_no_l
         manager.stop()
 
 
+def test_a_sign_in_restarts_only_the_live_agents_on_the_account(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    # A stopped agent picks up the new credentials when it next starts, so only live ones restart.
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    account = f"acct-{uuid4().hex}"
+    agent_state_by_name = {
+        "Running-Chat": "RUNNING",
+        "Waiting-Chat": "WAITING",
+        "Stopped-Chat": "STOPPED",
+        "Done-Chat": "DONE",
+    }
+    for name, state in agent_state_by_name.items():
+        seed_agent_state(manager, f"agent-{uuid4().hex}", name=name, state=state, labels={"account": account})
+    seed_agent_state(manager, f"agent-{uuid4().hex}", name="Other-Account-Chat", labels={"account": "acct-other"})
+    try:
+        assert manager.restart_agents_on_account(account) == 2
+        assert sorted(argv_log.read_text().splitlines()) == [
+            "start Running-Chat --restart --no-resume",
+            "start Waiting-Chat --restart --no-resume",
+        ]
+    finally:
+        manager.stop()
+
+
 def test_the_verbs_of_a_recorded_chat_act_on_the_right_agents(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
     manager, store, first, second = _recorded_chat(broadcaster, mngr_binary)
     try:
-        manager.stop_chat(ChatId(first))
         manager.rename_chat(first, "New Name")
         with manager._lock:
             manager._pending_permission_ids_by_agent[second] = {"req-1"}
@@ -3967,15 +3992,16 @@ def test_the_verbs_of_a_recorded_chat_act_on_the_right_agents(
         # both carry an ``account`` label.
         assert manager.restart_agents_on_account("acct-1") == 0
         assert manager.restart_agents_on_account("acct-2") == 1
+        manager.stop_chat(ChatId(first))
 
         manager.destroy_chat(ChatId(first))
 
         argv_lines = argv_log.read_text().splitlines()
-        # The rename is reflected in the tracked name at once, so the restart names the new one.
+        # The rename is reflected in the tracked name at once, so the restart and the stop name the new one.
         assert argv_lines == [
-            "stop Chat-1",
             f"rename {second} New-Name --label display_name=New Name",
             "start New-Name --restart --no-resume",
+            "stop New-Name",
             f"destroy {first} {second} --force",
         ]
         assert store.read(ChatId(first)) is None

@@ -1449,7 +1449,7 @@ class AgentManager:
         )
 
     def restart_agents_on_account(self, account_id: str) -> int:
-        """Restart every agent bound to `account_id`. Returns how many were restarted.
+        """Restart every live agent bound to `account_id`. Returns how many were restarted.
 
         Re-authenticating is only worth doing if the chats on that account come back, and they
         do not on their own -- claude reads its settings env at process start, and nothing
@@ -1461,6 +1461,11 @@ class AgentManager:
         Every agent bound to the account carries the label, not only the chats this app
         created: a worker, an automation, or a chat the Imbue Studio app started on the workspace's
         default account gets it from the create defaults (`create_defaults`), so they restart too.
+
+        Only agents whose process is alive are restarted. A stopped one reads the new
+        credentials whenever it next starts, and starting every old chat on the account at once
+        (an account can carry dozens, which earlyoom may have shed to make room) can push the
+        workspace past its memory limit.
 
         `--no-resume` for the same reason the queue actions use it: the agent's transcript is
         preserved by the harness itself, and a resume prompt would tell an agent that has not
@@ -1478,6 +1483,7 @@ class AgentManager:
                 if agent.labels.get("account") == account_id
                 and agent.labels.get("is_primary") != "true"
                 and not self._is_archived_member_locked(agent.id)
+                and not is_lifecycle_dead(agent.state)
             ]
         restarted = 0
         for name in names:
