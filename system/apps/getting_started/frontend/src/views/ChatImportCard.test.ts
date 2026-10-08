@@ -68,6 +68,15 @@ describe("the chat import card", () => {
     expect(root.querySelector('[data-chat-import-bar="claude"]')).toBeNull();
   });
 
+  it("counts pages instead when a source has nothing new to fetch", () => {
+    const { root } = render({
+      is_dismissed: false,
+      sources: { chatgpt: source("importing", 312, { fetched: 0, to_fetch: 0 }) },
+    });
+    expect(root.querySelector('[data-chat-import-source="chatgpt"]')!.textContent).toBe("ChatGPT: 312 so far");
+    expect(root.querySelector("[data-chat-import-bar]")).toBeNull();
+  });
+
   it("says which source needs the user and resumes the import of that source from a chat", () => {
     const { root, started } = render({
       is_dismissed: false,

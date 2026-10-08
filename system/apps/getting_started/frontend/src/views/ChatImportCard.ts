@@ -32,9 +32,15 @@ export interface ChatImportCardAttrs {
   readonly onDismiss: () => void;
 }
 
-/** A running import's fetched and to-fetch counts, when the source reports a total. */
+/** A running import's fetched and to-fetch counts, when the source reports a total with anything in it (an
+ *  update with nothing new to fetch reports 0). */
 function fetchProgress(source: ChatImportSource): { fetched: number; total: number } | null {
-  if (source.state !== "importing" || typeof source.to_fetch !== "number" || typeof source.fetched !== "number") {
+  if (
+    source.state !== "importing" ||
+    typeof source.to_fetch !== "number" ||
+    source.to_fetch <= 0 ||
+    typeof source.fetched !== "number"
+  ) {
     return null;
   }
   return { fetched: source.fetched, total: source.to_fetch };
@@ -67,7 +73,7 @@ function sourceLines(sources: Record<string, ChatImportSource>): m.Vnode {
       return [
         m("li", { key, "data-chat-import-source": key }, [
           sourceLine(label, source),
-          progress === null || progress.total === 0
+          progress === null
             ? null
             : m(
                 "div",
