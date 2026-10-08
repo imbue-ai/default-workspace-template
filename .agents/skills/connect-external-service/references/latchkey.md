@@ -65,7 +65,7 @@ latchkey curl http://latchkey-self.invalid/permissions/self | jq .rules
 
 # 3. Ask for the missing permissions.
 # This one must go in a tool call of its own, with nothing else in it and its output untouched.
-latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
+latchkey curl -XPOST -H "X-Latchkey-Device: *" http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
   -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "predefined", "payload": {"scope": "discord-api", "permissions": ["discord-read-all"]}, "rationale": "I'"'"'d like to access your Discord account to read server and channel information so I can help you summarize conversations."}'
 ```
@@ -89,6 +89,11 @@ approved or denied the request. If the permission still does not appear on your
 first call after an approval message, sleep for a few seconds and retry; the
 change can take a moment to propagate. Do not ask the user to tell you when they
 respond; mention that you will continue once they do if you need to wait.
+
+Do not forget to use the `-H "X-Latchkey-Device: *"` option to send the request
+to all of the user’s available devices. If none are available (usually
+indicated by an HTTP 503 error) or there are connection failures, the request
+will be stored on the outer host and delivered when the user starts Imbue Studio again.
 
 ### File exactly one permission request per tool call
 
