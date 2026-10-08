@@ -228,6 +228,9 @@ def is_pid_alive(pid: int) -> bool:
     except PermissionError:
         # Alive, and another user's.
         return True
+    except OverflowError:
+        # Past the C int range: no process has this pid.
+        return False
     return True
 
 
@@ -235,7 +238,8 @@ def process_start_time(pid: int) -> str:
     """When the process started, in clock ticks since boot (``/proc/<pid>/stat`` field 22), or ''
     where ``/proc`` does not have it (macOS, or a process already gone)."""
     try:
-        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        # The command name is arbitrary bytes; the numeric fields after it are ASCII.
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
     # Fields after the command name, which is parenthesized and may hold spaces; field 22 is the 20th.

@@ -189,7 +189,8 @@ def marker_path(environ: Mapping[str, str], chat_id: str, task_id: str) -> Path:
 def process_start_time(pid: int) -> str:
     """When the process started (``/proc/<pid>/stat`` field 22), or '' where ``/proc`` lacks it."""
     try:
-        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        # The command name is arbitrary bytes; the numeric fields after it are ASCII.
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
     fields = stat.rpartition(")")[2].split()
@@ -203,6 +204,8 @@ def _is_runner_alive(pid: int, pid_start: str) -> bool:
         return False
     except PermissionError:
         return True
+    except OverflowError:
+        return False
     return not pid_start or process_start_time(pid) in ("", pid_start)
 
 

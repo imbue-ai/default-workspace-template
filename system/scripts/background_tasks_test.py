@@ -9,11 +9,12 @@ import os
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
 import pytest
-from script_modules_testing import background_tasks
+from script_modules_testing import background_tasks, run_in_background
 
 _CHAT_ID = "agent-0123456789abcdef0123456789abcdef"
 _OTHER_CHAT_ID = "agent-fedcba9876543210fedcba9876543210"
@@ -504,3 +505,42 @@ def test_a_marker_whose_pid_now_belongs_to_another_process_is_stale(
         t.id
         for t in background_tasks.list_live_tasks(background_task_markers, _CHAT_ID)
     ] == ["same"]
+
+
+def test_a_marker_whose_pid_no_process_can_have_is_stale(
+    background_task_markers: Path,
+) -> None:
+    background_tasks.write_marker(
+        background_task_markers,
+        _CHAT_ID,
+        _task("overflow", "2026-10-08T10:00:00+00:00", pid=2**63),
+    )
+
+    assert background_tasks.list_live_tasks(background_task_markers, _CHAT_ID) == []
+
+
+@pytest.mark.skipif(
+    not Path("/proc/self/stat").exists(),
+    reason="needs Linux's /proc/<pid>/stat for a process's start time",
+)
+def test_a_process_whose_name_is_not_utf8_still_has_a_start_time(
+    tmp_path: Path,
+) -> None:
+    """The kernel names a process after the file it ran, byte for byte, so a recycled pid can
+    belong to a process whose ``/proc/<pid>/stat`` is not UTF-8."""
+    oddly_named = os.fsencode(tmp_path) + b"/py\xffthon"
+    os.symlink(os.path.realpath(sys.executable), oddly_named)
+    process = subprocess.Popen([oddly_named, "-c", "import time; time.sleep(30)"])
+    try:
+        comm = Path(f"/proc/{process.pid}/comm")
+        deadline = time.monotonic() + 10
+        while not comm.read_bytes().startswith(b"py\xff"):
+            assert time.monotonic() < deadline, "the process never took its name"
+            time.sleep(0.05)
+        assert background_tasks.process_start_time(process.pid) != ""
+        assert run_in_background.process_start_time(
+            process.pid
+        ) == background_tasks.process_start_time(process.pid)
+    finally:
+        process.kill()
+        process.wait()
