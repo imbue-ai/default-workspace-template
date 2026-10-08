@@ -21,12 +21,6 @@ _SCRIPT = Path(__file__).parent / "background_tasks.py"
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _dead_pid() -> int:
-    process = subprocess.Popen([sys.executable, "-c", "pass"])
-    process.wait()
-    return process.pid
-
-
 def _task(
     task_id: str,
     started_at: str,
@@ -71,7 +65,7 @@ def _shell_entry(task_id: str, description: str = "tail logs") -> dict[str, Any]
 
 
 def test_only_live_well_formed_markers_count_oldest_first(
-    background_task_markers: Path,
+    background_task_markers: Path, exited_pid: int
 ) -> None:
     root = background_task_markers
     background_tasks.write_marker(
@@ -81,7 +75,7 @@ def test_only_live_well_formed_markers_count_oldest_first(
         root, _CHAT_ID, _task("older", "2026-10-08T10:00:00+00:00")
     )
     background_tasks.write_marker(
-        root, _CHAT_ID, _task("stale", "2026-10-08T09:00:00+00:00", pid=_dead_pid())
+        root, _CHAT_ID, _task("stale", "2026-10-08T09:00:00+00:00", pid=exited_pid)
     )
     chat_dir = background_tasks.chat_dir(root, _CHAT_ID)
     (chat_dir / "run_in_background-garbled.json").write_text("{not json")
@@ -108,11 +102,11 @@ def test_only_live_well_formed_markers_count_oldest_first(
 
 
 def test_a_chat_whose_only_marker_is_stale_is_not_busy_and_not_listed(
-    background_task_markers: Path,
+    background_task_markers: Path, exited_pid: int
 ) -> None:
     root = background_task_markers
     background_tasks.write_marker(
-        root, _CHAT_ID, _task("stale", "2026-10-08T09:00:00+00:00", pid=_dead_pid())
+        root, _CHAT_ID, _task("stale", "2026-10-08T09:00:00+00:00", pid=exited_pid)
     )
     background_tasks.write_marker(
         root, _OTHER_CHAT_ID, _task("live", "2026-10-08T09:00:00+00:00")
@@ -466,30 +460,12 @@ def test_an_unreachable_chat_app_falls_back_to_the_files(
     assert _run_cli("is-busy", _OTHER_CHAT_ID, cwd=tmp_path).returncode == 1
 
 
-def _git(*args: str, cwd: Path) -> None:
-    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
-
-
-def test_a_worktrees_markers_resolve_to_the_main_checkout(tmp_path: Path) -> None:
+def test_a_worktrees_markers_resolve_to_the_main_checkout(
+    tmp_path: Path, main_checkout_and_worktree: tuple[Path, Path]
+) -> None:
     """A worker runs the scripts from its own worktree; its markers must land in the checkout the
     chat app reads."""
-    main = tmp_path / "workspace"
-    main.mkdir()
-    _git("init", "-q", "-b", "main", cwd=main)
-    _git(
-        "-c",
-        "user.email=t@example.com",
-        "-c",
-        "user.name=t",
-        "commit",
-        "-q",
-        "--allow-empty",
-        "-m",
-        "root",
-        cwd=main,
-    )
-    worktree = tmp_path / "worktrees" / "worker"
-    _git("worktree", "add", "-q", "-b", "worker", str(worktree), cwd=main)
+    main, worktree = main_checkout_and_worktree
 
     assert background_tasks.main_checkout(worktree) == main.resolve()
     assert background_tasks.main_checkout(main) == main

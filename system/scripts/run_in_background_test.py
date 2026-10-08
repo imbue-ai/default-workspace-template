@@ -675,11 +675,9 @@ def test_the_runners_marker_is_where_and_what_the_reader_expects(
 
 @pytest.mark.usefixtures("fake_mngr")
 def test_a_new_run_clears_its_chats_markers_from_runners_that_died(
-    fake_chat_app: Any, background_task_markers: Path, tmp_path: Path
+    fake_chat_app: Any, background_task_markers: Path, tmp_path: Path, exited_pid: int
 ) -> None:
     chat_dir = background_tasks.chat_dir(background_task_markers, _CHAT_ID)
-    dead = subprocess.Popen([sys.executable, "-c", "pass"])
-    dead.wait()
     background_tasks.write_marker(
         background_task_markers,
         _CHAT_ID,
@@ -688,7 +686,7 @@ def test_a_new_run_clears_its_chats_markers_from_runners_that_died(
             id="killed-earlier",
             description="Killed for memory",
             started_at="2026-10-08T09:00:00+00:00",
-            pid=dead.pid,
+            pid=exited_pid,
         ),
     )
 
@@ -706,28 +704,13 @@ def test_a_new_run_clears_its_chats_markers_from_runners_that_died(
     _wait_for_posts(fake_chat_app, 1)
 
 
-def test_the_runner_finds_the_main_checkout_as_the_reader_does(tmp_path: Path) -> None:
-    main = tmp_path / "workspace"
-    main.mkdir()
-    for args in (
-        ("init", "-q", "-b", "main"),
-        (
-            "-c",
-            "user.email=t@example.com",
-            "-c",
-            "user.name=t",
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "root",
-        ),
-        ("worktree", "add", "-q", "-b", "worker", str(tmp_path / "worker")),
-    ):
-        subprocess.run(["git", *args], cwd=main, check=True, capture_output=True)
+def test_the_runner_finds_the_main_checkout_as_the_reader_does(
+    tmp_path: Path, main_checkout_and_worktree: tuple[Path, Path]
+) -> None:
+    main, worktree = main_checkout_and_worktree
 
-    for checkout in (tmp_path / "worker", main, tmp_path):
+    for checkout in (worktree, main, tmp_path):
         assert run_in_background.main_checkout(
             checkout
         ) == background_tasks.main_checkout(checkout)
-    assert run_in_background.main_checkout(tmp_path / "worker") == main.resolve()
+    assert run_in_background.main_checkout(worktree) == main.resolve()

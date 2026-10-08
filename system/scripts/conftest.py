@@ -1,6 +1,6 @@
 """Fixtures for the scripts' tests: a fake chat app and a fake ``mngr`` for message_chat.py and
-run_in_background.py, and a marker root of its own for every test, so no test marks a chat busy
-in the real checkout."""
+run_in_background.py, a marker root of its own for every test, so no test marks a chat busy
+in the real checkout, and the exited pid and worktree the marker tests build on."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ import json
 import os
 import socket
 import stat
+import subprocess
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -38,6 +40,39 @@ def background_task_markers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     root = tmp_path / "background_tasks"
     monkeypatch.setenv(background_tasks.MARKER_ROOT_ENV, str(root))
     return root
+
+
+@pytest.fixture
+def exited_pid() -> int:
+    """The pid of a process that has already exited, which a marker naming it is stale by."""
+    process = subprocess.Popen([sys.executable, "-c", "pass"])
+    process.wait()
+    return process.pid
+
+
+@pytest.fixture
+def main_checkout_and_worktree(tmp_path: Path) -> tuple[Path, Path]:
+    """A git main checkout with one commit, and a worker's worktree of it, as ``(main, worktree)``."""
+    main = tmp_path / "workspace"
+    main.mkdir()
+    worktree = tmp_path / "worktrees" / "worker"
+    for args in (
+        ("init", "-q", "-b", "main"),
+        (
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "root",
+        ),
+        ("worktree", "add", "-q", "-b", "worker", str(worktree)),
+    ):
+        subprocess.run(["git", *args], cwd=main, check=True, capture_output=True)
+    return main, worktree
 
 
 @pytest.fixture(autouse=True)
