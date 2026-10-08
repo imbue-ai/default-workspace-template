@@ -582,6 +582,43 @@ def _record_progress_until(
             )
 
 
+def _run_dag_with_progress(
+    named: Sequence[ChatSource],
+    install: DatalibInstall,
+    config_path: Path,
+    data_root: Path,
+    status_path: Path,
+    run: Callable[..., subprocess.CompletedProcess],
+    progress_interval_seconds: float,
+) -> subprocess.CompletedProcess:
+    """Run one ``datalib-dag`` sync of ``named``'s ingests, recording their page counts as it goes."""
+    roots = ",".join(f"{source.group}/ingest" for source in named)
+    is_done = threading.Event()
+    reporter = threading.Thread(
+        target=_record_progress_until,
+        args=(is_done, named, data_root, status_path, progress_interval_seconds),
+        name="import-chats-progress",
+        daemon=True,
+    )
+    reporter.start()
+    try:
+        return run(
+            [
+                str(install.binary("datalib-dag")),
+                str(config_path),
+                "--sync",
+                roots,
+                "--by",
+                SYNC_REQUESTER,
+            ],
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        is_done.set()
+        reporter.join()
+
+
 def _record_failed(
     named: Sequence[ChatSource], data_root: Path, status_path: Path, detail: str
 ) -> None:
@@ -627,37 +664,32 @@ def sync(
             render_config(configured_sources(read_status(status_path), named)),
             encoding="utf-8",
         )
-        roots = ",".join(f"{source.group}/ingest" for source in named)
-        is_done = threading.Event()
-        reporter = threading.Thread(
-            target=_record_progress_until,
-            args=(is_done, named, data_root, status_path, progress_interval_seconds),
-            name="import-chats-progress",
-            daemon=True,
+        result = _run_dag_with_progress(
+            named,
+            install,
+            config_path,
+            data_root,
+            status_path,
+            run,
+            progress_interval_seconds,
         )
-        reporter.start()
-        try:
-            result = run(
-                [
-                    str(install.binary("datalib-dag")),
-                    str(config_path),
-                    "--sync",
-                    roots,
-                    "--by",
-                    SYNC_REQUESTER,
-                ],
-                capture_output=True,
-                text=True,
-            )
-        finally:
-            is_done.set()
-            reporter.join()
     except ImportChatsError as e:
         _record_failed(named, data_root, status_path, str(e))
         raise
     except OSError as e:
         _record_failed(named, data_root, status_path, str(e))
         raise ImportChatsError(str(e)) from e
+    return record_outcomes(named, result, data_root, status_path)
+
+
+def record_outcomes(
+    named: Sequence[ChatSource],
+    result: subprocess.CompletedProcess,
+    data_root: Path,
+    status_path: Path,
+) -> bool:
+    """Record each named source's outcome from a finished ``datalib-dag`` run and rewrite its index. True when every
+    named source imported."""
     steps = parse_run_summary(result.stderr)
     is_every_source_imported = True
     for source in named:
