@@ -1048,7 +1048,7 @@ export class DesktopStore {
       case "local-url": {
         const backendWindow = windowAtBackendUrl(openableApps(this.state), target.url);
         if (backendWindow !== null) {
-          await this.openWindowAt(backendWindow.app.name, backendWindow.path, "focus");
+          await this.openLinkedWindow(backendWindow.app.name, backendWindow.path);
           return;
         }
         await this.deliverMessage({ type: OPEN_URL_MESSAGE, url: target.url }, senderApp ?? EMBEDDER_SENDER);
@@ -1060,7 +1060,7 @@ export class DesktopStore {
           this.toast(`Nothing in this workspace is at ${target.url}`);
           return;
         }
-        await this.openWindowAt(app.name, target.path, "focus");
+        await this.openLinkedWindow(app.name, target.path);
         return;
       }
       case "other-workspace":
@@ -1073,6 +1073,23 @@ export class DesktopStore {
         console.warn(`[si] an opened link was ignored: ${url} is no address of this machine`);
         return;
     }
+  }
+
+  /** Open a link's app window at ``path``, raising one already there. A window there that this client has popped out
+   *  is raised in its own window, as an agent's ``open`` raises it, rather than pulled back onto the desktop: the
+   *  windows route's raise would bring it back, and its own window would close. */
+  private async openLinkedWindow(app: string, path: string): Promise<void> {
+    const desktopId = this.openingDesktopId();
+    const found = this.isPhoneLayout()
+      ? undefined
+      : this.state.desktops
+          .find((desktop) => desktop.id === desktopId)
+          ?.windows.find((window) => window.app === app && window.path === path);
+    if (found !== undefined && placementOf(this.state.layout, found.id).is_detached) {
+      this.showDetachedWindow(found.id);
+      return;
+    }
+    await this.openWindowAt(app, path, "focus");
   }
 
   /** Point this client's view of a window at ``path``, the way an agent's ``navigate`` does: the location is

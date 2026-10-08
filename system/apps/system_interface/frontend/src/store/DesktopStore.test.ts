@@ -1804,6 +1804,26 @@ describe("pulled-out windows", () => {
     expect(savedCalls()).toHaveLength(0);
   });
 
+  it("raises a link's app window in its own window when it is popped out, rather than pulling it back", async () => {
+    api.apps = [appRecord("docs", { url: "http://127.0.0.1:8095" }), appRecord("notes")];
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1", { is_detached: true }), placementRecord("win-2", { is_detached: true })],
+    });
+    // The link is clicked in another pop-out, so the main window may be closed.
+    const { store, calls } = makePopOutStore("win-2");
+    await store.start(NO_LINK);
+
+    await store.openLink("http://localhost:8095/a", "system-interface.localhost", "notes");
+    expect(calls).toEqual([["request", expect.objectContaining({ windowId: "win-1", title: "Docs" })]]);
+    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
+    expect(storedPlacement("win-1")).toMatchObject({ is_detached: true });
+
+    // A page of the app no window is at still opens as a window.
+    await store.openLink("http://localhost:8095/other", "system-interface.localhost", "notes");
+    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual(["openWindow:home:docs:/other:focus"]);
+  });
+
   it("a solo shell the size of a phone stays solo when the agent ops aimed at its client reach it", async () => {
     api.writeLayout("home", CLIENT, {
       updated_at: null,
