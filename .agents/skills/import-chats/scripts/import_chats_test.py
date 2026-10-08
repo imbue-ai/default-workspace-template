@@ -1002,3 +1002,38 @@ def test_a_sync_keeps_its_record_fresh_while_datalib_installs(
     workspace.sync([CHATGPT], run, progress_interval_seconds=0.01)
 
     assert rewritten_during_install == [True]
+
+
+def test_a_running_sync_keeps_recording_after_a_record_it_could_not_write(
+    workspace: _SyncWorkspace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    warnings: list[str] = []
+    rerecorded: list[bool] = []
+
+    def run(command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess:
+        if command[1:] == ["pull-runtime"]:
+            return subprocess.CompletedProcess(command, 0, "", "")
+        workspace.status_path.write_text("{not json")
+        pause = threading.Event()
+        for _ in range(500):
+            warnings.append(capsys.readouterr().err)
+            if "could not record the ChatGPT import's progress" in "".join(warnings):
+                break
+            pause.wait(0.01)
+        import_chats.write_status(workspace.status_path, {"sources": {}})
+        for _ in range(500):
+            record = import_chats.read_status(workspace.status_path)["sources"].get(
+                "chatgpt"
+            )
+            if record is not None and record["state"] == "importing":
+                break
+            pause.wait(0.01)
+        rerecorded.append(record is not None)
+        summary = _run_summary({"step": "chatgpt_chats/ingest", "status": "succeeded"})
+        return subprocess.CompletedProcess(command, 0, "", summary)
+
+    assert workspace.sync([CHATGPT], run, progress_interval_seconds=0.01) is True
+
+    assert "could not record the ChatGPT import's progress" in "".join(warnings)
+    assert rerecorded == [True]
+    assert workspace.record("chatgpt")["state"] == "imported"

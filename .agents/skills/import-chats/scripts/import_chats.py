@@ -666,15 +666,21 @@ def _record_progress_until(
 ) -> None:
     while not is_done.wait(interval_seconds):
         for source in named:
-            record_source(
-                status_path,
-                source.key,
-                STATE_IMPORTING,
-                count_conversations(data_root, source),
-                "",
-                pid=os.getpid(),
-                fetch_progress=progress.of(source),
-            )
+            try:
+                record_source(
+                    status_path,
+                    source.key,
+                    STATE_IMPORTING,
+                    count_conversations(data_root, source),
+                    "",
+                    pid=os.getpid(),
+                    fetch_progress=progress.of(source),
+                )
+            except (OSError, ImportChatsError) as e:
+                print(
+                    f"import-chats: could not record the {source.label} import's progress: {e}",
+                    file=sys.stderr,
+                )
 
 
 def stream_process(
@@ -731,7 +737,8 @@ def _reporting_progress(
 
     Each record also refreshes ``updated_at``, which the Getting Started app reads as the sync's heartbeat: a
     record that says ``importing`` but has not been rewritten for a while belongs to a sync that died, whatever
-    its pid says now (pids start over when the container restarts)."""
+    its pid says now (pids start over when the container restarts). A record that cannot be written is reported on
+    stderr and tried again at the next tick, so one failed write does not stop the heartbeat."""
     is_done = threading.Event()
     reporter = threading.Thread(
         target=_record_progress_until,
