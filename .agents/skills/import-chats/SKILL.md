@@ -95,6 +95,10 @@ turn: it carries the final status (the same JSON `status` prints), with one reco
 - `failed`: tell the user plainly, in a sentence, that the import of that source did not
   finish, with `detail` in your own words. Do not retry in a loop.
 
+A sync that could not run at all (datalib would not install, say) reports one `import-chats:`
+line saying why instead of the status, and records each source it was asked for as `failed`
+with that reason: handle it as `failed`.
+
 Close with one notification (the `notify-user` skill) saying how many chats came in from
 each source.
 
