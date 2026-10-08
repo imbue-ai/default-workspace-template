@@ -312,6 +312,41 @@ def test_a_sync_records_a_sign_in_problem_for_one_source_and_success_for_the_oth
     )
 
 
+def test_a_sync_whose_pages_did_not_render_records_the_render_failure(
+    tmp_path: Path,
+) -> None:
+    install = _installed(tmp_path / "home")
+    data_root = tmp_path / "datalib"
+    status_path = tmp_path / "status.json"
+    datalib = _FakeDatalib(
+        data_root,
+        _run_summary(
+            {"step": "claude_chats/ingest", "status": "succeeded"},
+            {
+                "step": "claude_chats/render_markdown",
+                "status": "failed",
+                "failure": "data",
+                "error": "step exited 1\ncaused by: render store: disk full\n",
+            },
+            {"step": "chatgpt_chats/ingest", "status": "succeeded"},
+            {"step": "chatgpt_chats/render_markdown", "status": "skipped_up_to_date"},
+        ),
+        {},
+    )
+
+    assert (
+        import_chats.sync([CLAUDE, CHATGPT], install, data_root, status_path, datalib)
+        is False
+    )
+
+    sources = import_chats.read_status(status_path)["sources"]
+    assert (sources["claude"]["state"], sources["claude"]["detail"]) == (
+        "failed",
+        "render store: disk full",
+    )
+    assert sources["chatgpt"]["state"] == "imported"
+
+
 def test_a_sync_that_never_summarised_records_the_failure_and_its_output(
     tmp_path: Path,
 ) -> None:

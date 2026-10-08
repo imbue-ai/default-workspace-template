@@ -111,6 +111,8 @@ _SIGN_IN_MARKERS = (
 )
 # The run summary's ``failure`` for a step whose credential failed.
 _AUTH_FAILURE_KIND = "auth"
+# A render step's statuses that leave the source's pages current: a sync skips a render with nothing new to do.
+_RENDER_DONE_STATUSES = ("succeeded", "skipped_up_to_date")
 
 
 @dataclass(frozen=True)
@@ -451,7 +453,7 @@ def runner_error(result: subprocess.CompletedProcess) -> str:
 
 
 def classify_failure(error: str, failure_kind: str | None) -> str:
-    """A failed ingest's state: a sign-in problem the user can fix by signing in again, or any other failure.
+    """A failed source's state: a sign-in problem the user can fix by signing in again, or any other failure.
 
     ``failure_kind`` is the run summary's ``failure`` for the step, which datalib sets to ``auth`` when the
     credential is what failed; the markers catch the refusals it does not classify that way."""
@@ -734,6 +736,9 @@ def source_failure(
         return runner_error(result), None
     if ingest.get("status") != "succeeded":
         return str(ingest.get("error", "")), ingest.get("failure")
+    render = steps.get(f"{source.group}/render_markdown")
+    if render is not None and render.get("status") not in _RENDER_DONE_STATUSES:
+        return str(render.get("error", "")), render.get("failure")
     return None
 
 
