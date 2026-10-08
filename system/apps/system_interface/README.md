@@ -194,9 +194,12 @@ the pages whose windows it may point at the path, and picks the window itself:
 one already showing it (switching desktops if it must), else the frontmost
 window on screen at one of those pages (pointed at the path), else the app's
 pinned window, else a new one. A pulled-out window it settles on stays out, and
-the client stays on its desktop: the shell asks that client's page to have the
-Imbue Studio app raise the window's own desktop window. The shell reads no meaning into
-a path's query string.
+the client stays on its desktop: the shell asks that client's pages to have the
+Imbue Studio app raise the window's own desktop window (the window's own solo
+page asks too, so the raise works with the main window closed). The shell reads
+no meaning into a path's query string. The other ops treat a pulled-out window
+the same way: `focus` raises it, and the ops that would move it back onto the
+desktop are refused unless forced (desktop contracts.md section 8).
 
 ### How the shell learns about apps
 
