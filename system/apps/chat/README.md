@@ -509,13 +509,14 @@ Each chat page reports its presence to `POST /api/chats/<chat-id>/presence`
 section 7, "Chat presence"): whether it is shown, whether its document has focus,
 keyed by an instance id the page mints once per load, so two pages of one chat never
 overwrite each other, and numbered in the order the page sent them, so a report that
-arrives after a later one from its page is dropped. A page is *watching* its chat while its last report is shown,
-focused, and under 90 seconds old; `GET /api/chats/<chat-id>/watchers` (loopback only)
-lists the watching instances, and the notify-user skill's script sends that list on
-with its notification so the Imbue Studio app shows nothing to a user already reading
-the chat. When a report turns a chat from unwatched to watched, the app is told the
-chat was read (`imbue_studio_notifications.py`, through the latchkey gateway as the
-chat's current agent, off the request thread).
+arrives after a later one from its page is dropped. A page is *watching* its chat
+while its last report is shown, focused, and under 90 seconds old;
+`GET /api/chats/<chat-id>/watchers` (loopback only) lists the watching instances, and
+the notify-user skill's script sends that list on with its notification so the Imbue
+Studio app shows nothing to a user already reading the chat. When a report turns a
+chat from unwatched to watched, the app is told the chat was read
+(`imbue_studio_notifications.py`, through the latchkey gateway as the chat's current
+agent, off the request thread).
 
 ## Memory shedding
 
