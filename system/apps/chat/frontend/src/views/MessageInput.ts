@@ -252,7 +252,7 @@ function providerNotice(markerClass: string, sentence: string, onChoose: () => v
     {
       oncreate: onShown,
       class:
-        `${markerClass} flex flex-row items-center justify-between gap-3 rounded-xl border ` +
+        `${markerClass} mb-2 flex flex-row items-center justify-between gap-3 rounded-xl border ` +
         "border-default bg-surface-secondary py-3 pr-3 pl-5 text-(length:--font-size-body) text-secondary",
     },
     [
