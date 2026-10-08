@@ -384,3 +384,191 @@ def test_a_check_without_latchkey_says_so() -> None:
 
     with pytest.raises(import_chats.ImportChatsError, match="cannot run latchkey"):
         import_chats.check(CLAUDE, run)
+
+
+def _rendered_page(
+    data_root: Path,
+    group: str,
+    uuid: str,
+    title: str,
+    original_url: str,
+    message_times: Sequence[str],
+) -> Path:
+    """A page laid out as datalib's chat renderer writes one: frontmatter, a title with its source link, and one
+    timestamped section per message."""
+    page = data_root / group / "render_markdown" / "account" / uuid / "all.md"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    messages = "\n".join(
+        f'<div class="msg"><h2><time class="msg-ts" datetime="{when}" title="{when}">{when}</time></h2>Hi</div>'
+        for when in message_times
+    )
+    page.write_text(
+        "---\n"
+        f"title: {json.dumps(title)}\n"
+        "provider: claude\n"
+        f"chat_uuid: {uuid}\n"
+        f"display: {json.dumps(title)}\n"
+        "item_count: 2\n"
+        "---\n\n"
+        f'<h1 class="page-title">{title} <a class="source-link" href="{original_url}" target="_blank">x</a></h1>\n\n'
+        f"{messages}\n"
+    )
+    return page
+
+
+def test_a_page_is_read_for_its_title_its_original_and_its_latest_message(
+    tmp_path: Path,
+) -> None:
+    path = _rendered_page(
+        tmp_path,
+        "claude_chats",
+        "u1",
+        'Drafting a "greeting"',
+        "https://claude.ai/chat/c1",
+        ["2026-09-30T10:00:00+00:00", "2026-10-02T09:00:00+02:00", "not a time"],
+    )
+
+    page = import_chats.read_page(path)
+
+    assert page.title == 'Drafting a "greeting"'
+    assert page.original_url == "https://claude.ai/chat/c1"
+    assert page.last_message_at is not None
+    assert page.last_message_at.isoformat() == "2026-10-02T09:00:00+02:00"
+    assert page.is_project is False
+
+
+def test_a_page_without_frontmatter_or_times_is_listed_by_its_directory(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "u9" / "all.md"
+    path.parent.mkdir()
+    path.write_text("# chat\n")
+
+    page = import_chats.read_page(path)
+
+    assert (page.title, page.original_url, page.last_message_at) == ("u9", "", None)
+
+
+def test_the_index_lists_chats_by_month_newest_first_then_undated_then_projects(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "datalib"
+    index_path = tmp_path / "import-chats" / "claude-chats.md"
+    _rendered_page(
+        data_root,
+        "claude_chats",
+        "old",
+        "Older [draft]",
+        "https://claude.ai/chat/a",
+        ["2026-09-03T08:00:00+00:00"],
+    )
+    _rendered_page(
+        data_root,
+        "claude_chats",
+        "new",
+        "Newest",
+        "https://claude.ai/chat/b",
+        ["2026-10-07T08:00:00+00:00"],
+    )
+    _rendered_page(
+        data_root,
+        "claude_chats",
+        "mid",
+        "Middle",
+        "https://claude.ai/chat/c",
+        ["2026-10-01T08:00:00+00:00"],
+    )
+    _rendered_page(
+        data_root, "claude_chats", "nodate", "No dates", "https://claude.ai/chat/d", []
+    )
+    _rendered_page(
+        data_root,
+        "claude_chats",
+        "proj",
+        "Stellar Cartography",
+        "https://claude.ai/project/p",
+        [],
+    )
+
+    import_chats.write_index(data_root, CLAUDE, index_path)
+
+    lines = index_path.read_text().splitlines()
+    assert lines[0] == "# Claude chats"
+    assert lines[2].startswith("4 conversations, most recent first.")
+    assert [line for line in lines if line.startswith("## ")] == [
+        "## October 2026",
+        "## September 2026",
+        "## Undated",
+        "## Projects",
+    ]
+    entries = [line for line in lines if line.startswith("- ")]
+    assert entries == [
+        "- 2026-10-07 · [Newest](../datalib/claude_chats/render_markdown/account/new/all.md) · [original](https://claude.ai/chat/b)",
+        "- 2026-10-01 · [Middle](../datalib/claude_chats/render_markdown/account/mid/all.md) · [original](https://claude.ai/chat/c)",
+        "- 2026-09-03 · [Older \\[draft\\]](../datalib/claude_chats/render_markdown/account/old/all.md) · [original](https://claude.ai/chat/a)",
+        "- [No dates](../datalib/claude_chats/render_markdown/account/nodate/all.md) · [original](https://claude.ai/chat/d)",
+        "- [Stellar Cartography](../datalib/claude_chats/render_markdown/account/proj/all.md) · [original](https://claude.ai/project/p)",
+    ]
+    assert list(index_path.parent.iterdir()) == [index_path]
+
+
+def test_an_index_of_a_source_with_nothing_rendered_says_so(tmp_path: Path) -> None:
+    index_path = tmp_path / "chatgpt-chats.md"
+
+    import_chats.write_index(tmp_path / "datalib", CHATGPT, index_path)
+
+    assert index_path.read_text().splitlines()[:3] == [
+        "# ChatGPT chats",
+        "",
+        '0 conversations, most recent first. Each title opens the copy in this workspace; "original" opens it in ChatGPT.',
+    ]
+
+
+def test_a_sync_rewrites_the_index_of_each_source_it_synced(tmp_path: Path) -> None:
+    install = _installed(tmp_path / "home")
+    data_root = tmp_path / "datalib"
+    status_path = tmp_path / "import-chats" / "status.json"
+    datalib = _FakeDatalib(
+        data_root,
+        _run_summary(
+            {"step": "claude_chats/ingest", "status": "succeeded"},
+            {
+                "step": "chatgpt_chats/ingest",
+                "status": "failed",
+                "error": "caused by: HTTP 401",
+            },
+        ),
+        {"claude_chats": 2},
+    )
+
+    import_chats.sync([CLAUDE, CHATGPT], install, data_root, status_path, datalib)
+
+    assert (
+        "2 conversations" in (tmp_path / "import-chats" / "claude-chats.md").read_text()
+    )
+    assert (
+        "0 conversations"
+        in (tmp_path / "import-chats" / "chatgpt-chats.md").read_text()
+    )
+
+
+def test_a_long_title_is_cut_short_in_the_index(tmp_path: Path) -> None:
+    data_root = tmp_path / "datalib"
+    index_path = tmp_path / "chatgpt-chats.md"
+    _rendered_page(
+        data_root,
+        "chatgpt_chats",
+        "u1",
+        "word " * 100,
+        "https://chatgpt.com/c/x",
+        ["2026-10-01T08:00:00+00:00"],
+    )
+
+    import_chats.write_index(data_root, CHATGPT, index_path)
+
+    (entry,) = [
+        line for line in index_path.read_text().splitlines() if line.startswith("- ")
+    ]
+    title = entry.split("[", 1)[1].split("](", 1)[0]
+    assert len(title) == 120
+    assert title.endswith("word…")

@@ -33,6 +33,11 @@ The status file (``data/.skills/import-chats/status.json``) is read by the Getti
 sync's process while it is ``importing``, so a reader can tell a sync that died from one that is
 still running.
 
+After each sync it also rewrites one index per source beside the status file
+(``data/.skills/import-chats/claude-chats.md``, ``chatgpt-chats.md``): every page by title, newest
+first, each linked to its page in the workspace and to the original. datalib names the pages by
+uuid, so this is the one place to browse them by name.
+
 The datalib store is ``data/.skills/datalib/`` (its ``config.toml`` and every tree datalib writes):
 the raw records each ingest kept, and one rendered markdown page per conversation under
 ``<group>/render_markdown/``. Credentials never touch it; latchkey's gateway attaches them.
@@ -49,11 +54,13 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -124,6 +131,14 @@ SOURCES: dict[str, ChatSource] = {
         check_url="https://chatgpt.com/backend-api/me",
     ),
 }
+
+
+# What the index reads off each rendered page: its frontmatter, the header's link to the original, and every
+# message's timestamp (the frontmatter carries no dates).
+_FRONTMATTER_FIELD = re.compile(r"^(\w+): (.*)$")
+_SOURCE_LINK = re.compile(r'class="source-link" href="([^"]+)"')
+_MESSAGE_TIME = re.compile(r'<time class="msg-ts" datetime="([^"]+)"')
+_INDEX_TITLE_LIMIT = 120
 
 
 class ImportChatsError(Exception):
@@ -247,6 +262,147 @@ def count_conversations(data_root: Path, source: ChatSource) -> int:
     if not rendered.is_dir():
         return 0
     return sum(1 for _ in rendered.rglob("all.md"))
+
+
+@dataclass(frozen=True)
+class IndexedPage:
+    title: str
+    path: Path
+    original_url: str
+    last_message_at: datetime.datetime | None
+
+    @property
+    def is_project(self) -> bool:
+        return "/project/" in self.original_url
+
+
+def _frontmatter_value(raw: str) -> str:
+    raw = raw.strip()
+    if raw.startswith('"'):
+        try:
+            return str(json.loads(raw))
+        except ValueError:
+            return raw.strip('"')
+    return raw
+
+
+def _parse_time(raw: str) -> datetime.datetime | None:
+    try:
+        parsed = datetime.datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return (
+        parsed
+        if parsed.tzinfo is not None
+        else parsed.replace(tzinfo=datetime.timezone.utc)
+    )
+
+
+def read_page(path: Path) -> IndexedPage:
+    """What the index shows for one rendered page; a page without frontmatter is listed by its directory name."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    fields: dict[str, str] = {}
+    if text.startswith("---\n"):
+        end = text.find("\n---", 4)
+        for line in text[4 : end if end != -1 else 4].splitlines():
+            match = _FRONTMATTER_FIELD.match(line)
+            if match is not None:
+                fields[match.group(1)] = _frontmatter_value(match.group(2))
+    link = _SOURCE_LINK.search(text)
+    times = [
+        parsed
+        for raw in _MESSAGE_TIME.findall(text)
+        if (parsed := _parse_time(raw)) is not None
+    ]
+    return IndexedPage(
+        title=fields.get("display") or fields.get("title") or path.parent.name,
+        path=path,
+        original_url=link.group(1) if link is not None else "",
+        last_message_at=max(times) if times else None,
+    )
+
+
+def _index_line(page: IndexedPage, index_dir: Path) -> str:
+    # An untitled chat is titled by its whole first message, which would make one entry a paragraph.
+    title = (
+        page.title
+        if len(page.title) <= _INDEX_TITLE_LIMIT
+        else page.title[: _INDEX_TITLE_LIMIT - 1].rstrip() + "…"
+    )
+    title = title.replace("[", "\\[").replace("]", "\\]")
+    target = urllib.parse.quote(Path(os.path.relpath(page.path, index_dir)).as_posix())
+    line = f"- [{title}]({target})"
+    if page.last_message_at is not None:
+        line = f"- {page.last_message_at.date().isoformat()} · [{title}]({target})"
+    if page.original_url:
+        line += f" · [original]({page.original_url})"
+    return line
+
+
+def render_index(
+    source: ChatSource, pages: Sequence[IndexedPage], index_dir: Path
+) -> str:
+    """The source's index: its conversations by month, newest first, then any without a date, then its projects."""
+    chats = sorted(
+        (
+            page
+            for page in pages
+            if not page.is_project and page.last_message_at is not None
+        ),
+        key=lambda page: (page.last_message_at, page.title),
+        reverse=True,
+    )
+    undated = sorted(
+        (
+            page
+            for page in pages
+            if not page.is_project and page.last_message_at is None
+        ),
+        key=lambda page: page.title,
+    )
+    projects = sorted(
+        (page for page in pages if page.is_project), key=lambda page: page.title
+    )
+    conversation_count = len(chats) + len(undated)
+    lines = [
+        f"# {source.label} chats",
+        "",
+        f"{conversation_count:,} conversation{'' if conversation_count == 1 else 's'}, most recent first. Each title opens "
+        f'the copy in this workspace; "original" opens it in {source.label}.',
+    ]
+    month = None
+    for page in chats:
+        assert page.last_message_at is not None
+        page_month = page.last_message_at.strftime("%B %Y")
+        if page_month != month:
+            month = page_month
+            lines += ["", f"## {month}", ""]
+        lines.append(_index_line(page, index_dir))
+    for heading, group in (("Undated", undated), ("Projects", projects)):
+        if group:
+            lines += ["", f"## {heading}", ""]
+            lines += [_index_line(page, index_dir) for page in group]
+    return "\n".join(lines) + "\n"
+
+
+def write_index(data_root: Path, source: ChatSource, index_path: Path) -> None:
+    """Rewrite the source's index from every page its render step wrote (atomically, like the status file)."""
+    rendered = data_root / source.group / "render_markdown"
+    pages = (
+        [read_page(path) for path in rendered.rglob("all.md")]
+        if rendered.is_dir()
+        else []
+    )
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = index_path.with_name(f"{index_path.name}.tmp-{os.getpid()}")
+    temp_path.write_text(
+        render_index(source, pages, index_path.parent), encoding="utf-8"
+    )
+    os.replace(temp_path, index_path)
+
+
+def index_path_for(status_path: Path, source: ChatSource) -> Path:
+    return status_path.parent / f"{source.key}-chats.md"
 
 
 def parse_run_summary(output: str) -> dict[str, dict]:
@@ -446,6 +602,8 @@ def sync(
             failure_detail(error),
             pid=None,
         )
+    for source in named:
+        write_index(data_root, source, index_path_for(status_path, source))
     return is_every_source_imported
 
 
