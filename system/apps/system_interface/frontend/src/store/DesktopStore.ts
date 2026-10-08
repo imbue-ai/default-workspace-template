@@ -862,6 +862,7 @@ export class DesktopStore {
   private async resyncAfterReconnect(): Promise<void> {
     let recorded: string | null = null;
     let isRecordedNewer = false;
+    let isResetUnderPage = false;
     const entryPushesBefore = this.entryPushes;
     const heardBeforeRead = this.desktopRevisionHeard;
     try {
@@ -872,8 +873,7 @@ export class DesktopStore {
       // The shell only ever raises a record's revision, so one below what this window had heard (or no record at
       // all) means the record was reset under the page, restored or pruned: the shell counts again from there.
       const recordedRevision = own?.desktop_revision ?? 0;
-      const isResetUnderPage =
-        this.desktopRevisionHeard === heardBeforeRead && recordedRevision < this.desktopRevisionHeard;
+      isResetUnderPage = this.desktopRevisionHeard === heardBeforeRead && recordedRevision < this.desktopRevisionHeard;
       if (isResetUnderPage) this.desktopRevisionHeard = recordedRevision;
       isRecordedNewer = this.hearDesktopRevision(recordedRevision);
       recorded = own?.active_desktop ?? null;
@@ -884,7 +884,9 @@ export class DesktopStore {
     void this.loadAvatarSelection();
     // The desktop shown is read after the save: a follow of news heard meanwhile waits on it to move the window.
     await this.flushPendingSave();
-    const isNewsHeard = this.desktopRevisionHeard > (isRecordedNewer ? heardAfterRead : heardBeforeRead);
+    // News is counted from the record when it set what this window has heard, newer or reset.
+    const isNewsHeard =
+      this.desktopRevisionHeard > (isRecordedNewer || isResetUnderPage ? heardAfterRead : heardBeforeRead);
     const isRecordedKnown = recorded !== null && this.state.desktops.some((desktop) => desktop.id === recorded);
     // A solo shell stays on its window's desktop: the recorded one is the main window's, and a report from
     // any other desktop would omit the solo window, which the chrome reads as its return.

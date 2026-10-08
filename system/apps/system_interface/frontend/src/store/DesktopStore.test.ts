@@ -889,6 +889,26 @@ describe("desktop news", () => {
     expect(store.getState().activeDesktopId).toBe("home");
   });
 
+  it("follows news counted from a reset record while a reconnect waits on its save", async () => {
+    api.clients = [clientRecord(CLIENT, { active_desktop: "home", desktop_revision: 5 })];
+    const store = await startedStore();
+    socket.deliver().onConnected();
+    store.minimizeWindow("win-1");
+    const answerWrites = api.holdWrites();
+    // The shell's client record is restored from an older copy while the socket is down.
+    api.clients = [clientRecord(CLIENT, { active_desktop: "work", desktop_revision: 1 })];
+    socket.deliver().onConnected();
+    await settle();
+    const reportsBefore = socket.reports.length;
+    // Another window moves the client to work, counted from the restored record, while this one's save is out.
+    deliverDesktopNews("work", 2);
+    answerWrites();
+    await settle();
+    await settle();
+    expect(store.getState().activeDesktopId).toBe("work");
+    expect(socket.reports.slice(reportsBefore)).toEqual([followingReport("home"), followingReport("work")]);
+  });
+
   it("follows news heard while a reconnect reads the record, and moves the client nowhere", async () => {
     api.clients = [clientRecord(CLIENT, { active_desktop: "home", desktop_revision: 1 })];
     const store = await startedStore();
