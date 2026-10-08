@@ -48,7 +48,6 @@ Standard library only, so it runs under bare ``python3`` like the other skill sc
 from __future__ import annotations
 
 import argparse
-import contextlib
 import datetime
 import hashlib
 import json
@@ -809,5 +808,4 @@ def main(
 
 
 if __name__ == "__main__":
-    with contextlib.suppress(KeyboardInterrupt):
-        sys.exit(main())
+    sys.exit(main())
