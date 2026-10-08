@@ -108,6 +108,17 @@ def _installed(home: Path) -> import_chats.DatalibInstall:
     return install
 
 
+def _wait_until(is_reached: Callable[[], bool]) -> bool:
+    """Check ``is_reached`` every 10ms for up to 5s; whether it was: how a test waits on a running sync's
+    progress thread."""
+    pause = threading.Event()
+    for _ in range(500):
+        if is_reached():
+            return True
+        pause.wait(0.01)
+    return False
+
+
 @dataclass(frozen=True)
 class _SyncWorkspace:
     """What a sync works on: an installed release, the datalib store and the status file."""
@@ -142,15 +153,15 @@ class _SyncWorkspace:
         return import_chats.read_status(self.status_path)["sources"][key]
 
     def watch_record(self, key: str, is_reached: Callable[[dict], bool]) -> list[dict]:
-        """Every reading of ``key``'s record, every 10ms for up to 5s, until one ``is_reached``: how a test sees what
-        a running sync's progress thread records."""
+        """Every reading of ``key``'s record until one ``is_reached``: how a test sees what a running sync's progress
+        thread records."""
         readings: list[dict] = []
-        pause = threading.Event()
-        for _ in range(500):
+
+        def is_latest_reached() -> bool:
             readings.append(self.record(key))
-            if is_reached(readings[-1]):
-                break
-            pause.wait(0.01)
+            return is_reached(readings[-1])
+
+        _wait_until(is_latest_reached)
         return readings
 
 
@@ -987,13 +998,12 @@ def test_a_sync_keeps_its_record_fresh_while_datalib_installs(
     def run(command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess:
         if command[1:] == ["pull-runtime"]:
             written_at_start = workspace.status_path.stat().st_mtime_ns
-            pause = threading.Event()
-            for _ in range(500):
-                if workspace.status_path.stat().st_mtime_ns != written_at_start:
-                    break
-                pause.wait(0.01)
             rewritten_during_install.append(
-                workspace.status_path.stat().st_mtime_ns != written_at_start
+                _wait_until(
+                    lambda: (
+                        workspace.status_path.stat().st_mtime_ns != written_at_start
+                    )
+                )
             )
             return subprocess.CompletedProcess(command, 0, "", "")
         summary = _run_summary({"step": "chatgpt_chats/ingest", "status": "succeeded"})
@@ -1010,25 +1020,23 @@ def test_a_running_sync_keeps_recording_after_a_record_it_could_not_write(
     warnings: list[str] = []
     rerecorded: list[bool] = []
 
+    def is_warned() -> bool:
+        warnings.append(capsys.readouterr().err)
+        return "could not record the ChatGPT import's progress" in "".join(warnings)
+
+    def is_recorded_again() -> bool:
+        record = import_chats.read_status(workspace.status_path)["sources"].get(
+            "chatgpt"
+        )
+        return record is not None and record["state"] == "importing"
+
     def run(command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess:
         if command[1:] == ["pull-runtime"]:
             return subprocess.CompletedProcess(command, 0, "", "")
         workspace.status_path.write_text("{not json")
-        pause = threading.Event()
-        for _ in range(500):
-            warnings.append(capsys.readouterr().err)
-            if "could not record the ChatGPT import's progress" in "".join(warnings):
-                break
-            pause.wait(0.01)
+        _wait_until(is_warned)
         import_chats.write_status(workspace.status_path, {"sources": {}})
-        for _ in range(500):
-            record = import_chats.read_status(workspace.status_path)["sources"].get(
-                "chatgpt"
-            )
-            if record is not None and record["state"] == "importing":
-                break
-            pause.wait(0.01)
-        rerecorded.append(record is not None)
+        rerecorded.append(_wait_until(is_recorded_again))
         summary = _run_summary({"step": "chatgpt_chats/ingest", "status": "succeeded"})
         return subprocess.CompletedProcess(command, 0, "", summary)
 
