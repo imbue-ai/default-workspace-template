@@ -649,9 +649,13 @@ def _register_pop_out(
 def _log_client_switches(
     report: ClientStateReport, client_queue: "queue.Queue[str | None]", shell: ShellState
 ) -> None:
-    """Log, and append to the activity log, the desktop switch a re-report names (a report whose previous desktop
-    is empty or unchanged names none)."""
-    is_desktop_switch = bool(report.previous_desktop) and report.previous_desktop != report.active_desktop
+    """Log, and append to the activity log, the desktop switch a re-report names (a following report, and a report
+    whose previous desktop is empty or unchanged, names none)."""
+    is_desktop_switch = (
+        not report.is_following
+        and bool(report.previous_desktop)
+        and report.previous_desktop != report.active_desktop
+    )
     # A switch the log cannot take is a warning: the record already moved the client.
     if is_desktop_switch:
         _loguru_logger.info(

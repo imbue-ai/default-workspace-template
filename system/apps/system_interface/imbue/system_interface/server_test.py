@@ -906,12 +906,20 @@ def test_a_move_is_echoed_with_its_report_and_revision_and_a_following_report_mo
             }
         ]
 
+        switches_logged = len(shell.activity.read_events())
         following = json.dumps(
-            {"type": "client_state", "client_id": "c1", "active_desktop": "home", "is_following": True}
+            {
+                "type": "client_state",
+                "client_id": "c1",
+                "active_desktop": "home",
+                "previous_desktop": str(work.id),
+                "is_following": True,
+            }
         )
         assert _handle_client_state_message(following, client_queue, shell, is_first_report=False) is True
         recorded = shell.clients.get_client("c1")
         assert recorded is not None and (recorded.active_desktop, recorded.desktop_revision) == (work.id, 2)
+        assert len(shell.activity.read_events()) == switches_logged
         assert drain_messages(client_queue) == []
         assert [info.active_desktop for info in shell.broadcaster.get_connected_client_infos()] == ["home"]
     finally:
