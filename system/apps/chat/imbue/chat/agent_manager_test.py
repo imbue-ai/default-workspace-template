@@ -196,7 +196,9 @@ def _agent_details(
 
 
 def _visible_report() -> PresenceReport:
-    return PresenceReport(instance_id="page-1", client_id="client-1", state=PresenceState.VISIBLE, is_focused=False)
+    return PresenceReport(
+        instance_id="page-1", client_id="client-1", state=PresenceState.VISIBLE, is_focused=False, sequence=1
+    )
 
 
 def _drain(q: queue.Queue[str | None]) -> list[dict[str, Any]]:
