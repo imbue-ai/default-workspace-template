@@ -59,9 +59,9 @@ function toolIcon(toolName: string): IconName {
  * tool's own name would tell one call from another only while there are few of
  * them, so the harness's two better answers come first:
  *
- * 1. The agent's OWN words. Claude's shell and delegation tools require a short
- *    description of what the command is for, and the agent writes one every time
- *    ("Read the transcript container markup"). Nothing beats it, so it wins.
+ * 1. The agent's OWN words. Claude's shell and delegation tools take an optional
+ *    short description of what the command is for ("Read the transcript container
+ *    markup"). Nothing beats it, so it wins whenever the agent wrote one.
  * 2. Otherwise, what the call did: a past-tense verb and the thing it acted on
  *    ("read ChatPanel.ts", `searched "font-size" in views`). A file is named, not
  *    pathed -- the parser shortens it, and the whole path is in the panel.
