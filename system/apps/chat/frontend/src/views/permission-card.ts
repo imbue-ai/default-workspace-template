@@ -271,7 +271,7 @@ function renderSubjectMark(details: PermissionRequestDetails | null, size: numbe
 const GENERIC_PERMISSION_TITLE = "Permission request";
 
 /** The card title: what's being asked for, in a few words. "Local files" for a
- *  file-sharing request; "Other machines" for a workspace request (acting on the
+ *  file-sharing request; "Other workspaces" for a workspace request (acting on the
  *  user's other Imbue Studio workspaces); "Device accounts" for an accounts request;
  *  the friendly service name for a predefined request once the gateway catalog
  *  resolves (the raw scope until then); null when nothing named the subject, so
@@ -279,7 +279,7 @@ const GENERIC_PERMISSION_TITLE = "Permission request";
  *  specifics live in the review modal and the raw disclosure. */
 function permissionTitle(details: PermissionRequestDetails | null, scopeInfo: ScopeInfo | null): string | null {
   if (details?.requestType === "file-sharing") return "Local files";
-  if (details?.requestType === "workspace") return "Other machines";
+  if (details?.requestType === "workspace") return "Other workspaces";
   if (details?.requestType === "accounts") return "Device accounts";
   if (details?.scope) return scopeInfo?.display_name ?? details.scope;
   return null;

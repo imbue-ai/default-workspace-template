@@ -6,7 +6,6 @@ The shell's answers are its to add to, so a caller parses one with unknown field
 """
 
 from typing import Any
-from typing import Final
 from typing import Literal
 from typing import TypeVar
 
@@ -32,9 +31,7 @@ from workspace_layout.primitives import WindowId
 from workspace_layout.records import ClientRecord
 from workspace_layout.records import DesktopLayoutView
 from workspace_layout.records import DesktopView
-
-# How much of an answer an error quotes.
-ANSWER_QUOTE_LIMIT: Final[int] = 200
+from workspace_layout.transport import quote_answer
 
 
 class DesktopOpAnswer(FrozenModel):
@@ -175,13 +172,6 @@ class LayoutOpMessage(FrozenModel):
 
 
 _Answer = TypeVar("_Answer", bound=FrozenModel)
-
-
-@pure
-def quote_answer(body: Any) -> str:
-    """An answer as an error message quotes it: its ``detail`` when it has one, else the whole of it, shortened."""
-    quoted = body.get("detail", body) if isinstance(body, dict) else body
-    return str(quoted).strip()[:ANSWER_QUOTE_LIMIT]
 
 
 @pure

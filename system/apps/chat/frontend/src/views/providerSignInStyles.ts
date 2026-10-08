@@ -94,6 +94,11 @@ export const LEAD = "mb-4 type-body leading-relaxed text-primary";
  *  rather than promoted to a numbered step -- "go to a website if you have not already" is not
  *  half of a two-part procedure. */
 export const LEAD_LINK = "text-accent underline underline-offset-2 hover:text-accent-hover";
+/** Something to do on the provider's side before the sign-in can work. Under the lead, in full
+ *  colour rather than a hint's faint, because skipping it fails the sign-in. */
+export const NOTE =
+  "-mt-2 mb-4 type-helper leading-snug text-primary " +
+  "[&_a]:text-accent [&_a]:underline [&_a]:underline-offset-2 [&_a]:hover:text-accent-hover";
 
 /** The right-hand end of the header: the harness line and the close button, as one group.
  *
@@ -124,6 +129,8 @@ export const FIELD_ROW = "flex items-center gap-2";
 /** One right-aligned action under the body. */
 export const FOOTER = "px-4 pb-3 pt-3";
 export const FOOTER_ROW = "flex justify-end";
+/** The browser wait's two ways forward, side by side. */
+export const RELAY_ACTIONS = "mt-4 flex flex-wrap gap-2";
 
 /** Secondary prose under a field or step. */
 export const HINT = "mt-1.5 type-helper leading-snug text-faint";

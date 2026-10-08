@@ -390,7 +390,7 @@ report, re-arm the poll.
    (the widget moved but still works) is not a hold: it applies unattended
    and is named in the results message with an offer to restore.
 
-For the hold, record it first, so the app can say what the machine is waiting
+For the hold, record it first, so the app can say what the workspace is waiting
 on (the detail line is shown in the app's modal, so write it for the user):
 
 ```bash
@@ -609,7 +609,7 @@ one; the careful flow refuses its next pass on that app while one is), tear it
 down with the preview script and close its window:
 
 ```bash
-uv run workspace-layout close <name>-preview
+uv run --no-sync workspace-layout close <name>-preview
 uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
 ```
 

@@ -206,7 +206,7 @@ at any other time -- they asked to see the browser, or should watch what you do 
 yourself:
 
 ```bash
-uv run workspace-layout open browser --path "/?session=browser-1"
+uv run --no-sync workspace-layout open browser --path "/?session=browser-1"
 ```
 
 That restores and raises the window, or opens one if there is none. It changes what the user is
