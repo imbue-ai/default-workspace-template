@@ -59,6 +59,15 @@ App specifics:
   skill's tests run when the app's surface moves), along with everything else
   the change reaches.
 
+## Theme icons
+
+The app needs an icon in every theme that draws its own (`build-app`'s
+`references/theming.md`, "Icons under a theme"). `uv run workspace-themes icon missing`
+must print `every theme has an icon for every app`; make any icon it names with the
+`make-theme-icon` skill, drawing it by hand as a pixel grid (a worker asks the user
+for no image-model key). An icon in a built-in theme lands under `data/.themes/`, not
+in the commit.
+
 ## Working in isolation
 
 Beyond the live-instance rules in `web-frontend-testing.md`: do not run `layout.py

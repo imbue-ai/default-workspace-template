@@ -139,6 +139,14 @@ under `system/apps/<your-package>/` so they get an isolated window and origin.
   `forward_port.py` refuses a brand-new registration without one. The
   scaffold copies it beside the app's manifest (`app.toml`), which names
   it.
+- **Then draw it in every theme's own style.** Once the scaffold has
+  registered the app (Step 1), `uv run workspace-themes icon missing` names
+  each theme with icons of its own (Classic Mac, Windows 2000, any the user
+  made) that has none for it. Make each with the `make-theme-icon` skill, in
+  the background (the `launch-task` skill) so the mock is not held up; until
+  one lands, that theme shows an icon derived from the one you drew. The app
+  is not finished until `icon missing` prints
+  `every theme has an icon for every app`.
 - **Pick a free port.** The scaffolder (canonical path) auto-picks the lowest free
   port at or above 8080 by parsing `system/supervisord.conf`, every
   `system/supervisord.conf.d/*.conf`, and `data/.state/apps.toml`, so running
@@ -482,6 +490,10 @@ Or with a visual screenshot:
 python3 system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>" --screenshot /tmp/app.png
 ```
 
+Then the app's theme icons: `uv run workspace-themes icon missing` prints
+`every theme has an icon for every app`, or names the themes still to draw for
+(pre-flight).
+
 If verification surfaces something unexpected (connection refused,
 a window stuck on the loading page, broken WebSockets), see
 [references/cross-flow-gotchas.md](references/cross-flow-gotchas.md)
@@ -576,8 +588,8 @@ loads `harden-creation.md` + `op-crystallize.md` + `type-app.md` and
 reports `done` once its testing contract and the review gates pass; there is no
 worker gate because the user already confirmed the live site.
 
-Alongside it, make the app's icons for the workspace's themes in the background
-(`references/theming.md`, "Icons under a theme").
+Hand off only once `uv run workspace-themes icon missing` prints
+`every theme has an icon for every app` (pre-flight); the worker checks it again.
 
 The confirmed mock plus the confirmed working site remain the single source of
 truth: if finalization changes the look-and-feel, re-confirm with the user before

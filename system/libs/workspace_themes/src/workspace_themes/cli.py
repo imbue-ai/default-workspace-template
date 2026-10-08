@@ -273,6 +273,19 @@ def _app_names(repo_root: Path) -> list[str]:
     ]
 
 
+def _apps_without_icon(
+    catalog: ThemeCatalog, entry: ThemeEntry, app_names: Sequence[str]
+) -> list[str]:
+    """The apps a theme draws no icon for. None for a theme whose icons are the standard ones (each app's own
+    icon.svg): the standard theme, and a theme that takes its icons from it."""
+    icons = _require_icons(entry)
+    standard = catalog.find(STANDARD_THEME_ID)
+    if standard is not None and icons.spec_folder == standard.folder:
+        return []
+    covered = {*icons.curated_by_app, *icons.generated_by_app}
+    return [name for name in app_names if name not in covered]
+
+
 @icon_group.command("spec")
 @click.argument("theme_id")
 @click.option(
@@ -285,15 +298,10 @@ def _app_names(repo_root: Path) -> list[str]:
 def icon_spec(theme_id: str, repo_root: str) -> None:
     """Print what a model needs to draw this theme's icons, and which apps still lack one."""
     root = Path(repo_root).resolve()
-    entry = _require_theme(_load_catalog(repo_root), theme_id)
+    catalog = _load_catalog(repo_root)
+    entry = _require_theme(catalog, theme_id)
     icons = _require_icons(entry)
-    covered = {*icons.curated_by_app, *icons.generated_by_app}
-    # The standard theme's icons are the apps' own icon.svg files, so no app lacks one.
-    apps_without_icon = (
-        []
-        if entry.id == STANDARD_THEME_ID
-        else [name for name in _app_names(root) if name not in covered]
-    )
+    apps_without_icon = _apps_without_icon(catalog, entry, _app_names(root))
     report = {
         "theme": entry.id,
         "spec": icons.spec.model_dump(mode="json"),
@@ -306,6 +314,41 @@ def icon_spec(theme_id: str, repo_root: str) -> None:
         "apps_without_icon": apps_without_icon,
     }
     click.echo(json.dumps(report, indent=2))
+
+
+@icon_group.command("missing")
+@click.argument("theme_ids", nargs=-1)
+@click.option(
+    "--repo-root",
+    default=".",
+    show_default=True,
+    type=click.Path(file_okay=False),
+    help="The workspace root",
+)
+def icon_missing(theme_ids: tuple[str, ...], repo_root: str) -> None:
+    """List, for every available theme (or those named), the apps it draws no icon for; exits 1 when any."""
+    root = Path(repo_root).resolve()
+    catalog = _load_catalog(repo_root)
+    entries = (
+        [_require_theme(catalog, theme_id) for theme_id in theme_ids]
+        if theme_ids
+        else [entry for entry in catalog.entries if entry.is_available]
+    )
+    app_names = _app_names(root)
+    missing_by_theme = {
+        str(entry.id): _apps_without_icon(catalog, entry, app_names)
+        for entry in entries
+    }
+    lines = [
+        f"{theme_id}: {', '.join(apps)}"
+        for theme_id, apps in missing_by_theme.items()
+        if apps
+    ]
+    if not lines:
+        click.echo("every theme has an icon for every app")
+        return
+    click.echo("\n".join(lines))
+    sys.exit(1)
 
 
 @icon_group.command("fit")

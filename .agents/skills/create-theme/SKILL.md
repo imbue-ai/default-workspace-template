@@ -96,10 +96,19 @@ that paints them hides the app.
 
 ## 6. Make the icons
 
-Until the theme has its own icons, the shell derives one per app from the app's standard icon
-(`derive` in `[icons]`). For each app in `uv run workspace-themes icon spec <id>`'s
-`apps_without_icon`, make one with the `make-theme-icon` skill -- in the background (the
-`launch-task` skill) when there are more than one or two.
+A theme with icons of its own (an `[icons]` table) needs one for every app in the workspace,
+built-in and user-made, and its generic program icon (`icons/app.<format>`). Until an app has one,
+the shell derives one from the app's standard icon (`derive` in `[icons]`), a stopgap rather than
+the theme's look.
+
+```bash
+uv run workspace-themes icon missing <id>
+```
+
+names the apps still without one. Make each with the `make-theme-icon` skill, in the background
+(the `launch-task` skill) when there are more than one or two, and show the user the theme while
+they land. The theme is finished when the command prints `every theme has an icon for every app`.
+A theme that keeps the standard icons (no `[icons]` of its own) has nothing to draw here.
 
 ## 7. Show the user
 

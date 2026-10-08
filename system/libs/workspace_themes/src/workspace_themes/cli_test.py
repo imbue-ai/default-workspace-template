@@ -317,3 +317,38 @@ def test_lint_app_reads_the_markup_a_python_module_builds_but_not_its_comments_o
     assert "files_app/runner.py:2: a literal color" in linted.output
     assert "runner.py:1" not in linted.output
     assert "runner_test.py" not in linted.output
+
+
+def test_icon_missing_lists_the_apps_a_theme_draws_no_icon_for_and_skips_themes_on_the_standard_icons(
+    tmp_path: Path,
+) -> None:
+    root = _workspace(tmp_path)
+    runner = CliRunner()
+    made = runner.invoke(
+        main,
+        [
+            "new",
+            "plain",
+            "--name",
+            "Plain",
+            "--description",
+            "The standard icons.",
+            "--repo-root",
+            str(root),
+        ],
+    )
+
+    missing = runner.invoke(main, ["icon", "missing", "--repo-root", str(root)])
+    write_test_theme(
+        root / BUILTIN_THEMES_DIRECTORY,
+        "paper",
+        '[data-part="window"] { color: #000000; }\n',
+        app_names_with_icons=("files",),
+    )
+    covered = runner.invoke(main, ["icon", "missing", "--repo-root", str(root)])
+
+    assert made.exit_code == 0, made.output
+    assert missing.exit_code == 1
+    assert missing.output == "paper: files\n"
+    assert covered.exit_code == 0
+    assert covered.output == "every theme has an icon for every app\n"

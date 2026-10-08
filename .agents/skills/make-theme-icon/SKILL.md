@@ -1,6 +1,6 @@
 ---
 name: make-theme-icon
-description: "Use when an app needs an icon drawn for a workspace theme (Classic Mac, Windows 2000, or a theme the user made) -- after building an app, after making a theme, or when the user asks for a new or better icon under a theme. Works with any image model, or none: the agent can draw a pixel grid or an SVG itself, and the workspace-themes tools fit any drawing onto the theme's limits."
+description: "Use when an app needs an icon drawn for a workspace theme (Classic Mac, Windows 2000, or a theme the user made) -- after building an app, after making a theme, when `workspace-themes icon missing` names one, when an app's own icon changed, or when the user asks for a new or better icon under a theme. Works with any image model, or none: the agent can draw a pixel grid or an SVG itself, and the workspace-themes tools fit any drawing onto the theme's limits."
 metadata:
   author: imbue
 ---
@@ -18,6 +18,12 @@ Run every command from the repo root. The standard theme's icons are not made he
 the app's own `icon.svg`, drawn to `docs/system/app-icons.md`.
 
 ## 1. Read what the theme wants
+
+```bash
+uv run workspace-themes icon missing
+```
+
+names every theme with icons of its own and the apps it has none for. For each theme:
 
 ```bash
 uv run workspace-themes icon spec <theme-id>

@@ -9,3 +9,5 @@ New library and CLI, `workspace-themes`, for workspace themes (`docs/system/blue
 - `new` lays out a theme folder, `validate` checks themes, `bundle` prints a bundle, `list` lists themes, and `lint-app` finds literal colors, fonts, and shadows in a tokens-mode app.
 
 - `scripts/vendor-css-library.mjs` adapts a CSS library (system.css, win95.css, ...) onto the contract's parts from a pinned, digest-checked source; it refuses two library assets with one file name, and never reads text inside an attribute selector or string as a class.
+
+- `workspace-themes icon missing [<id>...]` lists, for every theme with icons of its own, the apps it has no icon for, and exits 1 when there are any. A theme that keeps the standard icons has none to draw.

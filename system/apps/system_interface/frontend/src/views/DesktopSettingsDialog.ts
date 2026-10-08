@@ -40,6 +40,8 @@ export interface DesktopSettingsDialogAttrs {
   readonly onCancel: () => void;
   /** The workspace's themes, for the Theme row. */
   readonly themes: ThemeCatalog;
+  /** Draft the theme prompt into the chat and close the dialog; null when no window on this desktop takes a draft. */
+  readonly onMakeTheme: (() => void) | null;
   /** The app whose icon pictures each theme in the Theme row, as that theme draws it (null when absent). */
   readonly previewApp: Pick<AppRecord, "name" | "icon"> | null;
   /** Show a picked theme (a theme id, or null for the workspace's default) before it is saved. */
@@ -56,6 +58,14 @@ export interface ThemeChoice {
 }
 
 export const THEME_PREVIEW_APP = "files";
+
+/** The prompt "Make your own..." drafts, unsent, into the pinned window's chat. */
+export const THEME_DESIGN_PROMPT =
+  "I'd like to make my own workspace theme. Design it, show me how it looks, and let me try it " +
+  "in Desktop settings before anything changes. Here's the look I want: ";
+
+/** Where "Make your own..." would be, when no window on this desktop takes a draft. */
+export const MAKE_THEME_IN_CHAT_HINT = "To make your own theme, describe the look you want in a chat.";
 
 function normalizedGlyphIndex(glyph: number): number {
   const count = SQUIGGLE_GLYPHS.length;
@@ -263,6 +273,32 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
     );
   }
 
+  /** "Make your own...": drafts the theme prompt into the chat, where the agent makes the theme. */
+  function makeThemeTile(attrs: DesktopSettingsDialogAttrs): m.Children {
+    const onMakeTheme = attrs.onMakeTheme;
+    if (onMakeTheme === null) return null;
+    return m(
+      "button",
+      {
+        type: "button",
+        "data-make-theme": "",
+        ...TILE_PART,
+        class:
+          "flex w-28 shrink-0 cursor-pointer flex-col items-center gap-1 rounded-md border border-dashed " +
+          "border-default bg-transparent p-2",
+        onclick: onMakeTheme,
+      },
+      [
+        m(
+          "span",
+          { "aria-hidden": "true", class: "flex h-8 w-8 items-center justify-center text-2xl text-secondary" },
+          "+",
+        ),
+        m("span", { class: "type-helper text-center text-primary" }, "Make your own..."),
+      ],
+    );
+  }
+
   function themeRow(attrs: DesktopSettingsDialogAttrs): m.Children {
     const catalog = attrs.themes;
     const defaultTheme = resolveDesktopTheme(catalog, null);
@@ -279,7 +315,10 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
       ),
     ];
     return [
-      m("div", { class: "mb-2 flex flex-wrap gap-2" }, tiles),
+      m("div", { class: "mb-2 flex flex-wrap gap-2" }, [...tiles, makeThemeTile(attrs)]),
+      attrs.onMakeTheme === null
+        ? m("p", { "data-make-theme-hint": "", class: "mb-2 type-helper text-secondary" }, MAKE_THEME_IN_CHAT_HINT)
+        : null,
       theme === null
         ? null
         : m("label", { class: "mb-3 flex items-center gap-2 type-helper text-primary" }, [

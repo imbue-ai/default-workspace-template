@@ -4,7 +4,7 @@ import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appRecord, desktopRecord, themeCatalog, themeRecord } from "../testing/records";
-import { DesktopSettingsDialog, isSameWallpaper } from "./DesktopSettingsDialog";
+import { DesktopSettingsDialog, MAKE_THEME_IN_CHAT_HINT, isSameWallpaper } from "./DesktopSettingsDialog";
 import type { DesktopSettingsDialogAttrs } from "./DesktopSettingsDialog";
 
 afterEach(unmountViews);
@@ -20,6 +20,7 @@ function render(overrides: Partial<DesktopSettingsDialogAttrs> = {}): DesktopSet
     onPreviewTheme: vi.fn(),
     onClearPreview: vi.fn(),
     previewApp: null,
+    onMakeTheme: null,
     themes: themeCatalog(
       themeRecord("mac-classic", { name: "Classic Mac" }),
       themeRecord("windows-2000", { name: "Windows 2000" }),
@@ -259,5 +260,24 @@ describe("the Theme row's pictures", () => {
     );
     expect(pictures).toContain("standard");
     expect(card().querySelector('[data-theme-picture="standard"] rect')?.getAttribute("fill")).toBe("#123456");
+  });
+});
+
+describe("Make your own...", () => {
+  it("offers a tile that drafts the theme into a chat, when a chat can take the draft", () => {
+    const onMakeTheme = vi.fn();
+    render({ onMakeTheme });
+
+    (card().querySelector("[data-make-theme]") as HTMLElement).click();
+
+    expect(onMakeTheme).toHaveBeenCalledTimes(1);
+    expect(card().querySelector("[data-make-theme-hint]")).toBeNull();
+  });
+
+  it("says where to ask instead, with no tile, when no chat can take the draft", () => {
+    render({ onMakeTheme: null });
+
+    expect(card().querySelector("[data-make-theme]")).toBeNull();
+    expect(card().querySelector("[data-make-theme-hint]")?.textContent).toBe(MAKE_THEME_IN_CHAT_HINT);
   });
 });

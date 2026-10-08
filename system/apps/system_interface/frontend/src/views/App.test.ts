@@ -22,6 +22,7 @@ import {
   windowRecord,
 } from "../testing/records";
 import { AVATAR_DESIGN_PROMPT } from "./AvatarChooserDialog";
+import { THEME_DESIGN_PROMPT } from "./DesktopSettingsDialog";
 import { App } from "./App";
 
 const CLIENT = "client-1";
@@ -527,6 +528,29 @@ describe("the element menu", () => {
     expect(launch).toContain('\\"data-taskbar-entry\\":\\"win-1\\"');
     expect(launch).toContain('\\"app\\":\\"system_interface\\"');
     expect(launch.endsWith(":window:win-9")).toBe(true);
+  });
+});
+
+describe("the desktop settings' Make your own...", () => {
+  function openSettings(): void {
+    (document.querySelector("[data-desktops-menu]") as HTMLElement).click();
+    m.redraw.sync();
+    const row = document.querySelector('[data-menu-part="menu"] [data-menu-row="settings"]') as HTMLElement;
+    row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    row.click();
+    m.redraw.sync();
+  }
+
+  it("closes the dialog and drafts the theme prompt into the pinned window's chat", async () => {
+    pinnedEntry();
+    openSettings();
+    (document.querySelector("[data-make-theme]") as HTMLElement).click();
+    m.redraw.sync();
+    expect(document.querySelector("[data-desktop-settings]")).toBeNull();
+    await settle();
+    expect(api.calls).toContain(
+      `launch:home:buddy:draft:${JSON.stringify({ message: THEME_DESIGN_PROMPT })}:window:win-9`,
+    );
   });
 });
 

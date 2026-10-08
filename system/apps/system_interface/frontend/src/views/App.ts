@@ -53,7 +53,12 @@ import type { MountPolicy } from "../pages/livePages";
 import type { DesktopStore } from "../store/DesktopStore";
 import { AVATAR_DESIGN_PROMPT, AvatarChooserDialog } from "./AvatarChooserDialog";
 import { Backdrop } from "./Backdrop";
-import { DesktopSettingsDialog, THEME_PREVIEW_APP, isSameWallpaper } from "./DesktopSettingsDialog";
+import {
+  DesktopSettingsDialog,
+  THEME_DESIGN_PROMPT,
+  THEME_PREVIEW_APP,
+  isSameWallpaper,
+} from "./DesktopSettingsDialog";
 import { LauncherMenu } from "./LauncherMenu";
 import { ReplacedDesktopNotice } from "./ReplacedDesktopNotice";
 import { applyDropStyle, applyLiftStyle } from "./ShortcutIcon";
@@ -847,6 +852,13 @@ export function App(): m.Component<AppAttrs> {
       },
       themes: current.getThemeCatalog(),
       previewApp: appByName(current.getState(), THEME_PREVIEW_APP) ?? null,
+      onMakeTheme:
+        draftTargetOf(current.getState()) === null
+          ? null
+          : () => {
+              settingsDialog = null;
+              void current.draftIntoPinnedWindow(THEME_DESIGN_PROMPT);
+            },
       onPreviewTheme: (choice) => current.previewDesktopTheme(desktop.id, choice),
       onClearPreview: () => current.clearThemePreview(),
     });
