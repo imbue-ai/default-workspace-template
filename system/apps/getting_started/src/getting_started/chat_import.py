@@ -3,11 +3,14 @@ card away.
 
 The skill's script (``.agents/skills/import-chats/scripts/import_chats.py``) records each source it imports in
 ``data/.skills/import-chats/status.json``; this module only reads that file. A source the file says is still
-importing, but whose sync process is gone, was cut off (a restart, a shed), so it is answered as failed rather than
-as an import that never ends. Putting the card away is the app's own state, kept under its state directory.
+importing, but whose sync process is gone or whose record has stopped being rewritten, was cut off (a restart, a
+shed), so it is answered as failed rather than as an import that never ends. Putting the card away is the app's own state, kept under its state directory.
 """
 
 import os
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -30,6 +33,11 @@ DISMISSAL_FILENAME: Final[str] = "chat_import.json"
 ChatImportState = Literal["importing", "imported", "needs_sign_in", "failed"]
 
 _INTERRUPTED_DETAIL: Final[str] = "The import stopped before it finished."
+
+# A running sync rewrites its record every ten seconds (the script's PROGRESS_INTERVAL_SECONDS), from its install on.
+# A record that says importing but is older than this belongs to a sync that died, even if its pid now names some
+# other process, as it can after the container restarts.
+HEARTBEAT_STALE_AFTER: Final[timedelta] = timedelta(minutes=2)
 
 
 class ChatImportSource(FrozenModel):
@@ -60,8 +68,24 @@ def is_process_alive(pid: int) -> bool:
     return True
 
 
-def _settled(source: ChatImportSource) -> ChatImportSource:
-    if source.state == "importing" and (source.pid is None or not is_process_alive(source.pid)):
+def is_heartbeat_stale(updated_at: str, now: datetime) -> bool:
+    """Whether a record written at ``updated_at`` has gone longer than a running sync ever leaves it.
+
+    A record with no readable time says nothing either way, so it is never called stale; the pid still decides.
+    """
+    try:
+        written = datetime.fromisoformat(updated_at)
+    except ValueError:
+        return False
+    if written.tzinfo is None:
+        written = written.replace(tzinfo=timezone.utc)
+    return now - written > HEARTBEAT_STALE_AFTER
+
+
+def _settled(source: ChatImportSource, now: datetime) -> ChatImportSource:
+    if source.state == "importing" and (
+        source.pid is None or not is_process_alive(source.pid) or is_heartbeat_stale(source.updated_at, now)
+    ):
         fields = source.field_ref()
         return source.model_copy_update(
             to_update(fields.state, "failed"),
@@ -73,8 +97,10 @@ def _settled(source: ChatImportSource) -> ChatImportSource:
     return source
 
 
-def read_chat_import_sources(status_path: Path) -> dict[str, ChatImportSource]:
-    """Each source the skill has recorded, by key; a record of another shape is skipped (logged)."""
+def read_chat_import_sources(status_path: Path, now: datetime | None = None) -> dict[str, ChatImportSource]:
+    """Each source the skill has recorded, by key, as of ``now`` (the current time when omitted); a record of another
+    shape is skipped (logged)."""
+    as_of = now if now is not None else datetime.now(timezone.utc)
     document = read_json_object(status_path)
     if document is None:
         return {}
@@ -85,7 +111,7 @@ def read_chat_import_sources(status_path: Path) -> dict[str, ChatImportSource]:
     sources: dict[str, ChatImportSource] = {}
     for key, raw in raw_sources.items():
         try:
-            sources[str(key)] = _settled(ChatImportSource.model_validate(raw))
+            sources[str(key)] = _settled(ChatImportSource.model_validate(raw), as_of)
         except ValidationError as e:
             logger.warning("Skipped the chat import record for {} in {}: {}", key, status_path, e)
     return sources

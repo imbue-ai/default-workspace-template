@@ -977,3 +977,28 @@ def test_a_running_sync_records_how_many_of_its_conversations_it_has_fetched(
         None,
         None,
     )
+
+
+def test_a_sync_keeps_its_record_fresh_while_datalib_installs(
+    workspace: _SyncWorkspace,
+) -> None:
+    rewritten_during_install: list[bool] = []
+
+    def run(command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess:
+        if command[1:] == ["pull-runtime"]:
+            written_at_start = workspace.status_path.stat().st_mtime_ns
+            pause = threading.Event()
+            for _ in range(500):
+                if workspace.status_path.stat().st_mtime_ns != written_at_start:
+                    break
+                pause.wait(0.01)
+            rewritten_during_install.append(
+                workspace.status_path.stat().st_mtime_ns != written_at_start
+            )
+            return subprocess.CompletedProcess(command, 0, "", "")
+        summary = _run_summary({"step": "chatgpt_chats/ingest", "status": "succeeded"})
+        return subprocess.CompletedProcess(command, 0, "", summary)
+
+    workspace.sync([CHATGPT], run, progress_interval_seconds=0.01)
+
+    assert rewritten_during_install == [True]

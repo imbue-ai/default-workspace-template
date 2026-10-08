@@ -719,50 +719,56 @@ def stream_process(
     )
 
 
-def _run_dag_with_progress(
+@contextlib.contextmanager
+def _reporting_progress(
     named: Sequence[ChatSource],
-    install: DatalibInstall,
-    config_path: Path,
     data_root: Path,
     status_path: Path,
-    stream: Callable[
-        [Sequence[str], Callable[[str], None]], subprocess.CompletedProcess
-    ],
-    progress_interval_seconds: float,
-) -> subprocess.CompletedProcess:
-    """Run one ``datalib-dag`` sync of ``named``'s ingests, recording how far each has got as it goes."""
-    roots = ",".join(f"{source.group}/ingest" for source in named)
-    progress = IngestProgress()
+    progress: IngestProgress,
+    interval_seconds: float,
+) -> Iterator[None]:
+    """Record each source's progress every ``interval_seconds`` for as long as the block runs.
+
+    Each record also refreshes ``updated_at``, which the Getting Started app reads as the sync's heartbeat: a
+    record that says ``importing`` but has not been rewritten for a while belongs to a sync that died, whatever
+    its pid says now (pids start over when the container restarts)."""
     is_done = threading.Event()
     reporter = threading.Thread(
         target=_record_progress_until,
-        args=(
-            is_done,
-            named,
-            data_root,
-            status_path,
-            progress,
-            progress_interval_seconds,
-        ),
+        args=(is_done, named, data_root, status_path, progress, interval_seconds),
         name="import-chats-progress",
         daemon=True,
     )
     reporter.start()
     try:
-        return stream(
-            [
-                str(install.binary("datalib-dag")),
-                str(config_path),
-                "--sync",
-                roots,
-                "--by",
-                SYNC_REQUESTER,
-            ],
-            progress.observe,
-        )
+        yield
     finally:
         is_done.set()
         reporter.join()
+
+
+def _run_dag(
+    named: Sequence[ChatSource],
+    install: DatalibInstall,
+    config_path: Path,
+    stream: Callable[
+        [Sequence[str], Callable[[str], None]], subprocess.CompletedProcess
+    ],
+    progress: IngestProgress,
+) -> subprocess.CompletedProcess:
+    """Run one ``datalib-dag`` sync of ``named``'s ingests, feeding its event stream to ``progress``."""
+    roots = ",".join(f"{source.group}/ingest" for source in named)
+    return stream(
+        [
+            str(install.binary("datalib-dag")),
+            str(config_path),
+            "--sync",
+            roots,
+            "--by",
+            SYNC_REQUESTER,
+        ],
+        progress.observe,
+    )
 
 
 def _record_failed(
@@ -794,8 +800,8 @@ def sync(
     outcome. True when every named source imported.
 
     datalib renders and indexes pages while the ingest is still fetching, so the sync's own page count grows as
-    it runs; a thread records it, with how far each ingest has got, every ``progress_interval_seconds`` until the
-    sync returns."""
+    it runs; from the install on, a thread records it, with how far each ingest has got, every
+    ``progress_interval_seconds`` until the sync returns."""
     for source in named:
         previous = read_status(status_path)["sources"].get(source.key, {})
         record_source(
@@ -806,23 +812,19 @@ def sync(
             "",
             pid=os.getpid(),
         )
+    progress = IngestProgress()
     try:
-        install_datalib(install, run)
-        config_path = data_root / "config.toml"
-        # A loop another sync runs on this root re-reads the config, so it must never see a partial one.
-        _write_text_atomic(
-            config_path,
-            render_config(configured_sources(read_status(status_path), named)),
-        )
-        result = _run_dag_with_progress(
-            named,
-            install,
-            config_path,
-            data_root,
-            status_path,
-            stream,
-            progress_interval_seconds,
-        )
+        with _reporting_progress(
+            named, data_root, status_path, progress, progress_interval_seconds
+        ):
+            install_datalib(install, run)
+            config_path = data_root / "config.toml"
+            # A loop another sync runs on this root re-reads the config, so it must never see a partial one.
+            _write_text_atomic(
+                config_path,
+                render_config(configured_sources(read_status(status_path), named)),
+            )
+            result = _run_dag(named, install, config_path, stream, progress)
     except ImportChatsError as e:
         _record_failed(named, data_root, status_path, str(e))
         raise

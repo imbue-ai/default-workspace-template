@@ -3,9 +3,14 @@
 import json
 import os
 import subprocess
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
 
 from getting_started.chat_import import ChatImportStore
+from getting_started.chat_import import HEARTBEAT_STALE_AFTER
+from getting_started.chat_import import is_heartbeat_stale
 from getting_started.chat_import import is_process_alive
 from getting_started.chat_import import read_chat_import_sources
 
@@ -105,3 +110,42 @@ def test_a_running_imports_fetch_progress_reaches_the_card(tmp_path: Path) -> No
     wire = ChatImportStore(status_path=status_path, dismissal_path=tmp_path / "chat_import.json").wire_json()
 
     assert (wire["sources"]["chatgpt"]["fetched"], wire["sources"]["chatgpt"]["to_fetch"]) == (166, 582)
+
+
+def test_an_import_whose_record_stopped_being_rewritten_reads_as_failed_even_with_a_live_pid(tmp_path: Path) -> None:
+    status_path = tmp_path / "status.json"
+    _write_status(
+        status_path,
+        {
+            "stale": {
+                "state": "importing",
+                "conversations": 3,
+                "pid": os.getpid(),
+                "updated_at": "2026-10-08T16:00:00+00:00",
+            },
+            "fresh": {
+                "state": "importing",
+                "conversations": 3,
+                "pid": os.getpid(),
+                "updated_at": "2026-10-08T16:04:30+00:00",
+            },
+            "untimed": {"state": "importing", "conversations": 3, "pid": os.getpid(), "updated_at": ""},
+        },
+    )
+
+    sources = read_chat_import_sources(status_path, now=datetime(2026, 10, 8, 16, 5, tzinfo=timezone.utc))
+
+    assert {key: source.state for key, source in sources.items()} == {
+        "stale": "failed",
+        "fresh": "importing",
+        "untimed": "importing",
+    }
+
+
+def test_a_heartbeat_is_stale_only_past_the_threshold() -> None:
+    now = datetime(2026, 10, 8, 16, 5, tzinfo=timezone.utc)
+
+    assert is_heartbeat_stale((now - HEARTBEAT_STALE_AFTER).isoformat(), now) is False
+    assert is_heartbeat_stale((now - HEARTBEAT_STALE_AFTER - timedelta(seconds=1)).isoformat(), now) is True
+    assert is_heartbeat_stale("2026-10-08T16:04:59", now) is False
+    assert is_heartbeat_stale("not a time", now) is False
