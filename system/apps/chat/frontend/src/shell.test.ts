@@ -17,6 +17,7 @@ vi.mock("./models/Chats", () => ({ createChat, getChatById, addChatsUpdatedListe
 vi.mock("./presence", () => ({
   startPresenceReporting: vi.fn(),
   reportPresence: vi.fn(),
+  reportFocusChange: vi.fn(),
   currentPresenceState: vi.fn(() => "hidden"),
 }));
 
@@ -42,12 +43,17 @@ async function loadShell(): Promise<{
   connectChatToShell: typeof import("./shell").connectChatToShell;
   startChatOnAccount: typeof import("./shell").startChatOnAccount;
   openSubagentView: typeof import("./shell").openSubagentView;
-  presence: { startPresenceReporting: ReturnType<typeof vi.fn>; reportPresence: ReturnType<typeof vi.fn> };
+  presence: {
+    startPresenceReporting: ReturnType<typeof vi.fn>;
+    reportPresence: ReturnType<typeof vi.fn>;
+    reportFocusChange: ReturnType<typeof vi.fn>;
+  };
 }> {
   vi.resetModules();
   const presence = (await import("./presence")) as unknown as {
     startPresenceReporting: ReturnType<typeof vi.fn>;
     reportPresence: ReturnType<typeof vi.fn>;
+    reportFocusChange: ReturnType<typeof vi.fn>;
   };
   const shell = await import("./shell");
   return {
@@ -63,6 +69,17 @@ function framed(): { postMessage: ReturnType<typeof vi.fn> } {
   const parent = { postMessage: vi.fn() };
   Object.defineProperty(window, "parent", { value: parent, configurable: true });
   return parent;
+}
+
+/** The window listeners `connect` adds, by event type: called directly, so listeners an earlier test left on the
+ *  shared window do not answer too. */
+function windowListenersAddedBy(connect: () => void): (type: string) => Array<(event: Event) => void> {
+  const addSpy = vi.spyOn(window, "addEventListener");
+  connect();
+  const added = addSpy.mock.calls.map(([type, listener]) => [type, listener] as const);
+  addSpy.mockRestore();
+  return (type) =>
+    added.filter(([addedType]) => addedType === type).map(([, listener]) => listener as (event: Event) => void);
 }
 
 function deliver(data: unknown, source: unknown): void {
@@ -109,6 +126,35 @@ describe("connectChatToShell", () => {
 
     expect(presence.startPresenceReporting).not.toHaveBeenCalled();
     expect(presence.reportPresence).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["framed", true],
+    ["visited directly", false],
+  ])("reports the document's focus as it comes and goes on the chat's own page, %s", async (_how, isFramed) => {
+    if (isFramed) framed();
+    const { connectChatToShell, presence } = await loadShell();
+    const windowListeners = windowListenersAddedBy(() => {
+      connection = connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
+    });
+
+    windowListeners("focus").forEach((listener) => listener(new Event("focus")));
+    windowListeners("blur").forEach((listener) => listener(new Event("blur")));
+
+    expect(presence.reportFocusChange).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports no focus from a subagent view of the chat", async () => {
+    framed();
+    const { connectChatToShell, presence } = await loadShell();
+    const windowListeners = windowListenersAddedBy(() => {
+      connection = connectChatToShell("agent-1", { isPresenceReported: false, path: "/agent-1" });
+    });
+
+    windowListeners("focus").forEach((listener) => listener(new Event("focus")));
+    windowListeners("blur").forEach((listener) => listener(new Event("blur")));
+
+    expect(presence.reportFocusChange).not.toHaveBeenCalled();
   });
 
   it("still tells the shell where its window is from a subagent view", async () => {

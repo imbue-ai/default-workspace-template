@@ -24,9 +24,16 @@ observe`, its own supervised service) writes, and serves:
   so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
   chat's title. Loading the page sends and writes nothing. With nothing selected it
   shows the most recent chat, and with no chats one awaiting its first send
-  (`POST /api/chats/awaiting`, held in memory until that send launches it). The
-  list's right edge drags to resize it (100px to 480px, 180px by default, kept
-  per browser). On a phone-sized touchscreen (the shell's rule: a short side at
+  (`POST /api/chats/awaiting`, held in memory until that send launches it).
+  With nothing signed in, a chat awaiting its first send shows "Connect an AI
+  provider to start chatting." and a "Choose a provider" button above its
+  composer, which stays in view (holding any draft) but disabled, and opens the
+  provider chooser as that notice appears; this is the one place the chooser
+  opens for a missing provider (the New chat button opens the awaiting chat, and
+  an intake's first message goes into its composer, with no dialog). Which
+  account a chat starts on is decided from a fresh read of the account list.
+  The list's right edge drags to resize it (100px to 480px, 180px by default,
+  kept per browser). On a phone-sized touchscreen (the shell's rule: a short side at
   most 500px and a long side at most 1000px, either way round), or a window at
   most 500px wide under a mouse, the root takes its phone layout
   (`frontend/src/compactLayout.ts`, docs/system/blueprint/desktop-interface/plan-phone-interface.md):
@@ -56,7 +63,7 @@ observe`, its own supervised service) writes, and serves:
   no pty is registered) in meta tags. Every chat page reports its path and the
   chat's title to the shell.
 - Every `/api/chats/<chat-id>/...` route (events, streams, sends, model choice,
-  the queue actions, presence, destroy, rename, start, stop; the subagent reads under
+  the queue actions, presence and watchers, destroy, rename, start, stop; the subagent reads under
   `/api/chats/<chat-id>/agents/<agent-id>/subagents/<session-id>/`),
   `/api/chats/create`, `/api/chats/awaiting` (the chat an empty chat list opens on), `/api/chats`,
   `/api/harnesses`, `/api/uploads`,
@@ -318,7 +325,8 @@ pseudo-harness like any archived segment), the record names the seed as its
 first member, and the chat is listed as a provisional chat in the
 `awaiting_first_send` phase, its transcript on the page with a composer under
 it. The user's first message is what launches the chat's first real agent
-(the provider chooser opens then if nothing is signed in), which joins the
+(with nothing signed in, the chat's page asks for a provider first), which
+joins the
 record as the seed's successor with the `chat_id` and `chat_seq` labels a
 handoff's successor carries. That agent is launched with the seeded
 conversation ahead of the user's message, as one message: the seed is a segment
@@ -497,7 +505,8 @@ refuses the update when it cannot come up.
 change: it follows the same observer, reads the live accounts, and tracks every
 agent the live chat tracks, but reconciles no accounts, writes no memory scores,
 runs no automatic compaction, resumes no unfinished switch, opens no windows,
-reports no client activity to the shell, and registers nothing. Sends from it are
+reports no client activity to the shell, marks no chat read in the Imbue Studio
+app, and registers nothing. Sends from it are
 real, but a switch to another account is refused, since it would write the chat's
 record into the scratch copy only, and so is an answer to a secret card, since the
 answer belongs to the live chat. Point `CHAT_DATA_DIR` at a scratch copy of
@@ -507,6 +516,20 @@ secret requests) never land in the live chat's data.
 The frontend lives in `frontend/` and builds into `imbue/chat/static/`; see
 `system/apps/README.md` for the shared frontend library and the npm
 workspace every frontend belongs to.
+
+## Presence and watching
+
+Each chat page reports its presence to `POST /api/chats/<chat-id>/presence`
+(`presence.py`; the contract is `docs/system/blueprint/desktop-interface/contracts.md`
+section 7, "Chat presence"): whether it is shown, whether its document has focus,
+keyed by an instance id the page mints once per load, so two pages of one chat never
+overwrite each other. A page is *watching* its chat while its last report is shown,
+focused, and under 90 seconds old; `GET /api/chats/<chat-id>/watchers` (loopback only)
+lists the watching instances, and the notify-user skill's script sends that list on
+with its notification so the Imbue Studio app shows nothing to a user already reading
+the chat. When a report turns a chat from unwatched to watched, the app is told the
+chat was read (`imbue_studio_notifications.py`, through the latchkey gateway as the
+chat's current agent, off the request thread).
 
 ## Memory shedding
 

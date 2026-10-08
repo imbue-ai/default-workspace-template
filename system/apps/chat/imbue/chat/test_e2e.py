@@ -712,6 +712,42 @@ def test_a_minimized_chat_preserves_its_scroll_window(tmp_path: Path, page: Page
         )
 
 
+# watching
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_chat_page_watches_its_chat_only_while_shown_and_focused(e2e_server: RunningWorkspace, page: Page) -> None:
+    """The watchers route lists the chat's page while its window shows it and its document has focus, and drops it
+    when the focus moves to the chat list beside it or the window is minimized."""
+    _open_fixture_chat(page, e2e_server)
+    watchers_url = f"{e2e_server.chat_url}/api/chats/{FIXTURE_AGENT_ID}/watchers"
+
+    def wait_for_watcher_count(count: int, described: str) -> None:
+        wait_for(
+            lambda: len(_get_json(watchers_url)["watched_by"]) == count,
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message=f"the watchers route never showed {described}",
+        )
+
+    composer = _chat(page).locator(".message-input-textbox")
+    composer.click()
+    wait_for_watcher_count(1, "the focused chat page watching")
+
+    # A press on the chat list takes the focus into the root's own document, out of the chat page.
+    _chat_root(page).locator(f'.chat-rail-row[data-chat-id="{FIXTURE_AGENT_ID}"]').click()
+    wait_for_watcher_count(0, "the blurred chat page stop watching")
+
+    composer.click()
+    wait_for_watcher_count(1, "the refocused chat page watching again")
+
+    # A click on the focused window's taskbar entry minimizes it: the page is hidden in place.
+    entry = _taskbar_entry(page, _the_chat_window(e2e_server)["id"])
+    entry.click()
+    expect(entry).to_have_attribute("data-minimized", "true")
+    wait_for_watcher_count(0, "the hidden chat page stop watching")
+
+
 # desktops
 
 
@@ -864,17 +900,17 @@ def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_in_its_ow
     tmp_path: Path, page: Page
 ) -> None:
     """The window opens either way: with no account the chat app mints a chat that waits for its first send and
-    holds the intake, and the chat root offers the provider chooser over it, so signing in happens where the chat
-    will be rather than on the shell; no agent is created until an account is chosen (post-launch-paths plan
+    holds the intake, and that chat's page offers the provider chooser, so signing in happens where the chat will be
+    rather than on the shell or the chat list; no agent is created until an account is chosen (post-launch-paths plan
     section 4.6)."""
     with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
         chat_frame = _start_new_chat(page, server)
-        root = _chat_root(page)
-        expect(root.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+        expect(chat_frame.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
         # Under the chooser, the composer's provider row already says there is no provider to start on.
         expect(chat_frame.locator(".model-selector-not-connected")).to_have_text("Not connected", timeout=15000)
-        # The shell itself renders no chooser: the sign-in lives in the chat's page.
+        # Neither the shell nor the chat list draws a chooser of its own: the chat's page is the one place it opens.
         assert page.locator('[data-e2e="provider-chooser"]').count() == 0
+        assert _chat_root(page).locator('[data-e2e="provider-chooser"]').count() == 0
         assert [str(chat.chat_id) for chat in server.chat_state.agent_manager.get_chat_snapshots()] == [
             FIXTURE_AGENT_ID
         ]
@@ -888,6 +924,60 @@ def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_in_its_ow
         page.reload()
         expect(page.locator("iframe[data-live-page]")).to_have_count(1, timeout=15000)
         expect(_chat_root(page).locator(".chat-root")).to_be_visible(timeout=15000)
+        expect(_shown_chat(page).locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_the_new_chat_button_with_nothing_signed_in_opens_a_chat_that_asks_for_a_provider(
+    tmp_path: Path, page: Page
+) -> None:
+    """With nothing signed in the New chat button opens the chat awaiting its first send, and that chat's page asks
+    for a provider, the same as any chat with none to start on."""
+    with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
+        _open_fixture_chat_root(page, server)
+        root = _chat_root(page)
+        root.locator(".chat-rail-new").first.click()
+        expect(_shown_chat(page).locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+        awaiting = server.chat_state.agent_manager.get_provisional_chats()
+        assert [chat.phase.value for chat in awaiting] == ["awaiting_first_send"]
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_chat_awaiting_its_first_send_with_nothing_signed_in_offers_a_provider_in_place_of_the_composer(
+    tmp_path: Path, page: Page
+) -> None:
+    """A message typed before a provider is connected could not be sent, so with the chooser dismissed the composer
+    stays in view but disabled, under a sentence and a button that opens the same chooser again."""
+    with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
+        chat_frame = _start_new_chat(page, server)
+        expect(chat_frame.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+        chat_frame.locator('[data-e2e="provider-chooser"] [aria-label="Close"]').click()
+        expect(chat_frame.locator(".message-input-no-provider")).to_contain_text(
+            "Connect an AI provider to start chatting.", timeout=15000
+        )
+        expect(chat_frame.locator(".message-input-textbox")).to_be_disabled()
+        chat_frame.locator(".message-input-choose-provider").click()
+        expect(chat_frame.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_first_message_sent_with_nothing_signed_in_waits_in_the_chat_composer(tmp_path: Path, page: Page) -> None:
+    """A message sent from the launcher with nothing signed in raises no dialog: it waits in the new chat's disabled
+    composer while the chat asks for a provider, ready to send once one is signed in."""
+    dialogs: list[str] = []
+    page.on("dialog", lambda dialog: (dialogs.append(dialog.message), dialog.dismiss()))
+    with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
+        _land(page, server)
+        page.locator("[data-launcher-field] textarea").fill("Plan my week")
+        menu = page.locator("[data-launcher-overlay]")
+        expect(menu).to_be_visible(timeout=10000)
+        menu.locator(f'[data-launch="{CHAT_APP_NAME}:new"]').click()
+        expect(page.locator("iframe[data-live-page]")).to_have_count(1, timeout=15000)
+        chat_frame = _chat(page, None)
+        expect(chat_frame.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+        expect(chat_frame.locator(".message-input-textbox")).to_have_value("Plan my week", timeout=15000)
+        expect(chat_frame.locator(".message-input-textbox")).to_be_disabled()
+        assert dialogs == []
 
 
 # Installed in every frame before its scripts run: records each placeholder screen or text the chat page ever

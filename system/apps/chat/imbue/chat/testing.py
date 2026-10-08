@@ -48,6 +48,7 @@ import pexpect
 import pytest
 import simple_websocket
 from flask import Flask
+from flask import request
 from pydantic import Field
 from workspace_layout.client import DisconnectedShell
 from workspace_layout.interfaces import ShellLayoutInterface
@@ -464,6 +465,35 @@ def read_create_defaults_type(path: Path) -> str | None:
     create = raw.get("commands", {}).get("create", {})
     agent_type = create.get(TYPE_KEY) if isinstance(create, dict) else None
     return agent_type if isinstance(agent_type, str) and agent_type else None
+
+
+class RecordedGatewayRequest(FrozenModel):
+    """One request a ``RecordingGateway`` received."""
+
+    path: str = Field(description="The request's path")
+    headers: dict[str, str] = Field(description="The request's headers")
+    body: Any = Field(description="The request's JSON body")
+
+
+class RecordingGateway:
+    """A stand-in latchkey gateway that records every POST under ``/minds-api-proxy/`` and answers each with
+    one status."""
+
+    def __init__(self, status: int) -> None:
+        self.received: list[RecordedGatewayRequest] = []
+        self.status = status
+        self.application = Flask("recording-gateway")
+        self.application.add_url_rule(
+            "/minds-api-proxy/<path:rest>", view_func=self._accept, methods=["POST"], endpoint="minds_api_proxy"
+        )
+
+    def _accept(self, rest: str) -> tuple[str, int]:
+        self.received.append(
+            RecordedGatewayRequest(
+                path=request.path, headers=dict(request.headers), body=request.get_json(force=True, silent=True)
+            )
+        )
+        return json.dumps({"ok": True}), self.status
 
 
 def build_temporary_secret_request_store() -> SecretRequestStore:
