@@ -570,7 +570,8 @@ def install_datalib(
         result = run(
             [str(install.binary("datalib-step")), "pull-runtime"],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=_PULL_RUNTIME_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired as e:
@@ -902,7 +903,8 @@ def check(
         source.check_url,
     ]
     try:
-        result = run(command, capture_output=True, text=True)
+        # The body is the site's own answer, so a byte that is not UTF-8 must not stop the check.
+        result = run(command, capture_output=True, encoding="utf-8", errors="replace")
     except OSError as e:
         raise ImportChatsError(f"cannot run latchkey: {e}") from e
     return classify_check(result.returncode, result.stdout, result.stderr)
