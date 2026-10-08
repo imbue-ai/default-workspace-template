@@ -9,7 +9,7 @@ chat as waiting on the command between the two, and idle once the second turn ha
 
 ``claude -p`` stays up while its background command runs and runs the turn its completion starts, as an
 agent's Claude does. It is started through ``sh -c 'CLAUDE_PID=$$ exec claude ...'`` so the hook's
-``CLAUDE_PID`` names the Claude process itself, as mngr's launch does.
+``CLAUDE_PID`` names the Claude process itself.
 
 Marked ``real_claude``: it runs two real turns, so it needs the pinned claude on PATH, signed in. Skipped when
 the binary is missing or is not the pinned version.
