@@ -60,6 +60,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
@@ -92,6 +93,8 @@ CHECK_BLOCKED = "blocked"
 # Cloudflare challenge both sites put in front of their APIs. datalib sends the same marker.
 _IMPERSONATE_HEADER = "X-Imbue-Impersonate: 1"
 _CHECK_TIMEOUT_SECONDS = 60.0
+# How often a running sync rewrites each source's count, so the Getting Started card counts up as pages arrive.
+PROGRESS_INTERVAL_SECONDS = 10.0
 
 # latchkey's own refusals, and the provider answers datalib classifies as a credential problem: each
 # is fixed by (re-)sending the source's permission request, which signs the user in again.
@@ -526,15 +529,38 @@ def install_datalib(
         )
 
 
+def _record_progress_until(
+    is_done: threading.Event,
+    named: Sequence[ChatSource],
+    data_root: Path,
+    status_path: Path,
+    interval_seconds: float,
+) -> None:
+    while not is_done.wait(interval_seconds):
+        for source in named:
+            record_source(
+                status_path,
+                source.key,
+                STATE_IMPORTING,
+                count_conversations(data_root, source),
+                "",
+                pid=os.getpid(),
+            )
+
+
 def sync(
     named: Sequence[ChatSource],
     install: DatalibInstall,
     data_root: Path,
     status_path: Path,
     run: Callable[..., subprocess.CompletedProcess],
+    progress_interval_seconds: float = PROGRESS_INTERVAL_SECONDS,
 ) -> bool:
     """Import ``named``: install datalib if needed, write the config, run one sync, and record each source's
-    outcome. True when every named source imported."""
+    outcome. True when every named source imported.
+
+    datalib renders and indexes pages while the ingest is still fetching, so the sync's own page count grows as
+    it runs; a thread records it every ``progress_interval_seconds`` until the sync returns."""
     for source in named:
         previous = read_status(status_path)["sources"].get(source.key, {})
         record_source(
@@ -554,18 +580,30 @@ def sync(
             encoding="utf-8",
         )
         roots = ",".join(f"{source.group}/ingest" for source in named)
-        result = run(
-            [
-                str(install.binary("datalib-dag")),
-                str(config_path),
-                "--sync",
-                roots,
-                "--by",
-                SYNC_REQUESTER,
-            ],
-            capture_output=True,
-            text=True,
+        is_done = threading.Event()
+        reporter = threading.Thread(
+            target=_record_progress_until,
+            args=(is_done, named, data_root, status_path, progress_interval_seconds),
+            name="import-chats-progress",
+            daemon=True,
         )
+        reporter.start()
+        try:
+            result = run(
+                [
+                    str(install.binary("datalib-dag")),
+                    str(config_path),
+                    "--sync",
+                    roots,
+                    "--by",
+                    SYNC_REQUESTER,
+                ],
+                capture_output=True,
+                text=True,
+            )
+        finally:
+            is_done.set()
+            reporter.join()
     except (ImportChatsError, OSError) as e:
         for source in named:
             record_source(

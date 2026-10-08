@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import tomllib
 from collections.abc import Sequence
 from pathlib import Path
@@ -572,3 +573,43 @@ def test_a_long_title_is_cut_short_in_the_index(tmp_path: Path) -> None:
     title = entry.split("[", 1)[1].split("](", 1)[0]
     assert len(title) == 120
     assert title.endswith("word…")
+
+
+def test_a_running_sync_records_the_pages_rendered_so_far(tmp_path: Path) -> None:
+    install = _installed(tmp_path / "home")
+    data_root = tmp_path / "datalib"
+    status_path = tmp_path / "status.json"
+    seen_counts: list[int] = []
+
+    def run(command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess:
+        if command[1:] == ["pull-runtime"]:
+            return subprocess.CompletedProcess(command, 0, "", "")
+        for index in range(3):
+            _rendered_page(
+                data_root,
+                "chatgpt_chats",
+                f"u{index}",
+                f"Chat {index}",
+                "https://chatgpt.com/c/x",
+                [],
+            )
+        is_recorded = threading.Event()
+        for _ in range(500):
+            record = import_chats.read_status(status_path)["sources"]["chatgpt"]
+            seen_counts.append(record["conversations"])
+            if record["state"] == "importing" and record["conversations"] == 3:
+                break
+            is_recorded.wait(0.01)
+        summary = _run_summary({"step": "chatgpt_chats/ingest", "status": "succeeded"})
+        return subprocess.CompletedProcess(command, 0, summary, "")
+
+    import_chats.sync(
+        [CHATGPT], install, data_root, status_path, run, progress_interval_seconds=0.01
+    )
+
+    assert seen_counts[0] == 0
+    assert seen_counts[-1] == 3
+    assert (
+        import_chats.read_status(status_path)["sources"]["chatgpt"]["state"]
+        == "imported"
+    )
