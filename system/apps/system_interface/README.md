@@ -116,8 +116,10 @@ and the profile cache.
   avatar) is on its client record.
 - **The avatar** (`avatar/`): the bundled and registered designs, the
   workspace's selection, the rendered image routes, and the status reader,
-  which folds mngr's agents event file into a mood (working when any agent
-  but the services agent is running) and pushes `avatar_status` on change.
+  which folds mngr's agents event file and the chats' background task markers
+  into a mood (working when any agent but the services agent is running, or
+  any chat is busy on a background task that will wake its agent) and pushes
+  `avatar_status` on change.
 - **State files**: a fresh workspace gets one desktop, `Home`, seeded from
   every registered app's default shortcut (its `default_shortcut`, else, for
   an app a program runs, its first launch path taking no text, or its first

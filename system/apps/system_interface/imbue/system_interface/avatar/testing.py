@@ -1,12 +1,18 @@
-"""Test helpers for the avatar package: a minimal design the validator accepts, a registration of it, and what a
-test reads off a rendered icon."""
+"""Test helpers for the avatar package: a minimal design the validator accepts, a registration of it, what a test
+reads off a rendered icon, and a chat's background task marker written by the script that owns the format."""
 
+import importlib.util
 import struct
+import subprocess
+import sys
 import zlib
+from pathlib import Path
+from types import ModuleType
 from typing import Final
 
 from imbue.system_interface.avatar.catalog import DesignRegistration
 from imbue.system_interface.avatar.primitives import DesignId
+from imbue.system_interface.avatar.status import BACKGROUND_TASKS_SCRIPT
 
 # A body and closed-eye group on the 100 by 100 grid: the least a design that renders an expression needs.
 MINIMAL_DESIGN_SVG: Final[str] = (
@@ -49,3 +55,40 @@ def png_top_left_rgba(png: bytes) -> tuple[int, int, int, int]:
         offset += 12 + length
     red, green, blue, alpha = zlib.decompress(compressed)[1:5]
     return red, green, blue, alpha
+
+
+def _background_tasks_module() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("background_tasks_for_avatar_tests", BACKGROUND_TASKS_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_BACKGROUND_TASKS: Final[ModuleType] = _background_tasks_module()
+
+
+def write_background_task_marker(root: Path, chat_id: str, task_id: str, pid: int) -> None:
+    """A ``run_in_background`` marker for ``chat_id`` under ``root``, kept live by ``pid``, as the runner writes it."""
+    _BACKGROUND_TASKS.write_marker(
+        root,
+        chat_id,
+        _BACKGROUND_TASKS.BackgroundTask(
+            source=_BACKGROUND_TASKS.SOURCE_RUN_IN_BACKGROUND,
+            id=task_id,
+            description="Wait for the background agent",
+            started_at="2026-10-08T09:00:00+00:00",
+            pid=pid,
+        ),
+    )
+
+
+def remove_background_task_marker(root: Path, chat_id: str, task_id: str) -> None:
+    _BACKGROUND_TASKS.remove_marker(root, chat_id, _BACKGROUND_TASKS.SOURCE_RUN_IN_BACKGROUND, task_id)
+
+
+def exited_process_pid() -> int:
+    """The pid of a process that has already exited, which a marker naming it is stale by."""
+    process = subprocess.Popen([sys.executable, "-c", "pass"])
+    process.wait()
+    return process.pid

@@ -8,7 +8,7 @@ import string
 import subprocess
 import sys
 import urllib.error
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -23,6 +23,10 @@ _spec = importlib.util.spec_from_file_location("memory_candidates", _SCRIPT)
 assert _spec is not None and _spec.loader is not None
 memory_candidates = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(memory_candidates)
+_tasks_spec = importlib.util.spec_from_file_location("background_tasks", memory_candidates.BACKGROUND_TASKS_SCRIPT)
+assert _tasks_spec is not None and _tasks_spec.loader is not None
+background_tasks = importlib.util.module_from_spec(_tasks_spec)
+_tasks_spec.loader.exec_module(background_tasks)
 
 _NOW = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
 _BROWSER_URL = "http://browser.test"
@@ -155,7 +159,13 @@ def _desktops(*windows: Mapping[str, object]) -> dict[str, object]:
     return {"desktops": [{"id": "desktop-1", "windows": list(windows)}]}
 
 
-def _sources(proc_dir: Path, mngr: _FakeMngr, http: _FakeHttp) -> object:
+def _never_busy(chat_id: str) -> bool:
+    return False
+
+
+def _sources(
+    proc_dir: Path, mngr: _FakeMngr, http: _FakeHttp, is_chat_busy: Callable[[str], bool] = _never_busy
+) -> object:
     return memory_candidates.Sources(
         proc_dir=proc_dir,
         run_command=mngr,
@@ -163,6 +173,22 @@ def _sources(proc_dir: Path, mngr: _FakeMngr, http: _FakeHttp) -> object:
         browser_service_url=_BROWSER_URL,
         shell_url=_SHELL_URL,
         now=_NOW,
+        is_chat_busy=is_chat_busy,
+    )
+
+
+def _write_marker(root: Path, chat_id: str, pid: int) -> None:
+    """A ``run_in_background`` marker for ``chat_id``, written by the module that owns the format."""
+    background_tasks.write_marker(
+        root,
+        chat_id,
+        background_tasks.BackgroundTask(
+            source=background_tasks.SOURCE_RUN_IN_BACKGROUND,
+            id=f"task-{uuid4().hex[:8]}",
+            description="Wait for the background agent",
+            started_at="2026-09-24T10:00:00+00:00",
+            pid=pid,
+        ),
     )
 
 
@@ -240,8 +266,43 @@ def test_lists_only_idle_local_chats_and_workers_never_infrastructure_or_active_
     assert report.agents.candidates == ()
     assert report.browsers.candidates == ()
     table = memory_candidates.render_table(report)
-    assert "(waiting, no activity for 15m or more):\n  none" in table
+    assert "(waiting, not on a background task, no activity for 15m or more):\n  none" in table
     assert "Browsers no window shows (running):\n  none" in table
+
+
+def test_an_agent_whose_chat_waits_on_a_background_task_is_not_a_candidate(tmp_path: Path, runtime_dir: Path) -> None:
+    proc = tmp_path / "proc"
+    _write_meminfo(proc, {"MemTotal": 4 * 1024 * 1024, "MemAvailable": 100 * 1024})
+    old = _NOW - timedelta(hours=2)
+    lead = _agent_record("lead", "WAITING", {"user_created": "true"}, old, 10)
+    # A chat's successor carries the chat's id as a label; its markers are filed under that id, not its own.
+    successor = _agent_record("successor", "WAITING", {"user_created": "true", "chat_id": "agent-chat-1"}, old, 11)
+    worker = _agent_record("fix-login", "WAITING", {"agent_created": "true"}, old, 12)
+    finished = _agent_record("finished", "WAITING", {"agent_created": "true"}, old, 13)
+    for pid in (10, 11, 12, 13):
+        _fake_process(proc, pid, 100)
+    root = tmp_path / "background_tasks"
+    _write_marker(root, str(lead["id"]), os.getpid())
+    _write_marker(root, "agent-chat-1", os.getpid())
+    _write_marker(root, str(worker["id"]), os.getpid())
+    # A marker whose runner has exited is stale: that chat is no longer busy.
+    exited = subprocess.Popen([sys.executable, "-c", "pass"])
+    exited.wait()
+    _write_marker(root, str(finished["id"]), exited.pid)
+    is_chat_busy = memory_candidates.busy_chat_check(
+        memory_candidates.BACKGROUND_TASKS_SCRIPT, {background_tasks.MARKER_ROOT_ENV: str(root)}
+    )
+    mngr = _FakeMngr([lead, successor, worker, finished])
+
+    report = memory_candidates.collect_report(
+        _sources(proc, mngr, _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()}), is_chat_busy)
+    )
+
+    assert [a.name for a in report.agents.candidates] == ["finished"]
+
+
+def test_a_tree_without_the_background_task_reader_has_no_busy_chats(tmp_path: Path) -> None:
+    assert memory_candidates.busy_chat_check(tmp_path / "missing.py", {})("agent-1") is False
 
 
 def test_lists_running_browsers_no_window_shows_with_their_chromium_memory(tmp_path: Path, runtime_dir: Path) -> None:
@@ -291,7 +352,7 @@ def test_a_failed_mngr_list_reports_agents_as_unknown_and_still_lists_browsers(t
     assert len(report.agents.notes) == 1
     assert report.agents.notes[0].startswith("could not run `mngr list`: ")
     assert [b.name for b in report.browsers.candidates] == ["browser-1"]
-    assert "Idle chats and workers (waiting, no activity for 15m or more):\n  unknown\n  note: could not run" in (
+    assert "Idle chats and workers (waiting, not on a background task, no activity for 15m or more):\n  unknown\n  note: could not run" in (
         memory_candidates.render_table(report)
     )
 
@@ -433,20 +494,24 @@ def test_json_report_shape(tmp_path: Path, runtime_dir: Path) -> None:
 
 
 def test_the_script_runs_under_a_plain_python3_and_prints_json(tmp_path: Path) -> None:
-    """End to end through the real wiring: a fake ``mngr`` on PATH printing one rendered agent, and a browser
-    service nothing listens on."""
+    """End to end through the real wiring: a fake ``mngr`` on PATH printing two rendered agents, one of whose chats
+    waits on a background task, and a browser service nothing listens on."""
     bindir = tmp_path / "bin"
     bindir.mkdir()
-    record = _agent_record("chat-a", "WAITING", {"user_created": "true"}, datetime.now(timezone.utc) - timedelta(hours=3))
-    line = _render_like_mngr(memory_candidates.MNGR_LIST_ARGV[-1], record)
+    long_ago = datetime.now(timezone.utc) - timedelta(hours=3)
+    record = _agent_record("chat-a", "WAITING", {"user_created": "true"}, long_ago)
+    waiting_on_a_task = _agent_record("chat-b", "WAITING", {"user_created": "true"}, long_ago)
+    _write_marker(tmp_path / "background_tasks", str(waiting_on_a_task["id"]), os.getpid())
+    lines = "\n".join(_render_like_mngr(memory_candidates.MNGR_LIST_ARGV[-1], r) for r in (record, waiting_on_a_task))
     fake_mngr = bindir / "mngr"
-    fake_mngr.write_text(f"#!/bin/sh\ncat <<'EOF'\n{line}\nEOF\n")
+    fake_mngr.write_text(f"#!/bin/sh\ncat <<'EOF'\n{lines}\nEOF\n")
     fake_mngr.chmod(0o755)
     env = {
         **os.environ,
         "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
         "OOM_PRIORITY_RUNTIME_DIR": str(tmp_path / "runtime"),
         "MINDS_BROWSER_SERVICE_URL": "http://127.0.0.1:9",
+        background_tasks.MARKER_ROOT_ENV: str(tmp_path / "background_tasks"),
     }
 
     result = subprocess.run(
