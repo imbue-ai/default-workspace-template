@@ -154,8 +154,8 @@ class ChatOomPrioritizer:
         """Apply one page instance's presence report about one chat, re-tag every chat, and say what it changed.
 
         The report replaces that instance's standing one unless it is numbered at or
-        below it (self-healing: the page's heartbeat corrects any missed one). Non-chat ids are accepted and
-        ignored by ``reapply``, which only iterates the managed chats.
+        below it (self-healing: the page's heartbeat corrects any missed one). Non-chat
+        ids are accepted and ignored by ``reapply``, which only iterates the managed chats.
 
         Engagement is stamped on the *transition* into visibility, not for
         everything currently visible: a window left visible and untouched is not
