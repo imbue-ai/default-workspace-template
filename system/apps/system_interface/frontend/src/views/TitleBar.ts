@@ -52,7 +52,9 @@ function control(
 ): m.Vnode {
   // One box for every control in the bar, whatever size of glyph it holds: the hover boxes then
   // line up and read as one row of targets, and the pointer crosses between them without aiming.
-  const extra = `window-control shrink-0 min-h-(--desk-window-control-size) min-w-(--desk-window-control-size)${
+  // Above the window's resize handles, whose corners reach into the title bar: a press on a control is the control's,
+  // however close a theme sets it to the window's corner.
+  const extra = `window-control relative z-1 shrink-0 min-h-(--desk-window-control-size) min-w-(--desk-window-control-size)${
     options.extra === undefined ? "" : ` ${options.extra}`
   }`;
   return m(

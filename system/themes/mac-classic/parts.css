@@ -62,6 +62,15 @@ kbd {
 [data-part="window-control"] > * {
   display: none;
 }
+/* The boxes are drawn 11 pixels square, as System 7 drew them; the press reaches 3 pixels past each side. */
+[data-part="window-control"]:is([data-control="close"], [data-control="minimize"], [data-control="maximize"], [data-control="restore"]) {
+  position: relative;
+}
+[data-part="window-control"]:is([data-control="close"], [data-control="minimize"], [data-control="maximize"], [data-control="restore"])::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+}
 [data-part="window-control"]:active {
   background: #000000;
 }
