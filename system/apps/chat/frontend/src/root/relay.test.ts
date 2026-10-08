@@ -21,6 +21,7 @@ function deliver(data: unknown, source: unknown): void {
 
 afterEach(() => {
   Object.defineProperty(window, "parent", { value: window, configurable: true });
+  vi.restoreAllMocks();
 });
 
 describe("isForwardedToShell", () => {
@@ -132,6 +133,5 @@ describe("startInnerFrameRelay", () => {
     expect(parent.postMessage.mock.calls).toEqual([
       [{ type: "shell:open-link", url: "http://localhost:5173/other" }, "*"],
     ]);
-    opened.mockRestore();
   });
 });
