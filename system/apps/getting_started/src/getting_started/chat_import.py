@@ -4,7 +4,8 @@ card away.
 The skill's script (``.agents/skills/import-chats/scripts/import_chats.py``) records each source it imports in
 ``data/.skills/import-chats/status.json``; this module only reads that file. A source the file says is still
 importing, but whose sync process is gone or whose record has stopped being rewritten, was cut off (a restart, a
-shed), so it is answered as failed rather than as an import that never ends. Putting the card away is the app's own state, kept under its state directory.
+shed), so it is answered as failed rather than as an import that never ends. Putting the card away is the app's own
+state, kept under its state directory.
 """
 
 import os
