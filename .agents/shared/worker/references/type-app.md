@@ -70,7 +70,7 @@ in the commit.
 
 ## Working in isolation
 
-Beyond the live-instance rules in `web-frontend-testing.md`: do not run `layout.py
+Beyond the live-instance rules in `web-frontend-testing.md`: do not run `workspace-layout
 open` / `refresh` / `list` against the served tree.
 
 ## Critical apps

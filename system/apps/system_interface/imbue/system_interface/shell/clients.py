@@ -15,20 +15,21 @@ from app_manifest.primitives import AppName
 from loguru import logger
 from pydantic import Field
 from pydantic import ValidationError
+from workspace_layout.answers import ClientView
+from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import UserId
+from workspace_layout.primitives import WindowId
+from workspace_layout.records import ClientRecord
+from workspace_layout.records import EntryPresentation
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
-from imbue.system_interface.shell.data_types import ClientRecord
 from imbue.system_interface.shell.data_types import ClientReportOutcome
 from imbue.system_interface.shell.data_types import ClientStateReport
-from imbue.system_interface.shell.data_types import EntryPresentation
 from imbue.system_interface.shell.errors import ClientNotFoundError
-from imbue.system_interface.shell.primitives import ClientId
-from imbue.system_interface.shell.primitives import DesktopId
-from imbue.system_interface.shell.primitives import UserId
-from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.state_files import parse_versioned_document
 from imbue.system_interface.shell.state_files import read_json_object
@@ -79,17 +80,9 @@ def entries_wire_json(entries: Mapping[str, EntryPresentation]) -> dict[str, Any
 
 
 @pure
-def client_wire_json(record: ClientRecord, is_connected: bool) -> dict[str, Any]:
+def client_view(record: ClientRecord, is_connected: bool) -> ClientView:
     """The ``client`` object of desktop contracts.md section 5.5."""
-    return {
-        "id": str(record.id),
-        "active_desktop": str(record.active_desktop) if record.active_desktop is not None else None,
-        "last_seen": record.last_seen.isoformat(),
-        "is_connected": is_connected,
-        "user_id": str(record.user_id) if record.user_id is not None else None,
-        "entries": entries_wire_json(record.entries),
-        "shown_history": list(record.shown_history),
-    }
+    return ClientView.model_validate({**dict(record), "is_connected": is_connected})
 
 
 @pure

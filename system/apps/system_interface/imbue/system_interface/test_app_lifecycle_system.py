@@ -11,13 +11,13 @@ from pathlib import Path
 import pytest
 from flask import Flask
 from flask.testing import FlaskClient
+from workspace_layout.primitives import ClientId
 
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
-from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry

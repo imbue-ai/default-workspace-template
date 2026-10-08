@@ -30,6 +30,8 @@ dependencies = [
     # The fleet's own CDP client (cdp_client.py), the agent-facing CDP proxy
     # (cdp_proxy.py), and the standalone telemetry dashboard (telemetry_watch.py).
     "websockets>=13",
+    # The shell's layout client: the fleet opens a browser's window, the daemon reads the shell's windows.
+    "workspace-layout",
 ]
 
 # Entry point is "browser-service", not "browser" (historically because browser-use

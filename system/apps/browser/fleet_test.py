@@ -1,5 +1,6 @@
 import pytest
 from browser import fleet
+from workspace_layout.testing import LoopbackShell
 
 
 def test_daemon_url_prefers_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -135,35 +136,43 @@ def test_parser_rejects_the_removed_drive_verbs() -> None:
     assert close.func is fleet.cmd_close and close.name == "morgan-lee"
 
 
-def test_open_viewer_window_opens_the_browsers_page_as_a_window(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_open_viewer_window_opens_the_browsers_page_as_a_window(
+    loopback_shell: LoopbackShell, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # A user-started agent surfaces each browser as its own window, at the viewer page selected
     # by the browser's NAME; the shell picks the client from the chat that asked.
-    calls: list[tuple] = []
-    monkeypatch.setattr(fleet, "_layout", lambda *a, **k: calls.append(a) or True)
+    monkeypatch.setenv("MINDS_CHAT_ID", "agent-7")
     fleet._open_viewer_window("alex-smith", is_minimized=True)
-    assert calls == [("open", "browser", "--path", "/?session=alex-smith", "--minimized")]
+    assert loopback_shell.posted_ops() == [
+        ("open", {"app": "browser", "path": "/?session=alex-smith", "if_present": "focus", "minimized": True})
+    ]
+    assert loopback_shell.posted[0][1]["requester"] == {"app": "chat", "marker": "agent-7"}
 
 
-def test_open_viewer_window_warns_cleanly_when_it_cant_show_a_window(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_open_viewer_window_warns_cleanly_when_it_cant_show_a_window(
+    loopback_shell: LoopbackShell, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # The open never lands (no shell, no client to place it on): we attempt it, then offer the
-    # launcher in one clean line -- never crash, never leak layout.py's raw error (the browser
+    # launcher in one clean line -- never crash, never leak the shell's raw error (the browser
     # is still running).
     printed: list[str] = []
-    monkeypatch.setattr(fleet, "_layout", lambda *a, **k: False)
+    loopback_shell.close()
     monkeypatch.setattr(fleet, "_out", lambda msg: printed.append(msg))
     fleet._open_viewer_window("riley-jones", is_minimized=True)
     assert printed == ["browser riley-jones is ready. To watch it live, open it from the launcher (Browser -> riley-jones)."]
 
 
-def test_cmd_new_opens_the_viewer_window_by_name_minimized(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cmd_new_opens_the_viewer_window_by_name_minimized(
+    loopback_shell: LoopbackShell, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # "Open a new browser" opens its viewer window (by the returned name) right away rather than
     # waiting for the first command, but minimized, so it does not land over the user's work.
-    calls: list[tuple] = []
     monkeypatch.setattr(fleet, "_request", lambda *a, **k: (200, {"name": "alex-smith"}))
-    monkeypatch.setattr(fleet, "_layout", lambda *a, **k: calls.append(a) or True)
     args = fleet._build_parser().parse_args(["new"])
     assert fleet.cmd_new(args) == fleet._EXIT_OK
-    assert calls == [("open", "browser", "--path", "/?session=alex-smith", "--minimized")]
+    assert [(op, arguments["path"], arguments["minimized"]) for op, arguments in loopback_shell.posted_ops()] == [
+        ("open", "/?session=alex-smith", True)
+    ]
 
 
 def test_cmd_new_sends_chosen_name_and_maps_errors(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -197,16 +206,18 @@ def test_parser_accepts_handoff_and_request_human_alias() -> None:
     assert b.func is fleet.cmd_handoff and b.name == "alex-smith" and b.reason == "human verification needed"
 
 
-def test_cmd_handoff_shows_the_viewer_window_and_returns_preempted(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cmd_handoff_shows_the_viewer_window_and_returns_preempted(
+    loopback_shell: LoopbackShell, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # A successful handoff opens the viewer window NOT minimized, which also restores and raises a
     # window the browser already has, so the human sees what to solve; it exits PREEMPTED so the
     # agent stops and waits to be woken to resume.
-    calls: list[tuple] = []
     monkeypatch.setattr(fleet, "_request", lambda *a, **k: (200, {"ok": True, "status": "handed_off"}))
-    monkeypatch.setattr(fleet, "_layout", lambda *a, **k: calls.append(a) or True)
     args = fleet._build_parser().parse_args(["handoff", "alex-smith", "solve the captcha"])
     assert fleet.cmd_handoff(args) == fleet._EXIT_PREEMPTED
-    assert calls == [("open", "browser", "--path", "/?session=alex-smith")]
+    assert [(op, arguments["path"], arguments["minimized"]) for op, arguments in loopback_shell.posted_ops()] == [
+        ("open", "/?session=alex-smith", False)
+    ]
 
 
 def test_cmd_handoff_not_owner_still_tells_agent_to_stop(monkeypatch: pytest.MonkeyPatch) -> None:

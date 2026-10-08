@@ -57,7 +57,7 @@ The models behind a workspace app's two descriptions:
   validation is logged and skipped; an unreadable file raises
   `RegistryReadError`), and `registry_path()` (honours `MINDS_APPS_FILE`,
   default `data/.state/apps.toml` relative to the cwd, exactly like
-  `forward_port.py` and `layout.py`). `register_app(manifest_path, app_url)` is
+  `forward_port.py` and `workspace-layout`). `register_app(manifest_path, app_url)` is
   the startup registration every app's entry point calls: it runs
   `system/scripts/forward_port.py --manifest <path> --url <url>` under the
   current interpreter from the repo root, which upserts the app's row from its

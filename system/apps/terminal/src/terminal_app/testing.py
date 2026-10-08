@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-from app_manifest.registry import ENV_APPS_FILE
+from app_manifest.registry_location import ENV_APPS_FILE
 from flask import Flask
 from flask.testing import FlaskClient
 from imbue.imbue_common.frozen_model import FrozenModel

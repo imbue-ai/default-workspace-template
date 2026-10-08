@@ -704,6 +704,42 @@ def test_a_minimized_chat_preserves_its_scroll_window(tmp_path: Path, page: Page
         )
 
 
+# watching
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_chat_page_watches_its_chat_only_while_shown_and_focused(e2e_server: RunningWorkspace, page: Page) -> None:
+    """The watchers route lists the chat's page while its window shows it and its document has focus, and drops it
+    when the focus moves to the chat list beside it or the window is minimized."""
+    _open_fixture_chat(page, e2e_server)
+    watchers_url = f"{e2e_server.chat_url}/api/chats/{FIXTURE_AGENT_ID}/watchers"
+
+    def wait_for_watcher_count(count: int, described: str) -> None:
+        wait_for(
+            lambda: len(_get_json(watchers_url)["watched_by"]) == count,
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message=f"the watchers route never showed {described}",
+        )
+
+    composer = _chat(page).locator(".message-input-textbox")
+    composer.click()
+    wait_for_watcher_count(1, "the focused chat page watching")
+
+    # A press on the chat list takes the focus into the root's own document, out of the chat page.
+    _chat_root(page).locator(f'.chat-rail-row[data-chat-id="{FIXTURE_AGENT_ID}"]').click()
+    wait_for_watcher_count(0, "the blurred chat page stop watching")
+
+    composer.click()
+    wait_for_watcher_count(1, "the refocused chat page watching again")
+
+    # A click on the focused window's taskbar entry minimizes it: the page is hidden in place.
+    entry = _taskbar_entry(page, _the_chat_window(e2e_server)["id"])
+    entry.click()
+    expect(entry).to_have_attribute("data-minimized", "true")
+    wait_for_watcher_count(0, "the hidden chat page stop watching")
+
+
 # desktops
 
 

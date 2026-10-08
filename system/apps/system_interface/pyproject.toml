@@ -23,6 +23,7 @@ dependencies = [
     "werkzeug>=3.0",
     # Serves the workspace's themes from this app's own origin (docs/system/blueprint/workspace-themes/).
     "workspace-themes",
+    "workspace-layout",
 ]
 license = {text = "FCL-1.0-MIT"}
 license-files = [

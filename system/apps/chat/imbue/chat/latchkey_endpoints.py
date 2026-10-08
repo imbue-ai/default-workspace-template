@@ -31,22 +31,12 @@ from flask import Flask
 from flask import Response
 from loguru import logger as _loguru_logger
 
+from imbue.chat.latchkey_gateway import GatewayAccess
 from imbue.chat.models import LatchkeyPermissionInfo
 from imbue.chat.models import LatchkeyScopeInfo
 from imbue.chat.state import get_state
 
 logger = _loguru_logger
-
-# Injected into every agent container by the latchkey agent setup in mngr. These
-# names (and the header names below) are a stable agent<->gateway contract; we
-# read them rather than bundle any gateway state of our own.
-_ENV_GATEWAY = "LATCHKEY_GATEWAY"
-_ENV_GATEWAY_PASSWORD = "LATCHKEY_GATEWAY_PASSWORD"
-# Only present on desktop-hosted gateways, where requests without this JWT are
-# evaluated against a deny-all default; VPS gateways omit it.
-_ENV_GATEWAY_PERMISSIONS_OVERRIDE = "LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"
-_HEADER_PASSWORD = "X-Latchkey-Gateway-Password"
-_HEADER_PERMISSIONS_OVERRIDE = "X-Latchkey-Gateway-Permissions-Override"
 
 # Per-service catalog responses are cached (on the app's ``ChatAppState``)
 # keyed by service name; ``None`` records a 404 so a non-service scope-prefix
@@ -76,8 +66,7 @@ def candidate_services(scope: str) -> list[str]:
 
 def _get_service_catalog(
     client: httpx.Client,
-    base_url: str,
-    headers: dict[str, str],
+    gateway: GatewayAccess,
     service: str,
     cache: CatalogCache,
 ) -> ServiceCatalog | None:
@@ -92,8 +81,7 @@ def _get_service_catalog(
     """
     if service in cache:
         return cache[service]
-    url = f"{base_url.rstrip('/')}/permissions/available/{service}"
-    response = client.get(url, headers=headers)
+    response = client.get(gateway.url(f"/permissions/available/{service}"), headers=gateway.headers())
     if response.status_code == 404:
         cache[service] = None
         return None
@@ -133,9 +121,7 @@ def _to_scope_info(scope: str, entry: dict[str, Any]) -> LatchkeyScopeInfo | Non
 
 def resolve_scope_info(
     client: httpx.Client,
-    base_url: str,
-    password: str,
-    permissions_override: str | None,
+    gateway: GatewayAccess,
     scope: str,
     cache: CatalogCache,
 ) -> LatchkeyScopeInfo | None:
@@ -145,11 +131,8 @@ def resolve_scope_info(
     the entry from the first service whose catalog contains the scope. Propagates
     ``httpx.HTTPError`` from the gateway calls.
     """
-    headers = {_HEADER_PASSWORD: password}
-    if permissions_override:
-        headers[_HEADER_PERMISSIONS_OVERRIDE] = permissions_override
     for service in candidate_services(scope):
-        entries = _get_service_catalog(client, base_url, headers, service, cache)
+        entries = _get_service_catalog(client, gateway, service, cache)
         if entries is None:
             continue
         for entry in entries:
@@ -165,10 +148,8 @@ def get_scope_info(scope: str) -> Response:
     container); 502 when the gateway can't be reached or errors; 404 when the
     scope isn't in the gateway catalog.
     """
-    base_url = os.environ.get(_ENV_GATEWAY)
-    password = os.environ.get(_ENV_GATEWAY_PASSWORD)
-    permissions_override = os.environ.get(_ENV_GATEWAY_PERMISSIONS_OVERRIDE)
-    if not base_url or not password:
+    gateway = GatewayAccess.from_environ(os.environ)
+    if gateway is None:
         return _json_response({"detail": "latchkey gateway is not configured"}, status_code=503)
     state = get_state()
     client: httpx.Client = state.latchkey_http_client
@@ -177,7 +158,7 @@ def get_scope_info(scope: str) -> Response:
         # Serialize concurrent resolves so two request threads don't both fetch
         # the same uncached service catalog.
         with state.latchkey_lock:
-            info = resolve_scope_info(client, base_url, password, permissions_override, scope, cache)
+            info = resolve_scope_info(client, gateway, scope, cache)
     except httpx.HTTPError as error:
         logger.warning("latchkey gateway request for scope {!r} failed: {}", scope, error)
         return _json_response({"detail": "latchkey gateway request failed"}, status_code=502)

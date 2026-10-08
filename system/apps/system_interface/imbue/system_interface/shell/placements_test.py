@@ -3,12 +3,12 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import WindowId
 
 from imbue.system_interface.shell.desktop_document import with_window_placed_on_open
 from imbue.system_interface.shell.errors import StalePlacementsSaveError
 from imbue.system_interface.shell.placements import PlacementStore
-from imbue.system_interface.shell.primitives import ClientId
-from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import placement_record
 

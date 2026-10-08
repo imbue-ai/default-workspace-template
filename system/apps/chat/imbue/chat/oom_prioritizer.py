@@ -8,10 +8,10 @@ the worker a live chat just spawned.
 
 Signals, and where each comes from:
 
-- **open** / **visible** -- the chat page's presence in each client, reported by
+- **open** / **visible** -- the chat page's presence in each page instance, reported by
   the page itself through the chat app's presence route and aggregated by the
-  ``PresenceTracker`` (open while any client's report is unexpired, visible
-  while any client's last report says so),
+  ``PresenceTracker`` (open while any instance's report is unexpired, visible
+  while any instance's last report says so),
 - **messaged** -- a message sent through the chat app's send route; drives a
   recency ranking across all chats, newest-first,
 - **running** -- the chat's mngr lifecycle state, pushed in from the observe
@@ -56,8 +56,9 @@ from typing import Final
 
 from oom_priority import bands
 
-from imbue.chat.presence import PresenceState
+from imbue.chat.presence import PresenceReport
 from imbue.chat.presence import PresenceTracker
+from imbue.chat.presence import PresenceTransition
 from imbue.chat.primitives import ChatId
 
 # How often the sweep re-evaluates staleness. The ramp is measured in hours, so
@@ -80,7 +81,7 @@ class ChatOomPrioritizer:
     engagement clock so a revived chat is never treated as stale. ``clock``
     supplies wall-clock epoch seconds -- absolute, not monotonic, because idle
     time is compared against filesystem mtimes and seeded log timestamps.
-    ``presence`` holds the per-client presence reports the open and visible
+    ``presence`` holds the per-instance presence reports the open and visible
     signals are read from; one on the same clock is built when none is given.
     """
 
@@ -149,10 +150,10 @@ class ChatOomPrioritizer:
             for chat_id, messaged_at in last_message_at_by_chat_id.items():
                 self._stamp_message_locked(chat_id, messaged_at)
 
-    def record_presence(self, chat_id: ChatId, client_id: str, state: PresenceState) -> None:
-        """Apply one client's presence report about one chat, then re-tag every chat.
+    def record_presence(self, chat_id: ChatId, report: PresenceReport) -> PresenceTransition:
+        """Apply one page instance's presence report about one chat, re-tag every chat, and say what it changed.
 
-        The report replaces that client's standing one (idempotent and self-healing:
+        The report replaces that instance's standing one (idempotent and self-healing:
         the page's heartbeat corrects any missed one). Non-chat ids are accepted and
         ignored by ``reapply``, which only iterates the managed chats.
 
@@ -161,13 +162,13 @@ class ChatOomPrioritizer:
         continuing engagement, and re-stamping it every heartbeat would make it
         permanently fresh.
         """
-        was_visible = self._presence.is_visible(chat_id)
-        self._presence.record(chat_id, client_id, state)
-        if not was_visible and self._presence.is_visible(chat_id):
+        transition = self._presence.record(chat_id, report)
+        if transition.is_newly_visible:
             now = self._clock()
             with self._lock:
                 self._stamp_engagement_locked(chat_id, now)
         self.reapply()
+        return transition
 
     def record_message(self, chat_id: ChatId) -> None:
         """Stamp a chat as just-messaged so it ranks newest, then re-tag every chat."""
