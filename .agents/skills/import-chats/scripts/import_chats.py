@@ -544,7 +544,8 @@ def install_datalib(
             scratch_path = Path(scratch)
             archive = scratch_path / tarball
             _download(f"{_RELEASE_URL}/{DATALIB_VERSION}/{tarball}", archive)
-            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            with archive.open("rb") as downloaded:
+                digest = hashlib.file_digest(downloaded, "sha256").hexdigest()
             if digest != _TARBALL_SHA256_BY_ARCH[arch]:
                 raise ImportChatsError(
                     f"{tarball} has sha256 {digest}, not the pinned {_TARBALL_SHA256_BY_ARCH[arch]}"
