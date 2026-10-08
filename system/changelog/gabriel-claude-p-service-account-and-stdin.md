@@ -1,0 +1,1 @@
+The `test_workspace_claude_config.py` docstring no longer lists `claude_p.py` among the callers that land on the shared `~/.claude`: with `CLAUDE_CONFIG_DIR` unset, `claude_p.py` reads the workspace's default account and runs its child `claude -p` there.
