@@ -1806,9 +1806,22 @@ describe("pulled-out windows", () => {
 
   it("raises a link's app window in its own window when it is popped out, rather than pulling it back", async () => {
     api.apps = [appRecord("docs", { url: "http://127.0.0.1:8095" }), appRecord("notes")];
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [
+          windowRecord("win-1", "docs", "/a"),
+          windowRecord("win-2", "notes", "/b"),
+          windowRecord("win-3", "notes", "/c"),
+        ],
+      }),
+    ];
     api.writeLayout("home", CLIENT, {
       updated_at: null,
-      placements: [placementRecord("win-1", { is_detached: true }), placementRecord("win-2", { is_detached: true })],
+      placements: [
+        placementRecord("win-1", { is_detached: true }),
+        placementRecord("win-2", { is_detached: true }),
+        placementRecord("win-3", { is_detached: true }),
+      ],
     });
     // The link is clicked in another pop-out, so the main window may be closed.
     const { store, calls } = makePopOutStore("win-2");
@@ -1818,6 +1831,15 @@ describe("pulled-out windows", () => {
     expect(calls).toEqual([["request", expect.objectContaining({ windowId: "win-1", title: "Docs" })]]);
     expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
     expect(storedPlacement("win-1")).toMatchObject({ is_detached: true });
+
+    // A new-window click on a link to the page's own app (its shell:open) raises that page's pop-out the same way.
+    await store.openPathFromWindow("win-2", "/c", "focus");
+    expect(calls).toEqual([
+      ["request", expect.objectContaining({ windowId: "win-1" })],
+      ["request", expect.objectContaining({ windowId: "win-3" })],
+    ]);
+    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
+    expect(storedPlacement("win-3")).toMatchObject({ is_detached: true });
 
     // A page of the app no window is at still opens as a window.
     await store.openLink("http://localhost:8095/other", "system-interface.localhost", "notes");

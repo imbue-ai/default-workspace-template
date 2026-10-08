@@ -1048,7 +1048,7 @@ export class DesktopStore {
       case "local-url": {
         const backendWindow = windowAtBackendUrl(openableApps(this.state), target.url);
         if (backendWindow !== null) {
-          await this.openLinkedWindow(backendWindow.app.name, backendWindow.path);
+          await this.focusOrOpenWindowAt(backendWindow.app.name, backendWindow.path);
           return;
         }
         await this.deliverMessage({ type: OPEN_URL_MESSAGE, url: target.url }, senderApp ?? EMBEDDER_SENDER);
@@ -1060,7 +1060,7 @@ export class DesktopStore {
           this.toast(`Nothing in this workspace is at ${target.url}`);
           return;
         }
-        await this.openLinkedWindow(app.name, target.path);
+        await this.focusOrOpenWindowAt(app.name, target.path);
         return;
       }
       case "other-workspace":
@@ -1075,10 +1075,10 @@ export class DesktopStore {
     }
   }
 
-  /** Open a link's app window at ``path``, raising one already there. A window there that this client has popped out
+  /** Open a window of ``app`` at ``path``, raising one already there. A window there that this client has popped out
    *  is raised in its own window, as an agent's ``open`` raises it, rather than pulled back onto the desktop: the
    *  windows route's raise would bring it back, and its own window would close. */
-  private async openLinkedWindow(app: string, path: string): Promise<void> {
+  private async focusOrOpenWindowAt(app: string, path: string): Promise<void> {
     const desktopId = this.openingDesktopId();
     const found = this.isPhoneLayout()
       ? undefined
@@ -1582,7 +1582,8 @@ export class DesktopStore {
     if (!this.isPhoneLayout() && found.desktop.id !== this.state.activeDesktopId) {
       await this.switchDesktop(found.desktop.id);
     }
-    await this.openWindowAt(found.window.app, path, ifPresent);
+    if (ifPresent === "focus") await this.focusOrOpenWindowAt(found.window.app, path);
+    else await this.openWindowAt(found.window.app, path, ifPresent);
   }
 
   async closeWindow(windowId: string): Promise<void> {
