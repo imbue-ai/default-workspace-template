@@ -22,7 +22,7 @@ import { fetchAccountModelOptions } from "../models/AccountModelOptions";
 import { getChatById } from "../models/Chats";
 import type { ChatSnapshot, TransitionKind } from "../models/Chats";
 import { switchChat } from "../models/Handoffs";
-import { getHarnessCatalog } from "../models/HarnessCatalog";
+import { effortInEffect, getHarnessCatalog, startingEffort } from "../models/HarnessCatalog";
 import type { CatalogModelOption } from "../models/HarnessCatalog";
 import type { ModelIdentity } from "../models/ModelSettings";
 import {
@@ -190,7 +190,11 @@ function currentModelIdentity(chat: ChatSnapshot | undefined): ModelIdentity | n
   if (chat === undefined || getHarnessCatalog(chat.active_agent.harness)?.switch_mode === "read_only") return null;
   const choice = chat.active_agent.model_choice;
   if (choice === null || choice.matched === null) return null;
-  return { model_id: choice.matched.id, effort: choice.identity.effort, fast: choice.identity.fast };
+  return {
+    model_id: choice.matched.id,
+    effort: effortInEffect(choice.identity.effort, choice.matched),
+    fast: choice.identity.fast,
+  };
 }
 
 /** The chosen option, or null for the default. */
@@ -209,12 +213,6 @@ function pickOf(dialog: OpenDialog): PendingPick | null {
     fast: option.supports_fast ? dialog.fast : false,
   };
   return { identity, label: modelPickLabel(option.label, identity.effort, identity.fast), option };
-}
-
-/** The effort to start from when a model is chosen: the first shown, else the first declared. */
-function firstEffort(option: CatalogModelOption): string | null {
-  const shown = option.efforts.filter((effort) => effort.in_picker);
-  return (shown[0] ?? option.efforts[0])?.level ?? null;
 }
 
 function renderPicker(dialog: OpenDialog): m.Children {
@@ -262,7 +260,7 @@ function renderPicker(dialog: OpenDialog): m.Children {
         onchange: (event: Event) => {
           dialog.modelId = (event.target as HTMLSelectElement).value;
           const chosen = chosenOption(dialog);
-          dialog.effort = chosen === null ? null : firstEffort(chosen);
+          dialog.effort = chosen === null ? null : startingEffort(chosen);
           dialog.fast = false;
         },
       },

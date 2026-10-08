@@ -1,7 +1,7 @@
 ---
 name: find-transcripts
 description: "Find, read, or search through any chat message, transcript, or conversation content from this host -- whether from an active agent, a past session, a deleted agent, a sub-agent, or a worker. Use this skill any time a user asks about chat histories or you otherwise want to access them. NOTE: this skill only covers Imbue Studio agents -- not other services (ChatGPT, claude.ai, etc.)."
-compatibility: Covers agents that ran on this host (active, stopped, or destroyed). Uses find/cat/jq/mngr.
+compatibility: Covers agents that ran on this host (active, stopped, or destroyed). Uses find/jq/mngr.
 metadata:
   author: imbue
 ---
@@ -18,11 +18,11 @@ An agent's conversation is stored under its state dir as
 whether the agent still exists:
 
 - **Still present** (running, or **STOPPED** but not destroyed):
-  `/home/user/.mngr/agents/<agent_id>/events/*/common_transcript/events.jsonl`.
+  `/home/user/.mngr/agents/<agent_id>/events/<source>/common_transcript/events.jsonl`.
   A finished `launch-task` worker is usually left STOPPED here -- it is **not**
   in `/home/user/.mngr/preserved/` until it is actually destroyed.
 - **Destroyed:**
-  `/home/user/.mngr/preserved/<agent_name>--<agent_id>/events/*/common_transcript/events.jsonl`.
+  `/home/user/.mngr/preserved/<agent_name>--<agent_id>/events/<source>/common_transcript/events.jsonl`.
 
 (Use `$MNGR_HOST_DIR` in place of `/home/user/.mngr` if this host's mngr root is elsewhere.)
 **Always check both** -- a past agent could be in either.
@@ -74,36 +74,55 @@ the mtime -- roughly when it was destroyed: `ls -lt /home/user/.mngr/preserved`)
 ## 2. Find every transcript on this host (present OR destroyed)
 
 ```bash
-find /home/user/.mngr/agents /home/user/.mngr/preserved -path '*/common_transcript/events.jsonl' 2>/dev/null
+find /home/user/.mngr/agents /home/user/.mngr/preserved -path '*/events/*/common_transcript/events.jsonl' -not -path '*/events/logs/*' 2>/dev/null
 ```
+
+(`events/logs/common_transcript/` is the transcript converter's own log, not a
+conversation, so it is excluded.)
 
 ## 3. Read one
 
-For a still-present agent, the easiest is the rendered view:
-
 ```bash
-mngr transcript <agent-name-or-id>          # works for running/stopped agents; NOT for destroyed ones
+mngr transcript <agent-name-or-id>                    # still-present agent (running or stopped)
+mngr transcript <agent-name-or-id> --preserved-only   # destroyed agent, read from /home/user/.mngr/preserved
 ```
 
-For any agent (present or destroyed), read the file directly (pick a path from
-step 2):
+The rendered view cuts long tool inputs, tool outputs, and thinking short; add
+`--full` to see them whole. `--role user --role agent` hides tool output,
+`--tail N` shows the last N events, and `--format jsonl` prints the raw records.
 
-```bash
-cat "/home/user/.mngr/agents/<agent_id>/events/claude/common_transcript/events.jsonl"
-# or, if destroyed:
-cat "/home/user/.mngr/preserved/<agent_name>--<agent_id>/events/claude/common_transcript/events.jsonl"
-```
+An agent from before the transcript format change has an old-format file, which
+`mngr transcript` refuses with an error naming the "retired pre-ATIF format".
+Read those with step 4.
 
-## 4. Render a raw file readably
+## 4. Render or search a raw file
+
+This handles both the current format (`step` / `observation` records) and the
+old one (`user_message` / `assistant_message` / `tool_result`):
 
 ```bash
 F="<path from step 2>"
 jq -r '
-  if .type=="user_message" then "USER: \(.content)"
-  elif .type=="assistant_message" then "ASSISTANT: \([.parts[]?|select(.type=="text").content]|join(" "))"
-  elif .type=="tool_result" then "TOOL(\(.tool_name)): \(.output[0:300])"
-  else .type end' "$F"
+  def text: if type == "string" then . else [.[]? | select(.type == "text").text] | join(" ") end;
+  if .type == "step" then
+    "\(.source | ascii_upcase): \(.message)"
+    + ([.tool_calls[]? | "\n  -> \(.function_name)(\(.arguments | tojson | .[0:300]))"] | join(""))
+    + ([.observation.results[]? | "\n  \(.content | text)"] | join(""))
+  elif .type == "observation" then
+    [.results[] | "TOOL(\(.extra.tool_name // "?")): \(.content | text | .[0:300])"] | join("\n")
+  elif .type == "user_message" then "USER: \(.content)"
+  elif .type == "assistant_message" then
+    "AGENT: \(.text)"
+    + ([.tool_calls[]? | "\n  -> \(.tool_name)(\(.input_preview))"] | join(""))
+  elif .type == "tool_result" then "TOOL(\(.tool_name)): \(.output[0:300])"
+  else empty end' "$F"
 ```
+
+Drop the `[0:300]` slices to see tool inputs and outputs whole. An old-format
+file stored only the first 200 characters of each tool input (`input_preview`)
+and the first 2,000 of each tool output; for a claude agent the complete record
+is the raw transcript `logs/claude_transcript/events.jsonl` in the same agent
+directory (kept for destroyed agents too).
 
 ## Notes
 
@@ -111,5 +130,3 @@ jq -r '
   the named agents.
 - A transcript only exists if that agent actually produced one; a brand-new agent
   with no turns won't have one.
-- `mngr transcript` does NOT work for destroyed agents (they're no longer in
-  mngr's live index); read the file directly instead.

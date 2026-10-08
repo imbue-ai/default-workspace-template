@@ -33,7 +33,7 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getChatById, getProvisionalChat } from "../models/Chats";
 import type { ChatSnapshot } from "../models/Chats";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
-import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
+import { effortInEffect, ensureHarnessCatalogs, getHarnessCatalog, startingEffort } from "../models/HarnessCatalog";
 import type { ChatFastModeState } from "../models/FastMode";
 import {
   FAST_MODES,
@@ -93,18 +93,13 @@ import { FIELD_PART, MENU_ITEM_PART, MENU_SEPARATOR_PART } from "@imbue/workspac
  *  scriptable form, so the menu cannot drive it -- and says where the user can. */
 const READ_ONLY_TOOLTIP = "To change the model or effort, run /model or /effort in the agent terminal.";
 
-/** The effort to carry when switching to `option`: keep the current one if the new
- *  model declares it, else the model's first shown (or first declared) effort. Null
- *  when the model has no effort axis. */
+/** The effort to carry when switching to `option`: keep the current one if the new model declares
+ *  it, else the effort the model starts at. */
 function clampEffort(option: CatalogModelOption, currentEffort: string | null): string | null {
-  if (option.efforts.length === 0) {
-    return null;
-  }
   if (currentEffort !== null && option.efforts.some((effort) => effort.level === currentEffort)) {
     return currentEffort;
   }
-  const shown = option.efforts.filter((effort) => effort.in_picker);
-  return (shown[0] ?? option.efforts[0]).level;
+  return startingEffort(option);
 }
 
 /** The model a switch in progress is taking the chat to, as the chip reads it; null when the chat
@@ -807,7 +802,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
                     onclick: () => {
                       const next: ModelIdentity = {
                         model_id: option.id,
-                        effort: clampEffort(option, currentIdentity.effort),
+                        effort: clampEffort(option, effortInEffect(currentIdentity.effort, matched)),
                         fast: option.supports_fast ? currentIdentity.fast : false,
                       };
                       setModelChoice(chatId, next, option, changedAxes(currentIdentity, next), optimistic);
@@ -885,7 +880,10 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       const readOnly = catalog === null || catalog.switch_mode === "read_only";
       const interactive = !readOnly && matched !== null;
       const optimistic = catalog?.switch_mode === "eager_then_reconcile";
-      const currentEffort = choice?.identity.effort ?? null;
+      // What the agent recorded, which a switch diffs against; null while it runs at the default.
+      const recordedEffort = choice?.identity.effort ?? null;
+      // What every effort display shows.
+      const currentEffort = effortInEffect(recordedEffort, matched);
       const currentFast = choice?.identity.fast ?? false;
       const shownEfforts = (matched?.efforts ?? []).filter((effort) => effort.in_picker);
       const readOnlyTooltip = interactive ? null : READ_ONLY_TOOLTIP;
@@ -963,8 +961,8 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
 
       const currentIdentity: ModelIdentity =
         matched === null
-          ? { model_id: "", effort: currentEffort, fast: currentFast }
-          : { model_id: matched.id, effort: currentEffort, fast: currentFast };
+          ? { model_id: "", effort: recordedEffort, fast: currentFast }
+          : { model_id: matched.id, effort: recordedEffort, fast: currentFast };
       const sourceOptions: CatalogModelOption[] = dynamic ? (dynamicOptions ?? []) : (catalog?.options ?? []);
 
       const rows: MenuRow[] = [];

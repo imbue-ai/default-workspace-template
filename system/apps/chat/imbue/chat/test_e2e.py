@@ -1232,7 +1232,7 @@ def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Pag
         dialog.locator("select.switch-dialog-effort").select_option("high")
         dialog.get_by_role("button", name="Switch this chat").click()
         expect(chat.locator(".message-input-switch-strip")).to_contain_text(
-            "Your next message switches this chat to Anthropic 2 (Claude Code), Haiku 4.5 · High"
+            "Your next message switches this chat to Anthropic 2 (Claude Code), Haiku 5.5 · High"
         )
 
         chat.locator(".message-input-textbox").fill("Carry on on the other account")

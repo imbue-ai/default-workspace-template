@@ -58,6 +58,13 @@ SHELL_THEME_SCRIPT_PATH: Final[Path] = Path(
 SHELL_THEME_STYLESHEET_PATH: Final[Path] = Path(
     "system/apps/system_interface/imbue/system_interface/static/_static/workspace_theme.css"
 )
+# Every file the shell builds that an app's pages load.
+SHELL_MODULE_PATHS: Final[tuple[Path, ...]] = (
+    SHELL_APP_CONTRACT_PATH,
+    SHELL_CONTEXT_MENU_PATH,
+    SHELL_THEME_SCRIPT_PATH,
+    SHELL_THEME_STYLESHEET_PATH,
+)
 
 # The registration script, relative to the repo root every supervised program runs from.
 FORWARD_PORT_SCRIPT: Final[Path] = Path("system/scripts/forward_port.py")
