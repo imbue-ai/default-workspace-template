@@ -10,8 +10,8 @@ Signals, and where each comes from:
 
 - **open** / **visible** -- the chat page's presence in each page instance, reported by
   the page itself through the chat app's presence route and aggregated by the
-  ``PresenceTracker`` (open while any instance's report is unexpired, visible
-  while any instance's last report says so),
+  ``PresenceTracker`` (open while any instance has an unexpired visible or hidden
+  report, visible while any instance's last report says so),
 - **messaged** -- a message sent through the chat app's send route; drives a
   recency ranking across all chats, newest-first,
 - **running** -- the chat's mngr lifecycle state, pushed in from the observe
@@ -153,9 +153,9 @@ class ChatOomPrioritizer:
     def record_presence(self, chat_id: ChatId, report: PresenceReport) -> PresenceTransition:
         """Apply one page instance's presence report about one chat, re-tag every chat, and say what it changed.
 
-        The report replaces that instance's standing one (idempotent and self-healing:
-        the page's heartbeat corrects any missed one). Non-chat ids are accepted and
-        ignored by ``reapply``, which only iterates the managed chats.
+        The report replaces that instance's standing one unless it is numbered at or
+        below it (self-healing: the page's heartbeat corrects any missed one). Non-chat
+        ids are accepted and ignored by ``reapply``, which only iterates the managed chats.
 
         Engagement is stamped on the *transition* into visibility, not for
         everything currently visible: a window left visible and untouched is not
