@@ -13,19 +13,27 @@ from flask import jsonify
 from flask import request
 from flask.typing import ResponseReturnValue
 from loguru import logger
+from workspace_layout.answers import ClientsListing
+from workspace_layout.errors import InvalidLayoutValueError
+from workspace_layout.ops import ClientActivityReport
+from workspace_layout.ops import parse_op_body
+from workspace_layout.primitives import ClientActivityKind
+from workspace_layout.primitives import ClientId
+from workspace_layout.records import EntryPresentation
+from workspace_layout.shell_url import CLIENTS_ROUTE
+from workspace_layout.shell_url import CLIENT_ACTIVITY_ROUTE
+from workspace_layout.shell_url import INVENTORY_ROUTE
+from workspace_layout.shell_url import LAYOUT_OP_ROUTE
 
 from imbue.system_interface.app_context import get_state
-from imbue.system_interface.shell.client_activity import summarize_client_activity
-from imbue.system_interface.shell.clients import client_wire_json
+from imbue.system_interface.shell.clients import client_view
 from imbue.system_interface.shell.data_types import AppInventoryEntry
-from imbue.system_interface.shell.data_types import ClientActivityReport
 from imbue.system_interface.shell.data_types import ClientShownRequest
-from imbue.system_interface.shell.data_types import EntryPresentation
 from imbue.system_interface.shell.data_types import stoppable_program_of
 from imbue.system_interface.shell.desktop_routes import dispatch_desktop_op
-from imbue.system_interface.shell.desktop_routes import inventory_document_json
+from imbue.system_interface.shell.desktop_routes import inventory_document
 from imbue.system_interface.shell.desktop_routes import register_desktop_routes
-from imbue.system_interface.shell.desktop_routes import resolved_client_wire_json
+from imbue.system_interface.shell.desktop_routes import resolved_client_view
 from imbue.system_interface.shell.embedder_messages import EmbedderMessageRelayRequest
 from imbue.system_interface.shell.embedder_messages import deliver_forwarded_message
 from imbue.system_interface.shell.embedder_messages import forwarded_messages
@@ -51,14 +59,8 @@ from imbue.system_interface.shell.errors import UpdateNoticeCommandError
 from imbue.system_interface.shell.errors import UpdateNoticeRefusedError
 from imbue.system_interface.shell.errors import WallpaperNotFoundError
 from imbue.system_interface.shell.errors import WindowNotFoundError
-from imbue.system_interface.shell.layout_ops import CONTEXT_OP
-from imbue.system_interface.shell.layout_ops import OpRequester
-from imbue.system_interface.shell.layout_ops import is_known_op
-from imbue.system_interface.shell.layout_ops import parse_op_requester
 from imbue.system_interface.shell.port_parking import ParkedPageKind
 from imbue.system_interface.shell.primitives import AppLifecycleAction
-from imbue.system_interface.shell.primitives import ClientActivityKind
-from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.route_helpers import HTTP_ACCEPTED
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_GATEWAY
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_REQUEST
@@ -114,6 +116,11 @@ def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
             return detail_response(str(error), HTTP_INTERNAL_ERROR)
 
 
+def _answer_layout_value_error(error: InvalidLayoutValueError) -> ResponseReturnValue:
+    """A value off the layout wire's rule (an id, a requester) in a request: the caller's to fix."""
+    return detail_response(str(error), HTTP_BAD_REQUEST)
+
+
 def _shell() -> ShellState:
     return get_state().shell
 
@@ -151,9 +158,7 @@ def client_activity_route() -> ResponseReturnValue:
     shell = _shell()
     match report.kind:
         case ClientActivityKind.MESSAGE:
-            shell.activity.append_message(
-                str(report.client_id), str(report.desktop_id), report.app, report.key, report.text
-            )
+            shell.activity.append_message(report)
         case _ as unreachable:
             assert_never(unreachable)
     return "", HTTP_NO_CONTENT
@@ -238,18 +243,17 @@ def list_clients() -> ResponseReturnValue:
     shell = _shell()
     desktops = shell.list_desktops()
     connected = shell.broadcaster.connected_client_ids()
-    return jsonify(
-        {
-            "clients": [
-                resolved_client_wire_json(record, str(record.id) in connected, desktops)
-                for record in shell.clients.list_clients()
-            ]
-        }
+    listing = ClientsListing(
+        clients=tuple(
+            resolved_client_view(record, str(record.id) in connected, desktops)
+            for record in shell.clients.list_clients()
+        )
     )
+    return jsonify(listing.model_dump(mode="json"))
 
 
-def inventory_document() -> ResponseReturnValue:
-    return jsonify(inventory_document_json(_shell()))
+def inventory_route() -> ResponseReturnValue:
+    return jsonify(inventory_document(_shell()).model_dump(mode="json"))
 
 
 def set_client_entry(client_id: str, app: str) -> ResponseReturnValue:
@@ -266,7 +270,9 @@ def set_client_entry(client_id: str, app: str) -> ResponseReturnValue:
             f"App {app!r} offers the plain style and {pin.style.value!r}, not {body.style.value!r}"
         )
     record = shell.set_client_entry_presentation(ClientId(client_id), AppName(app), body)
-    return jsonify(client_wire_json(record, str(record.id) in shell.broadcaster.connected_client_ids()))
+    return jsonify(
+        client_view(record, str(record.id) in shell.broadcaster.connected_client_ids()).model_dump(mode="json")
+    )
 
 
 def record_client_shown(client_id: str) -> ResponseReturnValue:
@@ -275,7 +281,9 @@ def record_client_shown(client_id: str) -> ResponseReturnValue:
     body = parse_request_body(ClientShownRequest)
     shell = _shell()
     record = shell.record_client_shown(ClientId(client_id), body.window_id)
-    return jsonify(client_wire_json(record, str(record.id) in shell.broadcaster.connected_client_ids()))
+    return jsonify(
+        client_view(record, str(record.id) in shell.broadcaster.connected_client_ids()).model_dump(mode="json")
+    )
 
 
 # Section 5.6: the embedder-message relay
@@ -352,32 +360,16 @@ def layout_broadcast() -> ResponseReturnValue:
     except ValueError as e:
         logger.opt(exception=e).warning("layout broadcast received invalid JSON body")
         return detail_response("Invalid JSON in request body", HTTP_BAD_REQUEST)
-    if not isinstance(body, dict):
-        return detail_response("Request body must be a JSON object", HTTP_BAD_REQUEST)
-    op = body.get("op")
-    args_raw = body.get("args", {})
-    requester = parse_op_requester(body.get("requester"))
-    if not isinstance(op, str) or not is_known_op(op):
-        return detail_response(f"Unknown layout op: {op!r}", HTTP_BAD_REQUEST)
-    if not isinstance(args_raw, dict):
-        return detail_response("``args`` must be a JSON object", HTTP_BAD_REQUEST)
-    if op == CONTEXT_OP:
-        return _op_context(_shell(), requester)
-    return dispatch_desktop_op(_shell(), op, args_raw, requester)
-
-
-def _op_context(shell: ShellState, requester: OpRequester | None) -> ResponseReturnValue:
-    clients = summarize_client_activity(shell.activity.read_events(), shell.broadcaster.get_connected_client_infos())
-    logger.info("layout op=context requester={} clients={}", requester, len(clients))
-    return jsonify({"ok": True, "clients": clients})
+    return dispatch_desktop_op(_shell(), parse_op_body(body))
 
 
 def register_shell_routes(application: Flask) -> None:
     """Register every shell route of desktop contracts.md sections 5, 6, and 8 on ``application``."""
     application.register_error_handler(ShellError, _answer_shell_error)
+    application.register_error_handler(InvalidLayoutValueError, _answer_layout_value_error)
     register_desktop_routes(application)
     application.add_url_rule(
-        "/api/client-activity",
+        CLIENT_ACTIVITY_ROUTE,
         view_func=client_activity_route,
         methods=["POST"],
         endpoint="client_activity_route",
@@ -418,7 +410,7 @@ def register_shell_routes(application: Flask) -> None:
         methods=["POST"],
         endpoint="quit_app",
     )
-    application.add_url_rule("/api/clients", view_func=list_clients, methods=["GET"], endpoint="list_clients")
+    application.add_url_rule(CLIENTS_ROUTE, view_func=list_clients, methods=["GET"], endpoint="list_clients")
     application.add_url_rule(
         "/api/clients/<client_id>/entries/<app>",
         view_func=set_client_entry,
@@ -432,8 +424,8 @@ def register_shell_routes(application: Flask) -> None:
         endpoint="record_client_shown",
     )
     application.add_url_rule(
-        "/api/inventory",
-        view_func=inventory_document,
+        INVENTORY_ROUTE,
+        view_func=inventory_route,
         methods=["GET"],
         endpoint="inventory_document",
     )
@@ -444,7 +436,7 @@ def register_shell_routes(application: Flask) -> None:
         endpoint="relay_embedder_message",
     )
     application.add_url_rule(
-        "/api/layout/broadcast",
+        LAYOUT_OP_ROUTE,
         view_func=layout_broadcast,
         methods=["POST"],
         endpoint="layout_broadcast",

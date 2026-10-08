@@ -132,7 +132,7 @@ class LaunchPath(FrozenModel):
     """A way of starting something the desktop offers (desktop-interface contracts.md section 2): a page path the
     shell opens a window at (GET), or a route the shell posts to for the path of the page to open (POST)."""
 
-    id: LaunchPathId = Field(description="The id shortcuts and layout.py refer to")
+    id: LaunchPathId = Field(description="The id shortcuts and workspace-layout refer to")
     label: NonEmptyStr = Field(description="The launch path's user-facing label")
     path: LaunchPathValue = Field(description="The path under the app origin, without a query string")
     method: LaunchPathMethod = Field(

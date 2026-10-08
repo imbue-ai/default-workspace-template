@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from types import FrameType
 
-from app_manifest.registry import registry_path
+from app_manifest.registry_location import registry_path
 from flask import Flask
 from loguru import logger
 

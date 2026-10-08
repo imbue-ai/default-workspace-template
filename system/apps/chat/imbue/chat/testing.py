@@ -50,6 +50,8 @@ import simple_websocket
 from flask import Flask
 from flask import request
 from pydantic import Field
+from workspace_layout.client import DisconnectedShell
+from workspace_layout.interfaces import ShellLayoutInterface
 
 from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import mint_account_dir
@@ -85,18 +87,11 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.server import create_application
-from imbue.chat.shell_client import DisconnectedShell
-from imbue.chat.shell_client import ShellLayoutClient
-from imbue.chat.shell_client import ShellLayoutInterface
-from imbue.chat.shell_client import ShellOpError
-from imbue.chat.shell_client import ShellRefusedOpError
-from imbue.chat.shell_client import ShowAnswer
-from imbue.chat.shell_client import ShowRequest
+from imbue.chat.shell_client import build_chat_shell_client
 from imbue.chat.state import ChatAppState
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
 from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.observe import acquire_observe_lock
 from imbue.mngr.api.observe import release_observe_lock
@@ -462,30 +457,6 @@ class VanishedAgentMngrMessenger(RecordingMngrMessenger):
         raise AgentIdNotFoundError(f"No agent(s) found matching: {agent_id}")
 
 
-class RecordingShell(MutableModel):
-    """A shell whose connected clients a test sets, recording every show it is asked for and answering each with
-    ``answer``: refused for a client in ``refused_client_ids``, and failing with ``error`` for everyone while set."""
-
-    model_config = {"extra": "forbid", "frozen": False, "arbitrary_types_allowed": True}
-
-    client_ids: list[str] = []
-    refused_client_ids: list[str] = []
-    error: ShellOpError | None = None
-    answer: ShowAnswer = ShowAnswer(shown="opened", window_id="win-0123456789abcdef")
-    shows: list[ShowRequest] = []
-
-    def connected_client_ids(self) -> list[str]:
-        return list(self.client_ids)
-
-    def show(self, request: ShowRequest) -> ShowAnswer:
-        self.shows.append(request)
-        if self.error is not None:
-            raise self.error
-        if request.client_id in self.refused_client_ids:
-            raise ShellRefusedOpError(f"The shell refused the show (412): no client {request.client_id!r}")
-        return self.answer
-
-
 def read_create_defaults_type(path: Path) -> str | None:
     """The `commands.create.type` the workspace's local mngr settings name, or None when they name none."""
     if not path.exists():
@@ -494,37 +465,6 @@ def read_create_defaults_type(path: Path) -> str | None:
     create = raw.get("commands", {}).get("create", {})
     agent_type = create.get(TYPE_KEY) if isinstance(create, dict) else None
     return agent_type if isinstance(agent_type, str) and agent_type else None
-
-
-class RecordingClientActivityShell:
-    """A stand-in shell that records every body posted to ``/api/client-activity``."""
-
-    def __init__(self) -> None:
-        self.received: list[dict[str, Any]] = []
-        self.application = Flask("recording-shell")
-        self.application.add_url_rule(
-            "/api/client-activity", view_func=self._accept, methods=["POST"], endpoint="client_activity"
-        )
-
-    def _accept(self) -> tuple[str, int]:
-        self.received.append(request.get_json())
-        return "", 204
-
-
-class RecordingLayoutOpShell:
-    """A stand-in shell that records every op posted to ``/api/layout/broadcast`` and answers each with one
-    status and body."""
-
-    def __init__(self, status: int, body: str) -> None:
-        self.received: list[dict[str, Any]] = []
-        self.status = status
-        self.body = body
-        self.application = Flask("recording-op-shell")
-        self.application.add_url_rule("/api/layout/broadcast", view_func=self._accept, methods=["POST"], endpoint="op")
-
-    def _accept(self) -> tuple[str, int]:
-        self.received.append(request.get_json())
-        return self.body, self.status
 
 
 class RecordedGatewayRequest(FrozenModel):
@@ -1094,7 +1034,7 @@ def running_workspace(
         chat_state = build_test_state(
             config=Config(chat_host="127.0.0.1", chat_port=chat_port),
             agent_manager=manager,
-            shell=ShellLayoutClient(shell_url=shell_url),
+            shell=build_chat_shell_client(shell_url),
         )
         chat_app = create_application(chat_state)
         chat_server = make_threaded_server("127.0.0.1", chat_port, chat_app)
