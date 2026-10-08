@@ -591,6 +591,8 @@ def _listed_desktops(inventory: _Answer) -> list[dict[str, Any]]:
     ]
 
 
+# CLEANUP: drop the ``popped_out`` default (and the test of a shell older than the popped-out rules) once every
+# workspace's shell runs a release whose inventory lists each client's ``popped_out``.
 @pure
 def _listed_clients(inventory: _Answer) -> list[dict[str, Any]]:
     """Every client; a shell older than the popped-out rules lists no ``popped_out``, so none is listed for it."""
