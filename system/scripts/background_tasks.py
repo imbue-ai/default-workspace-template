@@ -22,9 +22,9 @@ and where ``/proc`` has it, that process's start time, so a pid recycled after a
 bring a marker back. Readers skip a stale marker and never delete it; its writer's next pass does.
 
 The chat app reads the directories on its state poller and is the authority for everyone else:
-``list`` and ``is-busy`` ask it first (``GET /api/agents?tracked=true``), and read the files themselves only
-when it cannot be reached or predates the fields. Then agent names are unknown and a chat's
-active agent is taken to be the agent whose id is the chat id::
+``list`` and ``is-busy`` ask it first (``GET /api/agents?tracked=true``), and read the files
+themselves only when it cannot be reached or predates the fields. Then agent names are unknown
+and a chat's active agent is taken to be the agent whose id is the chat id::
 
     python3 system/scripts/background_tasks.py list [--chat <chat-id>] [--format json|tsv]
     python3 system/scripts/background_tasks.py is-busy <chat-id>    # exit 0 busy, 1 not
@@ -36,8 +36,8 @@ counts a turn in flight; the files alone cannot see one.
 
 The marker root is ``data/.apps/chat/background_tasks`` under the workspace's main checkout:
 the repo this script is in, or, when that is a git worktree (a worker's work dir), the checkout
-the worktree belongs to, whose ``data/`` is the one the chat app reads. ``$MINDS_BACKGROUND_TASKS_DIR``
-overrides it.
+the worktree belongs to, whose ``data/`` is the one the chat app reads.
+``$MINDS_BACKGROUND_TASKS_DIR`` overrides it.
 
 Standard library only: skills run it as ``python3 system/scripts/...``, the hooks run it before
 any venv exists, and the chat app, the shell's avatar, the memory-candidate scan and the worker

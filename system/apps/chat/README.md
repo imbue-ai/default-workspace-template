@@ -141,10 +141,10 @@ sees the tasks alone. The listing is a fresh discovery by default;
 discovery, and 503 until it has read it once. The poller is not the only reader:
 the recompute that sees a turn end reads its chat's markers before it publishes
 the end (the Stop hook writes them before mngr clears the `active` marker), so a
-turn that ends to wait reads `background` at once, never `idle` first. The tasks are the
-chat's, so a handoff moves nothing: the successor reads the same directory. The
-switch dialog says a busy agent wraps up what it is doing, and the memory
-prioritizer treats a busy chat as mid-turn.
+turn that ends to wait reads `background` at once, never `idle` first. The tasks
+are the chat's, so a handoff moves nothing: the successor reads the same
+directory. The switch dialog says a busy agent wraps up what it is doing, and
+the memory prioritizer treats a busy chat as mid-turn.
 
 A chat is a sequence of agent transcripts run by one agent at a time
 (`docs/system/blueprint/chat-agent-split/`); its id is its first agent's id, a
