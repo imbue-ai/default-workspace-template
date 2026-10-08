@@ -14,8 +14,8 @@ permission request; a re-sent request also signs a lapsed account back in), or `
 site refused the request itself, which a sign-in does not fix).
 
 ``sync`` installs datalib on first use (the pinned release, sha256-checked, plus the Node runtime
-its latchkey and search steps run on), writes datalib's config for every source this workspace has
-ever imported, and runs one ``datalib-dag`` sync of the named sources. It records each source's
+its latchkey and search steps run on), writes datalib's config for every source a sync has ever been
+run for, and runs one ``datalib-dag`` sync of the named sources. It records each source's
 progress in the status file as it goes, prints the final status, and exits 0 only when every named
 source imported. A sync of a large account takes a while: run it through
 ``system/scripts/run_in_background.py``.
@@ -279,8 +279,8 @@ def render_config(sources: Sequence[ChatSource]) -> str:
 def configured_sources(
     status: Mapping, named: Sequence[ChatSource]
 ) -> list[ChatSource]:
-    """Every source this workspace has imported before plus the ones named now, in a stable order: a sync of one
-    source must not drop another from the config (or from search)."""
+    """Every source the status file records (a sync has been run for it) plus the ones named now, in a stable order:
+    a sync of one source must not drop another from the config (or from search)."""
     keys = set(status["sources"]) | {source.key for source in named}
     return [source for key, source in SOURCES.items() if key in keys]
 
