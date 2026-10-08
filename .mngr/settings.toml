@@ -64,6 +64,10 @@ host_env__extend = [
     # rationale as TICKETS_DIR above) makes the kill hook and every agent's hook
     # resolve one shared ledger and registry, regardless of work dir.
     "OOM_PRIORITY_RUNTIME_DIR=/home/user/workspace/data/.state/oom_priority",
+    # Where a chat's pending background tasks are marked (system/scripts/background_tasks.py).
+    # Absolute for the same reason: a worker's run_in_background.py and Claude hooks run in its
+    # own worktree, and the markers must land in the chat app's data dir, not the worktree's.
+    "MINDS_BACKGROUND_TASKS_DIR=/home/user/workspace/data/.apps/chat/background_tasks",
     # Keep regenerable caches off the persistent /home/user volume (and out of
     # backups): XDG-aware tools (uv, pip, playwright) follow XDG_CACHE_HOME,
     # npm follows npm_config_cache, and the seed script's ~/.cache symlink

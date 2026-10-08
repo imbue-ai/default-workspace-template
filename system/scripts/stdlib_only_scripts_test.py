@@ -20,6 +20,7 @@ import pytest
 _SCRIPTS_DIR = Path(__file__).parent
 
 _SCRIPTS_RUN_WITH_SYSTEM_PYTHON = (
+    "background_tasks.py",
     "collect_bug_report_diagnostics.py",
     "forward_port.py",
     "install_mngr.py",
@@ -51,7 +52,9 @@ def _imported_top_level_modules(script: Path) -> set[str]:
     return modules
 
 
-def _modules_outside_the_stdlib(script: Path, checked: frozenset[Path] = frozenset()) -> set[str]:
+def _modules_outside_the_stdlib(
+    script: Path, checked: frozenset[Path] = frozenset()
+) -> set[str]:
     """Every imported module that is neither standard library nor a sibling script that passes this same check.
 
     ``checked`` is the chain of scripts that led here, so an import cycle between siblings ends.
@@ -96,6 +99,4 @@ def test_the_check_sees_a_third_party_import_wherever_it_is(tmp_path: Path) -> N
     sibling = tmp_path / "helper.py"
     sibling.write_text("import tomlkit\n")
     (tmp_path / "caller.py").write_text("from helper import x\n")
-    assert _modules_outside_the_stdlib(tmp_path / "caller.py") == {
-        "helper -> tomlkit"
-    }
+    assert _modules_outside_the_stdlib(tmp_path / "caller.py") == {"helper -> tomlkit"}

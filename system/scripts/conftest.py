@@ -1,5 +1,6 @@
 """Fixtures for the scripts' tests: a registry file and a fake shell over loopback for
-layout.py, and a fake chat app and a fake ``mngr`` for message_chat.py and run_in_background.py."""
+layout.py, a fake chat app and a fake ``mngr`` for message_chat.py and run_in_background.py, and
+a marker root of its own for every test, so no test marks a chat busy in the real checkout."""
 
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ from typing import Any
 import pytest
 import tomlkit
 from layout_testing import desktop_answer
-from script_modules_testing import layout, message_chat
+from script_modules_testing import background_tasks, layout, message_chat
 
 
 def _write_apps_toml(path: Path, rows: dict[str, tuple[str, ...]]) -> None:
@@ -60,6 +61,15 @@ def _isolate_agent_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.delenv(layout.ENV_MINDS_CHAT_ID, raising=False)
     monkeypatch.delenv(layout.ENV_MNGR_AGENT_ID, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def background_task_markers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The background-task marker root every script (and every subprocess a test starts) writes
+    and reads, in place of the checkout's ``data/.apps/chat/background_tasks``."""
+    root = tmp_path / "background_tasks"
+    monkeypatch.setenv(background_tasks.MARKER_ROOT_ENV, str(root))
+    return root
 
 
 @pytest.fixture
@@ -187,10 +197,23 @@ def _clear_github_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class _FakeChatAppHandler(BaseHTTPRequestHandler):
-    """The chat app's send route, answering a scripted sequence of verdicts."""
+    """The chat app's send route, answering a scripted sequence of verdicts, and its GET routes,
+    answering what ``server.get_answers`` holds per path (404 for any other)."""
 
     def log_message(self, format: str, *args: Any) -> None:
         return
+
+    def do_GET(self) -> None:
+        server: Any = self.server
+        status, answer_body = server.get_answers.get(
+            self.path, (404, {"detail": "not found"})
+        )
+        payload = json.dumps(answer_body).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
 
     def do_POST(self) -> None:
         server: Any = self.server
@@ -219,11 +242,13 @@ def fake_chat_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     """A chat app over loopback, registered under the ``chat`` row of a registry the script reads.
 
     ``server.answers`` is the sequence of ``(status, body)`` the send route gives, the last one
-    repeating; ``server.posted`` is every ``(path, body)`` it received; ``server.drop_connections``
+    repeating; ``server.get_answers`` maps a GET path to its ``(status, body)``; ``server.posted``
+    is every ``(path, body)`` it received; ``server.drop_connections``
     makes it read each request and then close the connection without answering.
     """
     server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeChatAppHandler)
     server.answers = [(200, {"status": "ok"})]
+    server.get_answers = {}
     server.posted = []
     server.drop_connections = False
     thread = threading.Thread(target=server.serve_forever, daemon=True)

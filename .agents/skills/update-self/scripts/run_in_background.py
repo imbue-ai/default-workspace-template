@@ -23,6 +23,18 @@ command has exited, and ``runner.log``, the detached process's own record of the
 A caller that needs the result mid-turn, before the message can reach it, reads the first
 two.
 
+While the command runs, the chat it reports to is busy: before this script returns, the detached
+process has a marker in ``data/.apps/chat/background_tasks/<chat-id>/`` naming the run, which the
+chat app reads to show the chat as waiting on a background task rather than done. The marker goes
+once the report is delivered or given up on, and a marker whose runner has died is ignored.
+``system/scripts/background_tasks.py`` reads them, and pins this script's copy of their layout to
+its own. Waiting on a nested ``claude -p``? Start it through this script, not through the Bash
+tool's background flag: only this script's marker is out of reach of the nested Claude's hooks.
+
+``--keep-host-awake`` touches the caller's agent activity file every minute while the command
+runs, so mngr's idle mode does not stop the host under it. It matters only where idle mode is on,
+and a command that is itself an mngr agent (a worker) needs no flag: its own activity counts.
+
 The detached process starts a session of its own, so it outlives the caller's tool call and
 its process group. It also drops the caller's ``MNGR_AGENT_ID`` from its own environment:
 ``mngr stop`` (and a handoff retiring the agent, or a restart after a shed) kills every
@@ -52,11 +64,15 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import json
 import os
+import re
 import secrets
 import shlex
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -72,6 +88,16 @@ MESSAGE_FILE_NAME = "message.md"
 RUNNER_LOG_FILE_NAME = "runner.log"
 
 MESSAGE_CHAT_REL = Path("system") / "scripts" / "message_chat.py"
+
+# The marker layout ``system/scripts/background_tasks.py`` reads, copied because update-self's
+# staged copy runs in trees that may predate that module; a test pins the two together.
+MARKER_ROOT_ENV = "MINDS_BACKGROUND_TASKS_DIR"
+DEFAULT_MARKER_ROOT = Path("data") / ".apps" / "chat" / "background_tasks"
+MARKER_SOURCE = "run_in_background"
+_UNSAFE_NAME_CHARS = re.compile(r"[^A-Za-z0-9_.-]")
+
+ACTIVITY_FILE_REL = Path("activity") / "agent"
+KEEP_HOST_AWAKE_INTERVAL_SECONDS = 60.0
 
 # The variable mngr tags an agent's processes with and kills them by on a stop.
 AGENT_ID_ENV = "MNGR_AGENT_ID"
@@ -125,6 +151,63 @@ def script_repo_root() -> Path:
     raise RepoRootNotFoundError(
         f"no ancestor of {Path(__file__).resolve()} holds system/scripts"
     )
+
+
+def marker_path(environ: Mapping[str, str], chat_id: str, task_id: str) -> Path:
+    """Where this run's busy marker lives: one file per run under its chat's directory."""
+    override = environ.get(MARKER_ROOT_ENV, "")
+    root = Path(override) if override else script_repo_root() / DEFAULT_MARKER_ROOT
+    return (
+        root
+        / _UNSAFE_NAME_CHARS.sub("_", chat_id)
+        / f"{MARKER_SOURCE}-{_UNSAFE_NAME_CHARS.sub('_', task_id)}.json"
+    )
+
+
+def write_marker(path: Path, task_id: str, description: str, pid: int) -> None:
+    """Write the marker atomically, so the chat app never reads half of one."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temp_name = tempfile.mkstemp(dir=path.parent, prefix=".", suffix=".tmp")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as temp_file:
+            json.dump(
+                {
+                    "source": MARKER_SOURCE,
+                    "id": task_id,
+                    "description": " ".join(description.split()),
+                    "started_at": datetime.datetime.now(
+                        datetime.timezone.utc
+                    ).isoformat(timespec="seconds"),
+                    "pid": pid,
+                },
+                temp_file,
+            )
+        os.replace(temp_name, path)
+    except BaseException:
+        Path(temp_name).unlink(missing_ok=True)
+        raise
+
+
+def keep_host_awake(
+    environ: Mapping[str, str],
+    stopped: threading.Event,
+    interval_seconds: float = KEEP_HOST_AWAKE_INTERVAL_SECONDS,
+) -> None:
+    """Touch the caller's agent activity file every interval until ``stopped`` is set; nothing
+    outside an agent, which has no activity file."""
+    state_dir = environ.get("MNGR_AGENT_STATE_DIR", "")
+    if not state_dir:
+        return
+    activity_path = Path(state_dir) / ACTIVITY_FILE_REL
+    while not stopped.is_set():
+        try:
+            activity_path.parent.mkdir(parents=True, exist_ok=True)
+            activity_path.write_text(
+                json.dumps({"time": int(time.time() * 1000), "source": MARKER_SOURCE})
+            )
+        except OSError as exc:
+            _log(f"Could not touch {activity_path}: {exc}")
+        stopped.wait(interval_seconds)
 
 
 def messenger_argv(repo_root: Path, chat_id: str, message_file: Path) -> list[str]:
@@ -282,12 +365,45 @@ def run_and_deliver(
     chat_id: str,
     command: Sequence[str],
     command_environ: Mapping[str, str],
+    is_keeping_host_awake: bool = False,
 ) -> int:
-    """Run the command to completion here, in ``command_environ``, then send its report to the chat."""
+    """Run the command to completion here, in ``command_environ``, then send its report to the
+    chat; the chat's busy marker for this run goes once the report is delivered or given up on."""
+    try:
+        return _run_and_deliver(
+            task_dir,
+            description,
+            chat_id,
+            command,
+            command_environ,
+            is_keeping_host_awake,
+        )
+    finally:
+        marker_path(command_environ, chat_id, task_dir.name).unlink(missing_ok=True)
+
+
+def _run_and_deliver(
+    task_dir: Path,
+    description: str,
+    chat_id: str,
+    command: Sequence[str],
+    command_environ: Mapping[str, str],
+    is_keeping_host_awake: bool,
+) -> int:
     output_path = task_dir / OUTPUT_FILE_NAME
     _log(f"Running {shlex.join(command)}")
     started_at = time.monotonic()
-    returncode = _run_command(command, output_path, command_environ)
+    command_finished = threading.Event()
+    if is_keeping_host_awake:
+        threading.Thread(
+            target=keep_host_awake,
+            args=(command_environ, command_finished),
+            daemon=True,
+        ).start()
+    try:
+        returncode = _run_command(command, output_path, command_environ)
+    finally:
+        command_finished.set()
     (task_dir / EXIT_CODE_FILE_NAME).write_text(f"{returncode}\n")
     _log(
         f"Command exited with code {returncode} after {time.monotonic() - started_at:.0f}s"
@@ -320,13 +436,14 @@ def _start_detached(
     chat_id: str,
     command: Sequence[str],
     environ: Mapping[str, str],
+    is_keeping_host_awake: bool,
 ) -> None:
     # A session of its own, and no stdio shared with the caller, so nothing the caller's harness
     # does to the tool call's processes reaches it and nothing waits on it; and no agent id in
     # its environment, so mngr's stop of the caller's agent passes it by.
     agent_id = environ.get(AGENT_ID_ENV, "")
     with (task_dir / RUNNER_LOG_FILE_NAME).open("ab") as runner_log:
-        subprocess.Popen(
+        runner = subprocess.Popen(
             [
                 sys.executable,
                 str(Path(__file__).resolve()),
@@ -338,6 +455,7 @@ def _start_detached(
                 "--description",
                 description,
                 *(["--agent-id", agent_id] if agent_id else []),
+                *(["--keep-host-awake"] if is_keeping_host_awake else []),
                 "--",
                 *command,
             ],
@@ -346,6 +464,20 @@ def _start_detached(
             stdout=runner_log,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+        )
+    # Before the caller's tool call returns, so the chat is busy before its agent can end the turn.
+    try:
+        write_marker(
+            marker_path(environ, chat_id, task_dir.name),
+            task_dir.name,
+            description,
+            runner.pid,
+        )
+    except OSError as exc:
+        print(
+            f"run_in_background.py: could not mark the chat as waiting on this run ({exc}); "
+            "the report still arrives, but the chat may show as done until it does.",
+            file=sys.stderr,
         )
 
 
@@ -368,12 +500,20 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--chat-id",
         default=None,
-        help="The chat to deliver the result to (default: your own, $MINDS_CHAT_ID or $MNGR_AGENT_ID).",
+        help="The chat to deliver the result to, and to show as waiting on it meanwhile (default: your "
+        "own, $MINDS_CHAT_ID or $MNGR_AGENT_ID).",
     )
     parser.add_argument(
         "--task-dir",
         default=None,
         help="Keep the run's files here instead of a new directory under data/.tasks/run-in-background/.",
+    )
+    parser.add_argument(
+        "--keep-host-awake",
+        action="store_true",
+        help="Touch your agent activity file every minute while the command runs, so mngr's idle "
+        "mode does not stop the host under it. Matters only where idle mode is on; a command that "
+        "is itself an mngr agent needs no flag.",
     )
     parser.add_argument(
         "--foreground",
@@ -424,9 +564,21 @@ def main(
         if args.agent_id:
             command_environ[AGENT_ID_ENV] = args.agent_id
         return run_and_deliver(
-            task_dir, args.description, chat_id, command, command_environ
+            task_dir,
+            args.description,
+            chat_id,
+            command,
+            command_environ,
+            args.keep_host_awake,
         )
-    _start_detached(task_dir, args.description, chat_id, command, resolved_environ)
+    _start_detached(
+        task_dir,
+        args.description,
+        chat_id,
+        command,
+        resolved_environ,
+        args.keep_host_awake,
+    )
     print(
         f"Started in the background as task {task_dir.name}. When the command exits, its exit "
         "code and output arrive in this chat as a message, and that message starts your next "
