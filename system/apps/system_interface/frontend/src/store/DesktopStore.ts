@@ -1003,8 +1003,8 @@ export class DesktopStore {
    *  A chrome message is relayed only when an app registered for its type, and never from a preview shell (whose
    *  backend refuses the relay: the apps it names are the live ones) or a solo shell (whose client is the main
    *  window's, which relays the chrome's messages itself). An app's message is always relayed, from a solo shell
-   *  too: what it shows lands on this client's desktop, in the main window, and when that window is closed the user
-   *  is told to reopen it. */
+   *  too: what it shows lands on this client's desktop, in the main window (or stays in its own window when it is
+   *  popped out), and when the main window is closed the user is told to reopen it. */
   async relayEmbedderMessage(message: EmbedderMessage, senderApp: string | null): Promise<boolean> {
     const isFromEmbedder = senderApp === null;
     if (
