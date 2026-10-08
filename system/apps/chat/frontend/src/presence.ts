@@ -6,9 +6,8 @@
  * stops counting on its own. Every report names this page load's instance id, so two pages of
  * the chat in one client never overwrite each other's report, and its place in the order this
  * page sent them, since the chat app can receive two reports sent a moment apart in either
- * order. Only the chat's own page
- * reports, never a subagent view. The OOM prioritizer reads the aggregate, and the notify
- * path asks which pages are watching (shown and focused).
+ * order. Only the chat's own page reports, never a subagent view. The OOM prioritizer reads
+ * the aggregate, and the notify path asks which pages are watching (shown and focused).
  */
 
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
