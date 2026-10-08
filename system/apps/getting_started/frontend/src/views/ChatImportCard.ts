@@ -9,15 +9,21 @@
 import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import type { ChatImport, ChatImportSource } from "../models/ChatImport";
-import { SOURCE_LABELS, cardPhase, importedSummary } from "../models/ChatImport";
+import { SOURCE_LABELS, cardPhase, importedSummary, sourceNames } from "../models/ChatImport";
 
 export const IMPORT_PROMPT =
   "Bring my Claude and ChatGPT chats into this workspace, so you can search and build on my past conversations.";
-export const UPDATE_PROMPT =
-  "Check my Claude and ChatGPT chats for new conversations and bring them into this workspace.";
-export const RESUME_PROMPT =
-  "My chat import did not finish. Pick it up and bring the rest of my Claude and ChatGPT chats into " +
-  "this workspace.";
+
+/** The later prompts name only the sources the card is about: a source the user declined is never
+ *  recorded, and naming it would have the agent ask to connect it again. */
+export function updatePrompt(sources: Record<string, ChatImportSource>): string {
+  return `Check my ${sourceNames(Object.keys(sources))} chats for new conversations and bring them into this workspace.`;
+}
+
+export function resumePrompt(sources: Record<string, ChatImportSource>): string {
+  const unfinished = Object.keys(sources).filter((key) => sources[key].state !== "imported");
+  return `My chat import did not finish. Pick it up and bring the rest of my ${sourceNames(unfinished)} chats into this workspace.`;
+}
 
 export interface ChatImportCardAttrs {
   readonly chatImport: ChatImport | null;
@@ -93,7 +99,12 @@ export const ChatImportCard: m.Component<ChatImportCardAttrs> = {
         actions = [
           m(
             Button,
-            { variant: "primary", sm: true, "data-chat-import-action": "resume", onclick: start(RESUME_PROMPT) },
+            {
+              variant: "primary",
+              sm: true,
+              "data-chat-import-action": "resume",
+              onclick: start(resumePrompt(sources)),
+            },
             "Finish importing",
           ),
           dismissButton(attrs.onDismiss, "Hide"),
@@ -105,7 +116,12 @@ export const ChatImportCard: m.Component<ChatImportCardAttrs> = {
         actions = [
           m(
             Button,
-            { variant: "secondary", sm: true, "data-chat-import-action": "update", onclick: start(UPDATE_PROMPT) },
+            {
+              variant: "secondary",
+              sm: true,
+              "data-chat-import-action": "update",
+              onclick: start(updatePrompt(sources)),
+            },
             "Check for new chats",
           ),
           dismissButton(attrs.onDismiss, "Hide"),

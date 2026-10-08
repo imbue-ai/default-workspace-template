@@ -30,9 +30,10 @@ on every sync.
 
 ## Which sources
 
-Import what the user asked for. The Getting Started card asks for both; a user who uses only
-one of them declines the other's connection, and that is the end of it for that source:
-mention once that it was skipped, and do not ask again in this chat.
+Import what the user asked for. The Getting Started card's first offer asks for both, and its
+later ones only for the sources already imported; a user who uses only one of them declines the
+other's connection, and that is the end of it for that source: mention once that it was skipped,
+and do not ask again in this chat.
 
 ## 1. Connect each source
 

@@ -49,14 +49,27 @@ export function cardPhase(chatImport: ChatImport | null): ChatImportCardPhase {
   return "imported";
 }
 
-/** "312 from Claude and 40 from ChatGPT": what each recorded source holds, in the card's order. */
-export function importedSummary(sources: Record<string, ChatImportSource>): string {
-  const parts = SOURCE_LABELS.flatMap(([key, label]) => {
-    const source = sources[key];
-    return source === undefined ? [] : [`${source.conversations.toLocaleString()} from ${label}`];
-  });
+/** "a, b and c". */
+function joinedList(parts: ReadonlyArray<string>): string {
   if (parts.length <= 1) return parts.join("");
   return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
+/** "312 from Claude and 40 from ChatGPT": what each recorded source holds, in the card's order. */
+export function importedSummary(sources: Record<string, ChatImportSource>): string {
+  return joinedList(
+    SOURCE_LABELS.flatMap(([key, label]) => {
+      const source = sources[key];
+      return source === undefined ? [] : [`${source.conversations.toLocaleString()} from ${label}`];
+    }),
+  );
+}
+
+/** "Claude and ChatGPT": the names of the sources ``keys`` holds, in the card's order; every source's
+ *  when it holds none the card knows. */
+export function sourceNames(keys: ReadonlyArray<string>): string {
+  const known = SOURCE_LABELS.filter(([key]) => keys.includes(key));
+  return joinedList((known.length > 0 ? known : SOURCE_LABELS).map(([, label]) => label));
 }
 
 let state: ChatImport | null = null;

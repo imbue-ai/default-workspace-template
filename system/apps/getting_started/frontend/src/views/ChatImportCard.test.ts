@@ -5,7 +5,7 @@ import m from "mithril";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ChatImport } from "../models/ChatImport";
 import { chatImportSourceRecord as source } from "../testing/records";
-import { ChatImportCard, IMPORT_PROMPT, RESUME_PROMPT, UPDATE_PROMPT } from "./ChatImportCard";
+import { ChatImportCard, IMPORT_PROMPT } from "./ChatImportCard";
 
 afterEach(() => unmountViews());
 
@@ -54,7 +54,7 @@ describe("the chat import card", () => {
     expect(root.querySelector("[data-chat-import-action]")).toBeNull();
   });
 
-  it("says which source needs the user and resumes the import from a chat", () => {
+  it("says which source needs the user and resumes the import of that source from a chat", () => {
     const { root, started } = render({
       is_dismissed: false,
       sources: { claude: source("imported", 30), chatgpt: source("needs_sign_in") },
@@ -63,7 +63,9 @@ describe("the chat import card", () => {
       "ChatGPT: needs you to sign in again",
     );
     click(root, "resume");
-    expect(started).toEqual([RESUME_PROMPT]);
+    expect(started).toEqual([
+      "My chat import did not finish. Pick it up and bring the rest of my ChatGPT chats into this workspace.",
+    ]);
   });
 
   it("shows what came in and offers to look for new chats", () => {
@@ -75,6 +77,14 @@ describe("the chat import card", () => {
       "30 from Claude and 4 from ChatGPT.",
     );
     click(root, "update");
-    expect(started).toEqual([UPDATE_PROMPT]);
+    expect(started).toEqual([
+      "Check my Claude and ChatGPT chats for new conversations and bring them into this workspace.",
+    ]);
+  });
+
+  it("looks for new chats only in the sources that were imported", () => {
+    const { root, started } = render({ is_dismissed: false, sources: { claude: source("imported", 30) } });
+    click(root, "update");
+    expect(started).toEqual(["Check my Claude chats for new conversations and bring them into this workspace."]);
   });
 });
