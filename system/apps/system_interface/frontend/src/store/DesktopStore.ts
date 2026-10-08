@@ -1028,7 +1028,7 @@ export class DesktopStore {
    *  (``open:url``), one of this workspace's app addresses as that app's window at its path. Another workspace's
    *  address is refused with a notice.
    *  ``workspaceHost`` is this page's own host, which says which workspace it is; ``senderApp`` is the app whose page
-   *  asked, or null for the Imbue Studio chrome, and names the ``open:url`` it sends. */
+   *  asked, or null for the Imbue Studio chrome, and names the ``open:file`` or ``open:url`` it sends. */
   async openLink(url: string, workspaceHost: string, senderApp: string | null): Promise<void> {
     const target = classifyLink(url, workspaceHost);
     switch (target.kind) {
