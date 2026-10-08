@@ -584,6 +584,9 @@ def test_a_running_sync_records_the_pages_rendered_so_far(tmp_path: Path) -> Non
     def run(command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess:
         if command[1:] == ["pull-runtime"]:
             return subprocess.CompletedProcess(command, 0, "", "")
+        seen_counts.append(
+            import_chats.read_status(status_path)["sources"]["chatgpt"]["conversations"]
+        )
         for index in range(3):
             _rendered_page(
                 data_root,
@@ -593,13 +596,13 @@ def test_a_running_sync_records_the_pages_rendered_so_far(tmp_path: Path) -> Non
                 "https://chatgpt.com/c/x",
                 [],
             )
-        is_recorded = threading.Event()
+        pause = threading.Event()
         for _ in range(500):
             record = import_chats.read_status(status_path)["sources"]["chatgpt"]
             seen_counts.append(record["conversations"])
             if record["state"] == "importing" and record["conversations"] == 3:
                 break
-            is_recorded.wait(0.01)
+            pause.wait(0.01)
         summary = _run_summary({"step": "chatgpt_chats/ingest", "status": "succeeded"})
         return subprocess.CompletedProcess(command, 0, summary, "")
 
