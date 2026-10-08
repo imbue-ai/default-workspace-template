@@ -216,6 +216,11 @@ dependencies = [
     { name = "pydantic" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "ty" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
@@ -224,6 +229,9 @@ requires-dist = [
     { name = "pathspec", specifier = ">=1.1" },
     { name = "pydantic", specifier = ">=2.0" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ty", specifier = "==0.0.24" }]
 
 [[package]]
 name = "argon2-cffi"
@@ -290,6 +298,16 @@ wheels = [
 name = "automations"
 version = "0.1.0"
 source = { virtual = "system/libs/automations" }
+
+[package.dev-dependencies]
+dev = [
+    { name = "ty" },
+]
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ty", specifier = "==0.0.24" }]
 
 [[package]]
 name = "bcrypt"
@@ -375,12 +393,20 @@ dependencies = [
     { name = "tenacity" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "ty" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "loguru", specifier = ">=0.7.0" },
     { name = "tenacity", specifier = ">=8.0" },
     { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ty", specifier = "==0.0.24" }]
 
 [[package]]
 name = "boto3"
@@ -429,6 +455,11 @@ dependencies = [
     { name = "workspace-layout" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "ty" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
@@ -445,10 +476,23 @@ requires-dist = [
     { name = "workspace-layout", editable = "system/libs/workspace_layout" },
 ]
 
+[package.metadata.requires-dev]
+dev = [{ name = "ty", specifier = "==0.0.24" }]
+
 [[package]]
 name = "caretaker"
 version = "0.1.0"
 source = { virtual = "system/services/caretaker" }
+
+[package.dev-dependencies]
+dev = [
+    { name = "ty" },
+]
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ty", specifier = "==0.0.24" }]
 
 [[package]]
 name = "cel-python"
@@ -1014,12 +1058,20 @@ dependencies = [
     { name = "loguru" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "ty" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=9c98e0a334df19a484352f135559c984925c20ec" },
     { name = "loguru", specifier = ">=0.7.0" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ty", specifier = "==0.0.24" }]
 
 [[package]]
 name = "executing"
@@ -1234,6 +1286,7 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-timeout" },
     { name = "ruff" },
+    { name = "ty" },
 ]
 
 [package.metadata]
@@ -1259,6 +1312,7 @@ dev = [
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "pytest-timeout", specifier = ">=2.3.0" },
     { name = "ruff", specifier = "~=0.12.8" },
+    { name = "ty", specifier = "==0.0.24" },
 ]
 
 [[package]]
@@ -1318,11 +1372,19 @@ dependencies = [
     { name = "loguru" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "ty" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.0" },
     { name = "loguru", specifier = ">=0.7.0" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ty", specifier = "==0.0.24" }]
 
 [[package]]
 name = "google-re2"
@@ -1539,12 +1601,20 @@ dependencies = [
     { name = "loguru" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "ty" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=9c98e0a334df19a484352f135559c984925c20ec" },
     { name = "loguru", specifier = ">=0.7.0" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ty", specifier = "==0.0.24" }]
 
 [[package]]
 name = "httpcore"
@@ -2050,11 +2120,19 @@ dependencies = [
     { name = "imbue-mngr" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "ty" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
     { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=9c98e0a334df19a484352f135559c984925c20ec" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ty", specifier = "==0.0.24" }]
 
 [[package]]
 name = "multidict"
@@ -2168,6 +2246,16 @@ wheels = [
 name = "oom-priority"
 version = "0.1.0"
 source = { editable = "system/services/oom_priority" }
+
+[package.dev-dependencies]
+dev = [
+    { name = "ty" },
+]
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ty", specifier = "==0.0.24" }]
 
 [[package]]
 name = "openai"
@@ -2830,12 +2918,20 @@ dependencies = [
     { name = "pytest" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "ty" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=9c98e0a334df19a484352f135559c984925c20ec" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pytest", specifier = ">=8.0" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ty", specifier = "==0.0.24" }]
 
 [[package]]
 name = "pytest-playwright"
@@ -2872,8 +2968,16 @@ dependencies = [
     { name = "pytest" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "ty" },
+]
+
 [package.metadata]
 requires-dist = [{ name = "pytest", specifier = ">=8.0" }]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ty", specifier = "==0.0.24" }]
 
 [[package]]
 name = "python-dateutil"
@@ -3390,6 +3494,11 @@ dependencies = [
     { name = "werkzeug" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "ty" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "cryptography", specifier = ">=42" },
@@ -3399,6 +3508,9 @@ requires-dist = [
     { name = "pyjwt", specifier = ">=2.8" },
     { name = "werkzeug", specifier = ">=3.1" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ty", specifier = "==0.0.24" }]
 
 [[package]]
 name = "shellingham"
@@ -3553,6 +3665,7 @@ dependencies = [
 dev = [
     { name = "httpx" },
     { name = "imbue-mngr" },
+    { name = "ty" },
 ]
 
 [package.metadata]
@@ -3573,6 +3686,7 @@ requires-dist = [
 dev = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=9c98e0a334df19a484352f135559c984925c20ec" },
+    { name = "ty", specifier = "==0.0.24" },
 ]
 
 [[package]]
@@ -3647,6 +3761,16 @@ wheels = [
 name = "tk-command-parsing"
 version = "0.1.0"
 source = { editable = "system/libs/tk_command_parsing" }
+
+[package.dev-dependencies]
+dev = [
+    { name = "ty" },
+]
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ty", specifier = "==0.0.24" }]
 
 [[package]]
 name = "tokenizers"

@@ -54,9 +54,10 @@ def load_icon_image(path: Path) -> Image.Image:
 @pure
 def rgba_pixels(image: Image.Image) -> list[tuple[int, int, int, int]]:
     """Every pixel of the image as red, green, blue, and alpha, row by row."""
+    data = image.convert("RGBA").tobytes()
     return [
-        (int(pixel[0]), int(pixel[1]), int(pixel[2]), int(pixel[3]))
-        for pixel in image.convert("RGBA").get_flattened_data()
+        (data[index], data[index + 1], data[index + 2], data[index + 3])
+        for index in range(0, len(data), 4)
     ]
 
 

@@ -10,3 +10,12 @@ dependencies = []
 # member). The scripts are invoked by absolute path from cron entries and by
 # system/services/caretaker; run_job_test.py exercises run_job.sh as a real
 # subprocess.
+
+[dependency-groups]
+dev = [
+    # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
+    "ty==0.0.24",
+]
+
+# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
+[tool.ty]

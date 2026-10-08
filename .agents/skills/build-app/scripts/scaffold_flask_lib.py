@@ -282,6 +282,15 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/{package}"]
+
+[dependency-groups]
+dev = [
+    # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
+    "ty==0.0.24",
+]
+
+# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
+[tool.ty]
 """
 
 
@@ -433,6 +442,7 @@ def _lib_ratchets() -> str:
     return """from pathlib import Path
 
 from imbue.imbue_common.ratchet_testing import standard_ratchet_checks as rc
+from imbue.imbue_common.ratchet_testing.ratchets import check_no_type_errors
 from inline_snapshot import snapshot
 
 _DIR = Path(__file__).parent
@@ -505,6 +515,12 @@ def test_prevent_asyncio_import() -> None:
 def test_prevent_dataclasses_import() -> None:
     rc.check_dataclasses_import(_DIR, snapshot(0))
 
+
+# Types
+
+
+def test_no_type_errors() -> None:
+    check_no_type_errors(_DIR)
 """
 
 

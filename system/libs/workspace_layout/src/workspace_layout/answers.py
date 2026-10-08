@@ -44,6 +44,24 @@ class DesktopOpAnswer(FrozenModel):
     desktop: DesktopView = Field(description="The desktop after the op")
     layout: DesktopLayoutView | None = Field(description="The client's layout of the desktop; None for no client")
     window_id: WindowId | None = Field(description="The window the op acted on, when it names one")
+    # What the answer says about the client's popped-out windows (plan-popped-out-layout-ops.md); a shell older than
+    # the rules answers none of it.
+    is_raised_in_own_window: bool = Field(
+        default=False, description="The window is popped out, so its own window was raised and it stayed out"
+    )
+    is_brought_back: bool = Field(
+        default=False,
+        description="The op brought a pulled-out window back onto the desktop (forced, or for a client that is not "
+        "connected)",
+    )
+    unpaired_beside: WindowId | None = Field(
+        default=None, description="The popped-out window an open's ``beside`` named, which the open did not pair with"
+    )
+    has_no_desktop_window: bool = Field(
+        default=False,
+        description="The client's only open windows are pop-outs, so the window the op put on the desktop shows when "
+        "a desktop window opens",
+    )
 
 
 class OpenAnswer(DesktopOpAnswer):
@@ -71,10 +89,22 @@ class ClientView(ClientRecord):
     is_connected: bool = Field(description="Whether any window of the client holds the socket")
 
 
+class PoppedOutWindow(FrozenModel):
+    """A window a client's layout says is pulled out into its own window (desktop contracts.md section 4.2)."""
+
+    window_id: WindowId = Field(description="The window")
+    desktop_id: DesktopId = Field(description="The desktop it is on")
+    is_ghost_hidden: bool = Field(description="Whether the user hid its ghost on the desktop (``is_minimized``)")
+
+
 class InventoryClient(ClientView):
-    """A client of the inventory document: the client, and the windows of its active desktop it shows."""
+    """A client of the inventory document: the client, the windows of its active desktop it shows, and the windows
+    it popped out of any desktop."""
 
     shown: tuple[WindowId, ...] = Field(description="The windows of its active desktop its layout does not minimize")
+    popped_out: tuple[PoppedOutWindow, ...] = Field(
+        default=(), description="The windows its layouts of every desktop say are popped out; none from an older shell"
+    )
 
 
 class InventoryApp(FrozenModel):

@@ -23,6 +23,8 @@ dev = [
     # The tests poll the app and its listener coming up through mngr's poller.
     "imbue-mngr",
     "httpx>=0.27",
+    # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
+    "ty==0.0.24",
 ]
 
 [project.scripts]
@@ -35,3 +37,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/terminal_app"]
+
+# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
+[tool.ty]

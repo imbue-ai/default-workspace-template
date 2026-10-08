@@ -44,3 +44,6 @@ layers = [
     "workspace_themes.primitives",
     "workspace_themes.errors",
 ]
+
+# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
+[tool.ty]

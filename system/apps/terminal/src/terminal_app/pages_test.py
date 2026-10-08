@@ -9,7 +9,7 @@ from terminal_app.pages import (
     SessionPage,
     render_page,
 )
-from terminal_app.primitives import TmuxSessionName
+from terminal_app.primitives import TerminalTitle, TmuxSessionName
 from terminal_app.sessions import TmuxSessionSource
 from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.testing import (
@@ -87,7 +87,7 @@ def test_a_name_that_cannot_be_a_session_is_not_found(pages_client: FlaskClient)
     response = pages_client.get("/?session=not%20a%20name")
 
     assert response.status_code == 404
-    assert "no terminal has the name" in response.json["detail"]
+    assert "no terminal has the name" in response.get_json()["detail"]
 
 
 def test_new_allocates_a_terminal_in_the_posted_workdir_and_answers_its_page_path(
@@ -121,7 +121,7 @@ def test_new_refuses_a_bad_workdir_with_a_detail_body(pages_client: FlaskClient)
     response = pages_client.post("/new", json={"workdir": "x" * 2000})
 
     assert response.status_code == 400
-    assert "workdir" in response.json["detail"]
+    assert "workdir" in response.get_json()["detail"]
 
 
 @pytest.mark.parametrize("body", [[], "text", None], ids=["array", "string", "nothing"])
@@ -129,7 +129,7 @@ def test_new_refuses_a_body_that_is_not_a_json_object(pages_client: FlaskClient,
     response = pages_client.post("/new", json=body) if body is not None else pages_client.post("/new", data="")
 
     assert response.status_code == 400
-    assert "JSON object" in response.json["detail"]
+    assert "JSON object" in response.get_json()["detail"]
 
 
 def test_new_is_a_post_and_a_get_of_it_is_refused(pages_client: FlaskClient, fake_tmux: FakeTmux) -> None:
@@ -145,7 +145,7 @@ def test_new_answers_a_detail_body_when_tmux_refuses(pages_client: FlaskClient, 
     response = pages_client.post("/new", json={})
 
     assert response.status_code == 500
-    assert "could not create session" in response.json["detail"]
+    assert "could not create session" in response.get_json()["detail"]
 
 
 def test_the_session_api_answers_what_the_page_refreshes_from(
@@ -214,14 +214,17 @@ def test_a_missing_app_contract_module_says_the_shell_is_not_built(
     response = client.get("/_static/app_contract.js")
 
     assert response.status_code == 404
-    assert "not built" in response.json["detail"]
+    assert "not built" in response.get_json()["detail"]
 
 
 def test_render_page_keeps_a_script_closer_out_of_the_config_and_escapes_the_title() -> None:
     page = SessionPage(
-        name="terminal-1", title="R&D <tests>", pty_path="/?arg=_&arg=session&arg=terminal-1", pty_label="</script>"
+        name=TmuxSessionName("terminal-1"),
+        title=TerminalTitle("R&D <tests>"),
+        pty_path="/?arg=_&arg=session&arg=terminal-1",
+        pty_label="</script>",
     )
-    page_html = render_page(PageConfig(session="terminal-1", page=page))
+    page_html = render_page(PageConfig(session=TmuxSessionName("terminal-1"), page=page))
 
     assert "<title>R&amp;D &lt;tests&gt;</title>" in page_html
     start = page_html.index('id="terminal-config">') + len('id="terminal-config">')
@@ -232,9 +235,11 @@ def test_render_page_keeps_a_script_closer_out_of_the_config_and_escapes_the_tit
 
 def test_render_page_leaves_a_placeholders_text_in_the_title_alone() -> None:
     title = "__CONTRACT_PATH__ and __CONFIG__"
-    page = SessionPage(name="terminal-1", title=title, pty_path="/?arg=session", pty_label="pty")
+    page = SessionPage(
+        name=TmuxSessionName("terminal-1"), title=TerminalTitle(title), pty_path="/?arg=session", pty_label="pty"
+    )
 
-    page_html = render_page(PageConfig(session="terminal-1", page=page))
+    page_html = render_page(PageConfig(session=TmuxSessionName("terminal-1"), page=page))
 
     assert f"<title>{title}</title>" in page_html
     start = page_html.index('id="terminal-config">') + len('id="terminal-config">')

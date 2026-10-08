@@ -24,6 +24,7 @@ from workspace_layout.shell_url import CLIENTS_ROUTE
 from workspace_layout.shell_url import CLIENT_ACTIVITY_ROUTE
 from workspace_layout.shell_url import INVENTORY_ROUTE
 from workspace_layout.shell_url import LAYOUT_OP_ROUTE
+from workspace_layout.shell_url import POPPED_OUT_REFUSAL_STATUS
 
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.shell.clients import client_view
@@ -59,6 +60,7 @@ from imbue.system_interface.shell.errors import UpdateNoticeCommandError
 from imbue.system_interface.shell.errors import UpdateNoticeRefusedError
 from imbue.system_interface.shell.errors import WallpaperNotFoundError
 from imbue.system_interface.shell.errors import WindowNotFoundError
+from imbue.system_interface.shell.errors import WindowPoppedOutError
 from imbue.system_interface.shell.port_parking import ParkedPageKind
 from imbue.system_interface.shell.primitives import AppLifecycleAction
 from imbue.system_interface.shell.route_helpers import HTTP_ACCEPTED
@@ -112,6 +114,8 @@ def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
             return detail_response(str(error), HTTP_BAD_GATEWAY)
         case NoTargetClientError():
             return detail_response(str(error), HTTP_PRECONDITION_FAILED)
+        case WindowPoppedOutError():
+            return detail_response(str(error), POPPED_OUT_REFUSAL_STATUS)
         case _:
             logger.opt(exception=error).error("Failed to serve a shell request")
             return detail_response(str(error), HTTP_INTERNAL_ERROR)
