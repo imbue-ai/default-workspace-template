@@ -3,14 +3,11 @@ import "@imbue/workspace-ui/src/testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ChatImport, ChatImportSource } from "../models/ChatImport";
+import type { ChatImport } from "../models/ChatImport";
+import { chatImportSourceRecord as source } from "../testing/records";
 import { ChatImportCard, IMPORT_PROMPT, RESUME_PROMPT, UPDATE_PROMPT } from "./ChatImportCard";
 
 afterEach(() => unmountViews());
-
-function source(state: ChatImportSource["state"], conversations = 0): ChatImportSource {
-  return { state, conversations, updated_at: "", detail: "" };
-}
 
 function render(chatImport: ChatImport | null): { root: HTMLElement; started: string[]; dismissals: number[] } {
   const started: string[] = [];

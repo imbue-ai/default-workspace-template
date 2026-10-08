@@ -1,9 +1,15 @@
 /**
- * Record factories for the Getting Started tests: a published template as the catalog lists it. Takes
- * overrides so a test spells only what it is about.
+ * Record factories for the Getting Started tests: a published template as the catalog lists it, and a
+ * source's record in the chat import state. Each spells only what a test is about.
  */
 
+import type { ChatImportSource, ChatImportSourceState } from "../models/ChatImport";
 import type { CatalogTemplate } from "../models/TemplateCatalog";
+
+/** A chat import source in ``state`` holding ``conversations`` pages, with no timestamp or detail. */
+export function chatImportSourceRecord(state: ChatImportSourceState, conversations = 0): ChatImportSource {
+  return { state, conversations, updated_at: "", detail: "" };
+}
 
 function capitalized(name: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);

@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { chatImportSourceRecord as source } from "../testing/records";
 import type { ChatImport, ChatImportSource } from "./ChatImport";
 import { cardPhase, importedSummary } from "./ChatImport";
-
-function source(state: ChatImportSource["state"], conversations = 0): ChatImportSource {
-  return { state, conversations, updated_at: "", detail: "" };
-}
 
 function chatImport(sources: Record<string, ChatImportSource>, isDismissed = false): ChatImport {
   return { is_dismissed: isDismissed, sources };
