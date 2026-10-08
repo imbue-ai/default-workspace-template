@@ -1297,7 +1297,7 @@ def test_get_harnesses_lists_the_claude_catalog(client: FlaskClient) -> None:
     reported = {option["id"]: option["harness_reported_model_id"] for option in claude["options"]}
     assert reported["fable[1m]"] == "claude-fable-5-1"
     assert reported["opus[1m]"] == "claude-opus-5-5"
-    assert reported["sonnet[1m]"] == "claude-sonnet-5"
+    assert reported["sonnet[1m]"] == "claude-sonnet-5-5"
     assert claude["switch_mode"] == "eager_then_reconcile"
     assert claude["powered_by_text"] == ""
 
@@ -1564,6 +1564,48 @@ def test_picker_open_reconciles_the_chip_and_switch_model_sets_for_codex(tmp_pat
     assert switch_response.status_code == 200
     assert picker_client.calls == [{"model": "gpt-5.6-terra", "effort": "high", "service_tier": "priority"}]
     assert messenger.sent == []
+
+
+def test_fast_mode_changes_on_a_codex_chat_whose_effort_was_never_picked(tmp_path: Path) -> None:
+    """A codex chat that never picked an effort records none and runs at the model's default. A
+    fast-mode change sends that recorded (null) effort with only the fast axis, and must apply."""
+    agent_id = "agent-00000000000000000000000000000016"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    manager, _messenger = _manager_with_resolver(agent_info)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+
+    codex_client = _RecordingSwitchClient()
+    codex_client.models = (
+        CodexModel.model_validate(
+            {
+                "id": "gpt-6-sol",
+                "model": "gpt-6-sol",
+                "displayName": "GPT-6-Sol",
+                "defaultReasoningEffort": "medium",
+                "supportedReasoningEfforts": [
+                    {"reasoningEffort": "low"},
+                    {"reasoningEffort": "medium"},
+                    {"reasoningEffort": "high"},
+                ],
+                "serviceTiers": [{"id": "priority"}],
+            }
+        ),
+    )
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch(
+            "imbue.chat.harnesses.codex.model.open_bound_codex_client",
+            return_value=codex_client,
+        ),
+    ):
+        assert client.get(f"/api/chats/{agent_id}/model-options").status_code == 200
+        response = client.post(
+            f"/api/chats/{agent_id}/model",
+            json={"model_id": "gpt-6-sol", "effort": None, "fast": False, "axes": ["fast"]},
+        )
+
+    assert response.status_code == 200
+    assert codex_client.calls == [{"service_tier": None}]
 
 
 class _FakeCodexConnection:

@@ -71,6 +71,17 @@ export const REATTACH_WINDOW: "minds:reattach-window" =
 // desktop window follows it, came back inside, or was released out there.
 // Payload: { windowId, phase: "out" | "in" | "released" }.
 export const TEAR_OUT: "minds:tear-out" = "TEAR_OUT" in embedContract ? embedContract.TEAR_OUT : "minds:tear-out";
+// The provider sign-in pair (contract v7), probed the same way.
+// Workspace -> embedder: relay a provider sign-in's loopback callback into this workspace's flow and
+// open its page. Payload: { url, flowId }.
+export const PROVIDER_SIGN_IN: "minds:provider-sign-in" =
+  "PROVIDER_SIGN_IN" in embedContract ? embedContract.PROVIDER_SIGN_IN : "minds:provider-sign-in";
+// Embedder -> workspace: whether the chrome is relaying that sign-in. Payload: { relay }.
+export const PROVIDER_SIGN_IN_ACK: "minds:provider-sign-in-ack" =
+  "PROVIDER_SIGN_IN_ACK" in embedContract ? embedContract.PROVIDER_SIGN_IN_ACK : "minds:provider-sign-in-ack";
+// Workspace -> embedder: that sign-in has ended, so the chrome can stop relaying it. Payload: { flowId }.
+export const PROVIDER_SIGN_IN_END: "minds:provider-sign-in-end" =
+  "PROVIDER_SIGN_IN_END" in embedContract ? embedContract.PROVIDER_SIGN_IN_END : "minds:provider-sign-in-end";
 
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 
@@ -85,6 +96,7 @@ const EMBEDDER_TO_WORKSPACE_TYPES: readonly string[] = [
   EMBEDDER_CAPABILITIES,
   REATTACH_WINDOW,
   TEAR_OUT,
+  PROVIDER_SIGN_IN_ACK,
 ];
 
 // One replaceable handler per embedder->workspace type, registered by the

@@ -124,7 +124,7 @@ more than one. To add one, send a permission request with an `account` in the
 payload; approving it prompts the user to sign in. Double-check the resulting
 account; it may differ from the one you requested.
 
-Alternatively, the user can add one from the Permissions tab of this machine's
+Alternatively, the user can add one from the Permissions tab of this workspace's
 options in the Imbue Studio app (the key icon in the tabs along the top): "Add connection"
 lists the services that already have an account here under "Add another
 account", and the ones that do not under "Connect a new service". When
@@ -159,7 +159,7 @@ that needs a registered OAuth app is not one either, but that does not rule the
 service out: its website's own sign-in may be (row 4, "Signing in instead of a
 key" below).
 
-This asks the user to create a connection to one domain and let this machine
+This asks the user to create a connection to one domain and let this workspace
 use it:
 
 ```bash
