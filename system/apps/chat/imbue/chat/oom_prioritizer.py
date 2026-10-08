@@ -184,7 +184,9 @@ class ChatOomPrioritizer:
     def record_running_chats(self, running_ids: Iterable[ChatId]) -> None:
         """Record which chats are currently mid-turn, then re-tag if it changed.
 
-        Called from the observe stream on every lifecycle change. Both edges of a
+        A chat waiting on a pending background task counts as mid-turn: the task's
+        completion starts its next turn. Called on every lifecycle change and
+        whenever a chat's pending background tasks change. Both edges of a
         turn stamp engagement: entering a running state means something addressed
         the chat (for one driven from outside the UI this is the only evidence it
         is still in use), and leaving one means it was active up to that moment --
