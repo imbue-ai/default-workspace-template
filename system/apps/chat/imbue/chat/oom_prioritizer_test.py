@@ -29,6 +29,7 @@ class _Harness:
         # plausible epoch rather than 0 so idle arithmetic never goes negative.
         self.now = 1_700_000_000.0
         self.process_started_at: dict[ChatId, float] = {}
+        self.reports_sent = 0
         self.prioritizer = ChatOomPrioritizer(
             list_chat_ids=lambda: list(self.chat_ids),
             resolve_pid=lambda cid: self.pids.get(cid),
@@ -40,9 +41,12 @@ class _Harness:
         )
 
     def report(self, chat_id: str, state: PresenceState, instance_id: str = "page-1") -> None:
+        self.reports_sent += 1
         self.prioritizer.record_presence(
             ChatId(chat_id),
-            PresenceReport(instance_id=instance_id, client_id="client-1", state=state, is_focused=False),
+            PresenceReport(
+                instance_id=instance_id, client_id="client-1", state=state, is_focused=False, sequence=self.reports_sent
+            ),
         )
 
     def _set_adj(self, pid: int, adj: int) -> bool:
@@ -361,7 +365,9 @@ def test_a_prioritizer_with_no_writer_accepts_every_report_and_touches_no_proces
     prioritizer.seed_last_message_times({chat_id: 1_700_000_000.0})
     prioritizer.record_presence(
         chat_id,
-        PresenceReport(instance_id="page-1", client_id="client-1", state=PresenceState.VISIBLE, is_focused=False),
+        PresenceReport(
+            instance_id="page-1", client_id="client-1", state=PresenceState.VISIBLE, is_focused=False, sequence=1
+        ),
     )
     prioritizer.record_message(chat_id)
     prioritizer.record_running_chats([chat_id])

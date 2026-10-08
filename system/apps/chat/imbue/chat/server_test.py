@@ -1697,8 +1697,16 @@ def _manager_with_capturing_prioritizer(writes: list[tuple[int, int]], pids: dic
     return manager
 
 
-def _presence_body(state: str, instance_id: str = "page-1", is_focused: bool = False) -> dict[str, Any]:
-    return {"instance_id": instance_id, "client_id": "client-1", "state": state, "is_focused": is_focused}
+def _presence_body(
+    state: str, instance_id: str = "page-1", is_focused: bool = False, sequence: int = 1
+) -> dict[str, Any]:
+    return {
+        "instance_id": instance_id,
+        "client_id": "client-1",
+        "state": state,
+        "is_focused": is_focused,
+        "sequence": sequence,
+    }
 
 
 def _client_with_tracked_chat(writes: list[tuple[int, int]], agent_id: str, pid: int) -> FlaskClient:
@@ -1737,7 +1745,7 @@ def test_presence_endpoint_closed_report_releases_the_chat() -> None:
     client.post("/api/chats/agent-c0ffee/presence", json=_presence_body("hidden"))
     open_adj = writes[-1][1]
 
-    response = client.post("/api/chats/agent-c0ffee/presence", json=_presence_body("closed"))
+    response = client.post("/api/chats/agent-c0ffee/presence", json=_presence_body("closed", sequence=2))
 
     assert response.status_code == 200
     assert writes[-1][1] > open_adj
@@ -1771,7 +1779,8 @@ def test_presence_endpoint_refuses_a_report_that_names_no_page_instance() -> Non
     client = _client_with_tracked_chat(writes, "agent-c0ffee", 4242)
 
     response = client.post(
-        "/api/chats/agent-c0ffee/presence", json={"client_id": "client-1", "state": "visible", "is_focused": True}
+        "/api/chats/agent-c0ffee/presence",
+        json={"client_id": "client-1", "state": "visible", "is_focused": True, "sequence": 1},
     )
 
     assert response.status_code == 400
@@ -1824,8 +1833,12 @@ def test_a_report_that_starts_someone_watching_marks_the_chat_read_in_the_app_on
         client = create_application(build_test_state(agent_manager=manager)).test_client()
         try:
             client.post("/api/chats/agent-c0ffee/presence", json=_presence_body("visible", "page-1"))
-            client.post("/api/chats/agent-c0ffee/presence", json=_presence_body("visible", "page-1", is_focused=True))
-            client.post("/api/chats/agent-c0ffee/presence", json=_presence_body("visible", "page-1", is_focused=True))
+            client.post(
+                "/api/chats/agent-c0ffee/presence", json=_presence_body("visible", "page-1", is_focused=True, sequence=2)
+            )
+            client.post(
+                "/api/chats/agent-c0ffee/presence", json=_presence_body("visible", "page-1", is_focused=True, sequence=3)
+            )
             client.post("/api/chats/agent-c0ffee/presence", json=_presence_body("visible", "page-2", is_focused=True))
             # The calls run one at a time in order, so once this second chat's lands nothing is left for the first.
             client.post("/api/chats/agent-beef01/presence", json=_presence_body("visible", "page-3", is_focused=True))
