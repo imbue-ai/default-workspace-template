@@ -130,9 +130,6 @@ class ImportChatsError(Exception):
     """Something the import cannot go on past; the message is for the agent to read."""
 
 
-# The status file
-
-
 def _now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 
@@ -170,9 +167,6 @@ def record_source(
         "pid": pid,
     }
     write_status(path, document)
-
-
-# datalib's config
 
 
 def render_config(sources: Sequence[ChatSource]) -> str:
@@ -253,9 +247,6 @@ def count_conversations(data_root: Path, source: ChatSource) -> int:
     if not rendered.is_dir():
         return 0
     return sum(1 for _ in rendered.rglob("all.md"))
-
-
-# Running datalib
 
 
 def parse_run_summary(output: str) -> dict[str, dict]:
@@ -458,9 +449,6 @@ def sync(
     return is_every_source_imported
 
 
-# Checking access
-
-
 def classify_check(returncode: int, output: str) -> tuple[str, str]:
     """The ``check`` state for a ``latchkey curl -w '\\n%{http_code}'`` result: ``(state, detail)``."""
     body, _, status_code = output.rstrip("\n").rpartition("\n")
@@ -505,9 +493,6 @@ def check(
     except OSError as e:
         raise ImportChatsError(f"cannot run latchkey: {e}") from e
     return classify_check(result.returncode, result.stdout + result.stderr)
-
-
-# The command line
 
 
 def _sources(keys: Sequence[str]) -> list[ChatSource]:

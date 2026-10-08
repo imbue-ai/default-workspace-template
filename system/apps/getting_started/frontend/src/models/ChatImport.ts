@@ -6,8 +6,6 @@
  * Fetched once per page load and again when the window regains focus; while a source is still
  * importing it is polled, so the card counts up as the import runs. A failed fetch leaves the card
  * hidden: it is an offer, and the page reads fine without it.
- *
- * ``cardPhase`` (which face the card shows) and ``importedSummary`` are pure and tested.
  */
 
 import m from "mithril";
@@ -41,7 +39,6 @@ export const SOURCE_LABELS: ReadonlyArray<readonly [string, string]> = [
   ["chatgpt", "ChatGPT"],
 ];
 
-// pure helpers
 export function cardPhase(chatImport: ChatImport | null): ChatImportCardPhase {
   if (chatImport === null || chatImport.is_dismissed) return "hidden";
   const states = Object.values(chatImport.sources).map((source) => source.state);
@@ -61,7 +58,6 @@ export function importedSummary(sources: Record<string, ChatImportSource>): stri
   return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
 }
 
-// the fetch, the poll, and the dismissal
 let state: ChatImport | null = null;
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
