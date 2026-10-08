@@ -302,7 +302,7 @@ def _wired_command(event: str) -> str:
     return command
 
 
-def test_the_wired_claude_hooks_record_a_stop_and_clear_at_the_next_prompt(
+def test_the_wired_claude_hooks_record_a_stop_and_clear_at_the_next_session_start(
     background_task_markers: Path,
 ) -> None:
     """Runs the hook commands exactly as ``.claude/settings.json`` spells them, as Claude does."""
@@ -323,8 +323,8 @@ def test_the_wired_claude_hooks_record_a_stop_and_clear_at_the_next_prompt(
     assert (task.description, task.pid) == ("Build the site", os.getpid())
 
     subprocess.run(
-        ["sh", "-c", _wired_command("UserPromptSubmit")],
-        input="{}",
+        ["sh", "-c", _wired_command("SessionStart")],
+        input=json.dumps({"hook_event_name": "SessionStart", "source": "resume"}),
         text=True,
         env=env,
         cwd=_REPO_ROOT,
@@ -443,3 +443,65 @@ def test_an_unreachable_chat_app_falls_back_to_the_files(
 
     assert listed.stdout.splitlines() == [f"{_CHAT_ID}\t{_CHAT_ID}\t\ttrue\t1"]
     assert _run_cli("is-busy", _OTHER_CHAT_ID, cwd=tmp_path).returncode == 1
+
+
+def _git(*args: str, cwd: Path) -> None:
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+
+def test_a_worktrees_markers_resolve_to_the_main_checkout(tmp_path: Path) -> None:
+    """A worker runs the scripts from its own worktree; its markers must land in the checkout the
+    chat app reads."""
+    main = tmp_path / "workspace"
+    main.mkdir()
+    _git("init", "-q", "-b", "main", cwd=main)
+    _git(
+        "-c",
+        "user.email=t@example.com",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "root",
+        cwd=main,
+    )
+    worktree = tmp_path / "worktrees" / "worker"
+    _git("worktree", "add", "-q", "-b", "worker", str(worktree), cwd=main)
+
+    assert background_tasks.main_checkout(worktree) == main.resolve()
+    assert background_tasks.main_checkout(main) == main
+    assert background_tasks.main_checkout(tmp_path) == tmp_path
+
+
+@pytest.mark.skipif(
+    not Path("/proc/self/stat").exists(),
+    reason="needs Linux's /proc/<pid>/stat for a process's start time",
+)
+def test_a_marker_whose_pid_now_belongs_to_another_process_is_stale(
+    background_task_markers: Path,
+) -> None:
+    """After a restart pids are handed out again; a marker naming a recycled pid must not count."""
+    own_start = background_tasks.process_start_time(os.getpid())
+    for task_id, pid_start in (
+        ("same", own_start),
+        ("recycled", str(int(own_start) + 1)),
+    ):
+        background_tasks.write_marker(
+            background_task_markers,
+            _CHAT_ID,
+            background_tasks.BackgroundTask(
+                source="run_in_background",
+                id=task_id,
+                description="",
+                started_at="2026-10-08T10:00:00+00:00",
+                pid=os.getpid(),
+                pid_start=pid_start,
+            ),
+        )
+
+    assert [
+        t.id
+        for t in background_tasks.list_live_tasks(background_task_markers, _CHAT_ID)
+    ] == ["same"]

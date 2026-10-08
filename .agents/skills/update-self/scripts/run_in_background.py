@@ -153,15 +153,73 @@ def script_repo_root() -> Path:
     )
 
 
+def main_checkout(repo_root: Path) -> Path:
+    """The checkout a git worktree belongs to, read from its ``.git`` file; ``repo_root`` itself
+    when it is a main checkout or not a git checkout at all. A worker runs this script from its own
+    worktree, but its chat's marker belongs in the main checkout's ``data/``, which the chat app reads."""
+    try:
+        git_file = (repo_root / ".git").read_text(encoding="utf-8")
+    except OSError:
+        return repo_root
+    git_dir = (repo_root / git_file.strip().removeprefix("gitdir:").strip()).resolve()
+    try:
+        common_dir = (
+            git_dir / (git_dir / "commondir").read_text(encoding="utf-8").strip()
+        ).resolve()
+    except OSError:
+        return repo_root
+    return common_dir.parent
+
+
 def marker_path(environ: Mapping[str, str], chat_id: str, task_id: str) -> Path:
     """Where this run's busy marker lives: one file per run under its chat's directory."""
     override = environ.get(MARKER_ROOT_ENV, "")
-    root = Path(override) if override else script_repo_root() / DEFAULT_MARKER_ROOT
+    root = (
+        Path(override)
+        if override
+        else main_checkout(script_repo_root()) / DEFAULT_MARKER_ROOT
+    )
     return (
         root
         / _UNSAFE_NAME_CHARS.sub("_", chat_id)
         / f"{MARKER_SOURCE}-{_UNSAFE_NAME_CHARS.sub('_', task_id)}.json"
     )
+
+
+def process_start_time(pid: int) -> str:
+    """When the process started (``/proc/<pid>/stat`` field 22), or '' where ``/proc`` lacks it."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    fields = stat.rpartition(")")[2].split()
+    return fields[19] if len(fields) > 19 else ""
+
+
+def _is_runner_alive(pid: int, pid_start: str) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return not pid_start or process_start_time(pid) in ("", pid_start)
+
+
+def remove_dead_runner_markers(chat_dir: Path) -> None:
+    """Remove the markers of this chat's earlier runs whose runner died without removing its own
+    (killed for memory, or a restart); no reader counts them, and no one else removes them."""
+    for path in chat_dir.glob(f"{MARKER_SOURCE}-*.json"):
+        try:
+            marker = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        pid = marker.get("pid") if isinstance(marker, dict) else None
+        if not isinstance(pid, int) or pid <= 0:
+            continue
+        pid_start = marker.get("pid_start", "")
+        if not _is_runner_alive(pid, pid_start if isinstance(pid_start, str) else ""):
+            path.unlink(missing_ok=True)
 
 
 def write_marker(path: Path, task_id: str, description: str, pid: int) -> None:
@@ -179,6 +237,7 @@ def write_marker(path: Path, task_id: str, description: str, pid: int) -> None:
                         datetime.timezone.utc
                     ).isoformat(timespec="seconds"),
                     "pid": pid,
+                    "pid_start": process_start_time(pid),
                 },
                 temp_file,
             )
@@ -466,9 +525,11 @@ def _start_detached(
             start_new_session=True,
         )
     # Before the caller's tool call returns, so the chat is busy before its agent can end the turn.
+    path = marker_path(environ, chat_id, task_dir.name)
     try:
+        remove_dead_runner_markers(path.parent)
         write_marker(
-            marker_path(environ, chat_id, task_dir.name),
+            path,
             task_dir.name,
             description,
             runner.pid,

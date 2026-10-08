@@ -671,3 +671,63 @@ def test_the_runners_marker_is_where_and_what_the_reader_expects(
     )
     assert run_in_background.MARKER_ROOT_ENV == background_tasks.MARKER_ROOT_ENV
     assert run_in_background.DEFAULT_MARKER_ROOT == background_tasks.DEFAULT_MARKER_ROOT
+
+
+@pytest.mark.usefixtures("fake_mngr")
+def test_a_new_run_clears_its_chats_markers_from_runners_that_died(
+    fake_chat_app: Any, background_task_markers: Path, tmp_path: Path
+) -> None:
+    chat_dir = background_tasks.chat_dir(background_task_markers, _CHAT_ID)
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    background_tasks.write_marker(
+        background_task_markers,
+        _CHAT_ID,
+        background_tasks.BackgroundTask(
+            source="run_in_background",
+            id="killed-earlier",
+            description="Killed for memory",
+            started_at="2026-10-08T09:00:00+00:00",
+            pid=dead.pid,
+        ),
+    )
+
+    started = _start_runner(
+        tmp_path,
+        _agent_env(MNGR_AGENT_ID=_CHAT_ID),
+        "Wait a while",
+        *_python_command("import time; time.sleep(2)"),
+    )
+
+    assert started.returncode == 0, started.stderr
+    assert [path.name for path in chat_dir.iterdir()] == [
+        f"run_in_background-{_task_dir_from(started.stdout, tmp_path).name}.json"
+    ]
+    _wait_for_posts(fake_chat_app, 1)
+
+
+def test_the_runner_finds_the_main_checkout_as_the_reader_does(tmp_path: Path) -> None:
+    main = tmp_path / "workspace"
+    main.mkdir()
+    for args in (
+        ("init", "-q", "-b", "main"),
+        (
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "root",
+        ),
+        ("worktree", "add", "-q", "-b", "worker", str(tmp_path / "worker")),
+    ):
+        subprocess.run(["git", *args], cwd=main, check=True, capture_output=True)
+
+    for checkout in (tmp_path / "worker", main, tmp_path):
+        assert run_in_background.main_checkout(
+            checkout
+        ) == background_tasks.main_checkout(checkout)
+    assert run_in_background.main_checkout(tmp_path / "worker") == main.resolve()

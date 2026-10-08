@@ -13,11 +13,13 @@ Two writers, each owning its own files and never reading another's:
 - ``run_in_background.py``, whose detached runner writes a ``run_in_background-*`` marker
   before the caller's tool call returns and removes it once the report is delivered or given up;
 - Claude's Stop hook (``record-claude-stop``), which copies the ``background_tasks`` list Claude
-  Code hands it into ``claude-*`` markers, and its UserPromptSubmit and SessionStart hooks
-  (``clear-claude``), which empty that list when a turn starts.
+  Code hands it into ``claude-*`` markers, keeping a still-listed task's start time and removing
+  the ones no longer listed; and its SessionStart hook (``clear-claude``, on startup and resume),
+  which removes them all, since a new Claude process has none of the old one's tasks.
 
-Each marker names the pid whose death makes it stale (the runner, or the Claude main process).
-Readers skip a stale marker and never delete it; its writer's next pass does.
+Each marker names the pid whose death makes it stale (the runner, or the Claude main process),
+and where ``/proc`` has it, that process's start time, so a pid recycled after a restart does not
+bring a marker back. Readers skip a stale marker and never delete it; its writer's next pass does.
 
 The chat app reads the directories on its state poller and is the authority for everyone else:
 ``list`` and ``is-busy`` ask it first (``GET /api/agents``), and read the files themselves only
@@ -28,11 +30,14 @@ active agent is taken to be the agent whose id is the chat id::
     python3 system/scripts/background_tasks.py is-busy <chat-id>    # exit 0 busy, 1 not
 
 ``list`` prints every chat with pending tasks; ``tsv`` is one line per chat,
-``chat_id<TAB>active_agent_id<TAB>active_agent_name<TAB>is_busy<TAB>task_count``.
+``chat_id<TAB>active_agent_id<TAB>active_agent_name<TAB>is_busy<TAB>task_count``. Studio reads
+these columns by position, so a new one may only be appended. ``is_busy`` from the chat app
+counts a turn in flight; the files alone cannot see one.
 
-The marker root is ``$MINDS_BACKGROUND_TASKS_DIR``, which ``.mngr/settings.toml`` pins to an
-absolute path for every agent (a worker's work dir is its own worktree, whose ``data/`` the chat
-app never reads), else ``data/.apps/chat/background_tasks`` under the repo this script is in.
+The marker root is ``data/.apps/chat/background_tasks`` under the workspace's main checkout:
+the repo this script is in, or, when that is a git worktree (a worker's work dir), the checkout
+the worktree belongs to, whose ``data/`` is the one the chat app reads. ``$MINDS_BACKGROUND_TASKS_DIR``
+overrides it.
 
 Standard library only: skills run it as ``python3 system/scripts/...``, the hooks run it before
 any venv exists, and the chat app, the shell's avatar, the memory-candidate scan and the worker
@@ -86,6 +91,7 @@ class BackgroundTask:
     pid: int
     kind: str = ""
     command: str = ""
+    pid_start: str = ""
 
     @property
     def file_name(self) -> str:
@@ -103,6 +109,8 @@ class BackgroundTask:
             data["kind"] = self.kind
         if self.command:
             data["command"] = self.command
+        if self.pid_start:
+            data["pid_start"] = self.pid_start
         return data
 
     @classmethod
@@ -121,6 +129,7 @@ class BackgroundTask:
         if not (isinstance(description, str) and isinstance(started_at, str)):
             return None
         kind, command = data.get("kind", ""), data.get("command", "")
+        pid_start = data.get("pid_start", "")
         return cls(
             source=source,
             id=task_id,
@@ -129,6 +138,7 @@ class BackgroundTask:
             pid=pid,
             kind=kind if isinstance(kind, str) else "",
             command=command if isinstance(command, str) else "",
+            pid_start=pid_start if isinstance(pid_start, str) else "",
         )
 
 
@@ -144,11 +154,30 @@ def script_repo_root() -> Path:
     return Path.cwd()
 
 
+def main_checkout(repo_root: Path) -> Path:
+    """The checkout a git worktree belongs to, read from its ``.git`` file; ``repo_root`` itself
+    when it is a main checkout or not a git checkout at all."""
+    try:
+        git_file = (repo_root / ".git").read_text(encoding="utf-8")
+    except OSError:
+        # No .git, or a directory: a main checkout or none.
+        return repo_root
+    git_dir_text = git_file.strip().removeprefix("gitdir:").strip()
+    git_dir = (repo_root / git_dir_text).resolve()
+    try:
+        common_dir = (
+            git_dir / (git_dir / "commondir").read_text(encoding="utf-8").strip()
+        ).resolve()
+    except OSError:
+        return repo_root
+    return common_dir.parent
+
+
 def marker_root(environ: Mapping[str, str]) -> Path:
     override = environ.get(MARKER_ROOT_ENV, "")
     if override:
         return Path(override)
-    return script_repo_root() / DEFAULT_MARKER_ROOT
+    return main_checkout(script_repo_root()) / DEFAULT_MARKER_ROOT
 
 
 def own_chat_id(environ: Mapping[str, str]) -> str:
@@ -200,6 +229,29 @@ def is_pid_alive(pid: int) -> bool:
     return True
 
 
+def process_start_time(pid: int) -> str:
+    """When the process started, in clock ticks since boot (``/proc/<pid>/stat`` field 22), or ''
+    where ``/proc`` does not have it (macOS, or a process already gone)."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    # Fields after the command name, which is parenthesized and may hold spaces; field 22 is the 20th.
+    fields = stat.rpartition(")")[2].split()
+    return fields[19] if len(fields) > 19 else ""
+
+
+def is_task_live(task: BackgroundTask) -> bool:
+    """Whether the task's process still runs: its pid is alive and, when the marker recorded a
+    start time and ``/proc`` reports one, it is the same process, not a later one given its pid."""
+    if not is_pid_alive(task.pid):
+        return False
+    if not task.pid_start:
+        return True
+    current_start = process_start_time(task.pid)
+    return current_start in ("", task.pid_start)
+
+
 def read_markers(directory: Path) -> list[BackgroundTask]:
     """Every well-formed marker in one chat's directory, live or stale; a missing directory holds none."""
     try:
@@ -224,7 +276,7 @@ def read_markers(directory: Path) -> list[BackgroundTask]:
 
 def live_tasks_in(directory: Path) -> list[BackgroundTask]:
     """The markers in one chat's directory whose pid is alive, oldest first."""
-    live = [task for task in read_markers(directory) if is_pid_alive(task.pid)]
+    live = [task for task in read_markers(directory) if is_task_live(task)]
     return sorted(live, key=lambda task: (task.started_at, task.source, task.id))
 
 
@@ -456,7 +508,11 @@ def claude_main_pid(environ: Mapping[str, str]) -> int:
 
 
 def claude_tasks_from_stop_input(
-    payload: object, pid: int, existing: Mapping[str, BackgroundTask], started_at: str
+    payload: object,
+    pid: int,
+    pid_start: str,
+    existing: Mapping[str, BackgroundTask],
+    started_at: str,
 ) -> list[BackgroundTask] | None:
     """The Claude markers a Stop input calls for, or None when it carries no task list to copy.
 
@@ -484,6 +540,7 @@ def claude_tasks_from_stop_input(
                 pid=pid,
                 kind=str(kind),
                 command=command if isinstance(command, str) else "",
+                pid_start=pid_start,
             )
         )
     return tasks
@@ -498,7 +555,9 @@ def record_claude_stop(root: Path, chat_id: str, payload: object, pid: int) -> N
         for task in read_markers(directory)
         if task.source == SOURCE_CLAUDE
     }
-    tasks = claude_tasks_from_stop_input(payload, pid, existing, now_iso())
+    tasks = claude_tasks_from_stop_input(
+        payload, pid, process_start_time(pid), existing, now_iso()
+    )
     if tasks is None:
         return
     for task in tasks:
@@ -573,7 +632,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     commands.add_parser(
         "clear-claude",
-        help="Claude's UserPromptSubmit and SessionStart hook: remove the Claude markers.",
+        help="Claude's SessionStart hook: remove the Claude markers.",
     )
     return parser
 
