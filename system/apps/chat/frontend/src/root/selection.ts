@@ -38,7 +38,7 @@ export type SlotFill = { kind: "keep" } | { kind: "select"; chatId: string } | {
 
 export interface SlotState {
   selectedChatId: string | null;
-  /** The listed chats, most recent first. */
+  /** The listed chats in display order: the default chat first, then the most recent. */
   chatIds: readonly string[];
   isChatListKnown: boolean;
   /** An intake is choosing the chat, or the user is picking one. */
@@ -48,14 +48,15 @@ export interface SlotState {
   isShown: boolean;
 }
 
-/** The chat list is never left open empty: with nothing selected it shows the most recent chat, and with no chats a
- *  new one awaiting its first send. That new one is only asked for while the root is on screen, so a list open on
+/** The chat list is never left open empty: with nothing selected (opened bare, or the chat on screen was deleted) it
+ *  shows the head of the list -- the default chat, else the most recent -- and with no chats a new one awaiting its
+ *  first send. That new one is only asked for while the root is on screen, so a list open on
  *  a desktop nobody is looking at does not add one. */
 export function slotFill(state: SlotState): SlotFill {
   if (state.selectedChatId !== null || !state.isChatListKnown || state.isChoosing || state.isCompact) {
     return { kind: "keep" };
   }
-  const mostRecent = state.chatIds[0];
-  if (mostRecent !== undefined) return { kind: "select", chatId: mostRecent };
+  const head = state.chatIds[0];
+  if (head !== undefined) return { kind: "select", chatId: head };
   return state.isShown ? { kind: "open_new" } : { kind: "keep" };
 }

@@ -18,17 +18,10 @@ import m from "mithril";
 import { scopeOfHandshake } from "@imbue/workspace-ui/src/element_reference";
 import { ChatDrawer } from "./ChatDrawer";
 import { ChatHeader } from "./ChatHeader";
+import { chatRowFixture } from "./chatRowFixture";
 import type { ChatRow } from "./rows";
 
-const ONLY_CHAT: ChatRow = {
-  chatId: "agent-1",
-  title: "Plan the launch",
-  status: "idle",
-  labels: {},
-  agentIds: ["agent-1"],
-  lastActiveMs: null,
-  isProvisional: false,
-};
+const ONLY_CHAT: ChatRow = chatRowFixture("agent-1", { title: "Plan the launch" });
 
 // The rename case's chat: the delete case leaves its chat marked as being deleted for the rest of the file.
 const RENAMED_CHAT: ChatRow = { ...ONLY_CHAT, chatId: "agent-2", agentIds: ["agent-2"] };

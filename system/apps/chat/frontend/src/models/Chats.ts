@@ -109,6 +109,9 @@ export interface ChatSnapshot {
   // Epoch seconds of the chat's most recent message; null when it has never been messaged.
   // The chat root's list orders on it.
   last_messaged_at: number | null;
+  // Whether this is the workspace's default chat (the welcome chat): listed first, and where a text with no chat of
+  // its own goes.
+  is_default: boolean;
 }
 
 /** One message currently parked in an agent's harness queue (the wire shape of the backend
@@ -145,6 +148,8 @@ export interface ProvisionalChat {
   // Imbue Studio app had before the workspace existed. Its page keeps the transcript and the composer up
   // through the create rather than the provisional screens.
   is_seeded: boolean;
+  // Whether this is the workspace's default chat (a welcome chat still awaiting its first send).
+  is_default: boolean;
 }
 
 type WsEvent =

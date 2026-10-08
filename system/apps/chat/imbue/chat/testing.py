@@ -876,6 +876,7 @@ def make_chat_snapshot(chat_id: str, last_messaged_at: float | None = None, name
             is_connecting=False,
         ),
         last_messaged_at=last_messaged_at,
+        is_default=False,
     )
 
 

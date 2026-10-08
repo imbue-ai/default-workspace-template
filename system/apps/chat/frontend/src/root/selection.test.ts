@@ -33,10 +33,10 @@ describe("slotFill", () => {
     isShown: true,
   };
 
-  it("shows the most recent chat when nothing is selected", () => {
-    expect(slotFill({ ...empty, chatIds: ["agent-new", "agent-old"] })).toEqual({
+  it("shows the head of the list (the default chat, else the most recent) when nothing is selected", () => {
+    expect(slotFill({ ...empty, chatIds: ["agent-welcome", "agent-new", "agent-old"] })).toEqual({
       kind: "select",
-      chatId: "agent-new",
+      chatId: "agent-welcome",
     });
   });
 

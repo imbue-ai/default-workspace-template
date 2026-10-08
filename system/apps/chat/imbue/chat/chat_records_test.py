@@ -12,6 +12,7 @@ from imbue.chat.chat_records import ChatRecordError
 from imbue.chat.chat_records import FileChatRecordStore
 from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.chat_records import RECORD_VERSION
+from imbue.chat.chat_records import default_chat_id
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import make_chat_agent_entry
@@ -275,3 +276,20 @@ def test_an_in_memory_store_behaves_like_the_file_store() -> None:
     assert store.read_all() == {ChatId(first): record}
     store.delete(ChatId(first))
     assert store.read_all() == {}
+
+
+def _seeded_record(chat_id: str, started_minute: int) -> ChatRecord:
+    seed = make_chat_agent_entry(1, chat_id, is_archived=True, harness=HarnessType.SEED)
+    started_at = seed.started_at.replace(minute=started_minute)
+    return ChatRecord(
+        chat_id=ChatId(chat_id), agents=(seed.model_copy_update(to_update(seed.field_ref().started_at, started_at)),)
+    )
+
+
+def test_the_default_chat_is_the_earliest_seeded_one_and_none_without_a_seed() -> None:
+    earlier, later, plain = _agent_id(), _agent_id(), _agent_id()
+    plain_record = ChatRecord(chat_id=ChatId(plain), agents=(make_chat_agent_entry(1, plain, is_archived=False),))
+
+    assert default_chat_id([plain_record, _seeded_record(later, 30), _seeded_record(earlier, 10)]) == ChatId(earlier)
+    assert default_chat_id([plain_record]) is None
+    assert default_chat_id([]) is None

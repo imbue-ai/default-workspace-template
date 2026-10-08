@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import type { ProvisionalChat } from "../models/Chats";
-import { groupedRows, parentOf, rowsFromSnapshots } from "./rows";
+import { defaultGroupSize, groupedRows, parentOf, rowsFromSnapshots } from "./rows";
 
 const NONE: ReadonlySet<string> = new Set();
 
 function provisional(chatId: string, phase: ProvisionalChat["phase"], name = ""): ProvisionalChat {
-  return { chat_id: chatId, name, account_id: "", phase, error: null, is_seeded: false };
+  return { chat_id: chatId, name, account_id: "", phase, error: null, is_seeded: false, is_default: false };
 }
 
 describe("rowsFromSnapshots", () => {
@@ -79,5 +79,44 @@ describe("groupedRows", () => {
 
     expect(parentOf(rows[0], rows)).toBeNull();
     expect(groupedRows(rows, NONE).map((row) => row.chatId)).toEqual(["agent-orphan"]);
+  });
+
+  it("leads with the default chat and its helpers whatever was messaged since, a chat started here included", () => {
+    const rows = rowsFromSnapshots(
+      [
+        chatSnapshotFixture("agent-recent", { last_messaged_at: 300 }),
+        chatSnapshotFixture("agent-welcome", { last_messaged_at: 100, is_default: true }),
+        chatSnapshotFixture("agent-helper", {
+          last_messaged_at: 50,
+          labels: { agent_created: "true", lead_agent: "agent-welcome" },
+        }),
+        chatSnapshotFixture("agent-mine"),
+      ],
+      [],
+    );
+
+    const grouped = groupedRows(rows, new Set(["agent-mine"]));
+
+    expect(grouped.map((row) => row.chatId)).toEqual(["agent-welcome", "agent-helper", "agent-mine", "agent-recent"]);
+    expect(defaultGroupSize(grouped)).toBe(2);
+  });
+
+  it("leads with a default chat still awaiting its first send", () => {
+    const welcome: ProvisionalChat = { ...provisional("agent-welcome", "awaiting_first_send"), is_default: true };
+    const rows = rowsFromSnapshots([chatSnapshotFixture("agent-recent", { last_messaged_at: 300 })], [welcome]);
+
+    const grouped = groupedRows(rows, NONE);
+
+    expect(grouped.map((row) => [row.chatId, row.isDefault])).toEqual([
+      ["agent-welcome", true],
+      ["agent-recent", false],
+    ]);
+    expect(defaultGroupSize(grouped)).toBe(1);
+  });
+
+  it("has no default group when no chat is the default", () => {
+    const rows = rowsFromSnapshots([chatSnapshotFixture("agent-a"), chatSnapshotFixture("agent-b")], []);
+
+    expect(defaultGroupSize(groupedRows(rows, NONE))).toBe(0);
   });
 });

@@ -34,6 +34,8 @@ from playwright.sync_api import expect
 from imbue.chat.accounts import account_dir
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.auto_open import chat_root_path
+from imbue.chat.chat_seed import SeedRole
+from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.registry import get_model_state_path
 from imbue.chat.models import ChatSnapshot
@@ -849,6 +851,33 @@ def test_the_chat_list_opened_with_nothing_selected_shows_the_most_recent_chat(t
         _wait_for_chat_window_path(server, lambda path: path == _FIXTURE_ROOT_PATH, "the most recent chat's selection")
         expect(_chat_root(page).locator("iframe.chat-root-frame:visible")).to_have_count(1, timeout=15000)
         expect(_chat_root(page).locator(".chat-root-empty")).to_have_count(0)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_the_chat_list_leads_with_the_welcome_chat_and_opens_on_it_over_a_more_recent_chat(
+    tmp_path: Path, page: Page
+) -> None:
+    """The seeded welcome chat is the default chat: it heads the list, set apart from the rest and marked, ahead of
+    a chat messaged since, and it is the chat the list shows with nothing selected.
+
+    The root is opened at the chat app's own URL, with no shell client connected: seeding also owes the welcome chat
+    an auto-opened window, which would move a shell's chat window onto it whatever the root itself selected."""
+    with _running_e2e_server(tmp_path) as server:
+        agent_manager = server.chat_state.agent_manager
+        agent_manager.record_message_sent(ChatId(FIXTURE_AGENT_ID))
+        welcome = agent_manager.seed_chat(
+            "Welcome",
+            (SeedTurn(role=SeedRole.ASSISTANT, text="Your workspace is ready! How would you like to start?"),),
+        )
+        page.goto(f"{server.chat_url}/")
+        expect(page).to_have_url(f"{server.chat_url}{chat_root_path(welcome.chat_id)}", timeout=15000)
+        rows = page.locator(".chat-rail-row")
+        expect(rows).to_have_count(2, timeout=15000)
+        expect(rows.nth(0)).to_have_attribute("data-chat-id", welcome.chat_id)
+        expect(rows.nth(0)).to_have_attribute("data-default", "true")
+        expect(rows.nth(1)).to_have_attribute("data-chat-id", FIXTURE_AGENT_ID)
+        default_group = page.locator(".chat-rail-default-group .chat-rail-row")
+        expect(default_group).to_have_count(1)
 
 
 @pytest.mark.timeout(120, func_only=False)

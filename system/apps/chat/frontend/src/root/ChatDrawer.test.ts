@@ -19,10 +19,11 @@ import m from "mithril";
 import { scopeOfHandshake } from "@imbue/workspace-ui/src/element_reference";
 import { ChatDrawer } from "./ChatDrawer";
 import type { ChatRailAttrs } from "./ChatRail";
+import { chatRowFixture } from "./chatRowFixture";
 import type { ChatRow } from "./rows";
 
 function row(chatId: string, title: string, status = "idle"): ChatRow {
-  return { chatId, title, status, labels: {}, agentIds: [chatId], lastActiveMs: null, isProvisional: false };
+  return chatRowFixture(chatId, { title, status });
 }
 
 const ROWS = [row("agent-1", "Plan the launch"), row("agent-2", "Fix the tests", "stopped")];
