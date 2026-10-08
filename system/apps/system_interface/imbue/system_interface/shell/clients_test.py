@@ -59,7 +59,9 @@ def test_set_active_desktop_moves_a_recorded_client_and_refuses_an_unknown_one(t
     store.record_report(_report("c1", "home"), TEST_NOW, is_redirected=False)
     moved = store.set_active_desktop(ClientId("c1"), DesktopId("research"), TEST_NOW + timedelta(minutes=1))
     assert moved.is_active_desktop_changed is True and moved.record.active_desktop == "research"
-    assert store.set_active_desktop(ClientId("c1"), DesktopId("research"), TEST_NOW).is_active_desktop_changed is False
+    unmoved = store.set_active_desktop(ClientId("c1"), DesktopId("research"), TEST_NOW)
+    assert unmoved.is_active_desktop_changed is False
+    assert (moved.record.desktop_revision, unmoved.record.desktop_revision) == (2, 2)
     with pytest.raises(ClientNotFoundError):
         store.set_active_desktop(ClientId("nobody"), DesktopId("research"), TEST_NOW)
 
