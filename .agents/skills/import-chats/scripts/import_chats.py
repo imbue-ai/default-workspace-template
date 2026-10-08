@@ -689,17 +689,18 @@ def stream_process(
         errors="replace",
         bufsize=1,
     ) as process:
-        assert process.stdout is not None and process.stderr is not None
+        stdout, stderr = process.stdout, process.stderr
+        assert stdout is not None and stderr is not None
         stdout_chunks: list[str] = []
         stdout_reader = threading.Thread(
-            target=lambda: stdout_chunks.append(process.stdout.read()),
+            target=lambda: stdout_chunks.append(stdout.read()),
             name="datalib-dag-stdout",
             daemon=True,
         )
         stdout_reader.start()
         stderr_lines: list[str] = []
         try:
-            for line in process.stderr:
+            for line in stderr:
                 stderr_lines.append(line)
                 on_stderr_line(line)
         except BaseException:
@@ -943,7 +944,7 @@ def main(
     argv: Sequence[str] | None = None,
     run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
 ) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n", 1)[0])
     subcommands = parser.add_subparsers(dest="command", required=True)
     check_parser = subcommands.add_parser(
         "check", help="whether this workspace can read the account yet"
