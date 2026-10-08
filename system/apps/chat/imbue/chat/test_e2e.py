@@ -12,6 +12,8 @@ document.
 from __future__ import annotations
 
 import json
+import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -32,6 +34,7 @@ from playwright.sync_api import ViewportSize
 from playwright.sync_api import expect
 
 from imbue.chat.accounts import account_dir
+from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.auto_open import chat_root_path
 from imbue.chat.harnesses.harness_type import HarnessType
@@ -46,6 +49,8 @@ from imbue.chat.testing import RunningWorkspace
 from imbue.chat.testing import SummaryWritingMngrMessenger
 from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.testing import running_workspace
+from imbue.chat.testing import seed_agent_state
+from imbue.chat.testing import write_background_task_marker
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import DEFAULT_STATIC_DIRECTORY as SHELL_STATIC_DIRECTORY
 from imbue.system_interface.shell.desktops import DEFAULT_DESKTOP_NAME
@@ -122,6 +127,7 @@ def _running_e2e_server(
     session_events: list[dict[str, Any]] | None = None,
     is_account_signed_in: bool = True,
     additional_agents: Sequence[tuple[str, str]] = (),
+    background_tasks_root: Path | None = None,
 ) -> AbstractContextManager[RunningWorkspace]:
     """The two-server workspace, the shell and the chat each on a free port of their own."""
     return running_workspace(
@@ -131,6 +137,7 @@ def _running_e2e_server(
         session_events=session_events,
         additional_agents=additional_agents,
         is_account_signed_in=is_account_signed_in,
+        background_tasks_root=background_tasks_root,
     )
 
 
@@ -326,6 +333,56 @@ def test_chat_transcript_area_is_pure_white(e2e_server: RunningWorkspace, page: 
     assert shell_bg not in ("#ffffff", "#fff", "rgb(255, 255, 255)"), (
         f"shared shell --color-bg should stay off-white, got {shell_bg}"
     )
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_chat_waiting_on_background_tasks_shows_the_wait_in_the_list_and_the_strip(
+    tmp_path: Path, page: Page
+) -> None:
+    """Between turns with tasks pending, the list draws the dashed ring and the strip the wait line, which opens
+    into one row per task; reduced motion holds the ring still, and the wait goes when the tasks do."""
+    with _running_e2e_server(tmp_path, background_tasks_root=tmp_path / "background_tasks") as server:
+        manager = server.chat_state.agent_manager
+        agent = manager.get_agent_by_id(FIXTURE_AGENT_ID)
+        assert agent is not None
+        seed_agent_state(
+            manager,
+            FIXTURE_AGENT_ID,
+            name=agent.name,
+            state="WAITING",
+            labels=agent.labels,
+            activity_state=ActivityState.IDLE,
+        )
+        reader = manager._background_tasks
+        assert reader is not None
+        write_background_task_marker(reader, FIXTURE_AGENT_ID, "build", os.getpid(), "Rebuild the worker image")
+        write_background_task_marker(reader, FIXTURE_AGENT_ID, "migrate", os.getpid(), "Migrate the schema")
+        manager._agent_state_poller.start()
+        _open_fixture_chat(page, server)
+
+        row = _chat_root(page).locator(f'.chat-rail-row[data-chat-id="{FIXTURE_AGENT_ID}"]')
+        expect(row).to_have_attribute("data-status", "background", timeout=15000)
+        ring = row.locator(".chat-rail-dot")
+        expect(ring).to_have_class(re.compile(r"chat-rail-dot--dashed"))
+        assert ring.evaluate("e => getComputedStyle(e).animationName") == "chat-rail-spin"
+        assert ring.evaluate("e => getComputedStyle(e).borderTopStyle") == "dashed"
+
+        wait_line = _chat(page).locator(".background-tasks-line__summary")
+        expect(wait_line).to_contain_text("Waiting on 2 background tasks", timeout=15000)
+        expect(_chat(page).locator(".background-tasks-line__task")).to_have_count(0)
+        wait_line.click()
+        expect(_chat(page).locator(".background-tasks-line__description")).to_have_text(
+            ["Rebuild the worker image", "Migrate the schema"]
+        )
+        page.screenshot(path=str(tmp_path / "background-wait.png"))
+
+        page.emulate_media(reduced_motion="reduce")
+        assert ring.evaluate("e => getComputedStyle(e).animationName") == "none"
+
+        reader.script.remove_marker(reader.root, FIXTURE_AGENT_ID, "run_in_background", "build")
+        reader.script.remove_marker(reader.root, FIXTURE_AGENT_ID, "run_in_background", "migrate")
+        expect(row).to_have_attribute("data-status", "idle", timeout=15000)
+        expect(_chat(page).locator(".background-tasks-line")).to_have_count(0)
 
 
 @pytest.mark.timeout(60, func_only=False)

@@ -1010,6 +1010,7 @@ def running_workspace(
     is_account_signed_in: bool = True,
     additional_accounts: Sequence[tuple[str, str]] = (),
     messenger: MngrMessenger | None = None,
+    background_tasks_root: Path | None = None,
 ) -> Iterator[RunningWorkspace]:
     """Serve the shell and this chat app together, the way a workspace runs them, over fakes.
 
@@ -1021,7 +1022,9 @@ def running_workspace(
     root offers the provider chooser instead. ``additional_accounts`` sign further
     accounts in (a chat switches harness to one of them); ``messenger`` replaces the recording
     messenger the manager sends through. The chat's layout client is the served shell, so a route that asks the
-    shell for a window lands it there.
+    shell for a window lands it there. ``background_tasks_root`` is where the chat reads its chats'
+    background-task markers, and the agents' runner and hooks write them (``MINDS_BACKGROUND_TASKS_DIR``);
+    without it the chat reads none.
     """
     shell_url = f"http://127.0.0.1:{shell_port}"
     chat_url = f"http://127.0.0.1:{chat_port}"
@@ -1088,6 +1091,9 @@ def running_workspace(
                 "MNGR_PROJECT_CONFIG_DIR": str(tmp_path / "project-config"),
                 "MINDS_APPS_FILE": str(registry_path),
                 "MINDS_WORKSPACE_SERVER_URL": shell_url,
+                **(
+                    {} if background_tasks_root is None else {"MINDS_BACKGROUND_TASKS_DIR": str(background_tasks_root)}
+                ),
             },
         ),
         patch("imbue.chat.server.discover_agents", return_value=agents),
@@ -1111,6 +1117,9 @@ def running_workspace(
             # The successor's prompt template is cwd-relative in production (the repo root); the
             # suite runs from the chat package, so it is named outright.
             prompt_template_path=CONTINUE_CHAT_TEMPLATE_PATH,
+            background_tasks=None
+            if background_tasks_root is None
+            else build_background_task_reader(background_tasks_root),
         )
         # The agents carry the signed-in account's label, as a chat the app created would, so the
         # page's provider row names it.
