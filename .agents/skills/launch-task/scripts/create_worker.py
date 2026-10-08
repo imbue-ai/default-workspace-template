@@ -1286,7 +1286,7 @@ def _chat_is_busy(chat_id: str) -> bool:
     loaded by path (the scripts are not a package). The files are enough here:
     the chat app's busy verdict adds only a turn in flight, which an agent in an
     idle state has not got. A tree from before that script has no markers, so
-    there every chat reads as not busy, as it did before.
+    there every chat reads as not busy.
     """
     script = _repo_root() / _BACKGROUND_TASKS_SCRIPT_REL
     if not script.is_file():

@@ -483,12 +483,12 @@ def test_a_worker_parked_on_its_own_background_command_does_not_read_idle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A worker that starts a command through ``run_in_background.py`` and ends
-    its turn reads WAITING, and used to be declared stalled (exit 76) three
-    polls later. The runner marks the worker's chat busy under the chat id it
-    derives from the worker's own environment -- a worker ``launch`` created
-    carries no ``MINDS_CHAT_ID``, so that is its agent id -- and the lead's
-    idle check reads that same chat's markers, so the parked worker is not
-    idle until its runner is done."""
+    its turn reads WAITING, which the idle check behind exit 76 would take for
+    a stalled worker. The runner marks the worker's chat busy under the chat
+    id it derives from the worker's own environment -- a worker ``launch``
+    created carries no ``MINDS_CHAT_ID``, so that is its agent id -- and the
+    lead's idle check reads that same chat's markers, so the parked worker is
+    not idle until its runner is done."""
     root = tmp_path / "background_tasks"
     monkeypatch.setenv(run_in_background.MARKER_ROOT_ENV, str(root))
     worker_environ = {

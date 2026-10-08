@@ -2136,7 +2136,7 @@ def test_a_tree_without_the_background_task_reader_reads_not_busy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A launcher in a tree from before ``background_tasks.py`` reads every
-    chat as not busy, as it did before, rather than failing the poll."""
+    chat as not busy rather than failing the poll."""
     root = tmp_path / "background_tasks"
     monkeypatch.setenv(background_tasks.MARKER_ROOT_ENV, str(root))
     _write_marker(root, "agent-parked", "tests", os.getpid())
