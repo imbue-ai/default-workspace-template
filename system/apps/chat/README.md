@@ -109,8 +109,7 @@ browser; and a relative path, a fragment, or another scheme is unwrapped to its
 text. A chat opened on its own opens a web link in a new tab, and does nothing
 for a file link: a browser does not follow a `file:` link from a web page. The
 chat root relays its chat page's `shell:open-link` to the shell, and opened on
-its own (`isShellAbove` in `frontend/src/shell.ts`) opens a web one in a new tab
-itself.
+its own (`frontend/src/root/relay.ts`) opens a web one in a new tab itself.
 Sends are reported to the shell's client-activity route so agents can
 attribute a request to a client, and the app asks the shell for windows,
 through one client of the `workspace_layout` library that asks as the chat app
