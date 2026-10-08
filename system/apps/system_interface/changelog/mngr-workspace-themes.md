@@ -13,3 +13,5 @@ Workspace themes: Desktop settings has a **Theme** choice listing every theme th
 - `/theme-gallery?theme=<id>` shows every part of the interface under a theme, for judging one; a theme that fails validation is shown in the standard look with its problems listed.
 
 - The shell's build also produces the page kit (`/_static/workspace_theme.css` and `/_static/workspace_theme.js`), which a plain-HTML app page loads to wear the theme.
+
+- A window's title-bar controls take every press on them, even where a resize corner reaches into the title bar; the corner still resizes from its rim, just outside the window.
