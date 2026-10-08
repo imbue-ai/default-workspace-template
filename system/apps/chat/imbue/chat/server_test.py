@@ -1834,10 +1834,12 @@ def test_a_report_that_starts_someone_watching_marks_the_chat_read_in_the_app_on
         try:
             client.post("/api/chats/agent-c0ffee/presence", json=_presence_body("visible", "page-1"))
             client.post(
-                "/api/chats/agent-c0ffee/presence", json=_presence_body("visible", "page-1", is_focused=True, sequence=2)
+                "/api/chats/agent-c0ffee/presence",
+                json=_presence_body("visible", "page-1", is_focused=True, sequence=2),
             )
             client.post(
-                "/api/chats/agent-c0ffee/presence", json=_presence_body("visible", "page-1", is_focused=True, sequence=3)
+                "/api/chats/agent-c0ffee/presence",
+                json=_presence_body("visible", "page-1", is_focused=True, sequence=3),
             )
             client.post("/api/chats/agent-c0ffee/presence", json=_presence_body("visible", "page-2", is_focused=True))
             # The calls run one at a time in order, so once this second chat's lands nothing is left for the first.

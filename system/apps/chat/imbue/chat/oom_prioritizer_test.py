@@ -45,7 +45,11 @@ class _Harness:
         self.prioritizer.record_presence(
             ChatId(chat_id),
             PresenceReport(
-                instance_id=instance_id, client_id="client-1", state=state, is_focused=False, sequence=self.reports_sent
+                instance_id=instance_id,
+                client_id="client-1",
+                state=state,
+                is_focused=False,
+                sequence=self.reports_sent,
             ),
         )
 
