@@ -56,11 +56,11 @@ beforeEach(() => {
 
 describe("a compaction's chips", () => {
   it.each([
-    ["manual", "Compacting as requested…", "Compacted as requested"],
-    ["idle", "Compacting while idle…", "Compacted while idle"],
-    ["native", "Compacting to free up context…", "Compacted to free up context"],
-    [null, "Compacting…", "Context was compacted"],
-    [undefined, "Compacting…", "Context was compacted"],
+    ["manual", "Compacting as requested…", "Compacted"],
+    ["idle", "Compacting while idle…", "Compacted"],
+    ["native", "Compacting to free up context…", "Compacted"],
+    [null, "Compacting…", "Compacted"],
+    [undefined, "Compacting…", "Compacted"],
   ] as const)("names the start and the finish for cause %s", (cause, started, finished) => {
     mount(compactionEvent(cause, SUMMARY));
     expect(chipLabels()).toEqual([started, finished]);
@@ -118,7 +118,7 @@ describe("a compaction's chips", () => {
     root.querySelectorAll<HTMLButtonElement>(".tool-chip")[1].click();
     mount(compactionEvent("manual", SUMMARY));
     header = root.querySelector(".tool-chip-detail-header")!;
-    expect(header.querySelector(".tool-chip-detail-title")?.textContent).toBe("Compacted as requested");
+    expect(header.querySelector(".tool-chip-detail-title")?.textContent).toBe("Compacted");
     expect(header.querySelector("svg polyline")).not.toBeNull();
   });
 

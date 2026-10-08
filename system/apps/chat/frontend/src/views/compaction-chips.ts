@@ -3,7 +3,7 @@
  *
  * A compaction shows as two chips beside the agent's tool calls: one for its
  * start, named as the activity strip names it while it runs ("Compacting while
- * idle…"), and one for its finish ("Compacted while idle"). Both open the same
+ * idle…"), and one for its finish ("Compacted"). Both open the same
  * panel: why it ran and where to change that, then the summary the agent carries
  * on from. While a compaction runs, its start chip stands alone where the pair
  * will land (see `buildSections`).
@@ -46,20 +46,6 @@ export function runningCompaction(cause: CompactionCause | null): CompactionPart
   return { type: "compaction", event_id: RUNNING_COMPACTION_ID, event: null, cause, isNoticeAnchor: false };
 }
 
-/** A finished compaction's label for who started it, or null to keep the event's own. */
-function compactedLabel(cause: CompactionCause | null): string | null {
-  switch (cause) {
-    case "manual":
-      return "Compacted as requested";
-    case "idle":
-      return "Compacted while idle";
-    case "native":
-      return "Compacted to free up context";
-    default:
-      return null;
-  }
-}
-
 /** Why the context was compacted and where to change it, as markdown, for who started the compaction. */
 function compactionExplanation(cause: CompactionCause | null): string {
   switch (cause) {
@@ -74,11 +60,10 @@ function compactionExplanation(cause: CompactionCause | null): string {
   }
 }
 
-/** The event's own label ("Context was compacted") and the summary it carries, if any. */
-function eventLabelAndSummary(event: UserMessageEvent): { label: string; summary: string } {
-  const cls = classifyUserMessage(event);
-  const label = cls.label ?? (cls.body || "Context was compacted");
-  return { label, summary: cls.body && cls.body !== label ? cls.body : "" };
+/** The summary the compacted event carries, if any. */
+function eventSummary(event: UserMessageEvent): string {
+  const { label, body } = classifyUserMessage(event);
+  return label !== null && body !== label ? body : "";
 }
 
 /** The panel's first part. Composed here from the cause: it is for the user only, so it
@@ -106,8 +91,7 @@ function panelSections(cause: CompactionCause | null, summary: string): StatusCh
 
 /** The chips a compaction shows as: its start, and its finish once it has landed. */
 export function compactionChips(part: CompactionPart): StatusChip[] {
-  const { label: eventLabel, summary } =
-    part.event === null ? { label: "", summary: "" } : eventLabelAndSummary(part.event);
+  const summary = part.event === null ? "" : eventSummary(part.event);
   const sections = panelSections(part.cause, summary);
   const started: StatusChip = {
     kind: "status",
@@ -124,7 +108,7 @@ export function compactionChips(part: CompactionPart): StatusChip[] {
     {
       kind: "status",
       id: `compaction-finished:${part.event_id}`,
-      label: compactedLabel(part.cause) ?? eventLabel,
+      label: "Compacted",
       icon: "package",
       chipClass: "compaction-chip compaction-chip--finished",
       detailClass: "compaction-detail",

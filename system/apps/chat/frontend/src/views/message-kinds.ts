@@ -195,9 +195,9 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
       "No row on the user rail. A compaction ('Context was compacted') becomes two " +
       "chips in the agent's chip rows, beside its tool calls: a start chip named as " +
       "the activity strip names the compaction ('Compacting while idle…', package-open " +
-      "glyph) and a finish chip named for its cause ('Compacted while idle', package " +
-      "glyph). They join the chip run at the event's transcript position (or a row of " +
-      "their own when nothing chips beside them, as under a `/compact` bubble), and " +
+      "glyph) and a finish chip reading 'Compacted' (package glyph). They join the " +
+      "chip run at the event's transcript position (or a row of their own when " +
+      "nothing chips beside them, as under a `/compact` bubble), and " +
       "follow the reply when the event landed after it. Either chip opens the tool " +
       "chips' detail panel: why it ran and where to change that, then the summary in " +
       "an output pane. While the agent is COMPACTING, the start chip alone stands " +

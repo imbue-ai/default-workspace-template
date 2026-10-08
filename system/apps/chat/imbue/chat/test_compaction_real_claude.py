@@ -268,9 +268,7 @@ def test_a_compact_typed_in_a_real_claude_chat_shows_compacting_then_lands_the_c
                 replies.release.set()
 
                 finished = chat.locator(".tool-chip.compaction-chip--finished")
-                expect(finished.locator(".tool-chip-label")).to_have_text(
-                    "Compacted as requested", timeout=_TURN_TIMEOUT_MS
-                )
+                expect(finished.locator(".tool-chip-label")).to_have_text("Compacted", timeout=_TURN_TIMEOUT_MS)
                 expect(strip).to_have_count(0, timeout=60_000)
                 expect(started).to_have_count(1)
                 expect(bubble).to_have_count(1)

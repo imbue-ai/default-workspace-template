@@ -474,7 +474,7 @@ timeout or the stop button clears it.
 **The compaction chips.** Each "Context was compacted" event shows as two chips
 in the same chip rows the agent's tool calls use (`compaction-chips.ts`): one for
 the start (lucide `package-open`), named as the activity strip names the running
-compaction, and one for the finish (lucide `package`), named for its cause.
+compaction, and one for the finish (lucide `package`), reading "Compacted".
 Where they land depends on who started it:
 
 - `native` (Claude's own compaction, mid-turn): at the event's position in the
@@ -489,21 +489,21 @@ detail panel, titled with that chip's label and glyph: first a sentence saying
 why it ran, then, under a dashed rule, the summary in an output pane, clamped
 like a long tool output.
 
-**Why a chat was compacted.** The chips are named for the event's
+**Why a chat was compacted.** The start chip is named for the event's
 `compaction_cause`, and the panel's sentence says why:
 
-- `idle` (the sweep): "Compacting while idle…" and "Compacted while idle";
-  "Compacted while idle to keep replies fast and cheap. Change this under
-  Auto-compact in the model menu."
-- `manual` (a `/compact`): "Compacting as requested…" and "Compacted as
-  requested"; "Compacted because you asked (`/compact`).", with `/compact` in the
-  chat's inline-code style
+- `idle` (the sweep): "Compacting while idle…"; "Compacted while idle to keep
+  replies fast and cheap. Change this under Auto-compact in the model menu."
+- `manual` (a `/compact`): "Compacting as requested…"; "Compacted because you
+  asked (`/compact`).", with `/compact` in the chat's inline-code style
 - `native` (Claude's own compaction, from the hook's recorded trigger):
-  "Compacting to free up context…" and "Compacted to free up context"; "Your
-  agent triggered compaction. You can ask it about its current setting, or tell
-  it to change it."
-- unknown: "Compacting…" and "Context was compacted"; "Compacted to keep replies
-  fast and cheap. Idle compaction is under Auto-compact in the model menu."
+  "Compacting to free up context…"; "Your agent triggered compaction. You can
+  ask it about its current setting, or tell it to change it."
+- unknown: "Compacting…"; "Compacted to keep replies fast and cheap. Idle
+  compaction is under Auto-compact in the model menu."
+
+The finish chip reads "Compacted" whatever the cause, since the start chip
+beside it already names it.
 
 The sentence is composed by the page from the cause. It is not part of the
 event, so the transcript, the events API, and the agent never see it. A

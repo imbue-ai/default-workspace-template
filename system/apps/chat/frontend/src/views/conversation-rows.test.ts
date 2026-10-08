@@ -357,7 +357,7 @@ describe("a compaction's chips in the rows", () => {
     const row = rows.find((r) => r.key === "cs1")!;
     expect(row.estimate).toBe(ESTIMATED_CHIP_ROW_HEIGHT_PX);
     expect(row.anchorEventId).toBe("cs1");
-    expect(chipRows(rows, "cs1")).toEqual([["Compacting while idle…", "Compacted while idle"]]);
+    expect(chipRows(rows, "cs1")).toEqual([["Compacting while idle…", "Compacted"]]);
     expect((row.render() as { attrs: { id?: string } }).attrs.id).toBe("cs1");
   });
 
@@ -375,9 +375,7 @@ describe("a compaction's chips in the rows", () => {
       true,
     );
     expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-c1", "a-t5"]);
-    expect(chipRows(rows, "a-c1")).toEqual([
-      ["c1", "Compacting to free up context…", "Compacted to free up context", "c2"],
-    ]);
+    expect(chipRows(rows, "a-c1")).toEqual([["c1", "Compacting to free up context…", "Compacted", "c2"]]);
   });
 
   // With no chips before it, a compaction starts a chip row of its own, which the calls after it join.
@@ -394,7 +392,7 @@ describe("a compaction's chips in the rows", () => {
       true,
     );
     expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-t2", "a-t5"]);
-    expect(chipRows(rows, "a-t2")).toEqual([["Compacting to free up context…", "Compacted to free up context", "c2"]]);
+    expect(chipRows(rows, "a-t2")).toEqual([["Compacting to free up context…", "Compacted", "c2"]]);
 
     // At the head of a turn's stream, the chip row is a row of its own.
     const leading = buildConversationRows(
@@ -419,7 +417,7 @@ describe("a compaction's chips in the rows", () => {
       true,
     );
     expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-t2", "u-compact", "cs-manual"]);
-    expect(chipRows(rows, "cs-manual")).toEqual([["Compacting as requested…", "Compacted as requested"]]);
+    expect(chipRows(rows, "cs-manual")).toEqual([["Compacting as requested…", "Compacted"]]);
   });
 
   it("puts the start chip alone where the pair will land while the agent compacts, then the pair", () => {
@@ -435,7 +433,7 @@ describe("a compaction's chips in the rows", () => {
       cause: "manual",
     });
     expect(landed.map((r) => r.key)).toEqual(["u-t1", "a-t2", "u-compact", "cs-manual"]);
-    expect(chipRows(landed, "cs-manual")).toEqual([["Compacting as requested…", "Compacted as requested"]]);
+    expect(chipRows(landed, "cs-manual")).toEqual([["Compacting as requested…", "Compacted"]]);
   });
 
   it("puts the one-time notice under the chip row holding the latest idle compaction only", () => {
@@ -457,7 +455,7 @@ describe("a compaction's chips in the rows", () => {
     expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-t2", "cs1", "u-t4", "a-c1", "u-t7", "a-t8", "cs3"]);
     expect(hasNotice(rows, "cs1")).toBe(false);
     // The latest idle compaction joined the turn's last chip run; the notice sits under that row.
-    expect(chipRows(rows, "a-c1")).toEqual([["c1", "Compacting while idle…", "Compacted while idle"]]);
+    expect(chipRows(rows, "a-c1")).toEqual([["c1", "Compacting while idle…", "Compacted"]]);
     expect(hasNotice(rows, "a-c1")).toBe(true);
     expect(hasNotice(rows, "cs3")).toBe(false);
   });

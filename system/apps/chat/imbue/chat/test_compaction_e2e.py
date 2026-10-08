@@ -19,6 +19,7 @@ from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+from typing import Final
 
 import pytest
 from playwright.sync_api import FrameLocator
@@ -66,12 +67,7 @@ _STARTED_LABEL_BY_CAUSE: Mapping[str | None, str] = {
     None: "Compacting…",
 }
 
-_FINISHED_LABEL_BY_CAUSE: Mapping[str | None, str] = {
-    "idle": "Compacted while idle",
-    "manual": "Compacted as requested",
-    "native": "Compacted to free up context",
-    None: "Context was compacted",
-}
+_FINISHED_LABEL: Final[str] = "Compacted"
 
 # The first part of a compaction chip's panel for each cause as the page renders it: the markdown
 # ``compactionExplanation`` in ``compaction-chips.ts`` returns, with its inline code read as plain text.
@@ -349,7 +345,7 @@ def _record_compaction_cause(server: RunningWorkspace, cause: str | None) -> Non
 
 @pytest.mark.parametrize("cause", ["idle", "manual", "native", None])
 @pytest.mark.timeout(60, func_only=False)
-def test_a_compaction_is_two_chips_named_for_its_cause_that_open_on_why_then_the_summary(
+def test_a_compaction_is_two_chips_with_the_start_named_for_its_cause_that_open_on_why_then_the_summary(
     compaction_server: RunningWorkspace, page: Page, cause: str | None
 ) -> None:
     server = compaction_server
@@ -361,7 +357,7 @@ def test_a_compaction_is_two_chips_named_for_its_cause_that_open_on_why_then_the
 
     started = _started_chip(chat)
     finished = _finished_chip(chat)
-    expect(finished.locator(".tool-chip-label")).to_have_text(_FINISHED_LABEL_BY_CAUSE[cause], timeout=15000)
+    expect(finished.locator(".tool-chip-label")).to_have_text(_FINISHED_LABEL, timeout=15000)
     expect(started.locator(".tool-chip-label")).to_have_text(_STARTED_LABEL_BY_CAUSE[cause])
     # One chip row of the two, on the agent's rail.
     row = chat.locator(".tool-chip-row", has=finished)
@@ -373,7 +369,7 @@ def test_a_compaction_is_two_chips_named_for_its_cause_that_open_on_why_then_the
     finished.click()
 
     expect(panel).to_be_visible()
-    expect(panel.locator(".tool-chip-detail-title")).to_have_text(_FINISHED_LABEL_BY_CAUSE[cause])
+    expect(panel.locator(".tool-chip-detail-title")).to_have_text(_FINISHED_LABEL)
     body = panel.locator(":scope > :not(.tool-chip-detail-header)")
     expect(body).to_have_count(2)
     expect(body.nth(0)).to_have_class(re.compile(r"\bcompaction-explanation\b"))
@@ -417,9 +413,7 @@ def test_a_typed_compact_shows_as_a_bubble_with_the_start_chip_under_it_until_th
     _append_compact_summary(server, "uuid-compact-1")
     marker.unlink()
 
-    expect(_finished_chip(chat).locator(".tool-chip-label")).to_have_text(
-        _FINISHED_LABEL_BY_CAUSE["manual"], timeout=15000
-    )
+    expect(_finished_chip(chat).locator(".tool-chip-label")).to_have_text(_FINISHED_LABEL, timeout=15000)
     expect(_strip(chat)).to_have_count(0, timeout=15000)
     expect(started).to_have_count(1)
     expect(chat.locator(".message-user", has_text="/compact")).to_have_count(1)
