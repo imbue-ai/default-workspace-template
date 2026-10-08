@@ -27,7 +27,8 @@ vi.mock("../models/Chats", () => ({
 }));
 
 const catalogState: { catalog: unknown } = { catalog: null };
-vi.mock("../models/HarnessCatalog", () => ({
+vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),
   ensureHarnessCatalogs: () => undefined,
   getHarnessCatalog: (harness?: string) => (harness === undefined ? null : catalogState.catalog),
 }));
@@ -107,6 +108,8 @@ vi.mock("../models/Providers", () => ({
   accountForFirstSend: (id: string) =>
     providerState.accounts.find((a) => (a as { id: string }).id === id) ?? providerState.accounts[0] ?? null,
   areAccountsLoaded: () => providerState.isLoaded,
+  isAccountSignedOut: (id?: string | null) =>
+    !!id && providerState.isLoaded && !providerState.accounts.some((a) => (a as { id: string }).id === id),
   openProviderChooser: (intent: { onSignedIn?: unknown } = {}) =>
     chooserOpens.push({ hasOnSignedIn: intent.onSignedIn !== undefined }),
   deleteAccount: () => Promise.resolve(),
@@ -125,7 +128,8 @@ vi.mock("../shell", () => ({
 // armed card's Model row reopens it. Both recorded by account id.
 const begun: string[] = [];
 const reopened: string[] = [];
-vi.mock("./SwitchDialog", () => ({
+vi.mock("./SwitchDialog", async (importOriginal) => ({
+  takeBackSwitch: (await importOriginal<typeof import("./SwitchDialog")>()).takeBackSwitch,
   beginSwitchTo: (_chatId: string, account: { id: string }) => begun.push(account.id),
   openSwitchDialog: (_chatId: string, account: { id: string }) => reopened.push(account.id),
 }));
@@ -136,7 +140,7 @@ import { hoverTooltipText } from "@imbue/workspace-ui/src/testing/tooltip";
 
 import type { ChatSnapshot } from "../models/Chats";
 import { chatSnapshotFixture, handoffStateFixture, rebindStateFixture } from "../models/chatSnapshotFixture";
-import { getPendingAccountId, setPendingAccount, setPendingSwitch } from "../models/PendingLane";
+import { getPendingAccountId, setPendingAccount, setPendingSwitch, setSwitchSending } from "../models/PendingLane";
 import { ModelProviderMenu } from "./ModelProviderMenu";
 import * as css from "./modelProviderMenuStyles";
 
@@ -158,6 +162,15 @@ function click(selector: string): void {
   render();
 }
 
+function clickSubmenuRow(label: string): void {
+  const row = [...document.querySelectorAll<HTMLElement>('[data-menu-part="submenu"] button')].find((button) =>
+    button.textContent?.includes(label),
+  );
+  if (row === undefined) throw new Error(`no ${label} row in the submenu`);
+  row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  render();
+}
+
 /** Take the pointer off the open submenu and wait out the menu's leave grace. Needs fake timers,
  *  and overshoots the shared menu's own grace constant rather than restating it. */
 function leaveSubmenu(): void {
@@ -175,7 +188,13 @@ const OPUS = {
   supports_fast: false,
   in_picker: true,
   harness_reported_model_id: null,
+  default_effort: null,
 };
+const LOW_MEDIUM_HIGH = [
+  { level: "low", in_picker: true },
+  { level: "medium", in_picker: true },
+  { level: "high", in_picker: true },
+];
 const ACCOUNT = {
   id: "acct-1",
   lane: "anthropic",
@@ -231,6 +250,7 @@ beforeEach(() => {
   settingsState.choice = { identity: { model_id: "opus", effort: null, fast: false }, matched: OPUS, pending: null };
   providerState.accounts = [ACCOUNT];
   setPendingAccount("a1", null);
+  setSwitchSending("a1", false);
 });
 
 describe("the combo card", () => {
@@ -314,14 +334,20 @@ describe("the combo card", () => {
     expect(text).not.toContain("Model");
   });
 
-  it("says a chat whose account is gone has no account, not that nobody is signed in", () => {
+  it("shows no chip for a chat whose account was signed out, rather than the model it last ran", () => {
+    // The composer's notice stands in its place, with the way to choose a provider.
     agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-gone" } });
     render();
-    click(".model-selector-trigger");
-    const providerRow = document.querySelector('[data-menu-row="providers"]')?.textContent ?? "";
-    expect(providerRow).toContain("No account");
-    expect(providerRow).toContain("Pick one to move this chat to it");
-    expect(screenText()).not.toContain("Not signed in");
+    expect(ROOT().querySelector(".model-selector-trigger")).toBeNull();
+    expect(screenText()).not.toContain("Opus");
+  });
+
+  it("brings the chip back for a signed-out chat once a provider is chosen for it", () => {
+    agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-gone" } });
+    setPendingAccount("a1", "acct-1");
+    render();
+    expect(ROOT().querySelector(".model-selector-trigger")?.textContent).toContain("next");
+    setPendingAccount("a1", null);
   });
 
   it("renders a read-only harness without an effort control", () => {
@@ -402,12 +428,7 @@ describe("the combo card", () => {
   it("commits an effort on release, not on every notch of the drag", () => {
     // Each notch is a live switch typed into the agent's pane, and setModelChoice chains
     // rather than debounces -- a low-to-max drag would queue one per stop.
-    const efforts = [
-      { level: "low", in_picker: true },
-      { level: "medium", in_picker: true },
-      { level: "high", in_picker: true },
-    ];
-    const model = { ...OPUS, efforts };
+    const model = { ...OPUS, efforts: LOW_MEDIUM_HIGH };
     catalogState.catalog = catalogOf({ options: [model] });
     settingsState.choice = {
       identity: { model_id: "opus", effort: "low", fast: false },
@@ -433,12 +454,7 @@ describe("the combo card", () => {
     // Uncommitted is not the same as unshown: the row is what you are aiming with, so it reads
     // off the thumb from the first notch. The TRIGGER keeps saying the committed level, since
     // that is still what the agent is running on until release.
-    const efforts = [
-      { level: "low", in_picker: true },
-      { level: "medium", in_picker: true },
-      { level: "high", in_picker: true },
-    ];
-    const model = { ...OPUS, efforts };
+    const model = { ...OPUS, efforts: LOW_MEDIUM_HIGH };
     catalogState.catalog = catalogOf({ options: [model] });
     settingsState.choice = {
       identity: { model_id: "opus", effort: "low", fast: false },
@@ -511,6 +527,55 @@ describe("the combo card", () => {
     click(".model-selector-trigger");
     expect(document.querySelector('[data-menu-row="effort"]')?.textContent).toContain("Ultra");
     expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("0");
+  });
+
+  it("shows the model's default effort for a chat that never picked one", () => {
+    // codex records no effort until one is picked, while the thread runs at the model's default.
+    const model = { ...OPUS, id: "gpt-6-sol", label: "GPT-6-Sol", efforts: LOW_MEDIUM_HIGH, default_effort: "medium" };
+    catalogState.catalog = catalogOf({ picker_mode: "dynamic", switch_mode: "on_change", options: [] });
+    settingsState.choice = {
+      identity: { model_id: "gpt-6-sol", effort: null, fast: false },
+      matched: model,
+      pending: null,
+    };
+    render();
+    expect(document.querySelector(".model-selector-trigger")?.textContent).toContain("Medium");
+    click(".model-selector-trigger");
+    expect(document.querySelector('[data-menu-row="effort"]')?.textContent).toContain("Medium");
+    expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("1");
+  });
+
+  it("carries the default effort in effect onto a newly picked model", () => {
+    const current = { ...OPUS, efforts: LOW_MEDIUM_HIGH, default_effort: "medium" };
+    const other = { ...OPUS, id: "sonnet", label: "Sonnet", efforts: LOW_MEDIUM_HIGH, default_effort: "medium" };
+    catalogState.catalog = catalogOf({ options: [current, other] });
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: null, fast: false },
+      matched: current,
+      pending: null,
+    };
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="model"]');
+    clickSubmenuRow("Sonnet");
+    expect(picks).toHaveLength(1);
+    expect((picks[0] as unknown[])[1]).toEqual({ model_id: "sonnet", effort: "medium", fast: false });
+  });
+
+  it("lands a newly picked model on its default when it does not offer the current effort", () => {
+    const current = { ...OPUS, efforts: [...LOW_MEDIUM_HIGH, { level: "xhigh", in_picker: true }] };
+    const other = { ...OPUS, id: "sonnet", label: "Sonnet", efforts: LOW_MEDIUM_HIGH, default_effort: "medium" };
+    catalogState.catalog = catalogOf({ options: [current, other] });
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: "xhigh", fast: false },
+      matched: current,
+      pending: null,
+    };
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="model"]');
+    clickSubmenuRow("Sonnet");
+    expect((picks[0] as unknown[])[1]).toEqual({ model_id: "sonnet", effort: "medium", fast: false });
   });
 
   it("colours each tick for the part of the track it is drawn on", () => {
@@ -688,7 +753,76 @@ describe("the combo card", () => {
     });
     render();
     expect(ROOT().textContent).toContain("Opus · High");
-    expect(ROOT().textContent).toContain("next");
+    // Its message has gone: the switch is being carried out, not waiting on the next one.
+    expect(ROOT().textContent).not.toContain("next");
+  });
+
+  describe("once the armed switch's message has gone", () => {
+    const CODEX_ACCOUNT = {
+      ...ACCOUNT,
+      id: "acct-2",
+      provider: "OpenAI",
+      harness: "codex",
+      harness_label: "Codex",
+      label: "OpenAI (Codex)",
+    };
+    const ASTRA_PICK = {
+      identity: { model_id: "gpt-6-astra", effort: "high", fast: false },
+      label: "GPT-6 Astra · High",
+      option: { ...OPUS, id: "gpt-6-astra", label: "GPT-6 Astra" },
+    };
+
+    beforeEach(() => {
+      providerState.accounts = [ACCOUNT, CODEX_ACCOUNT];
+    });
+
+    it("names the pick without the next mark while the request is out", () => {
+      setPendingSwitch("a1", "acct-2", ASTRA_PICK);
+      setSwitchSending("a1", true);
+      render();
+      expect(ROOT().textContent).toContain("GPT-6 Astra · High");
+      expect(ROOT().textContent).not.toContain("next");
+    });
+
+    it("names the target, not next, while the switch runs, with rows that state it rather than offer it", () => {
+      setPendingAccount("a1", "acct-2");
+      agentState.agent = chatSnapshotFixture("a1", {
+        active_agent: { harness: "claude", account_id: "acct-1" },
+        handoff: handoffStateFixture({ phase: "summarizing", target_account_id: "acct-2" }),
+      });
+      render();
+      // No pick: the harness has not said what its default is yet, so the chip names the harness.
+      expect(ROOT().textContent).toContain("Codex");
+      expect(ROOT().textContent).not.toContain("next");
+      click(".model-selector-trigger");
+      expect(document.querySelector('[data-menu-row="providers"]')?.textContent).toContain("switching");
+      expect(document.querySelector('[data-menu-row="providers"]')?.textContent).not.toContain("next message");
+      expect(document.querySelector('[data-menu-row="model"]')?.textContent).toContain("Default model");
+      expect(document.querySelector('[data-menu-row="model"] button')).toBeNull();
+    });
+
+    it("reads the live choice, with no next mark anywhere, after the switch failed", () => {
+      setPendingAccount("a1", "acct-2");
+      agentState.agent = chatSnapshotFixture("a1", {
+        active_agent: { harness: "claude", account_id: "acct-1" },
+        handoff: handoffStateFixture({ phase: "failed", error: "boom", failed_step: "start" }),
+      });
+      render();
+      expect(ROOT().textContent).toContain("Opus");
+      expect(ROOT().textContent).not.toContain("next");
+      click(".model-selector-trigger");
+      click('[data-menu-row="providers"]');
+      expect(document.querySelector('[data-menu-part="submenu"]')?.textContent).not.toContain("next");
+
+      // Unmarked, its row is an ordinary one: pressing it begins a switch, not a silent take-back.
+      const failedRow = [...document.querySelectorAll('[data-menu-part="submenu"] button')].find((b) =>
+        (b.textContent ?? "").includes("OpenAI"),
+      );
+      if (failedRow === undefined) throw new Error("no row for the failed switch's account");
+      failedRow.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(begun).toEqual(["acct-2"]);
+      expect(getPendingAccountId("a1")).toBe("acct-2");
+    });
   });
 
   it("drops a failed switch's pick, which the chat keeps for the retry but never applied", () => {
@@ -1005,6 +1139,16 @@ describe("the phone layout's card", () => {
     expect(document.querySelector(".model-provider-menu--compact")).not.toBeNull();
     expect(screenText()).toContain("Provider");
     expect(screenText()).toContain("Stop agent");
+  });
+
+  it("keeps the settings button for a chat whose account was signed out, with a Provider row to move it on", () => {
+    agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-gone" } });
+    renderPhone();
+    tap("[data-composer-settings]");
+    const providerRow = document.querySelector('[data-menu-row="providers"]')?.textContent ?? "";
+    expect(providerRow).toContain("No account");
+    expect(providerRow).toContain("Pick one to move this chat to it");
+    expect(screenText()).not.toContain("Not signed in");
   });
 
   it("offers the picker's effort levels as segments, and a press sets the chat's effort at once", () => {

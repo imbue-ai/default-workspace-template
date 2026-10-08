@@ -8,6 +8,9 @@ from typing import Any
 from loguru import logger as _loguru_logger
 from pydantic import Field
 from pydantic import PrivateAttr
+from workspace_layout.answers import InventoryApp
+from workspace_layout.answers import LayoutOpMessage
+from workspace_layout.records import DesktopView
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
@@ -126,6 +129,12 @@ class WebSocketBroadcaster(MutableModel):
         with self._lock:
             return {info.client_id for info in self._client_info_by_queue_id.values()}
 
+    def desktop_connected_client_ids(self) -> set[str]:
+        """The ids of every registered client with a desktop window open: a client whose only open windows are
+        pop-outs is connected, but has nowhere to show a desktop window."""
+        with self._lock:
+            return {info.client_id for info in self._client_info_by_queue_id.values() if not info.is_pop_out}
+
     def broadcast(self, message: dict[str, Any]) -> None:
         """Serialize and send a message to all connected clients. Thread-safe."""
         self._broadcast_to_matching(message, target_client_id=None)
@@ -181,13 +190,15 @@ class WebSocketBroadcaster(MutableModel):
             _MAX_CONSECUTIVE_QUEUE_FULL,
         )
 
-    def broadcast_apps_updated(self, apps: Sequence[Mapping[str, Any]]) -> None:
+    def broadcast_apps_updated(self, apps: Sequence[InventoryApp]) -> None:
         """Broadcast every app after a registry or liveness change (desktop contracts.md section 6)."""
-        self.broadcast({"type": "apps_updated", "apps": apps})
+        self.broadcast({"type": "apps_updated", "apps": [app.model_dump(mode="json") for app in apps]})
 
-    def broadcast_desktops_updated(self, desktops: Sequence[Mapping[str, Any]]) -> None:
+    def broadcast_desktops_updated(self, desktops: Sequence[DesktopView]) -> None:
         """Broadcast every desktop after a write of ``desktops.json`` (desktop contracts.md section 6)."""
-        self.broadcast({"type": "desktops_updated", "desktops": desktops})
+        self.broadcast(
+            {"type": "desktops_updated", "desktops": [desktop.model_dump(mode="json") for desktop in desktops]}
+        )
 
     def broadcast_presence_updated(self, users: Sequence[Mapping[str, Any]]) -> None:
         """Broadcast the connected users whenever someone joins or leaves (one entry per user)."""
@@ -238,34 +249,23 @@ class WebSocketBroadcaster(MutableModel):
         """The kept rollback point changed (raised, progressing, settled, or cleared); every window re-renders its notice."""
         self.broadcast({"type": "update_notice_changed", "notice": dict(notice) if notice is not None else None})
 
-    def broadcast_layout_op(
-        self,
-        op: str,
-        args: dict[str, Any],
-        requester: str = "",
-        target_client_id: str | None = None,
-    ) -> None:
+    def broadcast_layout_op(self, message: LayoutOpMessage) -> None:
         """Send a transient ``layout_op`` to the browser (desktop contracts.md section 8): ``refresh`` and the
         interface reload, which are the whole effect of their ops, and the ``show``, ``open`` (unless minimized),
         and ``focus`` of a targeted op, which name the window the op put in front of the client after its edit was
         written, for the phone layout to switch to; a ``show`` also says whether the window is pulled out, since only
-        the client's page can bring a pulled-out window's own desktop window forward.
+        the client's pages (the desktop's, and that window's own solo page) can bring a pulled-out window's own
+        desktop window forward, and a ``focus``, or an ``open`` that finds the window, on a window popped out travels
+        as such a ``show``.
 
-        ``requester`` is the app and marker of the chat that invoked ``system/scripts/layout.py``, spelled
-        ``<app>:<marker>``. ``target_client_id`` names the client whose windows apply the op; None reaches
-        every window (``refresh`` of a whole app, ``reload_system_interface``).
+        The message reaches the windows of its ``target_client_id``, or every window when it names none (``refresh``
+        of a whole app, ``reload_system_interface``). Its ``args`` carry only what the op is about.
         """
-        message = {
-            "type": "layout_op",
-            "op": op,
-            "args": args,
-            "requester": requester,
-            "target_client_id": target_client_id,
-        }
-        if target_client_id is None:
-            self.broadcast(message)
+        wire = {**message.model_dump(mode="json"), "args": message.args.model_dump(mode="json", exclude_none=True)}
+        if message.target_client_id is None:
+            self.broadcast(wire)
         else:
-            self.broadcast_to_client(message, target_client_id)
+            self.broadcast_to_client(wire, str(message.target_client_id))
 
     def shutdown(self) -> None:
         """Signal all clients to disconnect by sending None sentinel."""

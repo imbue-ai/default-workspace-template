@@ -6,20 +6,20 @@ import pytest
 from app_manifest.manifest import EntryMode
 from app_manifest.manifest import PinStyle
 from app_manifest.primitives import AppName
+from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import UserId
+from workspace_layout.primitives import WindowId
+from workspace_layout.records import EntryPresentation
+from workspace_layout.records import FloatingPosition
 
 from imbue.system_interface.shell.clients import CLIENTS_FILENAME
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.clients import ClientStore
 from imbue.system_interface.shell.clients import SHOWN_HISTORY_LIMIT
-from imbue.system_interface.shell.clients import client_wire_json
+from imbue.system_interface.shell.clients import client_view
 from imbue.system_interface.shell.data_types import ClientStateReport
-from imbue.system_interface.shell.data_types import EntryPresentation
-from imbue.system_interface.shell.data_types import FloatingPosition
 from imbue.system_interface.shell.errors import ClientNotFoundError
-from imbue.system_interface.shell.primitives import ClientId
-from imbue.system_interface.shell.primitives import DesktopId
-from imbue.system_interface.shell.primitives import UserId
-from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.testing import TEST_NOW
 
 
@@ -41,10 +41,10 @@ def test_reports_are_recorded_and_listed_newest_first(tmp_path: Path) -> None:
     assert [str(client.id) for client in store.list_clients()] == ["c1", "c2"]
     assert recorded.active_desktop == "research"
     assert store.get_client("missing") is None
-    assert client_wire_json(recorded, True) == {
+    assert client_view(recorded, True).model_dump(mode="json") == {
         "id": "c1",
         "active_desktop": "research",
-        "last_seen": "2026-09-04T00:02:00+00:00",
+        "last_seen": "2026-09-04T00:02:00Z",
         "is_connected": True,
         "user_id": None,
         "entries": {},
@@ -81,7 +81,7 @@ def test_an_entry_presentation_is_kept_on_the_client_across_its_reports_and_refu
     bar = EntryPresentation(mode=EntryMode.BAR, style=PinStyle.PLAIN, position=None)
     both = store.set_entry_presentation(ClientId("c1"), AppName("notes"), bar, TEST_NOW + timedelta(minutes=4))
     assert both.entries == {"chat": floating, "notes": bar}
-    assert client_wire_json(both, False)["entries"] == {
+    assert client_view(both, False).model_dump(mode="json")["entries"] == {
         "chat": {"mode": "floating", "style": "avatar", "position": {"x": 0.9, "y": 0.85}},
         "notes": {"mode": "bar", "style": "plain", "position": None},
     }
@@ -158,7 +158,7 @@ def test_an_arrival_records_the_user_and_the_landing_desktop_and_a_report_keeps_
         ).is_active_desktop_changed
         is False
     )
-    assert client_wire_json(reported, False)["user_id"] == "user-alice"
+    assert client_view(reported, False).model_dump(mode="json")["user_id"] == "user-alice"
 
 
 def _window_id(index: int) -> str:
@@ -187,7 +187,7 @@ def test_the_shown_history_holds_the_newest_distinct_entries_most_recent_last(tm
     store.record_arrival(ClientId("c1"), None, DesktopId("home"), TEST_NOW + timedelta(minutes=3))
     reread = ClientStore(state_directory=tmp_path).get_client("c1")
     assert reread is not None and reread.shown_history == expected
-    assert client_wire_json(reread, False)["shown_history"] == list(expected)
+    assert client_view(reread, False).model_dump(mode="json")["shown_history"] == list(expected)
     with pytest.raises(ClientNotFoundError):
         store.record_shown(ClientId("nobody"), None, TEST_NOW)
 

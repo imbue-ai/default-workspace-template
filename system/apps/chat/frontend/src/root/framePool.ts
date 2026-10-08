@@ -44,6 +44,15 @@ export class InnerFramePool {
     return false;
   }
 
+  /** The windows of this pool's frames. */
+  innerWindows(): Window[] {
+    const windows: Window[] = [];
+    for (const { frame } of this.held.values()) {
+      if (frame.contentWindow !== null) windows.push(frame.contentWindow);
+    }
+    return windows;
+  }
+
   /** Show ``chatId`` (creating its frame on first sight), hiding whatever was shown; null shows nothing. */
   show(chatId: string | null): void {
     if (chatId !== null && !this.held.has(chatId)) this.create(chatId);

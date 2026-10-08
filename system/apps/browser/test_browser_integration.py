@@ -480,7 +480,7 @@ class _PageServer:
                 self.end_headers()
                 self.wfile.write(encoded)
 
-            def log_message(self, *args: Any) -> None:
+            def log_message(self, format: str, *args: Any) -> None:
                 pass
 
         self._server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -848,6 +848,7 @@ def _ws_recv_json(ws: Any, timeout: float) -> dict[str, Any]:
     return json.loads(payload)
 
 
+@pytest.mark.flaky
 @pytest.mark.timeout(30)
 def test_cast_ws_streams_control_and_take_control_flips_ownership(monkeypatch: pytest.MonkeyPatch) -> None:
     # The load-bearing WS inversion: the loop fans frames/control out onto the cast

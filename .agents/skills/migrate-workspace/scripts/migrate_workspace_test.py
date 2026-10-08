@@ -185,9 +185,9 @@ def test_rewrite_legacy_references_rewrites_the_old_safety_net_symlinks() -> Non
 
 def test_rewrite_legacy_references_keeps_directory_prefixes_intact() -> None:
     rewritten, _ = migrate_workspace.rewrite_legacy_references(
-        "python3 scripts/layout.py open\nDATA_DIR = Path('runtime/memory')\n"
+        "python3 scripts/forward_port.py --list\nDATA_DIR = Path('runtime/memory')\n"
     )
-    assert "python3 system/scripts/layout.py open" in rewritten
+    assert "python3 system/scripts/forward_port.py --list" in rewritten
     # A multi-segment legacy dir is rewritten with or without a trailing slash,
     # since code most often names it without one.
     assert "Path('data/memories')" in rewritten
@@ -642,6 +642,7 @@ def test_scan_audit_finds_each_kind_of_call_site() -> None:
             "cat /mngr/code/uploads/x\n"
         ),
         ".agents/skills/dash/SKILL.md": "See the build-web-service skill and heal-artifact.\n",
+        ".agents/skills/arrange/SKILL.md": "python3 system/scripts/layout.py place self --zone left\n",
     }
     findings = migrate_workspace.scan_audit(files)
     by_kind: dict[str, set[str]] = {}
@@ -652,6 +653,7 @@ def test_scan_audit_finds_each_kind_of_call_site() -> None:
     assert by_kind["legacy-path"] == {
         "system/apps/dash/runner.py",
         "system/scripts/fetch.sh",
+        ".agents/skills/arrange/SKILL.md",
     }
     assert by_kind["retired-skill"] == {".agents/skills/dash/SKILL.md"}
 
@@ -675,7 +677,10 @@ def test_scan_audit_respects_the_kind_filter() -> None:
 
 def test_scan_audit_legacy_path_pattern_ignores_current_layout_paths() -> None:
     findings = migrate_workspace.scan_audit(
-        {"a.py": "P = 'data/runtime/x'\nQ = 'data/uploads/y'\nR = 'myruntime/z'\n"},
+        {
+            "a.py": "P = 'data/runtime/x'\nQ = 'data/uploads/y'\nR = 'myruntime/z'\n",
+            "b.sh": "uv run pytest system/test_supervisord_layout.py\n",
+        },
         kinds=["legacy-path"],
     )
     assert findings == []

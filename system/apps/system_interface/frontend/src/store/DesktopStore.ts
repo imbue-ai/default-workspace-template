@@ -773,7 +773,7 @@ export class DesktopStore {
       onAvatarStatus: (status) => this.dispatch({ type: "avatar_status_updated", status }),
       onAvatarSelectionChanged: (design) => {
         this.avatarSelectionPushes += 1;
-        this.dispatch({ type: "avatar_selection_updated", design, defaultDesign: null, pushedAt: performance.now() });
+        this.dispatch({ type: "avatar_selection_updated", design, defaultDesign: null });
       },
       onUpdateNoticeChanged: (wire) =>
         this.dispatch({ type: "update_notice_changed", notice: wire === null ? null : noticeFromWire(wire) }),
@@ -1005,7 +1005,7 @@ export class DesktopStore {
     try {
       const catalog = await this.deps.api.fetchAvatars();
       const design = this.avatarSelectionPushes === pushesBefore ? catalog.selected : this.state.avatar.design;
-      this.dispatch({ type: "avatar_selection_updated", design, defaultDesign: catalog.default, pushedAt: null });
+      this.dispatch({ type: "avatar_selection_updated", design, defaultDesign: catalog.default });
     } catch (error) {
       console.warn("[si] could not read the avatar designs", error);
     }
@@ -1181,11 +1181,15 @@ export class DesktopStore {
       case "focus": {
         // An op that put a window on this client's screen. A phone shows it; a desktop has it placed already, and
         // acts only on a pulled-out window the shell left out, whose desktop window it raises as the taskbar's
-        // "Show" does, from the main window's page (a solo page shares its client).
+        // "Show" does. The main window's page asks for any window; a solo page asks for its own, so the raise works
+        // with the main window closed (the chrome raises an existing desktop window on the ask, whoever sends it).
         const windowId = event.args.window;
-        if (this.soloWindowId !== null || typeof windowId !== "string" || windowId === "") return;
-        if (this.isPhoneLayout()) this.showOnPhoneWhenKnown(windowId);
-        else if (event.op === "show" && event.args.is_detached === true) this.showDetachedWindow(windowId);
+        if (typeof windowId !== "string" || windowId === "") return;
+        const isDetachedShow = event.op === "show" && event.args.is_detached === true;
+        if (this.soloWindowId !== null) {
+          if (isDetachedShow && windowId === this.soloWindowId) this.showDetachedWindow(windowId);
+        } else if (this.isPhoneLayout()) this.showOnPhoneWhenKnown(windowId);
+        else if (isDetachedShow) this.showDetachedWindow(windowId);
         return;
       }
     }

@@ -405,6 +405,29 @@ def test_select_tests_over_a_diff_runs_what_depended_on_a_moved_files_old_place(
     )
 
 
+def test_select_tests_in_a_fresh_worktree_builds_the_frontends_before_an_apps_tests(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "workspace"
+    repo_root.mkdir()
+    build_selection_workspace(repo_root)
+    _branch_with_changes(repo_root, {"system/apps/notes/src/notes/core.py": "VALUE = 2\n"})
+    worktree = tmp_path / "worker"
+    run_git(repo_root, ("worktree", "add", "-q", "-b", "worker", str(worktree), "work"))
+
+    in_worktree = _run_cli(["select-tests", "--repo-root", str(worktree), "--diff-base", "main"])
+    in_built_tree = _run_cli(["select-tests", "--repo-root", str(repo_root), "--diff-base", "main"])
+
+    assert in_worktree.exit_code == 0, in_worktree.output
+    assert in_built_tree.exit_code == 0, in_built_tree.output
+    build = ["(cd system && npm ci)", "(cd system && npm run build)"]
+    # git leaves the ignored built modules out of the worktree, so the notes run there builds them.
+    worktree_commands = [line for line in in_worktree.output.splitlines() if not line.startswith("#")]
+    assert worktree_commands[:2] == build
+    assert "uv run pytest system/apps/notes" in worktree_commands
+    assert not set(build) & set(in_built_tree.output.splitlines())
+
+
 def test_select_tests_over_a_diff_refuses_a_working_tree_with_uncommitted_changes(
     tmp_path: Path,
 ) -> None:

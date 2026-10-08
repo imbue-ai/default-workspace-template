@@ -28,7 +28,7 @@ def test_the_registry_read_lists_every_app_with_its_launch_paths(
     assert [str(entry.row.name) for entry in entries] == ["terminal", "files"]
     assert all(entry.is_running for entry in entries)
     assert inventory.entry("files") is not None and inventory.entry("nope") is None
-    serialized = inventory.serialized()
+    serialized = [view.model_dump(mode="json") for view in inventory.views()]
     assert serialized[0]["launch_paths"] == [
         {
             "id": "new",

@@ -22,7 +22,8 @@ const agentState: { agent: ChatSnapshot | null } = { agent: null };
 vi.mock("../models/Chats", () => ({ getChatById: () => agentState.agent }));
 
 const catalogState: { catalog: unknown } = { catalog: null };
-vi.mock("../models/HarnessCatalog", () => ({
+vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),
   ensureHarnessCatalogs: () => undefined,
   getHarnessCatalog: () => catalogState.catalog,
 }));
@@ -47,6 +48,7 @@ vi.mock("../models/Providers", () => ({
   setDefaultAccount: () => Promise.resolve(),
   loadAccounts: () => Promise.resolve(),
   accountForAgent: (id?: string) => providerState.accounts.find((a) => (a as { id: string }).id === id) ?? null,
+  isAccountSignedOut: () => false,
   openProviderChooser: (intent: (typeof chooserOpens)[number] = {}) => chooserOpens.push(intent),
   deleteAccount: (id: string) => {
     deleted.push(id);
@@ -81,6 +83,7 @@ const OPUS = {
   supports_fast: false,
   in_picker: true,
   harness_reported_model_id: null,
+  default_effort: null,
 };
 const ACCOUNT = {
   id: "acct-1",

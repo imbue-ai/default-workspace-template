@@ -14,6 +14,7 @@ dependencies = [
     "pydantic>=2.0",
     "pydantic-settings>=2.13.1",
     "werkzeug>=3.0",
+    "workspace-layout",
 ]
 
 [dependency-groups]
@@ -24,6 +25,8 @@ dev = [
     "coverage",
     "inline-snapshot>=0.13",
     "ruff~=0.12.8",
+    # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
+    "ty==0.0.24",
 ]
 
 [project.scripts]
@@ -105,4 +108,8 @@ known-first-party = [
     "getting_started",
     "imbue",
     "app_manifest",
+    "workspace_layout",
 ]
+
+# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
+[tool.ty]

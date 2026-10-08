@@ -27,6 +27,7 @@ dependencies = [
     "tomlkit>=0.12",
     "watchdog>=4.0",
     "werkzeug>=3.0",
+    "workspace-layout",
 ]
 license = {text = "FCL-1.0-MIT"}
 
