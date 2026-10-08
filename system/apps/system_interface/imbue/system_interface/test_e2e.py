@@ -38,6 +38,7 @@ from playwright.sync_api import FloatRect
 from playwright.sync_api import Frame
 from playwright.sync_api import Locator
 from playwright.sync_api import Page
+from playwright.sync_api import WebSocket
 from playwright.sync_api import expect
 from pydantic import Field
 
@@ -1495,7 +1496,7 @@ def _record_desktop_traffic(page: Page) -> _DesktopTraffic:
     """Record the page's desktop traffic from here on; call before the page loads."""
     traffic = _DesktopTraffic(reports=[], moves=[])
 
-    def _watch(websocket: Any) -> None:
+    def _watch(websocket: WebSocket) -> None:
         def _on_sent(payload: str | bytes) -> None:
             message = json.loads(payload)
             if message.get("type") == "client_state":
