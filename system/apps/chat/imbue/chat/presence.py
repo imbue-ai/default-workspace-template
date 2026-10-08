@@ -11,10 +11,9 @@ never overwrite each other. Only the chat's own page reports, never a subagent v
 
 A page numbers its reports in the order it sends them. Each is its own request, and the
 threaded server can record two sent a moment apart in either order, so a report numbered at
-or below the instance's standing one is stale and dropped: without that, the ``hidden`` a page
-sends on its handshake can land after the ``visible`` that follows it, and the page reads as
-hidden until its next report. A ``closed`` report stays as the instance's standing report,
-counting as neither open nor visible, so a report it overtook cannot reopen the page.
+or below the instance's standing one is stale and dropped. A ``closed`` report stays as the
+instance's standing report, counting as neither open nor visible, so a report it overtook
+cannot reopen the page.
 
 Two readers. The OOM prioritizer reads the aggregate: a chat is *open* while any instance has
 an unexpired visible or hidden report, and *visible* while any instance's last report says so;
