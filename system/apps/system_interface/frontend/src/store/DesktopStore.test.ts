@@ -554,7 +554,7 @@ describe("opening", () => {
   it("shell:start-with-text runs the primary text action, and says so when there is none", async () => {
     const store = await startedStore();
     expect(await store.startWithText("hello")).toBe(false);
-    expect(last(notices())).toBe("No app on this machine can start a chat");
+    expect(last(notices())).toBe("No app in this workspace can start a chat");
     socket.deliver().onAppsUpdated([
       appRecord("docs", { launcher_rank: 20 }),
       appRecord("notes", {
@@ -574,7 +574,7 @@ describe("opening", () => {
   it("shell:draft-text drafts through the first draft row when no pinned window takes one, and says so with none", async () => {
     const store = await startedStore();
     expect(await store.draftText("Explain this element:")).toBe(false);
-    expect(last(notices())).toBe("No app on this machine can take a draft");
+    expect(last(notices())).toBe("No app in this workspace can take a draft");
     offerApps(api, socket, [
       appRecord("docs", {
         launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],

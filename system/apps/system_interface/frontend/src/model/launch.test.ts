@@ -129,6 +129,6 @@ describe("the free-text params", () => {
 
   it("never stands a POST launch path down for length, and stands one with no text param down outright", () => {
     expect(textRowDisabledReason(drafting, "x".repeat(5000))).toBeNull();
-    expect(textRowDisabledReason(launchPathRecord(), "hi")).toBe("No app on this machine can start a chat");
+    expect(textRowDisabledReason(launchPathRecord(), "hi")).toBe("No app in this workspace can start a chat");
   });
 });

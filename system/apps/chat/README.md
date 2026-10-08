@@ -24,13 +24,26 @@ observe`, its own supervised service) writes, and serves:
   so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
   chat's title. Loading the page sends and writes nothing. With nothing selected it
   shows the most recent chat, and with no chats one awaiting its first send
-  (`POST /api/chats/awaiting`, held in memory until that send launches it). At
-  700px wide or less (a phone, or a narrow window) the root takes its phone
-  layout (`frontend/src/compactLayout.ts`, docs/system/blueprint/desktop-interface/plan-phone-interface.md):
-  a 44px header with a list button, the chat's title and a kebab of its verbs,
-  and the list in a drawer over the chat, each row carrying a kebab with the
-  right-click menu's verbs; with nothing selected the drawer is open over an
-  empty chat. The root tells each chat page it frames which layout it is in, and
+  (`POST /api/chats/awaiting`, held in memory until that send launches it).
+  With nothing signed in, a chat awaiting its first send shows "Connect an AI
+  provider to start chatting." and a "Choose a provider" button above its
+  composer, which stays in view (holding any draft) but disabled, and opens the
+  provider chooser as that notice appears; this is the one place the chooser
+  opens for a missing provider (the New chat button opens the awaiting chat, and
+  an intake's first message goes into its composer, with no dialog). Which
+  account a chat starts on is decided from a fresh read of the account list.
+  The list's right edge drags to resize it (100px to 480px, 180px by default,
+  kept per browser). On a phone-sized touchscreen (the shell's rule: a short side at
+  most 500px and a long side at most 1000px, either way round), or a window at
+  most 500px wide under a mouse, the root takes its phone layout
+  (`frontend/src/compactLayout.ts`, docs/system/blueprint/desktop-interface/plan-phone-interface.md):
+  a header with a list button, the chat's title and a kebab offering what a
+  right-click on its row in the list offers, and the list in a drawer over the
+  chat; with nothing selected the drawer is open over an empty chat. On a
+  touchscreen the header is 44px and each drawer row a finger's height with a
+  kebab of the right-click menu's verbs; under a mouse the header is 36px and
+  the drawer holds the list as the wide layout draws it, at its dragged width.
+  The root tells each chat page it frames which layout it is in, and
   a page in the phone layout opens its model menu from a settings button at the
   composer's left, with submenus sliding over the card, effort as segments, and
   the Source view switch as a row. An
@@ -296,7 +309,8 @@ pseudo-harness like any archived segment), the record names the seed as its
 first member, and the chat is listed as a provisional chat in the
 `awaiting_first_send` phase, its transcript on the page with a composer under
 it. The user's first message is what launches the chat's first real agent
-(the provider chooser opens then if nothing is signed in), which joins the
+(with nothing signed in, the chat's page asks for a provider first), which
+joins the
 record as the seed's successor with the `chat_id` and `chat_seq` labels a
 handoff's successor carries. That agent is launched with the seeded
 conversation ahead of the user's message, as one message: the seed is a segment

@@ -5,19 +5,11 @@
  * render mode or the desktop's theme changes, and
  * handed on as one frozen record. No metric is a literal in TypeScript (``test_project_ratchets``
  * holds that for the views and the reducers); the phone breakpoint is the one exception in the
- * other direction, a TypeScript constant applied as a media query that sets ``data-phone``.
+ * other direction, a media query shared with the other apps (workspace-ui ``device_queries``) that
+ * sets ``data-phone``.
  */
 
-/** The viewport the shell renders its phone layout in (plan-phone-interface.md), whichever way round: a short side
- *  at most PHONE_MAX_SHORT_SIDE_PX and a long side at most PHONE_MAX_LONG_SIDE_PX. Rotating a phone keeps the layout;
- *  no tablet gets it, and neither does a desktop window that is short but wide. */
-export const PHONE_MAX_SHORT_SIDE_PX = 500;
-export const PHONE_MAX_LONG_SIDE_PX = 1000;
-
-export const PHONE_MEDIA_QUERY =
-  `(max-width: ${PHONE_MAX_SHORT_SIDE_PX}px) and (max-height: ${PHONE_MAX_LONG_SIDE_PX}px), ` +
-  `(max-height: ${PHONE_MAX_SHORT_SIDE_PX}px) and (max-width: ${PHONE_MAX_LONG_SIDE_PX}px)`;
-export const TOUCH_MEDIA_QUERY = "(pointer: coarse)";
+import { PHONE_MEDIA_QUERY, TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 
 export const PHONE_ATTRIBUTE = "data-phone";
 export const TOUCH_ATTRIBUTE = "data-touch";

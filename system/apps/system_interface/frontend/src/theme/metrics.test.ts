@@ -1,10 +1,10 @@
+import { PHONE_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { readFileSync } from "fs";
 import { describe, expect, it, vi } from "vitest";
 import { themeMetricsRecord } from "../testing/records";
 import type { MediaQueryLike } from "./metrics";
 import {
   PHONE_ATTRIBUTE,
-  PHONE_MEDIA_QUERY,
   TOUCH_ATTRIBUTE,
   ThemeMetricsError,
   applyRenderModes,

@@ -8,22 +8,35 @@
  * delete (which asks first). A stopped chat stays in the list faded with a pause mark; one
  * being deleted is crossed out until the list drops it.
  *
- * In the phone layout the same list is the drawer's (``ChatDrawer``): "New chat" is a plus in
- * its header, and each row carries a kebab offering the right-click menu's verbs, since nothing
- * on a phone right-clicks. The phone header's kebab offers them too, for the chat on screen
- * (``rowMenuRows``, ``renameField``).
+ * The list's right edge drags to resize it (``railWidth``); a double-click there puts back the
+ * default width.
+ *
+ * In the phone layout the same list is the drawer's (``ChatDrawer``). Under a mouse the drawer
+ * holds the list just as the rail draws it, at the rail's width. On a touchscreen it takes the
+ * finger's form: "New chat" is a plus in its header, and each row carries a kebab offering the
+ * right-click menu's verbs, since nothing on a phone right-clicks. The phone header's kebab
+ * offers the whole right-click menu, verbs and reference rows, for the chat on screen
+ * (``rowMenuRows``, ``referenceRowsFor``, ``renameField``).
  */
 
 import m from "mithril";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { createMenu, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { elementReferenceRows, targetOfEvent } from "@imbue/workspace-ui/src/context_menu_rows";
-import { describeElement, type ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
+import { describeElement, type ReferenceClick, type ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
 import { kebabGlyph, plusGlyph } from "../glyphs";
 import { isUnread } from "./chatUnread";
 import { destroyChat, renameChat, startChat, stopChat } from "./verbs";
 import { isAgentStarted } from "./rows";
+import {
+  DEFAULT_RAIL_WIDTH_PX,
+  MAX_RAIL_WIDTH_PX,
+  MIN_RAIL_WIDTH_PX,
+  railWidth,
+  saveRailWidth,
+  setRailWidth,
+} from "./railWidth";
 import type { ChatRow } from "./rows";
 import { LIST_ROW_PART } from "@imbue/workspace-ui/src/themes/parts";
 
@@ -32,7 +45,9 @@ export interface ChatRailAttrs {
   rows: readonly ChatRow[];
   selectedChatId: string | null;
   /** Whether the root draws its phone layout, where this list is the drawer's. */
-  isCompact: boolean;
+  isInDrawer: boolean;
+  /** Whether the list takes the finger's form: the drawer on a touchscreen. */
+  isTouch: boolean;
   onPick: (chatId: string) => void;
   onNew: () => void;
   /** The scope a reference to a row carries (the root's handshake). */
@@ -137,6 +152,18 @@ function setRunningFromMenu(row: ChatRow, isRunning: boolean): void {
 /** What a row's menu needs of the root: the rows, the one shown, and how to show another. */
 export type RowMenuContext = Pick<ChatRailAttrs, "rows" | "selectedChatId" | "onPick">;
 
+/** What a reference to an element of the list needs of the root, as its right-click menu does. */
+export type RowReferenceContext = Pick<
+  ChatRailAttrs,
+  "referenceScope" | "onDraftReference" | "isReferenceDraftAvailable"
+>;
+
+/** The reference rows of a menu about ``element``, opened at ``click``: what a right-click on it offers. */
+export function referenceRowsFor(attrs: RowReferenceContext, element: Element, click: ReferenceClick): MenuRow[] {
+  const reference = describeElement(element, click, attrs.referenceScope);
+  return elementReferenceRows(reference, attrs.onDraftReference, attrs.isReferenceDraftAvailable);
+}
+
 /** Delete from the menu, after asking. When it is the chat the root shows, the root moves to
  *  the next one in the list first, so it is not left on a page whose chat is gone. */
 function deleteFromMenu(attrs: RowMenuContext, row: ChatRow): void {
@@ -184,8 +211,7 @@ export function rowMenuRows(attrs: RowMenuContext, row: ChatRow, referenceRows: 
 /** The reference rows for a right-click on a row's element, built as the menu opens. */
 function referenceRowsForEvent(attrs: ChatRailAttrs, event: MouseEvent): MenuRow[] {
   const target = targetOfEvent(event, document);
-  const reference = describeElement(target.element, target.click, attrs.referenceScope);
-  return elementReferenceRows(reference, attrs.onDraftReference, attrs.isReferenceDraftAvailable);
+  return referenceRowsFor(attrs, target.element, target.click);
 }
 
 // The status marks
@@ -236,6 +262,11 @@ export const ChatRail: m.Component<ChatRailAttrs> = {
   onremove() {
     // A menu still open when the rail unmounts would keep its Escape listener on the window.
     railMenu.dispose();
+    // A drag whose edge goes with the rail (Escape closing the drawer mid-drag) never sees its release.
+    if (resizeDrag !== null) {
+      resizeDrag = null;
+      saveRailWidth();
+    }
   },
   view({ attrs }) {
     pruneDeleting(attrs.rows);
@@ -245,29 +276,98 @@ export const ChatRail: m.Component<ChatRailAttrs> = {
       {
         class: [
           "chat-rail relative flex h-full flex-none flex-col bg-surface",
-          attrs.isCompact ? "w-full" : "w-60 border-r border-default",
+          attrs.isTouch ? "w-full" : "border-r border-default",
+          // The drawer leaves a strip of the scrim to click away on, however wide the list was dragged.
+          attrs.isInDrawer && !attrs.isTouch ? "max-w-[calc(100vw-3rem)]" : "",
         ].join(" "),
+        style: attrs.isTouch ? undefined : { width: `${railWidth()}px` },
         "aria-label": "Chats",
       },
       [
-        attrs.isCompact ? drawerHead(attrs) : railHead(attrs),
+        attrs.isTouch ? drawerHead(attrs) : railHead(attrs),
         m(
           "div",
           {
             // A touch's allowed gestures are read from the touched row up to the first scrolling ancestor, this
             // list, so the drawer's own pan-y must be repeated here for a sideways drag over the rows to reach it.
-            class: `chat-rail-list min-h-0 flex-1 overflow-y-auto px-2 pb-2${attrs.isCompact ? " touch-pan-y" : ""}`,
+            class: `chat-rail-list min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 pb-2${attrs.isTouch ? " touch-pan-y" : ""}`,
           },
           attrs.rows.map((row) => railRow(attrs, row)),
         ),
+        attrs.isTouch ? null : resizeHandle(),
         menuRow === undefined ? null : railMenu.view(rowMenuRows(attrs, menuRow, menuReferenceRows)),
       ],
     );
   },
 };
 
+/** How far one arrow key moves the list's edge. */
+const RESIZE_KEY_STEP_PX = 16;
+
+// The drag on the list's edge being followed, from its pointerdown to its release; null between drags.
+let resizeDrag: { pointerId: number; startX: number; startWidth: number } | null = null;
+
+function endResize(event: PointerEvent): void {
+  if (resizeDrag === null || event.pointerId !== resizeDrag.pointerId) return;
+  resizeDrag = null;
+  saveRailWidth();
+}
+
+/** The width the list is drawn at, which a drag or an arrow key moves from: the drawer can draw it narrower than its
+ *  width, held back from the window's edge. */
+function drawnRailWidth(handle: HTMLElement): number {
+  const drawnWidth = handle.parentElement?.getBoundingClientRect().width ?? 0;
+  return drawnWidth > 0 ? Math.min(railWidth(), drawnWidth) : railWidth();
+}
+
+/** The list's right edge, dragged to resize it. The pointer is captured for the drag, so it keeps coming here while
+ *  it crosses the chat's frame; the drawer's own drag never sees the press. */
+function resizeHandle(): m.Vnode {
+  return m("div", {
+    class:
+      "chat-rail-resize absolute inset-y-0 -right-1 z-10 w-2 cursor-col-resize touch-none " +
+      "after:absolute after:inset-y-0 after:left-[3px] after:w-0.5 after:bg-accent after:opacity-0 " +
+      "after:transition-opacity hover:after:opacity-100 focus-visible:after:opacity-100 focus-visible:outline-none",
+    role: "separator",
+    tabindex: 0,
+    "aria-orientation": "vertical",
+    "aria-label": "Resize the chat list",
+    "aria-valuenow": railWidth(),
+    "aria-valuemin": MIN_RAIL_WIDTH_PX,
+    "aria-valuemax": MAX_RAIL_WIDTH_PX,
+    onpointerdown: (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const handle = event.currentTarget as HTMLElement;
+      handle.setPointerCapture(event.pointerId);
+      resizeDrag = { pointerId: event.pointerId, startX: event.clientX, startWidth: drawnRailWidth(handle) };
+    },
+    onpointermove: (event: PointerEvent & { redraw?: boolean }) => {
+      if (resizeDrag === null || event.pointerId !== resizeDrag.pointerId) {
+        event.redraw = false;
+        return;
+      }
+      setRailWidth(resizeDrag.startWidth + event.clientX - resizeDrag.startX);
+    },
+    onpointerup: endResize,
+    onpointercancel: endResize,
+    ondblclick: () => {
+      setRailWidth(DEFAULT_RAIL_WIDTH_PX);
+      saveRailWidth();
+    },
+    onkeydown: (event: KeyboardEvent) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const step = event.key === "ArrowRight" ? RESIZE_KEY_STEP_PX : -RESIZE_KEY_STEP_PX;
+      setRailWidth(drawnRailWidth(event.currentTarget as HTMLElement) + step);
+      saveRailWidth();
+    },
+  });
+}
+
 function railHead(attrs: ChatRailAttrs): m.Vnode {
-  return m("div", { class: "chat-rail-head flex flex-none items-center gap-1 p-2" }, [
+  return m("div", { class: "chat-rail-head flex flex-none items-center gap-1 overflow-hidden p-2" }, [
     m(
       "button",
       {
@@ -284,7 +384,7 @@ function railHead(attrs: ChatRailAttrs): m.Vnode {
   ]);
 }
 
-/** A button in the phone layout's bars, the header's and the drawer's, which read as one bar. */
+/** A button in the phone layout's bars on a touchscreen, the header's and the drawer's, which read as one bar. */
 export const BAR_ICON_BUTTON_CLASS =
   "flex size-9 flex-none items-center justify-center rounded-lg text-primary hover:bg-fill-hover";
 
@@ -313,7 +413,7 @@ function drawerHead(attrs: ChatRailAttrs): m.Vnode {
 function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
   const isSelected = row.chatId === attrs.selectedChatId;
   const isDeleting = deletingChatIds.has(row.chatId);
-  if (rename !== null && rename.chatId === row.chatId) return renameRow(row, isSelected, attrs.isCompact);
+  if (rename !== null && rename.chatId === row.chatId) return renameRow(row, isSelected, attrs.isTouch);
   const status = displayStatus(row);
   return m(
     "button",
@@ -323,7 +423,7 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
       class: [
         "chat-rail-row group flex w-full items-center gap-2 rounded-md py-1.5 text-left",
         // A finger's height in the drawer; the rail's rows stay dense under a pointer.
-        attrs.isCompact ? "min-h-11" : "",
+        attrs.isTouch ? "min-h-11" : "",
         isAgentStarted(row) ? "chat-rail-row--nested pr-2 pl-5" : "px-2",
         isDeleting
           ? "chat-rail-row--deleting text-danger line-through opacity-50"
@@ -341,7 +441,7 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
       "aria-disabled": isDeleting ? "true" : undefined,
       // In the drawer the chat on screen is picked again to close it.
       onclick: () => {
-        if (!isSelected || attrs.isCompact) attrs.onPick(row.chatId);
+        if (!isSelected || attrs.isInDrawer) attrs.onPick(row.chatId);
       },
       ondblclick: row.isProvisional ? undefined : () => beginRename(row),
       oncontextmenu: (event: MouseEvent) => {
@@ -355,11 +455,7 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
     [
       statusDot(row, "flex-none"),
       m("span", { class: "chat-rail-title min-w-0 flex-1 truncate text-(length:--font-size-row)" }, row.title),
-      row.isProvisional || (attrs.isCompact && isDeleting)
-        ? null
-        : attrs.isCompact
-          ? rowKebab(row)
-          : renamePencil(row),
+      row.isProvisional || (attrs.isTouch && isDeleting) ? null : attrs.isTouch ? rowKebab(row) : renamePencil(row),
     ],
   );
 }
@@ -387,9 +483,13 @@ function renamePencil(row: ChatRow): m.Vnode {
   return m(
     "span",
     {
+      // Out of sight it takes no room, the row's gap included, so the title runs to the row's end; it opens up, and
+      // the title shortens, only while the row is under the pointer or the pencil has the keyboard. Narrowed to
+      // nothing rather than hidden, so a tab still reaches it.
       class:
-        "chat-rail-rename flex-none rounded p-0.5 text-faint opacity-0 hover:bg-fill-hover hover:text-primary " +
-        "group-hover:opacity-100 focus-visible:opacity-100",
+        "chat-rail-rename -ml-2 w-0 flex-none overflow-hidden rounded p-0 text-faint opacity-0 " +
+        "hover:bg-fill-hover hover:text-primary group-hover:ml-0 group-hover:w-auto group-hover:p-0.5 " +
+        "group-hover:opacity-100 focus-visible:ml-0 focus-visible:w-auto focus-visible:p-0.5 focus-visible:opacity-100",
       ...innerButtonAttrs("Rename chat", () => beginRename(row)),
     },
     m.trust(icon("edit", { size: 13 })),
@@ -449,14 +549,14 @@ export function renameField(row: ChatRow): m.Vnode {
   });
 }
 
-function renameRow(row: ChatRow, isSelected: boolean, isCompact: boolean): m.Vnode {
+function renameRow(row: ChatRow, isSelected: boolean, isTouch: boolean): m.Vnode {
   return m(
     "div",
     {
       key: row.chatId,
       class: [
         "chat-rail-row chat-rail-row--renaming flex w-full items-center gap-2 rounded-md py-1.5",
-        isCompact ? "min-h-11" : "",
+        isTouch ? "min-h-11" : "",
         isAgentStarted(row) ? "pr-2 pl-5" : "px-2",
         isSelected ? "bg-fill-active text-primary" : "text-primary",
       ].join(" "),
