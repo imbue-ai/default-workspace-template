@@ -189,7 +189,8 @@ page's `shell:open-link` by the shared link classifier (`workspace_ui`'s
 registered backend port as that app's window (`windowAtBackendUrl` in
 `frontend/src/model/pageUrl.ts`), any other local URL as `open:url`, and one of
 this workspace's app addresses as that app's window; an app's window already
-there that the client has popped out is raised in its own window. An
+there that the client has popped out is raised in its own window, and one a
+link opens while the client has only pop-outs open gets the same notice. An
 app that wants a window for what it was told asks the op route's `show`, which
 takes the app, a path, the other paths that count as already showing it, and
 the pages whose windows it may point at the path, and picks the window itself:
