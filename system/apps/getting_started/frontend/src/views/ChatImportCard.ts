@@ -12,7 +12,7 @@ import type { ChatImport, ChatImportSource } from "../models/ChatImport";
 import { SOURCE_LABELS, cardPhase, importedSummary } from "../models/ChatImport";
 
 export const IMPORT_PROMPT =
-  "Bring my Claude and ChatGPT chats into this workspace, so you can search and build on my past " + "conversations.";
+  "Bring my Claude and ChatGPT chats into this workspace, so you can search and build on my past conversations.";
 export const UPDATE_PROMPT =
   "Check my Claude and ChatGPT chats for new conversations and bring them into this workspace.";
 export const RESUME_PROMPT =
