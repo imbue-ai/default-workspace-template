@@ -1,3 +1,5 @@
+import itertools
+
 from imbue.chat.presence import PRESENCE_EXPIRY_SECONDS
 from imbue.chat.presence import PresenceReport
 from imbue.chat.presence import PresenceState
@@ -7,6 +9,9 @@ from imbue.chat.presence import WATCHING_STALE_SECONDS
 from imbue.chat.primitives import ChatId
 
 _CHAT = ChatId("agent-1")
+
+# Unless a test numbers a report itself, every report is sent after the one before it.
+_SEQUENCE_NUMBERS = itertools.count(1)
 
 
 class _Clock:
@@ -25,9 +30,19 @@ def _tracker() -> tuple[PresenceTracker, _Clock]:
 
 
 def _report(
-    instance_id: str, state: PresenceState, is_focused: bool = False, client_id: str = "client-a"
+    instance_id: str,
+    state: PresenceState,
+    is_focused: bool = False,
+    client_id: str = "client-a",
+    sequence: int | None = None,
 ) -> PresenceReport:
-    return PresenceReport(instance_id=instance_id, client_id=client_id, state=state, is_focused=is_focused)
+    return PresenceReport(
+        instance_id=instance_id,
+        client_id=client_id,
+        state=state,
+        is_focused=is_focused,
+        sequence=next(_SEQUENCE_NUMBERS) if sequence is None else sequence,
+    )
 
 
 def test_a_visible_report_makes_the_chat_open_and_visible() -> None:
@@ -47,11 +62,38 @@ def test_a_hidden_report_is_open_but_not_visible() -> None:
     assert tracker.visible_chat_ids() == set()
 
 
-def test_a_closed_report_drops_the_instances_presence() -> None:
+def test_a_closed_report_leaves_the_chat_neither_open_nor_watched() -> None:
     tracker, _ = _tracker()
     tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True))
     tracker.record(_CHAT, _report("page-1", PresenceState.CLOSED))
     assert not tracker.is_open(_CHAT)
+    assert not tracker.is_visible(_CHAT)
+    assert tracker.watchers(_CHAT) == []
+    assert tracker.open_chat_ids() == set()
+
+
+def test_a_report_that_arrives_after_a_later_one_from_its_page_is_dropped() -> None:
+    # The page's handshake sends hidden and shown sends visible a moment later, as two requests the
+    # server can record in either order. Recorded last, the hidden one would leave the page hidden.
+    tracker, _ = _tracker()
+    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True, sequence=2))
+
+    assert tracker.record(_CHAT, _report("page-1", PresenceState.HIDDEN, is_focused=True, sequence=1)) == (
+        PresenceTransition(is_newly_visible=False, is_newly_watched=False)
+    )
+    assert tracker.is_visible(_CHAT)
+    assert tracker.watchers(_CHAT) == ["page-1"]
+
+
+def test_a_report_that_arrives_after_its_page_closed_does_not_reopen_it() -> None:
+    tracker, _ = _tracker()
+    tracker.record(_CHAT, _report("page-1", PresenceState.HIDDEN, sequence=1))
+    tracker.record(_CHAT, _report("page-1", PresenceState.CLOSED, sequence=3))
+
+    tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True, sequence=2))
+
+    assert not tracker.is_open(_CHAT)
+    assert not tracker.is_visible(_CHAT)
     assert tracker.watchers(_CHAT) == []
     assert tracker.open_chat_ids() == set()
 
