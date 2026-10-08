@@ -310,7 +310,7 @@ function outputKey(entry: ChipEntry): string {
 /** Close a chip. The unfolded-output state is a second key, and the expansion store
  *  is never swept, so without clearing it here "showing all" would outlive the panel
  *  it belongs to and a reopened chip would dump its whole log again. */
-function closeChip(entry: ChipEntry): void {
+export function closeChip(entry: ChipEntry): void {
   setBlockExpanded(chipKey(entry), false);
   setBlockExpanded(outputKey(entry), false);
 }

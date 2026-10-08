@@ -77,6 +77,7 @@ import { HandoffFailedNotice } from "./HandoffFailedNotice";
 import { renderHandoffTailNode } from "./handoff-node";
 import { SwitchDialog } from "./SwitchDialog";
 import { hasOpenHandoffRequest, isTailTurnSettled, liveCompactionOf } from "./turn-grouping";
+import { closeRunningCompactionChips } from "./compaction-chips";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 
 // The terminal output a page shows in place of a transcript: what mngr printed when a create
@@ -621,6 +622,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       // Both structure and decoration come from the transcript walk; there is no
       // side-channel enrichment. The same pipeline feeds the subagent view, so a
       // subagent's "View conversation" renders an identical progress timeline.
+      if (liveCompaction === null) closeRunningCompactionChips();
       cachedRows = buildConversationRows(chatId, events, tailTurnSettled, liveCompaction);
       rowsCacheKey = renderKey;
     }

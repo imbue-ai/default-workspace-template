@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import m from "mithril";
 import type { CompactionCause, UserMessageEvent } from "../models/Response";
-import { compactionChips, landedCompaction, runningCompaction } from "./compaction-chips";
+import { closeRunningCompactionChips, compactionChips, landedCompaction, runningCompaction } from "./compaction-chips";
 import { setBlockExpanded } from "./expansion-state";
 import { ToolChipGroup } from "./ToolChipGroup";
 
@@ -80,6 +80,14 @@ describe("a compaction's chips", () => {
   it("shows only the start chip for the compaction running now", () => {
     mount(null, "idle");
     expect(chipLabels()).toEqual(["Compacting while idle…"]);
+  });
+
+  it("closes the running compaction's chip, so the next compaction does not open with it", () => {
+    openPanelBody(null, 0);
+    closeRunningCompactionChips();
+    mount(null, "manual");
+    expect(chipLabels()).toEqual(["Compacting as requested…"]);
+    expect(root.querySelector(".tool-chip-detail")).toBeNull();
   });
 
   it.each([

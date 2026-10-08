@@ -14,7 +14,7 @@ import { renderMarkdown } from "../markdown";
 import type { CompactionCause, UserMessageEvent } from "../models/Response";
 import { compactingLabel } from "./ActivityIndicator";
 import { classifyUserMessage } from "./message-classification";
-import type { StatusChip, StatusChipSection } from "./ToolChipGroup";
+import { closeChip, type StatusChip, type StatusChipSection } from "./ToolChipGroup";
 
 /** The id of the compaction running now, which has no event of its own yet. */
 export const RUNNING_COMPACTION_ID = "compaction-running";
@@ -131,4 +131,10 @@ export function compactionChips(part: CompactionPart): StatusChip[] {
       sections,
     },
   ];
+}
+
+/** Close the running compaction's chip. Every running compaction reuses its id, and the
+ *  expansion store is never swept, so one left open would open the next compaction's too. */
+export function closeRunningCompactionChips(): void {
+  for (const chip of compactionChips(runningCompaction(null))) closeChip(chip);
 }
