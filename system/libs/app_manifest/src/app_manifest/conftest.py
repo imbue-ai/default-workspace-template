@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from app_manifest.registry import ENV_APPS_FILE
+from app_manifest.registry_location import ENV_APPS_FILE
 
 # system/libs/app_manifest/src/app_manifest/conftest.py -> the repository root, the cwd the
 # registration script is resolved against.

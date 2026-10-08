@@ -55,7 +55,7 @@ from app_manifest.manifest import (
     AppManifest,
     load_manifest,
 )
-from app_manifest.registry import registry_path
+from app_manifest.registry_location import registry_path
 
 # Where the shared script files each instance (its STATE_ROOT / STATE_FILENAME), and
 # where this script keeps what it adds: the registry copy and the sibling list.
