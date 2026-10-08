@@ -2,9 +2,9 @@
  * The Getting Started page's root: it connects to the shell that frames it (reporting ``/`` and its
  * title once greeted; it has one page, so it declares no navigation and a navigate reloads it),
  * requests the template catalog once and the chat import card's state on load and on every focus,
- * and mounts the page. What a tile or a detail action starts
- * goes to the shell as ``shell:start-with-text``: the shell runs its launcher's primary text action
- * with it, so this page never names the app that takes it.
+ * and mounts the page. What a tile or a detail action starts goes to the shell as
+ * ``shell:start-with-text``: the shell runs its launcher's primary text action with it, so this
+ * page never names the app that takes it.
  */
 
 import m from "mithril";
