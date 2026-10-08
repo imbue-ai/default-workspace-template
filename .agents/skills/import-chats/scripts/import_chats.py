@@ -147,6 +147,9 @@ _FRONTMATTER_FIELD = re.compile(r"^(\w+): (.*)$")
 _SOURCE_LINK = re.compile(r'class="source-link" href="([^"]+)"')
 _MESSAGE_TIME = re.compile(r'<time class="msg-ts" datetime="([^"]+)"')
 _INDEX_TITLE_LIMIT = 120
+# What a title must escape to stay one link's text: a backslash would escape the character after it, a bracket
+# would end the text, and ``<`` would start raw HTML.
+_LINK_TEXT_SPECIAL = re.compile(r"([\\\[\]<])")
 
 
 class ImportChatsError(Exception):
@@ -342,7 +345,7 @@ def _index_line(page: IndexedPage, index_dir: Path) -> str:
     title = " ".join(page.title.split())
     if len(title) > _INDEX_TITLE_LIMIT:
         title = title[: _INDEX_TITLE_LIMIT - 1].rstrip() + "…"
-    title = title.replace("[", "\\[").replace("]", "\\]")
+    title = _LINK_TEXT_SPECIAL.sub(r"\\\1", title)
     target = urllib.parse.quote(Path(os.path.relpath(page.path, index_dir)).as_posix())
     line = f"- [{title}]({target})"
     if page.last_message_at is not None:

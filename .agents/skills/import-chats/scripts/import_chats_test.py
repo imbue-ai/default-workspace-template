@@ -525,7 +525,7 @@ def test_the_index_lists_chats_by_month_newest_first_then_undated_then_projects(
         data_root,
         "claude_chats",
         "old",
-        "Older [draft]",
+        "Older [draft] <T> in C:\\",
         "https://claude.ai/chat/a",
         ["2026-09-03T08:00:00+00:00"],
     )
@@ -572,7 +572,7 @@ def test_the_index_lists_chats_by_month_newest_first_then_undated_then_projects(
     assert entries == [
         "- 2026-10-07 · [Newest](../datalib/claude_chats/render_markdown/account/new/all.md) · [original](https://claude.ai/chat/b)",
         "- 2026-10-01 · [Middle](../datalib/claude_chats/render_markdown/account/mid/all.md) · [original](https://claude.ai/chat/c)",
-        "- 2026-09-03 · [Older \\[draft\\]](../datalib/claude_chats/render_markdown/account/old/all.md) · [original](https://claude.ai/chat/a)",
+        "- 2026-09-03 · [Older \\[draft\\] \\<T> in C:\\\\](../datalib/claude_chats/render_markdown/account/old/all.md) · [original](https://claude.ai/chat/a)",
         "- [No dates](../datalib/claude_chats/render_markdown/account/nodate/all.md) · [original](https://claude.ai/chat/d)",
         "- [Stellar Cartography](../datalib/claude_chats/render_markdown/account/proj/all.md) · [original](https://claude.ai/project/p)",
     ]
