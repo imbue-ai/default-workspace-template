@@ -152,12 +152,11 @@ export function areAccountsLoaded(): boolean {
   return accountsLoaded;
 }
 
-/** Settles once the account list can choose a new chat's account, so a list not read yet or read stale is never taken
- *  for "nothing signed in": after its first read, and after a fresh read when it names no account, since a sign-in
- *  made on another page (the chat list, another chat) does not reach this page's copy. */
+/** Settles once the account list can choose a new chat's account: after its first read, and after a fresh read, since a
+ *  sign-in or a sign-out made on another page (the chat list, another chat) does not reach this page's copy, and a
+ *  launch on an account the workspace no longer has is refused. */
 export async function whenAccountsReadyToChoose(): Promise<void> {
   await firstAccountsLoad;
-  if (getSelectedAccount() !== null) return;
   try {
     await loadAccounts();
   } catch (error) {
@@ -195,8 +194,8 @@ export async function loadAccounts(): Promise<void> {
 /** Load the account list, retrying a failed fetch with backoff until it succeeds.
  *
  * The boot-time caller races the backend coming up: the page can be served before the API
- * answers, and a decision made off one silently failed fetch (the provider chooser the chat
- * root offers foremost) would be wrong for the whole page load. Never rejects.
+ * answers, and a decision made off one silently failed fetch (whether the composer asks for a
+ * provider) would be wrong for the whole page load. Never rejects.
  */
 export async function loadAccountsWithRetry(): Promise<void> {
   const backoff = new ReconnectBackoff();
@@ -387,14 +386,14 @@ function releaseRelay(ended: FlowStart): void {
  * The account the user pinned as the default wins; otherwise the one just signed in to;
  * otherwise the most recently used, which the server bumps on every launch -- so "start
  * another one like the last" needs no click. Null means there is nothing to launch on yet: the
- * chat root then offers the chooser before it creates anything. The server's
+ * chat then asks for a provider before anything is typed. The server's
  * `resolve_binding` follows the same order, so a launch the page decides and one it leaves to
  * the server land on the same account.
  */
 let selectedAccountId: string | null = null;
 
 /** The account a chat with no agent yet starts on: the one it was minted for, else the selected
- *  one. Null when neither exists, and its first send has to ask for a sign-in. */
+ *  one. Null when neither exists: the composer then offers the provider chooser in its place. */
 export function accountForFirstSend(accountId: string | undefined): ProviderAccount | null {
   return accountForAgent(accountId) ?? getSelectedAccount();
 }
