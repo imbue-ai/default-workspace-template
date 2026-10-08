@@ -22,7 +22,7 @@ and where ``/proc`` has it, that process's start time, so a pid recycled after a
 bring a marker back. Readers skip a stale marker and never delete it; its writer's next pass does.
 
 The chat app reads the directories on its state poller and is the authority for everyone else:
-``list`` and ``is-busy`` ask it first (``GET /api/agents``), and read the files themselves only
+``list`` and ``is-busy`` ask it first (``GET /api/agents?tracked=true``), and read the files themselves only
 when it cannot be reached or predates the fields. Then agent names are unknown and a chat's
 active agent is taken to be the agent whose id is the chat id::
 
@@ -72,7 +72,9 @@ CLAUDE_KINDS = ("shell", "monitor", "workflow", "subagent")
 # What a chat id or task id may contribute to a path; anything else becomes ``_``.
 _UNSAFE_NAME_CHARS = re.compile(r"[^A-Za-z0-9_.-]")
 
-AGENTS_PATH = "/api/agents"
+# The chat app's own agent list, with no fresh discovery; an older app ignores the query and
+# answers without the busy fields, which the files then answer for.
+AGENTS_PATH = "/api/agents?tracked=true"
 CONNECT_TIMEOUT_SECONDS = 3.0
 READ_TIMEOUT_SECONDS = 10.0
 

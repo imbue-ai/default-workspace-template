@@ -351,7 +351,7 @@ def test_list_answers_from_the_chat_app_with_agent_names(
     fake_chat_app: Any, background_task_markers: Path, tmp_path: Path
 ) -> None:
     marker = _task("from-app", "2026-10-08T10:00:00+00:00").to_json()
-    fake_chat_app.get_answers["/api/agents"] = _agents_answer(
+    fake_chat_app.get_answers[background_tasks.AGENTS_PATH] = _agents_answer(
         {
             "id": "agent-active",
             "name": "lead",
@@ -385,7 +385,7 @@ def test_list_answers_from_the_chat_app_with_agent_names(
 def test_is_busy_counts_a_turn_in_flight_the_chat_app_reports(
     fake_chat_app: Any, tmp_path: Path
 ) -> None:
-    fake_chat_app.get_answers["/api/agents"] = _agents_answer(
+    fake_chat_app.get_answers[background_tasks.AGENTS_PATH] = _agents_answer(
         {
             "id": _CHAT_ID,
             "name": "lead",
@@ -403,7 +403,7 @@ def test_is_busy_counts_a_turn_in_flight_the_chat_app_reports(
 def test_a_chat_app_from_before_the_busy_fields_falls_back_to_the_files(
     fake_chat_app: Any, background_task_markers: Path, tmp_path: Path
 ) -> None:
-    fake_chat_app.get_answers["/api/agents"] = _agents_answer(
+    fake_chat_app.get_answers[background_tasks.AGENTS_PATH] = _agents_answer(
         {"id": _CHAT_ID, "name": "lead", "state": "WAITING"}
     )
     background_tasks.write_marker(
