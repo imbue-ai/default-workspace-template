@@ -63,7 +63,7 @@ def test_an_import_whose_process_is_gone_reads_as_failed(tmp_path: Path) -> None
         status_path,
         {
             "claude": {"state": "importing", "conversations": 3, "pid": _exited_pid()},
-            "chatgpt": {"state": "importing", "conversations": 0, "pid": None},
+            "chatgpt": {"state": "importing", "conversations": 0, "pid": None, "fetched": 166, "to_fetch": 582},
         },
     )
 
@@ -72,6 +72,7 @@ def test_an_import_whose_process_is_gone_reads_as_failed(tmp_path: Path) -> None
     assert {key: source.state for key, source in sources.items()} == {"claude": "failed", "chatgpt": "failed"}
     assert sources["claude"].detail == "The import stopped before it finished."
     assert sources["claude"].conversations == 3
+    assert (sources["chatgpt"].fetched, sources["chatgpt"].to_fetch) == (None, None)
 
 
 def test_process_liveness() -> None:

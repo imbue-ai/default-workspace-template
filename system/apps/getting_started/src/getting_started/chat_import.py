@@ -61,7 +61,9 @@ def is_process_alive(pid: int) -> bool:
 
 def _settled(source: ChatImportSource) -> ChatImportSource:
     if source.state == "importing" and (source.pid is None or not is_process_alive(source.pid)):
-        return source.model_copy(update={"state": "failed", "detail": _INTERRUPTED_DETAIL, "pid": None})
+        return source.model_copy(
+            update={"state": "failed", "detail": _INTERRUPTED_DETAIL, "pid": None, "fetched": None, "to_fetch": None}
+        )
     return source
 
 
