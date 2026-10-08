@@ -41,7 +41,10 @@ class BackgroundTask(FrozenModel):
     source: str = Field(description="Who wrote the marker: run_in_background, or claude (its Stop hook)")
     id: str = Field(description="The task's id within its source")
     description: str = Field(description="What the task is, as its writer described it")
-    started_at: str = Field(description="When the task started (ISO 8601, UTC)")
+    started_at: str = Field(
+        description="When the task started (ISO 8601, UTC); for a Claude task, when its Stop hook first recorded "
+        "it, at the end of the turn that started it"
+    )
     pid: int = Field(description="The process whose exit makes the marker stale")
     kind: str = Field(default="", description="Claude's task type (shell, monitor, workflow, subagent); '' otherwise")
     command: str = Field(default="", description="The command a Claude task runs, when it has one")

@@ -55,7 +55,8 @@ export interface BackgroundTask {
   // Claude's task type ("shell", "monitor", "workflow", "subagent"); empty for the runner's.
   kind: string;
   description: string;
-  // When it started (ISO 8601, UTC).
+  // When it started (ISO 8601, UTC); for Claude's, when its Stop hook first recorded it, at the end of the
+  // turn that started it.
   started_at: string;
 }
 

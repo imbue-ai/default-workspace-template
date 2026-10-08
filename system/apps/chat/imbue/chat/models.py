@@ -533,7 +533,10 @@ class BackgroundTaskSnapshot(FrozenModel):
     source: str = Field(description="Who wrote the task's marker: run_in_background, or claude")
     kind: str = Field(description="Claude's task type (shell, monitor, workflow, subagent); '' otherwise")
     description: str = Field(description="What the task is, as its writer described it")
-    started_at: str = Field(description="When the task started (ISO 8601, UTC)")
+    started_at: str = Field(
+        description="When the task started (ISO 8601, UTC); for a Claude task, when its Stop hook first recorded "
+        "it, at the end of the turn that started it"
+    )
 
 
 class ActiveAgentSnapshot(FrozenModel):
