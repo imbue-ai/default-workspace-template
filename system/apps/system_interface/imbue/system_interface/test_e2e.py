@@ -46,6 +46,7 @@ from imbue.system_interface.config import Config
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.testing import DUFS_BINARY
+from imbue.system_interface.shell.testing import file_viewer_registry_row
 from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.shell.testing import message_handling_app
 from imbue.system_interface.shell.testing import registry_row_toml
@@ -2438,13 +2439,7 @@ _BROWSER_USER_AGENT = (
 def _running_e2e_server_with_file_viewer(tmp_path: Path, root: Path) -> Generator[tuple[E2EServer, str], None, None]:
     """The shell over the stub app and a File Viewer serving ``root``; yields the shell and the viewer's URL."""
     with running_file_viewer(root) as viewer_url:
-        row = registry_row_toml(
-            _FILES_APP_NAME,
-            viewer_url,
-            display_name="File Viewer",
-            launch_paths=(("new", "File Viewer", "/"),),
-        )
-        with _running_e2e_server(tmp_path, extra_rows=(row,)) as server:
+        with _running_e2e_server(tmp_path, extra_rows=(file_viewer_registry_row(viewer_url),)) as server:
             yield server, viewer_url
 
 
