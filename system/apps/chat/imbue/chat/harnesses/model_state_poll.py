@@ -44,8 +44,9 @@ from imbue.imbue_common.enums import UpperCaseStrEnum
 
 # One stat per watched path per interval is trivial even under gVisor's elevated syscall cost;
 # 1s keeps a harness-driven model change visible on the bar within a second of the write,
-# indistinguishable from the inotify latency it replaces.
-MODEL_STATE_POLL_INTERVAL_SECONDS: Final[float] = 1.0
+# indistinguishable from the inotify latency it replaces, and a chat's wait within a second of
+# its marker being written, removed, or left behind by a killed runner.
+AGENT_STATE_POLL_INTERVAL_SECONDS: Final[float] = 1.0
 
 # What "the path changed" means: a different (mtime_ns, size) pair, or a flip between
 # existing and absent (None). Content-identical rewrites re-fire harmlessly.
@@ -77,7 +78,7 @@ class AgentStatePoller:
         list_watched_paths: Callable[[], Mapping[str, Mapping[WatchedPathPurpose, Path]]],
         on_path_changed: Callable[[str, WatchedPathPurpose], None],
         on_pass_complete: Callable[[], None] | None = None,
-        poll_interval_seconds: float = MODEL_STATE_POLL_INTERVAL_SECONDS,
+        poll_interval_seconds: float = AGENT_STATE_POLL_INTERVAL_SECONDS,
     ) -> "AgentStatePoller":
         self = cls.__new__(cls)
         self._list_watched_paths = list_watched_paths
