@@ -33,8 +33,9 @@ The status file (``data/.skills/import-chats/status.json``) is read by the Getti
 ``state`` is one of ``importing``, ``imported``, ``needs_sign_in`` and ``failed``; ``pid`` is the
 sync's process while it is ``importing``, and a running sync rewrites its record (``updated_at``)
 every ``PROGRESS_INTERVAL_SECONDS``, so a reader can tell a sync that died (its pid gone, or its
-record gone stale) from one that is still running. ``fetched`` of ``to_fetch`` is how far a running ingest has got through the
-conversations it set out to fetch; both are null when it reports no total, and once the sync ends.
+record gone stale) from one that is still running. ``fetched`` of ``to_fetch`` is how far a
+running ingest has got through the conversations it set out to fetch; both are null when it
+reports no total, and once the sync ends.
 
 After each sync it also rewrites one index per source beside the status file
 (``data/.skills/import-chats/claude-chats.md``, ``chatgpt-chats.md``): every page by title, newest
