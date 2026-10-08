@@ -62,11 +62,12 @@ def test_a_hidden_report_is_open_but_not_visible() -> None:
     assert tracker.visible_chat_ids() == set()
 
 
-def test_a_closed_report_drops_the_instances_presence() -> None:
+def test_a_closed_report_leaves_the_chat_neither_open_nor_watched() -> None:
     tracker, _ = _tracker()
     tracker.record(_CHAT, _report("page-1", PresenceState.VISIBLE, is_focused=True))
     tracker.record(_CHAT, _report("page-1", PresenceState.CLOSED))
     assert not tracker.is_open(_CHAT)
+    assert not tracker.is_visible(_CHAT)
     assert tracker.watchers(_CHAT) == []
     assert tracker.open_chat_ids() == set()
 
