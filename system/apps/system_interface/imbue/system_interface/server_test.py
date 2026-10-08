@@ -926,5 +926,15 @@ def test_a_move_is_echoed_with_its_report_and_revision_and_a_following_report_mo
         assert len(shell.activity.read_events()) == switches_logged
         assert drain_messages(client_queue) == []
         assert [info.active_desktop for info in shell.broadcaster.get_connected_client_infos()] == ["home"]
+
+        # A client the shell has no record of (pruned or reset under an open page) still registers its connection.
+        unrecorded = json.dumps(
+            {"type": "client_state", "client_id": "c2", "active_desktop": "home", "is_following": True}
+        )
+        assert _handle_client_state_message(unrecorded, client_queue, shell, is_first_report=False) is True
+        registered = shell.broadcaster.get_client_info(client_queue)
+        assert registered is not None and (registered.client_id, registered.active_desktop) == ("c2", "home")
+        assert shell.clients.get_client("c2") is None
+        assert drain_messages(client_queue) == []
     finally:
         shell.broadcaster.unregister(client_queue)
