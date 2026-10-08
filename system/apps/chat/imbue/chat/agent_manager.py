@@ -2857,8 +2857,9 @@ class AgentManager:
         The Imbue Studio app's onboarding continues here as the workspace's first chat: the turns become
         the chat's seed segment on disk, its record names the seed as its first member, and the
         chat is listed as a provisional chat awaiting the user's first message, with the
-        transcript on its page and a composer under it. That first send picks the account (the
-        chooser opens then) and launches the chat's first agent through ``create_chat``. The
+        transcript on its page and a composer under it. That first send launches the chat's first
+        agent on the signed-in account through ``create_chat`` (with nothing signed in, the page
+        asks for a provider in the composer's place). The
         seed survives a restart of this app because the record does; the window is opened through
         the shell like a labeled chat's, held until a client is connected.
 

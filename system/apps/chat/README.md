@@ -24,13 +24,26 @@ observe`, its own supervised service) writes, and serves:
   so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
   chat's title. Loading the page sends and writes nothing. With nothing selected it
   shows the most recent chat, and with no chats one awaiting its first send
-  (`POST /api/chats/awaiting`, held in memory until that send launches it). At
-  700px wide or less (a phone, or a narrow window) the root takes its phone
-  layout (`frontend/src/compactLayout.ts`, docs/system/blueprint/desktop-interface/plan-phone-interface.md):
-  a 44px header with a list button, the chat's title and a kebab of its verbs,
-  and the list in a drawer over the chat, each row carrying a kebab with the
-  right-click menu's verbs; with nothing selected the drawer is open over an
-  empty chat. The root tells each chat page it frames which layout it is in, and
+  (`POST /api/chats/awaiting`, held in memory until that send launches it).
+  With nothing signed in, a chat awaiting its first send shows "Connect an AI
+  provider to start chatting." and a "Choose a provider" button above its
+  composer, which stays in view (holding any draft) but disabled, and opens the
+  provider chooser as that notice appears; this is the one place the chooser
+  opens for a missing provider (the New chat button opens the awaiting chat, and
+  an intake's first message goes into its composer, with no dialog). Which
+  account a chat starts on is decided from a fresh read of the account list.
+  The list's right edge drags to resize it (100px to 480px, 180px by default,
+  kept per browser). On a phone-sized touchscreen (the shell's rule: a short side at
+  most 500px and a long side at most 1000px, either way round), or a window at
+  most 500px wide under a mouse, the root takes its phone layout
+  (`frontend/src/compactLayout.ts`, docs/system/blueprint/desktop-interface/plan-phone-interface.md):
+  a header with a list button, the chat's title and a kebab offering what a
+  right-click on its row in the list offers, and the list in a drawer over the
+  chat; with nothing selected the drawer is open over an empty chat. On a
+  touchscreen the header is 44px and each drawer row a finger's height with a
+  kebab of the right-click menu's verbs; under a mouse the header is 36px and
+  the drawer holds the list as the wide layout draws it, at its dragged width.
+  The root tells each chat page it frames which layout it is in, and
   a page in the phone layout opens its model menu from a settings button at the
   composer's left, with submenus sliding over the card, effort as segments, and
   the Source view switch as a row. An
@@ -296,7 +309,8 @@ pseudo-harness like any archived segment), the record names the seed as its
 first member, and the chat is listed as a provisional chat in the
 `awaiting_first_send` phase, its transcript on the page with a composer under
 it. The user's first message is what launches the chat's first real agent
-(the provider chooser opens then if nothing is signed in), which joins the
+(with nothing signed in, the chat's page asks for a provider first), which
+joins the
 record as the seed's successor with the `chat_id` and `chat_seq` labels a
 handoff's successor carries. That agent is launched with the seeded
 conversation ahead of the user's message, as one message: the seed is a segment
@@ -379,6 +393,38 @@ account the index no longer has (a send held for a chat already switching is
 still held), and the composer shows "Choose a provider" in place of the input
 until a switch to another account is armed. A notice the chat app delivers for
 the agent's own secret request still goes through.
+
+A Claude or ChatGPT sign-in finishes in the user's own browser. The CLI (`claude
+auth login`, or a short-lived `codex app-server` for ChatGPT) runs with
+`system/scripts/minds_browser_shim` as `$BROWSER`, which records the page it
+would open; the flow offers it as `relay_url`, and the chooser hands it to the
+minds desktop app (`minds:provider-sign-in` in the embed contract; the chat root passes the desktop app's answer, `minds:provider-sign-in-ack`, down to the chat page that asked, since the shell frames the root and not the page). The desktop
+app opens the page and listens on the loopback port it calls back to, posting
+the callback to `POST /api/accounts/flow/<flow_id>/callback`. That route takes
+the flow's own callback once, replays it against the CLI here
+(`harnesses/sign_in_relay.py`), waits briefly for the flow to settle, and
+answers with the flow's status and provider name; the desktop app turns that
+into the page the browser ends on. The CLI's own answer is not passed back,
+since claude sends the browser to its success page before its token exchange
+has succeeded. When a flow ends the chooser sends `minds:provider-sign-in-end`,
+so the desktop app frees the port.
+
+Every way in stays reachable. With no desktop app to relay, Claude falls back to
+pasting the code its page shows, and ChatGPT to its one-time-code login. While
+the browser is out ("Finish signing in to <provider> in your browser", with
+"Try again", which reopens the same sign-in page, and "Try another way"), "Try another way" shows Claude's code steps for the same
+sign-in (the CLI takes whichever code arrives first) or starts ChatGPT's code
+login, alongside the lane's other methods; a failed sign-in offers the same. A
+Claude sign-in succeeds on the CLI's clean exit with its success line, or, if
+the line was reworded, on its own probe; a denial the browser reports says
+access wasn't approved (claude.ai's own Deny reports nothing, so the chooser
+keeps waiting with Try again). A ChatGPT code login that ChatGPT refuses says to turn on device code
+sign-in for Codex in ChatGPT's security settings. "Sign in again" on an API-key
+account asks for a key again; any other account signs in through its lane's
+first way in (`reauth_method` on each account row).
+
+Only the workspace's owner can deliver a relayed callback: the callback route
+answers 403 to a request whose `X-Imbue-Identity` says `owner: false`.
 
 The same default reaches every `mngr create` in the workspace that names no
 harness and no account -- workers, automations, the caretaker, and the bare
