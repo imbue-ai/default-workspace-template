@@ -619,14 +619,16 @@ def test_a_sync_rewrites_the_index_of_each_source_it_synced(tmp_path: Path) -> N
     )
 
 
-def test_a_long_title_is_cut_short_in_the_index(tmp_path: Path) -> None:
+def test_a_long_multi_line_title_is_one_line_cut_short_in_the_index(
+    tmp_path: Path,
+) -> None:
     data_root = tmp_path / "datalib"
     index_path = tmp_path / "chatgpt-chats.md"
     _rendered_page(
         data_root,
         "chatgpt_chats",
         "u1",
-        "word " * 100,
+        "word\n\t" * 100,
         "https://chatgpt.com/c/x",
         ["2026-10-01T08:00:00+00:00"],
     )
@@ -638,7 +640,9 @@ def test_a_long_title_is_cut_short_in_the_index(tmp_path: Path) -> None:
     ]
     title = entry.split("[", 1)[1].split("](", 1)[0]
     assert len(title) == 120
+    assert title.startswith("word word ")
     assert title.endswith("word…")
+    assert entry.endswith(" · [original](https://chatgpt.com/c/x)")
 
 
 def test_a_running_sync_records_the_pages_rendered_so_far(tmp_path: Path) -> None:

@@ -338,12 +338,11 @@ def read_page(path: Path) -> IndexedPage:
 
 
 def _index_line(page: IndexedPage, index_dir: Path) -> str:
-    # An untitled chat is titled by its whole first message, which would make one entry a paragraph.
-    title = (
-        page.title
-        if len(page.title) <= _INDEX_TITLE_LIMIT
-        else page.title[: _INDEX_TITLE_LIMIT - 1].rstrip() + "…"
-    )
+    # An untitled chat is titled by its whole first message, line breaks and all, which would make one entry a
+    # paragraph.
+    title = " ".join(page.title.split())
+    if len(title) > _INDEX_TITLE_LIMIT:
+        title = title[: _INDEX_TITLE_LIMIT - 1].rstrip() + "…"
     title = title.replace("[", "\\[").replace("]", "\\]")
     target = urllib.parse.quote(Path(os.path.relpath(page.path, index_dir)).as_posix())
     line = f"- [{title}]({target})"
