@@ -95,7 +95,7 @@ opening snapshot replaces the folded view and the health recovers.
 
 The chat page talks to the shell only through the browser-side contract
 (`shell:open`, `shell:focused`, the handshake, and a clicked link's
-`shell:message` or `shell:open-link`); the shell calls the chat only to post the
+`shell:open-link`); the shell calls the chat only to post the
 messages its manifest registers for (`minds:focus-chat`).
 
 The chat has no link code of its own: a click on a message's link follows the
