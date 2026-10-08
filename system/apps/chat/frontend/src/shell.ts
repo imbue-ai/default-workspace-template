@@ -52,8 +52,8 @@ export function isFrameRendered(): boolean {
 
 /**
  * Whether a shell stands above ``view``, the page's window: it frames the page, or it frames the chat root that
- * frames the page. A root opened on its own frames its chats with nothing above it, and keeps what they send up
- * (root/relay.ts), so a page there opens links as a page on its own does.
+ * frames the page. A root opened on its own frames its chats with nothing above it, so a page there has no shell to
+ * draft through.
  */
 export function isShellAbove(view: Window): boolean {
   if (view.parent === view) return false;
