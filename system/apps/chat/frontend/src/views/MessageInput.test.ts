@@ -1255,11 +1255,11 @@ describe("MessageInput on a chat awaiting its first send with nothing signed in"
     mocks.accountsLoaded = true;
   });
 
-  it("replaces the composer with a way to connect a provider", () => {
+  it("disables the composer under a way to connect a provider", () => {
     const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731" } } as never);
 
     expect(renderedText(tree)).toContain("Connect an AI provider to start chatting.");
-    expect(findByTag(tree, "textarea")).toBeUndefined();
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
     const chooseButton = findButton(tree, "Choose a provider");
     expect(chooseButton).toBeDefined();
     (chooseButton!.attrs!.onclick as () => void)();
@@ -1280,17 +1280,19 @@ describe("MessageInput on a chat awaiting its first send with nothing signed in"
     const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731", leading } } as never);
 
     expect(findByAttr(tree, "aria-label", "Chat settings")).toBeDefined();
-    expect(findByTag(tree, "textarea")).toBeUndefined();
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
   });
 
   it("gives the composer back once an account is signed in", () => {
     const component = MessageInput();
-    expect(findByTag(component.view!({ attrs: { chatId: "agent-first-7731" } } as never), "textarea")).toBeUndefined();
+    expect(
+      findByTag(component.view!({ attrs: { chatId: "agent-first-7731" } } as never), "textarea")?.attrs?.disabled,
+    ).toBe(true);
 
     mocks.selectedAccount = { id: "acct-7732" };
     const tree = component.view!({ attrs: { chatId: "agent-first-7731" } } as never);
 
-    expect(findByTag(tree, "textarea")).toBeDefined();
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(false);
     expect(renderedText(tree)).not.toContain("Connect an AI provider");
   });
 
@@ -1298,7 +1300,7 @@ describe("MessageInput on a chat awaiting its first send with nothing signed in"
     mocks.accountsLoaded = false;
     const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731" } } as never);
 
-    expect(findByTag(tree, "textarea")).toBeDefined();
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(false);
     expect(renderedText(tree)).not.toContain("Connect an AI provider");
   });
 });
@@ -1324,12 +1326,12 @@ describe("MessageInput on a chat whose account was signed out", () => {
     mocks.signedOutAccountIds.clear();
   });
 
-  it("replaces the composer with the reason and a way to choose another provider", () => {
+  it("disables the composer under the reason and a way to choose another provider", () => {
     const component = MessageInput();
     const tree = component.view!({ attrs: { chatId: "agent-signed-out" } } as never);
 
     expect(renderedText(tree)).toContain("You signed out of the account this chat runs on.");
-    expect(findByTag(tree, "textarea")).toBeUndefined();
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
     const chooseButton = findButton(tree, "Choose a provider");
     expect(chooseButton).toBeDefined();
 
@@ -1346,7 +1348,7 @@ describe("MessageInput on a chat whose account was signed out", () => {
     const tree = component.view!({ attrs: { chatId: "agent-signed-out", leading } } as never);
 
     expect(findByAttr(tree, "aria-label", "Chat settings")).toBeDefined();
-    expect(findByTag(tree, "textarea")).toBeUndefined();
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
     expect(findButton(tree, "Choose a provider")).toBeDefined();
   });
 
@@ -1355,7 +1357,7 @@ describe("MessageInput on a chat whose account was signed out", () => {
     const component = MessageInput();
     const tree = component.view!({ attrs: { chatId: "agent-signed-out" } } as never);
 
-    expect(findByTag(tree, "textarea")).toBeDefined();
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(false);
     expect(renderedText(tree)).not.toContain("You signed out of the account this chat runs on.");
   });
 
@@ -1377,7 +1379,7 @@ describe("MessageInput on a chat whose account was signed out", () => {
     await vi.waitFor(() => expect(mocks.switchChat).toHaveBeenCalledTimes(1));
 
     const sending = render();
-    expect(findByTag(sending, "textarea")).toBeDefined();
+    expect(findByTag(sending, "textarea")?.attrs?.disabled).toBe(false);
     expect(renderedText(sending)).not.toContain("You signed out of the account this chat runs on.");
 
     answer({ kind: "handoff", phase: "summarizing", returned_block: "" });
@@ -1401,7 +1403,7 @@ describe("MessageInput on a chat whose account was signed out", () => {
     await vi.waitFor(() => expect(mocks.loadAccounts).toHaveBeenCalledTimes(1));
     const tree = component.view!({ attrs: { chatId: "agent-signed-out" } } as never);
     expect(findButton(tree, "Choose a provider")).toBeDefined();
-    expect(findByTag(tree, "textarea")).toBeUndefined();
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
   });
 
   it("leaves the account list alone when a send fails for any other reason", async () => {

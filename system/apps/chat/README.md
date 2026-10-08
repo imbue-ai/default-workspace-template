@@ -26,10 +26,12 @@ observe`, its own supervised service) writes, and serves:
   shows the most recent chat, and with no chats one awaiting its first send
   (`POST /api/chats/awaiting`, held in memory until that send launches it). With
   nothing signed in, a chat awaiting its first send shows "Connect an AI
-  provider to start chatting." and a "Choose a provider" button in place of its
-  composer, and opens the provider chooser as that notice appears; this is the
-  one place the chooser opens for a missing provider (the New chat button opens
-  the awaiting chat, and an intake's first message goes into its composer). At
+  provider to start chatting." and a "Choose a provider" button above its
+  composer, which stays in view (holding any draft) but disabled, and opens the
+  provider chooser as that notice appears; this is the one place the chooser
+  opens for a missing provider (the New chat button opens the awaiting chat, and
+  an intake's first message goes into its composer, with no dialog). Which
+  account a chat starts on is decided from a fresh read of the account list. At
   700px wide or less (a phone, or a narrow window) the root takes its phone
   layout (`frontend/src/compactLayout.ts`, docs/system/blueprint/desktop-interface/plan-phone-interface.md):
   a 44px header with a list button, the chat's title and a kebab of its verbs,

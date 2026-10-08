@@ -169,15 +169,11 @@ function openChatForEmptyList(): void {
     });
 }
 
-async function createAndSelect(accountId: string): Promise<void> {
-  try {
-    const created = await createChat("", accountId);
-    startedHere.add(created.chatId);
-    awaitingListing.add(created.chatId);
-    select(created.chatId);
-  } catch (error) {
-    alert(`Failed to create chat: ${(error as Error).message}`);
-  }
+async function createOnAccountAndSelect(accountId: string): Promise<void> {
+  const created = await createChat("", accountId);
+  startedHere.add(created.chatId);
+  awaitingListing.add(created.chatId);
+  select(created.chatId);
 }
 
 /** The New chat button: a chat on the selected account, or with nothing signed in the chat awaiting its first
@@ -186,8 +182,16 @@ async function startNewChat(): Promise<void> {
   await whenAccountsReadyToChoose();
   const account = getSelectedAccount();
   if (account !== null) {
-    await createAndSelect(account.id);
-    return;
+    try {
+      await createOnAccountAndSelect(account.id);
+      return;
+    } catch (error) {
+      // An account the chat app no longer has: the chat awaiting its first send shows what is needed instead.
+      console.warn(
+        "[chat-root] could not create a chat on the selected account; opening one awaiting a provider",
+        error,
+      );
+    }
   }
   try {
     const chatId = await awaitingChatForEmptyList();
@@ -219,9 +223,10 @@ function draftInto(chatId: string, text: string): void {
  *  the chat was minted for when it names one, else the signed-in account when one has appeared meanwhile. With
  *  nothing signed in the text goes into the chat's composer, whose page asks for a provider. */
 async function launchWithFirstMessage(chatId: string, text: string): Promise<void> {
+  // A launch the chat app refuses leaves the text in the chat's composer, where the chat shows what it needs.
   const launchOrDraft = (accountId: string): void => {
     launchChat(chatId, accountId, text).catch((error: unknown) => {
-      alert(`Failed to start the chat: ${(error as Error).message}`);
+      console.warn("[chat-root] could not launch the chat with its first message; drafting it", error);
       draftInto(chatId, text);
     });
   };

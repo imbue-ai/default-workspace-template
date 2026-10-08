@@ -903,7 +903,7 @@ def test_a_chat_awaiting_its_first_send_with_nothing_signed_in_offers_a_provider
     tmp_path: Path, page: Page
 ) -> None:
     """A message typed before a provider is connected could not be sent, so with the chooser dismissed the composer
-    is a sentence and a button that opens the same chooser again."""
+    stays in view but disabled, under a sentence and a button that opens the same chooser again."""
     with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
         chat_frame = _start_new_chat(page, server)
         expect(chat_frame.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
@@ -911,9 +911,29 @@ def test_a_chat_awaiting_its_first_send_with_nothing_signed_in_offers_a_provider
         expect(chat_frame.locator(".message-input-no-provider")).to_contain_text(
             "Connect an AI provider to start chatting.", timeout=15000
         )
-        expect(chat_frame.locator(".message-input-textbox")).to_have_count(0)
+        expect(chat_frame.locator(".message-input-textbox")).to_be_disabled()
         chat_frame.locator(".message-input-choose-provider").click()
         expect(chat_frame.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_first_message_sent_with_nothing_signed_in_waits_in_the_chat_composer(tmp_path: Path, page: Page) -> None:
+    """A message sent from the launcher with nothing signed in raises no dialog: it waits in the new chat's disabled
+    composer while the chat asks for a provider, ready to send once one is signed in."""
+    dialogs: list[str] = []
+    page.on("dialog", lambda dialog: (dialogs.append(dialog.message), dialog.dismiss()))
+    with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
+        _land(page, server)
+        page.locator("[data-launcher-field] textarea").fill("Plan my week")
+        menu = page.locator("[data-launcher-overlay]")
+        expect(menu).to_be_visible(timeout=10000)
+        menu.locator(f'[data-launch="{CHAT_APP_NAME}:new"]').click()
+        expect(page.locator("iframe[data-live-page]")).to_have_count(1, timeout=15000)
+        chat_frame = _chat(page, None)
+        expect(chat_frame.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+        expect(chat_frame.locator(".message-input-textbox")).to_have_value("Plan my week", timeout=15000)
+        expect(chat_frame.locator(".message-input-textbox")).to_be_disabled()
+        assert dialogs == []
 
 
 # Installed in every frame before its scripts run: records each placeholder screen or text the chat page ever
