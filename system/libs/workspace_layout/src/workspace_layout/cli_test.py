@@ -581,6 +581,22 @@ def test_desktops_and_list_read_the_inventory_document(
     assert [desktop["id"] for desktop in listing["desktops"]] == ["home"]
 
 
+def test_desktops_lists_no_popped_out_windows_for_a_shell_older_than_the_popped_out_rules(
+    loopback_shell: LoopbackShell, layout_context: LayoutCliContext, capsys: pytest.CaptureFixture[str]
+) -> None:
+    client = InventoryClient(id=ClientId("c1"), last_seen=FAKE_TIME, is_connected=True, shown=())
+    inventory = InventoryDocument(
+        is_preview=False, workspace_name="workspace", desktops=(fake_desktop("home"),), apps=(), clients=(client,)
+    ).model_dump(mode="json")
+    for listed_client in inventory["clients"]:
+        del listed_client["popped_out"]
+    loopback_shell.get_answers[INVENTORY_ROUTE] = (200, inventory)
+
+    assert run_layout_cli(["desktops"], layout_context) == EXIT_OK
+
+    assert [client["popped_out"] for client in json.loads(capsys.readouterr().out)["clients"]] == [[]]
+
+
 # shortcuts and the wallpaper
 
 

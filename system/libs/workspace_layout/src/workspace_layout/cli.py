@@ -593,7 +593,8 @@ def _listed_desktops(inventory: _Answer) -> list[dict[str, Any]]:
 
 @pure
 def _listed_clients(inventory: _Answer) -> list[dict[str, Any]]:
-    return [_listed(client, _LISTED_CLIENT_FIELDS) for client in inventory["clients"]]
+    """Every client; a shell older than the popped-out rules lists no ``popped_out``, so none is listed for it."""
+    return [_listed({"popped_out": [], **client}, _LISTED_CLIENT_FIELDS) for client in inventory["clients"]]
 
 
 @pure
