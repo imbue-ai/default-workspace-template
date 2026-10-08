@@ -226,9 +226,14 @@ function withFastModel(): void {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 beforeEach(() => {
+  // The menu reads the chat's offerable models when it opens. Answered at once, as "offer the whole catalog",
+  // rather than left to a real request that fails whenever it fails: a failure logged after the file's last test
+  // reaches a worker that has already closed, and vitest counts that as an error of the run.
+  vi.spyOn(m, "request").mockResolvedValue({ models: null });
   document.body.innerHTML = '<div id="root"></div>';
   fastModeState.state = { mode: "auto", is_switched: false };
   fastModeLoads.length = 0;
