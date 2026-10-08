@@ -213,7 +213,7 @@ command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/ag
 # Pin Claude Code to a specific version; the provisioning-time version check
 # refuses to start the agent if the installed binary diverges. Bump this in
 # sync with the CLAUDE_CODE_VERSION default in system/scripts/setup_system.sh.
-version = "2.1.280"
+version = "2.1.293"
 # Do not provision a per-agent Claude config dir. A claude is bound to a
 # provider account on its `mngr create` by CLAUDE_CONFIG_DIR pointing at that
 # account's folder under ~/.minds/accounts (the chat app's own creates, and the
@@ -259,19 +259,19 @@ command = "sleep infinity"
 # (system/scripts/setup_system.sh, CODEX_VERSION), so check_installation is off -- do not
 # reinstall/verify at provision.
 #
-# model = "gpt-6-sol" makes GPT-6 Sol the model every new codex agent starts on; left unset,
-# codex takes the first model of its account's server catalog, which is GPT-6 Astra. A chat
-# can still switch to any model its account offers from the model bar.
+# model = "gpt-6.1-sol" makes GPT-6.1 Sol the model every new codex agent starts on; left
+# unset, codex takes the first model of its account's server catalog. A chat can still switch
+# to any model its account offers from the model bar.
 #
 # A codex slug is a property of the ACCOUNT, not the workspace: which models a ChatGPT plan
 # may use varies by tier, and a slug the account cannot use is a hard 400 on every turn ("The
 # 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account") that also
-# leaves the model bar showing a shrug. gpt-6-sol needs codex >= 0.155.0 (CODEX_VERSION) and
-# is listed for every plan GPT-6 Astra is except `promax`. fall_back_to_account_default_model
-# covers that: before mngr starts a new thread it reads the account's model list, and if the
-# pin is not offered it starts the thread on the account's default model instead. A thread
-# that already exists keeps its model. No effort is pinned, so the model's own default
-# (medium) applies.
+# leaves the model bar showing a shrug. gpt-6.1-sol is in codex's bundled catalog from 0.159.1
+# (CODEX_VERSION) and is listed for every plan GPT-6 Astra is. fall_back_to_account_default_model
+# covers an account that is still not offered it: before mngr starts a new thread it reads the
+# account's model list, and if the pin is not offered it starts the thread on the account's
+# default model instead. A thread that already exists keeps its model. model_reasoning_effort
+# pins medium, because GPT-6.1 Sol's own default is low.
 #
 # sandbox_mode = danger-full-access disables codex's own OS sandbox. On Linux codex
 # sandboxes exec via bubblewrap, but the bundled bwrap cannot set up its network
@@ -297,8 +297,9 @@ auto_dismiss_dialogs_at_startup = true
 auto_allow_permissions = true
 sandbox_mode = "danger-full-access"
 check_installation = false
-model = "gpt-6-sol"
+model = "gpt-6.1-sol"
 fall_back_to_account_default_model = true
+model_reasoning_effort = "medium"
 # config_overrides is dumped verbatim into codex's own config.toml, so these are codex's
 # own keys, not mngr fields -- kept here on the agent-type block for one place to read.
 # - memories = false: disable codex's built-in memory system so it never writes to
@@ -331,8 +332,8 @@ fall_back_to_account_default_model = true
 #   to third-party services that bypasses the latchkey gateway (codex's counterpart of
 #   ENABLE_CLAUDEAI_MCP_SERVERS=false above). Plugin skills and hooks are unaffected.
 config_overrides.suppress_unstable_features_warning = true
-# gpt-6-sol's catalog entry defaults to the `priority` (fast) tier, and codex's TUI applies a
-# model's default tier to every turn typed in the agent terminal when no tier is configured. So
+# Some catalog entries (gpt-6-sol) default to the `priority` (fast) tier, and codex's TUI applies
+# a model's default tier to every turn typed in the agent terminal when no tier is configured. So
 # pin standard speed; the `fast` create template's config_overrides__extend replaces it.
 config_overrides.service_tier = "default"
 config_overrides.features = { memories = false, code_mode_only = true, code_mode_host = true, goals = false, unified_exec_tty = false, apps = false }
@@ -1736,7 +1737,7 @@ setting__extend = [
 # system/services/caretaker/caretaker_check.sh once enabled) via
 # system/libs/automations/run_automation.sh, and labelled automation=caretaker
 # so it can be found as a singleton (the agent surfaces its own chat window via
-# uv run workspace-layout after its first message).
+# uv run --no-sync workspace-layout after its first message).
 [create_templates.caretaker]
 transfer = "none"
 env__extend = ["MNGR_AGENT_ROLE=caretaker"]
@@ -1750,7 +1751,7 @@ append_system_prompt__extend = ["You are the Caretaker: a maintenance agent for 
 [create_templates.automation]
 transfer = "none"
 env__extend = ["MNGR_AGENT_ROLE=automation"]
-append_system_prompt__extend = ["You are an automation agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the window does not pop up empty), silently surface your own chat window by running: uv run workspace-layout open chat --path \"/?chat=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}\" (with no --desktop it lands on the desktop the user is looking at; best-effort -- continue if it fails). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it."]
+append_system_prompt__extend = ["You are an automation agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the window does not pop up empty), silently surface your own chat window by running: uv run --no-sync workspace-layout open chat --path \"/?chat=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}\" (with no --desktop it lands on the desktop the user is looking at; best-effort -- continue if it fails). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it."]
 
 # Worker: general purpose sub-agent for doing tasks reliably (and ensuring they
 # are verified), landing in its own git worktree so its work is isolated from

@@ -119,10 +119,6 @@ PLACEABLE_STATES: Final[tuple[WindowState, ...]] = (
     WindowState.MAXIMIZED,
 )
 
-# The status the op route refuses an op with when it would change where a window the target client has popped out
-# into its own window sits, and the op did not carry ``force`` (plan-popped-out-layout-ops.md).
-POPPED_OUT_REFUSAL_STATUS: Final[int] = 423
-
 _FORCE_DESCRIPTION: Final[str] = (
     "Apply an op that would bring a window the target client has popped out back onto the desktop, rather than being "
     "refused"

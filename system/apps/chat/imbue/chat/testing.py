@@ -48,6 +48,7 @@ import pexpect
 import pytest
 import simple_websocket
 from flask import Flask
+from flask import request
 from pydantic import Field
 from workspace_layout.client import DisconnectedShell
 from workspace_layout.interfaces import ShellLayoutInterface
@@ -466,6 +467,35 @@ def read_create_defaults_type(path: Path) -> str | None:
     return agent_type if isinstance(agent_type, str) and agent_type else None
 
 
+class RecordedGatewayRequest(FrozenModel):
+    """One request a ``RecordingGateway`` received."""
+
+    path: str = Field(description="The request's path")
+    headers: dict[str, str] = Field(description="The request's headers")
+    body: Any = Field(description="The request's JSON body")
+
+
+class RecordingGateway:
+    """A stand-in latchkey gateway that records every POST under ``/minds-api-proxy/`` and answers each with
+    one status."""
+
+    def __init__(self, status: int) -> None:
+        self.received: list[RecordedGatewayRequest] = []
+        self.status = status
+        self.application = Flask("recording-gateway")
+        self.application.add_url_rule(
+            "/minds-api-proxy/<path:rest>", view_func=self._accept, methods=["POST"], endpoint="minds_api_proxy"
+        )
+
+    def _accept(self, rest: str) -> tuple[str, int]:
+        self.received.append(
+            RecordedGatewayRequest(
+                path=request.path, headers=dict(request.headers), body=request.get_json(force=True, silent=True)
+            )
+        )
+        return json.dumps({"ok": True}), self.status
+
+
 def build_temporary_secret_request_store() -> SecretRequestStore:
     """A store rooted in a fresh temporary directory, laid out like the workspace's data/."""
     root = Path(tempfile.mkdtemp(prefix="chat-secret-requests-"))
@@ -566,11 +596,13 @@ class FakePexpectProcess:
         expect_script: Sequence[tuple[int, str]],
         drain_chunks: Sequence[str] = (),
         is_alive: bool = True,
+        exitstatus: int | None = 0,
     ) -> None:
         assert expect_script, "expect_script must have at least one entry"
+        # What pexpect reports once the process has exited: its exit code, or None if a signal ended it.
+        self.exitstatus = exitstatus
         self._script = list(expect_script)
-        # Scriptable so the "the CLI has exited" arms are reachable from tests: process exit
-        # is the only success signal codex's device flow has.
+        # Scriptable so the "the CLI has exited" arms are reachable from tests.
         self._is_alive = is_alive
         self._call_idx = 0
         self._drain_chunks = list(drain_chunks)
@@ -608,10 +640,16 @@ class FakePexpectProcess:
     def isalive(self) -> bool:
         return self._is_alive
 
-    def exit(self) -> None:
+    def print_output(self, chunk: str) -> None:
+        """Have the scripted CLI print ``chunk``, for the next drain to read."""
+        self._drain_chunks.append(chunk)
+
+    def exit(self, exitstatus: int | None = None) -> None:
         """Let the scripted CLI finish. `terminate` does not: the production teardown calls
         it on paths where the process was already gone, so it cannot mean "now exited"."""
         self._is_alive = False
+        if exitstatus is not None:
+            self.exitstatus = exitstatus
 
     def terminate(self, force: bool = False) -> None:
         self.terminate_calls += 1

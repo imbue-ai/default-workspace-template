@@ -74,6 +74,11 @@ answer shapes live in one place the shell and its callers share.
   wired), `requester_from_environment()` (an agent's own chat, from
   `MINDS_CHAT_ID`, else `MNGR_AGENT_ID`), and `request_shell`, the one request
   as it came back.
+- `workspace_layout.transport` and `workspace_layout.agent_identity`: the
+  standard-library halves of the client: `exchange_with_shell` (one request,
+  answered as a status and a JSON object or text), `quote_answer`,
+  `refusal_detail`, and `chat_id_from_environment()`. The command uses these
+  instead of the client, so it imports no pydantic.
 - `workspace_layout.windows`: what an app with window-bound resources sweeps
   against (`docs/system/specs/window-bound-resources.md` sections 4.2 and 4.6):
   `read_app_window_paths(shell_url, app)` (every window path of the app, or
@@ -102,9 +107,12 @@ another, so one op's arguments never type-check as another's.
 
 ## The `workspace-layout` command
 
-`uv run workspace-layout <subcommand>`, from the repo root, is how an agent
+`uv run --no-sync workspace-layout <subcommand>`, from the repo root, is how an agent
 reads and arranges the desktop; the `manage-desktop` skill is its guide and
-`uv run workspace-layout --help` its reference. Every subcommand posts one op
+`uv run --no-sync workspace-layout --help` its reference. `--no-sync` runs the script the
+workspace build installed without uv first checking the lock and the venv: that check
+costs every call tens of milliseconds, and when the lock and a `pyproject.toml` disagree it
+relocks and syncs before the command runs. Every subcommand posts one op
 to the shell's op route under the calling agent's own chat as the requester
 (`MINDS_CHAT_ID`, else `MNGR_AGENT_ID`), except `desktops` and `list`, which
 read `GET /api/inventory`. Descriptions go to stderr; stdout carries only a
@@ -124,8 +132,16 @@ client with no desktop window open.
 else points an on-screen window on one of the `--repoint` pages at it, else the
 app's pinned window, else opens one.
 
-The command runs in the root venv, so it builds every op from the body models
-the shell reads and reads every answer through the answer models the shell
-builds. `place` takes `--state snapped-left|snapped-right|maximized` (the
+The command imports only the standard library and this library's
+dependency-free modules (`transport`, `agent_identity`, `shell_url`, `errors`,
+and `app_manifest.registry_location`), because an agent runs it once per layout
+action and importing pydantic and building the models was most of each call's
+time. It posts each op's arguments as the wire spells them and reads answers as
+plain JSON. The shell reads every body with the request models in `ops`, so a
+value off its rule (an app name, a window, a path, a frame, a cell, a client id)
+is refused with a 400 that names the argument, and the command exits 1 with
+that line. The command checks only what no model owns: the retired spellings
+and verbs, flags that exclude each other, and the text forms it turns into
+records (`--frame`, `--cell`, `--param`). `place` takes `--state snapped-left|snapped-right|maximized` (the
 `WindowState` the op sets, which its description names: `as snapped-left`) or
 `--frame x,y,width,height`; the retired `--zone` is refused with that form.

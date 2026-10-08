@@ -4,6 +4,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
+from app_manifest.registry import SHELL_APP_CONTRACT_PATH
+from app_manifest.registry import SHELL_MODULE_PATHS
 from app_manifest.selection import ALWAYS_RUN_GUARDS
 
 APP_ICON_MARKUP: Final[str] = (
@@ -150,9 +152,13 @@ def build_selection_workspace(repo_root: Path) -> None:
     (``notes``) that depends on ``midlib`` and references a script, the chat app as its own
     pytest root with a browser test and a frontend, the shared ``ui`` npm library that
     frontend depends on, a flat script and its test, a skill, the repo guards, and the check
-    that every supervisord block names its OOM band."""
+    that every supervisord block names its OOM band. The shell's modules are built, and ignored
+    by git, as in the live workspace; ``remove_shell_modules`` makes it a fresh worktree."""
     init_git_repository(repo_root)
     write_repo_file(repo_root, "pyproject.toml", _SELECTION_ROOT_PYPROJECT)
+    write_repo_file(repo_root, ".gitignore", f"{SHELL_APP_CONTRACT_PATH.parent.parent}/\n")
+    for module_path in SHELL_MODULE_PATHS:
+        write_repo_file(repo_root, str(module_path), "export {};\n")
     write_repo_file(repo_root, "conftest.py", "")
     write_repo_file(repo_root, "README.md", "# workspace\n")
     write_repo_file(repo_root, "docs/guide.md", "# guide\n")
@@ -227,6 +233,12 @@ def build_selection_workspace(repo_root: Path) -> None:
     write_repo_file(repo_root, ".agents/skills/refresh/scripts/refresh.py", "VALUE = 1\n")
     write_repo_file(repo_root, ".agents/skills/refresh/scripts/refresh_test.py", "def test_refresh() -> None:\n    pass\n")
     commit_everything(repo_root, "workspace")
+
+
+def remove_shell_modules(repo_root: Path) -> None:
+    """Delete the shell's built modules, as a fresh worktree lacks them."""
+    for module_path in SHELL_MODULE_PATHS:
+        (repo_root / module_path).unlink()
 
 
 def selection_lock(requests_version: str) -> str:

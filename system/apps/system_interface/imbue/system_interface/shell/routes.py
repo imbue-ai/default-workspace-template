@@ -16,7 +16,6 @@ from loguru import logger
 from workspace_layout.answers import ClientsListing
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.ops import ClientActivityReport
-from workspace_layout.ops import POPPED_OUT_REFUSAL_STATUS
 from workspace_layout.ops import parse_op_body
 from workspace_layout.primitives import ClientActivityKind
 from workspace_layout.primitives import ClientId
@@ -25,6 +24,7 @@ from workspace_layout.shell_url import CLIENTS_ROUTE
 from workspace_layout.shell_url import CLIENT_ACTIVITY_ROUTE
 from workspace_layout.shell_url import INVENTORY_ROUTE
 from workspace_layout.shell_url import LAYOUT_OP_ROUTE
+from workspace_layout.shell_url import POPPED_OUT_REFUSAL_STATUS
 
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.shell.clients import client_view

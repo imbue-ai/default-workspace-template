@@ -4,10 +4,10 @@ from typing import Any
 import pytest
 from app_manifest.primitives import AppName
 
+from workspace_layout.agent_identity import ENV_MINDS_CHAT_ID
+from workspace_layout.agent_identity import ENV_MNGR_AGENT_ID
 from workspace_layout.answers import ClientView
 from workspace_layout.answers import DesktopOpAnswer
-from workspace_layout.client import ENV_MINDS_CHAT_ID
-from workspace_layout.client import ENV_MNGR_AGENT_ID
 from workspace_layout.client import DisconnectedShell
 from workspace_layout.client import ShellLayoutClient
 from workspace_layout.client import requester_from_environment

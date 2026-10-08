@@ -9,7 +9,7 @@ README for details.
   app registry (`data/.state/apps.toml`) models every app is described by,
   and the `app-manifest validate-manifest` command.
 - `workspace_layout/` - The shell's layout routes as one typed client the
-  apps share, and the agent-facing `uv run workspace-layout` command that
+  apps share, and the agent-facing `uv run --no-sync workspace-layout` command that
   reads and arranges the desktop.
 - `workspace_ui/` - The frontends' shared JavaScript library (source only,
   a member of the npm workspace at `system/package.json`): the design

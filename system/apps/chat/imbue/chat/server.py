@@ -21,7 +21,7 @@ from uuid import uuid4
 
 from app_manifest.primitives import AppName
 from app_manifest.registry import read_origin_label
-from app_manifest.registry import registry_path
+from app_manifest.registry_location import registry_path
 from flask import Flask
 from flask import Response
 from flask import current_app
@@ -159,6 +159,7 @@ from imbue.chat.request_helpers import handle_unhandled_exception
 from imbue.chat.request_helpers import json_response
 from imbue.chat.request_helpers import parse_json_object_body
 from imbue.chat.request_helpers import parse_request_body
+from imbue.chat.request_helpers import require_loopback
 from imbue.chat.secret_requests import ChatLookup
 from imbue.chat.secret_requests import NoticeDeliveryError
 from imbue.chat.secret_requests import SecretRequestChatBridge
@@ -1901,8 +1902,19 @@ def _presence_endpoint(chat_id: str) -> Response:
         return _chat_not_found_response(chat_id)
     report = parse_request_body(PresenceReport)
     agent_manager: AgentManager = get_state().agent_manager
-    agent_manager.record_presence(ChatId(chat_id), report.client_id, report.state)
+    agent_manager.record_presence(ChatId(chat_id), report)
     return json_response({"status": "ok"})
+
+
+def _watchers_endpoint(chat_id: str) -> Response:
+    """The page instances watching this chat now, for the notify script inside the workspace (loopback only)."""
+    refusal = require_loopback()
+    if refusal is not None:
+        return refusal
+    if not AGENT_ID_PATTERN.fullmatch(chat_id):
+        return _chat_not_found_response(chat_id)
+    agent_manager: AgentManager = get_state().agent_manager
+    return json_response({"watched_by": agent_manager.chat_watchers(ChatId(chat_id))})
 
 
 # The terminal app's registered name: the chat's terminal back face is served from its origin.
@@ -2094,6 +2106,7 @@ _PER_CHAT_ROUTES: Final[tuple[tuple[str, Callable[..., Response], tuple[str, ...
     ("stream", _stream_events, ("GET",)),
     ("message", _send_message_endpoint, ("POST",)),
     ("presence", _presence_endpoint, ("POST",)),
+    ("watchers", _watchers_endpoint, ("GET",)),
     ("model", _set_model_choice_endpoint, ("POST",)),
     ("model-options", _get_model_options_endpoint, ("GET",)),
     ("powered-by", _get_powered_by_endpoint, ("GET",)),

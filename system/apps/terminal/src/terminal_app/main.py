@@ -5,7 +5,8 @@ from typing import Final
 
 import click
 from app_manifest.primitives import AppName, AppUrl
-from app_manifest.registry import SHELL_APP_CONTRACT_PATH, register_app, registry_path
+from app_manifest.registry import SHELL_APP_CONTRACT_PATH, register_app
+from app_manifest.registry_location import registry_path
 from flask import Flask
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import log_span

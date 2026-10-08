@@ -12,7 +12,7 @@ metadata:
 Use this skill when the user asks you to work with files located directly on their computer.
 
 **First, look for a synced copy.** If the folder you need is already under
-`~/synced_folders/`, it is on this machine as ordinary files: work on it
+`~/synced_folders/`, it is in this workspace as ordinary files: work on it
 directly with your normal tools and skip everything below. See "Folders the
 user keeps synced", including what happens to anything you write. The rest of
 this section is for a shared path that has no copy here.
@@ -30,7 +30,7 @@ The base URL is `http://latchkey-self.invalid/minds-api-proxy/api/v1/files/<devi
 ## Folders the user keeps synced
 
 For a shared folder, the user can additionally ask Imbue Studio to keep a copy of it
-on this machine. When there is one, **use it instead of the WebDAV server
+in this workspace. When there is one, **use it instead of the WebDAV server
 above**: it is ordinary local files, so your normal tools work on it, there is
 no round trip per file, and it keeps working while the user's computer is
 asleep or offline. Fall back to `latchkey curl` only for a shared path that has
@@ -134,16 +134,16 @@ After posting, wait for an automated system message indicating whether the user 
 
 ### Ask for a synchronized copy
 
-Access through the file server only works while the user's computer is awake and the Imbue Studio app is running. If you need a folder to stay reachable while the user's computer is asleep or offline, ask for a synchronized copy of it on this machine in the same request, by adding `sync` to the payload:
+Access through the file server only works while the user's computer is awake and the Imbue Studio app is running. If you need a folder to stay reachable while the user's computer is asleep or offline, ask for a synchronized copy of it in this workspace in the same request, by adding `sync` to the payload:
 
 ```bash
 latchkey curl -H "X-Latchkey-Device: <device ID>" -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
-  -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "file-sharing", "payload": {"path": "/home/hynek/project", "access": "WRITE", "sync": {"conflict": "NEWER"}}, "rationale": "I'"'"'d like to keep working on the project while your laptop is asleep, so I need a copy of it on this machine."}'
+  -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "file-sharing", "payload": {"path": "/home/hynek/project", "access": "WRITE", "sync": {"conflict": "NEWER"}}, "rationale": "I'"'"'d like to keep working on the project while your laptop is asleep, so I need a copy of it in this workspace."}'
 ```
 
 - `sync` is an object. Only folders can be synced, never single files.
-- `conflict` is optional and says which side wins when a two-way sync finds the same file changed on both: "NEWER" (the default), "THIS_COMPUTER" (the user's computer) or "WORKSPACE" (this machine). It only matters for "WRITE" access; a "READ" grant syncs one way, from the user's computer to this machine.
+- `conflict` is optional and says which side wins when a two-way sync finds the same file changed on both: "NEWER" (the default), "THIS_COMPUTER" (the user's computer) or "WORKSPACE" (this workspace). It only matters for "WRITE" access; a "READ" grant syncs one way, from the user's computer to this workspace.
 - The user decides. The approval dialog offers the sync switched on because you asked, and they can turn it off (or turn it on when you did not ask). The message you receive says which. When a sync was started it names where the copy lives, `~/synced_folders/<device id>/<the folder's full path on the user's computer>`; work with the files there directly, with ordinary file tools, not through the file server. When the user turned the sync off, the message says the copy was not enabled, and the file server is the only way to reach the folder.
 - The copy takes a moment to arrive after approval. If the directory is empty at first, wait briefly and look again.
 

@@ -1,12 +1,5 @@
-import http.client
-import json
-import os
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Mapping
-from http.client import HTTPMessage
-from typing import IO
 from typing import Any
 from typing import Final
 from typing import TypeVar
@@ -18,6 +11,8 @@ from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import Field
 
+from workspace_layout.agent_identity import AGENT_REQUESTER_APP_NAME
+from workspace_layout.agent_identity import chat_id_from_environment
 from workspace_layout.answers import ClientView
 from workspace_layout.answers import DesktopOpAnswer
 from workspace_layout.answers import InventoryDocument
@@ -26,12 +21,10 @@ from workspace_layout.answers import ShowAnswer
 from workspace_layout.answers import TransientOpAnswer
 from workspace_layout.answers import parse_answer
 from workspace_layout.answers import parse_listing
-from workspace_layout.answers import quote_answer
 from workspace_layout.errors import ShellRefusedOpError
 from workspace_layout.errors import ShellUnreachableError
 from workspace_layout.errors import WindowPoppedOutError
 from workspace_layout.interfaces import ShellLayoutInterface
-from workspace_layout.ops import POPPED_OUT_REFUSAL_STATUS
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.ops import NavigateArgs
 from workspace_layout.ops import NavigateBody
@@ -57,16 +50,15 @@ from workspace_layout.shell_url import CLIENTS_ROUTE
 from workspace_layout.shell_url import DESKTOPS_ROUTE
 from workspace_layout.shell_url import INVENTORY_ROUTE
 from workspace_layout.shell_url import LAYOUT_OP_ROUTE
+from workspace_layout.shell_url import POPPED_OUT_REFUSAL_STATUS
+from workspace_layout.transport import HTTP_SUCCESS_RANGE
+from workspace_layout.transport import exchange_with_shell
+from workspace_layout.transport import refusal_detail
 
-ENV_MINDS_CHAT_ID: Final[str] = "MINDS_CHAT_ID"
-ENV_MNGR_AGENT_ID: Final[str] = "MNGR_AGENT_ID"
-# The requester an agent's op carries is its own chat: the chat app's name, and the chat id its window's path carries.
-AGENT_REQUESTER_APP: Final[AppName] = AppName("chat")
+AGENT_REQUESTER_APP: Final[AppName] = AppName(AGENT_REQUESTER_APP_NAME)
 
 # The shell answers every one of these from memory and its state files; past this a request is suspicious.
 SHELL_REQUEST_SLOW_SECONDS: Final[float] = 0.5
-
-_HTTP_SUCCESS_RANGE: Final[range] = range(200, 300)
 
 _Answer = TypeVar("_Answer", bound=FrozenModel)
 
@@ -79,77 +71,21 @@ class ShellResponse(FrozenModel):
 
     @property
     def is_success(self) -> bool:
-        return self.status_code in _HTTP_SUCCESS_RANGE
-
-
-@pure
-def _refusal_detail(body: dict[str, Any] | str) -> str:
-    """What a refusal says: the shell's ``detail`` whole (a 412 lists the connected clients at its end), else the
-    body shortened, as a proxy's error page is."""
-    if isinstance(body, dict) and "detail" in body:
-        return str(body["detail"]).strip()
-    return quote_answer(body)
-
-
-@pure
-def _json_object_or_text(text: str) -> dict[str, Any] | str:
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        return text
-    return parsed if isinstance(parsed, dict) else text
-
-
-class _RedirectsAsAnswersHandler(urllib.request.HTTPRedirectHandler):
-    """Declines every redirect, so a 3xx reaches the caller as an HTTPError carrying the shell's own answer."""
-
-    def redirect_request(
-        self,
-        req: urllib.request.Request,
-        fp: IO[bytes],
-        code: int,
-        msg: str,
-        headers: HTTPMessage,
-        newurl: str,
-    ) -> None:
-        return None
-
-
-_SHELL_OPENER: Final[urllib.request.OpenerDirector] = urllib.request.build_opener(_RedirectsAsAnswersHandler)
-
-
-def _exchange(request: urllib.request.Request, timeout_seconds: float) -> tuple[int, bytes]:
-    try:
-        with _SHELL_OPENER.open(request, timeout=timeout_seconds) as response:
-            return response.status, response.read()
-    except urllib.error.HTTPError as e:
-        with e:
-            return e.code, e.read()
+        return self.status_code in HTTP_SUCCESS_RANGE
 
 
 def request_shell(method: str, url: str, body: Mapping[str, Any] | None, timeout_seconds: float) -> ShellResponse:
     """One request to a shell route, answered as it came; raises ShellUnreachableError when it could not be made
     (refused, timed out, or cut off)."""
-    # The stdlib rather than httpx: the workspace-layout command starts once per agent action, and importing httpx
-    # (which loads rich and pygments for its own CLI) would be a large share of that startup.
-    data = None if body is None else json.dumps(dict(body)).encode("utf-8")
-    headers = {} if data is None else {"Content-Type": "application/json"}
-    try:
-        request = urllib.request.Request(url, data=data, headers=headers, method=method)
-    except ValueError as e:
-        raise ShellUnreachableError(str(e)) from e
-    try:
-        status_code, raw = _exchange(request, timeout_seconds)
-    except (OSError, http.client.HTTPException) as e:
-        raise ShellUnreachableError(str(e) or type(e).__name__) from e
-    return ShellResponse(status_code=status_code, body=_json_object_or_text(raw.decode("utf-8", errors="replace")))
+    status_code, answered = exchange_with_shell(method, url, body, timeout_seconds)
+    return ShellResponse(status_code=status_code, body=answered)
 
 
 def requester_from_environment() -> OpRequester | None:
     """The calling agent's own chat as an op's requester, or None outside an agent: ``MINDS_CHAT_ID`` from the chat
     app that created the agent, else the agent's own id (an agent created any other way is its own chat)."""
-    chat_id = os.environ.get(ENV_MINDS_CHAT_ID, "") or os.environ.get(ENV_MNGR_AGENT_ID, "")
-    if not chat_id:
+    chat_id = chat_id_from_environment()
+    if chat_id is None:
         return None
     return OpRequester(app=AGENT_REQUESTER_APP, marker=chat_id)
 
@@ -181,7 +117,7 @@ class ShellLayoutClient(ShellLayoutInterface):
         if elapsed > SHELL_REQUEST_SLOW_SECONDS:
             logger.warning("Asked the shell for the {} slowly, in {:.1f}s", described, elapsed)
         if not response.is_success:
-            detail = _refusal_detail(response.body)
+            detail = refusal_detail(response.body)
             refusal = (
                 WindowPoppedOutError if response.status_code == POPPED_OUT_REFUSAL_STATUS else ShellRefusedOpError
             )
