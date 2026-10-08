@@ -74,6 +74,8 @@ _TARBALL_SHA256_BY_ARCH = {
 }
 _RELEASE_URL = "https://github.com/imbue-ai/datalib/releases/download"
 _DOWNLOAD_TIMEOUT_SECONDS = 300.0
+# ``pull-runtime`` downloads the Node runtime with no deadline of its own.
+_PULL_RUNTIME_TIMEOUT_SECONDS = 600.0
 
 DATA_ROOT = Path("data") / ".skills" / "datalib"
 STATUS_PATH = Path("data") / ".skills" / "import-chats" / "status.json"
@@ -554,11 +556,17 @@ def install_datalib(
             staged = unpack_release(archive, scratch_path, triple)
             shutil.rmtree(install.release_dir, ignore_errors=True)
             os.replace(staged, install.release_dir)
-    result = run(
-        [str(install.binary("datalib-step")), "pull-runtime"],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = run(
+            [str(install.binary("datalib-step")), "pull-runtime"],
+            capture_output=True,
+            text=True,
+            timeout=_PULL_RUNTIME_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise ImportChatsError(
+            f"datalib could not fetch its runtime: no answer in {e.timeout:.0f}s"
+        ) from e
     if result.returncode != 0:
         raise ImportChatsError(
             f"datalib could not fetch its runtime: {(result.stderr or result.stdout).strip()}"

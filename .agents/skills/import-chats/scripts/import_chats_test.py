@@ -432,6 +432,26 @@ def test_a_sync_whose_install_fails_records_the_failure_and_says_why(
     assert "no network" in record["detail"]
 
 
+def test_a_sync_whose_runtime_fetch_hangs_gives_up_and_records_the_failure(
+    tmp_path: Path,
+) -> None:
+    install = _installed(tmp_path / "home")
+    status_path = tmp_path / "status.json"
+
+    def run(
+        command: Sequence[str], timeout: float | None = None, **_kwargs: object
+    ) -> subprocess.CompletedProcess:
+        assert timeout is not None
+        raise subprocess.TimeoutExpired(command, timeout)
+
+    with pytest.raises(import_chats.ImportChatsError, match="no answer in"):
+        import_chats.sync([CLAUDE], install, tmp_path / "datalib", status_path, run)
+
+    record = import_chats.read_status(status_path)["sources"]["claude"]
+    assert record["state"] == "failed"
+    assert "could not fetch its runtime" in record["detail"]
+
+
 def test_a_sync_that_cannot_run_datalib_records_the_failure_and_reports_it_as_an_import_error(
     tmp_path: Path,
 ) -> None:
