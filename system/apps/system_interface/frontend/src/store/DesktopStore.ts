@@ -852,7 +852,8 @@ export class DesktopStore {
    *  own desktop would move the whole client back to it. So the recorded desktop is adopted as a push
    *  when it differs and is newer than anything this window heard (a record no newer says nothing the
    *  window has not taken, and its own desktop may be a switch whose report went down with the socket,
-   *  which the report below then makes), and the layout is read again either way, for the
+   *  which the report below then makes as a move unless the record already names it), and the layout is read
+   *  again either way, for the
    *  ``placements_updated`` missed. News heard on the new socket while the record was being read, or while the
    *  pending save is awaited, is newer than what this window had: the window follows it and only registers its
    *  connection here, since its desktop may still be the one the news moved the client off.
@@ -897,7 +898,10 @@ export class DesktopStore {
       await this.switchDesktop(recorded, "follow");
       return;
     }
-    if (isNewsHeard) this.reportFollowedDesktop();
+    // A window already on the recorded desktop has nothing to re-assert, and a move would undo any switch another
+    // window made after the read.
+    const isOnRecorded = isRecordedKnown && recorded === this.state.activeDesktopId;
+    if (isNewsHeard || isOnRecorded) this.reportFollowedDesktop();
     else this.reportMove("");
     await this.refetchLayout();
   }

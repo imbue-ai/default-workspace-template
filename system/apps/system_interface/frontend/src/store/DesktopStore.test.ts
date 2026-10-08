@@ -859,6 +859,19 @@ describe("desktop news", () => {
     expect(last(socket.reports)).toEqual(moveReport("home", ""));
   });
 
+  it("registers a reconnect on the desktop its record names without moving the client", async () => {
+    api.clients = [clientRecord(CLIENT, { active_desktop: "home", desktop_revision: 1 })];
+    await startedStore();
+    socket.deliver().onConnected();
+    const reportsBefore = socket.reports.length;
+    socket.deliver().onConnected();
+    await settle();
+    // Another window moved the client to work after the record was read: nothing this window sent moves it back.
+    deliverDesktopNews("work", 2);
+    await settle();
+    expect(socket.reports.slice(reportsBefore)).toEqual([followingReport("home"), followingReport("work")]);
+  });
+
   it("counts from the record again when the shell's record was reset under the page", async () => {
     const store = await startedStore();
     socket.deliver().onConnected();
