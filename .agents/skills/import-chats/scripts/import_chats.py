@@ -52,6 +52,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime
+import fcntl
 import hashlib
 import json
 import os
@@ -65,7 +66,7 @@ import tempfile
 import threading
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -197,6 +198,15 @@ def write_status(path: Path, document: Mapping) -> None:
     _write_text_atomic(path, json.dumps(document, indent=2) + "\n")
 
 
+@contextlib.contextmanager
+def status_lock(path: Path) -> Iterator[None]:
+    """Hold the status file's lock, so two syncs running at once never write back a record the other replaced."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.with_name(".status.lock").open("a") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        yield
+
+
 def record_source(
     path: Path,
     key: str,
@@ -206,17 +216,18 @@ def record_source(
     pid: int | None,
     fetch_progress: FetchProgress | None = None,
 ) -> None:
-    document = read_status(path)
-    document["sources"][key] = {
-        "state": state,
-        "conversations": conversations,
-        "updated_at": _now(),
-        "detail": detail,
-        "pid": pid,
-        "fetched": None if fetch_progress is None else fetch_progress.fetched,
-        "to_fetch": None if fetch_progress is None else fetch_progress.total,
-    }
-    write_status(path, document)
+    with status_lock(path):
+        document = read_status(path)
+        document["sources"][key] = {
+            "state": state,
+            "conversations": conversations,
+            "updated_at": _now(),
+            "detail": detail,
+            "pid": pid,
+            "fetched": None if fetch_progress is None else fetch_progress.fetched,
+            "to_fetch": None if fetch_progress is None else fetch_progress.total,
+        }
+        write_status(path, document)
 
 
 def render_config(sources: Sequence[ChatSource]) -> str:

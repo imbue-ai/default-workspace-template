@@ -524,6 +524,31 @@ def test_an_unreadable_status_file_is_an_error_rather_than_a_fresh_start(
         import_chats.read_status(status_path)
 
 
+def test_a_record_waits_for_another_writer_and_keeps_what_it_wrote(
+    tmp_path: Path,
+) -> None:
+    status_path = tmp_path / "import-chats" / "status.json"
+    with import_chats.status_lock(status_path):
+        recorder = threading.Thread(
+            target=import_chats.record_source,
+            args=(status_path, "claude", "imported", 3, ""),
+            kwargs={"pid": None},
+        )
+        recorder.start()
+        recorder.join(timeout=0.2)
+        assert recorder.is_alive()
+        import_chats.write_status(
+            status_path, {"sources": {"chatgpt": {"state": "importing"}}}
+        )
+    recorder.join()
+
+    sources = import_chats.read_status(status_path)["sources"]
+    assert (sources["claude"]["state"], sources["chatgpt"]["state"]) == (
+        "imported",
+        "importing",
+    )
+
+
 def test_the_install_picks_the_build_for_this_machine_and_refuses_one_it_has_none_for() -> (
     None
 ):
