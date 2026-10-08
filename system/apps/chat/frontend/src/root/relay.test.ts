@@ -123,6 +123,7 @@ describe("startInnerFrameRelay", () => {
     const inner = { name: "inner" };
     startInnerFrameRelay(
       (source) => source === (inner as unknown as MessageEventSource),
+      () => [],
       () => undefined,
     );
 
