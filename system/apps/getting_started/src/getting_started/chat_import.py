@@ -21,6 +21,7 @@ from pydantic import ValidationError
 from getting_started.state_files import read_json_object
 from getting_started.state_files import write_json_atomic
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 
 # Written by the import-chats skill's script, relative to the repo root the app runs from.
 CHAT_IMPORT_STATUS_PATH: Final[Path] = Path("data/.skills/import-chats/status.json")
@@ -61,8 +62,13 @@ def is_process_alive(pid: int) -> bool:
 
 def _settled(source: ChatImportSource) -> ChatImportSource:
     if source.state == "importing" and (source.pid is None or not is_process_alive(source.pid)):
-        return source.model_copy(
-            update={"state": "failed", "detail": _INTERRUPTED_DETAIL, "pid": None, "fetched": None, "to_fetch": None}
+        fields = source.field_ref()
+        return source.model_copy_update(
+            to_update(fields.state, "failed"),
+            to_update(fields.detail, _INTERRUPTED_DETAIL),
+            to_update(fields.pid, None),
+            to_update(fields.fetched, None),
+            to_update(fields.to_fetch, None),
         )
     return source
 
