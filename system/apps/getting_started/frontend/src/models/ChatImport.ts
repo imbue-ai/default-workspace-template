@@ -59,6 +59,7 @@ export function importedSummary(sources: Record<string, ChatImportSource>): stri
 }
 
 let state: ChatImport | null = null;
+let isDismissedHere = false;
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
 export function getChatImport(): ChatImport | null {
@@ -70,6 +71,12 @@ function schedulePoll(): void {
   pollTimer = null;
   if (cardPhase(state) !== "importing") return;
   pollTimer = setTimeout(() => void refreshChatImport(), POLL_INTERVAL_MS);
+}
+
+/** Take a server answer as the state. A dismissal made here is never undone by an answer to a load
+ *  the server read before it. */
+function adopt(next: ChatImport): void {
+  state = isDismissedHere ? { ...next, is_dismissed: true } : next;
 }
 
 /** ``action`` says what the request was for in the warning a failure logs ("could not <action>"). */
@@ -90,16 +97,17 @@ async function fetchChatImport(path: string, action: string, init?: RequestInit)
 /** Fetch the card's state; keeps polling for as long as a source is importing. */
 export async function refreshChatImport(): Promise<void> {
   const next = await fetchChatImport(CHAT_IMPORT_PATH, "load the chat import state");
-  if (next !== null) state = next;
+  if (next !== null) adopt(next);
   m.redraw();
   schedulePoll();
 }
 
 /** Put the card away for good; it hides at once, whatever the server answers. */
 export async function dismissChatImport(): Promise<void> {
-  if (state !== null) state = { ...state, is_dismissed: true };
+  isDismissedHere = true;
+  if (state !== null) adopt(state);
   m.redraw();
   const next = await fetchChatImport(CHAT_IMPORT_DISMISS_PATH, "put the chat import card away", { method: "POST" });
-  if (next !== null) state = next;
+  if (next !== null) adopt(next);
   schedulePoll();
 }

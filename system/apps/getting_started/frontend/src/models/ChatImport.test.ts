@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import "@imbue/workspace-ui/src/testing/dom";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { chatImportSourceRecord as source } from "../testing/records";
 import type { ChatImport, ChatImportSource } from "./ChatImport";
-import { cardPhase, importedSummary } from "./ChatImport";
+import { cardPhase, dismissChatImport, getChatImport, importedSummary, refreshChatImport } from "./ChatImport";
 
 function chatImport(sources: Record<string, ChatImportSource>, isDismissed = false): ChatImport {
   return { is_dismissed: isDismissed, sources };
@@ -38,5 +40,27 @@ describe("the imported summary", () => {
     );
     expect(importedSummary({ chatgpt: source("imported", 7) })).toBe("7 from ChatGPT");
     expect(importedSummary({})).toBe("");
+  });
+});
+
+describe("putting the card away", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("is not undone by the answer to a load the server read before it", async () => {
+    const answers: Array<(response: Response) => void> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>((resolve) => answers.push(resolve))),
+    );
+    const loading = refreshChatImport();
+    const dismissing = dismissChatImport();
+    const [load, dismissal] = answers;
+
+    dismissal(new Response(JSON.stringify(chatImport({}, true)), { status: 200 }));
+    await dismissing;
+    load(new Response(JSON.stringify(chatImport({})), { status: 200 }));
+    await loading;
+
+    expect(getChatImport()?.is_dismissed).toBe(true);
   });
 });
