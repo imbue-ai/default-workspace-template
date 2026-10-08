@@ -11,7 +11,9 @@ answer shapes live in one place the shell and its callers share.
 ## API
 
 - `workspace_layout.shell_url`: `shell_base_url()` (`MINDS_WORKSPACE_SERVER_URL`,
-  else `http://127.0.0.1:8000`) and the route constants.
+  else `http://127.0.0.1:8000`), the route constants, and
+  `POPPED_OUT_REFUSAL_STATUS` (`423`, the op route's refusal to move a window
+  the target client popped out into its own window).
 - `workspace_layout.primitives`: the values the wire carries. The ids
   (`ClientId`, `DesktopId`, `WindowId`, `UserId`, `WallpaperName`), a window's
   `WindowPath`, `WindowPage`, and `WindowTitle`, and the enums: `LayoutOp` (every
