@@ -11,7 +11,9 @@ answer shapes live in one place the shell and its callers share.
 ## API
 
 - `workspace_layout.shell_url`: `shell_base_url()` (`MINDS_WORKSPACE_SERVER_URL`,
-  else `http://127.0.0.1:8000`) and the route constants.
+  else `http://127.0.0.1:8000`), the route constants, and
+  `POPPED_OUT_REFUSAL_STATUS` (`423`, the op route's refusal to move a window
+  the target client popped out into its own window).
 - `workspace_layout.primitives`: the values the wire carries. The ids
   (`ClientId`, `DesktopId`, `WindowId`, `UserId`, `WallpaperName`), a window's
   `WindowPath`, `WindowPage`, and `WindowTitle`, and the enums: `LayoutOp` (every
@@ -59,8 +61,11 @@ answer shapes live in one place the shell and its callers share.
 - `workspace_layout.errors`: `WorkspaceLayoutError`; `InvalidLayoutValueError`;
   and `ShellOpError`, raised by every op that did not happen, as
   `ShellUnreachableError` (down, restarting, timed out), `ShellRefusedOpError`
-  (an error status, carrying it), or `ShellAnswerMalformedError` (a success
-  status with a body that is not the answer).
+  (an error status, carrying it; `WindowPoppedOutError` for the shell's refusal
+  to move a window the client popped out into its own window, which `force` on
+  `WindowArgs`, `PlaceArgs`, or `OpenArgs` overrides), or
+  `ShellAnswerMalformedError` (a success status with a body that is not the
+  answer).
 - `workspace_layout.interfaces.ShellLayoutInterface`: `show`, `open`, `focus`,
   `navigate`, `place`, `close`, `refresh`, `connected_clients`, `desktops`, and
   `record_client_activity` (best-effort: an unreachable or failing shell is a
@@ -115,7 +120,14 @@ to the shell's op route under the calling agent's own chat as the requester
 read `GET /api/inventory`. Descriptions go to stderr; stdout carries only a
 window id (`open`, `show`), the JSON of the read commands, and a desktop's
 shortcuts after a `shortcut` write. Exit codes are `0` (done), `1` (refused or
-unreachable), and `3` (the shell or an app cannot act right now: retry).
+unreachable), `3` (the shell or an app cannot act right now: retry), and `4`
+(the window is popped out into its own window: pass `--force`, or leave it to
+the user). Every mutating subcommand takes `--force`, and only the ones whose
+arguments take it send it: `minimize`, `restore`, `maximize`, `place`, and
+`open`, which it lets move a popped-out window, and `focus` and `close`, which
+ignore it. A summary notes when an op raised a popped-out window in its own
+window, brought one back, left an `open --beside` unpaired, or landed for a
+client with no desktop window open.
 
 `show <app> --path P [--showing P ...] [--repoint PAGE ...]` runs the shell's
 `show` op: it raises a window already at the path (or at a `--showing` path),

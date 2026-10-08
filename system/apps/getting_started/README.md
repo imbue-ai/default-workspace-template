@@ -32,8 +32,10 @@ first-visit opener (`first_window.py`): while `data/.state/getting-started/first
 does not say the window was delivered, it polls the shell's client list and, for the first
 connected client, posts an `open` of `/` on the first desktop and a `place` at the left
 complement of the pinned chat's frame through the loopback op route, then records the
-delivery. The shell seeds nothing for it; this is the same shape the chat app's auto-open
-takes for the welcome chat. A boot with `--no-register` does neither, since both would reach
+delivery. A window the `open` finds popped out into its own Imbue Studio window is on screen
+already: it is left there, with no `place`, and the delivery recorded. The shell seeds
+nothing for it; this is the same shape the chat app's auto-open takes for the welcome chat.
+A boot with `--no-register` does neither, since both would reach
 the live workspace: that is how its `[preview]` table boots it (`getting-started --no-register
 --state-dir {scratch}/state` on a free port, what `update-app`'s `preview_app.py` runs), with
 the catalog cache in the scratch state directory.

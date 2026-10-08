@@ -30,6 +30,7 @@ from workspace_layout.agent_identity import chat_id_from_environment
 from workspace_layout.errors import ShellUnreachableError
 from workspace_layout.shell_url import INVENTORY_ROUTE
 from workspace_layout.shell_url import LAYOUT_OP_ROUTE
+from workspace_layout.shell_url import POPPED_OUT_REFUSAL_STATUS
 from workspace_layout.shell_url import shell_base_url
 from workspace_layout.transport import HTTP_SUCCESS_RANGE
 from workspace_layout.transport import exchange_with_shell
@@ -80,6 +81,13 @@ active desktop.
 A window is named by its id (``win-<hex>``, from ``desktops`` or the ``open`` that made it), by
 ``self`` (the caller's own chat window), by ``pinned`` (the caller's app's pinned window), or
 by an app name (that app's most recently focused window on the target client's active desktop).
+
+A window the user *popped out* into its own Imbue Studio window (``desktops`` lists each
+client's under ``popped_out``) is their arrangement: ``minimize``, ``restore``, ``maximize``,
+and ``place`` refuse it (exit 4, changing nothing) unless ``--force`` is passed, which brings it
+back onto the desktop and closes its own window. ``focus``, and an ``open`` that finds it,
+raise its own window instead; ``open --beside`` a popped-out window opens unpaired. Every
+mutating verb takes ``--force``; it is ignored where nothing can be refused.
 
 Every op targets exactly one client: ``--client <id>`` (from ``context``), else the client
 that most recently messaged you while it is connected, else the one connected client (when
@@ -188,6 +196,7 @@ _LISTED_CLIENT_FIELDS: Final[tuple[str, ...]] = (
     "active_desktop",
     "is_connected",
     "shown",
+    "popped_out",
     "shown_history",
     "last_seen",
 )
@@ -198,12 +207,14 @@ _LISTED_APP_FIELDS: Final[tuple[str, ...]] = ("name", "display_name", "is_runnin
 READ_TIMEOUT_SECONDS: Final[float] = 10.0
 OP_TIMEOUT_SECONDS: Final[float] = 30.0
 
-# Agents branch on "did it work"; the one distinct code worth its own slot is a shell or app
-# that cannot act right now (a 409 or a 503), where retry-with-backoff is the right response.
-# Slot 2 is left to argparse's usage exit.
+# Agents branch on "did it work"; the distinct exit codes worth their own slot are a shell or app
+# that cannot act right now (a 409 or a 503), where retry-with-backoff is the right response, and a
+# window the user popped out into its own window, where the answer is --force or telling the user,
+# never a retry. Slot 2 is left to argparse's usage exit.
 EXIT_OK: Final[int] = 0
 EXIT_ERROR: Final[int] = 1
 EXIT_CONFLICT: Final[int] = 3
+EXIT_POPPED_OUT: Final[int] = 4
 
 # An answer of the shell as the command reads it: the JSON object it came as.
 _Answer = dict[str, Any]
@@ -381,8 +392,14 @@ def _require_registered(context: LayoutCliContext, app: str) -> int | None:
 
 
 def _report_refusal(op: str, status: int, detail: str) -> int:
-    """A refused op as a stderr message and an exit code; only a 409 or a 503 (the shell or an app cannot do it right
-    now) has its own code."""
+    """A refused op as a stderr message and an exit code; a 409 or a 503 (the shell or an app cannot do it right now)
+    and a refusal to move a popped-out window each have their own code."""
+    if status == POPPED_OUT_REFUSAL_STATUS:
+        _write_stderr(
+            f"error: '{op}' refused (HTTP {status}): {detail}. The user popped the window out into its own window; "
+            "--force overrides it\n"
+        )
+        return EXIT_POPPED_OUT
     if status == 412:
         _write_stderr(f"error: '{op}' has no client to apply it to (HTTP 412): {detail}\n")
         return EXIT_ERROR
@@ -460,6 +477,33 @@ def _describe_target(answer: _Answer) -> str:
     return f"desktop {answer['desktop_id']} for client {answer['client_id']}"
 
 
+@pure
+def _describe_pop_out_notes(answer: _Answer) -> str:
+    """What an answer says about the client's popped-out windows, as notes after the summary line ("" for none); a
+    shell older than the popped-out rules answers none of it."""
+    notes: list[str] = []
+    if answer.get("is_raised_in_own_window"):
+        notes.append("raised in its own window: the user popped it out, so it stays there")
+    if answer.get("is_brought_back"):
+        notes.append("brought back from its own window")
+    if answer.get("unpaired_beside") is not None:
+        notes.append(
+            f"not paired beside {answer['unpaired_beside']}: the user popped it out into its own window, so the window "
+            "opened where a plain open puts it; --force brings it back and pairs the two"
+        )
+    if answer.get("has_no_desktop_window"):
+        notes.append(
+            f"client {answer['client_id']} has no desktop window open, only popped-out ones; the window is there "
+            "when one opens"
+        )
+    return "".join(f" ({note})" for note in notes)
+
+
+def _force_fields(args: argparse.Namespace) -> dict[str, Any]:
+    """``force`` when the verb was given ``--force``, else nothing, so the body carries it only when asked."""
+    return {"force": True} if args.force else {}
+
+
 def _run_desktop_op(
     context: LayoutCliContext,
     op: str,
@@ -477,7 +521,7 @@ def _run_desktop_op(
     if isinstance(answer, int):
         return answer
     try:
-        summary = describe(answer)
+        summary = describe(answer) + _describe_pop_out_notes(answer)
         printed = None if emit is None else emit(answer)
     except (KeyError, TypeError) as e:
         _write_stderr(f"error: The shell answered the {op} without {e}: {quote_answer(answer)}\n")
@@ -547,9 +591,12 @@ def _listed_desktops(inventory: _Answer) -> list[dict[str, Any]]:
     ]
 
 
+# CLEANUP: drop the ``popped_out`` default (and the test of a shell older than the popped-out rules) once every
+# workspace's shell runs a release whose inventory lists each client's ``popped_out``.
 @pure
 def _listed_clients(inventory: _Answer) -> list[dict[str, Any]]:
-    return [_listed(client, _LISTED_CLIENT_FIELDS) for client in inventory["clients"]]
+    """Every client; a shell older than the popped-out rules lists no ``popped_out``, so none is listed for it."""
+    return [_listed({"popped_out": [], **client}, _LISTED_CLIENT_FIELDS) for client in inventory["clients"]]
 
 
 @pure
@@ -668,23 +715,33 @@ def _open_arguments(args: argparse.Namespace) -> dict[str, Any]:
         fields["minimized"] = True
     if args.beside is not None:
         fields["beside"] = window_argument(args.beside)
-    return {**fields, **_target_fields(args)}
+    return {**fields, **_target_fields(args), **_force_fields(args)}
 
 
 def _cmd_open(args: argparse.Namespace, context: LayoutCliContext) -> int:
     arguments = _open_arguments(args)
     if (err := _require_registered(context, arguments["app"])) is not None:
         return err
-    alongside = f" beside {arguments['beside']}" if arguments.get("beside") else ""
     return _run_desktop_op(
         context,
         "open",
         arguments,
         lambda answer: (
-            f"opened window {_describe_window(answer, answer['window_id'])}{alongside} on {_describe_target(answer)}"
+            f"opened window {_describe_window(answer, answer['window_id'])}{_describe_beside(arguments, answer)} "
+            f"on {_describe_target(answer)}"
         ),
         _window_id_line,
     )
+
+
+@pure
+def _describe_beside(arguments: Mapping[str, Any], answer: _Answer) -> str:
+    """The " beside <window>" an open's summary carries when it paired the window, "" when it did not: no
+    ``--beside``, a partner popped out, or the window found popped out and raised in its own window."""
+    beside = arguments.get("beside")
+    if beside is None or answer.get("unpaired_beside") is not None or answer.get("is_raised_in_own_window"):
+        return ""
+    return f" beside {beside}"
 
 
 def _show_arguments(args: argparse.Namespace) -> dict[str, Any]:
@@ -721,7 +778,7 @@ def _window_op(op: str, past_tense: str) -> Callable[[argparse.Namespace, Layout
         return _run_desktop_op(
             context,
             op,
-            {"window": window_argument(args.window), **_target_fields(args)},
+            {"window": window_argument(args.window), **_target_fields(args), **_force_fields(args)},
             lambda answer: (
                 f"{past_tense} window {_describe_window(answer, answer['window_id'])} on {_describe_target(answer)}"
             ),
@@ -752,7 +809,7 @@ def _cmd_place(args: argparse.Namespace, context: LayoutCliContext) -> int:
     return _run_desktop_op(
         context,
         "place",
-        {**fields, **_target_fields(args)},
+        {**fields, **_target_fields(args), **_force_fields(args)},
         lambda answer: (
             f"placed window {_describe_window(answer, answer['window_id'])} {what} on {_describe_target(answer)}"
         ),
@@ -887,6 +944,16 @@ def _add_target_arguments(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--desktop", default=None, help=_DESKTOP_HELP)
 
 
+_FORCE_HELP: Final[str] = (
+    "Apply the op even to a window the user popped out into its own window, bringing it back onto the desktop "
+    "(minimize, restore, maximize, place, open --beside); ignored where nothing is refused."
+)
+
+
+def _add_force_argument(subparser: argparse.ArgumentParser) -> None:
+    subparser.add_argument("--force", action="store_true", help=_FORCE_HELP)
+
+
 def _add_json_argument(subparser: argparse.ArgumentParser) -> None:
     # CLEANUP: drop --json once every workspace runs a release where JSON is the only output
     # (it became so in September 2026); it is accepted so instructions written for the YAML
@@ -900,6 +967,7 @@ def _add_window_verb(subparsers: Any, verb: str, help_text: str, past_tense: str
     subparser = subparsers.add_parser(verb, help=help_text)
     subparser.add_argument("window", help="A window id (win-<hex>), 'self', 'pinned', or an app name")
     _add_target_arguments(subparser)
+    _add_force_argument(subparser)
     subparser.set_defaults(func=_window_op(verb, past_tense))
 
 
@@ -928,6 +996,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_load = subparsers.add_parser("load", help="Switch the target client onto a desktop")
     p_load.add_argument("desktop", help="The desktop's name or id")
     p_load.add_argument("--client", default=None, help=_CLIENT_HELP)
+    _add_force_argument(p_load)
     p_load.set_defaults(func=_cmd_load)
 
     p_open = subparsers.add_parser("open", help="Open a window of an app (or a URL in a new browser)")
@@ -977,6 +1046,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "the opened one to the right half and on top. Ignored when the named window is not on the desktop.",
     )
     _add_target_arguments(p_open)
+    _add_force_argument(p_open)
     p_open.set_defaults(func=_cmd_open)
 
     p_show = subparsers.add_parser(
@@ -1000,6 +1070,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "(repeatable); without it no window is pointed elsewhere",
     )
     _add_target_arguments(p_show)
+    _add_force_argument(p_show)
     p_show.set_defaults(func=_cmd_show)
 
     _add_window_verb(subparsers, "focus", "Restore and raise a window", "focused")
@@ -1018,12 +1089,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--frame", default=None, metavar="X,Y,WIDTH,HEIGHT", help="The frame in fractions of the backdrop (0..1)"
     )
     _add_target_arguments(p_place)
+    _add_force_argument(p_place)
     p_place.set_defaults(func=_cmd_place)
 
     p_navigate = subparsers.add_parser("navigate", help="Point a window at another path under its app")
     p_navigate.add_argument("window", help="A window id (win-<hex>), 'self', 'pinned', or an app name")
     p_navigate.add_argument("path", help="The path under the app's origin, starting with '/'")
     _add_target_arguments(p_navigate)
+    _add_force_argument(p_navigate)
     p_navigate.set_defaults(func=_cmd_navigate)
 
     p_refresh = subparsers.add_parser("refresh", help="Reload one window's page, or every page of an app")
@@ -1032,6 +1105,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_refresh.add_argument("--app", default=None, help="Reload every page of this app, on every client")
     _add_target_arguments(p_refresh)
+    _add_force_argument(p_refresh)
     p_refresh.set_defaults(func=_cmd_refresh)
 
     p_shortcuts = subparsers.add_parser("shortcuts", help="List a desktop's backdrop shortcuts")
@@ -1054,23 +1128,27 @@ def _build_parser() -> argparse.ArgumentParser:
         "--cell", default=None, metavar="COLUMN,ROW", help="The grid cell; the next free one by default"
     )
     _add_target_arguments(p_shortcut_set)
+    _add_force_argument(p_shortcut_set)
     p_shortcut_set.set_defaults(func=_cmd_shortcut_set)
     p_shortcut_move = shortcut_subparsers.add_parser("move", help="Move a shortcut to another cell")
     p_shortcut_move.add_argument("app", help="The registered app")
     p_shortcut_move.add_argument("launch", help="The launch path the shortcut runs")
     p_shortcut_move.add_argument("--cell", required=True, metavar="COLUMN,ROW", help="The grid cell to move to")
     _add_target_arguments(p_shortcut_move)
+    _add_force_argument(p_shortcut_move)
     p_shortcut_move.set_defaults(func=_cmd_shortcut_move)
     p_shortcut_remove = shortcut_subparsers.add_parser("remove", help="Take a shortcut off the desktop")
     p_shortcut_remove.add_argument("app", help="The registered app")
     p_shortcut_remove.add_argument("launch", help="The launch path the shortcut runs")
     _add_target_arguments(p_shortcut_remove)
+    _add_force_argument(p_shortcut_remove)
     p_shortcut_remove.set_defaults(func=_cmd_shortcut_remove)
 
     p_wallpaper = subparsers.add_parser("wallpaper", help="Set or clear a desktop's wallpaper")
     p_wallpaper.add_argument("kind", help="'bundled' or 'file', or 'none' to clear it")
     p_wallpaper.add_argument("name", nargs="?", default=None, help="The image's file name without its extension")
     _add_target_arguments(p_wallpaper)
+    _add_force_argument(p_wallpaper)
     p_wallpaper.set_defaults(func=_cmd_wallpaper)
 
     for verb in RETIRED_VERBS:
