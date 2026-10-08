@@ -816,7 +816,7 @@ def record_outcomes(
     status_path: Path,
 ) -> bool:
     """Record each named source's outcome from a finished ``datalib-dag`` run and rewrite its index. True when every
-    named source imported."""
+    named source imported; an index that cannot be rewritten is reported on stderr and leaves the outcome as it is."""
     steps = parse_run_summary(result.stderr)
     is_every_source_imported = True
     for source in named:
@@ -838,7 +838,15 @@ def record_outcomes(
             pid=None,
         )
     for source in named:
-        write_index(data_root, source, index_path_for(status_path, source))
+        index_path = index_path_for(status_path, source)
+        try:
+            write_index(data_root, source, index_path)
+        except OSError as e:
+            print(
+                f"import-chats: the {source.label} chats are recorded, but their index {index_path} could not be "
+                f"rewritten: {e}",
+                file=sys.stderr,
+            )
     return is_every_source_imported
 
 

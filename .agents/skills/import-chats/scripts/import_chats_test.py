@@ -739,6 +739,24 @@ def test_a_sync_rewrites_the_index_of_each_source_it_synced(
     assert "0 conversations" in (index_dir / "chatgpt-chats.md").read_text()
 
 
+def test_a_sync_whose_index_cannot_be_written_still_records_what_it_imported(
+    workspace: _SyncWorkspace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    datalib = _FakeDatalib(
+        workspace.data_root,
+        _run_summary({"step": "claude_chats/ingest", "status": "succeeded"}),
+        {"claude_chats": 2},
+    )
+    index_path = import_chats.index_path_for(workspace.status_path, CLAUDE)
+    index_path.mkdir(parents=True)
+
+    assert workspace.sync([CLAUDE], datalib) is True
+
+    record = workspace.record("claude")
+    assert (record["state"], record["conversations"]) == ("imported", 2)
+    assert f"their index {index_path} could not be rewritten" in capsys.readouterr().err
+
+
 def test_a_long_title_with_tabs_is_one_line_cut_short_in_the_index(
     tmp_path: Path,
 ) -> None:
