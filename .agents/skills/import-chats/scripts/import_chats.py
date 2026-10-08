@@ -594,6 +594,7 @@ class IngestProgress:
 
     An ingest that knows how much it has to fetch says so with ``progress_length`` and counts each item with
     ``progress_inc`` (datalib's ChatGPT ingest does; its Claude ingest reports no length, so it has no entry here).
+    A ``step_start`` begins the count again: ``datalib-dag`` retries a failed ingest from zero, with a new length.
     Fed from the thread reading the stream and read by the one recording progress, hence the lock.
     """
 
@@ -608,16 +609,16 @@ class IngestProgress:
             return
         step = str(event["step"])
         with self._lock:
-            if event.get("event") == "progress_length" and isinstance(
-                event.get("total"), int
-            ):
-                self._total_by_step[step] = event["total"]
-            elif event.get("event") == "progress_inc" and isinstance(
-                event.get("delta"), int
-            ):
-                self._fetched_by_step[step] = (
-                    self._fetched_by_step.get(step, 0) + event["delta"]
-                )
+            match event.get("event"):
+                case "step_start":
+                    self._total_by_step.pop(step, None)
+                    self._fetched_by_step.pop(step, None)
+                case "progress_length" if isinstance(event.get("total"), int):
+                    self._total_by_step[step] = event["total"]
+                case "progress_inc" if isinstance(event.get("delta"), int):
+                    self._fetched_by_step[step] = (
+                        self._fetched_by_step.get(step, 0) + event["delta"]
+                    )
 
     def of(self, source: ChatSource) -> FetchProgress | None:
         step = f"{source.group}/ingest"

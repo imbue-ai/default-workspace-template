@@ -891,6 +891,25 @@ def test_ingest_progress_follows_each_ingests_length_and_increments() -> None:
     assert progress.of(CLAUDE) is None
 
 
+def test_a_retried_ingest_counts_its_progress_from_zero() -> None:
+    progress = import_chats.IngestProgress()
+    for line in [
+        _progress_event("step_start", "chatgpt_chats/ingest", attempt=1),
+        _progress_event("progress_length", "chatgpt_chats/ingest", total=582),
+        _progress_event("progress_inc", "chatgpt_chats/ingest", delta=300),
+        _progress_event("step_start", "chatgpt_chats/ingest", attempt=2),
+    ]:
+        progress.observe(line)
+    assert progress.of(CHATGPT) is None
+
+    for line in [
+        _progress_event("progress_length", "chatgpt_chats/ingest", total=282),
+        _progress_event("progress_inc", "chatgpt_chats/ingest", delta=1),
+    ]:
+        progress.observe(line)
+    assert progress.of(CHATGPT) == import_chats.FetchProgress(fetched=1, total=282)
+
+
 def test_stream_process_hands_over_stderr_lines_as_they_come_and_keeps_both_streams() -> (
     None
 ):
