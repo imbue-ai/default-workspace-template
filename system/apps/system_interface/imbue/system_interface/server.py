@@ -48,6 +48,7 @@ from imbue.system_interface.request_helpers import handle_unhandled_exception
 from imbue.system_interface.request_helpers import json_response
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import PopOutStateReport
+from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
@@ -588,9 +589,9 @@ def _handle_client_state_message(
     desktop it is on, on connect and on every switch. Registration feeds the broadcaster's client registry
     (which targets layout ops), the client record, and the client-activity log (a ``desktop_switch`` when
     the report names a different previous desktop). A following report (a window that followed the client's stored
-    desktop, pushed or read on a reconnect) registers the connection and records nothing. A pop-out's report
-    registers its connection under its client and nothing more: the client's record and active desktop are its main
-    window's.
+    desktop, pushed or read on a reconnect) registers the connection and only stamps the client as seen. A pop-out's
+    report registers its connection under its client and nothing more: the client's record and active desktop are its
+    main window's.
     """
     try:
         parsed = json.loads(raw_message)
@@ -610,10 +611,17 @@ def _handle_client_state_message(
         return False
     shell.broadcaster.set_client_info(client_queue, str(report.client_id), str(report.active_desktop))
     # A window that followed the stored desktop may name a desktop a later move has already replaced: recording it
-    # would move the client back and set its windows following again. So it only registers the connection.
-    if not report.is_following:
-        # A state file the shell cannot write is a warning, not a dropped socket: the live
-        # registration above is what the layout ops need, and the next report retries the write.
+    # would move the client back and set its windows following again. So it only stamps the client as seen.
+    # A state file the shell cannot write is a warning, not a dropped socket: the live
+    # registration above is what the layout ops need, and the next report retries the write.
+    if report.is_following:
+        try:
+            shell.record_client_seen(report.client_id)
+        except ClientNotFoundError as e:
+            _loguru_logger.opt(exception=e).debug("No client record to stamp as seen for {}", report.client_id)
+        except ShellStateError as e:
+            _loguru_logger.opt(exception=e).warning("Could not stamp the client {} as seen", report.client_id)
+    else:
         try:
             shell.record_client_report(report)
         except ShellStateError as e:

@@ -15,6 +15,7 @@ import httpx
 import pytest
 from flask import Flask
 from flask.testing import FlaskClient
+from workspace_layout.primitives import ClientId
 
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.avatar.primitives import DesignId
@@ -874,7 +875,7 @@ def test_a_report_of_a_deleted_desktop_lands_the_client_on_the_first_one_and_say
 def test_a_move_is_echoed_with_its_report_and_revision_and_a_following_report_moves_nothing(app: Flask) -> None:
     """A window's move is broadcast naming the report that made it and the revision it was written at. A window
     that followed a push reports the desktop it followed, which a later move may have replaced: that report
-    registers its connection there and neither moves the client back nor broadcasts."""
+    registers its connection there and stamps the client as seen, and neither moves the client back nor broadcasts."""
     shell = state_of(app).shell
     shell.inventory.reload_registry()
     shell.list_desktops()
@@ -907,6 +908,8 @@ def test_a_move_is_echoed_with_its_report_and_revision_and_a_following_report_mo
         ]
 
         switches_logged = len(shell.activity.read_events())
+        long_ago = utc_now() - timedelta(days=30)
+        shell.clients.set_active_desktop(ClientId("c1"), work.id, long_ago)
         following = json.dumps(
             {
                 "type": "client_state",
@@ -919,6 +922,7 @@ def test_a_move_is_echoed_with_its_report_and_revision_and_a_following_report_mo
         assert _handle_client_state_message(following, client_queue, shell, is_first_report=False) is True
         recorded = shell.clients.get_client("c1")
         assert recorded is not None and (recorded.active_desktop, recorded.desktop_revision) == (work.id, 2)
+        assert recorded.last_seen > long_ago
         assert len(shell.activity.read_events()) == switches_logged
         assert drain_messages(client_queue) == []
         assert [info.active_desktop for info in shell.broadcaster.get_connected_client_infos()] == ["home"]

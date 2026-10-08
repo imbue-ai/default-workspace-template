@@ -753,6 +753,11 @@ class ShellState(MutableModel):
         """The desktop a client is on by the rule of desktop contracts.md section 4.3; None with no desktops."""
         return resolve_active_desktop(self.clients.get_client(client_id), self.list_desktops())
 
+    def record_client_seen(self, client_id: ClientId) -> ClientRecord:
+        """Stamp a recorded client as seen without moving it (a following ``client_state`` report); raises
+        ClientNotFoundError."""
+        return self.clients.record_seen(client_id, datetime.now(timezone.utc))
+
     def record_client_report(self, report: ClientStateReport) -> ClientReportOutcome:
         """Record a ``client_state`` report and announce what moved; a report naming a desktop that no longer exists
         lands the client on the first desktop instead (desktop plan section 3.5)."""

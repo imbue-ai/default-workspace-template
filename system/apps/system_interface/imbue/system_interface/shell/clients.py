@@ -196,6 +196,14 @@ class ClientStore(MutableModel):
             is_revised_regardless=is_redirected,
         )
 
+    def record_seen(self, client_id: ClientId, now: datetime) -> ClientRecord:
+        """Stamp a recorded client's last-seen time, leaving its desktop where it is (a following report); raises
+        ClientNotFoundError."""
+        stamped = now.astimezone(timezone.utc)
+        return self._update_recorded_client(
+            client_id, lambda previous: previous.model_copy_update(to_update(previous.field_ref().last_seen, stamped))
+        )
+
     def set_active_desktop(self, client_id: ClientId, desktop_id: DesktopId, now: datetime) -> ClientReportOutcome:
         """Move a recorded client onto a desktop (a ``load`` op, an op's ``--desktop``, or a deleted desktop's
         fallback); raises ClientNotFoundError."""
