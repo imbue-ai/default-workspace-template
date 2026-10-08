@@ -172,8 +172,8 @@ def test_a_closed_report_releases_the_chat() -> None:
     h = _Harness(chat_ids=["a"], pids={"a": 10})
     h.report("a", PresenceState.VISIBLE)
     protected = h.latest_adj_by_pid()[10]
-    # The tab is closed; the page's closed report drops the client's presence and ``a``
-    # becomes the most-expendable (base) chat again.
+    # The tab is closed; after the page's closed report ``a`` is neither open nor visible
+    # and becomes the most-expendable (base) chat again.
     h.report("a", PresenceState.CLOSED)
     reverted = h.latest_adj_by_pid()[10]
     assert reverted > protected

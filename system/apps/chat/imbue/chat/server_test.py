@@ -1739,7 +1739,7 @@ def test_presence_endpoint_retags_a_chat_from_the_report() -> None:
 
 
 def test_presence_endpoint_closed_report_releases_the_chat() -> None:
-    """A ``closed`` report drops the client's presence, so the chat reads as closed again."""
+    """After a page's ``closed`` report it counts as neither open nor visible, so the chat reads as closed again."""
     writes: list[tuple[int, int]] = []
     client = _client_with_tracked_chat(writes, "agent-c0ffee", 4242)
     client.post("/api/chats/agent-c0ffee/presence", json=_presence_body("hidden"))
