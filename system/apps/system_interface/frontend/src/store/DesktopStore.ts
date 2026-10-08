@@ -864,10 +864,12 @@ export class DesktopStore {
       const clients = await this.deps.api.fetchClients();
       const own = clients.find((client) => client.id === this.deps.clientId);
       this.takeFetchedEntries(own, entryPushesBefore);
-      if (own !== undefined) {
-        this.takeShownHistory(own.shown_history);
-        isRecordedNewer = this.hearDesktopRevision(own.desktop_revision);
-      }
+      if (own !== undefined) this.takeShownHistory(own.shown_history);
+      // The shell only ever raises a record's revision, so one below what this window heard (or no record at all)
+      // means the record was reset under the page, restored or pruned: the shell counts again from there.
+      const recordedRevision = own?.desktop_revision ?? 0;
+      if (recordedRevision < this.desktopRevisionHeard) this.desktopRevisionHeard = recordedRevision;
+      isRecordedNewer = this.hearDesktopRevision(recordedRevision);
       recorded = own?.active_desktop ?? null;
     } catch (error) {
       console.warn("[si] could not read the client records after reconnecting", error);

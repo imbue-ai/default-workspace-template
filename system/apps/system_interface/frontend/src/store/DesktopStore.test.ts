@@ -847,6 +847,23 @@ describe("desktop news", () => {
     expect(store.getState().activeDesktopId).toBe("home");
     expect(last(socket.reports)).toEqual(moveReport("home", ""));
   });
+
+  it("counts from the record again when the shell's record was reset under the page", async () => {
+    const store = await startedStore();
+    socket.deliver().onConnected();
+    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "work", revision: 5, reportId: null });
+    await settle();
+    // The shell's client record is restored from an older copy while the socket is down.
+    api.clients = [clientRecord(CLIENT, { active_desktop: "home", desktop_revision: 1 })];
+    socket.deliver().onConnected();
+    await settle();
+    expect(store.getState().activeDesktopId).toBe("work");
+    expect(last(socket.reports)).toEqual(moveReport("work", ""));
+    // The window's report is written at revision 2, and an op's move after it at 3: the window follows the op.
+    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "home", revision: 3, reportId: null });
+    await settle();
+    expect(store.getState().activeDesktopId).toBe("home");
+  });
 });
 
 describe("gestures", () => {
