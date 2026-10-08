@@ -274,9 +274,16 @@ def remove_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
 
 def open_window(desktop_id: str) -> ResponseReturnValue:
     body = parse_request_body(WindowOpenRequest)
-    outcome = _shell().open_window(desktop_id, body)
+    shell = _shell()
+    outcome = shell.open_window(desktop_id, body)
     return (
-        jsonify({"window": _shell().window_view(outcome.window).model_dump(mode="json"), "is_new": outcome.is_new}),
+        jsonify(
+            {
+                "window": shell.window_view(outcome.window).model_dump(mode="json"),
+                "is_new": outcome.is_new,
+                "has_no_desktop_window": not body.minimized and _has_no_desktop_window(shell, body.client_id),
+            }
+        ),
         HTTP_CREATED if outcome.is_new else HTTP_OK,
     )
 

@@ -65,6 +65,8 @@ export class FakeDesktopApi implements DesktopApi {
   }[] = [];
   /** What the relay answers each app did with a message it took. */
   relayDeliveries: MessageDelivery[] = [];
+  /** What every window open answers of whether the client has only pop-outs open. */
+  hasNoDesktopWindow = false;
   /** A refusal every route raises while set. */
   refusal: string | null = null;
   /** The page a POST launch path answers (as the app would); a GET launch path's page is built from its path. */
@@ -256,7 +258,7 @@ export class FakeDesktopApi implements DesktopApi {
         request.clientId,
         withWindowRaised(this.layoutOf(desktopId, request.clientId), existing.id),
       );
-      return { window: existing, isNew: false };
+      return { window: existing, isNew: false, hasNoDesktopWindow: this.hasNoDesktopWindow && !request.isMinimized };
     }
     this.windowCounter += 1;
     const window: WindowRecord = {
@@ -275,7 +277,7 @@ export class FakeDesktopApi implements DesktopApi {
       request.clientId,
       request.isMinimized ? withWindowMinimized(placed, window.id) : placed,
     );
-    return { window, isNew: true };
+    return { window, isNew: true, hasNoDesktopWindow: this.hasNoDesktopWindow && !request.isMinimized };
   }
 
   /** As the shell does: a GET launch path's page is its path with the presets and params as the query, a POST one's

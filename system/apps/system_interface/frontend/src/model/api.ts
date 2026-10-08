@@ -106,6 +106,8 @@ export interface WindowOpenOutcome {
   readonly window: WindowRecord;
   /** True for an open, false when an existing window was answered and raised instead. */
   readonly isNew: boolean;
+  /** The client has only pop-outs open, so the window waits on its desktop for a desktop window. */
+  readonly hasNoDesktopWindow: boolean;
 }
 
 export async function openWindow(desktopId: string, request: WindowOpenRequest): Promise<WindowOpenOutcome> {
@@ -116,8 +118,15 @@ export async function openWindow(desktopId: string, request: WindowOpenRequest):
     if_present: request.ifPresent,
     minimized: request.isMinimized,
   };
-  const data = await postJson<{ window: unknown; is_new: boolean }>(desktopUrl(desktopId, "/windows"), body);
-  return { window: parseWindow(data.window), isNew: data.is_new === true };
+  const data = await postJson<{ window: unknown; is_new: boolean; has_no_desktop_window?: boolean }>(
+    desktopUrl(desktopId, "/windows"),
+    body,
+  );
+  return {
+    window: parseWindow(data.window),
+    isNew: data.is_new === true,
+    hasNoDesktopWindow: data.has_no_desktop_window === true,
+  };
 }
 
 /** Where a launch's page goes (post-launch-paths plan section 3.3): a new window, a window already at the path (else

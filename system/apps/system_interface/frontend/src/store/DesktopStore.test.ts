@@ -1431,6 +1431,23 @@ describe("links Imbue Studio hands over", () => {
     expect(api.relayedMessages).toEqual([]);
   });
 
+  it("tells the user to reopen the main window when an app's window a link opened waits on the desktop", async () => {
+    api.apps = [appRecord("docs"), FILES_APP];
+    const store = makeStore(() => undefined, { soloWindowId: "win-1" });
+    await store.start(NO_LINK);
+    await store.openLink(`http://files-ab12cd34.${COORDINATE}/a/`, SHELL_HOST, "chat");
+    expect(notices()).toEqual([]);
+
+    api.hasNoDesktopWindow = true;
+    await store.openLink(`http://files-ab12cd34.${COORDINATE}/b/`, SHELL_HOST, "chat");
+
+    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([
+      "openWindow:home:files:/a/:focus",
+      "openWindow:home:files:/b/:focus",
+    ]);
+    expect(notices()).toEqual([SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE]);
+  });
+
   it("refuses another workspace's address, and an address no app of this workspace is at, with a notice", async () => {
     const store = await startedStore();
     socket.deliver().onAppsUpdated([appRecord("docs"), FILES_APP]);

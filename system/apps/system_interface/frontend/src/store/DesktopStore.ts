@@ -190,7 +190,7 @@ export const EMBEDDER_SENDER = "embedder";
 /** What a link to another workspace's app gets, since only that workspace can open it. */
 export const OTHER_WORKSPACE_LINK_NOTICE = "That link belongs to another workspace, so it cannot open here.";
 
-/** What a message shown on this client's desktop gets while the client has only pop-outs open. */
+/** What a page shown or a window opened on this client's desktop gets while the client has only pop-outs open. */
 export const SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE =
   "It opened on your desktop. Reopen the main Imbue Studio window to see it.";
 
@@ -1485,8 +1485,9 @@ export class DesktopStore {
   }
 
   /** Every open goes through the shell's one route; the answer is applied at once and the layout
-   *  refetched for the stamp the shell wrote. A phone opens out of sight and shows the window itself. Answers the
-   *  window id, or null when the shell refused. */
+   *  refetched for the stamp the shell wrote. A phone opens out of sight and shows the window itself. A window that
+   *  waits on the desktop because this client has only pop-outs open gets a notice to reopen the main window.
+   *  Answers the window id, or null when the shell refused. */
   async openWindowAt(app: string, path: string, ifPresent: IfPresent): Promise<string | null> {
     const desktopId = this.openingDesktopId();
     if (desktopId === null) return null;
@@ -1508,6 +1509,7 @@ export class DesktopStore {
       return null;
     }
     this.takeOpened(desktopId, outcome.window, outcome.isNew, isMinimized);
+    if (outcome.hasNoDesktopWindow) this.toast(SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE);
     return outcome.window.id;
   }
 

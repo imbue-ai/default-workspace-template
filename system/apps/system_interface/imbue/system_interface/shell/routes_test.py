@@ -2162,6 +2162,24 @@ def test_an_op_that_shows_a_desktop_window_to_a_client_with_only_pop_outs_open_s
     assert focused.get_json()["has_no_desktop_window"] is False
 
 
+def test_a_page_open_for_a_client_with_only_pop_outs_open_says_the_window_waits_for_a_desktop_window(
+    client: FlaskClient, app: Flask
+) -> None:
+    """A link opened from a pop-out with the main window closed: the window is placed on the desktop, and the answer
+    says no desktop window shows it, so the page can tell the user; a minimized open is out of sight anyway."""
+    _record_client(app, "c1", "home")
+    _shell(app).broadcaster.set_pop_out_info(_shell(app).broadcaster.register(), "c1")
+
+    alone = _open_window(client, "files", "/notes/")
+    minimized = _open_window(client, "files", "/later/", minimized=True)
+    _register_client(app, "c1", "home")
+    with_desktop = _open_window(client, "files", "/notes/")
+
+    assert (alone.status_code, alone.get_json()["has_no_desktop_window"]) == (201, True)
+    assert minimized.get_json()["has_no_desktop_window"] is False
+    assert (with_desktop.status_code, with_desktop.get_json()["has_no_desktop_window"]) == (200, False)
+
+
 def test_the_inventory_lists_every_clients_popped_out_windows_with_their_ghosts(
     client: FlaskClient, app: Flask
 ) -> None:
