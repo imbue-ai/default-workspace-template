@@ -13,7 +13,7 @@ import os
 import shutil
 import socket
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import closing
 from contextlib import contextmanager
 from pathlib import Path
@@ -45,7 +45,7 @@ def _is_listening(port: int) -> bool:
 
 
 @contextmanager
-def _running(binary: str, args: list[str], env: dict[str, str]) -> Iterator[object]:
+def _running(binary: str, args: list[str], env: dict[str, str]) -> Generator[object, None, None]:
     process = spawn_pty(binary, args, _START_SECONDS, env={**os.environ, **env})
     try:
         yield process

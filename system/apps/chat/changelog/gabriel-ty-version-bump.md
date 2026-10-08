@@ -8,4 +8,6 @@ The type-check ratchet runs `ty` 0.0.85 (was 0.0.24). 0.0.85 checks the objects 
 
 - `@contextmanager` functions are annotated as returning `Generator[X, None, None]` rather than `Iterator[X]`, which 0.0.85 reports as a deprecated overload.
 
+- The e2e test that records launcher dialogs registers a named `Dialog` handler returning `None`; the tuple-returning lambda matched none of `Page.on`'s overloads.
+
 - An inert mypy-style `type: ignore` in the config tests is gone.
