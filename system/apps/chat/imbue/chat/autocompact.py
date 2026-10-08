@@ -16,7 +16,7 @@ from imbue.mngr_autocompact.manager import compact_stale_agents_by_name
 _DEFAULT_SWEEP_INTERVAL_SECONDS: Final[float] = 60.0
 # A slow sweep delays the next tick, so one taking this long is logged.
 SLOW_SWEEP_WARNING_SECONDS: Final[float] = 30.0
-# The plugin call has no timeout, so ``stop`` does not wait out a sweep in flight; the thread is a daemon.
+# A plugin call can run for minutes, so ``stop`` does not wait out a sweep in flight; the thread is a daemon.
 _STOP_JOIN_TIMEOUT_SECONDS: Final[float] = 5.0
 # A sweep still in flight this long is logged with the stack it is blocked in, and again each repeat
 # interval it stays in flight, since no other sweep starts until it returns.
