@@ -115,8 +115,8 @@ _SIGN_IN_MARKERS = (
 )
 # The run summary's ``failure`` for a step whose credential failed.
 _AUTH_FAILURE_KIND = "auth"
-# A render step's statuses that leave the source's pages current: a sync skips a render with nothing new to do.
-_RENDER_DONE_STATUSES = ("succeeded", "skipped_up_to_date")
+# The statuses datalib counts as a step finishing without failing: a sync skips a step with nothing new to do.
+_STEP_OK_STATUSES = ("succeeded", "skipped_up_to_date")
 
 
 @dataclass(frozen=True)
@@ -857,10 +857,10 @@ def source_failure(
     ingest = steps.get(f"{source.group}/ingest")
     if ingest is None:
         return runner_error(result), None
-    if ingest.get("status") != "succeeded":
+    if ingest.get("status") not in _STEP_OK_STATUSES:
         return str(ingest.get("error", "")), ingest.get("failure")
     render = steps.get(f"{source.group}/render_markdown")
-    if render is not None and render.get("status") not in _RENDER_DONE_STATUSES:
+    if render is not None and render.get("status") not in _STEP_OK_STATUSES:
         return str(render.get("error", "")), render.get("failure")
     return None
 

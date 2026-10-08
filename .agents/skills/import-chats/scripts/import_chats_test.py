@@ -368,7 +368,7 @@ def test_a_sync_records_a_sign_in_problem_for_one_source_and_success_for_the_oth
     )
 
 
-def test_a_sync_whose_pages_did_not_render_records_the_render_failure(
+def test_a_sync_records_a_render_failure_and_counts_a_source_with_nothing_new_as_imported(
     workspace: _SyncWorkspace,
 ) -> None:
     datalib = _FakeDatalib(
@@ -381,7 +381,7 @@ def test_a_sync_whose_pages_did_not_render_records_the_render_failure(
                 "failure": "data",
                 "error": "step exited 1\ncaused by: render store: disk full\n",
             },
-            {"step": "chatgpt_chats/ingest", "status": "succeeded"},
+            {"step": "chatgpt_chats/ingest", "status": "skipped_up_to_date"},
             {"step": "chatgpt_chats/render_markdown", "status": "skipped_up_to_date"},
         ),
         {},
