@@ -171,12 +171,16 @@ def read_status(path: Path) -> dict:
     return document
 
 
-def write_status(path: Path, document: Mapping) -> None:
+def _write_text_atomic(path: Path, text: str) -> None:
     """Write through a same-directory temp file and a rename, so a reader never sees a partial file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f"{path.name}.tmp-{os.getpid()}")
-    temp_path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    temp_path.write_text(text, encoding="utf-8")
     os.replace(temp_path, path)
+
+
+def write_status(path: Path, document: Mapping) -> None:
+    _write_text_atomic(path, json.dumps(document, indent=2) + "\n")
 
 
 def record_source(
@@ -395,19 +399,14 @@ def render_index(
 
 
 def write_index(data_root: Path, source: ChatSource, index_path: Path) -> None:
-    """Rewrite the source's index from every page its render step wrote (atomically, like the status file)."""
+    """Rewrite the source's index from every page its render step wrote."""
     rendered = data_root / source.group / "render_markdown"
     pages = (
         [read_page(path) for path in rendered.rglob("all.md")]
         if rendered.is_dir()
         else []
     )
-    index_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = index_path.with_name(f"{index_path.name}.tmp-{os.getpid()}")
-    temp_path.write_text(
-        render_index(source, pages, index_path.parent), encoding="utf-8"
-    )
-    os.replace(temp_path, index_path)
+    _write_text_atomic(index_path, render_index(source, pages, index_path.parent))
 
 
 def index_path_for(status_path: Path, source: ChatSource) -> Path:
