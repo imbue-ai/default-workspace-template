@@ -333,6 +333,27 @@ def test_the_wired_claude_hooks_record_a_stop_and_clear_at_the_next_session_star
     assert background_tasks.list_live_tasks(background_task_markers, _CHAT_ID) == []
 
 
+@pytest.mark.parametrize("event", ["Stop", "SessionStart"])
+def test_a_wired_claude_hook_whose_script_is_gone_still_exits_0(
+    tmp_path: Path, event: str
+) -> None:
+    """Claude keeps the hooks it started with, so a session can outlive the script (a worktree
+    checked out at an older commit). python3 exits 2 on a missing script, and a Stop hook's exit 2
+    blocks Claude's stop."""
+    env = os.environ | _main_claude_env(tmp_path)
+
+    finished = subprocess.run(
+        ["sh", "-c", _wired_command(event)],
+        input="{}",
+        text=True,
+        env=env,
+        cwd=tmp_path,
+        capture_output=True,
+    )
+
+    assert finished.returncode == 0, finished.stderr
+
+
 def _run_cli(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(_SCRIPT), *args],

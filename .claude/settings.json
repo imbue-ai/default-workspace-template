@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/background_tasks.py clear-claude"
+            "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/background_tasks.py clear-claude || true"
           }
         ]
       }
@@ -92,7 +92,7 @@
           },
           {
             "type": "command",
-            "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/background_tasks.py record-claude-stop"
+            "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/background_tasks.py record-claude-stop || true"
           }
         ]
       }
