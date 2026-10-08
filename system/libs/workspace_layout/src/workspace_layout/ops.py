@@ -119,6 +119,11 @@ PLACEABLE_STATES: Final[tuple[WindowState, ...]] = (
     WindowState.MAXIMIZED,
 )
 
+_FORCE_DESCRIPTION: Final[str] = (
+    "Apply an op that would bring a window the target client has popped out back onto the desktop, rather than being "
+    "refused"
+)
+
 
 class ClientActivityReport(FrozenModel):
     """The body of ``POST /api/client-activity`` (desktop contracts.md section 5.1): a message a client sent."""
@@ -206,6 +211,7 @@ class OpenArgs(OpTarget):
         description="A window to lay the opened one beside for the target client: that one snapped to the left half, "
         "the opened one to the right half and on top",
     )
+    force: bool = Field(default=False, description=_FORCE_DESCRIPTION)
 
     @model_validator(mode="after")
     def _check_one_page_and_one_place(self) -> "OpenArgs":
@@ -227,12 +233,15 @@ class _WindowTarget(OpTarget):
 class WindowArgs(_WindowTarget):
     """An op on one window that takes nothing else."""
 
+    force: bool = Field(default=False, description=_FORCE_DESCRIPTION)
+
 
 class PlaceArgs(_WindowTarget):
     """``place``: set a window's state, or its frame with the state ``NORMAL``."""
 
     state: WindowState | None = Field(default=None, description="The state to set, one of PLACEABLE_STATES")
     frame: Frame | None = Field(default=None, description="The frame to set")
+    force: bool = Field(default=False, description=_FORCE_DESCRIPTION)
 
     @model_validator(mode="after")
     def _check_a_state_or_a_frame(self) -> "PlaceArgs":

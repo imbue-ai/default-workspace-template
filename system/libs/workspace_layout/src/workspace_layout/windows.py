@@ -11,13 +11,13 @@ from pydantic import Field
 from pydantic import ValidationError
 
 from workspace_layout.answers import DesktopsListing
-from workspace_layout.answers import quote_answer
 from workspace_layout.client import request_shell
 from workspace_layout.errors import ShellUnreachableError
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import WindowId
 from workspace_layout.primitives import WindowPath
 from workspace_layout.shell_url import DESKTOPS_ROUTE
+from workspace_layout.transport import quote_answer
 
 # One loopback read of a small file the shell holds in memory; past this it is not answering.
 WINDOW_READ_TIMEOUT_SECONDS: Final[float] = 2.0

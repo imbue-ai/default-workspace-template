@@ -1,7 +1,7 @@
 # Window-bound resources and new-window shortcuts
 
 Status: agreed design (2026-09-20), implemented on `mngr/desktop-ui-phase-6`; amended by [stop-when-no-windows.md](stop-when-no-windows.md) (the close hint goes only to a running app, and an app's process is the shell's to stop once no window shows it).
-Audience: implementers of `system/apps/terminal`, `system/apps/browser`, `system/apps/chat`, `system/libs/app_manifest`, the shell (`system/apps/system_interface`), `uv run workspace-layout`, and the `manage-desktop` and `agentic-browser-fleet` skills.
+Audience: implementers of `system/apps/terminal`, `system/apps/browser`, `system/apps/chat`, `system/libs/app_manifest`, the shell (`system/apps/system_interface`), `uv run --no-sync workspace-layout`, and the `manage-desktop` and `agentic-browser-fleet` skills.
 
 This spec amends the desktop interface ([plan](../blueprint/desktop-interface/plan-desktop-interface.md), [contracts](../blueprint/desktop-interface/contracts.md), [concepts](../blueprint/desktop-interface/concepts.md)) in two places that the first live test showed do not feel like a desktop:
 
@@ -90,7 +90,7 @@ The `focus` browser shortcut raises this client's most recent browser window on 
 Shortcuts are seeded when a desktop is created; afterwards a desktop gains only the default shortcut of an app never offered before, and a workspace from before the offered record counts every app with a shortcut on a desktop as offered ([plan 3.2](../blueprint/desktop-interface/plan-desktop-interface.md)).
 So an existing desktop keeps its stored shortcuts (the chat's at `(chat, new)` in `new` mode, the others in `focus` mode).
 There is no automatic migration in this release, as for every other desktop-file change (plan section 15).
-A user flips a shortcut from its context menu ("Change shortcut to ...") or makes a new desktop; an agent runs `uv run workspace-layout shortcut remove chat new` and `uv run workspace-layout shortcut set chat root --mode new --cell <column,row>`.
+A user flips a shortcut from its context menu ("Change shortcut to ...") or makes a new desktop; an agent runs `uv run --no-sync workspace-layout shortcut remove chat new` and `uv run --no-sync workspace-layout shortcut set chat root --mode new --cell <column,row>`.
 The changelog entry says so.
 
 ## 4. Part B: window-bound resources

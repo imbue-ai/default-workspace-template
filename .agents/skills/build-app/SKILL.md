@@ -496,7 +496,7 @@ launcher -- skip the surfacing step only for services with no UI
 (pure JSON APIs, webhook receivers, etc.).
 
 ```bash
-uv run workspace-layout open <name> --beside
+uv run --no-sync workspace-layout open <name> --beside
 ```
 
 `--beside` lays it beside the chat that asked for it instead of on top of the
@@ -505,7 +505,9 @@ nudged sideways only if there is no room beside it, and then by the least that
 makes room; it is resized only if it is over half the backdrop wide. Most of the
 time nothing about it changes. Drop the flag
 only for an app the user wanted running rather than shown; with no chat on that
-desktop it is already a no-op.
+desktop it is already a no-op. When the user has popped the chat out into its own
+window, the app opens unpaired where a plain `open` puts it and the summary says
+so; that is fine, and there is no need to `--force` the chat back.
 
 With no `--desktop`, the op edits the desktop the target client is looking
 at, which is where the user expects the new window. (Pass `--desktop <name>`
@@ -524,7 +526,7 @@ To force a reload of an already-open window (e.g. after redeploying the
 service) without prompting the user to click Refresh:
 
 ```bash
-uv run workspace-layout refresh --app <name>
+uv run --no-sync workspace-layout refresh --app <name>
 ```
 
 You should always `refresh` services after making changes, to make sure the user can see the updates.

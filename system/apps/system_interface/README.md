@@ -182,9 +182,12 @@ the pages whose windows it may point at the path, and picks the window itself:
 one already showing it (switching desktops if it must), else the frontmost
 window on screen at one of those pages (pointed at the path), else the app's
 pinned window, else a new one. A pulled-out window it settles on stays out, and
-the client stays on its desktop: the shell asks that client's page to have the
-Imbue Studio app raise the window's own desktop window. The shell reads no meaning into
-a path's query string.
+the client stays on its desktop: the shell asks that client's pages to have the
+Imbue Studio app raise the window's own desktop window (the window's own solo
+page asks too, so the raise works with the main window closed). The shell reads
+no meaning into a path's query string. The other ops treat a pulled-out window
+the same way: `focus` raises it, and the ops that would move it back onto the
+desktop are refused unless forced (desktop contracts.md section 8).
 
 ### How the shell learns about apps
 
@@ -207,8 +210,8 @@ reported (under gVisor and on lima, a change made outside the sandbox raises no
 inotify event in it).
 
 Every registry read is also announced to the minds desktop (`app_announcements.py`):
-one `service_registered` event per app whose URL, label, or icon differs from
-the last announced, and one `service_deregistered` per app that left, appended
+one `service_registered` event per app whose URL, label, icon, or display name
+differs from the last announced, and one `service_deregistered` per app that left, appended
 to `$MNGR_AGENT_STATE_DIR/events/services/events.jsonl` in the `imbue_common`
 event envelope; the first read after the shell starts announces every app. The
 stream is what `mngr forward` and the desktop resolve app origins from, and
@@ -396,18 +399,18 @@ that, tokens or not.
 ## Driving the desktop from an agent
 
 An agent inside the workspace arranges the desktop through
-`uv run workspace-layout` (`context / desktops / list / load / open / show / focus /
+`uv run --no-sync workspace-layout` (`context / desktops / list / load / open / show / focus /
 minimize / restore / maximize / place / close / navigate / refresh / shortcuts /
 shortcut set / shortcut move / shortcut remove / wallpaper`), which names apps
 and windows (desktop-interface contracts.md section 8):
 
 ```bash
-uv run workspace-layout desktops
-uv run workspace-layout context
-uv run workspace-layout open files --path /home/user/workspace/data/notes/ --desktop Research
-uv run workspace-layout open terminal
-uv run workspace-layout place self --state snapped-left
-uv run workspace-layout navigate win-0123456789abcdef /other/
+uv run --no-sync workspace-layout desktops
+uv run --no-sync workspace-layout context
+uv run --no-sync workspace-layout open files --path /home/user/workspace/data/notes/ --desktop Research
+uv run --no-sync workspace-layout open terminal
+uv run --no-sync workspace-layout place self --state snapped-left
+uv run --no-sync workspace-layout navigate win-0123456789abcdef /other/
 ```
 
 The document ops are applied by the shell to the desktop and to the target

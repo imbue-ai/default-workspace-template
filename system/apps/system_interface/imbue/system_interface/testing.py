@@ -28,7 +28,7 @@ from xmlrpc.server import SimpleXMLRPCDispatcher
 from xmlrpc.server import SimpleXMLRPCRequestHandler
 
 import simple_websocket
-from app_manifest.registry import registry_path
+from app_manifest.registry_location import registry_path
 from flask import Flask
 from pydantic import Field
 

@@ -84,7 +84,7 @@ describe("whenAccountsReadyToChoose", () => {
 
   it("settles only once the account list has been read, so a new chat never decides on the empty list", async () => {
     let answer: (body: typeof ACCOUNTS_BODY) => void = () => {};
-    mockRequest.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    mockRequest.mockReturnValueOnce(new Promise((resolve) => (answer = resolve))).mockResolvedValueOnce(ACCOUNTS_BODY);
     const settled = vi.fn();
     const ready = providers.whenAccountsReadyToChoose().then(settled);
 
@@ -97,7 +97,7 @@ describe("whenAccountsReadyToChoose", () => {
     await loading;
     await ready;
     expect(settled).toHaveBeenCalledOnce();
-    expect(mockRequest).toHaveBeenCalledTimes(1);
+    expect(mockRequest).toHaveBeenCalledTimes(2);
     expect(providers.getSelectedAccount()?.id).toBe("acct-1");
   });
 
@@ -112,13 +112,14 @@ describe("whenAccountsReadyToChoose", () => {
     expect(providers.getSelectedAccount()?.id).toBe("acct-1");
   });
 
-  it("does not read the list again when it already names an account", async () => {
-    mockRequest.mockResolvedValueOnce(ACCOUNTS_BODY);
+  it("reads the list again when it names an account, so a sign-out on another page counts", async () => {
+    mockRequest.mockResolvedValueOnce(ACCOUNTS_BODY).mockResolvedValueOnce({ accounts: [], mru: null });
     await providers.loadAccounts();
 
     await providers.whenAccountsReadyToChoose();
 
-    expect(mockRequest).toHaveBeenCalledTimes(1);
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+    expect(providers.getSelectedAccount()).toBeNull();
   });
 
   it("chooses from the list it has when the second read fails", async () => {

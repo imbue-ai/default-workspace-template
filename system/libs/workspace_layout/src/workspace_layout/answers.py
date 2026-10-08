@@ -6,7 +6,6 @@ The shell's answers are its to add to, so a caller parses one with unknown field
 """
 
 from typing import Any
-from typing import Final
 from typing import Literal
 from typing import TypeVar
 
@@ -32,9 +31,7 @@ from workspace_layout.primitives import WindowId
 from workspace_layout.records import ClientRecord
 from workspace_layout.records import DesktopLayoutView
 from workspace_layout.records import DesktopView
-
-# How much of an answer an error quotes.
-ANSWER_QUOTE_LIMIT: Final[int] = 200
+from workspace_layout.transport import quote_answer
 
 
 class DesktopOpAnswer(FrozenModel):
@@ -47,6 +44,24 @@ class DesktopOpAnswer(FrozenModel):
     desktop: DesktopView = Field(description="The desktop after the op")
     layout: DesktopLayoutView | None = Field(description="The client's layout of the desktop; None for no client")
     window_id: WindowId | None = Field(description="The window the op acted on, when it names one")
+    # What the answer says about the client's popped-out windows (plan-popped-out-layout-ops.md); a shell older than
+    # the rules answers none of it.
+    is_raised_in_own_window: bool = Field(
+        default=False, description="The window is popped out, so its own window was raised and it stayed out"
+    )
+    is_brought_back: bool = Field(
+        default=False,
+        description="The op brought a pulled-out window back onto the desktop (forced, or for a client that is not "
+        "connected)",
+    )
+    unpaired_beside: WindowId | None = Field(
+        default=None, description="The popped-out window an open's ``beside`` named, which the open did not pair with"
+    )
+    has_no_desktop_window: bool = Field(
+        default=False,
+        description="The client's only open windows are pop-outs, so the window the op put on the desktop shows when "
+        "a desktop window opens",
+    )
 
 
 class OpenAnswer(DesktopOpAnswer):
@@ -74,10 +89,22 @@ class ClientView(ClientRecord):
     is_connected: bool = Field(description="Whether any window of the client holds the socket")
 
 
+class PoppedOutWindow(FrozenModel):
+    """A window a client's layout says is pulled out into its own window (desktop contracts.md section 4.2)."""
+
+    window_id: WindowId = Field(description="The window")
+    desktop_id: DesktopId = Field(description="The desktop it is on")
+    is_ghost_hidden: bool = Field(description="Whether the user hid its ghost on the desktop (``is_minimized``)")
+
+
 class InventoryClient(ClientView):
-    """A client of the inventory document: the client, and the windows of its active desktop it shows."""
+    """A client of the inventory document: the client, the windows of its active desktop it shows, and the windows
+    it popped out of any desktop."""
 
     shown: tuple[WindowId, ...] = Field(description="The windows of its active desktop its layout does not minimize")
+    popped_out: tuple[PoppedOutWindow, ...] = Field(
+        default=(), description="The windows its layouts of every desktop say are popped out; none from an older shell"
+    )
 
 
 class InventoryApp(FrozenModel):
@@ -175,13 +202,6 @@ class LayoutOpMessage(FrozenModel):
 
 
 _Answer = TypeVar("_Answer", bound=FrozenModel)
-
-
-@pure
-def quote_answer(body: Any) -> str:
-    """An answer as an error message quotes it: its ``detail`` when it has one, else the whole of it, shortened."""
-    quoted = body.get("detail", body) if isinstance(body, dict) else body
-    return str(quoted).strip()[:ANSWER_QUOTE_LIMIT]
 
 
 @pure

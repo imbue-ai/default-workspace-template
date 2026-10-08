@@ -11,7 +11,9 @@ answer shapes live in one place the shell and its callers share.
 ## API
 
 - `workspace_layout.shell_url`: `shell_base_url()` (`MINDS_WORKSPACE_SERVER_URL`,
-  else `http://127.0.0.1:8000`) and the route constants.
+  else `http://127.0.0.1:8000`), the route constants, and
+  `POPPED_OUT_REFUSAL_STATUS` (`423`, the op route's refusal to move a window
+  the target client popped out into its own window).
 - `workspace_layout.primitives`: the values the wire carries. The ids
   (`ClientId`, `DesktopId`, `WindowId`, `UserId`, `WallpaperName`), a window's
   `WindowPath`, `WindowPage`, and `WindowTitle`, and the enums: `LayoutOp` (every
@@ -59,8 +61,11 @@ answer shapes live in one place the shell and its callers share.
 - `workspace_layout.errors`: `WorkspaceLayoutError`; `InvalidLayoutValueError`;
   and `ShellOpError`, raised by every op that did not happen, as
   `ShellUnreachableError` (down, restarting, timed out), `ShellRefusedOpError`
-  (an error status, carrying it), or `ShellAnswerMalformedError` (a success
-  status with a body that is not the answer).
+  (an error status, carrying it; `WindowPoppedOutError` for the shell's refusal
+  to move a window the client popped out into its own window, which `force` on
+  `WindowArgs`, `PlaceArgs`, or `OpenArgs` overrides), or
+  `ShellAnswerMalformedError` (a success status with a body that is not the
+  answer).
 - `workspace_layout.interfaces.ShellLayoutInterface`: `show`, `open`, `focus`,
   `navigate`, `place`, `close`, `refresh`, `connected_clients`, `desktops`, and
   `record_client_activity` (best-effort: an unreachable or failing shell is a
@@ -71,6 +76,11 @@ answer shapes live in one place the shell and its callers share.
   wired), `requester_from_environment()` (an agent's own chat, from
   `MINDS_CHAT_ID`, else `MNGR_AGENT_ID`), and `request_shell`, the one request
   as it came back.
+- `workspace_layout.transport` and `workspace_layout.agent_identity`: the
+  standard-library halves of the client: `exchange_with_shell` (one request,
+  answered as a status and a JSON object or text), `quote_answer`,
+  `refusal_detail`, and `chat_id_from_environment()`. The command uses these
+  instead of the client, so it imports no pydantic.
 - `workspace_layout.windows`: what an app with window-bound resources sweeps
   against (`docs/system/specs/window-bound-resources.md` sections 4.2 and 4.6):
   `read_app_window_paths(shell_url, app)` (every window path of the app, or
@@ -99,23 +109,41 @@ another, so one op's arguments never type-check as another's.
 
 ## The `workspace-layout` command
 
-`uv run workspace-layout <subcommand>`, from the repo root, is how an agent
+`uv run --no-sync workspace-layout <subcommand>`, from the repo root, is how an agent
 reads and arranges the desktop; the `manage-desktop` skill is its guide and
-`uv run workspace-layout --help` its reference. Every subcommand posts one op
+`uv run --no-sync workspace-layout --help` its reference. `--no-sync` runs the script the
+workspace build installed without uv first checking the lock and the venv: that check
+costs every call tens of milliseconds, and when the lock and a `pyproject.toml` disagree it
+relocks and syncs before the command runs. Every subcommand posts one op
 to the shell's op route under the calling agent's own chat as the requester
 (`MINDS_CHAT_ID`, else `MNGR_AGENT_ID`), except `desktops` and `list`, which
 read `GET /api/inventory`. Descriptions go to stderr; stdout carries only a
 window id (`open`, `show`), the JSON of the read commands, and a desktop's
 shortcuts after a `shortcut` write. Exit codes are `0` (done), `1` (refused or
-unreachable), and `3` (the shell or an app cannot act right now: retry).
+unreachable), `3` (the shell or an app cannot act right now: retry), and `4`
+(the window is popped out into its own window: pass `--force`, or leave it to
+the user). Every mutating subcommand takes `--force`, and only the ones whose
+arguments take it send it: `minimize`, `restore`, `maximize`, `place`, and
+`open`, which it lets move a popped-out window, and `focus` and `close`, which
+ignore it. A summary notes when an op raised a popped-out window in its own
+window, brought one back, left an `open --beside` unpaired, or landed for a
+client with no desktop window open.
 
 `show <app> --path P [--showing P ...] [--repoint PAGE ...]` runs the shell's
 `show` op: it raises a window already at the path (or at a `--showing` path),
 else points an on-screen window on one of the `--repoint` pages at it, else the
 app's pinned window, else opens one.
 
-The command runs in the root venv, so it builds every op from the body models
-the shell reads and reads every answer through the answer models the shell
-builds. `place` takes `--state snapped-left|snapped-right|maximized` (the
+The command imports only the standard library and this library's
+dependency-free modules (`transport`, `agent_identity`, `shell_url`, `errors`,
+and `app_manifest.registry_location`), because an agent runs it once per layout
+action and importing pydantic and building the models was most of each call's
+time. It posts each op's arguments as the wire spells them and reads answers as
+plain JSON. The shell reads every body with the request models in `ops`, so a
+value off its rule (an app name, a window, a path, a frame, a cell, a client id)
+is refused with a 400 that names the argument, and the command exits 1 with
+that line. The command checks only what no model owns: the retired spellings
+and verbs, flags that exclude each other, and the text forms it turns into
+records (`--frame`, `--cell`, `--param`). `place` takes `--state snapped-left|snapped-right|maximized` (the
 `WindowState` the op sets, which its description names: `as snapped-left`) or
 `--frame x,y,width,height`; the retired `--zone` is refused with that form.

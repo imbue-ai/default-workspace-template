@@ -14,9 +14,9 @@ Two properties the shapes forced:
   closed mid-flow would otherwise leave a CLI waiting forever -- codex's device flow polls
   for fifteen minutes. Every flow therefore arms a wall-clock timer that terminates the
   process and removes the folder.
-* Success is not scraped. Two of the three PTY lanes print no success line at all, so the
-  harness's own probe is what decides. Failure IS scraped, so a rejected code fails in
-  seconds rather than waiting out a deadline.
+* Success is scraped only where the CLI announces it; where it prints no success line, the
+  harness's own probe decides. Failure IS scraped, so a rejected code fails in seconds rather
+  than waiting out a deadline.
 """
 
 from __future__ import annotations
@@ -25,8 +25,11 @@ import contextlib
 import json
 import os
 import re
+import shutil
 import signal
+import tempfile
 import threading
+import time
 import uuid
 from collections.abc import Callable
 from collections.abc import Generator
@@ -46,17 +49,25 @@ from imbue.chat.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
 from imbue.chat.harnesses.claude.auth import CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR
 from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
 from imbue.chat.harnesses.claude.auth import parse_credential_lines
+from imbue.chat.harnesses.claude.auth import read_managed_auth_env
 from imbue.chat.harnesses.claude.auth import record_api_key_approval
+from imbue.chat.harnesses.codex.sign_in import APP_SERVER_SOCKET_FILENAME
+from imbue.chat.harnesses.codex.sign_in import CodexLoginClient
+from imbue.chat.harnesses.codex.sign_in import SIGN_IN_FLOW_ENV_VAR
+from imbue.chat.harnesses.codex.sign_in import app_server_argv
+from imbue.chat.harnesses.codex.sign_in import connect_login_client
+from imbue.chat.harnesses.codex.sign_in import describe_login_failure
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.lanes import AppServerMethod
+from imbue.chat.harnesses.lanes import CodexLogin
 from imbue.chat.harnesses.lanes import DrainUntil
-from imbue.chat.harnesses.lanes import EofPolicy
 from imbue.chat.harnesses.lanes import LANES
 from imbue.chat.harnesses.lanes import Lane
 from imbue.chat.harnesses.lanes import PasteMethod
 from imbue.chat.harnesses.lanes import PasteSink
 from imbue.chat.harnesses.lanes import PtyMethod
 from imbue.chat.harnesses.lanes import Scrape
-from imbue.chat.harnesses.lanes import Submit
+from imbue.chat.harnesses.lanes import SignInMethod
 from imbue.chat.harnesses.lanes import get_lane
 from imbue.chat.harnesses.lanes import get_method
 from imbue.chat.harnesses.pty_auth import PtyAuthError
@@ -68,9 +79,23 @@ from imbue.chat.harnesses.pty_auth import safe_close
 from imbue.chat.harnesses.pty_auth import safe_terminate
 from imbue.chat.harnesses.pty_auth import spawn_pty
 from imbue.chat.harnesses.registry import build_account_binding
+from imbue.chat.harnesses.sign_in_relay import BROWSER_ENV_VAR
+from imbue.chat.harnesses.sign_in_relay import BROWSER_SHIM_RELATIVE_PATH
+from imbue.chat.harnesses.sign_in_relay import CallbackFetcher
+from imbue.chat.harnesses.sign_in_relay import RelayCallbackError
+from imbue.chat.harnesses.sign_in_relay import RelayTarget
+from imbue.chat.harnesses.sign_in_relay import SIGN_IN_URL_FILENAME
+from imbue.chat.harnesses.sign_in_relay import SIGN_IN_URL_FILE_ENV_VAR
+from imbue.chat.harnesses.sign_in_relay import fetch_loopback_callback
+from imbue.chat.harnesses.sign_in_relay import is_relayable_path
+from imbue.chat.harnesses.sign_in_relay import parse_relay_target
+from imbue.chat.harnesses.sign_in_relay import query_state
+from imbue.chat.harnesses.sign_in_relay import read_sign_in_url
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.harnesses.signed_in import is_signed_in
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.mngr_codex.app_server_client import CodexAppServerError
+from imbue.mngr_codex.app_server_client import LoginCompleted
 
 logger = _loguru_logger
 
@@ -79,10 +104,20 @@ logger = _loguru_logger
 _CODE_ECHO_QUIET_SECONDS: Final = 0.3
 _CODE_ECHO_DEADLINE_SECONDS: Final = 3.0
 _READY_WAIT_SECONDS: Final = 20.0
+# How long a sign-in's `codex app-server` may take to start listening.
+_APP_SERVER_START_SECONDS: Final = 20.0
 # How long to keep asking whether a submitted code worked. The browser round trip is already
 # over by then, so this bounds only the CLI's own exchange with its provider -- long enough
 # for a slow network, short enough that a spinner cannot outlive the user's patience.
 _VERDICT_DEADLINE_SECONDS: Final = 120.0
+# How long the relayed callback waits for the flow to settle once the CLI has it, so the page the
+# desktop app shows can say how the sign-in ended. A flow still pending after this is reported as
+# finishing, and the chooser shows how it ends.
+_RELAYED_VERDICT_WAIT_SECONDS: Final = 20.0
+_DEVICE_LOGIN_REFUSED_DETAIL: Final = (
+    "ChatGPT couldn't start a sign-in with a code. Turn on device code sign-in for Codex in "
+    "ChatGPT's security settings, or use an OpenAI API key instead."
+)
 # How still a screen has to be before we call it drawn, when the method names no anchor to
 # expect. Short enough that a fast CLI is not held up; `settle_s` is the overall budget.
 _SETTLE_QUIET_SECONDS: Final = 0.2
@@ -107,6 +142,9 @@ class FlowShape(StrEnum):
     CODE_THEN_WAIT = "code_then_wait"
     # Paste a key.
     PASTE = "paste"
+    # Here is a page to finish in a browser; the sign-in completes by itself. Only a relay from
+    # the user's own machine can reach its callback, so without one the chooser offers another way.
+    BROWSER = "browser"
 
 
 class FlowStart(FrozenModel):
@@ -114,6 +152,9 @@ class FlowStart(FrozenModel):
     shape: FlowShape
     url: str | None = None
     code: str | None = None
+    # The sign-in page the minds desktop app can open for this flow and relay the callback of.
+    # None when the CLI named none, or one whose callback this workspace cannot serve.
+    relay_url: str | None = None
 
 
 class FlowStatus(FrozenModel):
@@ -122,10 +163,12 @@ class FlowStatus(FrozenModel):
     account_id: str | None = None
 
 
-def flow_shape(method: PtyMethod | PasteMethod) -> FlowShape:
+def flow_shape(method: SignInMethod) -> FlowShape:
     if isinstance(method, PasteMethod):
         return FlowShape.PASTE
-    return FlowShape.CODE_THEN_WAIT if method.submit is Submit.NONE else FlowShape.URL_THEN_CODE
+    if isinstance(method, AppServerMethod):
+        return FlowShape.BROWSER if method.login is CodexLogin.BROWSER else FlowShape.CODE_THEN_WAIT
+    return FlowShape.URL_THEN_CODE
 
 
 def _never_done(_buffer: str) -> bool:
@@ -151,7 +194,7 @@ class _Session:
 
     flow_id: str
     lane: Lane
-    method: PtyMethod | PasteMethod
+    method: SignInMethod
     account_id: str
     # Whether THIS flow created the folder. Only a folder we minted is ours to throw away: a
     # re-auth adopts a committed account, so discarding on failure would delete a live
@@ -170,10 +213,22 @@ class _Session:
     # What the probe last said, or None if it has not run. Only UNKNOWN matters: it means
     # "the check failed", not "the credential is bad", so the folder is worth keeping.
     last_verdict: SignedIn | None
-    # A re-auth takes the account's existing credential AWAY before driving the CLI, so the
-    # promote probe answers about the NEW sign-in rather than the old file. These are the
-    # bytes it took, restored on every path that does not end in a fresh credential.
-    cleared_credentials: Mapping[Path, bytes | None]
+    # A terminal re-auth's credential files as they were when it began. The probes only see that a
+    # credential is there, so while these still hold the same bytes a yes would be about the old one.
+    reauth_credentials: Mapping[Path, bytes | None]
+    # Where the browser shim records the sign-in URL; removed with the session.
+    scratch_dir: Path | None
+    relay_url: str | None
+    relay_target: RelayTarget | None
+    # The desktop app has handed this flow its callback. It gets exactly one.
+    is_callback_relayed: bool
+    # A relayed request is out to the CLI. A poll must not settle the flow meanwhile: that
+    # tears the CLI down, which could cut off the answer the browser is waiting on.
+    is_relay_in_flight: bool
+    # An app-server sign-in's connection, and how its login ended once codex says so: the
+    # notification, or why waiting for it failed.
+    login_client: CodexLoginClient | None
+    login_outcome: LoginCompleted | str | None
 
     def is_value_ready(self, buffer: str) -> bool:
         """Whether the scraped value can be read yet -- the drain loop's stop condition.
@@ -182,12 +237,12 @@ class _Session:
         predicate, and this is the one piece of per-flow state it has to see.
         """
         method = self.method
-        if isinstance(method, PasteMethod):
+        if not isinstance(method, PtyMethod):
             return True
         return _extract(buffer, method.scrape, method.frame_marker) is not None
 
 
-def _new_session(lane: Lane, method: PtyMethod | PasteMethod, account_id: str, minted: bool) -> _Session:
+def _new_session(lane: Lane, method: SignInMethod, account_id: str, minted: bool) -> _Session:
     session = _Session()
     session.flow_id = uuid.uuid4().hex
     session.lane = lane
@@ -201,7 +256,14 @@ def _new_session(lane: Lane, method: PtyMethod | PasteMethod, account_id: str, m
     session.timer = None
     session.code_submitted = False
     session.last_verdict = None
-    session.cleared_credentials = {}
+    session.reauth_credentials = {}
+    session.scratch_dir = None
+    session.relay_url = None
+    session.relay_target = None
+    session.is_callback_relayed = False
+    session.is_relay_in_flight = False
+    session.login_client = None
+    session.login_outcome = None
     return session
 
 
@@ -219,6 +281,9 @@ class AuthFlowService:
     _session: _Session | None
     _spawner: Callable[..., Any]
     _probe: Callable[[HarnessType, Path], SignedIn]
+    _fetch_callback: CallbackFetcher
+    _clock: Callable[[], float]
+    _connect_login_client: Callable[[Path], CodexLoginClient]
 
     @classmethod
     def create(
@@ -228,6 +293,9 @@ class AuthFlowService:
         spawner: Callable[..., Any] | None = None,
         probe: Callable[[HarnessType, Path], SignedIn] | None = None,
         restart_bound_agents: Callable[[str], None] | None = None,
+        fetch_callback: CallbackFetcher | None = None,
+        clock: Callable[[], float] | None = None,
+        login_client_connector: Callable[[Path], CodexLoginClient] | None = None,
     ) -> "AuthFlowService":
         """`spawner` stands in for `spawn_pty`, `probe` for `is_signed_in`.
 
@@ -244,6 +312,9 @@ class AuthFlowService:
         service._spawner = spawner or spawn_pty
         service._probe = probe or is_signed_in
         service._restart_bound_agents = restart_bound_agents or (lambda _account_id: None)
+        service._fetch_callback = fetch_callback or fetch_loopback_callback
+        service._clock = clock or time.monotonic
+        service._connect_login_client = login_client_connector or connect_login_client
         return service
 
     # lifecycle
@@ -279,77 +350,128 @@ class AuthFlowService:
             binding = build_account_binding(lane.harness)
             binding.seed_account(account_path, self._work_dir)
 
+            # A re-auth leaves the account's credential where it is: the CLI writes the new one
+            # over it, and the account keeps working meanwhile. What decides that a sign-in
+            # landed is the CLI saying so, never a probe that would also see the old credential.
             session = _new_session(lane, method, account_id, minted)
+            if not minted and isinstance(method, PtyMethod):
+                session.reauth_credentials = _read_credentials(binding.credential_paths(account_path))
             self._session = session
-            # Take the old credential away first. Three of the four promote probes are
-            # presence checks, not validity checks -- `claude auth status --json` reports
-            # loggedIn for a bogus key, and so do codex and pi -- so a re-auth that the user
-            # abandons in the browser would otherwise be judged against the file that was
-            # already there and reported as a success. Nothing changed, and the UI says
-            # "signed in again".
-            if not minted:
-                session.cleared_credentials = _read_credentials(binding.credential_paths(account_path))
-                # Parked on DISK before anything is unlinked, so the only copy is never
-                # process memory alone. A stop, a snapshot or an OOM kill in this window used
-                # to destroy a working credential with no trace: the row still pointed at a
-                # folder that existed, so nothing noticed, and every chat bound there failed
-                # its next turn while the picker showed the account as healthy. `reconcile`
-                # puts it back at boot.
-                accounts.save_reauth_backup(account_id, session.cleared_credentials, self._home)
-                for path in session.cleared_credentials:
-                    path.unlink(missing_ok=True)
 
             if isinstance(method, PasteMethod):
                 # Nothing to drive; the caller supplies the credential on submit. It still
                 # gets a deadline: a closed browser tab would otherwise leave the session
                 # PENDING and its minted folder on disk until the next sign-in or the next
                 # boot, and the service is single-flight, so that session is in the way.
-                #
-                # Below the clearing block on purpose. Returning above it left a paste re-auth
-                # judged against the credential that was already there: paste a dead key over a
-                # working OAuth login and `claude auth status` still says logged-in, so the
-                # probe returned YES and the bad key was committed -- while at runtime the key
-                # OUTRANKS the OAuth credential, so the account was broken and the UI said
-                # "signed in again". Every failure path restores from the park, same as a PTY
-                # flow.
                 self._arm_deadline_locked(session, method.flow_deadline_s)
                 return FlowStart(flow_id=session.flow_id, shape=FlowShape.PASTE)
-            # A `finally` rather than a catch-all: the credential is already unlinked by here,
-            # so what matters is that the restore cannot be MISSED, which is what `finally`
-            # guarantees and a catch-all only approximates. A missing binary raises pexpect.ExceptionPexpect and a CLI that
-            # already exited raises OSError from send(); neither is a FlowError, so without this
-            # the credential stayed deleted with no restore, no teardown and no deadline -- the
-            # account still advertised, its chats failing, the session wedged PENDING with no
-            # timer to expire it.
-            #
-            # The exception propagates either way. A FlowError is the CLI having said no, and is
-            # already reported; anything else is a bug, and a 500 naming it is more use than a
-            # tidy message that hides it.
-            unwound = False
+            # A missing binary raises pexpect.ExceptionPexpect and a CLI that already exited
+            # raises OSError from send(); neither is a FlowError, so this tears the session down
+            # rather than leaving it PENDING with no deadline. The exception propagates: a
+            # FlowError is the CLI having said no, and anything else is a bug.
+            is_torn_down = False
             try:
-                url, code = self._drive_locked(session, method, account_path)
-                unwound = True
+                if isinstance(method, AppServerMethod):
+                    url, code = self._drive_app_server_locked(session, method, account_path)
+                else:
+                    url, code = self._drive_locked(session, method, account_path)
+                is_torn_down = True
             except FlowError:
-                # Already unwound: `_drive_locked`'s own failure paths restore and tear down.
-                # Marked so the finally does not do it a second time.
-                unwound = True
+                # `_drive_locked`'s own failure paths already tore the session down.
+                is_torn_down = True
                 raise
             finally:
-                if not unwound:
-                    self._unwind_credentials_locked(session)
+                if not is_torn_down:
                     self._teardown_locked(session, keep_folder=not minted)
                     self._session = None
             self._arm_deadline_locked(session, method.flow_deadline_s)
             return FlowStart(
                 flow_id=session.flow_id,
                 shape=flow_shape(method),
-                url=method.static_url or url,
+                url=url,
                 code=code,
+                relay_url=session.relay_url,
             )
+
+    def _drive_app_server_locked(
+        self, session: _Session, method: AppServerMethod, account_path: Path
+    ) -> tuple[str | None, str | None]:
+        """Start an app-server on the account's codex home and begin its login."""
+        session.scratch_dir = Path(tempfile.mkdtemp(prefix="minds-sign-in-"))
+        socket_path = session.scratch_dir / APP_SERVER_SOCKET_FILENAME
+        env = {
+            **os.environ,
+            **build_account_binding(session.lane.harness).account_env(account_path),
+            BROWSER_ENV_VAR: str(self._work_dir / BROWSER_SHIM_RELATIVE_PATH),
+            SIGN_IN_URL_FILE_ENV_VAR: str(session.scratch_dir / SIGN_IN_URL_FILENAME),
+            SIGN_IN_FLOW_ENV_VAR: "1",
+        }
+        session.process = self._spawner(
+            _binary_for(session.lane), app_server_argv(socket_path), _APP_SERVER_START_SECONDS, env=env
+        )
+        # Reading its output while it starts keeps the PTY from filling, and paces the wait.
+        session.output = drain_pty_stream(
+            session.process,
+            session.output,
+            lambda _: socket_path.exists(),
+            deadline_seconds=_APP_SERVER_START_SECONDS,
+        )
+        if not socket_path.exists():
+            self._fail_locked(session, "Codex did not start its sign-in.")
+            raise FlowError(session.detail or "no app-server")
+        try:
+            client = self._connect_login_client(socket_path)
+            session.login_client = client
+            if method.login is CodexLogin.BROWSER:
+                browser_login = client.start_chatgpt_login()
+                login_id, url, code = browser_login.login_id, browser_login.auth_url, None
+                relay_target = parse_relay_target(url)
+                if relay_target is not None:
+                    session.relay_url = url
+                    session.relay_target = relay_target
+            else:
+                device_login = client.start_device_login()
+                login_id, url, code = device_login.login_id, device_login.verification_url, device_login.user_code
+        except (CodexAppServerError, OSError) as e:
+            logger.warning("Codex sign-in could not begin: {}", e)
+            # A code sign-in is refused when the ChatGPT account has device codes turned off, a
+            # setting the user can change.
+            self._fail_locked(
+                session,
+                _DEVICE_LOGIN_REFUSED_DETAIL
+                if method.login is CodexLogin.DEVICE
+                else "Codex could not begin the sign-in.",
+            )
+            raise FlowError(session.detail or "no login") from e
+        threading.Thread(
+            target=self._await_login,
+            args=(session, client, login_id, method.flow_deadline_s),
+            name=f"codex-sign-in-{session.flow_id}",
+            daemon=True,
+        ).start()
+        return url, code
+
+    def _await_login(self, session: _Session, client: CodexLoginClient, login_id: str, timeout: float) -> None:
+        """Wait for codex to say how the login ended; the next poll settles the flow on it."""
+        outcome: LoginCompleted | str
+        try:
+            outcome = client.wait_login_completed(login_id, timeout)
+        except CodexAppServerError as e:
+            outcome = str(e)
+        with self._lock:
+            if session.login_outcome is None:
+                session.login_outcome = outcome
 
     def _drive_locked(self, session: _Session, method: PtyMethod, account_path: Path) -> tuple[str | None, str | None]:
         """Spawn the CLI, get it to the point of showing something, and scrape it."""
         env = {**os.environ, **build_account_binding(session.lane.harness).account_env(account_path)}
+        url_file: Path | None = None
+        if method.relays_browser_sign_in:
+            session.scratch_dir = Path(tempfile.mkdtemp(prefix="minds-sign-in-"))
+            url_file = session.scratch_dir / SIGN_IN_URL_FILENAME
+            env[BROWSER_ENV_VAR] = str(self._work_dir / BROWSER_SHIM_RELATIVE_PATH)
+            env[SIGN_IN_URL_FILE_ENV_VAR] = str(url_file)
+        drive_started_at = time.monotonic()
         binary = _binary_for(session.lane)
         session.process = self._spawner(
             binary, list(method.argv), method.scrape_timeout_s, env=env, columns=method.pty_columns
@@ -423,7 +545,22 @@ class AuthFlowService:
         if value is None:
             self._fail_locked(session, "Could not read the sign-in details from the terminal.")
             raise FlowError(session.detail or "extraction failed")
-        return (None, value) if method.static_url else (value, None)
+        if url_file is not None:
+            # The CLI may print its manual URL before it runs `$BROWSER`, so the shim's file can
+            # land a moment after the scrape. Reading the PTY meanwhile keeps its output whole.
+            remaining = max(0.0, method.scrape_timeout_s - (time.monotonic() - drive_started_at))
+            session.output = drain_pty_stream(
+                session.process,
+                session.output,
+                lambda _: read_sign_in_url(url_file) is not None,
+                deadline_seconds=remaining,
+            )
+            relay_url = read_sign_in_url(url_file)
+            relay_target = None if relay_url is None else parse_relay_target(relay_url)
+            if relay_target is not None:
+                session.relay_url = relay_url
+                session.relay_target = relay_target
+        return value, None
 
     # advancing
 
@@ -431,9 +568,7 @@ class AuthFlowService:
         with self._lock:
             session = self._require_locked(flow_id, must_be_pending=True)
             method = session.method
-            if isinstance(method, PasteMethod):
-                raise FlowError("this sign-in does not take a code")
-            if method.submit is Submit.NONE:
+            if not isinstance(method, PtyMethod):
                 raise FlowError("this sign-in does not take a code")
             # Two writes: the code, then Enter separately, or the paste heuristic swallows it.
             session.process.send(code)
@@ -469,14 +604,6 @@ class AuthFlowService:
             # quietly break every agent bound to it until each one's next turn.
             with _credentials_restored_on_error(_credential_paths(method.sink, path)) as before:
                 display = _write_paste(method.sink, path, api_key, key_provider, session.lane)
-                # The parked copy exists to cover the window where the account has NO
-                # credential on disk. That window closes the instant the new one lands, and
-                # keeping the park past it is its own bug: dying between here and the commit
-                # below -- the probe can take thirty seconds -- would have the next boot
-                # restore the OLD credential over the one the user just pasted. The rejection
-                # path below restores from `before`/`cleared_credentials` in memory, so it
-                # does not need the park either.
-                accounts.clear_reauth_backup(session.account_id, self._home)
                 # Writing the file is not the same as the harness accepting it. Ask before
                 # committing, so a key the harness cannot use fails here -- where the user is
                 # looking at the field they just typed into -- rather than later, as a chat that
@@ -522,8 +649,10 @@ class AuthFlowService:
             if session.state is not FlowState.PENDING:
                 return FlowStatus(state=session.state, detail=session.detail, account_id=session.account_id)
             method = session.method
-            if isinstance(method, PasteMethod):
+            if isinstance(method, PasteMethod) or session.is_relay_in_flight:
                 return FlowStatus(state=FlowState.PENDING)
+            if isinstance(method, AppServerMethod):
+                return self._settle_app_server_locked(session)
             return self._settle_locked(session, method)
 
     def abort(self, flow_id: str) -> None:
@@ -531,7 +660,71 @@ class AuthFlowService:
             if self._session is not None and self._session.flow_id == flow_id:
                 self._drop_locked()
 
+    def provider_name(self, flow_id: str) -> str:
+        """The provider a live flow signs in to, as the chooser names it."""
+        with self._lock:
+            return self._require_locked(flow_id).lane.provider_name
+
+    def relay_callback(self, flow_id: str, path_and_query: str) -> FlowStatus:
+        """Deliver the callback the desktop app received on this flow's loopback port, and say how it went.
+
+        Only the provider's callback is taken -- the path the sign-in URL names and the `state` it
+        carries, while the flow is still waiting on it -- and only once. The CLI is asked outside
+        the lock, since it answers only after its own token exchange and the polls that report
+        that need the lock meanwhile. Then the flow is polled until it settles, briefly, so the
+        desktop app can tell the browser the outcome rather than guess it.
+        """
+        if not is_relayable_path(path_and_query):
+            raise FlowError("that is not a callback this sign-in can take")
+        with self._lock:
+            session = self._require_locked(flow_id, must_be_pending=True)
+            target = session.relay_target
+            if target is None:
+                raise FlowError("this sign-in has no browser callback")
+            if session.is_callback_relayed:
+                raise FlowError("that sign-in's callback has already been handled")
+            if path_and_query.split("?", 1)[0] != target.path or query_state(path_and_query) != target.state:
+                raise FlowError("that callback does not belong to this sign-in")
+            session.is_callback_relayed = True
+            session.is_relay_in_flight = True
+            # As with a submitted code, nobody is away in a browser any more.
+            self._arm_deadline_locked(session, _VERDICT_DEADLINE_SECONDS)
+        try:
+            self._fetch_callback(target.port, path_and_query)
+        except RelayCallbackError as e:
+            # The CLI could not be reached or took too long; what the flow makes of that is
+            # still the answer, so it is asked below like any other.
+            logger.warning("Sign-in {}: the CLI did not take the relayed callback: {}", flow_id, e)
+        finally:
+            with self._lock:
+                session.is_relay_in_flight = False
+        deadline = self._clock() + _RELAYED_VERDICT_WAIT_SECONDS
+        status = self.poll(flow_id)
+        # Each poll waits briefly on the CLI's output, which paces this loop.
+        while status.state is FlowState.PENDING and self._clock() < deadline:
+            status = self.poll(flow_id)
+        return status
+
     # internals
+
+    def _settle_app_server_locked(self, session: _Session) -> FlowStatus:
+        """Decide on what codex said about its login, without waiting for it."""
+        session.output = _bounded(
+            drain_pty_stream(session.process, session.output, lambda _: False, deadline_seconds=0.2)
+        )
+        outcome = session.login_outcome
+        if outcome is None:
+            if session.process is not None and session.process.isalive():
+                return FlowStatus(state=FlowState.PENDING)
+            self._fail_locked(session, "Codex stopped before the sign-in finished.")
+            return FlowStatus(state=FlowState.FAILED, detail=session.detail)
+        if isinstance(outcome, LoginCompleted) and outcome.success:
+            return self._commit_locked(session, session.lane.provider_name)
+        logger.info("Codex sign-in {} did not complete: {}", session.flow_id, outcome)
+        self._fail_locked(
+            session, describe_login_failure(outcome.error if isinstance(outcome, LoginCompleted) else None)
+        )
+        return FlowStatus(state=FlowState.FAILED, detail=session.detail)
 
     def _settle_locked(self, session: _Session, method: PtyMethod) -> FlowStatus:
         """Read what the CLI has said so far and decide, without blocking on it."""
@@ -547,15 +740,28 @@ class AuthFlowService:
                 return FlowStatus(state=FlowState.FAILED, detail=detail)
 
         alive = bool(session.process is not None and session.process.isalive())
-        said_success = method.success is not None and re.search(method.success, session.output) is not None
-        exited_meaning_success = not alive and method.eof_policy is EofPolicy.SUCCESS
+        if method.success is not None:
+            # A CLI that announces its sign-in decides it: a clean exit, with its success line. Its
+            # probe would also see an old credential, so on a re-auth it could not tell the two apart.
+            if alive:
+                return FlowStatus(state=FlowState.PENDING)
+            if session.process.exitstatus != 0:
+                self._fail_locked(session, "The sign-in did not complete.")
+                return FlowStatus(state=FlowState.FAILED, detail=session.detail)
+            if re.search(method.success, session.output) is not None:
+                return self._commit_locked(session, session.lane.provider_name)
+            # A clean exit whose wording changed: the probe decides, rather than a reworded line
+            # throwing away a sign-in that worked.
+            if self._probe_new_sign_in_locked(session) is SignedIn.YES:
+                return self._commit_locked(session, session.lane.provider_name)
+            self._fail_locked(session, "The sign-in did not complete.")
+            return FlowStatus(state=FlowState.FAILED, detail=session.detail)
         # A CLI that never announces success and never exits leaves the probe as the ONLY
         # thing that can say yes -- so it has to be allowed to run while the CLI is still
         # alive. agy is exactly that: it prints no success line and drops straight into its
         # chat TUI, so gating the probe on the CLI being "done talking" meant a completed
         # sign-in stayed PENDING forever and the flow could never finish.
-        probe_is_the_only_verdict = method.success is None and session.code_submitted
-        if not (said_success or exited_meaning_success or not alive or probe_is_the_only_verdict):
+        if alive and not session.code_submitted:
             return FlowStatus(state=FlowState.PENDING)
 
         # The CLI is done talking.
@@ -576,11 +782,6 @@ class AuthFlowService:
                 return FlowStatus(state=FlowState.FAILED, detail=session.detail)
             with _credentials_restored_on_error(_credential_paths(method.result_sink, path)) as before:
                 _write_paste(method.result_sink, path, result, None, session.lane)
-                # Same rule as the paste lanes: the park covers "no credential on disk", and
-                # that is over. Left in place, a crash before the commit below would put the
-                # old credential back over a token the CLI just minted -- and a setup token is
-                # a year long, so the loss is not a small one.
-                accounts.clear_reauth_backup(session.account_id, self._home)
                 session.last_verdict = self._probe(session.lane.harness, path)
                 if session.last_verdict is SignedIn.NO:
                     _restore_credentials(before)
@@ -589,46 +790,35 @@ class AuthFlowService:
             return self._commit_locked(session, session.lane.provider_name)
 
         # Its own probe, not the screen, decides.
-        verdict = self._probe(session.lane.harness, path)
-        session.last_verdict = verdict
+        verdict = self._probe_new_sign_in_locked(session)
         if verdict is SignedIn.YES:
             return self._commit_locked(session, session.lane.provider_name)
         if verdict is SignedIn.UNKNOWN:
             # Keep the folder: a network blink is not evidence the sign-in failed, and the
             # user may have just finished a browser round trip we would be throwing away.
             return FlowStatus(state=FlowState.PENDING)
-        # The CLI is gone and its own probe says no. Whatever the method's EOF policy means for
-        # a clean exit, there is nothing left that could still turn this into a success.
-        #
-        # Without this, a SUCCESS-policy method that exits non-zero -- codex's device auth when
-        # the user denies the request or lets the code expire -- fell through to PENDING and sat
-        # there for the full 900-second deadline, polling every two seconds and spawning a
-        # `codex login status` subprocess each time, roughly 450 of them, before finally saying
-        # it timed out. It knew within a second.
+        # The CLI is gone and its own probe says no: nothing left could still turn this into a
+        # success, so it fails now rather than polling the probe until the deadline.
         if not alive:
             self._fail_locked(session, "The sign-in did not complete.")
             return FlowStatus(state=FlowState.FAILED, detail=session.detail)
         return FlowStatus(state=FlowState.PENDING)
 
-    def _unwind_credentials_locked(self, session: _Session, restore: bool = True) -> None:
-        """Give the account back the credential this flow took away, and unpark the copy.
+    def _probe_new_sign_in_locked(self, session: _Session) -> SignedIn:
+        """Whether the account now holds a sign-in this flow landed, by the harness's own probe.
 
-        One method because these two must never happen apart: leaving a parked copy behind
-        means the next boot restores the OLD credential over whatever the user has by then,
-        and unparking without restoring loses it outright. `restore=False` is the expiry case
-        where a sign-in may genuinely have landed and the old file must NOT go back -- the
-        parked copy still has to go, for the same reason.
+        On a re-auth whose credential files still hold what they held when it began, the answer is
+        no without asking: the probe would only be reporting the credential the account already had.
         """
-        if restore:
-            _restore_credentials(session.cleared_credentials)
-        session.cleared_credentials = {}
-        accounts.clear_reauth_backup(session.account_id, self._home)
+        credentials = session.reauth_credentials
+        if credentials and _read_credentials(tuple(credentials)) == credentials:
+            verdict = SignedIn.NO
+        else:
+            verdict = self._probe(session.lane.harness, accounts.account_dir(session.account_id, self._home))
+        session.last_verdict = verdict
+        return verdict
 
     def _commit_locked(self, session: _Session, display: str) -> FlowStatus:
-        # The sign-in wrote a new credential over the cleared one, so there is nothing to
-        # restore -- and restoring would undo what the user just did. The parked copy goes with
-        # it, or the next boot would put the OLD credential back over the new one.
-        self._unwind_credentials_locked(session, restore=False)
         # A RE-AUTH commits into a row that must still be there. Another tab can delete the
         # account while this flow is mid-probe, and both outcomes were wrong: for a harness
         # whose folder goes with it, `commit_account` raised AccountError -- which `poll_flow`
@@ -640,6 +830,9 @@ class AuthFlowService:
         if not session.minted and not accounts.account_exists(session.account_id, self._home):
             self._fail_locked(session, "That account was removed while you were signing in.")
             raise FlowError(session.detail or "account removed")
+        method = session.method
+        if isinstance(method, PtyMethod) and method.result_sink is None and session.lane.harness is HarnessType.CLAUDE:
+            _drop_claude_env_credential(accounts.account_dir(session.account_id, self._home))
         account = accounts.commit_account(session.account_id, session.lane.id, display, self._home)
         # A re-auth is only worth doing if the chats on that account come back. They do not on
         # their own: claude reads its settings env at process start, and nothing shows codex's
@@ -660,15 +853,18 @@ class AuthFlowService:
     def _fail_locked(self, session: _Session, detail: str) -> None:
         session.state = FlowState.FAILED
         session.detail = detail
-        # A failed re-auth leaves the account exactly as it was: the credential it had is
-        # more use than nothing, and the user asked to REPLACE it, not to lose it.
-        self._unwind_credentials_locked(session)
         self._teardown_locked(session, keep_folder=not session.minted)
 
     def _teardown_locked(self, session: _Session, keep_folder: bool) -> None:
         if session.timer is not None:
             session.timer.cancel()
             session.timer = None
+        if session.login_client is not None:
+            session.login_client.close()
+            session.login_client = None
+        if session.scratch_dir is not None:
+            shutil.rmtree(session.scratch_dir, ignore_errors=True)
+            session.scratch_dir = None
         if session.process is not None:
             safe_terminate(session.process)
             safe_close(session.process)
@@ -683,8 +879,7 @@ class AuthFlowService:
         try:
             if self._session is not None and self._session.state is FlowState.PENDING:
                 # Abandoned rather than failed -- back button, closed modal, a second sign-in
-                # displacing this one. Same rule: the account keeps what it had.
-                self._unwind_credentials_locked(self._session)
+                # displacing this one.
                 self._teardown_locked(self._session, keep_folder=not self._session.minted)
         finally:
             self._session = None
@@ -705,10 +900,6 @@ class AuthFlowService:
                 # deliberately keeps it for that reason. Letting the deadline discard it
                 # anyway makes the two mechanisms contradict each other.
                 keep = not session.minted or session.last_verdict is SignedIn.UNKNOWN
-                # A re-auth that ran out of time leaves the account as it was. The exception
-                # is UNKNOWN: the check could not run, so a sign-in may genuinely have landed
-                # and putting the old credential back would throw it away.
-                self._unwind_credentials_locked(session, restore=session.last_verdict is not SignedIn.UNKNOWN)
                 self._teardown_locked(session, keep_folder=keep)
 
     def _require_locked(self, flow_id: str, must_be_pending: bool = False) -> _Session:
@@ -746,6 +937,10 @@ def _auth_command_signatures() -> set[tuple[str, ...]]:
     return signatures
 
 
+_APP_SERVER_SIGNATURE: Final = ("codex", "app-server")
+_SIGN_IN_FLOW_MARKER: Final = f"{SIGN_IN_FLOW_ENV_VAR}=1".encode()
+
+
 def reap_orphaned_auth_processes(home: Path | None = None) -> int:
     """Kill sign-in CLIs left running by a previous process. Returns how many.
 
@@ -778,9 +973,15 @@ def reap_orphaned_auth_processes(home: Path | None = None) -> int:
                 continue
             # argv[0] can be an absolute path; compare on the basename.
             signature = (Path(cmdline[0]).name, *cmdline[1:])
-            if signature not in signatures:
+            is_app_server = signature[:2] == _APP_SERVER_SIGNATURE
+            if signature not in signatures and not is_app_server:
                 continue
-            if scoping_value not in entry.joinpath("environ").read_bytes():
+            environ = entry.joinpath("environ").read_bytes()
+            if scoping_value not in environ:
+                continue
+            # The account's own chats run app-servers on the same codex home; only one this
+            # service started for a sign-in carries the marker.
+            if is_app_server and _SIGN_IN_FLOW_MARKER not in environ.split(b"\0"):
                 continue
             os.kill(int(entry.name), signal.SIGKILL)
             reaped += 1
@@ -862,6 +1063,16 @@ def write_claude_env(account_path: Path, managed_env: Mapping[str, str]) -> None
     # arrives through a sign-in is ours to approve, in this account's own .claude.json.
     record_api_key_approval(managed_env, account_path / ".claude.json")
     settings.chmod(0o600)
+
+
+def _drop_claude_env_credential(account_path: Path) -> None:
+    """Remove the managed credential from an account's settings.json env block, if it holds one.
+
+    `claude auth login` writes its credential to .credentials.json, which a key or token in the env
+    block outranks, so a sign-in that lands one has to take the old one away or claude keeps using it.
+    """
+    if read_managed_auth_env(settings_path_override=account_path / "settings.json"):
+        write_claude_env(account_path, {})
 
 
 def _credential_paths(sink: PasteSink, account_path: Path) -> tuple[Path, ...]:

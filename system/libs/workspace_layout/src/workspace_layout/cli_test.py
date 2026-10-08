@@ -1,34 +1,35 @@
 """Tests for the agent-facing ``workspace-layout`` command.
 
 The shell they post to reads every op body as the real one does, so a body the shell would
-refuse fails here too.
+refuse fails here too, with the 400 the real one answers.
 """
 
 import json
+import subprocess
+import sys
 from typing import Any
 
 import pytest
 from app_manifest.manifest import DefaultShortcut
 from app_manifest.manifest import ShortcutMode
-from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
 from app_manifest.registry import RegistryLaunchPath
-from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.primitives import NonEmptyStr
 
 from workspace_layout.answers import ClientActivitySummary
 from workspace_layout.answers import InventoryClient
 from workspace_layout.answers import InventoryDocument
+from workspace_layout.answers import PoppedOutWindow
 from workspace_layout.cli import EXIT_CONFLICT
 from workspace_layout.cli import EXIT_ERROR
 from workspace_layout.cli import EXIT_OK
+from workspace_layout.cli import EXIT_POPPED_OUT
 from workspace_layout.cli import RETIRED_VERBS
 from workspace_layout.cli import LayoutCliContext
 from workspace_layout.cli import app_name_argument
 from workspace_layout.cli import run_layout_cli
 from workspace_layout.cli import window_argument
-from workspace_layout.ops import OpRequester
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import WindowId
@@ -106,41 +107,30 @@ def test_the_retired_verbs_are_refused_with_the_replacement(
     assert f"'{verb}' is not a desktop verb" in err and RETIRED_VERBS[verb] in err
 
 
-@pytest.mark.parametrize(
-    ("bad_name", "fragment"),
-    [
-        ("Foo.Bar", "not an app name"),
-        ("-leading", "not an app name"),
-        ("a" * 33, "not an app name"),
-        ("localhost", "not an app name"),
-        ("agent-abc", "not an app name"),
-        ("https://example.com", "is a URL"),
-    ],
-)
-def test_a_name_the_registry_could_never_hold_is_refused_without_waiting(
-    loopback_shell: LoopbackShell,
-    layout_context: LayoutCliContext,
-    capsys: pytest.CaptureFixture[str],
-    bad_name: str,
-    fragment: str,
+@pytest.mark.parametrize("bad_name", ["Foo.Bar", "localhost", "agent-abc"])
+def test_a_name_no_app_is_registered_under_is_refused_without_posting(
+    loopback_shell: LoopbackShell, layout_context: LayoutCliContext, capsys: pytest.CaptureFixture[str], bad_name: str
 ) -> None:
-    with pytest.raises(SystemExit):
-        app_name_argument(bad_name)
-    assert fragment in capsys.readouterr().err
-    with pytest.raises(SystemExit):
-        run_layout_cli(["open", "--path", "/", "--", bad_name], layout_context)
-    assert "not registered" not in capsys.readouterr().err
+    assert run_layout_cli(["show", bad_name, "--path", "/"], layout_context) == EXIT_ERROR
+    assert "not registered" in capsys.readouterr().err
     assert loopback_shell.posted == []
 
 
-def test_windows_are_named_by_id_self_or_app(capsys: pytest.CaptureFixture[str]) -> None:
-    assert window_argument("win-0123456789abcdef") == "win-0123456789abcdef"
-    assert window_argument("self") == "self"
-    assert window_argument("pinned") == "pinned"
-    assert window_argument("files") == "files"
+def test_a_url_where_an_app_belongs_is_refused_by_name(
+    loopback_shell: LoopbackShell, layout_context: LayoutCliContext, capsys: pytest.CaptureFixture[str]
+) -> None:
     with pytest.raises(SystemExit):
-        window_argument("win 12")
-    assert "not a window" in capsys.readouterr().err
+        run_layout_cli(["show", "https://example.com", "--path", "/"], layout_context)
+    assert "is a URL: only 'open' takes one" in capsys.readouterr().err
+    assert loopback_shell.posted == []
+
+
+def test_a_window_off_its_rule_is_refused_by_the_shell_naming_it(
+    loopback_shell: LoopbackShell, layout_context: LayoutCliContext, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert run_layout_cli(["focus", "win 12"], layout_context) == EXIT_ERROR
+    err = capsys.readouterr().err
+    assert "'focus' rejected (HTTP 400): bad focus arguments: args.window:" in err and "'win 12'" in err
 
 
 # open
@@ -203,16 +193,15 @@ def test_open_beside_posts_the_window_it_pairs_with_and_says_so(
     assert f"opened window {_FILES_ID} (files at /notes/) beside self on" in capsys.readouterr().err
 
 
-def test_open_beside_refuses_a_non_window_and_refuses_minimized(
+def test_open_beside_refuses_minimized_and_the_shell_refuses_a_non_window(
     loopback_shell: LoopbackShell, layout_context: LayoutCliContext, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    with pytest.raises(SystemExit):
-        run_layout_cli(["open", "files", "--beside", "not a window"], layout_context)
-    assert "is not a window" in capsys.readouterr().err
     with pytest.raises(SystemExit):
         run_layout_cli(["open", "files", "--beside", "--minimized"], layout_context)
     assert "one or the other" in capsys.readouterr().err
     assert loopback_shell.posted == []
+    assert run_layout_cli(["open", "files", "--beside", "not a window"], layout_context) == EXIT_ERROR
+    assert "'open' rejected (HTTP 400): bad open arguments: args.beside:" in capsys.readouterr().err
 
 
 def test_open_with_no_client_says_the_window_landed_for_nobody(
@@ -231,9 +220,6 @@ def test_open_arguments_are_refused_where_they_make_no_sense(
     with pytest.raises(SystemExit):
         run_layout_cli(["open", "files", "--path", "/notes/", "--launch", "new"], layout_context)
     assert "one or the other" in capsys.readouterr().err
-    with pytest.raises(SystemExit):
-        run_layout_cli(["open", "files", "--path", "notes"], layout_context)
-    assert "starts with a single '/'" in capsys.readouterr().err
     with pytest.raises(SystemExit):
         run_layout_cli(["open", "https://example.com", "--param", "url=x"], layout_context)
     assert "do not apply" in capsys.readouterr().err
@@ -280,25 +266,30 @@ def test_show_posts_the_page_and_what_counts_as_showing_it_and_prints_the_window
 
 
 @pytest.mark.parametrize(
-    ("arguments", "fragment"),
+    ("command", "fragment"),
     [
-        (["--path", "notes"], "--path: invalid window path"),
-        (["--path", "/a", "--showing", "a"], "--showing: invalid window path"),
-        (["--path", "/a", "--repoint", "/?x=1"], "--repoint: invalid page"),
-        (["--path", "/a", "--repoint", "notes/"], "--repoint: invalid window path"),
+        (["open", "files", "--path", "notes"], "path: invalid window path 'notes': a path starts with a single '/'"),
+        (["show", "files", "--path", "notes"], "path: invalid window path"),
+        (["show", "files", "--path", "/a", "--showing", "a"], "showing.0: invalid window path"),
+        (["show", "files", "--path", "/a", "--repoint", "/?x=1"], "repoint.0: invalid page"),
+        (["navigate", "self", "notes"], "path: invalid window path"),
+        (["place", "self", "--frame", "0,0,1.5,1"], "fractions in 0..1"),
+        (["shortcut", "move", "docs", "open", "--cell=-1,0"], "cell.column"),
+        (["focus", "self", "--client", "not/an/id"], "invalid client id"),
     ],
+    ids=lambda value: " ".join(value) if isinstance(value, list) else value,
 )
-def test_show_refuses_a_path_or_a_page_the_shell_would_refuse(
+def test_a_value_off_its_rule_is_refused_by_the_shell_in_one_line_naming_the_argument(
     loopback_shell: LoopbackShell,
     layout_context: LayoutCliContext,
     capsys: pytest.CaptureFixture[str],
-    arguments: list[str],
+    command: list[str],
     fragment: str,
 ) -> None:
-    with pytest.raises(SystemExit):
-        run_layout_cli(["show", "files", *arguments], layout_context)
-    assert fragment in capsys.readouterr().err
-    assert loopback_shell.posted == []
+    assert run_layout_cli(command, layout_context) == EXIT_ERROR
+    err = capsys.readouterr().err
+    assert "rejected (HTTP 400): bad " in err and fragment in err
+    assert len(err.splitlines()) == 1
 
 
 # the window verbs
@@ -332,6 +323,92 @@ def test_the_window_verbs_post_the_window_and_the_target(
     assert "pointed window" in err and "at /?chat=agent-2" in err
 
 
+def test_the_verbs_whose_arguments_take_force_send_it_and_the_rest_accept_it_unsent(
+    loopback_shell: LoopbackShell, layout_context: LayoutCliContext
+) -> None:
+    loopback_shell.op_answer = _answer([_CHAT_WINDOW], _CHAT_ID)
+    for argv in (
+        ["minimize", "self", "--force"],
+        ["place", "chat", "--state", "snapped-left", "--force"],
+        ["open", "files", "--beside", "--force"],
+        ["focus", "self", "--force"],
+        ["refresh", "--app", "files", "--force"],
+    ):
+        assert run_layout_cli(argv, layout_context) == EXIT_OK
+    assert loopback_shell.posted_ops() == [
+        ("minimize", {"window": "self", "force": True}),
+        ("place", {"window": "chat", "state": "SNAPPED_LEFT", "force": True}),
+        ("open", {"app": "files", "beside": "self", "force": True}),
+        ("focus", {"window": "self", "force": True}),
+        ("refresh", {"app": "files"}),
+    ]
+
+
+def test_a_popped_out_window_refusal_exits_4_and_says_force_overrides_it(
+    loopback_shell: LoopbackShell, layout_context: LayoutCliContext, capsys: pytest.CaptureFixture[str]
+) -> None:
+    loopback_shell.op_refusal = (423, {"detail": "Window win-0000000000000001 is popped out into its own window"})
+
+    assert run_layout_cli(["restore", _CHAT_ID], layout_context) == EXIT_POPPED_OUT
+
+    err = capsys.readouterr().err
+    assert "'restore' refused (HTTP 423): Window win-0000000000000001 is popped out" in err
+    assert "--force overrides it" in err
+
+
+@pytest.mark.parametrize(
+    ("argv", "notes", "expected"),
+    [
+        pytest.param(
+            ["focus", "self"],
+            {"is_raised_in_own_window": True},
+            f"focused window {_CHAT_ID} (chat at /?chat=agent-1) on desktop home for client c1 "
+            "(raised in its own window: the user popped it out, so it stays there)",
+            id="raised",
+        ),
+        pytest.param(
+            ["maximize", "self", "--force"],
+            {"is_brought_back": True},
+            "(brought back from its own window)",
+            id="brought-back",
+        ),
+        pytest.param(
+            ["open", "files", "--beside"],
+            {"unpaired_beside": _CHAT_ID},
+            f"opened window {_CHAT_ID} (chat at /?chat=agent-1) on desktop home for client c1 "
+            f"(not paired beside {_CHAT_ID}: the user popped it out",
+            id="unpaired",
+        ),
+        pytest.param(
+            ["open", "files", "--beside"],
+            {"is_raised_in_own_window": True},
+            f"opened window {_CHAT_ID} (chat at /?chat=agent-1) on desktop home for client c1 "
+            "(raised in its own window: the user popped it out, so it stays there)",
+            id="found-raised-not-paired",
+        ),
+        pytest.param(
+            ["open", "files"],
+            {"has_no_desktop_window": True},
+            "(client c1 has no desktop window open, only popped-out ones; the window is there when one opens)",
+            id="no-desktop-window",
+        ),
+    ],
+)
+def test_the_summary_notes_what_the_shell_did_about_a_popped_out_window(
+    loopback_shell: LoopbackShell,
+    layout_context: LayoutCliContext,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+    notes: dict[str, Any],
+    expected: str,
+) -> None:
+    loopback_shell.op_answer = {**_answer([_CHAT_WINDOW], _CHAT_ID), **notes}
+
+    assert run_layout_cli(argv, layout_context) == EXIT_OK
+
+    assert expected in capsys.readouterr().err
+
+
 def test_close_names_a_window_the_answer_no_longer_lists_by_its_id_alone(
     loopback_shell: LoopbackShell, layout_context: LayoutCliContext, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -341,7 +418,7 @@ def test_close_names_a_window_the_answer_no_longer_lists_by_its_id_alone(
     assert capsys.readouterr().err == f"closed window {_CHAT_ID} on desktop home for client c1\n"
 
 
-def test_place_and_navigate_check_their_arguments(
+def test_place_and_the_cell_flags_check_their_text_forms(
     loopback_shell: LoopbackShell, layout_context: LayoutCliContext, capsys: pytest.CaptureFixture[str]
 ) -> None:
     with pytest.raises(SystemExit):
@@ -351,18 +428,14 @@ def test_place_and_navigate_check_their_arguments(
         run_layout_cli(["place", "self", "--state", "maximized", "--frame", "0,0,1,1"], layout_context)
     assert "exactly one of" in capsys.readouterr().err
     with pytest.raises(SystemExit):
-        run_layout_cli(["place", "self", "--frame", "0,0,1.5,1"], layout_context)
-    frame_error = capsys.readouterr().err
-    assert "inside the unit square" in frame_error and "fractions in 0..1" in frame_error
+        run_layout_cli(["place", "self", "--frame", "0,0,1"], layout_context)
+    assert "a frame is 'x,y,width,height' in fractions, not '0,0,1'" in capsys.readouterr().err
     with pytest.raises(SystemExit):
-        run_layout_cli(["shortcut", "move", "docs", "open", "--cell=-1,0"], layout_context)
-    cell_error = capsys.readouterr().err
-    assert "at least zero" in cell_error and "'column'" in cell_error
-    # A value off a record's rule is named in the command's one error line, not in pydantic's own report.
-    assert [len(error.splitlines()) for error in (frame_error, cell_error)] == [1, 1]
+        run_layout_cli(["place", "self", "--frame", "0,0,half,1"], layout_context)
+    assert "a frame is 'x,y,width,height'" in capsys.readouterr().err
     with pytest.raises(SystemExit):
-        run_layout_cli(["navigate", "self", "notes"], layout_context)
-    assert "starts with a single '/'" in capsys.readouterr().err
+        run_layout_cli(["shortcut", "move", "docs", "open", "--cell", "1.5,0"], layout_context)
+    assert "a cell is 'column,row', not '1.5,0'" in capsys.readouterr().err
     assert loopback_shell.posted == []
 
 
@@ -439,6 +512,7 @@ def test_desktops_and_list_read_the_inventory_document(
     home = fake_desktop(
         "home", [_FILES_WINDOW], shortcuts=[DesktopShortcut.model_validate(shortcut) for shortcut in shortcuts]
     )
+    popped_out = PoppedOutWindow(window_id=WindowId(_FILES_ID), desktop_id=DesktopId("home"), is_ghost_hidden=False)
     clients = (
         InventoryClient(
             id=ClientId("c1"),
@@ -447,6 +521,7 @@ def test_desktops_and_list_read_the_inventory_document(
             shown_history=("home", _FILES_ID),
             is_connected=True,
             shown=(WindowId(_FILES_ID),),
+            popped_out=(popped_out,),
         ),
         InventoryClient(id=ClientId("c2"), last_seen=FAKE_TIME, is_connected=False, shown=()),
     )
@@ -480,11 +555,11 @@ def test_desktops_and_list_read_the_inventory_document(
         }
     ]
     assert [
-        (client["id"], client["active_desktop"], client["shown"], client["shown_history"])
+        (client["id"], client["active_desktop"], client["shown"], client["popped_out"], client["shown_history"])
         for client in desktops["clients"]
     ] == [
-        ("c1", "home", [_FILES_ID], ["home", _FILES_ID]),
-        ("c2", None, [], []),
+        ("c1", "home", [_FILES_ID], [popped_out.model_dump(mode="json")], ["home", _FILES_ID]),
+        ("c2", None, [], [], []),
     ]
     assert run_layout_cli(["list", "--json"], layout_context) == 0
     listing = json.loads(capsys.readouterr().out)
@@ -504,6 +579,22 @@ def test_desktops_and_list_read_the_inventory_document(
         }
     ]
     assert [desktop["id"] for desktop in listing["desktops"]] == ["home"]
+
+
+def test_desktops_lists_no_popped_out_windows_for_a_shell_older_than_the_popped_out_rules(
+    loopback_shell: LoopbackShell, layout_context: LayoutCliContext, capsys: pytest.CaptureFixture[str]
+) -> None:
+    client = InventoryClient(id=ClientId("c1"), last_seen=FAKE_TIME, is_connected=True, shown=())
+    inventory = InventoryDocument(
+        is_preview=False, workspace_name="workspace", desktops=(fake_desktop("home"),), apps=(), clients=(client,)
+    ).model_dump(mode="json")
+    for listed_client in inventory["clients"]:
+        del listed_client["popped_out"]
+    loopback_shell.get_answers[INVENTORY_ROUTE] = (200, inventory)
+
+    assert run_layout_cli(["desktops"], layout_context) == EXIT_OK
+
+    assert [client["popped_out"] for client in json.loads(capsys.readouterr().out)["clients"]] == [[]]
 
 
 # shortcuts and the wallpaper
@@ -614,9 +705,7 @@ def test_every_op_carries_the_requester_in_its_body(
 ) -> None:
     """The requester rides in the body as ``{app, marker}``, posted as JSON to the op route; no header names the
     agent (the shell reads none)."""
-    asking = layout_context.model_copy_update(
-        to_update(layout_context.field_ref().requester, OpRequester(app=AppName("chat"), marker="agent-42"))
-    )
+    asking = layout_context._replace(requester_chat_id="agent-42")
 
     assert run_layout_cli(["focus", "self"], asking) == EXIT_OK
 
@@ -635,7 +724,7 @@ def test_a_read_timeout_is_an_unreachable_shell(
     wedged = LayoutCliContext(
         shell_url=silent_shell_url,
         apps_file=layout_context.apps_file,
-        requester=None,
+        requester_chat_id=None,
         registration_timeout_seconds=0.0,
         read_timeout_seconds=0.2,
         op_timeout_seconds=0.2,
@@ -651,6 +740,7 @@ def test_a_read_timeout_is_an_unreachable_shell(
         ["context"],
         ["load", "Research"],
         ["open", "files", "--path", "/notes/", "--if-present", "new", "--desktop", "Research", "--client", "c1"],
+        ["open", "files", "--path", "/notes/", "--if-present", "focus"],
         ["open", "terminal", "--launch", "new", "--param", "workdir=/data", "--minimized"],
         ["open", "https://example.com"],
         ["open", "files", "--beside", "self"],
@@ -660,13 +750,16 @@ def test_a_read_timeout_is_an_unreachable_shell(
         ["restore", "files"],
         ["maximize", "win-0000000000000001"],
         ["close", "self"],
+        ["place", "self", "--state", "snapped-left"],
         ["place", "self", "--state", "snapped-right"],
+        ["place", "self", "--state", "maximized"],
         ["place", "self", "--frame", "0.1,0.1,0.5,0.5"],
         ["navigate", "self", "/b"],
         ["refresh", "self", "--client", "c1"],
         ["refresh", "--app", "files"],
         ["shortcuts"],
         ["shortcut", "set", "files", "new", "--mode", "new", "--cell", "0,1"],
+        ["shortcut", "set", "files", "new", "--mode", "focus"],
         ["shortcut", "move", "files", "new", "--cell", "1,1"],
         ["shortcut", "remove", "files", "new"],
         ["wallpaper", "file", "beach"],
@@ -677,10 +770,33 @@ def test_a_read_timeout_is_an_unreachable_shell(
 def test_every_subcommand_posts_a_body_the_shells_own_request_models_take(
     loopback_shell: LoopbackShell, layout_context: LayoutCliContext, argv: list[str]
 ) -> None:
-    """The command and the shell read one set of request models, so the two cannot drift apart unnoticed."""
+    """The command spells each body by hand and the shell reads it with the request models, so every subcommand, and
+    every word a flag chooses, is checked against those models here."""
     loopback_shell.op_answer = {**_answer([_FILES_WINDOW], _FILES_ID), "shown": "raised"}
 
     assert run_layout_cli(argv, layout_context) == EXIT_OK
 
     assert len(loopback_shell.posted) == 1
     assert describe_op_body_problem(loopback_shell.posted[0][1]) is None
+
+
+def test_an_answer_that_is_not_the_contracts_is_an_error_naming_what_it_lacks(
+    loopback_shell: LoopbackShell, layout_context: LayoutCliContext, capsys: pytest.CaptureFixture[str]
+) -> None:
+    loopback_shell.op_answer = {"ok": True, "window_id": _CHAT_ID}
+    assert run_layout_cli(["focus", "self"], layout_context) == EXIT_ERROR
+    assert "The shell answered the focus without 'desktop'" in capsys.readouterr().err
+    loopback_shell.get_answers[INVENTORY_ROUTE] = (200, {"clients": []})
+    assert run_layout_cli(["desktops"], layout_context) == EXIT_ERROR
+    assert "could not read the inventory: it has no 'desktops'" in capsys.readouterr().err
+
+
+def test_the_command_loads_no_pydantic() -> None:
+    """An agent pays the command's import time on every layout call; pydantic and the typed client are most of what
+    the library would otherwise load."""
+    probe = (
+        "import sys, workspace_layout.cli; "
+        "print(sorted({m.split('.')[0] for m in sys.modules} & {'pydantic', 'pydantic_core', 'loguru', 'asyncio'}))"
+    )
+    loaded = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True).stdout
+    assert loaded.strip() == "[]"
