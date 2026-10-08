@@ -34,7 +34,8 @@ def _run_summary(*steps: dict) -> str:
 class _FakeDatalib:
     """Stands in for the installed release's binaries: ``pull-runtime`` succeeds, and a ``datalib-dag`` sync
     renders ``pages_by_group`` pages for each source it was asked to sync, then writes ``stderr`` (the event
-    stream, where the real binary writes its run summary) and ``stdout`` (its per-step report)."""
+    stream, where the real binary writes its run summary) and ``stdout`` (its per-step report). It exits 2 when a
+    step failed, like the real binary, unless ``returncode`` says otherwise."""
 
     def __init__(
         self,
@@ -42,11 +43,13 @@ class _FakeDatalib:
         stderr: str,
         pages_by_group: dict[str, int],
         stdout: str = "",
+        returncode: int | None = None,
     ) -> None:
         self.data_root = data_root
         self.stderr = stderr
         self.pages_by_group = pages_by_group
         self.stdout = stdout
+        self.returncode = returncode
         self.commands: list[list[str]] = []
 
     def __call__(
@@ -67,11 +70,12 @@ class _FakeDatalib:
                 )
                 page.parent.mkdir(parents=True, exist_ok=True)
                 page.write_text("# chat\n")
+        if self.returncode is not None:
+            returncode = self.returncode
+        else:
+            returncode = 0 if '"failed"' not in self.stderr else 2
         return subprocess.CompletedProcess(
-            command,
-            0 if '"failed"' not in self.stderr else 2,
-            self.stdout,
-            self.stderr,
+            command, returncode, self.stdout, self.stderr
         )
 
 
@@ -319,6 +323,7 @@ def test_a_sync_that_never_summarised_records_the_failure_and_its_output(
         '{"event":"run_plan","steps":[]}\nError: the run store is locked\n',
         {},
         stdout="claude_chats/ingest  Running\n",
+        returncode=1,
     )
 
     assert (
@@ -330,6 +335,26 @@ def test_a_sync_that_never_summarised_records_the_failure_and_its_output(
         "failed",
         "Error: the run store is locked",
     )
+
+
+def test_a_sync_that_followed_another_ones_run_to_the_end_records_what_it_imported(
+    tmp_path: Path,
+) -> None:
+    install = _installed(tmp_path / "home")
+    data_root = tmp_path / "datalib"
+    status_path = tmp_path / "status.json"
+    datalib = _FakeDatalib(
+        data_root,
+        "datalib-dag: the loop on datalib is already running (pid 7); following request r1 there\n",
+        {"claude_chats": 2},
+        stdout="request r1: done\n",
+        returncode=0,
+    )
+
+    assert import_chats.sync([CLAUDE], install, data_root, status_path, datalib) is True
+
+    record = import_chats.read_status(status_path)["sources"]["claude"]
+    assert (record["state"], record["conversations"]) == ("imported", 2)
 
 
 def test_a_sync_marks_its_sources_importing_with_its_pid_while_it_runs(

@@ -695,20 +695,15 @@ def record_outcomes(
     steps = parse_run_summary(result.stderr)
     is_every_source_imported = True
     for source in named:
-        ingest = steps.get(f"{source.group}/ingest")
         conversations = count_conversations(data_root, source)
-        if ingest is not None and ingest.get("status") == "succeeded":
+        failure = source_failure(steps, source, result)
+        if failure is None:
             record_source(
                 status_path, source.key, STATE_IMPORTED, conversations, "", pid=None
             )
             continue
         is_every_source_imported = False
-        if ingest is None:
-            error = runner_error(result)
-            failure_kind = None
-        else:
-            error = str(ingest.get("error", ""))
-            failure_kind = ingest.get("failure")
+        error, failure_kind = failure
         record_source(
             status_path,
             source.key,
@@ -720,6 +715,26 @@ def record_outcomes(
     for source in named:
         write_index(data_root, source, index_path_for(status_path, source))
     return is_every_source_imported
+
+
+def source_failure(
+    steps: Mapping[str, dict],
+    source: ChatSource,
+    result: subprocess.CompletedProcess,
+) -> tuple[str, str | None] | None:
+    """Why ``source`` did not import in a finished ``datalib-dag`` run, as its error and datalib's failure kind; None
+    when it imported.
+
+    A run with no summary at all handed its request to a loop another process was already running on the same data
+    root, and exits with that request's outcome: 0 when it was done."""
+    if not steps:
+        return None if result.returncode == 0 else (runner_error(result), None)
+    ingest = steps.get(f"{source.group}/ingest")
+    if ingest is None:
+        return runner_error(result), None
+    if ingest.get("status") != "succeeded":
+        return str(ingest.get("error", "")), ingest.get("failure")
+    return None
 
 
 def classify_check(returncode: int, stdout: str, stderr: str) -> tuple[str, str]:
