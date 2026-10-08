@@ -12,6 +12,7 @@ import tarfile
 import threading
 import tomllib
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -96,7 +97,7 @@ def _streaming(
     return stream
 
 
-def _installed(home: Path) -> object:
+def _installed(home: Path) -> import_chats.DatalibInstall:
     install = import_chats.DatalibInstall(home=home)
     install.release_dir.mkdir(parents=True)
     for name in ("datalib-dag", "datalib-step"):
@@ -104,6 +105,49 @@ def _installed(home: Path) -> object:
         binary.write_text("#!/bin/sh\n")
         binary.chmod(0o755)
     return install
+
+
+@dataclass(frozen=True)
+class _SyncWorkspace:
+    """What a sync works on: an installed release, the datalib store and the status file."""
+
+    install: import_chats.DatalibInstall
+    data_root: Path
+    status_path: Path
+
+    def sync(
+        self,
+        named: Sequence[import_chats.ChatSource],
+        run: Callable[..., subprocess.CompletedProcess],
+        stream: Callable[
+            [Sequence[str], Callable[[str], None]], subprocess.CompletedProcess
+        ]
+        | None = None,
+        progress_interval_seconds: float = import_chats.PROGRESS_INTERVAL_SECONDS,
+    ) -> bool:
+        """Sync ``named`` with ``run`` standing in for the release's binaries (and, unless ``stream`` is given,
+        for the streamed ``datalib-dag`` run too)."""
+        return import_chats.sync(
+            named,
+            self.install,
+            self.data_root,
+            self.status_path,
+            run,
+            stream=_streaming(run) if stream is None else stream,
+            progress_interval_seconds=progress_interval_seconds,
+        )
+
+    def record(self, key: str) -> dict:
+        return import_chats.read_status(self.status_path)["sources"][key]
+
+
+@pytest.fixture
+def workspace(tmp_path: Path) -> _SyncWorkspace:
+    return _SyncWorkspace(
+        install=_installed(tmp_path / "home"),
+        data_root=tmp_path / "datalib",
+        status_path=tmp_path / "import-chats" / "status.json",
+    )
 
 
 def test_the_config_names_every_source_and_feeds_each_into_the_shared_grid_and_search() -> (
@@ -255,13 +299,10 @@ def test_a_check_asks_the_sources_own_api_through_the_impersonating_gateway() ->
 
 
 def test_a_sync_writes_the_config_runs_the_named_ingests_and_records_what_it_imported(
-    tmp_path: Path,
+    workspace: _SyncWorkspace,
 ) -> None:
-    install = _installed(tmp_path / "home")
-    data_root = tmp_path / "data" / ".skills" / "datalib"
-    status_path = tmp_path / "status.json"
     datalib = _FakeDatalib(
-        data_root,
+        workspace.data_root,
         _run_summary(
             {"step": "claude_chats/ingest", "status": "succeeded"},
             {"step": "chatgpt_chats/ingest", "status": "succeeded"},
@@ -269,30 +310,21 @@ def test_a_sync_writes_the_config_runs_the_named_ingests_and_records_what_it_imp
         {"claude_chats": 3, "chatgpt_chats": 2},
     )
 
-    is_imported = import_chats.sync(
-        [CLAUDE, CHATGPT],
-        install,
-        data_root,
-        status_path,
-        datalib,
-        stream=_streaming(datalib),
-    )
+    is_imported = workspace.sync([CLAUDE, CHATGPT], datalib)
 
     assert is_imported is True
     pull, dag = datalib.commands
     assert pull[1:] == ["pull-runtime"]
+    config_path = workspace.data_root / "config.toml"
     assert dag[1:] == [
-        str(data_root / "config.toml"),
+        str(config_path),
         "--sync",
         "claude_chats/ingest,chatgpt_chats/ingest",
         "--by",
         "import-chats",
     ]
-    assert (
-        tomllib.loads((data_root / "config.toml").read_text())["groups"][1]["id"]
-        == "chatgpt_chats"
-    )
-    sources = import_chats.read_status(status_path)["sources"]
+    assert tomllib.loads(config_path.read_text())["groups"][1]["id"] == "chatgpt_chats"
+    sources = import_chats.read_status(workspace.status_path)["sources"]
     assert {
         key: (record["state"], record["conversations"], record["pid"])
         for key, record in sources.items()
@@ -303,13 +335,10 @@ def test_a_sync_writes_the_config_runs_the_named_ingests_and_records_what_it_imp
 
 
 def test_a_sync_records_a_sign_in_problem_for_one_source_and_success_for_the_other(
-    tmp_path: Path,
+    workspace: _SyncWorkspace,
 ) -> None:
-    install = _installed(tmp_path / "home")
-    data_root = tmp_path / "datalib"
-    status_path = tmp_path / "status.json"
     datalib = _FakeDatalib(
-        data_root,
+        workspace.data_root,
         _run_summary(
             {"step": "claude_chats/ingest", "status": "succeeded"},
             {
@@ -321,34 +350,21 @@ def test_a_sync_records_a_sign_in_problem_for_one_source_and_success_for_the_oth
         {"claude_chats": 1},
     )
 
-    assert (
-        import_chats.sync(
-            [CLAUDE, CHATGPT],
-            install,
-            data_root,
-            status_path,
-            datalib,
-            stream=_streaming(datalib),
-        )
-        is False
-    )
+    assert workspace.sync([CLAUDE, CHATGPT], datalib) is False
 
-    sources = import_chats.read_status(status_path)["sources"]
-    assert sources["claude"]["state"] == "imported"
-    assert (sources["chatgpt"]["state"], sources["chatgpt"]["detail"]) == (
+    assert workspace.record("claude")["state"] == "imported"
+    chatgpt = workspace.record("chatgpt")
+    assert (chatgpt["state"], chatgpt["detail"]) == (
         "needs_sign_in",
         "chatgpt: HTTP 401 token_expired",
     )
 
 
 def test_a_sync_whose_pages_did_not_render_records_the_render_failure(
-    tmp_path: Path,
+    workspace: _SyncWorkspace,
 ) -> None:
-    install = _installed(tmp_path / "home")
-    data_root = tmp_path / "datalib"
-    status_path = tmp_path / "status.json"
     datalib = _FakeDatalib(
-        data_root,
+        workspace.data_root,
         _run_summary(
             {"step": "claude_chats/ingest", "status": "succeeded"},
             {
@@ -363,53 +379,27 @@ def test_a_sync_whose_pages_did_not_render_records_the_render_failure(
         {},
     )
 
-    assert (
-        import_chats.sync(
-            [CLAUDE, CHATGPT],
-            install,
-            data_root,
-            status_path,
-            datalib,
-            stream=_streaming(datalib),
-        )
-        is False
-    )
+    assert workspace.sync([CLAUDE, CHATGPT], datalib) is False
 
-    sources = import_chats.read_status(status_path)["sources"]
-    assert (sources["claude"]["state"], sources["claude"]["detail"]) == (
-        "failed",
-        "render store: disk full",
-    )
-    assert sources["chatgpt"]["state"] == "imported"
+    claude = workspace.record("claude")
+    assert (claude["state"], claude["detail"]) == ("failed", "render store: disk full")
+    assert workspace.record("chatgpt")["state"] == "imported"
 
 
 def test_a_sync_that_never_summarised_records_the_failure_and_its_output(
-    tmp_path: Path,
+    workspace: _SyncWorkspace,
 ) -> None:
-    install = _installed(tmp_path / "home")
-    data_root = tmp_path / "datalib"
-    status_path = tmp_path / "status.json"
     datalib = _FakeDatalib(
-        data_root,
+        workspace.data_root,
         '{"event":"run_plan","steps":[]}\nError: the run store is locked\n',
         {},
         stdout="claude_chats/ingest  Running\n",
         returncode=1,
     )
 
-    assert (
-        import_chats.sync(
-            [CLAUDE],
-            install,
-            data_root,
-            status_path,
-            datalib,
-            stream=_streaming(datalib),
-        )
-        is False
-    )
+    assert workspace.sync([CLAUDE], datalib) is False
 
-    record = import_chats.read_status(status_path)["sources"]["claude"]
+    record = workspace.record("claude")
     assert (record["state"], record["detail"]) == (
         "failed",
         "Error: the run store is locked",
@@ -417,44 +407,29 @@ def test_a_sync_that_never_summarised_records_the_failure_and_its_output(
 
 
 def test_a_sync_that_followed_another_ones_run_to_the_end_records_what_it_imported(
-    tmp_path: Path,
+    workspace: _SyncWorkspace,
 ) -> None:
-    install = _installed(tmp_path / "home")
-    data_root = tmp_path / "datalib"
-    status_path = tmp_path / "status.json"
     datalib = _FakeDatalib(
-        data_root,
+        workspace.data_root,
         "datalib-dag: the loop on datalib is already running (pid 7); following request r1 there\n",
         {"claude_chats": 2},
         stdout="request r1: done\n",
         returncode=0,
     )
 
-    assert (
-        import_chats.sync(
-            [CLAUDE],
-            install,
-            data_root,
-            status_path,
-            datalib,
-            stream=_streaming(datalib),
-        )
-        is True
-    )
+    assert workspace.sync([CLAUDE], datalib) is True
 
-    record = import_chats.read_status(status_path)["sources"]["claude"]
+    record = workspace.record("claude")
     assert (record["state"], record["conversations"]) == ("imported", 2)
 
 
 def test_a_sync_marks_its_sources_importing_with_its_pid_while_it_runs(
-    tmp_path: Path,
+    workspace: _SyncWorkspace,
 ) -> None:
-    install = _installed(tmp_path / "home")
-    status_path = tmp_path / "status.json"
     seen: list[dict] = []
 
     def run(command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess:
-        seen.append(import_chats.read_status(status_path)["sources"]["claude"])
+        seen.append(workspace.record("claude"))
         return subprocess.CompletedProcess(
             command,
             0,
@@ -462,14 +437,7 @@ def test_a_sync_marks_its_sources_importing_with_its_pid_while_it_runs(
             _run_summary({"step": "claude_chats/ingest", "status": "succeeded"}),
         )
 
-    import_chats.sync(
-        [CLAUDE],
-        install,
-        tmp_path / "datalib",
-        status_path,
-        run,
-        stream=_streaming(run),
-    )
+    workspace.sync([CLAUDE], run)
 
     assert {(record["state"], record["pid"]) for record in seen} == {
         ("importing", os.getpid())
@@ -477,35 +445,22 @@ def test_a_sync_marks_its_sources_importing_with_its_pid_while_it_runs(
 
 
 def test_a_sync_whose_install_fails_records_the_failure_and_says_why(
-    tmp_path: Path,
+    workspace: _SyncWorkspace,
 ) -> None:
-    install = _installed(tmp_path / "home")
-    status_path = tmp_path / "status.json"
-
     def run(command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess:
         return subprocess.CompletedProcess(command, 1, "", "no network\n")
 
     with pytest.raises(import_chats.ImportChatsError, match="no network"):
-        import_chats.sync(
-            [CHATGPT],
-            install,
-            tmp_path / "datalib",
-            status_path,
-            run,
-            stream=_streaming(run),
-        )
+        workspace.sync([CHATGPT], run)
 
-    record = import_chats.read_status(status_path)["sources"]["chatgpt"]
+    record = workspace.record("chatgpt")
     assert record["state"] == "failed"
     assert "no network" in record["detail"]
 
 
 def test_a_sync_whose_runtime_fetch_hangs_gives_up_and_records_the_failure(
-    tmp_path: Path,
+    workspace: _SyncWorkspace,
 ) -> None:
-    install = _installed(tmp_path / "home")
-    status_path = tmp_path / "status.json"
-
     def run(
         command: Sequence[str], timeout: float | None = None, **_kwargs: object
     ) -> subprocess.CompletedProcess:
@@ -513,40 +468,23 @@ def test_a_sync_whose_runtime_fetch_hangs_gives_up_and_records_the_failure(
         raise subprocess.TimeoutExpired(command, timeout)
 
     with pytest.raises(import_chats.ImportChatsError, match="no answer in"):
-        import_chats.sync(
-            [CLAUDE],
-            install,
-            tmp_path / "datalib",
-            status_path,
-            run,
-            stream=_streaming(run),
-        )
+        workspace.sync([CLAUDE], run)
 
-    record = import_chats.read_status(status_path)["sources"]["claude"]
+    record = workspace.record("claude")
     assert record["state"] == "failed"
     assert "could not fetch its runtime" in record["detail"]
 
 
 def test_a_sync_that_cannot_run_datalib_records_the_failure_and_reports_it_as_an_import_error(
-    tmp_path: Path,
+    workspace: _SyncWorkspace,
 ) -> None:
-    install = _installed(tmp_path / "home")
-    status_path = tmp_path / "status.json"
-
     def run(command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess:
         raise PermissionError(13, "Permission denied", command[0])
 
     with pytest.raises(import_chats.ImportChatsError, match="Permission denied"):
-        import_chats.sync(
-            [CLAUDE],
-            install,
-            tmp_path / "datalib",
-            status_path,
-            run,
-            stream=_streaming(run),
-        )
+        workspace.sync([CLAUDE], run)
 
-    record = import_chats.read_status(status_path)["sources"]["claude"]
+    record = workspace.record("claude")
     assert record["state"] == "failed"
     assert "Permission denied" in record["detail"]
 
@@ -758,12 +696,11 @@ def test_an_index_of_a_source_with_nothing_rendered_says_so(tmp_path: Path) -> N
     ]
 
 
-def test_a_sync_rewrites_the_index_of_each_source_it_synced(tmp_path: Path) -> None:
-    install = _installed(tmp_path / "home")
-    data_root = tmp_path / "datalib"
-    status_path = tmp_path / "import-chats" / "status.json"
+def test_a_sync_rewrites_the_index_of_each_source_it_synced(
+    workspace: _SyncWorkspace,
+) -> None:
     datalib = _FakeDatalib(
-        data_root,
+        workspace.data_root,
         _run_summary(
             {"step": "claude_chats/ingest", "status": "succeeded"},
             {
@@ -775,22 +712,11 @@ def test_a_sync_rewrites_the_index_of_each_source_it_synced(tmp_path: Path) -> N
         {"claude_chats": 2},
     )
 
-    import_chats.sync(
-        [CLAUDE, CHATGPT],
-        install,
-        data_root,
-        status_path,
-        datalib,
-        stream=_streaming(datalib),
-    )
+    workspace.sync([CLAUDE, CHATGPT], datalib)
 
-    assert (
-        "2 conversations" in (tmp_path / "import-chats" / "claude-chats.md").read_text()
-    )
-    assert (
-        "0 conversations"
-        in (tmp_path / "import-chats" / "chatgpt-chats.md").read_text()
-    )
+    index_dir = workspace.status_path.parent
+    assert "2 conversations" in (index_dir / "claude-chats.md").read_text()
+    assert "0 conversations" in (index_dir / "chatgpt-chats.md").read_text()
 
 
 def test_a_long_title_with_tabs_is_one_line_cut_short_in_the_index(
@@ -819,21 +745,18 @@ def test_a_long_title_with_tabs_is_one_line_cut_short_in_the_index(
     assert entry.endswith(" · [original](https://chatgpt.com/c/x)")
 
 
-def test_a_running_sync_records_the_pages_rendered_so_far(tmp_path: Path) -> None:
-    install = _installed(tmp_path / "home")
-    data_root = tmp_path / "datalib"
-    status_path = tmp_path / "status.json"
+def test_a_running_sync_records_the_pages_rendered_so_far(
+    workspace: _SyncWorkspace,
+) -> None:
     seen_counts: list[int] = []
 
     def run(command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess:
         if command[1:] == ["pull-runtime"]:
             return subprocess.CompletedProcess(command, 0, "", "")
-        seen_counts.append(
-            import_chats.read_status(status_path)["sources"]["chatgpt"]["conversations"]
-        )
+        seen_counts.append(workspace.record("chatgpt")["conversations"])
         for index in range(3):
             _rendered_page(
-                data_root,
+                workspace.data_root,
                 "chatgpt_chats",
                 f"u{index}",
                 f"Chat {index}",
@@ -842,7 +765,7 @@ def test_a_running_sync_records_the_pages_rendered_so_far(tmp_path: Path) -> Non
             )
         pause = threading.Event()
         for _ in range(500):
-            record = import_chats.read_status(status_path)["sources"]["chatgpt"]
+            record = workspace.record("chatgpt")
             seen_counts.append(record["conversations"])
             if record["state"] == "importing" and record["conversations"] == 3:
                 break
@@ -850,22 +773,11 @@ def test_a_running_sync_records_the_pages_rendered_so_far(tmp_path: Path) -> Non
         summary = _run_summary({"step": "chatgpt_chats/ingest", "status": "succeeded"})
         return subprocess.CompletedProcess(command, 0, "", summary)
 
-    import_chats.sync(
-        [CHATGPT],
-        install,
-        data_root,
-        status_path,
-        run,
-        stream=_streaming(run),
-        progress_interval_seconds=0.01,
-    )
+    workspace.sync([CHATGPT], run, progress_interval_seconds=0.01)
 
     assert seen_counts[0] == 0
     assert seen_counts[-1] == 3
-    assert (
-        import_chats.read_status(status_path)["sources"]["chatgpt"]["state"]
-        == "imported"
-    )
+    assert workspace.record("chatgpt")["state"] == "imported"
 
 
 def _progress_event(event: str, step: str, **fields: object) -> str:
@@ -953,10 +865,8 @@ def test_stream_process_stops_the_command_when_following_it_fails() -> None:
 
 
 def test_a_running_sync_records_how_many_of_its_conversations_it_has_fetched(
-    tmp_path: Path,
+    workspace: _SyncWorkspace,
 ) -> None:
-    install = _installed(tmp_path / "home")
-    status_path = tmp_path / "status.json"
     seen: list[tuple[object, object]] = []
 
     def stream(
@@ -970,7 +880,7 @@ def test_a_running_sync_records_how_many_of_its_conversations_it_has_fetched(
             on_stderr_line(line)
         pause = threading.Event()
         for _ in range(500):
-            record = import_chats.read_status(status_path)["sources"]["chatgpt"]
+            record = workspace.record("chatgpt")
             seen.append((record["fetched"], record["to_fetch"]))
             if seen[-1] == (2, 5):
                 break
@@ -978,18 +888,15 @@ def test_a_running_sync_records_how_many_of_its_conversations_it_has_fetched(
         summary = _run_summary({"step": "chatgpt_chats/ingest", "status": "succeeded"})
         return subprocess.CompletedProcess(command, 0, "", summary)
 
-    import_chats.sync(
+    workspace.sync(
         [CHATGPT],
-        install,
-        tmp_path / "datalib",
-        status_path,
-        _FakeDatalib(tmp_path / "datalib", "", {}),
+        _FakeDatalib(workspace.data_root, "", {}),
         stream=stream,
         progress_interval_seconds=0.01,
     )
 
     assert seen[-1] == (2, 5)
-    final = import_chats.read_status(status_path)["sources"]["chatgpt"]
+    final = workspace.record("chatgpt")
     assert (final["state"], final["fetched"], final["to_fetch"]) == (
         "imported",
         None,
