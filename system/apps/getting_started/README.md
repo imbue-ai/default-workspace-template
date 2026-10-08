@@ -30,10 +30,11 @@ from its own uv tool environment (`system/scripts/build_workspace.sh`), serving 
   each source the `import-chats` skill recorded in `data/.skills/import-chats/status.json`
   (`state`, `conversations`, `updated_at`, `detail`, and a running import's `fetched` of
   `to_fetch`), with an import whose sync process is gone answered as `failed`. The page
-  fetches it on load and on focus, and polls it while a source is importing. Every action on
-  the card starts a chat (`shell:start-with-text`) that the skill matches on.
-- `POST /api/chat-import/dismiss`: puts the card away for good, recorded in
-  `data/.state/getting-started/chat_import.json`.
+  fetches it on load and on focus, and polls it while a source is importing. The card's
+  import, update and resume actions each start a chat (`shell:start-with-text`) that the
+  skill matches on.
+- `POST /api/chat-import/dismiss`: puts the card away for good ("Not now" or "Hide"),
+  recorded in `data/.state/getting-started/chat_import.json`.
 - `GET /_static/app_contract.js`: the shell's browser-side contract module, served from this
   origin as every app serves it.
 
