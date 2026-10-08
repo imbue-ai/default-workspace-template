@@ -254,6 +254,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
   return {
     view(vnode) {
       const attrs = vnode.attrs;
+      const isSearching = query.trim() !== "";
       const body: m.Children =
         detailTemplate !== null
           ? m(TemplateDetail, {
@@ -265,7 +266,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
             })
           : [
               searchField(),
-              query.trim() !== ""
+              isSearching
                 ? null
                 : m(ChatImportCard, {
                     chatImport: attrs.chatImport,
@@ -275,7 +276,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
               m(
                 "div",
                 { class: "mt-6" },
-                query.trim() !== ""
+                isSearching
                   ? searchResults(attrs)
                   : [pagedStartSomethingSection(attrs), templatesSection(attrs.catalog)],
               ),
