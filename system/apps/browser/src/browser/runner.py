@@ -406,7 +406,7 @@ async def _cancel_pending_url(browser: LiveBrowser) -> bool:
     return browser.cancel_pending_url()
 
 
-def cancel_pending_url(browser_id: str) -> Response:
+def cancel_pending_url(browser_id: str) -> ResponseReturnValue:
     """``POST /browsers/<name>/pending-url/cancel``: drop the page the human asked for and the browser is holding
     (the viewer's Cancel on the agent overlay), leaving whoever drives the browser as they were."""
     if not is_valid_browser_name(browser_id):
