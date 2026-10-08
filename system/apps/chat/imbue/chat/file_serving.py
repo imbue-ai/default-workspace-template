@@ -113,7 +113,7 @@ def try_serve_file(url_path: str) -> Response | None:
 
     ``url_path`` never includes the query string (Flask splits it off before
     routing), so the frontend's per-message ``?requested_at=<post time>`` cache
-    key is ignored here: it only makes the browser treat each message's file URL
+    key is ignored here: it only makes the browser treat each message's image URL
     as distinct, so a new message never renders a stale copy cached under a path
     an earlier message reused. The served bytes are the file's current content.
     """
