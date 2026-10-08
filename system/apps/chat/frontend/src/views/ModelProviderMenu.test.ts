@@ -251,6 +251,10 @@ beforeEach(() => {
   providerState.accounts = [ACCOUNT];
   setPendingAccount("a1", null);
   setSwitchSending("a1", false);
+  // Opening the menu on a dynamic or searchable picker loads the chat's offerable models. Answered
+  // here, so the load settles in the test that opened the menu: unanswered, it goes out to jsdom's
+  // localhost and its failure is logged after the file's environment has been torn down.
+  vi.spyOn(m, "request").mockResolvedValue({ models: null, options: null });
 });
 
 describe("the combo card", () => {
