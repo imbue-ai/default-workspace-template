@@ -1057,7 +1057,7 @@ export async function sendMessage(chatId: string, message: string, messageId?: s
 
   // The client identity rides along so the server can record which browser
   // (and which named layout) the message came from -- that is how agents
-  // attribute a request to a client via `layout.py context`. The message_id is
+  // attribute a request to a client via `workspace-layout context`. The message_id is
   // the stable send-time id the backend reconciles delivery against (A4).
   await m.request({
     method: "POST",

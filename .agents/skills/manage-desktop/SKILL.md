@@ -1,6 +1,6 @@
 ---
 name: manage-desktop
-description: Use when you want to open, arrange, or close windows on the user's desktop (open an app or a page, focus, place, minimize, maximize, close, navigate, refresh), switch or read desktops, edit a desktop's shortcuts or wallpaper, or work out which screen a request came from.
+description: Use when you want to open, arrange, or close windows on the user's desktop (open an app or a page, show a page, focus, place, minimize, maximize, close, navigate, refresh), switch or read desktops, edit a desktop's shortcuts or wallpaper, or work out which screen a request came from.
 metadata:
   author: imbue
   crystallized: true
@@ -13,15 +13,16 @@ in `system/apps/system_interface`: windows over a backdrop, a taskbar, and a
 launcher. Your chat is one window; every other window is a page of some app: a
 terminal, a browser, a folder in the file viewer, another chat, an app you built.
 
-`system/scripts/layout.py` is the agent-facing helper. Use it whenever you want
+`uv run --no-sync workspace-layout` is the agent-facing command. Use it whenever you want
 to surface, inspect, or arrange windows. Do not hand-edit the shell's state
 files.
 
-> **Where the script lives:** `layout.py` is at the **repo root**, at
-> `system/scripts/layout.py` (i.e. `/home/user/workspace/system/scripts/layout.py`,
-> the container WORKDIR). It is **NOT** inside this skill's folder. Every
-> command below is written as `python3 system/scripts/layout.py ...`, a path
-> relative to the repo root, which is the cwd for all commands in this repo.
+> **Where the command comes from:** `workspace-layout` is the console script of
+> the `system/libs/workspace_layout` library, installed in the repo root's venv.
+> It is **NOT** inside this skill's folder. Every command below is written as
+> `uv run --no-sync workspace-layout ...`, run from the repo root
+> (`/home/user/workspace`), which is the cwd for all commands in this repo. Keep the
+> `--no-sync`: without it every call first checks, and can start, a sync of the venv.
 
 ## The vocabulary (read this first)
 
@@ -93,16 +94,17 @@ A window argument is one of:
 
 | Goal | Command |
 |---|---|
-| See which client asked for something | `python3 system/scripts/layout.py context` |
-| List every desktop, its windows (id, app, path, title), and every client | `python3 system/scripts/layout.py desktops` |
-| List every app with its launch paths and windows | `python3 system/scripts/layout.py list` |
-| Switch a client onto a desktop | `python3 system/scripts/layout.py load <desktop> [--client <id>]` |
-| Open an app (at its default launch path) | `python3 system/scripts/layout.py open terminal` |
-| Open a specific page of an app | `python3 system/scripts/layout.py open files --path /home/user/workspace/data/notes/` |
-| Open a page with launch parameters | `python3 system/scripts/layout.py open terminal --launch new --param workdir=/data` |
-| Open a web page in a new browser | `python3 system/scripts/layout.py open https://example.com` |
-| Bring a window to the front | `python3 system/scripts/layout.py focus <window>` |
-| Close a window | `python3 system/scripts/layout.py close <window>` (a terminal's session, or the one browser, is ended by its app once no window shows it; refused for a pinned window, which is never closed: `minimize` it instead) |
+| See which client asked for something | `uv run --no-sync workspace-layout context` |
+| List every desktop, its windows (id, app, path, title), and every client | `uv run --no-sync workspace-layout desktops` |
+| List every app with its launch paths and windows | `uv run --no-sync workspace-layout list` |
+| Switch a client onto a desktop | `uv run --no-sync workspace-layout load <desktop> [--client <id>]` |
+| Open an app (at its default launch path) | `uv run --no-sync workspace-layout open terminal` |
+| Open a specific page of an app | `uv run --no-sync workspace-layout open files --path /home/user/workspace/data/notes/` |
+| Open a page with launch parameters | `uv run --no-sync workspace-layout open terminal --launch new --param workdir=/data` |
+| Open a web page in a new browser | `uv run --no-sync workspace-layout open https://example.com` |
+| Bring a window to the front | `uv run --no-sync workspace-layout focus <window>` |
+| Put a page on screen, raising a window already showing it rather than opening another | `uv run --no-sync workspace-layout show files --path /home/user/workspace/data/notes/ [--showing <other path> ...] [--repoint <page> ...]` (prints the window's id; `--repoint` names the pages whose on-screen window may be pointed at the path, and without it no window is pointed elsewhere) |
+| Close a window | `uv run --no-sync workspace-layout close <window>` (a terminal's session, or the one browser, is ended by its app once no window shows it; refused for a pinned window, which is never closed: `minimize` it instead) |
 
 **Every mutating op here changes what the user is looking at, live.** There is
 no staging area: `open` puts a window on their screen the moment it returns, and
@@ -137,11 +139,11 @@ target client's placements only:
 
 | Goal | Command |
 |---|---|
-| Snap a window to a half of the screen, or maximize it | `python3 system/scripts/layout.py place <window> --zone left\|right\|maximized` |
-| Put a window at an exact frame (fractions of the backdrop) | `python3 system/scripts/layout.py place <window> --frame 0.05,0.05,0.6,0.7` |
-| Minimize / restore / maximize | `python3 system/scripts/layout.py minimize <window>` / `restore <window>` / `maximize <window>` |
-| Point a window at another path under its app | `python3 system/scripts/layout.py navigate <window> /other/path` |
-| Reload one window's page, or every page of an app | `python3 system/scripts/layout.py refresh <window>` / `refresh --app <name>` |
+| Snap a window to a half of the screen, or maximize it | `uv run --no-sync workspace-layout place <window> --state snapped-left\|snapped-right\|maximized` |
+| Put a window at an exact frame (fractions of the backdrop) | `uv run --no-sync workspace-layout place <window> --frame 0.05,0.05,0.6,0.7` |
+| Minimize / restore / maximize | `uv run --no-sync workspace-layout minimize <window>` / `restore <window>` / `maximize <window>` |
+| Point a window at another path under its app | `uv run --no-sync workspace-layout navigate <window> /other/path` |
+| Reload one window's page, or every page of an app | `uv run --no-sync workspace-layout refresh <window>` / `refresh --app <name>` |
 
 `navigate` and `refresh` reach the page itself: `navigate` sets the window's
 path as if its page had reported it (the client's page follows), and `refresh`
@@ -153,14 +155,14 @@ alone and leaves every other client where it was.
 The most common natural request, "put a terminal next to my chat", is one op:
 
 ```bash
-python3 system/scripts/layout.py open terminal --beside
+uv run --no-sync workspace-layout open terminal --beside
 ```
 
 Two `place`s put two windows that are both already open on the halves:
 
 ```bash
-python3 system/scripts/layout.py place self --zone left
-python3 system/scripts/layout.py place "$(python3 system/scripts/layout.py open terminal)" --zone right
+uv run --no-sync workspace-layout place self --state snapped-left
+uv run --no-sync workspace-layout place "$(uv run --no-sync workspace-layout open terminal)" --state snapped-right
 ```
 
 ## Shortcuts and the wallpaper
@@ -177,19 +179,19 @@ an app's own shortcut by right-clicking it in the launcher or the taskbar.
 
 ```bash
 # The target client's active desktop's shortcuts: app, launch path, mode, cell.
-python3 system/scripts/layout.py shortcuts
+uv run --no-sync workspace-layout shortcuts
 
 # Add the docs app's "open" to Research's backdrop, always opening anew, in column 2 row 0.
-python3 system/scripts/layout.py shortcut set docs open --mode new --cell 2,0 --desktop "Research"
+uv run --no-sync workspace-layout shortcut set docs open --mode new --cell 2,0 --desktop "Research"
 
 # Move it, or take it off.
-python3 system/scripts/layout.py shortcut move docs open --cell 3,0 --desktop "Research"
-python3 system/scripts/layout.py shortcut remove docs open --desktop "Research"
+uv run --no-sync workspace-layout shortcut move docs open --cell 3,0 --desktop "Research"
+uv run --no-sync workspace-layout shortcut remove docs open --desktop "Research"
 
 # The wallpaper: a bundled image (GET /api/wallpapers lists the ones that ship -- just `arcs` today), a
 # file under data/.apps/system_interface/wallpapers/, or none.
-python3 system/scripts/layout.py wallpaper bundled arcs --desktop "Research"
-python3 system/scripts/layout.py wallpaper none
+uv run --no-sync workspace-layout wallpaper bundled arcs --desktop "Research"
+uv run --no-sync workspace-layout wallpaper none
 ```
 
 `--desktop` switches the target client onto that desktop for every op, `shortcuts`
@@ -197,7 +199,7 @@ included, so to look at another desktop's shortcuts without moving anyone, read 
 off `desktops`, which lists every desktop's shortcuts.
 
 `shortcut set` refuses an app or launch path the registry does not declare.
-Creating, renaming, or deleting a *desktop itself* has no `layout.py`
+Creating, renaming, or deleting a *desktop itself* has no `workspace-layout`
 subcommand: it is the taskbar's desktop menu, or the shell's REST routes
 (`POST /api/desktops`, `POST /api/desktops/<id>/settings`, `POST
 /api/desktops/<id>/delete`), which the `system_interface` README documents.
@@ -235,7 +237,7 @@ the app's own to name, stop, or end:
 | End a terminal or the browser | `close` its last window: the terminal deletes a session no window shows, and the browser stops (profile and tabs kept) once none shows it |
 | Open another chat | the chat root page (`open chat`), or `open chat --path "/?chat=<id>"` |
 
-`layout.py` refuses the old tabbed-shell verbs (`split`, `move`, `rename`,
+`workspace-layout` refuses the old tabbed-shell verbs (`split`, `move`, `rename`,
 `delete`, `stop`, `start`, `replace-url`, `inspect`, `where`, `views`) and the
 old `app:`, `chat:`, `chat-terminal:`, `terminal:`, `service:`, `url:`, and
 `subagent:` spellings with the verb or form to use instead.
@@ -246,10 +248,10 @@ The shell edits the files itself and answers with the result, so every op
 returns as soon as the file is written; a connected window shows it within a
 redraw. Ops print a one-line description on **stderr** (`opened window
 win-... (terminal at /?session=terminal-3) on desktop home for client ...`, `placed window ...
-in the left zone ...`); `refresh` prints `(sent refresh to client <id>)`.
+as snapped-left ...`); `refresh` prints `(sent refresh to client <id>)`.
 
 **stdout** is reserved for machine-readable output: the id of the window
-`open` made, the structured output of the read commands, and the desktop's
+`open` or `show` put on screen, the structured output of the read commands, and the desktop's
 shortcuts as they stand after a `shortcut set`, `shortcut move`, or
 `shortcut remove`.
 
@@ -265,5 +267,5 @@ shortcuts as they stand after a `shortcut set`, `shortcut move`, or
 ## When NOT to use this skill
 
 - **Building a brand-new app.** Use `build-app` to scaffold it first; it
-  ends with a `layout.py open` call to surface the new window.
+  ends with a `workspace-layout open` call to surface the new window.
 - **Persisting layout state.** The frontend auto-saves every gesture.
