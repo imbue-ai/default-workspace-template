@@ -72,7 +72,7 @@ def _waiting_workspace(tmp_path: Path, messenger: RecordingMngrMessenger) -> Ite
         yield workspace
 
 
-def _start_runner(workspace: RunningWorkspace, tmp_path: Path, description: str, *command: str) -> None:
+def _start_runner(tmp_path: Path, description: str, *command: str) -> None:
     """Run the real runner for the fixture chat, as an agent's tool call does: it returns once the command is detached."""
     finished = subprocess.run(
         [sys.executable, str(_RUNNER), "--chat-id", FIXTURE_AGENT_ID, "--description", description, "--", *command],
@@ -139,7 +139,7 @@ def test_a_chat_waiting_on_the_runner_reads_background_until_the_report_is_hande
     messenger = RecordingMngrMessenger(sent=[])
     with _waiting_workspace(tmp_path, messenger) as workspace:
         client_queue = workspace.chat_state.agent_manager.broadcaster.register()
-        _start_runner(workspace, tmp_path, "Wait for the image build", "sleep", "6")
+        _start_runner(tmp_path, "Wait for the image build", "sleep", "6")
 
         wait_for(lambda: _chat(workspace)["status"] == "background", timeout=10.0, poll_interval=0.2)
         chat = _chat(workspace)
@@ -176,7 +176,7 @@ def test_a_chat_waiting_on_the_runner_reads_background_until_the_report_is_hande
 def test_a_chat_whose_runner_is_killed_returns_to_idle_within_a_poll(tmp_path: Path) -> None:
     messenger = RecordingMngrMessenger(sent=[])
     with _waiting_workspace(tmp_path, messenger) as workspace:
-        _start_runner(workspace, tmp_path, "A long wait", "sleep", "30")
+        _start_runner(tmp_path, "A long wait", "sleep", "30")
         wait_for(lambda: _chat(workspace)["status"] == "background", timeout=10.0, poll_interval=0.2)
         (marker,) = (tmp_path / "background_tasks" / FIXTURE_AGENT_ID).glob("*.json")
         runner_pid = json.loads(marker.read_text())["pid"]
@@ -199,7 +199,7 @@ def test_a_handoff_during_the_wait_leaves_the_successor_waiting_and_the_report_l
     messenger = RecordingMngrMessenger(sent=[])
     with _waiting_workspace(tmp_path, messenger) as workspace:
         manager = workspace.chat_state.agent_manager
-        _start_runner(workspace, tmp_path, "Wait for the migration", "sleep", "8")
+        _start_runner(tmp_path, "Wait for the migration", "sleep", "8")
         wait_for(lambda: _chat(workspace)["status"] == "background", timeout=10.0, poll_interval=0.2)
 
         # The handoff lands: the chat's record names the successor as its active agent.
