@@ -81,6 +81,7 @@ from imbue.chat.testing import InlineExecutor
 from imbue.chat.testing import RecordingGateway
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import VanishedAgentMngrMessenger
+from imbue.chat.testing import build_background_task_reader
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
 from imbue.chat.testing import drain_is_connecting_pushes
@@ -93,6 +94,7 @@ from imbue.chat.testing import open_ws
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import seed_failed_chat
 from imbue.chat.testing import serve_app
+from imbue.chat.testing import write_background_task_marker
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
@@ -167,6 +169,68 @@ def test_list_agents_endpoint(client: FlaskClient) -> None:
     assert len(data["agents"]) == 1
     assert data["agents"][0]["name"] == "test-agent"
     assert data["agents"][0]["state"] == "RUNNING"
+
+
+def test_the_agent_and_chat_listings_carry_each_chats_busy_verdict_and_pending_tasks(
+    config: Config, tmp_path: Path
+) -> None:
+    """``/api/agents`` is what ``system/scripts/background_tasks.py`` asks first, so its answer is checked through the
+    script's own parser; ``/api/chats`` carries the same facts on each snapshot."""
+    reader = build_background_task_reader(tmp_path / "background_tasks")
+    manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path / "chats", background_tasks=reader)
+    state = build_test_state(config=config, agent_manager=manager)
+    manager.note_agent_list_known()
+    seed_agent_state(manager, "agent-waiting", name="Waiting", state="WAITING", activity_state=ActivityState.IDLE)
+    seed_agent_state(manager, "agent-turn", name="Turn", activity_state=ActivityState.THINKING)
+    seed_agent_state(manager, "agent-idle", name="Idle", state="WAITING", activity_state=ActivityState.IDLE)
+    write_background_task_marker(reader, "agent-waiting", "task-1", os.getpid())
+    manager._agent_state_poller.poll_once()
+    discovered = [
+        AgentInfo(
+            id=agent_id,
+            name=agent_id,
+            state="RUNNING",
+            agent_state_dir=tmp_path / agent_id,
+            claude_config_dir=tmp_path / ".claude",
+        )
+        for agent_id in ("agent-waiting", "agent-turn", "agent-idle")
+    ]
+    client = create_application(state).test_client()
+    try:
+        with patch("imbue.chat.server.discover_agents", return_value=discovered):
+            agents_payload = client.get("/api/agents").get_json()
+        chats_payload = client.get("/api/chats").get_json()
+    finally:
+        state.shutdown()
+
+    by_id = {agent["id"]: agent for agent in agents_payload["agents"]}
+    assert {agent_id: (agent["chat_id"], agent["is_busy"]) for agent_id, agent in by_id.items()} == {
+        "agent-waiting": ("agent-waiting", True),
+        "agent-turn": ("agent-turn", True),
+        "agent-idle": ("agent-idle", False),
+    }
+    (task,) = by_id["agent-waiting"]["background_tasks"]
+    assert (task["source"], task["id"], task["pid"]) == ("run_in_background", "task-1", os.getpid())
+    parsed = {chat.chat_id: chat for chat in reader.script.chats_from_agents_payload(agents_payload)}
+    assert [task.id for task in parsed["agent-waiting"].tasks] == ["task-1"]
+    assert parsed["agent-turn"].is_busy and not parsed["agent-turn"].tasks
+
+    chats = {chat["chat_id"]: chat for chat in chats_payload["chats"]}
+    assert {chat_id: chat["status"] for chat_id, chat in chats.items()} == {
+        "agent-waiting": "background",
+        "agent-turn": "working",
+        "agent-idle": "idle",
+    }
+    assert chats["agent-waiting"]["active_agent"]["is_busy"] is True
+    assert chats["agent-waiting"]["active_agent"]["background_tasks"] == [
+        {
+            "id": "task-1",
+            "source": "run_in_background",
+            "kind": "",
+            "description": "Rebuild the worker image",
+            "started_at": "2026-10-08T12:00:00+00:00",
+        }
+    ]
 
 
 def test_health_reports_whether_lifecycle_events_are_arriving(client: FlaskClient) -> None:

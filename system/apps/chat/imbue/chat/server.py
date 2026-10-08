@@ -1767,10 +1767,23 @@ def _discover_with_filters() -> list[AgentInfo]:
 
 
 def _list_agents_endpoint() -> Response:
-    """List all mngr-managed agents (the loopback callers' listing: the evals bridge, the deployment tests)."""
-    agents = _discover_with_filters()
-    items = [AgentListItem(id=agent.id, name=agent.name, state=agent.state) for agent in agents]
-    return json_response(AgentListResponse(agents=items).model_dump())
+    """List all mngr-managed agents (the loopback callers' listing: the evals bridge, the deployment tests, and
+    ``system/scripts/background_tasks.py``, which reads each agent's busy verdict and its chat's pending tasks)."""
+    agent_manager: AgentManager = get_state().agent_manager
+    items: list[AgentListItem] = []
+    for agent in _discover_with_filters():
+        busy = agent_manager.busy_state_of_agent(agent.id, agent.labels)
+        items.append(
+            AgentListItem(
+                id=agent.id,
+                name=agent.name,
+                state=agent.state,
+                chat_id=busy.chat_id,
+                is_busy=busy.is_busy,
+                background_tasks=busy.background_tasks,
+            )
+        )
+    return json_response(AgentListResponse(agents=items).model_dump(mode="json"))
 
 
 def _list_chats_endpoint() -> Response:

@@ -199,6 +199,24 @@ Both are artificial lag/ordering bugs, not inherent latency — unacceptable. Th
 the mechanism that makes codex exact here; the codex plan must adopt them for activity, not the
 rollout-poll.
 
+### A6a. Busy is not activity — a pending background task is shown as a wait, not a turn
+An agent that started a background task and ended its turn is idle by A6: no turn is in flight,
+and the activity dot is cleared. But it will resume on its own when the task's report arrives, so
+its chat is **busy**, and the chat's status says so: **`background`**, distinct from both
+`working` and `idle`.
+- **Busy = a turn in flight, or a pending background task.** A pending task is a live marker in
+  the chat's directory (a task whose writer's process is alive). A permission request is not
+  busy (the chat waits on the user, not on itself), and neither is a process that will never
+  wake the agent.
+- **Precedence:** stopped, attention, working, background, idle. A turn in flight is `working`
+  even with tasks pending; the strip shows the activity line and, beneath it, the wait.
+- **The backend decides it** (`active_agent.is_busy` and `active_agent.background_tasks` on the
+  snapshot); the frontend renders the wait it is given and decides nothing.
+- **A wait ends exactly:** when the task's marker goes (its report delivered or given up) or its
+  writer's process dies, the chat returns to `idle` within one poll of the state poller.
+- **The wait belongs to the chat, not the agent:** a switch to another agent keeps it, and the
+  report's turn runs on the successor.
+
 ---
 
 ---

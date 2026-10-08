@@ -58,6 +58,8 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.background_tasks import BACKGROUND_TASKS_SCRIPT_PATH
+from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_records import ChatAgentEntry
 from imbue.chat.chat_records import ChatHandoffRecord
@@ -263,6 +265,34 @@ def make_chat_agent_entry(
 CONTINUE_CHAT_TEMPLATE_PATH: Final[Path] = (
     Path(__file__).parents[5] / ".agents" / "shared" / "references" / "continue-chat.md"
 )
+
+
+# The repo's own background-tasks script: tests write markers through it, as the agents' runner and hooks do.
+BACKGROUND_TASKS_SCRIPT_REPO_PATH: Final[Path] = Path(__file__).resolve().parents[5] / BACKGROUND_TASKS_SCRIPT_PATH
+
+
+def build_background_task_reader(root: Path) -> BackgroundTaskReader:
+    """A reader over ``root`` through the repo's script (production names it relative to the repo root)."""
+    return BackgroundTaskReader.load(root, BACKGROUND_TASKS_SCRIPT_REPO_PATH)
+
+
+def write_background_task_marker(
+    reader: BackgroundTaskReader,
+    chat_id: str,
+    task_id: str,
+    pid: int,
+    description: str = "Rebuild the worker image",
+    started_at: str = "2026-10-08T12:00:00+00:00",
+) -> None:
+    """Write a ``run_in_background`` marker into the chat's directory with the script's own writer."""
+    task = reader.script.BackgroundTask(
+        source=reader.script.SOURCE_RUN_IN_BACKGROUND,
+        id=task_id,
+        description=description,
+        started_at=started_at,
+        pid=pid,
+    )
+    reader.script.write_marker(reader.root, chat_id, task)
 
 
 def write_summary_for_request(text: str) -> None:
@@ -903,6 +933,8 @@ def make_chat_snapshot(chat_id: str, last_messaged_at: float | None = None, name
             queued_messages=(),
             shoulder_tap_available=False,
             is_connecting=False,
+            is_busy=False,
+            background_tasks=(),
         ),
         last_messaged_at=last_messaged_at,
     )
