@@ -117,7 +117,11 @@ class ClientStateReport(FrozenModel):
 
     client_id: ClientId = Field(description="The reporting client")
     active_desktop: DesktopId = Field(description="The desktop the client is on now")
-    previous_desktop: str = Field(default="", description="The desktop it was on before, empty on connect")
+    previous_desktop: str = Field(
+        default="",
+        description="The desktop the window left, empty when the report names none (a connect, a landing, or a "
+        "following report)",
+    )
     report_id: ReportId | None = Field(
         default=None,
         description="The window's id for a report that moves the client, echoed on the broadcast it causes; None for a "
