@@ -140,6 +140,18 @@ class _SyncWorkspace:
     def record(self, key: str) -> dict:
         return import_chats.read_status(self.status_path)["sources"][key]
 
+    def watch_record(self, key: str, is_reached: Callable[[dict], bool]) -> list[dict]:
+        """Every reading of ``key``'s record, every 10ms for up to 5s, until one ``is_reached``: how a test sees what
+        a running sync's progress thread records."""
+        readings: list[dict] = []
+        pause = threading.Event()
+        for _ in range(500):
+            readings.append(self.record(key))
+            if is_reached(readings[-1]):
+                break
+            pause.wait(0.01)
+        return readings
+
 
 @pytest.fixture
 def workspace(tmp_path: Path) -> _SyncWorkspace:
@@ -771,13 +783,15 @@ def test_a_running_sync_records_the_pages_rendered_so_far(
                 "https://chatgpt.com/c/x",
                 [],
             )
-        pause = threading.Event()
-        for _ in range(500):
-            record = workspace.record("chatgpt")
-            seen_counts.append(record["conversations"])
-            if record["state"] == "importing" and record["conversations"] == 3:
-                break
-            pause.wait(0.01)
+        seen_counts.extend(
+            record["conversations"]
+            for record in workspace.watch_record(
+                "chatgpt",
+                lambda record: (
+                    record["state"] == "importing" and record["conversations"] == 3
+                ),
+            )
+        )
         summary = _run_summary({"step": "chatgpt_chats/ingest", "status": "succeeded"})
         return subprocess.CompletedProcess(command, 0, "", summary)
 
@@ -886,13 +900,13 @@ def test_a_running_sync_records_how_many_of_its_conversations_it_has_fetched(
             _progress_event("progress_inc", "chatgpt_chats/ingest", delta=1),
         ]:
             on_stderr_line(line)
-        pause = threading.Event()
-        for _ in range(500):
-            record = workspace.record("chatgpt")
-            seen.append((record["fetched"], record["to_fetch"]))
-            if seen[-1] == (2, 5):
-                break
-            pause.wait(0.01)
+        seen.extend(
+            (record["fetched"], record["to_fetch"])
+            for record in workspace.watch_record(
+                "chatgpt",
+                lambda record: (record["fetched"], record["to_fetch"]) == (2, 5),
+            )
+        )
         summary = _run_summary({"step": "chatgpt_chats/ingest", "status": "succeeded"})
         return subprocess.CompletedProcess(command, 0, "", summary)
 
