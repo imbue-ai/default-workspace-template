@@ -1,6 +1,7 @@
-"""One file's changes, watched with watchdog: the handler that fires on the mutating events naming the file and
-the observer that carries it, shared by the app inventory (the registry) and the avatar status reader (mngr's
-agents event file)."""
+"""Changes watched with watchdog: one file's, by a handler that fires on the mutating events naming the file, shared
+by the app inventory (the registry) and the avatar status reader (mngr's agents event file); and a whole tree's, by
+a handler that fires on every mutating event under it, which the avatar status reader watches the chats' background
+task markers with."""
 
 import os
 from collections.abc import Callable
@@ -41,6 +42,22 @@ class FileChangeHandler(FileSystemEventHandler):
     on_closed = _maybe_fire
 
 
+class TreeChangeHandler(FileSystemEventHandler):
+    """Fires ``on_change`` on every mutating event anywhere under the watched directory, file or directory alike:
+    the same mutation events ``FileChangeHandler`` subscribes to, so a read of a file under it never fires."""
+
+    on_change: Callable[[], None]
+
+    def _fire(self, event: FileSystemEvent) -> None:
+        self.on_change()
+
+    on_modified = _fire
+    on_created = _fire
+    on_deleted = _fire
+    on_moved = _fire
+    on_closed = _fire
+
+
 def make_file_change_handler(basename: str, on_change: Callable[[], None]) -> FileChangeHandler:
     handler = FileChangeHandler()
     handler.basename = basename
@@ -48,18 +65,34 @@ def make_file_change_handler(basename: str, on_change: Callable[[], None]) -> Fi
     return handler
 
 
-def start_file_watch(path: Path, on_change: Callable[[], None]) -> BaseObserver | None:
-    """Watch ``path``'s directory, which must exist, calling ``on_change`` whenever the file is written, replaced,
-    or removed; None (logged) when the watch cannot start."""
+def make_tree_change_handler(on_change: Callable[[], None]) -> TreeChangeHandler:
+    handler = TreeChangeHandler()
+    handler.on_change = on_change
+    return handler
+
+
+def _start_observer(handler: FileSystemEventHandler, directory: Path, is_recursive: bool) -> BaseObserver | None:
     observer = _Observer()
-    observer.schedule(make_file_change_handler(path.name, on_change), str(path.parent))
+    observer.schedule(handler, str(directory), recursive=is_recursive)
     observer.daemon = True
     try:
         observer.start()
     except OSError as e:
-        logger.opt(exception=e).error("Failed to watch {}", path)
+        logger.opt(exception=e).error("Failed to watch {}", directory)
         return None
     return observer
+
+
+def start_file_watch(path: Path, on_change: Callable[[], None]) -> BaseObserver | None:
+    """Watch ``path``'s directory, which must exist, calling ``on_change`` whenever the file is written, replaced,
+    or removed; None (logged) when the watch cannot start."""
+    return _start_observer(make_file_change_handler(path.name, on_change), path.parent, is_recursive=False)
+
+
+def start_tree_watch(directory: Path, on_change: Callable[[], None]) -> BaseObserver | None:
+    """Watch ``directory``, which must exist, and everything under it, calling ``on_change`` whenever a file or
+    directory in it is created, written, replaced, or removed; None (logged) when the watch cannot start."""
+    return _start_observer(make_tree_change_handler(on_change), directory, is_recursive=True)
 
 
 def stop_file_watch(observer: BaseObserver) -> None:
