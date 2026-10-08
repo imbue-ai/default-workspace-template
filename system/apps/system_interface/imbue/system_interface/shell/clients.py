@@ -66,6 +66,7 @@ class _StoredClient(FrozenModel):
     )
     desktop_revision: int = Field(
         default=0,
+        ge=0,
         description="Counts the moves of the stored active desktop and the reports redirected off a deleted desktop",
     )
 
