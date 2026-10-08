@@ -9,8 +9,10 @@ It joins three sources, each read independently so one failing leaves the others
 
 - free memory, from ``/proc/meminfo`` (``MemAvailable``, else ``MemFree``; the field read is named);
 - agents, from ``mngr list --provider local`` rendered through a ``--format`` template: a chat
-  (``user_created``) or worker (``agent_created``) whose state is ``WAITING`` and whose latest
-  activity is at least ``IDLE_AFTER_SECONDS`` old. Its memory is the summed RSS of its process trees, rooted at the pid
+  (``user_created``) or worker (``agent_created``) whose state is ``WAITING``, whose chat is not
+  busy, and whose latest activity is at least ``IDLE_AFTER_SECONDS`` old. A chat is busy while a
+  background task will wake its agent, which ``system/scripts/background_tasks.py`` reads from the
+  chats' marker files (loaded by path; a tree without it has no busy chats). Its memory is the summed RSS of its process trees, rooted at the pid
   mngr reports plus every live pid the agent-pid registry holds for it;
 - browsers, from the browser service's ``GET /browsers``: a ``running`` browser that no desktop
   window shows, per the shell's ``GET /api/desktops``. Its memory is the summed RSS of every
@@ -25,6 +27,7 @@ insert), so it runs under a plain ``python3``.
 
 import argparse
 import http.client
+import importlib.util
 import json
 import os
 import subprocess
@@ -35,6 +38,7 @@ import urllib.request
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Final, NamedTuple
 
 sys.path.insert(
@@ -56,6 +60,9 @@ from oom_priority.registry import live_pids_by_agent_id
 # still reading its reply.
 IDLE_AFTER_SECONDS: Final[float] = 15 * 60
 IDLE_AGENT_STATE: Final[str] = "WAITING"
+# The label naming the chat an agent belongs to, which the chat app stamps on a chat's agents once it has handed
+# off; an agent without it is its own chat.
+CHAT_ID_LABEL: Final[str] = "chat_id"
 CHAT_KIND: Final[str] = "chat"
 WORKER_KIND: Final[str] = "worker"
 
@@ -72,6 +79,7 @@ MNGR_LIST_FIELDS: Final[tuple[str, ...]] = (
     f"labels.{PRIMARY_LABEL}",
     f"labels.{CHAT_LABEL}",
     f"labels.{WORKER_LABEL}",
+    f"labels.{CHAT_ID_LABEL}",
     "labels.display_name",
 )
 MNGR_LIST_FIELD_SEPARATOR: Final[str] = "|"
@@ -117,10 +125,12 @@ KIB_PER_MIB: Final[int] = 1024
 README_SECTION: Final[str] = 'system/services/oom_priority/README.md, "Memory candidates"'
 
 _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[4]
+BACKGROUND_TASKS_SCRIPT: Final[Path] = _REPO_ROOT / "system" / "scripts" / "background_tasks.py"
 _PROC_DIR: Final[Path] = Path("/proc")
 
 RunCommand = Callable[[Sequence[str], float], "subprocess.CompletedProcess[str]"]
 FetchJson = Callable[[str, float], Any]
+IsChatBusy = Callable[[str], bool]
 
 
 class FreeMemory(NamedTuple):
@@ -141,6 +151,10 @@ class ListedAgent(NamedTuple):
     last_activity: datetime | None
     labels: Mapping[str, str]
     display_name: str | None
+
+    @property
+    def chat_id(self) -> str:
+        return self.labels.get(CHAT_ID_LABEL) or self.agent_id
 
 
 class AgentCandidate(NamedTuple):
@@ -200,6 +214,7 @@ class Sources(NamedTuple):
     browser_service_url: str
     shell_url: str
     now: datetime
+    is_chat_busy: IsChatBusy
 
 
 # Free memory
@@ -348,15 +363,17 @@ def idle_agent_candidates(
     registry_pids: Mapping[str, Sequence[int]],
     proc_dir: Path,
     now: datetime,
+    is_chat_busy: IsChatBusy,
 ) -> list[AgentCandidate]:
-    """The idle chats and workers, largest memory first."""
+    """The idle chats and workers, largest memory first. An agent whose chat waits on a background task is not idle:
+    the task's completion will start its next turn."""
     candidates: list[AgentCandidate] = []
     for agent in agents:
         kind = agent_kind(agent.labels)
         if kind is None or agent.state != IDLE_AGENT_STATE or agent.last_activity is None:
             continue
         idle_seconds = (now - agent.last_activity).total_seconds()
-        if idle_seconds < IDLE_AFTER_SECONDS:
+        if idle_seconds < IDLE_AFTER_SECONDS or is_chat_busy(agent.chat_id):
             continue
 
         # The pid mngr reports plus every pid the agent registered (codex registers two).
@@ -384,7 +401,7 @@ def collect_agent_section(sources: Sources) -> AgentSection:
     if agents is None:
         return AgentSection(candidates=None, notes=tuple(notes))
     registry_pids = live_pids_by_agent_id(is_alive=lambda pid: (sources.proc_dir / str(pid)).is_dir())
-    candidates = idle_agent_candidates(agents, registry_pids, sources.proc_dir, sources.now)
+    candidates = idle_agent_candidates(agents, registry_pids, sources.proc_dir, sources.now, sources.is_chat_busy)
     return AgentSection(candidates=tuple(candidates), notes=tuple(notes))
 
 
@@ -613,7 +630,11 @@ def render_table(report: Report) -> str:
         total = "" if free.total_kib is None else f"; {MEMINFO_TOTAL_FIELD} {_mib(free.total_kib)}"
         lines.append(f"Free memory: {_mib(free.free_kib)} ({free.field} from /proc/meminfo{total})")
 
-    lines += ["", f"Idle chats and workers (waiting, no activity for {_duration(IDLE_AFTER_SECONDS)} or more):"]
+    lines += [
+        "",
+        f"Idle chats and workers (waiting, not on a background task, no activity for {_duration(IDLE_AFTER_SECONDS)}"
+        " or more):",
+    ]
     agents = report.agents.candidates
     if agents is None:
         lines.append("  unknown")
@@ -678,6 +699,23 @@ def resolve_browser_service_url() -> str:
     return app_registry.read_app_url(registry, BROWSER_APP_NAME) or DEFAULT_BROWSER_SERVICE_URL
 
 
+def _load_background_tasks(script: Path) -> ModuleType:
+    spec = importlib.util.spec_from_file_location("background_tasks_for_memory_candidates", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def busy_chat_check(script: Path, environ: Mapping[str, str]) -> IsChatBusy:
+    """Whether a chat has a live background task, from its marker files; never, in a tree without the reader."""
+    if not script.is_file():
+        return lambda chat_id: False
+    background_tasks = _load_background_tasks(script)
+    root = background_tasks.marker_root(environ)
+    return lambda chat_id: background_tasks.is_busy(root, chat_id)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="List idle chats and workers, and browsers no window shows, alongside free memory. Stops nothing."
@@ -691,6 +729,7 @@ def main() -> None:
         browser_service_url=resolve_browser_service_url(),
         shell_url=os.environ.get(ENV_SHELL_URL, DEFAULT_SHELL_URL).rstrip("/"),
         now=datetime.now(timezone.utc),
+        is_chat_busy=busy_chat_check(BACKGROUND_TASKS_SCRIPT, os.environ),
     )
     report = collect_report(sources)
     output = json.dumps(report_to_json(report), indent=2) + "\n" if args.json else render_table(report)

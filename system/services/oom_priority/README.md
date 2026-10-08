@@ -322,6 +322,14 @@ It lists:
     example) are never listed;
   - is `WAITING`, meaning its turn has ended. A `RUNNING` agent is mid-turn, and
     a `STOPPED` or `DONE` agent holds no memory to free;
+  - is in a chat that is not busy. An agent that ended its turn to wait on a
+    background task (a command started through `run_in_background.py`, or one
+    of Claude's own) is `WAITING` too, but the task's completion will start its
+    next turn, so stopping it would lose work in flight. The chat is the
+    agent's `chat_id` label, else the agent's own id, and it is busy while it
+    holds a live marker under the chats' marker root, read through
+    `system/scripts/background_tasks.py`. A tree without that script has no
+    busy chats;
   - has had no activity for `IDLE_AFTER_SECONDS` (15 minutes). Its last
     activity is the latest of mngr's `user_activity_time`, `agent_activity_time`
     and `start_time`. mngr's own `idle_seconds` is not used, because it also
