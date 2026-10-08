@@ -72,23 +72,24 @@ function schedulePoll(): void {
   pollTimer = setTimeout(() => void refreshChatImport(), POLL_INTERVAL_MS);
 }
 
-async function fetchChatImport(init?: RequestInit, path: string = CHAT_IMPORT_PATH): Promise<ChatImport | null> {
+/** ``action`` says what the request was for in the warning a failure logs ("could not <action>"). */
+async function fetchChatImport(path: string, action: string, init?: RequestInit): Promise<ChatImport | null> {
   try {
     const response = await fetch(apiUrl(path), init);
     if (!response.ok) {
-      console.warn(`[getting-started] could not load the chat import state: HTTP ${response.status}`);
+      console.warn(`[getting-started] could not ${action}: HTTP ${response.status}`);
       return null;
     }
     return (await response.json()) as ChatImport;
   } catch (e) {
-    console.warn("[getting-started] could not load the chat import state", e);
+    console.warn(`[getting-started] could not ${action}`, e);
     return null;
   }
 }
 
 /** Fetch the card's state; keeps polling for as long as a source is importing. */
 export async function refreshChatImport(): Promise<void> {
-  const next = await fetchChatImport();
+  const next = await fetchChatImport(CHAT_IMPORT_PATH, "load the chat import state");
   if (next !== null) state = next;
   m.redraw();
   schedulePoll();
@@ -98,7 +99,7 @@ export async function refreshChatImport(): Promise<void> {
 export async function dismissChatImport(): Promise<void> {
   if (state !== null) state = { ...state, is_dismissed: true };
   m.redraw();
-  const next = await fetchChatImport({ method: "POST" }, CHAT_IMPORT_DISMISS_PATH);
+  const next = await fetchChatImport(CHAT_IMPORT_DISMISS_PATH, "put the chat import card away", { method: "POST" });
   if (next !== null) state = next;
   schedulePoll();
 }
