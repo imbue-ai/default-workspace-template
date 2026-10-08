@@ -392,7 +392,10 @@ but take no more of the user's messages. The message route and the intake answer
 409 with `kind: account_signed_out` for a chat whose `account` label names an
 account the index no longer has (a send held for a chat already switching is
 still held), and the composer shows "Choose a provider" in place of the input
-until a switch to another account is armed. A notice the chat app delivers for
+until a switch to another account is armed. A chat page shows it only for an
+account it removed itself, or one a fresh read of the account list still lacks:
+the list it read earlier misses accounts signed in on other pages since (the
+chat list's chooser, another chat). A notice the chat app delivers for
 the agent's own secret request still goes through.
 
 A Claude or ChatGPT sign-in finishes in the user's own browser. The CLI (`claude

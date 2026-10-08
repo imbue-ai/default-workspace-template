@@ -56,7 +56,7 @@ const mocks = vi.hoisted(() => {
     beginSwitchToAccountId: vi.fn(),
     // The account ids that read as signed out; empty at rest.
     signedOutAccountIds: new Set<string>(),
-    loadAccounts: vi.fn(async () => {}),
+    rereadAccountsFor: vi.fn(async (_accountId: string) => {}),
     cancelHandoff: vi.fn(async () => ({ returned_block: "" })),
     switching,
     drainToComposer: vi.fn(async () => ({ block: "" })),
@@ -199,7 +199,7 @@ vi.mock("../models/Providers", () => ({
   areAccountsLoaded: () => mocks.accountsLoaded,
   isAccountSignedOut: (accountId: string | null | undefined) =>
     !!accountId && mocks.signedOutAccountIds.has(accountId),
-  loadAccounts: () => mocks.loadAccounts(),
+  rereadAccountsFor: (accountId: string) => mocks.rereadAccountsFor(accountId),
   whenAccountsReadyToChoose: () => Promise.resolve(),
 }));
 
@@ -1310,7 +1310,7 @@ describe("MessageInput on a chat whose account was signed out", () => {
     mocks.sendMessage.mockClear();
     mocks.openProviderChooser.mockClear();
     mocks.beginSwitchToAccountId.mockClear();
-    mocks.loadAccounts.mockClear();
+    mocks.rereadAccountsFor.mockClear();
     mocks.agent.harness = "codex";
     mocks.agent.activity_state = undefined;
     mocks.agent.account_id = "account-signed-out-5521";
@@ -1389,7 +1389,7 @@ describe("MessageInput on a chat whose account was signed out", () => {
   it("catches up with a sign-out made in another window when the send is refused for it", async () => {
     // This page's list still has the account, so the composer is there to send from.
     mocks.signedOutAccountIds.clear();
-    mocks.loadAccounts.mockImplementationOnce(async () => {
+    mocks.rereadAccountsFor.mockImplementationOnce(async () => {
       mocks.signedOutAccountIds.add("account-signed-out-5521");
     });
     mocks.sendMessage.mockRejectedValueOnce({
@@ -1400,7 +1400,7 @@ describe("MessageInput on a chat whose account was signed out", () => {
 
     await typeAndSend(component, "agent-signed-out", "are you still there?");
 
-    await vi.waitFor(() => expect(mocks.loadAccounts).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(mocks.rereadAccountsFor).toHaveBeenCalledWith("account-signed-out-5521"));
     const tree = component.view!({ attrs: { chatId: "agent-signed-out" } } as never);
     expect(findButton(tree, "Choose a provider")).toBeDefined();
     expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
@@ -1415,6 +1415,6 @@ describe("MessageInput on a chat whose account was signed out", () => {
 
     await typeAndSend(MessageInput(), "agent-signed-out", "hello");
 
-    expect(mocks.loadAccounts).not.toHaveBeenCalled();
+    expect(mocks.rereadAccountsFor).not.toHaveBeenCalled();
   });
 });

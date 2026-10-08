@@ -31,8 +31,8 @@ import {
   accountForFirstSend,
   areAccountsLoaded,
   isAccountSignedOut,
-  loadAccounts,
   openProviderChooser,
+  rereadAccountsFor,
   whenAccountsReadyToChoose,
 } from "../models/Providers";
 import type { ProvisionalChat } from "../models/Chats";
@@ -278,15 +278,17 @@ function composeRow(leading: m.Children | undefined, boxChildren: m.Children[]):
 /**
  * Re-read the account list when a send was refused because the chat's account was signed out.
  *
- * The composer offers "Choose a provider" from that list, which only this page's own account
- * actions refresh: a removal made in another window leaves it listing the account until then.
+ * The composer gives way to "Choose a provider" once that list lacks the account, and only this
+ * page's own account actions refresh it: a removal made in another window leaves it listing the
+ * account until then.
  */
-function catchUpOnSignedOutAccount(sendError: unknown): void {
+function catchUpOnSignedOutAccount(chatId: string, sendError: unknown): void {
   const kind = (sendError as { response?: { kind?: unknown } | null } | null)?.response?.kind;
-  if (kind !== ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND) {
+  const accountId = getChatById(chatId)?.active_agent.account_id;
+  if (kind !== ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND || !accountId) {
     return;
   }
-  loadAccounts().then(
+  rereadAccountsFor(accountId).then(
     () => m.redraw(),
     (err: unknown) => console.error(`Failed to re-read the account list: ${describeRequestError(err)}`),
   );
@@ -682,7 +684,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // would take the message with it (contract A1a). A repeat send removes that copy once
           // it has landed.
           restoreFailedMessageToComposer(chatId, sentText, sentAttachments);
-          catchUpOnSignedOutAccount(err);
+          catchUpOnSignedOutAccount(chatId, err);
           // Actions only if they are still on the agent that failed -- this catch runs after an
           // await, so they may have switched and the switch-clear has already gone by.
           if (currentChatId === chatId) {
@@ -1043,7 +1045,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           focusMessageTextarea();
         } catch (err) {
           dropOutgoing(recovery.chatId, outgoingId);
-          catchUpOnSignedOutAccount(err);
+          catchUpOnSignedOutAccount(recovery.chatId, err);
           // Failed again. Only re-open the notice if they are still on that agent -- otherwise
           // it would surface this agent's error over a different chat, with no way to act on it.
           // The message is already back in that agent's composer either way.
