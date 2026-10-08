@@ -853,27 +853,33 @@ export class DesktopStore {
    *  when it differs and is newer than anything this window heard (a record no newer says nothing the
    *  window has not taken, and its own desktop may be a switch whose report went down with the socket,
    *  which the report below then makes), and the layout is read again either way, for the
-   *  ``placements_updated`` missed.
+   *  ``placements_updated`` missed. News heard on the new socket while the record was being read is newer than
+   *  what this window had: the window follows it and only registers its connection here, since its desktop may
+   *  still be the one the news moved the client off.
    *  The record's entries and the workspace's selection are taken again too, for the
    *  ``client_entries_changed`` and ``avatar_selection_changed`` missed (the server resends the rest). */
   private async resyncAfterReconnect(): Promise<void> {
     let recorded: string | null = null;
     let isRecordedNewer = false;
     const entryPushesBefore = this.entryPushes;
+    const heardBeforeRead = this.desktopRevisionHeard;
     try {
       const clients = await this.deps.api.fetchClients();
       const own = clients.find((client) => client.id === this.deps.clientId);
       this.takeFetchedEntries(own, entryPushesBefore);
       if (own !== undefined) this.takeShownHistory(own.shown_history);
-      // The shell only ever raises a record's revision, so one below what this window heard (or no record at all)
-      // means the record was reset under the page, restored or pruned: the shell counts again from there.
+      // The shell only ever raises a record's revision, so one below what this window had heard (or no record at
+      // all) means the record was reset under the page, restored or pruned: the shell counts again from there.
       const recordedRevision = own?.desktop_revision ?? 0;
-      if (recordedRevision < this.desktopRevisionHeard) this.desktopRevisionHeard = recordedRevision;
+      const isResetUnderPage =
+        this.desktopRevisionHeard === heardBeforeRead && recordedRevision < this.desktopRevisionHeard;
+      if (isResetUnderPage) this.desktopRevisionHeard = recordedRevision;
       isRecordedNewer = this.hearDesktopRevision(recordedRevision);
       recorded = own?.active_desktop ?? null;
     } catch (error) {
       console.warn("[si] could not read the client records after reconnecting", error);
     }
+    const isNewsHeardDuringRead = this.desktopRevisionHeard > heardBeforeRead && !isRecordedNewer;
     void this.loadAvatarSelection();
     const isRecordedKnown = recorded !== null && this.state.desktops.some((desktop) => desktop.id === recorded);
     // A solo shell stays on its window's desktop: the recorded one is the main window's, and a report from
@@ -884,7 +890,8 @@ export class DesktopStore {
       await this.switchDesktop(recorded, "follow");
       return;
     }
-    this.reportMove("");
+    if (isNewsHeardDuringRead) this.reportFollowedDesktop();
+    else this.reportMove("");
     await this.refetchLayout();
   }
 

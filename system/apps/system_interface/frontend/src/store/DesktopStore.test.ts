@@ -864,6 +864,25 @@ describe("desktop news", () => {
     await settle();
     expect(store.getState().activeDesktopId).toBe("home");
   });
+
+  it("follows news heard while a reconnect reads the record, and moves the client nowhere", async () => {
+    api.clients = [clientRecord(CLIENT, { active_desktop: "home", desktop_revision: 1 })];
+    const store = await startedStore();
+    socket.deliver().onConnected();
+    store.minimizeWindow("win-1");
+    const answerReads = api.holdReads();
+    const answerWrites = api.holdWrites();
+    socket.deliver().onConnected();
+    const reportsBefore = socket.reports.length;
+    // Another window moves the client to work while the record read is out; following it waits on this one's save.
+    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "work", revision: 2, reportId: null });
+    answerReads();
+    await settle();
+    answerWrites();
+    await settle();
+    expect(store.getState().activeDesktopId).toBe("work");
+    expect(socket.reports.slice(reportsBefore)).toEqual([followingReport("home"), followingReport("work")]);
+  });
 });
 
 describe("gestures", () => {
