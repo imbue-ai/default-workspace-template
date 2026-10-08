@@ -250,12 +250,14 @@ def test_clearing_removes_only_the_claude_markers(
         {"MAIN_CLAUDE_SESSION_ID": ""},
         {"CLAUDE_PROJECT_DIR": "/somewhere/else"},
         {"MNGR_AGENT_ID": ""},
+        {"CLAUDE_PID": ""},
     ],
     ids=[
         "subagent-proxy-child",
         "no-main-session",
         "other-project-dir",
         "not-an-agent",
+        "no-claude-pid",
     ],
 )
 def test_a_claude_that_is_not_the_agents_main_session_writes_nothing(

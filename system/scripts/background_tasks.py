@@ -484,11 +484,15 @@ def claude_hook_chat_id(environ: Mapping[str, str]) -> str:
     Only the agent's main Claude session writes: not mngr's subagent-proxy children, not a
     Claude outside an mngr agent, and not a nested Claude started in another directory. A
     nested Claude in the work dir passes these checks; the main session's next Stop corrects
-    what it wrote.
+    what it wrote. A Claude that does not name its own pid (``CLAUDE_PID``) writes nothing
+    either: its markers would have no process to go stale by.
     """
     if environ.get("MNGR_CLAUDE_SUBAGENT_PROXY_CHILD") or not environ.get(
         "MAIN_CLAUDE_SESSION_ID"
     ):
+        return ""
+    raw_pid = environ.get("CLAUDE_PID", "")
+    if not (raw_pid.isdigit() and int(raw_pid) > 0):
         return ""
     project_dir, work_dir = (
         environ.get("CLAUDE_PROJECT_DIR", ""),
@@ -504,9 +508,9 @@ def claude_hook_chat_id(environ: Mapping[str, str]) -> str:
 
 
 def claude_main_pid(environ: Mapping[str, str]) -> int:
-    """The Claude process whose exit makes its markers stale: ``CLAUDE_PID``, else this hook's parent."""
-    raw = environ.get("CLAUDE_PID", "")
-    return int(raw) if raw.isdigit() and int(raw) > 0 else os.getppid()
+    """The Claude process whose exit makes its markers stale: ``CLAUDE_PID``, which Claude Code sets
+    for its hooks (this hook's parent is only the shell it runs the hook command through)."""
+    return int(environ["CLAUDE_PID"])
 
 
 def claude_tasks_from_stop_input(
