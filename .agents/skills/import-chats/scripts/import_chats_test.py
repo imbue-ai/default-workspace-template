@@ -464,49 +464,45 @@ def test_a_sync_marks_its_sources_importing_with_its_pid_while_it_runs(
     }
 
 
-def test_a_sync_whose_install_fails_records_the_failure_and_says_why(
+def _runtime_fetch_fails(
+    command: Sequence[str], **_kwargs: object
+) -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess(command, 1, "", "no network\n")
+
+
+def _runtime_fetch_hangs(
+    command: Sequence[str], timeout: float | None = None, **_kwargs: object
+) -> subprocess.CompletedProcess:
+    assert timeout is not None
+    raise subprocess.TimeoutExpired(command, timeout)
+
+
+def _datalib_cannot_start(
+    command: Sequence[str], **_kwargs: object
+) -> subprocess.CompletedProcess:
+    raise PermissionError(13, "Permission denied", command[0])
+
+
+@pytest.mark.parametrize(
+    ("run", "reason"),
+    [
+        (_runtime_fetch_fails, "no network"),
+        (_runtime_fetch_hangs, "could not fetch its runtime: no answer in"),
+        (_datalib_cannot_start, "Permission denied"),
+    ],
+    ids=["runtime-fetch-fails", "runtime-fetch-hangs", "datalib-cannot-start"],
+)
+def test_a_sync_that_cannot_run_records_the_failure_and_reports_it_as_an_import_error(
     workspace: _SyncWorkspace,
+    run: Callable[..., subprocess.CompletedProcess],
+    reason: str,
 ) -> None:
-    def run(command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess:
-        return subprocess.CompletedProcess(command, 1, "", "no network\n")
-
-    with pytest.raises(import_chats.ImportChatsError, match="no network"):
-        workspace.sync([CHATGPT], run)
-
-    record = workspace.record("chatgpt")
-    assert record["state"] == "failed"
-    assert "no network" in record["detail"]
-
-
-def test_a_sync_whose_runtime_fetch_hangs_gives_up_and_records_the_failure(
-    workspace: _SyncWorkspace,
-) -> None:
-    def run(
-        command: Sequence[str], timeout: float | None = None, **_kwargs: object
-    ) -> subprocess.CompletedProcess:
-        assert timeout is not None
-        raise subprocess.TimeoutExpired(command, timeout)
-
-    with pytest.raises(import_chats.ImportChatsError, match="no answer in"):
+    with pytest.raises(import_chats.ImportChatsError, match=reason):
         workspace.sync([CLAUDE], run)
 
     record = workspace.record("claude")
     assert record["state"] == "failed"
-    assert "could not fetch its runtime" in record["detail"]
-
-
-def test_a_sync_that_cannot_run_datalib_records_the_failure_and_reports_it_as_an_import_error(
-    workspace: _SyncWorkspace,
-) -> None:
-    def run(command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess:
-        raise PermissionError(13, "Permission denied", command[0])
-
-    with pytest.raises(import_chats.ImportChatsError, match="Permission denied"):
-        workspace.sync([CLAUDE], run)
-
-    record = workspace.record("claude")
-    assert record["state"] == "failed"
-    assert "Permission denied" in record["detail"]
+    assert reason in record["detail"]
 
 
 def test_an_unreadable_status_file_is_an_error_rather_than_a_fresh_start(
