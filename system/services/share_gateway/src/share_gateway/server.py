@@ -28,8 +28,8 @@ from flask import request
 from werkzeug.datastructures import Headers
 
 from share_gateway.caddyfile import RegisteredApp
-from share_gateway.caddyfile import build_label_to_name
 from share_gateway.caddyfile import build_grantable_service_names
+from share_gateway.caddyfile import build_label_to_name
 from share_gateway.grants import Grants
 from share_gateway.grants import GrantsError
 from share_gateway.grants import load_grants

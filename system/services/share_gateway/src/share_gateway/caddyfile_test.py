@@ -1,8 +1,8 @@
 from pathlib import Path
 
 from share_gateway.caddyfile import build_frame_ancestors_policy
-from share_gateway.caddyfile import build_label_to_name
 from share_gateway.caddyfile import build_grantable_service_names
+from share_gateway.caddyfile import build_label_to_name
 from share_gateway.caddyfile import parse_registered_apps
 from share_gateway.caddyfile import render_caddyfile
 
