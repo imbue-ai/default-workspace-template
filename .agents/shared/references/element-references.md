@@ -17,7 +17,7 @@ the click. Every field is present; a fact the page did not know is `null` or emp
 |---|---|
 | `reference_id` | The `REF-<id>` the message calls it by |
 | `app` | The app the page belongs to (`system_interface` is the desktop shell; `chat`; `getting_started`; anything else is an app under `system/apps/<app>/`); `null` when the page was opened outside the workspace |
-| `window_id`, `desktop_id`, `client_id` | The window, desktop, and client the page was showing in; what `uv run workspace-layout` addresses |
+| `window_id`, `desktop_id`, `client_id` | The window, desktop, and client the page was showing in; what `uv run --no-sync workspace-layout` addresses |
 | `page_origin`, `page_path`, `page_title` | Where the page was: its origin, its path with the query, and its title |
 | `tag`, `id`, `classes`, `attributes` | The element's tag, its `id`, its class list in order, and every other attribute (`data-*`, `href`, `src`, `style`, ...; a password field's `value` attribute is withheld) |
 | `role`, `aria_label` | Its `role` and `aria-label` attributes |

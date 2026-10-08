@@ -71,7 +71,18 @@ export const REATTACH_WINDOW: "minds:reattach-window" =
 // desktop window follows it, came back inside, or was released out there.
 // Payload: { windowId, phase: "out" | "in" | "released" }.
 export const TEAR_OUT: "minds:tear-out" = "TEAR_OUT" in embedContract ? embedContract.TEAR_OUT : "minds:tear-out";
-// Embedder -> workspace (contract v7, the workspace link routing plan): a popup a page of this workspace opened
+// The provider sign-in pair (contract v7), probed the same way.
+// Workspace -> embedder: relay a provider sign-in's loopback callback into this workspace's flow and
+// open its page. Payload: { url, flowId }.
+export const PROVIDER_SIGN_IN: "minds:provider-sign-in" =
+  "PROVIDER_SIGN_IN" in embedContract ? embedContract.PROVIDER_SIGN_IN : "minds:provider-sign-in";
+// Embedder -> workspace: whether the chrome is relaying that sign-in. Payload: { relay }.
+export const PROVIDER_SIGN_IN_ACK: "minds:provider-sign-in-ack" =
+  "PROVIDER_SIGN_IN_ACK" in embedContract ? embedContract.PROVIDER_SIGN_IN_ACK : "minds:provider-sign-in-ack";
+// Workspace -> embedder: that sign-in has ended, so the chrome can stop relaying it. Payload: { flowId }.
+export const PROVIDER_SIGN_IN_END: "minds:provider-sign-in-end" =
+  "PROVIDER_SIGN_IN_END" in embedContract ? embedContract.PROVIDER_SIGN_IN_END : "minds:provider-sign-in-end";
+// Embedder -> workspace (contract v8, the workspace link routing plan): a popup a page of this workspace opened
 // to a local address, which Imbue Studio turned away from a window of its own; the workspace opens it inside.
 // Payload: { url }. Sent only to a workspace that announced ``opensLinks`` with WORKSPACE_READY.
 export const OPEN_LINK: "minds:open-link" = "OPEN_LINK" in embedContract ? embedContract.OPEN_LINK : "minds:open-link";
@@ -89,6 +100,7 @@ const EMBEDDER_TO_WORKSPACE_TYPES: readonly string[] = [
   EMBEDDER_CAPABILITIES,
   REATTACH_WINDOW,
   TEAR_OUT,
+  PROVIDER_SIGN_IN_ACK,
   OPEN_LINK,
 ];
 

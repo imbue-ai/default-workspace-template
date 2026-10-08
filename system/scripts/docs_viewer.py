@@ -9,7 +9,7 @@ on refresh. Run it with the ``markdown`` package available, e.g.::
 Then register + surface it as a workspace tab::
 
     python3 system/scripts/forward_port.py --name queuing-specs --url http://localhost:8791 --no-icon
-    uv run workspace-layout open queuing-specs
+    uv run --no-sync workspace-layout open queuing-specs
 """
 
 import argparse

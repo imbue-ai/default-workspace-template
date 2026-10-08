@@ -8,12 +8,12 @@ from app_manifest.errors import AppRegistrationError
 from app_manifest.errors import RegistryReadError
 from app_manifest.primitives import AppName
 from app_manifest.primitives import AppUrl
-from app_manifest.registry import DEFAULT_APPS_FILE
-from app_manifest.registry import ENV_APPS_FILE
 from app_manifest.registry import read_origin_label
 from app_manifest.registry import read_registry
 from app_manifest.registry import register_app
-from app_manifest.registry import registry_path
+from app_manifest.registry_location import DEFAULT_APPS_FILE
+from app_manifest.registry_location import ENV_APPS_FILE
+from app_manifest.registry_location import registry_path
 from app_manifest.testing import APP_ICON_MARKUP
 
 

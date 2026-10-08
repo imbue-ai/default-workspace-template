@@ -27,7 +27,8 @@ vi.mock("../models/Chats", () => ({
 }));
 
 const catalogState: { catalog: unknown } = { catalog: null };
-vi.mock("../models/HarnessCatalog", () => ({
+vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),
   ensureHarnessCatalogs: () => undefined,
   getHarnessCatalog: (harness?: string) => (harness === undefined ? null : catalogState.catalog),
 }));
@@ -161,6 +162,15 @@ function click(selector: string): void {
   render();
 }
 
+function clickSubmenuRow(label: string): void {
+  const row = [...document.querySelectorAll<HTMLElement>('[data-menu-part="submenu"] button')].find((button) =>
+    button.textContent?.includes(label),
+  );
+  if (row === undefined) throw new Error(`no ${label} row in the submenu`);
+  row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  render();
+}
+
 /** Take the pointer off the open submenu and wait out the menu's leave grace. Needs fake timers,
  *  and overshoots the shared menu's own grace constant rather than restating it. */
 function leaveSubmenu(): void {
@@ -178,7 +188,13 @@ const OPUS = {
   supports_fast: false,
   in_picker: true,
   harness_reported_model_id: null,
+  default_effort: null,
 };
+const LOW_MEDIUM_HIGH = [
+  { level: "low", in_picker: true },
+  { level: "medium", in_picker: true },
+  { level: "high", in_picker: true },
+];
 const ACCOUNT = {
   id: "acct-1",
   lane: "anthropic",
@@ -412,12 +428,7 @@ describe("the combo card", () => {
   it("commits an effort on release, not on every notch of the drag", () => {
     // Each notch is a live switch typed into the agent's pane, and setModelChoice chains
     // rather than debounces -- a low-to-max drag would queue one per stop.
-    const efforts = [
-      { level: "low", in_picker: true },
-      { level: "medium", in_picker: true },
-      { level: "high", in_picker: true },
-    ];
-    const model = { ...OPUS, efforts };
+    const model = { ...OPUS, efforts: LOW_MEDIUM_HIGH };
     catalogState.catalog = catalogOf({ options: [model] });
     settingsState.choice = {
       identity: { model_id: "opus", effort: "low", fast: false },
@@ -443,12 +454,7 @@ describe("the combo card", () => {
     // Uncommitted is not the same as unshown: the row is what you are aiming with, so it reads
     // off the thumb from the first notch. The TRIGGER keeps saying the committed level, since
     // that is still what the agent is running on until release.
-    const efforts = [
-      { level: "low", in_picker: true },
-      { level: "medium", in_picker: true },
-      { level: "high", in_picker: true },
-    ];
-    const model = { ...OPUS, efforts };
+    const model = { ...OPUS, efforts: LOW_MEDIUM_HIGH };
     catalogState.catalog = catalogOf({ options: [model] });
     settingsState.choice = {
       identity: { model_id: "opus", effort: "low", fast: false },
@@ -521,6 +527,55 @@ describe("the combo card", () => {
     click(".model-selector-trigger");
     expect(document.querySelector('[data-menu-row="effort"]')?.textContent).toContain("Ultra");
     expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("0");
+  });
+
+  it("shows the model's default effort for a chat that never picked one", () => {
+    // codex records no effort until one is picked, while the thread runs at the model's default.
+    const model = { ...OPUS, id: "gpt-6-sol", label: "GPT-6-Sol", efforts: LOW_MEDIUM_HIGH, default_effort: "medium" };
+    catalogState.catalog = catalogOf({ picker_mode: "dynamic", switch_mode: "on_change", options: [] });
+    settingsState.choice = {
+      identity: { model_id: "gpt-6-sol", effort: null, fast: false },
+      matched: model,
+      pending: null,
+    };
+    render();
+    expect(document.querySelector(".model-selector-trigger")?.textContent).toContain("Medium");
+    click(".model-selector-trigger");
+    expect(document.querySelector('[data-menu-row="effort"]')?.textContent).toContain("Medium");
+    expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("1");
+  });
+
+  it("carries the default effort in effect onto a newly picked model", () => {
+    const current = { ...OPUS, efforts: LOW_MEDIUM_HIGH, default_effort: "medium" };
+    const other = { ...OPUS, id: "sonnet", label: "Sonnet", efforts: LOW_MEDIUM_HIGH, default_effort: "medium" };
+    catalogState.catalog = catalogOf({ options: [current, other] });
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: null, fast: false },
+      matched: current,
+      pending: null,
+    };
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="model"]');
+    clickSubmenuRow("Sonnet");
+    expect(picks).toHaveLength(1);
+    expect((picks[0] as unknown[])[1]).toEqual({ model_id: "sonnet", effort: "medium", fast: false });
+  });
+
+  it("lands a newly picked model on its default when it does not offer the current effort", () => {
+    const current = { ...OPUS, efforts: [...LOW_MEDIUM_HIGH, { level: "xhigh", in_picker: true }] };
+    const other = { ...OPUS, id: "sonnet", label: "Sonnet", efforts: LOW_MEDIUM_HIGH, default_effort: "medium" };
+    catalogState.catalog = catalogOf({ options: [current, other] });
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: "xhigh", fast: false },
+      matched: current,
+      pending: null,
+    };
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="model"]');
+    clickSubmenuRow("Sonnet");
+    expect((picks[0] as unknown[])[1]).toEqual({ model_id: "sonnet", effort: "medium", fast: false });
   });
 
   it("colours each tick for the part of the track it is drawn on", () => {

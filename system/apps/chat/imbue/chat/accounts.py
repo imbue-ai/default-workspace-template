@@ -31,7 +31,6 @@ import shutil
 import threading
 import uuid
 from collections.abc import Iterator
-from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
@@ -351,19 +350,36 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
 # is not.
 KEPT_ON_DISCARD: Final = ("projects",)
 
-# Where a re-auth parks the credential it is about to replace.
-#
-# A re-auth has to delete the working credential before driving the CLI -- three of the four
-# promote probes are presence checks, so a flow judged against the file already there reports
-# success without anything having changed. That leaves a window in which the only copy of a
-# working credential is in process memory, and a stop, a snapshot, an OOM kill or a supervisord
-# restart in that window destroys it with no trace on disk: the row still points at a folder
-# that exists, so nothing notices, and every chat bound there fails on its next turn looking
-# signed in. Parking it here instead makes the window survivable -- `reconcile` puts it back at
-# boot -- and it is inside the account folder so deleting the account takes the backup with it.
-REAUTH_BACKUP_DIRNAME: Final = ".minds-reauth-backup"
-# Marks a backed-up file that did not exist before the flow, so restoring it means deleting it.
-_ABSENT_SUFFIX: Final = ".absent"
+# CLEANUP: where a re-auth used to park the credential it replaced, and the marker for a file that
+# did not exist before it. `reconcile` restores and removes any left behind; remove these and
+# `_restore_legacy_reauth_backup` once every workspace has booted a build without parking.
+_LEGACY_REAUTH_BACKUP_DIRNAME: Final = ".minds-reauth-backup"
+_LEGACY_ABSENT_SUFFIX: Final = ".absent"
+
+
+def _restore_legacy_reauth_backup(account_id: str, home: Path | None) -> int:
+    """Put back a credential an older build parked mid-re-auth, and remove the parking spot.
+
+    A re-auth on that build moved the working credential aside before signing in, so one that
+    died part way left the only copy here. Returns how many files it covered.
+    """
+    folder = account_dir(account_id, home)
+    backup = folder / _LEGACY_REAUTH_BACKUP_DIRNAME
+    if not backup.is_dir():
+        return 0
+    restored = 0
+    for child in sorted(backup.iterdir()):
+        if child.name.endswith(_LEGACY_ABSENT_SUFFIX):
+            continue
+        target = folder / child.name
+        if (backup / f"{child.name}{_LEGACY_ABSENT_SUFFIX}").exists():
+            target.unlink(missing_ok=True)
+        else:
+            target.write_bytes(child.read_bytes())
+            target.chmod(0o600)
+        restored += 1
+    shutil.rmtree(backup, ignore_errors=True)
+    return restored
 
 
 def discard_account_dir(account_id: str, home: Path | None = None) -> None:
@@ -549,66 +565,6 @@ def resolve_account(account_id: str, home: Path | None = None) -> Account:
     raise AccountError(f"no such account: {account_id}")
 
 
-def _reauth_backup_dir(account_id: str, home: Path | None = None) -> Path:
-    return account_dir(account_id, home) / REAUTH_BACKUP_DIRNAME
-
-
-def save_reauth_backup(account_id: str, files: Mapping[Path, bytes | None], home: Path | None = None) -> None:
-    """Park the credential a re-auth is about to delete, so it outlives this process.
-
-    Keyed by file NAME rather than by path: every credential a harness reads sits directly in
-    the account folder, and a name is what survives being written to disk and read back by a
-    later process that has no memory of the flow. A file that did not exist is recorded as an
-    empty marker, so the restore knows to remove rather than to write.
-    """
-    backup = _reauth_backup_dir(account_id, home)
-    shutil.rmtree(backup, ignore_errors=True)
-    backup.mkdir(parents=True, exist_ok=True)
-    backup.chmod(0o700)
-    for path, content in files.items():
-        target = backup / path.name
-        if content is None:
-            target.write_bytes(b"")
-            (backup / f"{path.name}{_ABSENT_SUFFIX}").write_bytes(b"")
-        else:
-            target.write_bytes(content)
-        target.chmod(0o600)
-
-
-def clear_reauth_backup(account_id: str, home: Path | None = None) -> None:
-    """Drop the parked copy. Called once the new credential is committed."""
-    shutil.rmtree(_reauth_backup_dir(account_id, home), ignore_errors=True)
-
-
-def restore_reauth_backup(account_id: str, home: Path | None = None) -> int:
-    """Put a parked credential back, returning how many files it covered.
-
-    Zero when there is nothing parked, which is the ordinary case. Only ever called with the
-    index lock held, so it cannot race a flow that is mid-commit.
-    """
-    backup = _reauth_backup_dir(account_id, home)
-    if not backup.is_dir():
-        return 0
-    folder = account_dir(account_id, home)
-    if not folder.is_dir():
-        shutil.rmtree(backup, ignore_errors=True)
-        return 0
-    restored = 0
-    for child in sorted(backup.iterdir()):
-        if child.name.endswith(_ABSENT_SUFFIX):
-            continue
-        target = folder / child.name
-        if (backup / f"{child.name}{_ABSENT_SUFFIX}").exists():
-            # It did not exist before the flow, so putting it "back" means removing it.
-            target.unlink(missing_ok=True)
-        else:
-            target.write_bytes(child.read_bytes())
-            target.chmod(0o600)
-        restored += 1
-    shutil.rmtree(backup, ignore_errors=True)
-    return restored
-
-
 def reconcile(home: Path | None = None) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Make the index and the folders agree, in BOTH directions. Called at boot.
 
@@ -632,16 +588,11 @@ def reconcile(home: Path | None = None) -> tuple[tuple[str, ...], tuple[str, ...
     with _index_lock(home):
         index = read_index(home)
         known = {a.id for a in index.accounts}
-        # Before anything else: a re-auth that died mid-flight left the only copy of a working
-        # credential parked in the account folder. Put it back, so the account this boot
-        # inherits is the one the user had rather than a signed-out husk that still looks fine.
         for account in index.accounts:
-            restored = restore_reauth_backup(account.id, home)
+            restored = _restore_legacy_reauth_backup(account.id, home)
             if restored:
                 logger.warning(
-                    "Restored {} credential file(s) for account {} from an interrupted re-auth",
-                    restored,
-                    account.id,
+                    "Restored {} credential file(s) for account {} from an interrupted re-auth", restored, account.id
                 )
         removed = []
         for child in sorted(root.iterdir()):

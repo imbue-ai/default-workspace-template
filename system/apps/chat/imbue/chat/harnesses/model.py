@@ -66,6 +66,10 @@ class ModelOption(FrozenModel):
     # The DECLARED effort set: the validity + matching universe for this model.
     # An empty tuple means the model has no effort axis (the slot is hidden).
     efforts: tuple[EffortChoice, ...]
+    # The effort the model runs at when none has been picked, for a harness whose live state records
+    # no effort until one is (codex). The bar shows it in place of that missing effort, and a pick for
+    # the model may leave its effort unnamed to run at it. None when the harness does not report one.
+    default_effort: str | None = None
     # Whether fast mode applies to this model. Per-MODEL, not per-harness.
     supports_fast: bool
     # False = a hidden model: matchable (a live read of it still displays) but not
@@ -199,14 +203,15 @@ def validate_model_pick(
 
     One rule for every pick, wherever it is made: the model bar's route and a switch's pick for
     the agent it creates. The model is an exact id lookup (a picker only ever sends an option
-    id); the effort is required and in the model's declared set when the model has an effort
-    axis, and absent when it does not; fast needs the model's support.
+    id); the effort is in the model's declared set when the model has an effort axis, and absent
+    when it does not; fast needs the model's support. An absent effort on a model with an effort
+    axis is allowed only when the model has a default effort, which it then runs at.
     """
     option = next((candidate for candidate in options if candidate.id == model_id), None)
     if option is None:
         raise InvalidModelPickError(f"Unknown model '{model_id}'")
     declared_efforts = {choice.level for choice in option.efforts}
-    if declared_efforts and effort is None:
+    if declared_efforts and effort is None and option.default_effort is None:
         raise InvalidModelPickError("This model requires an effort level")
     if declared_efforts and effort is not None and effort not in declared_efforts:
         raise InvalidModelPickError(f"'{effort}' is not a valid effort for '{model_id}'")

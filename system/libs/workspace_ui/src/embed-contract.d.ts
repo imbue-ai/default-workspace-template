@@ -31,7 +31,11 @@ declare module "@minds/embed-contract" {
   export const EMBEDDER_CAPABILITIES: "minds:embedder-capabilities";
   export const REATTACH_WINDOW: "minds:reattach-window";
   export const TEAR_OUT: "minds:tear-out";
-  // The link a popup was turned into (contract v7). Probed like the ones above.
+  // The provider sign-in set (contract v7). Probed like the ones above.
+  export const PROVIDER_SIGN_IN: "minds:provider-sign-in";
+  export const PROVIDER_SIGN_IN_ACK: "minds:provider-sign-in-ack";
+  export const PROVIDER_SIGN_IN_END: "minds:provider-sign-in-end";
+  // The link a popup was turned into (contract v8). Probed like the ones above.
   export const OPEN_LINK: "minds:open-link";
   export const MAX_OPEN_LINK_URL_LENGTH: number;
 

@@ -7,9 +7,9 @@ from typing import Final
 import pytest
 from loguru import logger
 
+from workspace_layout.agent_identity import ENV_MINDS_CHAT_ID
+from workspace_layout.agent_identity import ENV_MNGR_AGENT_ID
 from workspace_layout.cli import LayoutCliContext
-from workspace_layout.client import ENV_MINDS_CHAT_ID
-from workspace_layout.client import ENV_MNGR_AGENT_ID
 from workspace_layout.testing import LoopbackShell
 from workspace_layout.testing import write_registry
 
@@ -58,7 +58,7 @@ def layout_context(loopback_shell: LoopbackShell, registry: Path) -> LayoutCliCo
     return LayoutCliContext(
         shell_url=loopback_shell.url,
         apps_file=registry,
-        requester=None,
+        requester_chat_id=None,
         registration_timeout_seconds=0.0,
         read_timeout_seconds=5.0,
         op_timeout_seconds=5.0,

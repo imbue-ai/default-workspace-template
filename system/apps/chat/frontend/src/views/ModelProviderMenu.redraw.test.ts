@@ -22,7 +22,8 @@ const agentState: { agent: ChatSnapshot | null } = { agent: null };
 vi.mock("../models/Chats", () => ({ getChatById: () => agentState.agent }));
 
 const catalogState: { catalog: unknown } = { catalog: null };
-vi.mock("../models/HarnessCatalog", () => ({
+vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),
   ensureHarnessCatalogs: () => undefined,
   getHarnessCatalog: () => catalogState.catalog,
 }));
@@ -82,6 +83,7 @@ const OPUS = {
   supports_fast: false,
   in_picker: true,
   harness_reported_model_id: null,
+  default_effort: null,
 };
 const ACCOUNT = {
   id: "acct-1",

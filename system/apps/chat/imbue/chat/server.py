@@ -21,7 +21,7 @@ from uuid import uuid4
 
 from app_manifest.primitives import AppName
 from app_manifest.registry import read_origin_label
-from app_manifest.registry import registry_path
+from app_manifest.registry_location import registry_path
 from flask import Flask
 from flask import Response
 from flask import current_app
