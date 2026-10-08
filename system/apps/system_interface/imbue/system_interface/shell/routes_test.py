@@ -603,7 +603,11 @@ def test_every_desktop_holds_one_pinned_window_per_pinned_app_and_a_new_desktop_
     assert born["app"] == "buddy" and born["is_pinned"] is True and born["id"] != pinned["id"]
     # An open at the home path with the default focus behaviour finds the pinned window.
     focused = _open_window(client, "buddy", "/")
-    assert focused.status_code == 200 and focused.get_json() == {"window": pinned, "is_new": False}
+    assert focused.status_code == 200 and focused.get_json() == {
+        "window": pinned,
+        "is_new": False,
+        "has_no_desktop_window": False,
+    }
 
 
 def test_a_pinned_window_is_refused_a_close_by_the_route_and_by_the_op(
@@ -1047,7 +1051,11 @@ def test_windows_open_focus_locate_and_close_across_clients(client: FlaskClient,
 
     # The same app at the same path is answered rather than opened, and raised in the requesting client's layout.
     focused = _open_window(client, "terminal", "/new?workdir=%2Ftmp", client_id="c2")
-    assert focused.status_code == 200 and focused.get_json() == {"window": window, "is_new": False}
+    assert focused.status_code == 200 and focused.get_json() == {
+        "window": window,
+        "is_new": False,
+        "has_no_desktop_window": False,
+    }
     (restored,) = _placements(client, "c2")
     assert restored["window_id"] == window["id"] and restored["is_minimized"] is False
     another = _open_window(client, "terminal", "/new?workdir=%2Ftmp", if_present="new")
