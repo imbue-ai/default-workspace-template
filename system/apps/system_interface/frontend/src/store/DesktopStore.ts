@@ -49,6 +49,7 @@ import type {
   Inventory,
   LaunchPath,
   Layout,
+  MessageRelay,
   PinStyle,
   Placement,
   PresentUser,
@@ -177,7 +178,7 @@ export interface DesktopApi {
     clientId: string,
     payload: Readonly<Record<string, unknown>>,
     sender: string,
-  ): Promise<void>;
+  ): Promise<MessageRelay>;
 }
 
 /** A message this page received, from the Imbue Studio chrome or from an app's frame: its type and its own fields. */
@@ -188,6 +189,10 @@ export const EMBEDDER_SENDER = "embedder";
 
 /** What a link to another workspace's app gets, since only that workspace can open it. */
 export const OTHER_WORKSPACE_LINK_NOTICE = "That link belongs to another workspace, so it cannot open here.";
+
+/** What a message shown on this client's desktop gets while the client has only pop-outs open. */
+export const SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE =
+  "It opened on your desktop. Reopen the main Imbue Studio window to see it.";
 
 /** What the live-page layer does for the store, registered by that layer (it sits above the store). */
 export interface PageDriver {
@@ -998,7 +1003,8 @@ export class DesktopStore {
    *  A chrome message is relayed only when an app registered for its type, and never from a preview shell (whose
    *  backend refuses the relay: the apps it names are the live ones) or a solo shell (whose client is the main
    *  window's, which relays the chrome's messages itself). An app's message is always relayed, from a solo shell
-   *  too: what it shows lands on this client's desktop, in the main window. */
+   *  too: what it shows lands on this client's desktop, in the main window, and when that window is closed the user
+   *  is told to reopen it. */
   async relayEmbedderMessage(message: EmbedderMessage, senderApp: string | null): Promise<boolean> {
     const isFromEmbedder = senderApp === null;
     if (
@@ -1011,14 +1017,18 @@ export class DesktopStore {
   }
 
   /** Ask the shell to deliver ``message`` to the apps registered for its type, telling the user why when it did not
-   *  reach every one; answers whether it did. */
+   *  reach every one, or when a page it showed waits for a desktop window; answers whether it reached every app. */
   private async deliverMessage(message: EmbedderMessage, sender: string): Promise<boolean> {
     const { type, ...payload } = message;
+    let relay: MessageRelay;
     try {
-      await this.deps.api.relayEmbedderMessage(type, this.deps.clientId, payload, sender);
+      relay = await this.deps.api.relayEmbedderMessage(type, this.deps.clientId, payload, sender);
     } catch (error) {
       this.toast((error as Error).message);
       return false;
+    }
+    if (relay.deliveries.some((delivery) => delivery.has_no_desktop_window)) {
+      this.toast(SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE);
     }
     return true;
   }

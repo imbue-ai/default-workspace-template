@@ -17,7 +17,12 @@ import {
   windowRecord,
 } from "../testing/records";
 import type { GridCell } from "../model/records";
-import { DesktopStore, OTHER_WORKSPACE_LINK_NOTICE, chooseInitialDesktopId } from "./DesktopStore";
+import {
+  DesktopStore,
+  OTHER_WORKSPACE_LINK_NOTICE,
+  SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE,
+  chooseInitialDesktopId,
+} from "./DesktopStore";
 import type { PopOutBridge, StoreDependencies } from "./DesktopStore";
 
 const METRICS = themeMetricsRecord();
@@ -1325,6 +1330,20 @@ describe("embedder messages", () => {
     expect(api.relayedMessages).toEqual([
       { type: "open:file", clientId: CLIENT, payload: { path: "/home/user/plan.md" }, sender: "chat" },
     ]);
+  });
+
+  it("tells the user to reopen the main window when what an app's message showed waits on the desktop", async () => {
+    api.apps = [appRecord("docs"), appRecord("notes"), HANDLING_APP];
+    const store = makeStore(() => undefined, { soloWindowId: "win-1" });
+    await store.start(NO_LINK);
+    api.relayDeliveries = [{ app: "files", has_no_desktop_window: false }];
+    expect(await store.relayEmbedderMessage({ type: "open:file", path: "/home/user/a.md" }, "chat")).toBe(true);
+    expect(notices()).toEqual([]);
+
+    api.relayDeliveries = [{ app: "files", has_no_desktop_window: true }];
+    expect(await store.relayEmbedderMessage({ type: "open:file", path: "/home/user/b.md" }, "chat")).toBe(true);
+
+    expect(notices()).toEqual([SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE]);
   });
 
   it("relays no chrome message of a type no app registered for", async () => {

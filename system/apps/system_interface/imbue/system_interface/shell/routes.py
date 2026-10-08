@@ -351,6 +351,7 @@ def _show_relayed_page(shown: ShownPage, relayed: EmbedderMessageRelayRequest) -
         is_delivered=True,
         shown=result.outcome,
         window_id=result.window_id,
+        has_no_desktop_window=result.has_no_desktop_window,
     )
 
 

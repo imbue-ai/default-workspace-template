@@ -12,6 +12,7 @@ import {
   parseDesktop,
   parseInventory,
   parseLayout,
+  parseMessageRelay,
   parsePresentUsers,
   parseWallpaperListings,
   shortcutKey,
@@ -80,6 +81,23 @@ describe("parseClientArrival", () => {
       parseClientArrival({ desktop_id: null, created_desktop: null, replaced_desktop_name: null }).desktop_id,
     ).toBeNull();
     expect(() => parseClientArrival({ desktop_id: 7 })).toThrow(WireShapeError);
+  });
+});
+
+describe("parseMessageRelay", () => {
+  it("reads a shown page's wait for a desktop window, a posted message as not waiting, and refuses the wrong shape", () => {
+    const relay = parseMessageRelay({
+      type: "open:file",
+      deliveries: [
+        { app: "logger", status: 200, detail: "" },
+        { app: "files", status: 200, detail: "", shown: "opened", has_no_desktop_window: true, window_id: "win-1" },
+      ],
+    });
+    expect(relay.deliveries).toEqual([
+      { app: "logger", has_no_desktop_window: false },
+      { app: "files", has_no_desktop_window: true },
+    ]);
+    expect(() => parseMessageRelay({ type: "open:file" })).toThrow(WireShapeError);
   });
 });
 

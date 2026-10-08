@@ -165,11 +165,35 @@ def test_a_show_handler_opens_the_page_it_builds_from_the_message_and_raises_it_
     assert first.get_json() == {
         "type": _OPEN_FILE,
         "deliveries": [
-            {"app": _VIEWER_ROW_NAME, "status": 200, "detail": "", "shown": "opened", "window_id": window["id"]}
+            {
+                "app": _VIEWER_ROW_NAME,
+                "status": 200,
+                "detail": "",
+                "shown": "opened",
+                "has_no_desktop_window": False,
+                "window_id": window["id"],
+            }
         ],
     }
     assert second.get_json()["deliveries"][0]["shown"] == "raised"
     assert second.get_json()["deliveries"][0]["window_id"] == window["id"]
+
+
+def test_a_show_for_a_client_with_only_pop_outs_open_says_the_page_waits_for_a_desktop_window(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A link clicked in a pop-out after the main window closed: the page is put on the client's desktop, which no
+    window shows, and the delivery says so, so the pop-out's page can tell the user."""
+    client = _arrived_client(tmp_path, broadcaster, _viewer_row())
+    broadcaster.set_pop_out_info(broadcaster.register(), _CLIENT_ID)
+
+    alone = _relay(client, {"type": _OPEN_FILE, "client_id": _CLIENT_ID, "payload": {"path": "/x.md"}})
+    broadcaster.set_client_info(broadcaster.register(), _CLIENT_ID, "home")
+    with_desktop = _relay(client, {"type": _OPEN_FILE, "client_id": _CLIENT_ID, "payload": {"path": "/y.md"}})
+
+    assert alone.status_code == 200
+    assert alone.get_json()["deliveries"][0]["has_no_desktop_window"] is True
+    assert with_desktop.get_json()["deliveries"][0]["has_no_desktop_window"] is False
 
 
 def test_a_window_on_a_showing_page_counts_as_already_showing_the_message(

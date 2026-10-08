@@ -963,6 +963,10 @@ class ShowResult(FrozenModel):
     is_raised_in_own_window: bool = Field(
         description="The window was popped out, so its own window was raised and it stayed out"
     )
+    has_no_desktop_window: bool = Field(
+        description="The client's only open windows are pop-outs, so the page shown on the desktop waits for a "
+        "desktop window to open"
+    )
 
 
 def _show_page(
@@ -1021,6 +1025,7 @@ def _show_page(
         window_id=window_id,
         outcome=choice.outcome,
         is_raised_in_own_window=is_raised_in_own_window,
+        has_no_desktop_window=not is_raised_in_own_window and _has_no_desktop_window(shell, client_id),
     )
 
 
@@ -1032,9 +1037,7 @@ def _show(
         shell, arguments.app, arguments.path, set(arguments.showing), set(arguments.repoint), target, requester
     )
     notes = _PopOutNotes(
-        is_raised_in_own_window=result.is_raised_in_own_window,
-        has_no_desktop_window=not result.is_raised_in_own_window
-        and _has_no_desktop_window(shell, result.shown_on.client_id),
+        is_raised_in_own_window=result.is_raised_in_own_window, has_no_desktop_window=result.has_no_desktop_window
     )
     answer = ShowAnswer.model_validate(
         {

@@ -18,6 +18,8 @@ import type {
   AvatarCatalog,
   ClientArrival,
   ClientRecord,
+  MessageDelivery,
+  MessageRelay,
   Desktop,
   DesktopShortcut,
   EntryPresentation,
@@ -61,6 +63,8 @@ export class FakeDesktopApi implements DesktopApi {
     payload: Readonly<Record<string, unknown>>;
     sender: string;
   }[] = [];
+  /** What the relay answers each app did with a message it took. */
+  relayDeliveries: MessageDelivery[] = [];
   /** A refusal every route raises while set. */
   refusal: string | null = null;
   /** The page a POST launch path answers (as the app would); a GET launch path's page is built from its path. */
@@ -457,10 +461,11 @@ export class FakeDesktopApi implements DesktopApi {
     clientId: string,
     payload: Readonly<Record<string, unknown>>,
     sender: string,
-  ): Promise<void> {
+  ): Promise<MessageRelay> {
     this.calls.push(`relayEmbedderMessage:${type}:${clientId}:${sender}`);
     this.refuse();
     this.relayedMessages.push({ type, clientId, payload, sender });
+    return { deliveries: this.relayDeliveries };
   }
 }
 

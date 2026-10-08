@@ -215,6 +215,19 @@ export interface ClientArrival {
   readonly replaced_desktop_name: string | null;
 }
 
+/** One app's part of the answer to a message every app took (contracts.md section 5.6), as far as a page reads it:
+ *  for a page shown, whether the client has only pop-outs open, so the page waits on its desktop for a desktop
+ *  window (false for a posted message). */
+export interface MessageDelivery {
+  readonly app: string;
+  readonly has_no_desktop_window: boolean;
+}
+
+/** What the shell answers a message every app took. */
+export interface MessageRelay {
+  readonly deliveries: readonly MessageDelivery[];
+}
+
 export interface WallpaperListing {
   readonly kind: WallpaperKind;
   readonly name: string;
@@ -617,6 +630,19 @@ export function parseInventory(raw: unknown): Inventory {
     apps: parseAppRecords(record.apps),
     clients: parseClientRecords(record.clients),
     workspace_name: asString(record.workspace_name ?? "", "inventory.workspace_name"),
+  };
+}
+
+export function parseMessageRelay(raw: unknown): MessageRelay {
+  const record = asObject(raw, "message relay");
+  return { deliveries: asArray(record.deliveries, "message relay.deliveries").map(parseMessageDelivery) };
+}
+
+function parseMessageDelivery(raw: unknown): MessageDelivery {
+  const record = asObject(raw, "message delivery");
+  return {
+    app: asString(record.app, "message delivery.app"),
+    has_no_desktop_window: asBoolean(record.has_no_desktop_window ?? false, "message delivery.has_no_desktop_window"),
   };
 }
 

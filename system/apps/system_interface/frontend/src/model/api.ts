@@ -15,6 +15,7 @@ import {
   parseDesktop,
   parseInventory,
   parseLayout,
+  parseMessageRelay,
   parseWallpaperListings,
   parseWindow,
 } from "./records";
@@ -30,6 +31,7 @@ import type {
   IfPresent,
   Inventory,
   Layout,
+  MessageRelay,
   Placement,
   Wallpaper,
   WallpaperListing,
@@ -302,12 +304,14 @@ export async function quitApp(appName: string): Promise<void> {
 
 /** Ask the shell to deliver a message this client's page received, from the Imbue Studio chrome or from an app's frame
  *  (``sender`` says which: ``embedder`` or the app), to the apps registered for its type (contracts.md section 5.6);
- *  throws with the shell's detail when an app did not take it. */
+ *  answers what each app did with it, and throws with the shell's detail when an app did not take it. */
 export async function relayEmbedderMessage(
   type: string,
   clientId: string,
   payload: Readonly<Record<string, unknown>>,
   sender: string,
-): Promise<void> {
-  await postJson<unknown>(apiUrl("/api/embedder-messages"), { type, client_id: clientId, payload, sender });
+): Promise<MessageRelay> {
+  return parseMessageRelay(
+    await postJson<unknown>(apiUrl("/api/embedder-messages"), { type, client_id: clientId, payload, sender }),
+  );
 }

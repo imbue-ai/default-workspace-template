@@ -98,6 +98,11 @@ class MessageDelivery(FrozenModel):
         default=None, description="For a page shown: which way the ``show`` op went (raised, navigated, ...)"
     )
     window_id: WindowId | None = Field(default=None, description="For a page shown: the window that shows it")
+    has_no_desktop_window: bool = Field(
+        default=False,
+        description="For a page shown: the client's only open windows are pop-outs, so the page waits on its desktop "
+        "for a desktop window to open",
+    )
 
 
 @pure
@@ -177,6 +182,7 @@ def message_delivery_wire_json(delivery: MessageDelivery) -> dict[str, Any]:
     wire: dict[str, Any] = {"app": str(delivery.app), "status": delivery.status, "detail": delivery.detail}
     if delivery.shown is not None:
         wire["shown"] = delivery.shown.value
+        wire["has_no_desktop_window"] = delivery.has_no_desktop_window
     if delivery.window_id is not None:
         wire["window_id"] = str(delivery.window_id)
     return wire
