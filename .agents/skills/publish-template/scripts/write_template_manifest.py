@@ -58,6 +58,9 @@ SUPERVISORD_DROPIN_DIRECTORY = "system/supervisord.conf.d"
 # A reference to a secret file anywhere in a config: the file's slug is what a
 # declaration is keyed by.
 _SECRET_REFERENCE_RE = re.compile(r"data/\.secrets/([a-z0-9][a-z0-9-]*)\.env")
+# A supervisord comment (a whole ';'/'#' line, or ';' after whitespace): a secret
+# file named there is documentation, not a file the program runs under.
+_SUPERVISORD_COMMENT_RE = re.compile(r"^\s*[;#].*$|\s;.*$", re.MULTILINE)
 _SECRET_FILE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _VARIABLE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # The names an env file sets: what `system/scripts/with_secrets.py` reads, names only.
@@ -290,14 +293,21 @@ def collect_references(repo_root: Path) -> dict[str, list[str]]:
             continue
         relative = path.relative_to(repo_root).as_posix()
         text = path.read_text(encoding="utf-8", errors="replace")
-        if path.suffix == ".conf":
-            # A supervisord comment that mentions a secret file (the stock
-            # host-backup and share-gateway drop-ins document theirs that way)
-            # is not a program running under it.
-            text = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith((";", "#")))
-        for match in _SECRET_REFERENCE_RE.finditer(text):
-            sources_by_file.setdefault(match.group(1), []).append(relative)
+        for file in sorted(secret_references_in(path, text)):
+            sources_by_file.setdefault(file, []).append(relative)
     return sources_by_file
+
+
+def secret_references_in(path: Path, text: str) -> set[str]:
+    """The secret files a snapshot config runs under, comments in a drop-in excluded.
+
+    Mirrors `env_converge.template_manifest.secret_references_in` (this script runs
+    without that package); the two must agree or a publish this writer accepts
+    fails validation, and a test pins them together.
+    """
+    if path.suffix == ".conf":
+        text = _SUPERVISORD_COMMENT_RE.sub("", text)
+    return set(_SECRET_REFERENCE_RE.findall(text))
 
 
 def env_file_variable_names(text: str) -> set[str]:

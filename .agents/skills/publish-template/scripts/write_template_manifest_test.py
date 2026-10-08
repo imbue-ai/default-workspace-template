@@ -107,11 +107,37 @@ def test_a_secret_file_named_only_in_a_supervisord_comment_is_not_a_reference(
         "# data/.secrets/restic.env is injected by the app.\n"
         "; data/.secrets/other.env is mentioned here too.\n"
         "[program:host-backup]\n"
-        "command=python3 system/services/host_backup/run.py\n"
+        "command=python3 system/services/host_backup/run.py ; see data/.secrets/inline.env\n"
     )
     assert writer.collect_references(root) == {
         "widget": ["system/supervisord.conf.d/widget-app.conf"],
     }
+
+
+_REFERENCE_CASES = [
+    ("a.conf", 'command=bash -c "python3 with_secrets.py data/.secrets/live.env -- x"\n'),
+    ("a.conf", "# data/.secrets/doc.env\n  ; data/.secrets/doc2.env\ncommand=x ; data/.secrets/inline.env\n"),
+    ("a.conf", "command=x;data/.secrets/glued.env\n"),
+    ("mcp-servers.json", '{"args": ["/w/data/.secrets/mcp.env"], "note": "# data/.secrets/hash.env"}'),
+]
+
+
+@pytest.mark.parametrize(("name", "text"), _REFERENCE_CASES)
+def test_writer_and_validator_agree_on_secret_references(name: str, text: str) -> None:
+    # The writer mirrors the validator's rule (it runs without env_converge); if they
+    # drift, a publish the writer accepts fails validation.
+    import importlib.util
+
+    schema_path = next(
+        ancestor / "system/services/env_converge/src/env_converge/template_manifest.py"
+        for ancestor in Path(__file__).resolve().parents
+        if (ancestor / "system/services/env_converge/src/env_converge/template_manifest.py").is_file()
+    )
+    spec = importlib.util.spec_from_file_location("template_manifest_for_parity", schema_path)
+    assert spec is not None and spec.loader is not None
+    schema = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(schema)
+    assert writer.secret_references_in(Path(name), text) == schema.secret_references_in(Path(name), text)
 
 
 def test_an_undeclared_reference_and_a_missing_variable_stop_the_publish(

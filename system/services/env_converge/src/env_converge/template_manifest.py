@@ -665,6 +665,22 @@ def check_markdown_agreement(
 SECRET_REFERENCE_PATTERN = re.compile(r"data/\.secrets/([a-z0-9][a-z0-9-]*)\.env")
 MCP_SERVERS_FILE_NAME = "mcp-servers.json"
 SUPERVISORD_DROPIN_DIRECTORY = "system/supervisord.conf.d"
+# A supervisord comment: a whole line starting with ';' or '#', or an inline
+# comment (a ';' after whitespace). A secret file a comment names -- the stock
+# host-backup and share-gateway drop-ins document the ones Imbue Studio injects
+# that way -- is not one the program runs under.
+SUPERVISORD_COMMENT_PATTERN = re.compile(r"^\s*[;#].*$|\s;.*$", re.MULTILINE)
+
+
+def secret_references_in(path: Path, text: str) -> set[str]:
+    """The secret files a snapshot config runs under, comments in a drop-in excluded.
+
+    The publish flow's writer (write_template_manifest.py) mirrors this; the two
+    must agree or a publish the writer accepts fails validation.
+    """
+    if path.suffix == ".conf":
+        text = SUPERVISORD_COMMENT_PATTERN.sub("", text)
+    return set(SECRET_REFERENCE_PATTERN.findall(text))
 
 
 def check_secret_references(
@@ -687,7 +703,7 @@ def check_secret_references(
         if not path.is_file():
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
-        for file in sorted(set(SECRET_REFERENCE_PATTERN.findall(text))):
+        for file in sorted(secret_references_in(path, text)):
             if file not in declared:
                 problems.append(
                     f"{path.relative_to(repo_root).as_posix()} runs under data/.secrets/{file}.env, "

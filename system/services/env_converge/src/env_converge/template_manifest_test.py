@@ -726,3 +726,19 @@ def test_a_program_running_under_an_undeclared_secret_file_is_flagged(
         tmp_path / "declared",
     )
     assert check_secret_references(tmp_path, declared) == ()
+
+
+def test_a_secret_file_named_only_in_a_supervisord_comment_is_not_a_reference(
+    tmp_path: Path,
+) -> None:
+    # The stock host-backup and share-gateway drop-ins document the secret file
+    # Imbue Studio injects in a header comment; that alone must not fail a publish.
+    (tmp_path / "system/supervisord.conf.d").mkdir(parents=True)
+    (tmp_path / "system/supervisord.conf.d/host-backup.conf").write_text(
+        "# Hourly backup. data/.secrets/restic.env is injected by Imbue Studio.\n"
+        "[program:host-backup]\n"
+        "command=python3 run.py ; reads data/.secrets/inline.env\n"
+    )
+    (tmp_path / "manifest").mkdir()
+    manifest = _manifest(_MINIMAL_TOML, tmp_path / "manifest")
+    assert check_secret_references(tmp_path, manifest) == ()
