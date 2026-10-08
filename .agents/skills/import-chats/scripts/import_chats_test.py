@@ -372,6 +372,23 @@ def test_a_sync_whose_install_fails_records_the_failure_and_says_why(
     assert "no network" in record["detail"]
 
 
+def test_a_sync_that_cannot_run_datalib_records_the_failure_and_reports_it_as_an_import_error(
+    tmp_path: Path,
+) -> None:
+    install = _installed(tmp_path / "home")
+    status_path = tmp_path / "status.json"
+
+    def run(command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess:
+        raise PermissionError(13, "Permission denied", command[0])
+
+    with pytest.raises(import_chats.ImportChatsError, match="Permission denied"):
+        import_chats.sync([CLAUDE], install, tmp_path / "datalib", status_path, run)
+
+    record = import_chats.read_status(status_path)["sources"]["claude"]
+    assert record["state"] == "failed"
+    assert "Permission denied" in record["detail"]
+
+
 def test_an_unreadable_status_file_is_an_error_rather_than_a_fresh_start(
     tmp_path: Path,
 ) -> None:

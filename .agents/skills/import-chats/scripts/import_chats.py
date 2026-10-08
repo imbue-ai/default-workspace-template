@@ -582,6 +582,20 @@ def _record_progress_until(
             )
 
 
+def _record_failed(
+    named: Sequence[ChatSource], data_root: Path, status_path: Path, detail: str
+) -> None:
+    for source in named:
+        record_source(
+            status_path,
+            source.key,
+            STATE_FAILED,
+            count_conversations(data_root, source),
+            detail,
+            pid=None,
+        )
+
+
 def sync(
     named: Sequence[ChatSource],
     install: DatalibInstall,
@@ -638,17 +652,12 @@ def sync(
         finally:
             is_done.set()
             reporter.join()
-    except (ImportChatsError, OSError) as e:
-        for source in named:
-            record_source(
-                status_path,
-                source.key,
-                STATE_FAILED,
-                count_conversations(data_root, source),
-                str(e),
-                pid=None,
-            )
+    except ImportChatsError as e:
+        _record_failed(named, data_root, status_path, str(e))
         raise
+    except OSError as e:
+        _record_failed(named, data_root, status_path, str(e))
+        raise ImportChatsError(str(e)) from e
     steps = parse_run_summary(result.stderr)
     is_every_source_imported = True
     for source in named:
