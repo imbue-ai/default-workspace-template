@@ -181,8 +181,8 @@ message posted to the route it named; a `show` handler has the shell build the
 page its template names from the message's fields and show it through the op
 route's `show` below, in-process. A message some app did not take becomes a
 notice carrying that app's reason, and a page shown while the client has only
-pop-outs open becomes a notice to reopen the main window. The shell's page also opens links itself:
-it announces `opensLinks` to the chrome and opens a `minds:open-link` (a popup
+pop-outs open becomes a notice to reopen the main window. The shell's page
+also opens links itself: it announces `opensLinks` to the chrome and opens a `minds:open-link` (a popup
 Imbue Studio turned back into the workspace) or a page's `shell:open-link` by
 the shared link classifier (`workspace_ui`'s `links.ts`): a `file:` URL as
 `open:file`, a local URL at an
