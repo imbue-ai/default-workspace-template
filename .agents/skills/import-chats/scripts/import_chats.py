@@ -96,12 +96,16 @@ _CHECK_TIMEOUT_SECONDS = 60.0
 # How often a running sync rewrites each source's count, so the Getting Started card counts up as pages arrive.
 PROGRESS_INTERVAL_SECONDS = 10.0
 
-# latchkey's own refusals, and the provider answers datalib classifies as a credential problem: each
-# is fixed by (re-)sending the source's permission request, which signs the user in again.
-_SIGN_IN_MARKERS = (
+# latchkey's own refusals: no permission for the service yet, or no saved sign-in for it.
+_LATCHKEY_REFUSALS = (
     "No service matches URL",
     "No credentials found",
     "Request not permitted",
+)
+# latchkey's refusals, and the provider answers datalib classifies as a credential problem: each
+# is fixed by (re-)sending the source's permission request, which signs the user in again.
+_SIGN_IN_MARKERS = (
+    *_LATCHKEY_REFUSALS,
     "HTTP 401",
     "HTTP 403",
     "token_expired",
@@ -677,11 +681,7 @@ def classify_check(returncode: int, stdout: str, stderr: str) -> tuple[str, str]
     body, _, status_code = stdout.rstrip("\n").rpartition("\n")
     if returncode == 0 and status_code.strip() == "200":
         return CHECK_CONNECTED, ""
-    for marker in (
-        "No service matches URL",
-        "No credentials found",
-        "Request not permitted",
-    ):
+    for marker in _LATCHKEY_REFUSALS:
         if marker in stdout or marker in stderr:
             return CHECK_NEEDS_PERMISSION, marker
     code = status_code.strip()
