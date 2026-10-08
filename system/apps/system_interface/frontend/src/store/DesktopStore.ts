@@ -847,18 +847,17 @@ export class DesktopStore {
     this.reportMove("");
   }
 
-  /** The client record is the shell's word after a reconnect: another window of this client may have
-   *  switched desktops meanwhile (the ``active_desktop_changed`` is gone), and reporting this window's
-   *  own desktop would move the whole client back to it. So the recorded desktop is adopted as a push
-   *  when it differs and is newer than anything this window heard (a record no newer says nothing the
-   *  window has not taken, and its own desktop may be a switch whose report went down with the socket,
-   *  which the report below then makes as a move unless the record already names it), and the layout is read
-   *  again either way, for the
-   *  ``placements_updated`` missed. News heard on the new socket while the record was being read, or while the
-   *  pending save is awaited, is newer than what this window had: the window follows it and only registers its
-   *  connection here, since its desktop may still be the one the news moved the client off.
-   *  The record's entries and the workspace's selection are taken again too, for the
-   *  ``client_entries_changed`` and ``avatar_selection_changed`` missed (the server resends the rest). */
+  /** The client record is the shell's word after a reconnect: another window of this client may have switched
+   *  desktops meanwhile (the ``active_desktop_changed`` is gone), and reporting this window's own desktop would move
+   *  the whole client back to it. So the recorded desktop is adopted as a push when it differs and is newer than
+   *  anything this window heard. A record no newer says nothing the window has not taken, and the window's own
+   *  desktop may be a switch whose report went down with the socket: it is reported as a move unless the record
+   *  already names it. News heard on the new socket while the record was being read, or while the pending save is
+   *  awaited, is newer than what this window had: the window follows it and only registers its connection here,
+   *  since its desktop may still be the one the news moved the client off.
+   *  The layout is read again either way, for the ``placements_updated`` missed, and the record's entries and the
+   *  workspace's selection too, for the ``client_entries_changed`` and ``avatar_selection_changed`` missed (the
+   *  server resends the rest). */
   private async resyncAfterReconnect(): Promise<void> {
     let recorded: string | null = null;
     let isRecordedNewer = false;
