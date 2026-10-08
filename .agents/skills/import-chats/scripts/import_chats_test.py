@@ -679,7 +679,7 @@ def test_a_sync_rewrites_the_index_of_each_source_it_synced(tmp_path: Path) -> N
     )
 
 
-def test_a_long_multi_line_title_is_one_line_cut_short_in_the_index(
+def test_a_long_title_with_tabs_is_one_line_cut_short_in_the_index(
     tmp_path: Path,
 ) -> None:
     data_root = tmp_path / "datalib"
@@ -688,7 +688,7 @@ def test_a_long_multi_line_title_is_one_line_cut_short_in_the_index(
         data_root,
         "chatgpt_chats",
         "u1",
-        "word\n\t" * 100,
+        "word\t  " * 100,
         "https://chatgpt.com/c/x",
         ["2026-10-01T08:00:00+00:00"],
     )

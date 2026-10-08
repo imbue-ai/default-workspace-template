@@ -342,8 +342,7 @@ def read_page(path: Path) -> IndexedPage:
 
 
 def _index_line(page: IndexedPage, index_dir: Path) -> str:
-    # An untitled chat is titled by its whole first message, line breaks and all, which would make one entry a
-    # paragraph.
+    # A chat's name can hold tabs and runs of spaces; collapsed, the entry reads as one line.
     title = " ".join(page.title.split())
     if len(title) > _INDEX_TITLE_LIMIT:
         title = title[: _INDEX_TITLE_LIMIT - 1].rstrip() + "…"
