@@ -853,9 +853,9 @@ export class DesktopStore {
    *  when it differs and is newer than anything this window heard (a record no newer says nothing the
    *  window has not taken, and its own desktop may be a switch whose report went down with the socket,
    *  which the report below then makes), and the layout is read again either way, for the
-   *  ``placements_updated`` missed. News heard on the new socket while the record was being read is newer than
-   *  what this window had: the window follows it and only registers its connection here, since its desktop may
-   *  still be the one the news moved the client off.
+   *  ``placements_updated`` missed. News heard on the new socket while the record was being read, or while the
+   *  pending save is awaited, is newer than what this window had: the window follows it and only registers its
+   *  connection here, since its desktop may still be the one the news moved the client off.
    *  The record's entries and the workspace's selection are taken again too, for the
    *  ``client_entries_changed`` and ``avatar_selection_changed`` missed (the server resends the rest). */
   private async resyncAfterReconnect(): Promise<void> {
@@ -879,18 +879,25 @@ export class DesktopStore {
     } catch (error) {
       console.warn("[si] could not read the client records after reconnecting", error);
     }
-    const isNewsHeardDuringRead = this.desktopRevisionHeard > heardBeforeRead && !isRecordedNewer;
+    const heardAfterRead = this.desktopRevisionHeard;
     void this.loadAvatarSelection();
+    // The desktop shown is read after the save: a follow of news heard meanwhile waits on it to move the window.
+    await this.flushPendingSave();
+    const isNewsHeard = this.desktopRevisionHeard > (isRecordedNewer ? heardAfterRead : heardBeforeRead);
     const isRecordedKnown = recorded !== null && this.state.desktops.some((desktop) => desktop.id === recorded);
     // A solo shell stays on its window's desktop: the recorded one is the main window's, and a report from
     // any other desktop would omit the solo window, which the chrome reads as its return.
     const isRecordedAdopted =
-      this.soloWindowId === null && isRecordedKnown && isRecordedNewer && recorded !== this.state.activeDesktopId;
+      this.soloWindowId === null &&
+      isRecordedKnown &&
+      isRecordedNewer &&
+      !isNewsHeard &&
+      recorded !== this.state.activeDesktopId;
     if (recorded !== null && isRecordedAdopted) {
       await this.switchDesktop(recorded, "follow");
       return;
     }
-    if (isNewsHeardDuringRead) this.reportFollowedDesktop();
+    if (isNewsHeard) this.reportFollowedDesktop();
     else this.reportMove("");
     await this.refetchLayout();
   }

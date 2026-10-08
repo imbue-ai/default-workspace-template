@@ -881,7 +881,28 @@ describe("desktop news", () => {
     answerWrites();
     await settle();
     expect(store.getState().activeDesktopId).toBe("work");
-    expect(socket.reports.slice(reportsBefore)).toEqual([followingReport("home"), followingReport("work")]);
+    // The follow lands before the reconnect reports, so both register the connection on the desktop followed.
+    expect(socket.reports.slice(reportsBefore)).toEqual([followingReport("work"), followingReport("work")]);
+  });
+
+  it("takes a record newer than the news heard while reading it once that news's follow has landed", async () => {
+    api.clients = [clientRecord(CLIENT, { active_desktop: "home", desktop_revision: 1 })];
+    const store = await startedStore();
+    socket.deliver().onConnected();
+    store.minimizeWindow("win-1");
+    const answerReads = api.holdReads();
+    const answerWrites = api.holdWrites();
+    // Another window moves the client to work and back home: this window hears the first move while the record read is
+    // out, and following it waits on this window's save; the record it reads is the second move's.
+    api.clients = [clientRecord(CLIENT, { active_desktop: "home", desktop_revision: 3 })];
+    socket.deliver().onConnected();
+    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "work", revision: 2, reportId: null });
+    answerReads();
+    await settle();
+    answerWrites();
+    await settle();
+    await settle();
+    expect(store.getState().activeDesktopId).toBe("home");
   });
 });
 
