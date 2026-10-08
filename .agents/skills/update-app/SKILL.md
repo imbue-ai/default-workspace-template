@@ -223,12 +223,12 @@ pre-change content. Refresh it so the user sees the update without being told
 to click Refresh:
 
 ```bash
-uv run workspace-layout refresh --app <name>
+uv run --no-sync workspace-layout refresh --app <name>
 ```
 
 `refresh --app` reloads every page of the service on every client. If no
 window is open yet and the change is ready to show, surface it instead with
-`uv run workspace-layout open <name>`: with no `--desktop` it lands
+`uv run --no-sync workspace-layout open <name>`: with no `--desktop` it lands
 on the desktop the user is looking at, and `--desktop <name>` targets one
 desktop (and switches the client to it).
 **That `open` puts the window on the user's screen the moment it returns** -- it
@@ -364,7 +364,7 @@ where the data dies. Encode these, cheapest first:
   ```bash
   uv run python3 .agents/skills/update-app/scripts/preview_app.py up \
       --app <name> --worktree <dir>          # prints <name>-preview
-  uv run workspace-layout open <name>-preview   # puts a window of it in front of the user
+  uv run --no-sync workspace-layout open <name>-preview   # puts a window of it in front of the user
   uv run python3 .agents/skills/update-app/scripts/preview_app.py refresh --app <name>   # after a rebuild, in place
   uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
   ```

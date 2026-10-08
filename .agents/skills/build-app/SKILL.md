@@ -494,7 +494,7 @@ launcher -- skip the surfacing step only for services with no UI
 (pure JSON APIs, webhook receivers, etc.).
 
 ```bash
-uv run workspace-layout open <name> --beside
+uv run --no-sync workspace-layout open <name> --beside
 ```
 
 `--beside` lays it beside the chat that asked for it instead of on top of the
@@ -522,7 +522,7 @@ To force a reload of an already-open window (e.g. after redeploying the
 service) without prompting the user to click Refresh:
 
 ```bash
-uv run workspace-layout refresh --app <name>
+uv run --no-sync workspace-layout refresh --app <name>
 ```
 
 You should always `refresh` services after making changes, to make sure the user can see the updates.

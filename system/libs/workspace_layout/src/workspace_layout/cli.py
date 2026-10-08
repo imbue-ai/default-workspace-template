@@ -179,7 +179,7 @@ refused with the verb or form to use instead.
 """
 
 # How the hints name this command: agents run it from the repo root through the root venv.
-_COMMAND: Final[str] = "uv run workspace-layout"
+_COMMAND: Final[str] = "uv run --no-sync workspace-layout"
 
 # A bare URL opens a new browser on that page: the browser app's ``new`` launch path with the
 # URL as its ``url`` parameter (system/apps/browser/app.toml).

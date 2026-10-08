@@ -396,18 +396,18 @@ that, tokens or not.
 ## Driving the desktop from an agent
 
 An agent inside the workspace arranges the desktop through
-`uv run workspace-layout` (`context / desktops / list / load / open / show / focus /
+`uv run --no-sync workspace-layout` (`context / desktops / list / load / open / show / focus /
 minimize / restore / maximize / place / close / navigate / refresh / shortcuts /
 shortcut set / shortcut move / shortcut remove / wallpaper`), which names apps
 and windows (desktop-interface contracts.md section 8):
 
 ```bash
-uv run workspace-layout desktops
-uv run workspace-layout context
-uv run workspace-layout open files --path /home/user/workspace/data/notes/ --desktop Research
-uv run workspace-layout open terminal
-uv run workspace-layout place self --state snapped-left
-uv run workspace-layout navigate win-0123456789abcdef /other/
+uv run --no-sync workspace-layout desktops
+uv run --no-sync workspace-layout context
+uv run --no-sync workspace-layout open files --path /home/user/workspace/data/notes/ --desktop Research
+uv run --no-sync workspace-layout open terminal
+uv run --no-sync workspace-layout place self --state snapped-left
+uv run --no-sync workspace-layout navigate win-0123456789abcdef /other/
 ```
 
 The document ops are applied by the shell to the desktop and to the target

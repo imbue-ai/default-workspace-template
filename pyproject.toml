@@ -16,7 +16,7 @@ dependencies = [
     "host-backup",
     "share-gateway",
     "tk-command-parsing",
-    # Agents run `uv run workspace-layout` from the repo root, so its console script
+    # Agents run `uv run --no-sync workspace-layout` from the repo root, so its console script
     # must survive a sync of the root closure.
     "workspace-layout",
     "imbue-common",

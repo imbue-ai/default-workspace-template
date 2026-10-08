@@ -99,9 +99,12 @@ another, so one op's arguments never type-check as another's.
 
 ## The `workspace-layout` command
 
-`uv run workspace-layout <subcommand>`, from the repo root, is how an agent
+`uv run --no-sync workspace-layout <subcommand>`, from the repo root, is how an agent
 reads and arranges the desktop; the `manage-desktop` skill is its guide and
-`uv run workspace-layout --help` its reference. Every subcommand posts one op
+`uv run --no-sync workspace-layout --help` its reference. `--no-sync` runs the script the
+workspace build installed without uv first checking the lock and the venv: that check
+costs every call tens of milliseconds, and when the lock and a `pyproject.toml` disagree it
+relocks and syncs before the command runs. Every subcommand posts one op
 to the shell's op route under the calling agent's own chat as the requester
 (`MINDS_CHAT_ID`, else `MNGR_AGENT_ID`), except `desktops` and `list`, which
 read `GET /api/inventory`. Descriptions go to stderr; stdout carries only a

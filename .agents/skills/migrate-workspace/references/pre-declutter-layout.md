@@ -207,7 +207,7 @@ built.
 - **Templates.** A publishable, bootable snapshot of what an agent has built, so
   another agent can be created from it or adopt it. See `publish-template`,
   `use-template`, `update-installed-template`.
-- **Desktop operations.** `uv run workspace-layout` reads and arranges the
+- **Desktop operations.** `uv run --no-sync workspace-layout` reads and arranges the
   desktop's windows -- open, focus, place, minimize, maximize, close, navigate.
   See `manage-desktop`.
 - **`data/.apps/` and `data/.skills/`.** Per-creation data has a declared home
