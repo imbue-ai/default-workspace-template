@@ -31,6 +31,9 @@ _SCRIPT = Path(__file__).parent / "create_worker.py"
 _MESSAGE_CHAT_SCRIPT = (
     Path(__file__).resolve().parents[4] / "system" / "scripts" / "message_chat.py"
 )
+_BACKGROUND_TASKS_SCRIPT = (
+    Path(__file__).resolve().parents[4] / "system" / "scripts" / "background_tasks.py"
+)
 _WORKER_ID = "agent-00000000000000000000000000abcdef"
 _CREATED_EVENT = (
     json.dumps({"event": "created", "agent_id": _WORKER_ID, "host_id": "host-1"}) + "\n"
@@ -39,6 +42,12 @@ _spec = importlib.util.spec_from_file_location("create_worker", _SCRIPT)
 assert _spec is not None and _spec.loader is not None
 create_worker_mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(create_worker_mod)
+_tasks_spec = importlib.util.spec_from_file_location(
+    "background_tasks", _BACKGROUND_TASKS_SCRIPT
+)
+assert _tasks_spec is not None and _tasks_spec.loader is not None
+background_tasks = importlib.util.module_from_spec(_tasks_spec)
+_tasks_spec.loader.exec_module(background_tasks)
 
 
 @dataclass
@@ -1710,7 +1719,7 @@ def test_await_returns_idle_code_when_worker_idle_without_report(
     assert len(idle_polls) == create_worker_mod._IDLE_POLLS_BEFORE_GIVING_UP
     assert out.getvalue() == ""
     err = capsys.readouterr().err
-    assert "ended its turn" in err and "worktree" in err
+    assert "no longer busy" in err and "worktree" in err
 
 
 def test_await_transient_idle_does_not_end_the_poll(tmp_path: Path) -> None:
@@ -2053,6 +2062,98 @@ def test_an_unreadable_listing_answers_not_idle() -> None:
         )
         is False
     )
+
+
+def test_a_worker_whose_own_chat_is_busy_is_not_idle() -> None:
+    """A worker that ended its turn to wait on a background command of its own
+    reads WAITING, but the command's completion starts its next turn. A worker
+    is its own chat, so the busy question is asked about its own agent id."""
+    worker = _unique("worker")
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _listing(_agent_record(worker, "WAITING")))
+    asked: list[str] = []
+
+    def _busy(chat_id: str) -> bool:
+        asked.append(chat_id)
+        return True
+
+    assert (
+        create_worker_mod._worker_is_idle(
+            worker,
+            runner,
+            pending_shed_check=lambda _name: False,
+            chat_busy_check=_busy,
+        )
+        is False
+    )
+    assert asked == [_agent_id(worker)]
+
+
+def _write_marker(root: Path, chat_id: str, task_id: str, pid: int) -> None:
+    background_tasks.write_marker(
+        root,
+        chat_id,
+        background_tasks.BackgroundTask(
+            source=background_tasks.SOURCE_RUN_IN_BACKGROUND,
+            id=task_id,
+            description="Run the test suite",
+            started_at="2026-10-08T09:00:00+00:00",
+            pid=pid,
+        ),
+    )
+
+
+def test_the_default_busy_check_reads_the_worker_markers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without an injected check, the idle check reads the same marker files the
+    background runner writes: a live marker keeps the worker busy, and once it
+    is gone -- or its runner has died -- the worker is idle."""
+    root = tmp_path / "background_tasks"
+    monkeypatch.setenv(background_tasks.MARKER_ROOT_ENV, str(root))
+    worker = _unique("worker")
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _listing(_agent_record(worker, "WAITING")))
+
+    def _is_idle() -> bool:
+        return create_worker_mod._worker_is_idle(
+            worker, runner, pending_shed_check=lambda _name: False
+        )
+
+    _write_marker(root, _agent_id(worker), "tests", os.getpid())
+    assert _is_idle() is False
+    background_tasks.remove_marker(
+        root, _agent_id(worker), background_tasks.SOURCE_RUN_IN_BACKGROUND, "tests"
+    )
+    assert _is_idle() is True
+    exited = subprocess.Popen([sys.executable, "-c", "pass"])
+    exited.wait()
+    _write_marker(root, _agent_id(worker), "killed", exited.pid)
+    assert _is_idle() is True
+
+
+def test_a_tree_without_the_background_task_reader_reads_not_busy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A launcher in a tree from before ``background_tasks.py`` reads every
+    chat as not busy, as it did before, rather than failing the poll."""
+    root = tmp_path / "background_tasks"
+    monkeypatch.setenv(background_tasks.MARKER_ROOT_ENV, str(root))
+    _write_marker(root, "agent-parked", "tests", os.getpid())
+    tree = tmp_path / "older-tree"
+    (tree / "system" / "scripts").mkdir(parents=True)
+    copied = (
+        tree / ".agents" / "skills" / "launch-task" / "scripts" / "create_worker.py"
+    )
+    copied.parent.mkdir(parents=True)
+    shutil.copy2(_SCRIPT, copied)
+    spec = importlib.util.spec_from_file_location("create_worker_in_older_tree", copied)
+    assert spec is not None and spec.loader is not None
+    older = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(older)
+
+    assert older._chat_is_busy("agent-parked") is False
+    assert create_worker_mod._chat_is_busy("agent-parked") is True
 
 
 def test_a_non_agent_row_with_the_same_name_is_not_mistaken_for_the_worker() -> None:
