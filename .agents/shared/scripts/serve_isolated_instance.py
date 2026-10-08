@@ -756,7 +756,8 @@ def _register_service(
     *,
     internal: bool = False,
     display_name: str | None = None,
-) -> None:
+) -> str:
+    """Register ``service_name`` at ``port`` and return its minted origin label."""
     argv = [
         *FORWARD_PORT_CMD,
         "--name",
@@ -779,6 +780,7 @@ def _register_service(
     if getattr(result, "returncode", 0) != 0:
         stderr = (getattr(result, "stderr", "") or "").strip()
         raise InstanceError(f"{what} failed (exit {result.returncode}): {stderr}")
+    return (getattr(result, "stdout", "") or "").strip()
 
 
 def _kill_process_group_and_wait(
@@ -956,8 +958,9 @@ def up(
             )
 
         # 2. Register it as a service (own browser origin), if asked.
+        inner_label: str | None = None
         if service_name is not None:
-            _register_service(
+            inner_label = _register_service(
                 runner,
                 repo_root,
                 service_name,
@@ -978,6 +981,7 @@ def up(
                 service_name is not None
                 and preview_service_name is not None
                 and preview_title is not None
+                and inner_label is not None
             )
             wrapper_port = find_free_port()
             _append_boot_marker(wrapper_log_path, name)
@@ -991,7 +995,7 @@ def up(
                             "--port",
                             str(wrapper_port),
                             "--inner-service",
-                            service_name,
+                            inner_label,
                             "--title",
                             preview_title,
                             "--inner-path",

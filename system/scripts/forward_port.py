@@ -750,7 +750,7 @@ def _upsert(
     program: str | None = None,
     display_name: str | None = None,
     manifest_fields: dict[str, object] | None = None,
-) -> None:
+) -> str:
     """Register ``name`` at ``url``, optionally setting its icon markup.
 
     ``icon`` is None when the caller said nothing about an icon, which leaves
@@ -797,16 +797,17 @@ def _upsert(
                 elif key in app:
                     del app[key]
             _save_apps(path, apps)
-            return
+            return str(app["label"])
 
     # No existing entry -- append with a freshly-minted label. The ``icon``,
     # ``internal``, ``program``, and manifest keys are omitted entirely when
     # there is nothing to say (a missing key reads as "no icon" / "not
     # internal" / "not supervised").
+    label = mint_service_label(name)
     entry: dict[str, object] = {
         "name": name,
         "url": url,
-        "label": mint_service_label(name),
+        "label": label,
     }
     if icon is not None:
         entry["icon"] = icon
@@ -815,6 +816,7 @@ def _upsert(
             entry[key] = manifest_owned[key]
     apps.append(entry)
     _save_apps(path, apps)
+    return label
 
 
 def _manifest_owned_values(
@@ -1015,7 +1017,7 @@ def main() -> None:
                         "drawn to docs/system/app-icons.md, name one in the manifest, or pass "
                         "--no-icon to keep the generic letter monogram"
                     )
-                _upsert(
+                label = _upsert(
                     apps_file,
                     name,
                     args.url,
@@ -1025,6 +1027,7 @@ def main() -> None:
                     display_name=args.display_name,
                     manifest_fields=manifest_fields,
                 )
+                print(label)
         finally:
             fcntl.flock(lock_file, fcntl.LOCK_UN)
 
