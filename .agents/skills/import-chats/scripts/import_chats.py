@@ -269,12 +269,14 @@ def configured_sources(
     return [source for key, source in SOURCES.items() if key in keys]
 
 
-def count_conversations(data_root: Path, source: ChatSource) -> int:
-    """How many pages the source's render step wrote: one per conversation (and, for Claude, one per project)."""
+def rendered_pages(data_root: Path, source: ChatSource) -> list[Path]:
+    """Every page the source's render step wrote: one per conversation (and, for Claude, one per project)."""
     rendered = data_root / source.group / "render_markdown"
-    if not rendered.is_dir():
-        return 0
-    return sum(1 for _ in rendered.rglob("all.md"))
+    return list(rendered.rglob("all.md")) if rendered.is_dir() else []
+
+
+def count_conversations(data_root: Path, source: ChatSource) -> int:
+    return len(rendered_pages(data_root, source))
 
 
 @dataclass(frozen=True)
@@ -400,12 +402,7 @@ def render_index(
 
 def write_index(data_root: Path, source: ChatSource, index_path: Path) -> None:
     """Rewrite the source's index from every page its render step wrote."""
-    rendered = data_root / source.group / "render_markdown"
-    pages = (
-        [read_page(path) for path in rendered.rglob("all.md")]
-        if rendered.is_dir()
-        else []
-    )
+    pages = [read_page(path) for path in rendered_pages(data_root, source)]
     _write_text_atomic(index_path, render_index(source, pages, index_path.parent))
 
 
