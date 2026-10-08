@@ -104,7 +104,7 @@ BROWSER_SESSION_QUERY_KEY: Final[str] = "session"
 BROWSER_PROFILE_DIR_PREFIX: Final[str] = "browser-use-user-data-dir-"
 USER_DATA_DIR_FLAG: Final[str] = "--user-data-dir="
 
-# The shell's address and its desktops document, as app_manifest.shell_windows reads them.
+# The shell's address and its desktops document, as workspace_layout's shell_url and windows read them.
 ENV_SHELL_URL: Final[str] = "MINDS_WORKSPACE_SERVER_URL"
 DEFAULT_SHELL_URL: Final[str] = "http://127.0.0.1:8000"
 DESKTOPS_ROUTE: Final[str] = "/api/desktops"
@@ -402,7 +402,7 @@ def browser_names_shown_by_windows(desktops: Any) -> set[str] | None:
     """The browsers some desktop window shows, from the shell's desktops document, or None when the
     document is not shaped as one (which, like an unreachable shell, means "unknown", never "none").
 
-    Mirrors ``app_manifest.shell_windows.window_paths_of_app``: a window's own path and each
+    Mirrors ``workspace_layout.windows.read_app_window_paths``: a window's own path and each
     client's path of it all count.
     """
     if not isinstance(desktops, dict) or not isinstance(desktops.get("desktops"), list):

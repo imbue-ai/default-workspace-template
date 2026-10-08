@@ -9,6 +9,7 @@ clock, a dict of process-start times, and a capturing ``set_adj`` so the exact
 from oom_priority import bands
 
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
+from imbue.chat.presence import PresenceReport
 from imbue.chat.presence import PresenceState
 from imbue.chat.presence import PresenceTracker
 from imbue.chat.primitives import ChatId
@@ -38,8 +39,11 @@ class _Harness:
             presence=PresenceTracker(clock=lambda: self.now),
         )
 
-    def report(self, chat_id: str, state: PresenceState, client_id: str = "client-1") -> None:
-        self.prioritizer.record_presence(ChatId(chat_id), client_id, state)
+    def report(self, chat_id: str, state: PresenceState, instance_id: str = "page-1") -> None:
+        self.prioritizer.record_presence(
+            ChatId(chat_id),
+            PresenceReport(instance_id=instance_id, client_id="client-1", state=state, is_focused=False),
+        )
 
     def _set_adj(self, pid: int, adj: int) -> bool:
         self.writes.append((pid, adj))
@@ -96,11 +100,11 @@ def test_a_hidden_page_counts_as_open_but_not_visible() -> None:
 
 def test_visible_in_any_client_makes_the_chat_visible() -> None:
     h = _Harness(chat_ids=["a"], pids={"a": 10})
-    h.report("a", PresenceState.HIDDEN, client_id="desktop")
-    h.report("a", PresenceState.VISIBLE, client_id="phone")
+    h.report("a", PresenceState.HIDDEN, instance_id="desktop")
+    h.report("a", PresenceState.VISIBLE, instance_id="phone")
     assert h.latest_adj_by_pid()[10] == _fresh(is_open=True, is_visible=True, recency_rank=None)
     # The phone puts it away; the desktop still has it open.
-    h.report("a", PresenceState.CLOSED, client_id="phone")
+    h.report("a", PresenceState.CLOSED, instance_id="phone")
     assert h.latest_adj_by_pid()[10] == _fresh(is_open=True, is_visible=False, recency_rank=None)
 
 
@@ -355,7 +359,10 @@ def test_a_prioritizer_with_no_writer_accepts_every_report_and_touches_no_proces
         sweep_interval_seconds=0.01,
     )
     prioritizer.seed_last_message_times({chat_id: 1_700_000_000.0})
-    prioritizer.record_presence(chat_id, "client-1", PresenceState.VISIBLE)
+    prioritizer.record_presence(
+        chat_id,
+        PresenceReport(instance_id="page-1", client_id="client-1", state=PresenceState.VISIBLE, is_focused=False),
+    )
     prioritizer.record_message(chat_id)
     prioritizer.record_running_chats([chat_id])
     prioritizer.reapply()

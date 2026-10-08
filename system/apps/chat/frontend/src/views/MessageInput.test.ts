@@ -77,6 +77,8 @@ const mocks = vi.hoisted(() => {
     launchChat: vi.fn(async (_chatId: string, _accountId: string, _message?: string) => ({})),
     chooseFastMode: vi.fn(),
     selectedAccount: null as { id: string } | null,
+    // Whether this page has read the account list; until it has, no account reads as missing.
+    accountsLoaded: true,
     listeners,
     agent,
   };
@@ -200,6 +202,7 @@ vi.mock("../models/Providers", () => ({
   openProviderChooser: mocks.openProviderChooser,
   // The seeded chats these tests launch name no account of their own, so the selected one decides.
   accountForFirstSend: () => mocks.selectedAccount,
+  areAccountsLoaded: () => mocks.accountsLoaded,
   isAccountSignedOut: (accountId: string | null | undefined) =>
     !!accountId && mocks.signedOutAccountIds.has(accountId),
   loadAccounts: () => mocks.loadAccounts(),
@@ -666,6 +669,7 @@ describe("MessageInput first send of a seeded chat", () => {
     mocks.isChatRegistered = true;
     mocks.provisional = undefined;
     mocks.selectedAccount = null;
+    mocks.accountsLoaded = true;
     mocks.whenChatRegistered.mockImplementation(async (_chatId: string) => {});
   });
 
@@ -679,6 +683,8 @@ describe("MessageInput first send of a seeded chat", () => {
   });
 
   it("asks the chooser for an account when none is signed in, and launches on the one it produces", async () => {
+    // Sent before the account list loaded: the composer was there, and the send finds no account.
+    mocks.accountsLoaded = false;
     mocks.selectedAccount = null;
 
     const sending = typeAndSend(MessageInput(), "agent-1", "Let's build something");
@@ -692,6 +698,7 @@ describe("MessageInput first send of a seeded chat", () => {
   });
 
   it("puts the message back when the chooser is dismissed, launching nothing", async () => {
+    mocks.accountsLoaded = false;
     mocks.selectedAccount = null;
 
     const sending = typeAndSend(MessageInput(), "agent-1", "Let's build something");
@@ -1287,6 +1294,79 @@ describe("prependToComposer with an element reference", () => {
   });
 });
 
+describe("MessageInput on a chat awaiting its first send with nothing signed in", () => {
+  beforeEach(() => {
+    mocks.openProviderChooser.mockReset();
+    mocks.isChatRegistered = false;
+    mocks.provisional = {
+      chat_id: "agent-first-7731",
+      name: "Welcome",
+      account_id: "",
+      phase: "awaiting_first_send",
+      error: null,
+      is_seeded: true,
+    };
+    mocks.selectedAccount = null;
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    mocks.isChatRegistered = true;
+    mocks.provisional = undefined;
+    mocks.selectedAccount = null;
+    mocks.accountsLoaded = true;
+  });
+
+  it("disables the composer under a way to connect a provider", () => {
+    const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731" } } as never);
+
+    expect(renderedText(tree)).toContain("Connect an AI provider to start chatting.");
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
+    const chooseButton = findButton(tree, "Choose a provider");
+    expect(chooseButton).toBeDefined();
+    (chooseButton!.attrs!.onclick as () => void)();
+    expect(mocks.openProviderChooser).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the provider chooser as the notice appears", () => {
+    const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731" } } as never);
+
+    const notice = findByClass(tree, "message-input-no-provider");
+    (notice!.attrs!.oncreate as () => void)();
+
+    expect(mocks.openProviderChooser).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the phone's leading settings button beside the notice", () => {
+    const leading = m("button", { "aria-label": "Chat settings" });
+    const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731", leading } } as never);
+
+    expect(findByAttr(tree, "aria-label", "Chat settings")).toBeDefined();
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
+  });
+
+  it("gives the composer back once an account is signed in", () => {
+    const component = MessageInput();
+    expect(
+      findByTag(component.view!({ attrs: { chatId: "agent-first-7731" } } as never), "textarea")?.attrs?.disabled,
+    ).toBe(true);
+
+    mocks.selectedAccount = { id: "acct-7732" };
+    const tree = component.view!({ attrs: { chatId: "agent-first-7731" } } as never);
+
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(false);
+    expect(renderedText(tree)).not.toContain("Connect an AI provider");
+  });
+
+  it("shows the composer while the account list has not loaded yet", () => {
+    mocks.accountsLoaded = false;
+    const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731" } } as never);
+
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(false);
+    expect(renderedText(tree)).not.toContain("Connect an AI provider");
+  });
+});
+
 describe("MessageInput on a chat whose account was signed out", () => {
   beforeEach(() => {
     mocks.sendMessage.mockClear();
@@ -1308,12 +1388,12 @@ describe("MessageInput on a chat whose account was signed out", () => {
     mocks.signedOutAccountIds.clear();
   });
 
-  it("replaces the composer with the reason and a way to choose another provider", () => {
+  it("disables the composer under the reason and a way to choose another provider", () => {
     const component = MessageInput();
     const tree = component.view!({ attrs: { chatId: "agent-signed-out" } } as never);
 
     expect(renderedText(tree)).toContain("You signed out of the account this chat runs on.");
-    expect(findByTag(tree, "textarea")).toBeUndefined();
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
     const chooseButton = findButton(tree, "Choose a provider");
     expect(chooseButton).toBeDefined();
 
@@ -1330,7 +1410,7 @@ describe("MessageInput on a chat whose account was signed out", () => {
     const tree = component.view!({ attrs: { chatId: "agent-signed-out", leading } } as never);
 
     expect(findByAttr(tree, "aria-label", "Chat settings")).toBeDefined();
-    expect(findByTag(tree, "textarea")).toBeUndefined();
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
     expect(findButton(tree, "Choose a provider")).toBeDefined();
   });
 
@@ -1339,7 +1419,7 @@ describe("MessageInput on a chat whose account was signed out", () => {
     const component = MessageInput();
     const tree = component.view!({ attrs: { chatId: "agent-signed-out" } } as never);
 
-    expect(findByTag(tree, "textarea")).toBeDefined();
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(false);
     expect(renderedText(tree)).not.toContain("You signed out of the account this chat runs on.");
   });
 
@@ -1361,7 +1441,7 @@ describe("MessageInput on a chat whose account was signed out", () => {
     await vi.waitFor(() => expect(mocks.switchChat).toHaveBeenCalledTimes(1));
 
     const sending = render();
-    expect(findByTag(sending, "textarea")).toBeDefined();
+    expect(findByTag(sending, "textarea")?.attrs?.disabled).toBe(false);
     expect(renderedText(sending)).not.toContain("You signed out of the account this chat runs on.");
 
     answer({ kind: "handoff", phase: "summarizing", returned_block: "" });
@@ -1385,7 +1465,7 @@ describe("MessageInput on a chat whose account was signed out", () => {
     await vi.waitFor(() => expect(mocks.loadAccounts).toHaveBeenCalledTimes(1));
     const tree = component.view!({ attrs: { chatId: "agent-signed-out" } } as never);
     expect(findButton(tree, "Choose a provider")).toBeDefined();
-    expect(findByTag(tree, "textarea")).toBeUndefined();
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
   });
 
   it("leaves the account list alone when a send fails for any other reason", async () => {

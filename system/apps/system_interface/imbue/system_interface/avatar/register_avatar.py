@@ -14,10 +14,10 @@ from typing import Final
 
 import httpx
 from app_manifest.manifest import describe_validation_error
-from app_manifest.shell_windows import shell_base_url
 from loguru import logger
 from pydantic import Field
 from pydantic import ValidationError
+from workspace_layout.shell_url import shell_base_url
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.avatar.catalog import DesignRegistration

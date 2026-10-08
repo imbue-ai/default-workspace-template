@@ -16,6 +16,8 @@ from uuid import uuid4
 import pytest
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
+from workspace_layout.testing import FakeShell
+from workspace_layout.testing import connected_client
 
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import account_dir
@@ -104,12 +106,12 @@ from imbue.chat.models import QueuedMessageState
 from imbue.chat.models import SummaryOutcome
 from imbue.chat.models import TransitionKind
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
+from imbue.chat.presence import PresenceReport
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
 from imbue.chat.testing import RecordingMngrMessenger
-from imbue.chat.testing import RecordingShell
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import drain_is_connecting_pushes
 from imbue.chat.testing import is_chat_connecting
@@ -203,6 +205,10 @@ def _agent_details(
             state=HostState.RUNNING,
         ),
     )
+
+
+def _visible_report() -> PresenceReport:
+    return PresenceReport(instance_id="page-1", client_id="client-1", state=PresenceState.VISIBLE, is_focused=False)
 
 
 def _drain(q: queue.Queue[str | None]) -> list[dict[str, Any]]:
@@ -974,7 +980,7 @@ def test_a_build_restores_the_seeded_chats_still_awaiting_their_first_send(
     finally:
         first.stop()
 
-    reactor = AutoOpenReactor(ledger=AutoOpenLedger(path=None), shell=RecordingShell(client_ids=[]))
+    reactor = AutoOpenReactor(ledger=AutoOpenLedger(path=None), shell=FakeShell())
     second, _ = _seed_manager(broadcaster, tmp_path, store=store, auto_open=reactor)
     try:
         restored = second.get_provisional_chat(seeded.chat_id)
@@ -989,7 +995,7 @@ def test_a_build_restores_the_seeded_chats_still_awaiting_their_first_send(
     # A tab the ledger says was delivered is not popped again by a restart.
     delivered_ledger = AutoOpenLedger(path=None)
     delivered_ledger.mark_delivered(ChatId(seeded.chat_id))
-    delivered_reactor = AutoOpenReactor(ledger=delivered_ledger, shell=RecordingShell(client_ids=[]))
+    delivered_reactor = AutoOpenReactor(ledger=delivered_ledger, shell=FakeShell())
     third, _ = _seed_manager(broadcaster, tmp_path, store=store, auto_open=delivered_reactor)
     try:
         assert third.get_provisional_chat(seeded.chat_id) is not None
@@ -3434,7 +3440,7 @@ def test_agent_removed_event_drops_pending_permissions_and_presence(
     agent_manager._handle_observe_event(make_agent_state_event(agent))
     with agent_manager._lock:
         agent_manager._pending_permission_ids_by_agent[str_id] = {"evt-1"}
-    agent_manager.record_presence(ChatId(str_id), "client-1", PresenceState.VISIBLE)
+    agent_manager.record_presence(ChatId(str_id), _visible_report())
     assert agent_manager.has_pending_permission(ChatId(str_id))
     assert agent_manager._oom_prioritizer._presence.is_open(ChatId(str_id))
 
@@ -4037,7 +4043,7 @@ def test_observe_events_feed_the_auto_open_reactor(
     monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", "/tmp/test-work")
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    shell = RecordingShell(client_ids=["c1"])
+    shell = FakeShell(clients=[connected_client("c1")])
     reactor = AutoOpenReactor(ledger=AutoOpenLedger(path=None), shell=shell)
     manager = AgentManager.build(broadcaster, auto_open=reactor)
     at_start = _agent_details("update-self-1", labels={"auto_open": "true"})
@@ -4046,13 +4052,13 @@ def test_observe_events_feed_the_auto_open_reactor(
     manager._handle_observe_event(make_full_agent_state_event([at_start, plain]))
     reactor.flush()
 
-    assert [(request.path, request.client_id) for request in shell.shows] == [(f"/?chat={at_start.id}", "c1")]
+    assert [(request.path, request.client) for request in shell.shows] == [(f"/?chat={at_start.id}", "c1")]
     assert not reactor.ledger.is_delivered(ChatId(plain.id))
 
     appeared = _agent_details("assist-new", labels={"assist": "true", "auto_open": "true"})
     manager._handle_observe_event(make_agent_state_event(appeared))
     reactor.flush()
-    assert (shell.shows[-1].path, shell.shows[-1].client_id) == (f"/?chat={appeared.id}", "c1")
+    assert (shell.shows[-1].path, shell.shows[-1].client) == (f"/?chat={appeared.id}", "c1")
     assert reactor.ledger.is_delivered(ChatId(appeared.id))
 
     manager._handle_observe_event(make_agent_removed_event(appeared.id, appeared.name, appeared.host.id))
@@ -4120,6 +4126,17 @@ def test_a_recorded_chat_lists_once_under_its_first_agent_with_its_members_in_or
         assert active is not None and active.id == second
         assert manager.get_active_agent_info(ChatId(second)) is None
         assert manager.get_chat_ids() == [ChatId(first)]
+    finally:
+        manager.stop()
+
+
+def test_a_moved_chat_is_marked_read_in_the_app_as_the_agent_it_runs_on_now(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    manager, _store, first, second = _recorded_chat(broadcaster)
+    try:
+        assert manager.current_agent_id_of_chat(ChatId(first)) == second
+        assert manager.current_agent_id_of_chat(ChatId(second)) is None
     finally:
         manager.stop()
 
@@ -4248,7 +4265,7 @@ def test_an_archived_members_removal_leaves_its_chats_records_and_transcripts_st
     evicted: list[str] = []
     manager.set_watcher_eviction_callback(evicted.append)
     try:
-        manager.record_presence(ChatId(first), "client-1", PresenceState.VISIBLE)
+        manager.record_presence(ChatId(first), _visible_report())
         manager.remove_agent(first)
         # The chat's per-chat state (its presence, here) belongs to the chat, not the member.
         assert manager._oom_prioritizer._presence.is_open(ChatId(first))
@@ -4296,7 +4313,7 @@ def test_removing_an_archived_member_through_the_observe_stream_keeps_the_chat(
 ) -> None:
     manager, _store, first, second = _recorded_chat(broadcaster)
     try:
-        manager.record_presence(ChatId(first), "client-1", PresenceState.VISIBLE)
+        manager.record_presence(ChatId(first), _visible_report())
         manager._handle_observe_event(make_agent_state_event(_agent_details("Chat-1", agent_id=MngrAgentId(second))))
         first_details = _agent_details(f"archived-1-Chat-1-{first}", agent_id=MngrAgentId(first))
         manager._handle_observe_event(make_agent_state_event(first_details))
@@ -4323,6 +4340,7 @@ def test_a_recorded_chat_whose_active_agent_is_unknown_lists_nothing(
         assert manager.get_chat_snapshots() == []
         assert manager.get_chat_snapshot(first) is None
         assert manager.get_chat_ids() == []
+        assert manager.current_agent_id_of_chat(ChatId(first)) is None
     finally:
         manager.stop()
 

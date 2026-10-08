@@ -14,7 +14,6 @@ import threading
 from collections.abc import Callable
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
 from typing import Final
 
 from app_manifest.errors import RegistryReadError
@@ -24,6 +23,7 @@ from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
 from watchdog.observers.api import BaseObserver
+from workspace_layout.answers import InventoryApp
 
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
@@ -31,7 +31,7 @@ from imbue.imbue_common.pure import pure
 from imbue.system_interface.file_watch import start_file_watch
 from imbue.system_interface.file_watch import stop_file_watch
 from imbue.system_interface.shell.data_types import AppInventoryEntry
-from imbue.system_interface.shell.data_types import app_wire_json
+from imbue.system_interface.shell.data_types import app_view
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
@@ -40,8 +40,8 @@ LIVENESS_SWEEP_INTERVAL_SECONDS: Final[float] = 10.0
 
 
 @pure
-def serialize_apps(entries: Sequence[AppInventoryEntry]) -> list[dict[str, Any]]:
-    return [app_wire_json(entry) for entry in entries]
+def app_views(entries: Sequence[AppInventoryEntry]) -> list[InventoryApp]:
+    return [app_view(entry) for entry in entries]
 
 
 class AppInventory(MutableModel):
@@ -113,8 +113,8 @@ class AppInventory(MutableModel):
         with self._lock:
             return self._entry_by_name.get(app_name)
 
-    def serialized(self) -> list[dict[str, Any]]:
-        return serialize_apps(self.entries())
+    def views(self) -> list[InventoryApp]:
+        return app_views(self.entries())
 
     @property
     def is_registry_read(self) -> bool:
@@ -247,9 +247,9 @@ class AppInventory(MutableModel):
 
     def _broadcast_if_changed(self) -> None:
         with self._broadcast_lock:
-            serialized = self.serialized()
-            encoded = json.dumps(serialized, sort_keys=True)
+            views = self.views()
+            encoded = json.dumps([view.model_dump(mode="json") for view in views], sort_keys=True)
             if encoded == self._last_broadcast_json:
                 return
             self._last_broadcast_json = encoded
-            self.broadcaster.broadcast_apps_updated(serialized)
+            self.broadcaster.broadcast_apps_updated(views)

@@ -1,0 +1,1 @@
+No behaviour change. A comment on the tool chip's label order no longer claims Claude always writes a description for its shell calls; the description is optional and Opus 5.5 often leaves it out, which is why the workspace's Claude instructions now ask for it.
