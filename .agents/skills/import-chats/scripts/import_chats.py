@@ -27,11 +27,13 @@ The status file (``data/.skills/import-chats/status.json``) is read by the Getti
 ``system/apps/getting_started/src/getting_started/chat_import.py``::
 
     {"sources": {"claude": {"state": "imported", "conversations": 312,
-                            "updated_at": "<iso8601>", "detail": "", "pid": null}}}
+                            "updated_at": "<iso8601>", "detail": "", "pid": null,
+                            "fetched": null, "to_fetch": null}}}
 
 ``state`` is one of ``importing``, ``imported``, ``needs_sign_in`` and ``failed``; ``pid`` is the
 sync's process while it is ``importing``, so a reader can tell a sync that died from one that is
-still running.
+still running. ``fetched`` of ``to_fetch`` is how far a running ingest has got through the
+conversations it set out to fetch; both are null when it reports no total, and once it ends.
 
 After each sync it also rewrites one index per source beside the status file
 (``data/.skills/import-chats/claude-chats.md``, ``chatgpt-chats.md``): every page by title, newest
@@ -768,7 +770,8 @@ def sync(
     outcome. True when every named source imported.
 
     datalib renders and indexes pages while the ingest is still fetching, so the sync's own page count grows as
-    it runs; a thread records it every ``progress_interval_seconds`` until the sync returns."""
+    it runs; a thread records it, with how far each ingest has got, every ``progress_interval_seconds`` until the
+    sync returns."""
     for source in named:
         previous = read_status(status_path)["sources"].get(source.key, {})
         record_source(

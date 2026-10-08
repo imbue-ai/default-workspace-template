@@ -28,8 +28,8 @@ from its own uv tool environment (`system/scripts/build_workspace.sh`), serving 
   no URL is configured, a 503 when nothing could ever be loaded.
 - `GET /api/chat-import`: the "Bring in your chats" card's state, `{"is_dismissed", "sources"}`:
   each source the `import-chats` skill recorded in `data/.skills/import-chats/status.json`
-  (`state`, `conversations`, `updated_at`, `detail`), with an import whose sync process is gone
-  answered as `failed`. The page fetches it on load and on focus, and polls it while a source is
+  (`state`, `conversations`, `updated_at`, `detail`, and a running import's `fetched` of
+  `to_fetch`), with an import whose sync process is gone answered as `failed`. The page fetches it on load and on focus, and polls it while a source is
   importing. Every action on the card starts a chat (`shell:start-with-text`) that the skill
   matches on.
 - `POST /api/chat-import/dismiss`: puts the card away for good, recorded in
