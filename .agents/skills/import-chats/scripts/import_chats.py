@@ -50,6 +50,7 @@ Standard library only, so it runs under bare ``python3`` like the other skill sc
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
 import hashlib
 import json
@@ -183,8 +184,13 @@ def _write_text_atomic(path: Path, text: str) -> None:
     """Write through a same-directory temp file and a rename, so a reader never sees a partial file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f"{path.name}.tmp-{os.getpid()}")
-    temp_path.write_text(text, encoding="utf-8")
-    os.replace(temp_path, path)
+    try:
+        temp_path.write_text(text, encoding="utf-8")
+        os.replace(temp_path, path)
+    except OSError:
+        with contextlib.suppress(OSError):
+            temp_path.unlink(missing_ok=True)
+        raise
 
 
 def write_status(path: Path, document: Mapping) -> None:

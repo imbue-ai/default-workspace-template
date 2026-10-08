@@ -755,6 +755,7 @@ def test_a_sync_whose_index_cannot_be_written_still_records_what_it_imported(
     record = workspace.record("claude")
     assert (record["state"], record["conversations"]) == ("imported", 2)
     assert f"their index {index_path} could not be rewritten" in capsys.readouterr().err
+    assert not list(index_path.parent.glob("*.tmp-*"))
 
 
 def test_a_long_title_with_tabs_is_one_line_cut_short_in_the_index(
