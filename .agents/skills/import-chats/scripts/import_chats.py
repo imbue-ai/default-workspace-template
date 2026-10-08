@@ -510,6 +510,21 @@ def _download(url: str, destination: Path) -> None:
         shutil.copyfileobj(response, out)
 
 
+def unpack_release(archive: Path, destination: Path, triple: str) -> Path:
+    """Unpack the release tarball into ``destination`` and return the one release directory it holds."""
+    try:
+        with tarfile.open(archive) as opened:
+            opened.extractall(destination, filter="data")
+    except tarfile.TarError as e:
+        raise ImportChatsError(f"{archive.name} could not be unpacked: {e}") from e
+    staged = [path for path in destination.glob(f"datalib-*-{triple}") if path.is_dir()]
+    if len(staged) != 1:
+        raise ImportChatsError(
+            f"{archive.name} holds {len(staged)} datalib-*-{triple} directories, not one"
+        )
+    return staged[0]
+
+
 def install_datalib(
     install: DatalibInstall, run: Callable[..., subprocess.CompletedProcess]
 ) -> None:
@@ -534,13 +549,7 @@ def install_datalib(
                 raise ImportChatsError(
                     f"{tarball} has sha256 {digest}, not the pinned {_TARBALL_SHA256_BY_ARCH[arch]}"
                 )
-            with tarfile.open(archive) as opened:
-                opened.extractall(scratch_path, filter="data")
-            (staged,) = [
-                path
-                for path in scratch_path.glob(f"datalib-*-{triple}")
-                if path.is_dir()
-            ]
+            staged = unpack_release(archive, scratch_path, triple)
             shutil.rmtree(install.release_dir, ignore_errors=True)
             os.replace(staged, install.release_dir)
     result = run(

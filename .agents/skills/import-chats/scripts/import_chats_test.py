@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import tarfile
 import threading
 import tomllib
 from collections.abc import Sequence
@@ -395,6 +396,36 @@ def test_the_install_picks_the_build_for_this_machine_and_refuses_one_it_has_non
         import_chats.linux_arch("Darwin", "arm64")
     with pytest.raises(import_chats.ImportChatsError, match="only on Linux"):
         import_chats.linux_arch("Linux", "riscv64")
+
+
+def _tarball(path: Path, members: Sequence[str]) -> Path:
+    with tarfile.open(path, "w:gz") as archive:
+        for member in members:
+            info = tarfile.TarInfo(member)
+            info.type = tarfile.DIRTYPE
+            info.mode = 0o755
+            archive.addfile(info)
+    return path
+
+
+def test_the_release_unpacks_to_its_one_directory_and_anything_else_is_refused(
+    tmp_path: Path,
+) -> None:
+    triple = "x86_64-unknown-linux-musl"
+    good = _tarball(tmp_path / "good.tar.gz", [f"datalib-v0.40.0-{triple}"])
+    assert (
+        import_chats.unpack_release(good, tmp_path / "good", triple)
+        == tmp_path / "good" / f"datalib-v0.40.0-{triple}"
+    )
+
+    empty = _tarball(tmp_path / "empty.tar.gz", ["something-else"])
+    with pytest.raises(import_chats.ImportChatsError, match="holds 0"):
+        import_chats.unpack_release(empty, tmp_path / "empty", triple)
+
+    corrupt = tmp_path / "corrupt.tar.gz"
+    corrupt.write_bytes(b"not a tarball")
+    with pytest.raises(import_chats.ImportChatsError, match="could not be unpacked"):
+        import_chats.unpack_release(corrupt, tmp_path / "corrupt", triple)
 
 
 def test_a_check_without_latchkey_says_so() -> None:
