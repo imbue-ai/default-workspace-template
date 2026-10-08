@@ -6,7 +6,7 @@
 - Ops that don't change the pop-out keep working, and three of them start working properly on it: `refresh <window>` reaches the pop-out's page, `focus` and `open` raise the pop-out instead of pulling the window back, and `reload_system_interface` leaves the pop-out a pop-out.
 - The pop-out's shell registers its connection with the shell server under its client's id, so targeted ops reach it. A registration from a pop-out never reports an active desktop, so the client's active desktop stays its main window's.
 - A pop-out reopened at launch trusts the stored layout: if its window was brought back while the client was away, it closes, as the pull-out spec's section 4.5 already says. The grace that marks a window popped out again stays for a freshly torn-out pop-out only.
-- The work ships as three PRs. On template main: the three pop-out bug fixes (`refresh <window>` delivery, `?solo=` surviving a reload, the reopened pop-out closing). Stacked on #759 (`workspace-layout`): the op rules, the agent-facing docs, and this plan. On mngr: the reopened-at-launch signal and the pull-out spec fixes.
+- The work ships as three PRs. On template main: the three pop-out bug fixes (`refresh <window>` delivery, `?solo=` surviving a reload, the reopened pop-out closing). On template main after #759 (`workspace-layout`): the op rules, the agent-facing docs, and this plan. On mngr: the reopened-at-launch signal and the pull-out spec fixes.
 
 ## Expected behavior
 
@@ -82,7 +82,7 @@
 - Tests: store and page-layer unit tests for the registration and the reopened-at-launch rule. New pop-out cases in `test_e2e.py`, where a second page in the same browser context opened at `/?solo=<window>` is a real pop-out-mode shell: `refresh <window>` reloads it, `reload_system_interface` leaves it in pop-out mode, and a reopened pop-out closes when its window is back.
 - A changelog entry for `system_interface`.
 
-### Template PR stacked on #759: layout-op rules
+### Template PR after #759: layout-op rules
 
 - The shell's op route checks the target client's placement of the target window before applying `restore`, `maximize`, `place`, `minimize` and `open --beside`. A popped-out window refuses the op, with a refusal distinct from the existing 409 and 503, unless the op carries `force`.
 - A refused op applies nothing, the `--desktop` switch included.
