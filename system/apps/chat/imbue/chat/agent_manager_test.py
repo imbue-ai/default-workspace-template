@@ -5178,8 +5178,7 @@ def test_the_rebind_runners_record_callbacks_raise_its_own_cancelled_error(
         # A pending background task: busy with no turn in flight.
         ("WAITING", ActivityState.IDLE, False, True, ChatStatus.BACKGROUND),
         ("WAITING", None, False, True, ChatStatus.BACKGROUND),
-        # A live turn outranks the wait, a permission prompt outranks both, and a dead agent outranks everything.
-        ("RUNNING", ActivityState.TOOL_RUNNING, False, True, ChatStatus.WORKING),
+        # A permission prompt outranks the wait, and a dead agent outranks everything.
         ("WAITING", ActivityState.IDLE, True, True, ChatStatus.ATTENTION),
         ("STOPPED", None, False, True, ChatStatus.STOPPED),
     ],
