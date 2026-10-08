@@ -5,12 +5,14 @@ from datetime import timezone
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
+from jwt.algorithms import RSAAlgorithm
 
 from share_gateway.handoff import HandoffVerificationError
 from share_gateway.handoff import JwksCache
 from share_gateway.identity import RequesterIdentity
 from share_gateway.handoff import SingleUseJtiRegistry
 from share_gateway.handoff import verify_handoff_token
+from share_gateway.testing import serve_json
 
 _DOMAIN = "host-" + "a" * 32 + "." + "b" * 32 + ".us1.imbueminds.com"
 _KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -115,3 +117,21 @@ def test_forged_signature_is_rejected() -> None:
 def test_garbage_token_is_rejected() -> None:
     with pytest.raises(HandoffVerificationError):
         verify_handoff_token("garbage", "n1", _DOMAIN, _cache(), SingleUseJtiRegistry())
+
+
+def test_a_refreshed_jwks_verifies_with_the_brokers_public_key_and_drops_a_private_one() -> None:
+    leaked_private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwks = {
+        "keys": [
+            {**RSAAlgorithm.to_jwk(_KEY.public_key(), as_dict=True), "kid": _KID},
+            {**RSAAlgorithm.to_jwk(leaked_private_key, as_dict=True), "kid": "kid-private"},
+        ]
+    }
+
+    with serve_json(jwks) as jwks_url:
+        cache = JwksCache(jwks_url)
+        result = verify_handoff_token(_token(), "n1", _DOMAIN, cache, SingleUseJtiRegistry())
+        with pytest.raises(HandoffVerificationError, match="no key 'kid-private'"):
+            cache.key_for_kid("kid-private")
+
+    assert result == RequesterIdentity(user_id="u1", email="a@b.co", is_owner=False)

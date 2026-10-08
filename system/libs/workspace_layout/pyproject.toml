@@ -1,0 +1,42 @@
+[project]
+name = "workspace-layout"
+version = "0.1.0"
+description = "The shell's layout routes as a typed client, and the agent-facing workspace-layout command (stdlib-only)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "app-manifest",
+    "imbue-common",
+    "loguru>=0.7",
+    # 2.12 is the first whose model_validate takes ``extra``, which every answer is read with.
+    "pydantic>=2.12",
+]
+
+[dependency-groups]
+dev = [
+    # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
+    "ty==0.0.24",
+]
+
+[project.scripts]
+workspace-layout = "workspace_layout.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/workspace_layout"]
+
+# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
+[tool.ty]
+
+[tool.ruff]
+line-length = 119
+
+[tool.ruff.lint]
+select = ["F", "I", "UP006", "UP007"]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+known-first-party = ["workspace_layout"]

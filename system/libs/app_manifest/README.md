@@ -55,7 +55,7 @@ The models behind a workspace app's two descriptions:
   validation is logged and skipped; an unreadable file raises
   `RegistryReadError`), and `registry_path()` (honours `MINDS_APPS_FILE`,
   default `data/.state/apps.toml` relative to the cwd, exactly like
-  `forward_port.py` and `layout.py`). `register_app(manifest_path, app_url)` is
+  `forward_port.py` and `workspace-layout`). `register_app(manifest_path, app_url)` is
   the startup registration every app's entry point calls: it runs
   `system/scripts/forward_port.py --manifest <path> --url <url>` under the
   current interpreter from the repo root, which upserts the app's row from its
@@ -250,6 +250,17 @@ the full root suite too. So does a path in a package the root project's
 than a test file or a frontend path), and a `uv.lock` upgrade the root project
 depends on directly or through one of those packages: the root project's own
 tests, in `system/scripts`, `.agents` and the skills, are its consumers.
+
+A run that can drive a browser comes after `npm ci && npm run build`: an
+own-root suite's run that includes its `browser` tests, or its files named on
+their own (those tests skip when the bundles are missing). An app's pages
+import the shell's built modules (`_static/app_contract.js` and
+`_static/context_menu.js`, in the shell's gitignored `static/`), so when the
+tree lacks them, as a fresh worktree does, the full root suite and every
+root-collected run of an app come after the build too. A tree that has them,
+like the live workspace, gets no build for those runs: the modules change only
+when a frontend does, which selects the build itself, and a build in the live
+workspace rewrites the bundles the running shell serves.
 
 Every change that is not entirely documentation (README and changelog files
 anywhere, and other markdown outside `.agents/` and

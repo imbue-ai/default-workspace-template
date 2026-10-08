@@ -25,6 +25,7 @@ from urllib.parse import urlencode
 from flask import Flask
 from flask import Response
 from flask import request
+from werkzeug.datastructures import Headers
 
 from share_gateway.caddyfile import RegisteredApp
 from share_gateway.caddyfile import build_label_to_name
@@ -138,7 +139,7 @@ def _is_html_navigation(method: str, accept_header: str, is_websocket_upgrade: b
     return method.upper() == "GET" and not is_websocket_upgrade and "text/html" in accept_header.lower()
 
 
-def forwarded_client_ip(headers: Mapping[str, str]) -> str:
+def forwarded_client_ip(headers: Headers | Mapping[str, str]) -> str:
     """The real client address of the request being verified, or '' when unknown.
 
     frpc stamps each spliced connection with PROXY protocol, so caddy's
@@ -237,7 +238,7 @@ def build_gateway_app(
             # to reach individual services -- most importantly owner-exec. Only
             # the owner gets the map; a visitor sees just liveness + backend.
             detail["services"] = {name: label for label, name in label_to_name.items()}
-        return _apply_health_cors(app.response_class(response=_json_body(detail), mimetype="application/json"))
+        return _apply_health_cors(Response(_json_body(detail), mimetype="application/json"))
 
     @app.get("/_auth/loading")
     def loading() -> Response:
