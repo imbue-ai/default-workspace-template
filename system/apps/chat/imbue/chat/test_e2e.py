@@ -711,7 +711,7 @@ def test_a_chat_page_watches_its_chat_only_while_shown_and_focused(e2e_server: R
 
     def wait_for_watcher_count(count: int, described: str) -> None:
         wait_for(
-            lambda: len(_get_json(watchers_url)["watched_by"]) == count,
+            lambda: len(get_json(watchers_url)["watched_by"]) == count,
             timeout=15.0,
             poll_interval=0.1,
             error_message=f"the watchers route never showed {described}",
