@@ -320,6 +320,27 @@ describe("the switch dialog", () => {
     expect(ROOT().textContent).toBe("");
   });
 
+  it("starts a chosen model's effort at the model's default", async () => {
+    const sol = {
+      ...ASTRA,
+      id: "gpt-6-sol",
+      label: "GPT-6-Sol",
+      efforts: [
+        { level: "low", in_picker: true },
+        { level: "medium", in_picker: true },
+        { level: "high", in_picker: true },
+      ],
+      default_effort: "medium",
+    };
+    state.options = [sol];
+    state.chat = workingChat();
+    beginSwitchTo("agent-1", CODEX as ProviderAccount);
+    await flush();
+    render();
+    choose("switch-dialog-model", "gpt-6-sol");
+    expect(ROOT().querySelector<HTMLSelectElement>("select.switch-dialog-effort")?.value).toBe("medium");
+  });
+
   it("does not say an idle agent wraps up what it is doing", async () => {
     beginSwitchTo("agent-1", CODEX as ProviderAccount);
     render();

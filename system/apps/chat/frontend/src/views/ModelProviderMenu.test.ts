@@ -557,6 +557,26 @@ describe("the combo card", () => {
     expect((picks[0] as unknown[])[1]).toEqual({ model_id: "sonnet", effort: "medium", fast: false });
   });
 
+  it("lands a newly picked model on its default when it does not offer the current effort", () => {
+    const current = { ...OPUS, efforts: [...LOW_MEDIUM_HIGH, { level: "xhigh", in_picker: true }] };
+    const other = { ...OPUS, id: "sonnet", label: "Sonnet", efforts: LOW_MEDIUM_HIGH, default_effort: "medium" };
+    catalogState.catalog = catalogOf({ options: [current, other] });
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: "xhigh", fast: false },
+      matched: current,
+      pending: null,
+    };
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="model"]');
+    const row = [...document.querySelectorAll<HTMLElement>('[data-menu-part="submenu"] button')].find((button) =>
+      button.textContent?.includes("Sonnet"),
+    );
+    if (row === undefined) throw new Error("no Sonnet row");
+    row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect((picks[0] as unknown[])[1]).toEqual({ model_id: "sonnet", effort: "medium", fast: false });
+  });
+
   it("colours each tick for the part of the track it is drawn on", () => {
     const efforts = [
       { level: "low", in_picker: true },

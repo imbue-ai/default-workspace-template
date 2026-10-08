@@ -38,6 +38,16 @@ export function effortInEffect(recordedEffort: string | null, option: CatalogMod
   return recordedEffort ?? option?.default_effort ?? null;
 }
 
+/** The effort a newly chosen model starts at: its default when it offers that level, else its first
+ *  shown (or first declared) effort. Null when the model has no effort axis. */
+export function startingEffort(option: CatalogModelOption): string | null {
+  if (option.default_effort !== null && option.efforts.some((effort) => effort.level === option.default_effort)) {
+    return option.default_effort;
+  }
+  const shown = option.efforts.filter((effort) => effort.in_picker);
+  return (shown[0] ?? option.efforts[0])?.level ?? null;
+}
+
 // A popup the harness declared for the chat UI (see HarnessSpec.popups on the
 // backend). `composer_command` popups match a typed message's first token against
 // `commands` at send time; the `turn_check` popup is the fast-mode turn-limit

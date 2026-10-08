@@ -22,7 +22,7 @@ import { fetchAccountModelOptions } from "../models/AccountModelOptions";
 import { getChatById } from "../models/Chats";
 import type { ChatSnapshot, TransitionKind } from "../models/Chats";
 import { switchChat } from "../models/Handoffs";
-import { effortInEffect, getHarnessCatalog } from "../models/HarnessCatalog";
+import { effortInEffect, getHarnessCatalog, startingEffort } from "../models/HarnessCatalog";
 import type { CatalogModelOption } from "../models/HarnessCatalog";
 import type { ModelIdentity } from "../models/ModelSettings";
 import {
@@ -214,12 +214,6 @@ function pickOf(dialog: OpenDialog): PendingPick | null {
   return { identity, label: modelPickLabel(option.label, identity.effort, identity.fast), option };
 }
 
-/** The effort to start from when a model is chosen: the first shown, else the first declared. */
-function firstEffort(option: CatalogModelOption): string | null {
-  const shown = option.efforts.filter((effort) => effort.in_picker);
-  return (shown[0] ?? option.efforts[0])?.level ?? null;
-}
-
 function renderPicker(dialog: OpenDialog): m.Children {
   // With no pick, a handoff's successor starts on its harness's default and a rebound agent keeps its model.
   const harness = harnessLabel(dialog.target.harness);
@@ -264,7 +258,7 @@ function renderPicker(dialog: OpenDialog): m.Children {
         onchange: (event: Event) => {
           dialog.modelId = (event.target as HTMLSelectElement).value;
           const chosen = chosenOption(dialog);
-          dialog.effort = chosen === null ? null : firstEffort(chosen);
+          dialog.effort = chosen === null ? null : startingEffort(chosen);
           dialog.fast = false;
         },
       },
