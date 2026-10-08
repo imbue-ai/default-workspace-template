@@ -3,6 +3,7 @@ and the status it records through a sync."""
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -554,6 +555,18 @@ def test_the_install_picks_the_build_for_this_machine_and_refuses_one_it_has_non
         import_chats.linux_arch("Darwin", "arm64")
     with pytest.raises(import_chats.ImportChatsError, match="only on Linux"):
         import_chats.linux_arch("Linux", "riscv64")
+
+
+def test_a_release_is_used_only_when_its_sha256_is_the_pinned_one(
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "datalib.tar.gz"
+    archive.write_bytes(b"release")
+    pinned = hashlib.sha256(b"release").hexdigest()
+
+    import_chats.verify_release(archive, pinned)
+    with pytest.raises(import_chats.ImportChatsError, match="not the pinned"):
+        import_chats.verify_release(archive, hashlib.sha256(b"other").hexdigest())
 
 
 def _tarball(path: Path, members: Sequence[str]) -> Path:

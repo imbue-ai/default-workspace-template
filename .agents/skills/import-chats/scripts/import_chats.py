@@ -540,6 +540,16 @@ def _download(url: str, destination: Path) -> None:
         shutil.copyfileobj(response, out)
 
 
+def verify_release(archive: Path, expected_sha256: str) -> None:
+    """Refuse a downloaded release whose sha256 is not the pinned one."""
+    with archive.open("rb") as downloaded:
+        digest = hashlib.file_digest(downloaded, "sha256").hexdigest()
+    if digest != expected_sha256:
+        raise ImportChatsError(
+            f"{archive.name} has sha256 {digest}, not the pinned {expected_sha256}"
+        )
+
+
 def unpack_release(archive: Path, destination: Path, triple: str) -> Path:
     """Unpack the release tarball into ``destination`` and return the one release directory it holds."""
     try:
@@ -574,12 +584,7 @@ def install_datalib(
             scratch_path = Path(scratch)
             archive = scratch_path / tarball
             _download(f"{_RELEASE_URL}/{DATALIB_VERSION}/{tarball}", archive)
-            with archive.open("rb") as downloaded:
-                digest = hashlib.file_digest(downloaded, "sha256").hexdigest()
-            if digest != _TARBALL_SHA256_BY_ARCH[arch]:
-                raise ImportChatsError(
-                    f"{tarball} has sha256 {digest}, not the pinned {_TARBALL_SHA256_BY_ARCH[arch]}"
-                )
+            verify_release(archive, _TARBALL_SHA256_BY_ARCH[arch])
             staged = unpack_release(archive, scratch_path, triple)
             shutil.rmtree(install.release_dir, ignore_errors=True)
             os.replace(staged, install.release_dir)
