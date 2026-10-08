@@ -32,19 +32,20 @@ def _run_summary(*steps: dict) -> str:
 
 class _FakeDatalib:
     """Stands in for the installed release's binaries: ``pull-runtime`` succeeds, and a ``datalib-dag`` sync
-    renders ``pages_by_group`` pages for each source it was asked to sync and answers ``summary``."""
+    renders ``pages_by_group`` pages for each source it was asked to sync, then writes ``stderr`` (the event
+    stream, where the real binary writes its run summary) and ``stdout`` (its per-step report)."""
 
     def __init__(
         self,
         data_root: Path,
-        summary: str,
+        stderr: str,
         pages_by_group: dict[str, int],
-        stderr: str = "",
+        stdout: str = "",
     ) -> None:
         self.data_root = data_root
-        self.summary = summary
-        self.pages_by_group = pages_by_group
         self.stderr = stderr
+        self.pages_by_group = pages_by_group
+        self.stdout = stdout
         self.commands: list[list[str]] = []
 
     def __call__(
@@ -67,8 +68,8 @@ class _FakeDatalib:
                 page.write_text("# chat\n")
         return subprocess.CompletedProcess(
             command,
-            0 if '"failed"' not in self.summary else 2,
-            self.summary,
+            0 if '"failed"' not in self.stderr else 2,
+            self.stdout,
             self.stderr,
         )
 
@@ -300,7 +301,12 @@ def test_a_sync_that_never_summarised_records_the_failure_and_its_output(
     install = _installed(tmp_path / "home")
     data_root = tmp_path / "datalib"
     status_path = tmp_path / "status.json"
-    datalib = _FakeDatalib(data_root, "", {}, stderr="config.toml: 1 entry dropped\n")
+    datalib = _FakeDatalib(
+        data_root,
+        '{"event":"run_plan","steps":[]}\nError: the run store is locked\n',
+        {},
+        stdout="claude_chats/ingest  Running\n",
+    )
 
     assert (
         import_chats.sync([CLAUDE], install, data_root, status_path, datalib) is False
@@ -309,7 +315,7 @@ def test_a_sync_that_never_summarised_records_the_failure_and_its_output(
     record = import_chats.read_status(status_path)["sources"]["claude"]
     assert (record["state"], record["detail"]) == (
         "failed",
-        "config.toml: 1 entry dropped",
+        "Error: the run store is locked",
     )
 
 
@@ -325,8 +331,8 @@ def test_a_sync_marks_its_sources_importing_with_its_pid_while_it_runs(
         return subprocess.CompletedProcess(
             command,
             0,
-            _run_summary({"step": "claude_chats/ingest", "status": "succeeded"}),
             "",
+            _run_summary({"step": "claude_chats/ingest", "status": "succeeded"}),
         )
 
     import_chats.sync([CLAUDE], install, tmp_path / "datalib", status_path, run)
@@ -604,7 +610,7 @@ def test_a_running_sync_records_the_pages_rendered_so_far(tmp_path: Path) -> Non
                 break
             pause.wait(0.01)
         summary = _run_summary({"step": "chatgpt_chats/ingest", "status": "succeeded"})
-        return subprocess.CompletedProcess(command, 0, summary, "")
+        return subprocess.CompletedProcess(command, 0, "", summary)
 
     import_chats.sync(
         [CHATGPT], install, data_root, status_path, run, progress_interval_seconds=0.01

@@ -408,23 +408,43 @@ def index_path_for(status_path: Path, source: ChatSource) -> Path:
     return status_path.parent / f"{source.key}-chats.md"
 
 
-def parse_run_summary(output: str) -> dict[str, dict]:
-    """Each step's entry in the ``run_summary`` event ``datalib-dag`` prints last, by step id."""
-    for line in reversed(output.splitlines()):
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            event = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(event, dict) and event.get("event") == "run_summary":
+def _event(line: str) -> dict | None:
+    """The NDJSON event on ``line`` of ``datalib-dag``'s stderr, or None for any other line."""
+    line = line.strip()
+    if not line.startswith("{"):
+        return None
+    try:
+        event = json.loads(line)
+    except ValueError:
+        return None
+    return event if isinstance(event, dict) and "event" in event else None
+
+
+def parse_run_summary(stderr: str) -> dict[str, dict]:
+    """Each step's entry in the ``run_summary`` event ``datalib-dag`` writes last to stderr (its event stream), by
+    step id."""
+    for line in reversed(stderr.splitlines()):
+        event = _event(line)
+        if event is not None and event.get("event") == "run_summary":
             return {
                 step["step"]: step
                 for step in event.get("steps", [])
                 if isinstance(step, dict) and "step" in step
             }
     return {}
+
+
+def runner_error(result: subprocess.CompletedProcess) -> str:
+    """What a ``datalib-dag`` run that never summarised said about why: its stderr without the event stream (the
+    runner's own error), else its stdout report, else its exit code."""
+    said = "\n".join(
+        line for line in result.stderr.splitlines() if _event(line) is None
+    )
+    return (
+        said.strip()
+        or result.stdout.strip()
+        or f"datalib-dag exited {result.returncode}"
+    )
 
 
 def classify_failure(error: str) -> str:
@@ -615,7 +635,7 @@ def sync(
                 pid=None,
             )
         raise
-    steps = parse_run_summary(result.stdout)
+    steps = parse_run_summary(result.stderr)
     is_every_source_imported = True
     for source in named:
         ingest = steps.get(f"{source.group}/ingest")
@@ -627,9 +647,7 @@ def sync(
             continue
         is_every_source_imported = False
         if ingest is None:
-            error = (
-                result.stderr or result.stdout
-            ).strip() or f"datalib-dag exited {result.returncode}"
+            error = runner_error(result)
         else:
             error = str(ingest.get("error", ""))
         record_source(
