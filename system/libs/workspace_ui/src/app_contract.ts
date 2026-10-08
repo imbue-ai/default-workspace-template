@@ -231,7 +231,7 @@ function followLinkClick(
   }
   event.preventDefault();
   if (isExternalUrl(url)) {
-    view.open(url.href, "_blank", "noopener");
+    view.open(url.href, "_blank", link.relList.contains("noreferrer") ? "noopener,noreferrer" : "noopener");
     return;
   }
   send(SHELL_OPEN_LINK, { url: url.href });

@@ -268,6 +268,12 @@ describe("a framed page's link clicks", () => {
     expect(cancelled).toEqual([true]);
   });
 
+  it("keeps an external link's noreferrer when it opens it", () => {
+    connect();
+    click('<a href="https://example.com/docs" rel="noopener noreferrer">out</a>');
+    expect(opened.mock.calls).toEqual([["https://example.com/docs", "_blank", "noopener,noreferrer"]]);
+  });
+
   it("leaves a plain click on a link to the page's own origin to the page", () => {
     const parent = connect();
     click('<a href="/docs/intro?tab=2">intro</a>');
