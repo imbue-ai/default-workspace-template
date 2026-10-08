@@ -228,7 +228,9 @@ Your built-in `TodoWrite` tool is disabled. Use `tk` instead -- step records (`t
 
 `.claude/skills` does not exist; it is symlinked to `.agents/skills/`.
 
-Use your built-in memory system. Your memory directory is `data/memories/` (configured via `autoMemoryDirectory` in `.claude/settings.json`)."""]
+Use your built-in memory system. Your memory directory is `data/memories/` (configured via `autoMemoryDirectory` in `.claude/settings.json`).
+
+Give every Bash call a `description`, `tk` calls included: a few plain words saying what the command does. The chat shows the user that description instead of the raw command."""]
 
 # The "main" (services) agent type -- a plain `command` agent, NOT a claude
 # agent. No claude ever runs as this agent: window 0 only sleeps while the
