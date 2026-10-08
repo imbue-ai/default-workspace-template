@@ -1,6 +1,7 @@
 /**
  * The Getting Started page (launcher-and-getting-started plan section 3.6), top to bottom: a
- * search field over its own content; "Start something", the intent tiles two to a row (four at
+ * search field over its own content; the "Bring in your chats" card, until the user puts it away;
+ * "Start something", the intent tiles two to a row (four at
  * first, the rest behind "See more"); "Start from a template", the catalog's shelves. The page is
  * its own scroller, since the shared base styles pin the body to the viewport. Picking a template
  * shows its detail as a page inside this one, with a way back. Typing swaps the sections for
@@ -13,8 +14,10 @@ import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
+import type { ChatImport } from "../models/ChatImport";
 import type { CatalogTemplate, TemplateCatalogState } from "../models/TemplateCatalog";
 import { resolveShelves, searchTemplates } from "../models/TemplateCatalog";
+import { ChatImportCard } from "./ChatImportCard";
 import { TemplateDetail } from "./TemplateDetail";
 import { TemplateCard, TemplateShelves } from "./TemplateShelves";
 import { HOVER_GLYPH_GROUP, HOVER_SHADOW_SELF } from "./hoverLift";
@@ -43,8 +46,12 @@ const FIELD_GLYPH_SIZE = 14;
 
 export interface GettingStartedPageAttrs {
   readonly catalog: TemplateCatalogState;
+  /** The chat import card's state; null until it has loaded (the card stays hidden until then). */
+  readonly chatImport: ChatImport | null;
   /** Start a chat whose first message is ``text``. */
   readonly onStartWithText: (text: string) => void;
+  /** Put the chat import card away. */
+  readonly onDismissChatImport: () => void;
 }
 
 export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
@@ -258,6 +265,13 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
             })
           : [
               searchField(),
+              query.trim() !== ""
+                ? null
+                : m(ChatImportCard, {
+                    chatImport: attrs.chatImport,
+                    onStartWithText: attrs.onStartWithText,
+                    onDismiss: attrs.onDismissChatImport,
+                  }),
               m(
                 "div",
                 { class: "mt-6" },

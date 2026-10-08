@@ -12,6 +12,9 @@ from app_manifest.primitives import AppUrl
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import register_app
 from app_manifest.shell_windows import shell_base_url
+from getting_started.chat_import import CHAT_IMPORT_STATUS_PATH
+from getting_started.chat_import import ChatImportStore
+from getting_started.chat_import import DISMISSAL_FILENAME
 from getting_started.config import Config
 from getting_started.config import load_config
 from getting_started.first_window import FirstWindowLedger
@@ -39,7 +42,10 @@ class GettingStartedArguments(FrozenModel):
 
     manifest_path: Path = Field(description="The app.toml to register")
     app_url: AppUrl = Field(description="Where the page is served")
-    state_dir: Path = Field(description="The app's state directory: the catalog cache and the first-visit ledger")
+    state_dir: Path = Field(
+        description="The app's state directory: the catalog cache, the first-visit ledger, and the chat import card's "
+        "dismissal"
+    )
     static_directory: Path = Field(description="The frontend's built bundle")
     catalog_url: str = Field(description="Where the template catalog is fetched from; empty disables it")
     host: str = Field(description="The address the page server binds")
@@ -56,6 +62,9 @@ def build_pages_app(arguments: GettingStartedArguments) -> Flask:
             static_directory=arguments.static_directory,
             catalog=build_template_catalog_store(
                 catalog_url=arguments.catalog_url, state_directory=arguments.state_dir, fetcher=None
+            ),
+            chat_import=ChatImportStore(
+                status_path=CHAT_IMPORT_STATUS_PATH, dismissal_path=arguments.state_dir / DISMISSAL_FILENAME
             ),
             contract_path=SHELL_APP_CONTRACT_PATH,
         )
@@ -119,7 +128,7 @@ def arguments_from_config(
     type=click.Path(path_type=Path),
     default=DEFAULT_STATE_DIRECTORY,
     show_default=True,
-    help="The app's state directory (the catalog cache and the first-visit ledger)",
+    help="The app's state directory (the catalog cache, the first-visit ledger, and the chat import card's dismissal)",
 )
 @click.option(
     "--static-dir",

@@ -1,0 +1,559 @@
+#!/usr/bin/env python3
+"""Import the user's Claude and ChatGPT chats into this workspace with datalib.
+
+Subcommands, run from the repo root (every skill's cwd)::
+
+    python3 .agents/skills/import-chats/scripts/import_chats.py check --source claude
+    python3 .agents/skills/import-chats/scripts/import_chats.py sync --source claude --source chatgpt
+    python3 .agents/skills/import-chats/scripts/import_chats.py status
+
+``check`` asks the source's own API, through ``latchkey curl``, whether this workspace can read
+the account yet, and prints one JSON line ``{"source", "state", "detail"}``. Its ``state`` says
+what the agent does next: ``connected`` (sync), ``needs_permission`` (file the source's
+permission request; a re-sent request also signs a lapsed account back in), or ``blocked`` (the
+site refused the request itself, which a sign-in does not fix).
+
+``sync`` installs datalib on first use (the pinned release, sha256-checked, plus the Node runtime
+its latchkey and search steps run on), writes datalib's config for every source this workspace has
+ever imported, and runs one ``datalib-dag`` sync of the named sources. It records each source's
+progress in the status file as it goes, prints the final status, and exits 0 only when every named
+source imported. A sync of a large account takes a while: run it through
+``system/scripts/run_in_background.py``.
+
+``status`` prints the status file.
+
+The status file (``data/.skills/import-chats/status.json``) is read by the Getting Started app's
+"Bring in your chats" card, so its shape is a contract with
+``system/apps/getting_started/src/getting_started/chat_import.py``::
+
+    {"sources": {"claude": {"state": "imported", "conversations": 312,
+                            "updated_at": "<iso8601>", "detail": "", "pid": null}}}
+
+``state`` is one of ``importing``, ``imported``, ``needs_sign_in`` and ``failed``; ``pid`` is the
+sync's process while it is ``importing``, so a reader can tell a sync that died from one that is
+still running.
+
+The datalib store is ``data/.skills/datalib/`` (its ``config.toml`` and every tree datalib writes):
+the raw records each ingest kept, and one rendered markdown page per conversation under
+``<group>/render_markdown/``. Credentials never touch it; latchkey's gateway attaches them.
+
+Standard library only, so it runs under bare ``python3`` like the other skill scripts.
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import datetime
+import hashlib
+import json
+import os
+import platform
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import urllib.request
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+
+DATALIB_VERSION = "v0.40.0"
+# The fully static builds: they run on any Linux of the right arch, whatever its libc.
+_TARBALL_SHA256_BY_ARCH = {
+    "x86_64": "b777dc02be0f6ea1d1e712dfe020be6fecd5468478380a208793706f2c722b04",
+    "aarch64": "488d9fa8fd232e6a5a2041762fe421c9173e1af1d4cf914e118dbcb99752b707",
+}
+_RELEASE_URL = "https://github.com/imbue-ai/datalib/releases/download"
+_DOWNLOAD_TIMEOUT_SECONDS = 300.0
+
+DATA_ROOT = Path("data") / ".skills" / "datalib"
+STATUS_PATH = Path("data") / ".skills" / "import-chats" / "status.json"
+SYNC_REQUESTER = "import-chats"
+
+STATE_IMPORTING = "importing"
+STATE_IMPORTED = "imported"
+STATE_NEEDS_SIGN_IN = "needs_sign_in"
+STATE_FAILED = "failed"
+
+CHECK_CONNECTED = "connected"
+CHECK_NEEDS_PERMISSION = "needs_permission"
+CHECK_BLOCKED = "blocked"
+
+# Marks a request for the gateway's Chrome-impersonating curl, which is what gets it past the
+# Cloudflare challenge both sites put in front of their APIs. datalib sends the same marker.
+_IMPERSONATE_HEADER = "X-Imbue-Impersonate: 1"
+_CHECK_TIMEOUT_SECONDS = 60.0
+
+# latchkey's own refusals, and the provider answers datalib classifies as a credential problem: each
+# is fixed by (re-)sending the source's permission request, which signs the user in again.
+_SIGN_IN_MARKERS = (
+    "No service matches URL",
+    "No credentials found",
+    "Request not permitted",
+    "HTTP 401",
+    "HTTP 403",
+    "token_expired",
+)
+
+
+@dataclass(frozen=True)
+class ChatSource:
+    key: str
+    label: str
+    datalib_type: str
+    group: str
+    # A cheap authenticated read: it answers 200 once the account is connected.
+    check_url: str
+
+
+SOURCES: dict[str, ChatSource] = {
+    "claude": ChatSource(
+        key="claude",
+        label="Claude",
+        datalib_type="claude",
+        group="claude_chats",
+        check_url="https://claude.ai/api/organizations",
+    ),
+    "chatgpt": ChatSource(
+        key="chatgpt",
+        label="ChatGPT",
+        datalib_type="chatgpt",
+        group="chatgpt_chats",
+        check_url="https://chatgpt.com/backend-api/me",
+    ),
+}
+
+
+class ImportChatsError(Exception):
+    """Something the import cannot go on past; the message is for the agent to read."""
+
+
+# The status file
+
+
+def _now() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+
+def read_status(path: Path) -> dict:
+    """The status document, ``{"sources": {}}`` when there is none yet."""
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"sources": {}}
+    except ValueError as e:
+        raise ImportChatsError(f"the status file {path} is not JSON: {e}") from e
+    if not isinstance(document, dict) or not isinstance(document.get("sources"), dict):
+        raise ImportChatsError(f"the status file {path} is not a status document")
+    return document
+
+
+def write_status(path: Path, document: Mapping) -> None:
+    """Write through a same-directory temp file and a rename, so a reader never sees a partial file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+    temp_path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    os.replace(temp_path, path)
+
+
+def record_source(
+    path: Path, key: str, state: str, conversations: int, detail: str, pid: int | None
+) -> None:
+    document = read_status(path)
+    document["sources"][key] = {
+        "state": state,
+        "conversations": conversations,
+        "updated_at": _now(),
+        "detail": detail,
+        "pid": pid,
+    }
+    write_status(path, document)
+
+
+# datalib's config
+
+
+def render_config(sources: Sequence[ChatSource]) -> str:
+    """datalib's ``config.toml`` for ``sources``: per source, its ingest, its rendered pages and its keyword
+    index; then the shared grid and search over all of them, and the applet that serves them.
+
+    Embeddings are left out: they download a model and keep a CPU busy for a long time, and keyword search plus
+    the rendered pages cover what an agent needs from past chats.
+    """
+    if not sources:
+        raise ImportChatsError("a config needs at least one source")
+    lines = [
+        "# Written by the import-chats skill (.agents/skills/import-chats/scripts/import_chats.py), which",
+        "# rewrites it on every import: a hand edit here does not survive the next one.",
+        "",
+    ]
+    for source in sources:
+        group = source.group
+        lines += [
+            "[[groups]]",
+            f'id = "{group}"',
+            f'name = "{source.label}"',
+            f'type = "{source.datalib_type}"',
+            "",
+            "[[steps]]",
+            f'group = "{group}"',
+            'function = "ingest"',
+            "[steps.params.api]",
+            "",
+            "[[steps]]",
+            f'group = "{group}"',
+            'function = "render_markdown"',
+            f'inputs = ["{group}/ingest"]',
+            "",
+            "[[steps]]",
+            f'group = "{group}"',
+            'function = "keyword_index"',
+            f'inputs = ["{group}/render_markdown"]',
+            "",
+        ]
+    rendered = ", ".join(f'"{source.group}/render_markdown"' for source in sources)
+    indexed = ", ".join(f'"{source.group}/keyword_index"' for source in sources)
+    lines += [
+        "[[groups]]",
+        'id = "unified_index"',
+        "",
+        "[[steps]]",
+        'group = "unified_index"',
+        'function = "grid_index"',
+        f"inputs = [{rendered}]",
+        "",
+        "[[steps]]",
+        'group = "unified_index"',
+        'function = "qmd_aggregator"',
+        f"inputs = [{indexed}]",
+        "",
+        "[[applets]]",
+        'group = "unified_index"',
+        'id = "unified_index"',
+        'command = "datalib-applet unified_index"',
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def configured_sources(
+    status: Mapping, named: Sequence[ChatSource]
+) -> list[ChatSource]:
+    """Every source this workspace has imported before plus the ones named now, in a stable order: a sync of one
+    source must not drop another from the config (or from search)."""
+    keys = set(status["sources"]) | {source.key for source in named}
+    return [source for key, source in SOURCES.items() if key in keys]
+
+
+def count_conversations(data_root: Path, source: ChatSource) -> int:
+    """How many pages the source's render step wrote: one per conversation (and, for Claude, one per project)."""
+    rendered = data_root / source.group / "render_markdown"
+    if not rendered.is_dir():
+        return 0
+    return sum(1 for _ in rendered.rglob("all.md"))
+
+
+# Running datalib
+
+
+def parse_run_summary(output: str) -> dict[str, dict]:
+    """Each step's entry in the ``run_summary`` event ``datalib-dag`` prints last, by step id."""
+    for line in reversed(output.splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get("event") == "run_summary":
+            return {
+                step["step"]: step
+                for step in event.get("steps", [])
+                if isinstance(step, dict) and "step" in step
+            }
+    return {}
+
+
+def classify_failure(error: str) -> str:
+    """A failed ingest's state: a sign-in problem the user can fix by signing in again, or any other failure."""
+    return (
+        STATE_NEEDS_SIGN_IN
+        if any(marker in error for marker in _SIGN_IN_MARKERS)
+        else STATE_FAILED
+    )
+
+
+def failure_detail(error: str) -> str:
+    """The line of a step's error that says what went wrong (datalib's ``caused by:`` line when there is one)."""
+    lines = [line.strip() for line in error.splitlines() if line.strip()]
+    for line in lines:
+        if line.startswith("caused by:"):
+            return line.removeprefix("caused by:").strip()
+    return lines[-1] if lines else "the import failed"
+
+
+@dataclass(frozen=True)
+class DatalibInstall:
+    """Where the pinned release lives in this home directory."""
+
+    home: Path
+
+    @property
+    def release_dir(self) -> Path:
+        return self.home / ".local" / "lib" / "datalib" / DATALIB_VERSION
+
+    def binary(self, name: str) -> Path:
+        return self.release_dir / name
+
+    def is_installed(self) -> bool:
+        return os.access(self.binary("datalib-dag"), os.X_OK)
+
+
+def linux_arch(system: str, machine: str) -> str:
+    """The release's arch name for this machine, refusing one the pinned release has no build for."""
+    arch = {
+        "x86_64": "x86_64",
+        "amd64": "x86_64",
+        "aarch64": "aarch64",
+        "arm64": "aarch64",
+    }.get(machine.lower())
+    if system != "Linux" or arch is None:
+        raise ImportChatsError(
+            f"datalib is installed here only on Linux x86_64 or arm64, not {system} {machine}"
+        )
+    return arch
+
+
+def _download(url: str, destination: Path) -> None:
+    with (
+        urllib.request.urlopen(url, timeout=_DOWNLOAD_TIMEOUT_SECONDS) as response,
+        destination.open("wb") as out,
+    ):
+        shutil.copyfileobj(response, out)
+
+
+def install_datalib(
+    install: DatalibInstall, run: Callable[..., subprocess.CompletedProcess]
+) -> None:
+    """Install the pinned release into ``install.release_dir`` unless it is already there, then fetch the Node
+    runtime its latchkey and search steps use (a no-op once fetched).
+
+    The tarball is unpacked whole, because its binaries find their siblings and ``runtime.manifest`` beside their
+    own resolved path. Nothing is linked onto PATH: the tarball also carries a ``latchkey`` launcher, which must not
+    shadow the workspace's own.
+    """
+    if not install.is_installed():
+        arch = linux_arch(platform.system(), platform.machine())
+        triple = f"{arch}-unknown-linux-musl"
+        tarball = f"datalib-{triple}.tar.gz"
+        install.release_dir.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=install.release_dir.parent) as scratch:
+            scratch_path = Path(scratch)
+            archive = scratch_path / tarball
+            _download(f"{_RELEASE_URL}/{DATALIB_VERSION}/{tarball}", archive)
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            if digest != _TARBALL_SHA256_BY_ARCH[arch]:
+                raise ImportChatsError(
+                    f"{tarball} has sha256 {digest}, not the pinned {_TARBALL_SHA256_BY_ARCH[arch]}"
+                )
+            with tarfile.open(archive) as opened:
+                opened.extractall(scratch_path, filter="data")
+            (staged,) = [
+                path
+                for path in scratch_path.glob(f"datalib-*-{triple}")
+                if path.is_dir()
+            ]
+            shutil.rmtree(install.release_dir, ignore_errors=True)
+            os.replace(staged, install.release_dir)
+    result = run(
+        [str(install.binary("datalib-step")), "pull-runtime"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise ImportChatsError(
+            f"datalib could not fetch its runtime: {(result.stderr or result.stdout).strip()}"
+        )
+
+
+def sync(
+    named: Sequence[ChatSource],
+    install: DatalibInstall,
+    data_root: Path,
+    status_path: Path,
+    run: Callable[..., subprocess.CompletedProcess],
+) -> bool:
+    """Import ``named``: install datalib if needed, write the config, run one sync, and record each source's
+    outcome. True when every named source imported."""
+    for source in named:
+        previous = read_status(status_path)["sources"].get(source.key, {})
+        record_source(
+            status_path,
+            source.key,
+            STATE_IMPORTING,
+            int(previous.get("conversations", 0)),
+            "",
+            pid=os.getpid(),
+        )
+    try:
+        install_datalib(install, run)
+        data_root.mkdir(parents=True, exist_ok=True)
+        config_path = data_root / "config.toml"
+        config_path.write_text(
+            render_config(configured_sources(read_status(status_path), named)),
+            encoding="utf-8",
+        )
+        roots = ",".join(f"{source.group}/ingest" for source in named)
+        result = run(
+            [
+                str(install.binary("datalib-dag")),
+                str(config_path),
+                "--sync",
+                roots,
+                "--by",
+                SYNC_REQUESTER,
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except (ImportChatsError, OSError) as e:
+        for source in named:
+            record_source(
+                status_path,
+                source.key,
+                STATE_FAILED,
+                count_conversations(data_root, source),
+                str(e),
+                pid=None,
+            )
+        raise
+    steps = parse_run_summary(result.stdout)
+    is_every_source_imported = True
+    for source in named:
+        ingest = steps.get(f"{source.group}/ingest")
+        conversations = count_conversations(data_root, source)
+        if ingest is not None and ingest.get("status") == "succeeded":
+            record_source(
+                status_path, source.key, STATE_IMPORTED, conversations, "", pid=None
+            )
+            continue
+        is_every_source_imported = False
+        if ingest is None:
+            error = (
+                result.stderr or result.stdout
+            ).strip() or f"datalib-dag exited {result.returncode}"
+        else:
+            error = str(ingest.get("error", ""))
+        record_source(
+            status_path,
+            source.key,
+            classify_failure(error),
+            conversations,
+            failure_detail(error),
+            pid=None,
+        )
+    return is_every_source_imported
+
+
+# Checking access
+
+
+def classify_check(returncode: int, output: str) -> tuple[str, str]:
+    """The ``check`` state for a ``latchkey curl -w '\\n%{http_code}'`` result: ``(state, detail)``."""
+    body, _, status_code = output.rstrip("\n").rpartition("\n")
+    if returncode == 0 and status_code.strip() == "200":
+        return CHECK_CONNECTED, ""
+    for marker in (
+        "No service matches URL",
+        "No credentials found",
+        "Request not permitted",
+    ):
+        if marker in output:
+            return CHECK_NEEDS_PERMISSION, marker
+    code = status_code.strip()
+    if code == "401":
+        return CHECK_NEEDS_PERMISSION, "the saved sign-in has expired"
+    if code == "403" and "cloudflare" not in body.lower():
+        return CHECK_NEEDS_PERMISSION, "the account refused the saved sign-in"
+    if code == "403":
+        return CHECK_BLOCKED, "the site's bot protection refused the request"
+    return CHECK_BLOCKED, (
+        body.strip() or output.strip() or f"latchkey curl exited {returncode}"
+    )[:300]
+
+
+def check(
+    source: ChatSource, run: Callable[..., subprocess.CompletedProcess]
+) -> tuple[str, str]:
+    command = [
+        "latchkey",
+        "curl",
+        "-sS",
+        "--max-time",
+        str(int(_CHECK_TIMEOUT_SECONDS)),
+        "-H",
+        _IMPERSONATE_HEADER,
+        "-w",
+        "\n%{http_code}",
+        source.check_url,
+    ]
+    try:
+        result = run(command, capture_output=True, text=True)
+    except OSError as e:
+        raise ImportChatsError(f"cannot run latchkey: {e}") from e
+    return classify_check(result.returncode, result.stdout + result.stderr)
+
+
+# The command line
+
+
+def _sources(keys: Sequence[str]) -> list[ChatSource]:
+    return [SOURCES[key] for key in dict.fromkeys(keys)]
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
+    subcommands = parser.add_subparsers(dest="command", required=True)
+    check_parser = subcommands.add_parser(
+        "check", help="whether this workspace can read the account yet"
+    )
+    check_parser.add_argument("--source", required=True, choices=sorted(SOURCES))
+    sync_parser = subcommands.add_parser("sync", help="import the named sources")
+    sync_parser.add_argument(
+        "--source", required=True, action="append", choices=sorted(SOURCES)
+    )
+    subcommands.add_parser("status", help="print what has been imported so far")
+    arguments = parser.parse_args(argv)
+
+    try:
+        if arguments.command == "check":
+            source = SOURCES[arguments.source]
+            state, detail = check(source, run)
+            print(json.dumps({"source": source.key, "state": state, "detail": detail}))
+            return 0
+        if arguments.command == "sync":
+            is_imported = sync(
+                _sources(arguments.source),
+                DatalibInstall(home=Path.home()),
+                DATA_ROOT,
+                STATUS_PATH,
+                run,
+            )
+            print(json.dumps(read_status(STATUS_PATH), indent=2))
+            return 0 if is_imported else 1
+        print(json.dumps(read_status(STATUS_PATH), indent=2))
+        return 0
+    except ImportChatsError as e:
+        print(f"import-chats: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    with contextlib.suppress(KeyboardInterrupt):
+        sys.exit(main())

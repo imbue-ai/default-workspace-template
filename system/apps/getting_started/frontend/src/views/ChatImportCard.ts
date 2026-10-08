@@ -1,0 +1,136 @@
+/**
+ * "Bring in your chats": the card at the top of the page offering to copy the user's Claude and
+ * ChatGPT conversations into the workspace. Its action starts a chat whose first message asks for
+ * the import (the import-chats skill matches on it); the agent connects each account and runs the
+ * import, and the card follows along from the skill's status: counting up while it runs, then the
+ * result, or a way back in when a source needs the user. "Not now" and "Hide" put it away for good.
+ */
+
+import m from "mithril";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
+import type { ChatImport, ChatImportSource } from "../models/ChatImport";
+import { SOURCE_LABELS, cardPhase, importedSummary } from "../models/ChatImport";
+
+export const IMPORT_PROMPT =
+  "Bring my Claude and ChatGPT chats into this workspace, so you can search and build on my past " + "conversations.";
+export const UPDATE_PROMPT =
+  "Check my Claude and ChatGPT chats for new conversations and bring them into this workspace.";
+export const RESUME_PROMPT =
+  "My chat import did not finish. Pick it up and bring the rest of my Claude and ChatGPT chats into " +
+  "this workspace.";
+
+export interface ChatImportCardAttrs {
+  readonly chatImport: ChatImport | null;
+  /** Start a chat whose first message is ``text``. */
+  readonly onStartWithText: (text: string) => void;
+  readonly onDismiss: () => void;
+}
+
+function sourceLine(label: string, source: ChatImportSource): string {
+  switch (source.state) {
+    case "importing":
+      return `${label}: ${source.conversations.toLocaleString()} so far`;
+    case "imported":
+      return `${label}: ${source.conversations.toLocaleString()} imported`;
+    case "needs_sign_in":
+      return `${label}: needs you to sign in again`;
+    case "failed":
+      return `${label}: did not finish`;
+  }
+}
+
+function sourceLines(sources: Record<string, ChatImportSource>): m.Vnode {
+  return m(
+    "ul",
+    { class: "chat-import-sources mt-2 type-helper text-secondary" },
+    SOURCE_LABELS.flatMap(([key, label]) => {
+      const source = sources[key];
+      return source === undefined ? [] : [m("li", { key, "data-chat-import-source": key }, sourceLine(label, source))];
+    }),
+  );
+}
+
+export const ChatImportCard: m.Component<ChatImportCardAttrs> = {
+  view({ attrs }) {
+    const phase = cardPhase(attrs.chatImport);
+    if (phase === "hidden" || attrs.chatImport === null) return null;
+    const sources = attrs.chatImport.sources;
+    const start = (text: string) => () => attrs.onStartWithText(text);
+    let title: string;
+    let body: m.Children;
+    let actions: m.Children;
+    switch (phase) {
+      case "offer":
+        title = "Bring in your chats";
+        body = m(
+          "p",
+          { class: "type-helper mt-1 text-secondary" },
+          "Copy your Claude and ChatGPT conversations here, so this workspace can search and build on " +
+            "what you have already worked through. You sign in once; the rest happens on its own.",
+        );
+        actions = [
+          m(
+            Button,
+            { variant: "primary", sm: true, "data-chat-import-action": "import", onclick: start(IMPORT_PROMPT) },
+            "Import my chats",
+          ),
+          m(
+            Button,
+            { variant: "ghost", sm: true, "data-chat-import-action": "dismiss", onclick: attrs.onDismiss },
+            "Not now",
+          ),
+        ];
+        break;
+      case "importing":
+        title = "Bringing in your chats…";
+        body = sourceLines(sources);
+        actions = null;
+        break;
+      case "attention":
+        title = "Your chat import needs a hand";
+        body = sourceLines(sources);
+        actions = [
+          m(
+            Button,
+            { variant: "primary", sm: true, "data-chat-import-action": "resume", onclick: start(RESUME_PROMPT) },
+            "Finish importing",
+          ),
+          m(
+            Button,
+            { variant: "ghost", sm: true, "data-chat-import-action": "dismiss", onclick: attrs.onDismiss },
+            "Hide",
+          ),
+        ];
+        break;
+      case "imported":
+        title = "Your chats are here";
+        body = m("p", { class: "type-helper mt-1 text-secondary" }, `${importedSummary(sources)}.`);
+        actions = [
+          m(
+            Button,
+            { variant: "secondary", sm: true, "data-chat-import-action": "update", onclick: start(UPDATE_PROMPT) },
+            "Check for new chats",
+          ),
+          m(
+            Button,
+            { variant: "ghost", sm: true, "data-chat-import-action": "dismiss", onclick: attrs.onDismiss },
+            "Hide",
+          ),
+        ];
+        break;
+    }
+    return m(
+      "section",
+      {
+        "data-section": "chat-import",
+        "data-chat-import-phase": phase,
+        class: "getting-started-chat-import mt-6 rounded-xl border border-default bg-surface p-4 text-primary",
+      },
+      [
+        m("h2", { class: "type-label" }, title),
+        body,
+        actions === null ? null : m("div", { class: "mt-3 flex flex-wrap gap-2" }, actions),
+      ],
+    );
+  },
+};

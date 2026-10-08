@@ -1,11 +1,14 @@
-"""Tests for the routes: the page (built or not), the assets, the health probe, the catalog, and the contract module."""
+"""Tests for the routes: the page (built or not), the assets, the health probe, the catalog, the chat import card's
+state, and the contract module."""
 
+import json
 from pathlib import Path
 
 import pytest
 from flask import Flask
 from flask.testing import FlaskClient
 
+from getting_started.chat_import import ChatImportStore
 from getting_started.pages import build_pages_blueprint
 from getting_started.template_catalog import TemplateCatalogStore
 from getting_started.testing import FakeTemplateCatalogFetcher
@@ -26,7 +29,10 @@ def _client(
         fetcher=fetcher if fetcher is not None else FakeTemplateCatalogFetcher(),
     )
     app = Flask("getting-started-under-test", static_folder=None)
-    app.register_blueprint(build_pages_blueprint(static_directory, store, contract_path))
+    chat_import = ChatImportStore(
+        status_path=tmp_path / "import-chats" / "status.json", dismissal_path=tmp_path / "chat_import.json"
+    )
+    app.register_blueprint(build_pages_blueprint(static_directory, store, chat_import, contract_path))
     return app.test_client()
 
 
@@ -93,3 +99,29 @@ def test_the_contract_module_is_served_from_this_origin_once_the_shell_has_built
         assert b"connectToShell" in response.data
     else:
         assert response.status_code == 404
+
+
+def test_the_chat_import_route_answers_what_was_imported_until_the_card_is_put_away(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    assert client.get("/api/chat-import").get_json() == {"is_dismissed": False, "sources": {}}
+
+    status_path = tmp_path / "import-chats" / "status.json"
+    status_path.parent.mkdir(parents=True)
+    status_path.write_text(
+        json.dumps(
+            {
+                "sources": {
+                    "claude": {"state": "imported", "conversations": 12, "updated_at": "t", "detail": "", "pid": None}
+                }
+            }
+        )
+    )
+    assert client.get("/api/chat-import").get_json() == {
+        "is_dismissed": False,
+        "sources": {"claude": {"state": "imported", "conversations": 12, "updated_at": "t", "detail": ""}},
+    }
+
+    dismissed = client.post("/api/chat-import/dismiss")
+    assert dismissed.status_code == 200
+    assert dismissed.get_json()["is_dismissed"] is True
+    assert client.get("/api/chat-import").get_json()["is_dismissed"] is True
