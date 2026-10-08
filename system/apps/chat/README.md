@@ -457,11 +457,10 @@ marker older than that is ignored. A request on a chat nobody has open, which no
 (`UNWATCHED_PENDING_COMPACTION_TIMEOUT_SECONDS`) unless Claude's
 `last_compaction.json` ends it first. In a Claude chat the stop button stays up
 during a compaction: with no turn in flight it presses Claude's cancel chord
-(`M-q`, bound to `chat:cancel`, the action Escape takes), which is expected to
-cancel the compaction but has not yet been checked against a live Claude. When a
-chord or a restart was actually sent, the app drops the marker and its own
-pending request, since a cancelled compaction reports no completion; a stop that
-found nothing to interrupt leaves them alone. Codex and Pi interrupts do not
+(`M-q`, bound to `chat:cancel`, the action Escape takes), which cancels the
+compaction. When a chord or a restart was actually sent, the app drops the
+marker and its own pending request, since a cancelled compaction reports no
+completion; a stop that found nothing to interrupt leaves them alone. Codex and Pi interrupts do not
 cancel a compaction (`can_interrupt_compaction`), so their stop button is hidden
 while they compact. A `/compact` typed in a Claude chat's composer before the
 agent's first reply is declined with "Nothing to compact yet." (a 409 with
