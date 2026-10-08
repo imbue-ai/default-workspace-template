@@ -9,3 +9,5 @@ Workspace themes become a real feature: a theme is a folder of CSS and a `theme.
 - The terminal's pty page (`terminal_pty`) declares `[theming] mode = "none"`: its xterm takes only the theme's terminal palette, which the terminal app hands it.
 
 - Docs: the desktop-interface and workspace-app-model contracts, `docs/system/app-icons.md`, `AGENTS.md`, `THIRD_PARTY_NOTICES.md`, and the library README describe themes.
+
+- The theme contract gains the `avatar` part and the `--desk-avatar-color` and `--desk-avatar-shadow-color` tokens, which both retro themes set.

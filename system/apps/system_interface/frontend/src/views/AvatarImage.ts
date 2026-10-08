@@ -16,6 +16,7 @@ import { IMBUE_CHARACTER_DESIGN_ID, ImbueCharacter } from "./character/ImbueChar
 import { avatarImageUrl } from "../model/api";
 import type { AvatarMood, AvatarStatus } from "../model/records";
 import type { AvatarState, TaskbarEntry } from "../reducers/desktopState";
+import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { appGlyph } from "./glyphs";
 
 export interface AvatarImageAttrs {
@@ -48,6 +49,8 @@ export const AvatarImage: m.ClosureComponent<AvatarImageAttrs> = () => {
       }
       return m("img", {
         "data-avatar-image": design,
+        ...partAttrs("avatar"),
+        "data-avatar-kind": "image",
         src: avatarImageUrl(design, mood),
         alt: "",
         draggable: false,

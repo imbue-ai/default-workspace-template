@@ -44,6 +44,9 @@
   --desk-window-shadow: 1px 1px 0 #000000;
   --desk-taskbar-surface: #ffffff;
   --desk-taskbar-entry-shadow: none;
+  /* The avatar: solid black, with no soft pool under it, which a one-bit screen cannot draw. */
+  --desk-avatar-color: #000000;
+  --desk-avatar-shadow-color: transparent;
   --desk-icon-radius: 0px;
   --desk-icon-shadow: none;
   --desk-icon-shadow-lifted: 2px 2px 0 #000000;

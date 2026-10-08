@@ -51,6 +51,9 @@
   --desk-window-shadow: -1px -1px 0 #ffffff, 1px 1px 0 #808080, -2px -2px 0 #d4d0c8, 2px 2px 0 #404040;
   --desk-taskbar-surface: #d4d0c8;
   --desk-taskbar-entry-shadow: none;
+  /* The avatar: the caption bar's navy, casting a plain black pool. */
+  --desk-avatar-color: #0a246a;
+  --desk-avatar-shadow-color: #000000;
   --desk-icon-radius: 0px;
   --desk-icon-shadow: none;
   --desk-icon-shadow-lifted: none;

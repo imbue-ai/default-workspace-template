@@ -124,7 +124,7 @@ A theme sets tokens on `:root` (and under `:root[data-touch]` or `:root[data-pho
 | Type | `--font-sans`, `--font-mono`, `--font-display` (headings, section labels, and what a theme sets its titles, buttons, and menus in), `--font-size-heading-lg`, `--font-size-heading`, `--font-size-body`, `--font-size-row`, `--font-size-helper`, `--weight-regular`, `--weight-semibold`, `--weight-bold` |
 | Shape | `--radius-sm`, `--radius-md`, `--radius-lg`, `--radius-xl` |
 | Motion | `--dur-fast`, `--dur-base`, `--dur-slow` |
-| Desktop | `--desk-window-radius`, `--desk-window-shadow`, `--desk-taskbar-surface`, `--desk-taskbar-entry-shadow`, `--desk-backdrop`, `--desk-default-wallpaper`, `--desk-icon-radius`, `--desk-icon-shadow`, `--desk-icon-shadow-lifted`, `--desk-shortcut-label-shadow`, `--desk-toast-radius`, `--desk-phone-sheet-radius`, `--desk-phone-tile-radius` |
+| Desktop | `--desk-window-radius`, `--desk-window-shadow`, `--desk-taskbar-surface`, `--desk-taskbar-entry-shadow`, `--desk-backdrop`, `--desk-default-wallpaper`, `--desk-icon-radius`, `--desk-icon-shadow`, `--desk-icon-shadow-lifted`, `--desk-shortcut-label-shadow`, `--desk-toast-radius`, `--desk-phone-sheet-radius`, `--desk-phone-tile-radius`, `--desk-avatar-color` and `--desk-avatar-shadow-color` (the workspace character's body and the pool it casts) |
 | Desktop metrics | `--desk-title-bar-height` (16 to 64 px), `--desk-taskbar-height` (24 to 96 px), `--desk-window-control-size` (12 to 48 px), `--desk-taskbar-entry-size` (16 to 64 px) |
 | Terminal | `--term-background`, `--term-foreground`, `--term-cursor`, `--term-selection`, `--term-ansi-0` to `--term-ansi-15` |
 
@@ -166,6 +166,7 @@ Every part carries `data-part`. State is said with standard attributes, which a 
 | `badge` | a small status label | |
 | `tile` | a card that opens something (Getting Started's tiles, a picker's choices) | `aria-pressed` where it is a choice |
 | `list-row` | a selectable row in a list | `aria-current` on the current one |
+| `avatar` | the pinned chat's avatar, on its floating entry, in the taskbar, and in the avatar chooser | `data-avatar-kind="character"` for the workspace's own drawn character, `"image"` for a design drawn as a picture; `data-mood` on its entry |
 
 The list lives in code as `PARTS` in `system/libs/workspace_ui/src/themes/parts.ts`, and in the validator's copy in `system/libs/workspace_themes`; a test keeps the two equal, and the theme gallery (section 8.2) renders every one.
 

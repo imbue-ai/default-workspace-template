@@ -94,6 +94,7 @@ CORE_PARTS: Final[tuple[str, ...]] = (
     "badge",
     "tile",
     "list-row",
+    "avatar",
 )
 
 COLOR_TOKENS: Final[tuple[str, ...]] = (
@@ -174,6 +175,8 @@ DESKTOP_TOKENS: Final[tuple[str, ...]] = (
     "--desk-toast-radius",
     "--desk-phone-sheet-radius",
     "--desk-phone-tile-radius",
+    "--desk-avatar-color",
+    "--desk-avatar-shadow-color",
 )
 
 # The desktop's metrics a theme may set, each to a pixel length within its range: the shell's geometry reads them.

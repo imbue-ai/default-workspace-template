@@ -34,6 +34,7 @@ export const PARTS = [
   "badge",
   "tile",
   "list-row",
+  "avatar",
 ] as const;
 
 export type Part = (typeof PARTS)[number];

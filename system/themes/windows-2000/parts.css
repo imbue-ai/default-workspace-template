@@ -269,3 +269,11 @@ select {
 [data-part="tile"][aria-pressed="true"] {
   box-shadow: var(--theme-pressed);
 }
+
+/* The avatar: drawn with a pixel edge, as a 2000-era icon was; a design drawn as a picture keeps its colours. */
+[data-part="avatar"] {
+  shape-rendering: crispEdges;
+}
+[data-part="avatar"][data-avatar-kind="image"] {
+  image-rendering: pixelated;
+}

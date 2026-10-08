@@ -17,3 +17,5 @@ Workspace themes: Desktop settings has a **Theme** choice listing every theme th
 - A window's title-bar controls take every press on them, even where a resize corner reaches into the title bar; the corner still resizes from its rim, just outside the window.
 
 - Desktop settings' Theme row ends with **Make your own...**, which closes the dialog and drafts a theme request into the pinned chat window, where the agent makes the theme; with no window that takes a draft, the row says to describe the look in a chat instead.
+
+- The pinned chat's avatar wears the theme too: it is the contract's `avatar` part, and the workspace character draws its body and shadow from `--desk-avatar-color` and `--desk-avatar-shadow-color`. Classic Mac draws it solid black with a hard edge and no soft shadow; Windows 2000 in the caption bar's navy; the standard look is unchanged.
