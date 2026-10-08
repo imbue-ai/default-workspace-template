@@ -116,11 +116,15 @@ class SetModelChoiceRequest(FrozenModel):
     """Request body for POST /api/chats/{id}/model.
 
     One shape covering all three axes. ``effort`` is omitted for a model with no
-    effort axis, and defaults to None; ``fast`` is the intended fast state.
+    effort axis, or for a model with a default effort to run at that default, and
+    defaults to None; ``fast`` is the intended fast state.
     """
 
     model_id: str = Field(description="Model id to switch to; must be one of the harness catalog option ids")
-    effort: str | None = Field(default=None, description="Reasoning effort to set; None for a no-effort model")
+    effort: str | None = Field(
+        default=None,
+        description="Reasoning effort to set; None for a no-effort model, or for a model's default effort",
+    )
     fast: bool = Field(default=False, description="Whether fast mode should be on")
     axes: tuple[ModelAxis, ...] = Field(
         default=(),
@@ -354,7 +358,10 @@ class ModelPick(FrozenModel):
     it runs, exactly as the model bar's own pick is (``validate_model_pick``)."""
 
     model_id: str = Field(description="Model id to run on; must be one of the harness's option ids")
-    effort: str | None = Field(default=None, description="Reasoning effort; None for a model with no effort axis")
+    effort: str | None = Field(
+        default=None,
+        description="Reasoning effort; None for a model with no effort axis, or for a model's default effort",
+    )
     fast: bool = Field(default=False, description="Whether fast mode should be on")
 
 

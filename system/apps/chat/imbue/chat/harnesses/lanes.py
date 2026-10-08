@@ -13,10 +13,7 @@ already does -- one recommended path with the alternates behind a disclosure -- 
 so every lane can have its own alternates.
 
 Every value in the table below was measured against the real CLIs, not read off
-documentation, which was wrong about several of them. Notably: codex's `--device-auth` is
-absent from `codex login --help` but is what bare `codex login` tells you to use on a
-headless box, and it inverts the usual shape -- the code comes OUT and nothing is pasted
-back.
+documentation, which was wrong about several of them.
 """
 
 from __future__ import annotations
@@ -48,29 +45,6 @@ class DrainUntil(StrEnum):
 
     VALUE_EXTRACTABLE = "value_extractable"
     EOF = "eof"
-
-
-class EofPolicy(StrEnum):
-    """What end-of-stream means for a flow.
-
-    Not a detail: for claude, EOF without a value is a failure, while for codex's device
-    flow the process exiting IS the success signal. Opposite readings of the same event.
-    """
-
-    SUCCESS = "success"
-    FAILURE = "failure"
-
-
-class Submit(StrEnum):
-    """What the user sends back after approving in the browser.
-
-    `OPTIONAL` is not hedging: `claude setup-token` completes on its own polling *and*
-    accepts a pasted code, both live against the same session.
-    """
-
-    CODE = "code"
-    NONE = "none"
-    OPTIONAL = "optional"
 
 
 class PasteSink(StrEnum):
@@ -126,17 +100,12 @@ class PtyMethod(FrozenModel):
     key_gap_s: float = 0.6
     pty_columns: int = DEFAULT_PTY_COLUMNS
 
-    # When the sign-in URL is fixed, there is nothing to scrape for it and `scrape` names
-    # the one-time CODE instead.
-    static_url: str | None = None
     scrape: Scrape
-    # Some CLIs print a success line; agy and codex do not, and fall back to the probe.
+    # None for a CLI that prints no success line, which falls back to the probe.
     success: str | None = None
     # (pattern, user-facing copy). "{1}" interpolates the pattern's first group, so a CLI
     # that explains itself can have its own words shown.
     failures: tuple[tuple[str, str], ...] = ()
-    eof_policy: EofPolicy = EofPolicy.FAILURE
-    submit: Submit = Submit.CODE
 
     # For the one method where the PTY output IS the credential rather than a step toward
     # it: `claude setup-token` prints the token it just minted.
@@ -151,6 +120,9 @@ class PtyMethod(FrozenModel):
     # A wall clock for the whole flow. Nothing else bounds it: the machinery only advances
     # when a client polls, so a closed tab would otherwise leave a CLI waiting forever.
     flow_deadline_s: float = 900.0
+    # The CLI opens its sign-in page through `$BROWSER` and listens for the provider's loopback
+    # callback itself, so the minds desktop app can open the page and relay the callback here.
+    relays_browser_sign_in: bool = False
 
 
 class PasteMethod(FrozenModel):
@@ -167,6 +139,32 @@ class PasteMethod(FrozenModel):
     # is single-flight, so an abandoned one is in the way of the next. Shorter than a browser
     # method's, because there is no round trip to wait out -- the field is already on screen.
     flow_deadline_s: float = 600.0
+
+
+class CodexLogin(StrEnum):
+    """Which ChatGPT login an app-server sign-in runs."""
+
+    # A page to open in a browser; codex listens for its loopback callback, which only a relay
+    # from the user's own machine can reach.
+    BROWSER = "browser"
+    # A page and a one-time code to type into it; works from any device.
+    DEVICE = "device"
+
+
+class AppServerMethod(FrozenModel):
+    """A ChatGPT sign-in driven through a short-lived `codex app-server`'s login RPCs."""
+
+    id: str
+    label: str
+    description: str
+    login: CodexLogin
+    # Markdown shown while the sign-in waits on the browser, for an account setting it needs.
+    note: str = ""
+    # As on `PtyMethod`: nothing else bounds a flow the user may walk away from.
+    flow_deadline_s: float = 900.0
+
+
+SignInMethod = PtyMethod | PasteMethod | AppServerMethod
 
 
 class KeyProvider(FrozenModel):
@@ -189,7 +187,7 @@ class Lane(FrozenModel):
     subtitle: str
     harness: HarnessType
     # Primary first; the rest render under "Other ways to sign in".
-    methods: tuple[PtyMethod | PasteMethod, ...]
+    methods: tuple[SignInMethod, ...]
     # Only the bring-your-own-key lane populates this.
     key_providers: tuple[KeyProvider, ...] = ()
 
@@ -221,10 +219,17 @@ _CLAUDE_TOKEN_SCRAPE = Scrape(
     min_length=60,
     drain_until=DrainUntil.EOF,
 )
-# Two failure classes with different copy: an OAuth error parks the CLI on a retry prompt
-# and needs a restart, while a login failure explains itself and is worth echoing.
+# An OAuth error parks the CLI on a retry prompt and needs a restart. A login failure names its
+# cause: the two the browser can cause get words a user can act on (the callback came back with no
+# code when access was denied; Anthropic refused a code that was used or had expired), and any
+# other is echoed.
 _CLAUDE_FAILURES: Final = (
     (r"OAuth error", "Anthropic rejected the code. Start over to get a fresh link."),
+    (r"Login failed: No authorization code received", "Access wasn't approved on Claude's page."),
+    (
+        r"Login failed: Request failed with status code 4\d\d",
+        "Anthropic didn't accept that sign-in. Start over to get a fresh link.",
+    ),
     (r"Login failed: ?([^\r\n]*)", "{1}"),
 )
 
@@ -245,7 +250,7 @@ LANE_ANTHROPIC = Lane(
             scrape=_CLAUDE_URL_SCRAPE,
             success=r"Login successful",
             failures=_CLAUDE_FAILURES,
-            eof_policy=EofPolicy.FAILURE,
+            relays_browser_sign_in=True,
         ),
         PasteMethod(
             id="api_key",
@@ -260,7 +265,6 @@ LANE_ANTHROPIC = Lane(
             argv=("setup-token",),
             scrape=_CLAUDE_URL_SCRAPE,
             failures=_CLAUDE_FAILURES,
-            submit=Submit.OPTIONAL,
             result_scrape=_CLAUDE_TOKEN_SCRAPE,
             result_sink=PasteSink.CLAUDE_ENV,
         ),
@@ -272,17 +276,16 @@ LANE_ANTHROPIC = Lane(
             scrape=_CLAUDE_URL_SCRAPE,
             success=r"Login successful",
             failures=_CLAUDE_FAILURES,
-            eof_policy=EofPolicy.FAILURE,
+            relays_browser_sign_in=True,
         ),
     ),
 )
 
 # codex
-# Its device flow is inverted from every other PTY method: the URL is fixed and the CODE is
-# what gets scraped, the user types it into the browser, and nothing comes back to the
-# terminal. The CLI polls and exits 0 on its own, so process exit is the success signal.
-# Pasting a key skips all of that -- it is a plain file write, and the only method on this
-# lane that can be driven without a person at a browser.
+# Both ChatGPT logins run through a short-lived `codex app-server`, which reports completion as a
+# notification. The browser login is the primary one and needs the minds desktop app to relay its
+# loopback callback; the device login works anywhere, which is why it stays. Pasting a key skips
+# all of that -- it is a plain file write.
 
 LANE_OPENAI = Lane(
     id="openai",
@@ -290,25 +293,20 @@ LANE_OPENAI = Lane(
     subtitle="Use your ChatGPT Plus or Pro subscription, or pay per token.",
     harness=HarnessType.CODEX,
     methods=(
-        PtyMethod(
-            id="device",
-            label="Continue with ChatGPT",
-            description="Enter a one-time code on another device.",
-            argv=("login", "--device-auth"),
-            static_url="https://auth.openai.com/codex/device",
-            scrape=Scrape(
-                trigger=r"[A-Z0-9]{4}-[A-Z0-9]{4,6}",
-                strict=r"[A-Z0-9]{4}-[A-Z0-9]{4,6}",
-                continuation=r"^[A-Z0-9-]+$",
-            ),
-            submit=Submit.NONE,
-            eof_policy=EofPolicy.SUCCESS,
-            # codex renders plainly, without Ink's synchronized updates.
-            frame_marker=None,
+        AppServerMethod(
+            id="chatgpt",
+            label="Use your ChatGPT plan (runs on Codex)",
+            description="Sign in with your ChatGPT account in your browser.",
+            login=CodexLogin.BROWSER,
+            note="Note: You must first turn on *Enable device code sign-in…* at the bottom of the "
+            "[ChatGPT settings page](https://chatgpt.com/settings/security).",
         ),
-        # `codex login status`, the promote probe for this lane, is a presence check: it
-        # exits 0 for any key in the file. So a key with a typo in it commits happily here
-        # and surfaces as a failed first turn instead.
+        AppServerMethod(
+            id="device",
+            label="ChatGPT with a code",
+            description="Enter a one-time code on another device.",
+            login=CodexLogin.DEVICE,
+        ),
         PasteMethod(
             id="api_key",
             label="Use an API key",
@@ -541,7 +539,7 @@ def get_lane(lane_id: str) -> Lane:
     return lane
 
 
-def get_method(lane_id: str, method_id: str) -> PtyMethod | PasteMethod:
+def get_method(lane_id: str, method_id: str) -> SignInMethod:
     lane = get_lane(lane_id)
     for method in lane.methods:
         if method.id == method_id:

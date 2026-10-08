@@ -29,7 +29,7 @@ solely to support one app lives in that app's folder under
 
   ```bash
   uv run pytest system/services/<package>       # standalone
-  cd system/apps/<package> && uv run pytest     # app-owned (<app>-<role>)
+  uv run pytest system/apps/<package>           # app-owned (<app>-<role>)
   ```
 
   The gate is `harden-creation.md`'s "The test gate", which adds whatever
