@@ -61,13 +61,13 @@ from types import FrameType
 from typing import Any
 
 from app_manifest.registry import APP_CONTRACT_ROUTE, SHELL_APP_CONTRACT_PATH
-from app_manifest.shell_windows import shell_base_url
 from flask import Flask, Response, jsonify, request, send_file
 from flask_sock import Sock
 from imbue.imbue_common.frozen_model import FrozenModel
 from loguru import logger
 from pydantic import Field
 from simple_websocket import ConnectionClosed
+from workspace_layout.shell_url import shell_base_url
 
 from browser import mediastream, telemetry
 from browser.cdp_proxy import ProxyServer

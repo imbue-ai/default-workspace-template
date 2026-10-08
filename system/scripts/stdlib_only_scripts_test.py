@@ -24,7 +24,6 @@ _SCRIPTS_RUN_WITH_SYSTEM_PYTHON = (
     "collect_bug_report_diagnostics.py",
     "forward_port.py",
     "install_mngr.py",
-    "layout.py",
     "list_mngr_plugins.py",
     "message_chat.py",
     "provision_backups.py",

@@ -466,15 +466,17 @@ path below instead.
 
 **When the update touches a critical app (`system/apps/system_interface/`,
 `system/apps/chat/`, `system/apps/terminal/`, `system/apps/terminal_pty/`),
-`system/apps/getting_started/frontend/`, `system/libs/workspace_ui/`, or
-`system/package.json` / `system/package-lock.json` at all** (every critical
-app's tree, plus the Getting Started frontend, the shared library, and the npm
-files, whose change rebuilds every frontend bundle), also take the `editing
+`system/apps/getting_started/frontend/`, `system/libs/workspace_ui/`,
+`system/libs/workspace_layout/`, or `system/package.json` /
+`system/package-lock.json` at all** (every critical app's tree, plus the Getting
+Started frontend, the shared library, and the npm files, whose change rebuilds
+every frontend bundle, and the layout wire contract the critical apps run), also take the `editing
 critical app <name>` lease for each critical app it touches through the apply,
 as `update-app/references/critical-app.md` does (`<name>` is the app's
 `app.toml` name, so `system/apps/terminal_pty/` is `terminal-pty`; the Getting
 Started frontend, `workspace_ui`, and the npm files count as both
-`system_interface` and `chat`). Take them all or none, as that reference says:
+`system_interface` and `chat`; `workspace_layout` counts as `system_interface`,
+`chat`, and `terminal`). Take them all or none, as that reference says:
 check each one in `tk ready` (`grep -E -- "- editing critical app <name>$"`,
 anchored so `terminal` does not match `terminal-pty`'s lease), take them in
 name order (`tk create "editing
@@ -608,7 +610,7 @@ one; the careful flow refuses its next pass on that app while one is), tear it
 down with the preview script and close its window:
 
 ```bash
-python3 system/scripts/layout.py close <name>-preview
+uv run --no-sync workspace-layout close <name>-preview
 uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
 ```
 

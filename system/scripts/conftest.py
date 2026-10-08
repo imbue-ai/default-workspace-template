@@ -1,6 +1,6 @@
-"""Fixtures for the scripts' tests: a registry file and a fake shell over loopback for
-layout.py, a fake chat app and a fake ``mngr`` for message_chat.py and run_in_background.py, and
-a marker root of its own for every test, so no test marks a chat busy in the real checkout."""
+"""Fixtures for the scripts' tests: a fake chat app and a fake ``mngr`` for message_chat.py and
+run_in_background.py, and a marker root of its own for every test, so no test marks a chat busy
+in the real checkout."""
 
 from __future__ import annotations
 
@@ -14,53 +14,21 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import tomlkit
-from layout_testing import desktop_answer
-from script_modules_testing import background_tasks, layout, message_chat
-
-
-def _write_apps_toml(path: Path, rows: dict[str, tuple[str, ...]]) -> None:
-    """A registry with one row per name, shaped as ``forward_port.py`` writes it; the value is the
-    app's declared launch path ids (none for an app that opens at its root). An app declaring
-    more than one gets a ``default_shortcut`` on its last one."""
-    doc = tomlkit.document()
-    apps = tomlkit.aot()
-    for name, launch_ids in rows.items():
-        entry = tomlkit.table()
-        entry["name"] = name
-        entry["url"] = f"http://localhost:9000/{name}"
-        if launch_ids:
-            launch_paths = tomlkit.aot()
-            for launch_id in launch_ids:
-                launch_path = tomlkit.table()
-                launch_path["id"] = launch_id
-                launch_path["label"] = f"{launch_id.capitalize()} {name}"
-                launch_path["path"] = f"/{launch_id}"
-                launch_paths.append(launch_path)
-            entry["launch_paths"] = launch_paths
-        if len(launch_ids) > 1:
-            default_shortcut = tomlkit.inline_table()
-            default_shortcut["launch"] = launch_ids[-1]
-            default_shortcut["mode"] = "focus"
-            entry["default_shortcut"] = default_shortcut
-        apps.append(entry)
-    doc["apps"] = apps
-    path.write_text(tomlkit.dumps(doc))
+from script_modules_testing import background_tasks, message_chat
 
 
 @pytest.fixture(autouse=True)
 def _isolate_agent_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     """Hide the ambient agent identity from every test for these scripts.
 
-    ``layout.py`` resolves ``self`` and every op's ``requester`` from
-    ``MINDS_CHAT_ID``, falling back to ``MNGR_AGENT_ID``, so a test asserting on
-    an address it derives is reading its own inputs only if BOTH halves are
-    cleared -- clearing the chat id alone leaves the fallback steered by
-    whatever agent is running the suite. Cleared here rather than per test, so a
-    test that needs an identity has to say so explicitly.
+    A script that names the caller's own chat reads ``MINDS_CHAT_ID``, falling back to
+    ``MNGR_AGENT_ID``, so a test asserting on an address it derives is reading its own inputs
+    only if BOTH halves are cleared -- clearing the chat id alone leaves the fallback steered by
+    whatever agent is running the suite. Cleared here rather than per test, so a test that needs
+    an identity has to say so explicitly.
     """
-    monkeypatch.delenv(layout.ENV_MINDS_CHAT_ID, raising=False)
-    monkeypatch.delenv(layout.ENV_MNGR_AGENT_ID, raising=False)
+    monkeypatch.delenv("MINDS_CHAT_ID", raising=False)
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -70,102 +38,6 @@ def background_task_markers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     root = tmp_path / "background_tasks"
     monkeypatch.setenv(background_tasks.MARKER_ROOT_ENV, str(root))
     return root
-
-
-@pytest.fixture
-def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    path = tmp_path / "apps.toml"
-    _write_apps_toml(
-        path,
-        {
-            "files": (),
-            "terminal": ("new",),
-            "chat": ("subagent", "new"),
-            "browser": ("new",),
-        },
-    )
-    monkeypatch.setenv(layout.ENV_APPS_FILE, str(path))
-    return path
-
-
-class _FakeShellHandler(BaseHTTPRequestHandler):
-    """The shell's op route and inventory document, answering what the fixture holds."""
-
-    def log_message(self, format: str, *args: Any) -> None:
-        return
-
-    def _respond(self, status: int, body: dict[str, Any] | str) -> None:
-        """A dict is the shell's JSON answer; a str is a page a proxy in front of it might answer with instead."""
-        is_json = isinstance(body, dict)
-        payload = (json.dumps(body) if is_json else str(body)).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json" if is_json else "text/html")
-        self.send_header("Content-Length", str(len(payload)))
-        self.end_headers()
-        self.wfile.write(payload)
-
-    def do_GET(self) -> None:
-        server: Any = self.server
-        if self.path == "/api/inventory":
-            self._respond(
-                200,
-                {
-                    "apps": server.inventory_apps,
-                    "desktops": server.inventory_desktops,
-                    "clients": server.inventory_clients,
-                },
-            )
-            return
-        self._respond(404, {"detail": f"unknown path {self.path}"})
-
-    def do_POST(self) -> None:
-        server: Any = self.server
-        body_length = int(self.headers.get("Content-Length", "0"))
-        body = json.loads(self.rfile.read(body_length) or b"{}")
-        server.posted.append((self.path, body))
-        server.posted_content_types.append(self.headers.get("Content-Type"))
-        if self.path == "/api/layout/broadcast":
-            if body.get("op") == "context":
-                self._respond(200, {"ok": True, "clients": server.context_clients})
-            elif body.get("op") == "refresh":
-                self._respond(
-                    200, {"ok": True, "target_client_id": server.refresh_target}
-                )
-            elif server.op_refusal is not None:
-                self._respond(*server.op_refusal)
-            else:
-                self._respond(200, server.op_answer)
-            return
-        self._respond(404, {"detail": f"unknown path {self.path}"})
-
-
-@pytest.fixture
-def fake_shell(monkeypatch: pytest.MonkeyPatch) -> Any:
-    """A shell over loopback: ``server.posted`` is every ``(path, body)`` it received (``posted_content_types``
-    the matching ``Content-Type`` headers); ``server.op_answer`` is what a desktop op answers
-    (``server.op_refusal`` a ``(status, body)`` refusal instead, the body a dict or a page's text), and the ``inventory_*`` lists are the
-    inventory document."""
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeShellHandler)
-    server.posted = []
-    server.posted_content_types = []
-    server.context_clients = []
-    server.inventory_apps = []
-    server.inventory_desktops = []
-    server.inventory_clients = []
-    server.op_answer = desktop_answer()
-    server.op_refusal = None
-    server.refresh_target = "c1"
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    monkeypatch.setenv(
-        layout.ENV_WORKSPACE_URL, f"http://127.0.0.1:{server.server_address[1]}"
-    )
-    try:
-        yield server
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
 
 
 @pytest.fixture(autouse=True)

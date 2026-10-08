@@ -63,6 +63,7 @@ from typing import Any, Literal
 from imbue.imbue_common.mutable_model import MutableModel
 from loguru import logger
 from pydantic import PrivateAttr
+from workspace_layout.windows import parse_window_closed_hint, read_app_window_paths, window_query_value
 
 from browser import chrome_launcher
 from browser import manifest as fleet_manifest
@@ -72,7 +73,6 @@ from browser.errors import BrowserNotDrivableError, UnknownBrowserError
 from browser.names import first_free_numbered_browser_name, is_valid_browser_name
 from browser.oom_retag import notify_chromium_processes_expected
 from browser.primitives import APP_NAME, SESSION_QUERY_KEY
-from app_manifest.shell_windows import read_app_window_paths, window_query_value
 
 # Errors expected when a target/CDP session goes away underneath us (tab closed,
 # navigation, browser killed). The bounded CDP helpers additionally catch broadly
@@ -1913,12 +1913,10 @@ def closed_window_browser(hint_body: object) -> str | None:
     None for a path with no browser (the root, or one naming something that is not a browser name), or a body of
     another shape than the shell posts.
     """
-    if not isinstance(hint_body, dict):
+    hint = parse_window_closed_hint(hint_body)
+    if hint is None:
         return None
-    path = hint_body.get("path")
-    if not isinstance(path, str):
-        return None
-    return window_query_value(path, SESSION_QUERY_KEY)
+    return window_query_value(hint.path, SESSION_QUERY_KEY)
 
 
 class BrowserSessionManager(MutableModel):

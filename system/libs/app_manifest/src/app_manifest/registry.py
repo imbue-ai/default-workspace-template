@@ -1,4 +1,3 @@
-import os
 import subprocess
 import sys
 import time
@@ -28,12 +27,6 @@ from app_manifest.primitives import LaunchParamName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
 from app_manifest.primitives import PriorityName
-
-# The registry's location, exactly as system/scripts/forward_port.py and
-# system/scripts/layout.py resolve it: relative to the cwd (the repo root under
-# supervisord) unless MINDS_APPS_FILE points elsewhere.
-DEFAULT_APPS_FILE: Final[str] = "data/.state/apps.toml"
-ENV_APPS_FILE: Final[str] = "MINDS_APPS_FILE"
 
 # The browser-side app contract module (desktop-interface contracts.md section 7), where the
 # shell's frontend build writes it, relative to the repo root every supervised program runs
@@ -126,10 +119,6 @@ class RegistryRow(FrozenModel):
     message_handlers: tuple[MessageHandler, ...] = Field(
         default=(), description="The messages the app takes and where the shell posts each; absent means none"
     )
-
-
-def registry_path() -> Path:
-    return Path(os.environ.get(ENV_APPS_FILE, DEFAULT_APPS_FILE))
 
 
 def read_registry(path: Path) -> list[RegistryRow]:

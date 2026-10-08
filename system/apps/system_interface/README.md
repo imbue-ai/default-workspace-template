@@ -91,7 +91,7 @@ has offered), `placements/<desktop>/<client>.json`,
 `window_paths/<client>.json` (a client's own paths for independent windows),
 `clients.json`, `users.json` (the desktop made for each visiting user),
 `avatar_selection.json`, and the client-activity
-event log (`events/client_activity/events.jsonl`, what `layout.py context`
+event log (`events/client_activity/events.jsonl`, what `workspace-layout context`
 reads). Wallpapers are listed from `static/wallpapers/` (bundled) and
 `data/.apps/system_interface/wallpapers/` (files the user adds); avatar designs
 an agent registers live in `data/.apps/system_interface/avatars/catalog.json`
@@ -145,7 +145,8 @@ and the profile cache.
   with 409 and the browser refetches. `GET /api/inventory` is
   `{desktops, apps, clients}`, each `app` carrying its `launch_paths`,
   `default_shortcut`, and `is_running`.
-- **The op route** (`shell/layout_ops.py`): an op is `{op, args, requester}`,
+- **The op route** (`shell/desktop_routes.py`, over the request models of
+  the `workspace_layout` library's `ops`): an op is `{op, args, requester}`,
   the requester `{app, marker}` or null; `self` names the requester's app's
   window whose path carries the marker. The document verbs (`open`, `focus`,
   `minimize`, `restore`, `maximize`, `place`, `close`, `navigate`, `load`,
@@ -153,13 +154,15 @@ and the profile cache.
   announced as `desktops_updated` and `placements_updated`; `context` answers every
   client's recent activity, folded from the client-activity log and the live
   socket registrations, and `desktops` and `list` answer the inventory
-  document (`GET /api/inventory`'s `{desktops, apps, clients}`); only
-  `refresh` and `reload_system_interface` reach the browser as `layout_op`
-  messages.
+  document (`GET /api/inventory`'s `{desktops, apps, clients}`);
+  `refresh` and `reload_system_interface` reach the browser only as
+  `layout_op` messages, and `focus`, `show`, and an `open` that is not
+  minimized also send one telling the target client which window they put in
+  front.
 
 The backend is the `imbue/system_interface/shell/` subpackage (inventory and
 liveness, desktops, placements, wallpapers, clients, users and the request
-identity, client activity, layout ops, the pure desktop document editor, the
+identity, client activity, the pure desktop document editor, the
 routes with their shared helpers, state); the package root holds the process
 (`main.py`, `server.py`), the not-built placeholder, and the update-staleness
 check. The frontend
@@ -395,18 +398,18 @@ that, tokens or not.
 ## Driving the desktop from an agent
 
 An agent inside the workspace arranges the desktop through
-`system/scripts/layout.py` (`context / desktops / list / load / open / focus /
+`uv run --no-sync workspace-layout` (`context / desktops / list / load / open / show / focus /
 minimize / restore / maximize / place / close / navigate / refresh / shortcuts /
 shortcut set / shortcut move / shortcut remove / wallpaper`), which names apps
 and windows (desktop-interface contracts.md section 8):
 
 ```bash
-python3 system/scripts/layout.py desktops
-python3 system/scripts/layout.py context
-python3 system/scripts/layout.py open files --path /home/user/workspace/data/notes/ --desktop Research
-python3 system/scripts/layout.py open terminal
-python3 system/scripts/layout.py place self --zone left
-python3 system/scripts/layout.py navigate win-0123456789abcdef /other/
+uv run --no-sync workspace-layout desktops
+uv run --no-sync workspace-layout context
+uv run --no-sync workspace-layout open files --path /home/user/workspace/data/notes/ --desktop Research
+uv run --no-sync workspace-layout open terminal
+uv run --no-sync workspace-layout place self --state snapped-left
+uv run --no-sync workspace-layout navigate win-0123456789abcdef /other/
 ```
 
 The document ops are applied by the shell to the desktop and to the target
