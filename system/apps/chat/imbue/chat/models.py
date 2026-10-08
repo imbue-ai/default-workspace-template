@@ -85,7 +85,9 @@ class AgentListItem(FrozenModel):
     is_busy: bool = Field(
         description=(
             "Whether the agent will resume on its own: it has a turn in flight, or it is its chat's active "
-            "agent and the chat has a pending background task"
+            "agent and the chat has a pending background task. The turn in flight is the chat app's alone to "
+            "know: background_tasks.py's fallback to the marker files, when this app cannot answer, sees "
+            "only the tasks"
         )
     )
     background_tasks: tuple[BackgroundTask, ...] = Field(

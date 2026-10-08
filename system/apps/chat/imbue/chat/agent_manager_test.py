@@ -3543,6 +3543,38 @@ def test_a_chat_whose_runner_is_killed_reads_idle_on_the_next_poll(
         manager.stop()
 
 
+def test_a_turn_that_ends_to_wait_is_published_with_its_wait_never_idle_in_between(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Claude's Stop hook writes the task markers before mngr clears the ``active`` marker. The recompute that reads
+    the turn's end reads the chat's markers too, so the end goes out as ``background`` without waiting for the
+    poller: an ``idle`` push in between would mark the chat done."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    manager, reader = _manager_reading_tasks(broadcaster, tmp_path)
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    try:
+        seed_agent_state(manager, "agent-1", name="Chat-1", state="WAITING")
+        manager._ensure_activity_tracking("agent-1")
+        manager.update_session_events(
+            "agent-1", [{"type": "user_message", "timestamp": "2026-07-28T00:00:00Z", "content": "go"}]
+        )
+        (state_dir / "active").touch()
+        manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+        manager._agent_state_poller.poll_once()
+        assert [snapshot.status for snapshot in manager.get_chat_snapshots()] == [ChatStatus.WORKING]
+        client_queue = broadcaster.register()
+
+        write_background_task_marker(reader, "agent-1", "task-1", os.getpid())
+        (state_dir / "active").unlink()
+        manager._recompute_activity_state("agent-1", broadcast_on_change=True)
+
+        pushed = [message for message in _drain(client_queue) if message.get("type") == "chats_updated"]
+        assert [message["chats"][0]["status"] for message in pushed] == ["background"]
+    finally:
+        manager.stop()
+
+
 def test_a_turn_in_flight_reads_working_with_its_pending_tasks_listed(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:

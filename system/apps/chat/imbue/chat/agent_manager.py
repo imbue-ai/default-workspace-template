@@ -4166,7 +4166,7 @@ class AgentManager:
         for chat_id in busy_chat_ids:
             self._recompute_background_tasks(chat_id)
 
-    def _recompute_background_tasks(self, chat_id: ChatId) -> None:
+    def _recompute_background_tasks(self, chat_id: ChatId, *, broadcast_on_change: bool = True) -> None:
         """Re-read a chat's live background tasks, and push the chats and the mid-turn set when they changed."""
         reader = self._background_tasks
         if reader is None:
@@ -4180,7 +4180,8 @@ class AgentManager:
                 self._background_tasks_by_chat[chat_id] = tasks
             else:
                 self._background_tasks_by_chat.pop(chat_id, None)
-        self._broadcast_chats_updated()
+        if broadcast_on_change:
+            self._broadcast_chats_updated()
         self._report_mid_turn_chats()
 
     def busy_state_of_agent(self, agent_id: str, labels: Mapping[str, str]) -> AgentBusyState:
@@ -4188,7 +4189,8 @@ class AgentManager:
 
         The chat is the one a record names the agent in, else its ``chat_id`` label, else the
         agent itself. Only the agent a chat runs on carries the chat's tasks; any agent with a
-        turn in flight is busy.
+        turn in flight is busy. That half is this app's alone to know: ``background_tasks.py``,
+        reading the marker files when this app cannot answer, sees only the tasks.
         """
         with self._lock:
             agent = self._agents.get(agent_id)
@@ -4387,6 +4389,17 @@ class AgentManager:
         # state below. Runs regardless of ``broadcast_on_change`` (it is a state
         # mutation); only the broadcast itself is gated.
         handled_snapshot = queue_handler() if queue_handler is not None else None
+        # A turn that just ended may have ended to wait on a background task. Its writers put the
+        # markers down before the turn reads as ended (mngr's Stop hook clears the ``active``
+        # marker only after the sibling hooks that write them), and that end was read above, so
+        # reading the chat's markers now, rather than on the poller's next pass, means the turn's
+        # end is published with its wait: the chat never reads idle in between, which would
+        # mark it done.
+        if is_turn_in_flight(old_state) and not is_turn_in_flight(new_state):
+            with self._lock:
+                ended_chat_id = self._chat_id_of_agent_if_active_locked(agent_id)
+            if ended_chat_id is not None:
+                self._recompute_background_tasks(ended_chat_id, broadcast_on_change=False)
         if handled_snapshot is not None:
             handled_queue = tuple(_queued_message_state(entry) for entry in handled_snapshot)
             with self._lock:

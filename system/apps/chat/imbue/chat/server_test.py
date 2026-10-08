@@ -171,6 +171,12 @@ def test_list_agents_endpoint(client: FlaskClient) -> None:
     assert data["agents"][0]["state"] == "RUNNING"
 
 
+def _busy_fields_by_agent(payload: dict[str, Any]) -> dict[str, tuple[Any, ...]]:
+    return {
+        agent["id"]: (agent["chat_id"], agent["is_busy"], agent["background_tasks"]) for agent in payload["agents"]
+    }
+
+
 def test_the_agent_and_chat_listings_carry_each_chats_busy_verdict_and_pending_tasks(
     config: Config, tmp_path: Path
 ) -> None:
@@ -199,9 +205,16 @@ def test_the_agent_and_chat_listings_carry_each_chats_busy_verdict_and_pending_t
     try:
         with patch("imbue.chat.server.discover_agents", return_value=discovered):
             agents_payload = client.get("/api/agents").get_json()
+        # The tracked view answers from the app's own agent list, with no discovery.
+        with patch("imbue.chat.server.discover_agents", side_effect=AssertionError("discovered")):
+            tracked_payload = client.get("/api/agents?tracked=true").get_json()
         chats_payload = client.get("/api/chats").get_json()
     finally:
         state.shutdown()
+
+    assert _busy_fields_by_agent(tracked_payload) == _busy_fields_by_agent(agents_payload)
+    # The tracked view's states are the app's own, not discovery's.
+    assert {agent["id"]: agent["state"] for agent in tracked_payload["agents"]}["agent-waiting"] == "WAITING"
 
     by_id = {agent["id"]: agent for agent in agents_payload["agents"]}
     assert {agent_id: (agent["chat_id"], agent["is_busy"]) for agent_id, agent in by_id.items()} == {
@@ -231,6 +244,12 @@ def test_the_agent_and_chat_listings_carry_each_chats_busy_verdict_and_pending_t
             "started_at": "2026-10-08T12:00:00+00:00",
         }
     ]
+
+
+def test_the_tracked_agent_listing_waits_for_the_agent_list(config: Config) -> None:
+    """Before the app has read its agent list, the tracked view has nothing true to say; the CLI reads the files."""
+    client = create_application(build_test_state(config=config)).test_client()
+    assert client.get("/api/agents?tracked=true").status_code == 503
 
 
 def test_health_reports_whether_lifecycle_events_are_arriving(client: FlaskClient) -> None:

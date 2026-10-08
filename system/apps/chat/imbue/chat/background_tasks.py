@@ -1,7 +1,8 @@
 """The background tasks each chat waits on, read through ``system/scripts/background_tasks.py``.
 
 A chat is busy when its agent will resume on its own: its active agent has a turn in flight, or
-its chat has a pending background task, whose completion starts one. The pending tasks are one
+its chat has a pending background task, whose completion starts one. Only the chat app knows the
+first (the script's own file fallback, used when the app cannot answer, sees the tasks alone). The pending tasks are one
 marker file each under ``<chat data dir>/background_tasks/<chat-id>/``, written by
 ``run_in_background.py`` and by Claude's Stop hook. The script is their one reader: it is
 standard library only (the hooks and skills run it with a bare ``python3``) and lives outside
@@ -44,6 +45,9 @@ class BackgroundTask(FrozenModel):
     pid: int = Field(description="The process whose exit makes the marker stale")
     kind: str = Field(default="", description="Claude's task type (shell, monitor, workflow, subagent); '' otherwise")
     command: str = Field(default="", description="The command a Claude task runs, when it has one")
+    pid_start: str = Field(
+        default="", description="The pid's process start time, so a recycled pid cannot keep the marker live"
+    )
 
 
 def load_background_tasks_script(script_path: Path) -> ModuleType:
@@ -86,6 +90,7 @@ class BackgroundTaskReader(FrozenModel):
                 pid=task.pid,
                 kind=task.kind,
                 command=task.command,
+                pid_start=task.pid_start,
             )
             for task in self.script.live_tasks_in(self.chat_dir(chat_id))
         )

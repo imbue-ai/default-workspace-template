@@ -133,7 +133,14 @@ above the composer adds a line, "Waiting on N background tasks", that opens
 into one row per task. Each snapshot's `active_agent` carries `is_busy` and
 `background_tasks`; `GET /api/agents` carries each agent's `chat_id`,
 `is_busy` and its chat's `background_tasks` (the active agent's only), which is
-what `background_tasks.py list` and `is-busy` ask first. The tasks are the
+what `background_tasks.py list` and `is-busy` ask first. `is_busy` counts a turn
+in flight, which only this app knows: the script's fallback to the marker files
+sees the tasks alone. The listing is a fresh discovery by default;
+`?tracked=true` answers from the agent list this app already follows, with no
+discovery, and 503 until it has read it once. The poller is not the only reader:
+the recompute that sees a turn end reads its chat's markers before it publishes
+the end (the Stop hook writes them before mngr clears the `active` marker), so a
+turn that ends to wait reads `background` at once, never `idle` first. The tasks are the
 chat's, so a handoff moves nothing: the successor reads the same directory. The
 switch dialog says a busy agent wraps up what it is doing, and the memory
 prioritizer treats a busy chat as mid-turn.
