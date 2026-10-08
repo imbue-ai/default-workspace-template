@@ -42,12 +42,17 @@ App specifics:
   any `uv run`. If a fix needs a new dependency, `uv add ...` and commit the
   manifest changes (`pyproject.toml` / `uv.lock`).
 - Add a `test_<package>.py` for the routes. While you iterate, run the app's
-  own suite from its own root (it is its own project, with its own pytest and
-  coverage configuration):
+  suite by path from the repo root, where the root pytest configuration
+  applies and the app's repo-relative paths resolve (the shell's and the
+  chat's suites are their own pytest roots, run from their own directories):
 
   ```bash
-  cd system/apps/<package> && uv run pytest    # primary, plus test_<package>_ratchets.py
+  uv run pytest system/apps/<package>    # primary, plus test_<package>_ratchets.py
   ```
+
+  Its pages import the shell's built modules, which a fresh worktree lacks
+  (the shell's `static/` is gitignored), so build them once before its
+  browser tests: `(cd system && npm ci && npm run build)`.
 
   The gate is `harden-creation.md`'s "The test gate": `select-tests` turns the
   app's `[[references]]` into the suites that exercise them (a referenced
