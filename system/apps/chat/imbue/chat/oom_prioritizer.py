@@ -10,8 +10,8 @@ Signals, and where each comes from:
 
 - **open** / **visible** -- the chat page's presence in each page instance, reported by
   the page itself through the chat app's presence route and aggregated by the
-  ``PresenceTracker`` (open while any instance's report is unexpired, visible
-  while any instance's last report says so),
+  ``PresenceTracker`` (open while any instance has an unexpired visible or hidden
+  report, visible while any instance's last report says so),
 - **messaged** -- a message sent through the chat app's send route; drives a
   recency ranking across all chats, newest-first,
 - **running** -- the chat's mngr lifecycle state, pushed in from the observe
