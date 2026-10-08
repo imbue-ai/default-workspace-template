@@ -290,7 +290,7 @@ def test_an_agent_whose_chat_waits_on_a_background_task_is_not_a_candidate(tmp_p
     exited.wait()
     _write_marker(root, str(finished["id"]), exited.pid)
     is_chat_busy = memory_candidates.busy_chat_check(
-        memory_candidates.BACKGROUND_TASKS_SCRIPT, {"MINDS_BACKGROUND_TASKS_DIR": str(root)}
+        memory_candidates.BACKGROUND_TASKS_SCRIPT, {background_tasks.MARKER_ROOT_ENV: str(root)}
     )
     mngr = _FakeMngr([lead, successor, worker, finished])
 
@@ -511,7 +511,7 @@ def test_the_script_runs_under_a_plain_python3_and_prints_json(tmp_path: Path) -
         "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
         "OOM_PRIORITY_RUNTIME_DIR": str(tmp_path / "runtime"),
         "MINDS_BROWSER_SERVICE_URL": "http://127.0.0.1:9",
-        "MINDS_BACKGROUND_TASKS_DIR": str(tmp_path / "background_tasks"),
+        background_tasks.MARKER_ROOT_ENV: str(tmp_path / "background_tasks"),
     }
 
     result = subprocess.run(
