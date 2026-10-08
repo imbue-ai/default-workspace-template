@@ -85,7 +85,7 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     lastHandshake = received;
     adoptClientIdentity({ clientId: received.clientId, desktopId: received.desktopId });
     // Hidden until the shell says shown: a page can load into a background tab, and open
-    // (any page's unexpired report) is what a hidden report keeps.
+    // (any page's unexpired visible or hidden report) is what a hidden report keeps.
     if (isPresenceReported) startPresenceReporting(chatId, received.clientId, isShown ? "visible" : "hidden");
     m.redraw();
   };

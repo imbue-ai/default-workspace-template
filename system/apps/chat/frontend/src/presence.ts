@@ -4,9 +4,10 @@
  * `pagehide`, whether the document has focus on every window `focus` and `blur`, and a
  * heartbeat of all of it every thirty seconds, so a page that vanished without its `pagehide`
  * stops counting on its own. Every report names this page load's instance id, so two pages of
- * the chat in one client never overwrite each other's report. Only the chat's own page
- * reports, never a subagent view. The OOM prioritizer reads the aggregate, and the notify
- * path asks which pages are watching (shown and focused).
+ * the chat in one client never overwrite each other's report, and its place in the order this
+ * page sent them, since the chat app can receive two reports sent a moment apart in either
+ * order. Only the chat's own page reports, never a subagent view. The OOM prioritizer reads
+ * the aggregate, and the notify path asks which pages are watching (shown and focused).
  */
 
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
@@ -22,6 +23,7 @@ const instanceId: string =
     ? crypto.randomUUID()
     : `page-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
+let lastSequence = 0;
 let heartbeat: ReturnType<typeof setInterval> | null = null;
 let currentState: PresenceState = "hidden";
 let reportingChatId: string | null = null;
@@ -32,7 +34,13 @@ function post(chatId: string, clientId: string, state: PresenceState): void {
   void fetch(apiUrl(`/api/chats/${encodeURIComponent(chatId)}/presence`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ instance_id: instanceId, client_id: clientId, state, is_focused: document.hasFocus() }),
+    body: JSON.stringify({
+      instance_id: instanceId,
+      client_id: clientId,
+      state,
+      is_focused: document.hasFocus(),
+      sequence: ++lastSequence,
+    }),
     keepalive: true,
   }).catch(() => {
     // Best-effort: the next heartbeat corrects a dropped report.

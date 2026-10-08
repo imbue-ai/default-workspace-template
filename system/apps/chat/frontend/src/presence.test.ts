@@ -15,6 +15,7 @@ interface PresenceBody {
   client_id: string;
   state: string;
   is_focused: boolean;
+  sequence: number;
 }
 
 interface PresenceRequest {
@@ -69,7 +70,7 @@ describe("presence reporting", () => {
     expect(url).toBe("/api/chats/agent-1/presence");
     expect(keepalive).toBe(true);
     const { instance_id: instanceId, ...rest } = body;
-    expect(rest).toEqual({ client_id: "client-1", state: "hidden", is_focused: false });
+    expect(rest).toEqual({ client_id: "client-1", state: "hidden", is_focused: false, sequence: 1 });
     expect(instanceId).toMatch(/^[0-9a-f-]{36}$/);
     expect(presence.currentPresenceState()).toBe("hidden");
   });
@@ -115,6 +116,18 @@ describe("presence reporting", () => {
       ["visible", false],
       ["visible", true],
     ]);
+  });
+
+  it("numbers every report in the order it is sent, heartbeats and a re-keyed client included", async () => {
+    const presence = await loadPresence();
+    presence.startPresenceReporting("agent-1", "client-1", "hidden");
+    presence.reportPresence("visible");
+    presence.reportFocusChange();
+    vi.advanceTimersByTime(30_000);
+    presence.startPresenceReporting("agent-1", "client-2", "visible");
+    presence.reportPresence("closed");
+
+    expect(requests().map((request) => request.body.sequence)).toEqual([1, 2, 3, 4, 5, 6]);
   });
 
   it("stops reporting once the page reported closed", async () => {
