@@ -4,8 +4,9 @@
  * (``src/getting_started/chat_import.py``).
  *
  * Fetched once per page load and again when the window regains focus; while a source is still
- * importing it is polled, so the card counts up as the import runs. A failed fetch leaves the card
- * hidden: it is an offer, and the page reads fine without it.
+ * importing it is polled, so the card counts up as the import runs. A fetch that fails keeps what
+ * was last loaded, so a failed first fetch leaves the card hidden: it is an offer, and the page
+ * reads fine without it.
  */
 
 import m from "mithril";
