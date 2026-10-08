@@ -665,7 +665,8 @@ def stream_process(
         list(command),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         bufsize=1,
     ) as process:
         assert process.stdout is not None and process.stderr is not None

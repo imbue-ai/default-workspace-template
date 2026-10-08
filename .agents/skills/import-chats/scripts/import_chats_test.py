@@ -926,6 +926,16 @@ def test_stream_process_hands_over_stderr_lines_as_they_come_and_keeps_both_stre
     )
 
 
+def test_stream_process_follows_output_that_is_not_utf8_to_the_end() -> None:
+    script = "import sys; sys.stderr.buffer.write(b'bad \\xff byte\\nnext\\n')"
+
+    result = import_chats.stream_process(
+        [sys.executable, "-c", script], lambda _line: None
+    )
+
+    assert result.stderr == "bad � byte\nnext\n"
+
+
 def test_stream_process_stops_the_command_when_following_it_fails() -> None:
     script = "import os, sys, time; print(os.getpid(), file=sys.stderr, flush=True); time.sleep(60)"
     pids: list[int] = []
