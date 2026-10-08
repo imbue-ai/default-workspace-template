@@ -162,6 +162,15 @@ function click(selector: string): void {
   render();
 }
 
+function clickSubmenuRow(label: string): void {
+  const row = [...document.querySelectorAll<HTMLElement>('[data-menu-part="submenu"] button')].find((button) =>
+    button.textContent?.includes(label),
+  );
+  if (row === undefined) throw new Error(`no ${label} row in the submenu`);
+  row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  render();
+}
+
 /** Take the pointer off the open submenu and wait out the menu's leave grace. Needs fake timers,
  *  and overshoots the shared menu's own grace constant rather than restating it. */
 function leaveSubmenu(): void {
@@ -548,11 +557,7 @@ describe("the combo card", () => {
     render();
     click(".model-selector-trigger");
     click('[data-menu-row="model"]');
-    const row = [...document.querySelectorAll<HTMLElement>('[data-menu-part="submenu"] button')].find((button) =>
-      button.textContent?.includes("Sonnet"),
-    );
-    if (row === undefined) throw new Error("no Sonnet row");
-    row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    clickSubmenuRow("Sonnet");
     expect(picks).toHaveLength(1);
     expect((picks[0] as unknown[])[1]).toEqual({ model_id: "sonnet", effort: "medium", fast: false });
   });
@@ -569,11 +574,7 @@ describe("the combo card", () => {
     render();
     click(".model-selector-trigger");
     click('[data-menu-row="model"]');
-    const row = [...document.querySelectorAll<HTMLElement>('[data-menu-part="submenu"] button')].find((button) =>
-      button.textContent?.includes("Sonnet"),
-    );
-    if (row === undefined) throw new Error("no Sonnet row");
-    row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    clickSubmenuRow("Sonnet");
     expect((picks[0] as unknown[])[1]).toEqual({ model_id: "sonnet", effort: "medium", fast: false });
   });
 
