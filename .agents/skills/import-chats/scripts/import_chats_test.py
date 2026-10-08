@@ -185,29 +185,37 @@ def test_the_failure_detail_is_the_caused_by_line_or_else_the_last_line() -> Non
 
 
 @pytest.mark.parametrize(
-    ("returncode", "output", "state"),
+    ("returncode", "stdout", "stderr", "state"),
     [
-        (0, '{"uuid": "org"}\n200', "connected"),
+        (0, '{"uuid": "org"}\n200', "", "connected"),
+        (0, '{"uuid": "org"}\n200', "warning: a notice on stderr\n", "connected"),
         (
             1,
-            '{"error": "No credentials found for claude-ai."}\n000',
+            "\n000",
+            '{"error": "No credentials found for claude-ai."}\n',
             "needs_permission",
         ),
         (
             1,
             '{"error": "No service matches URL: https://chatgpt.com/backend-api/me"}\n000',
+            "",
             "needs_permission",
         ),
-        (0, '{"error": "Request not permitted by the user."}\n403', "needs_permission"),
-        (0, '{"detail": "token_expired"}\n401', "needs_permission"),
-        (0, "<html>Just a moment... cloudflare</html>\n403", "blocked"),
-        (0, "upstream sad\n502", "blocked"),
+        (
+            0,
+            '{"error": "Request not permitted by the user."}\n403',
+            "",
+            "needs_permission",
+        ),
+        (0, '{"detail": "token_expired"}\n401', "", "needs_permission"),
+        (0, "<html>Just a moment... cloudflare</html>\n403", "", "blocked"),
+        (0, "upstream sad\n502", "", "blocked"),
     ],
 )
 def test_a_check_says_what_the_agent_does_next(
-    returncode: int, output: str, state: str
+    returncode: int, stdout: str, stderr: str, state: str
 ) -> None:
-    assert import_chats.classify_check(returncode, output)[0] == state
+    assert import_chats.classify_check(returncode, stdout, stderr)[0] == state
 
 
 def test_a_check_asks_the_sources_own_api_through_the_impersonating_gateway() -> None:

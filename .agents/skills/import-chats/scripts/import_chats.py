@@ -670,9 +670,11 @@ def sync(
     return is_every_source_imported
 
 
-def classify_check(returncode: int, output: str) -> tuple[str, str]:
-    """The ``check`` state for a ``latchkey curl -w '\\n%{http_code}'`` result: ``(state, detail)``."""
-    body, _, status_code = output.rstrip("\n").rpartition("\n")
+def classify_check(returncode: int, stdout: str, stderr: str) -> tuple[str, str]:
+    """The ``check`` state for a ``latchkey curl -w '\\n%{http_code}'`` result: ``(state, detail)``.
+
+    The status code is the last line of stdout; latchkey's refusals may come on either stream."""
+    body, _, status_code = stdout.rstrip("\n").rpartition("\n")
     if returncode == 0 and status_code.strip() == "200":
         return CHECK_CONNECTED, ""
     for marker in (
@@ -680,7 +682,7 @@ def classify_check(returncode: int, output: str) -> tuple[str, str]:
         "No credentials found",
         "Request not permitted",
     ):
-        if marker in output:
+        if marker in stdout or marker in stderr:
             return CHECK_NEEDS_PERMISSION, marker
     code = status_code.strip()
     if code == "401":
@@ -690,7 +692,7 @@ def classify_check(returncode: int, output: str) -> tuple[str, str]:
     if code == "403":
         return CHECK_BLOCKED, "the site's bot protection refused the request"
     return CHECK_BLOCKED, (
-        body.strip() or output.strip() or f"latchkey curl exited {returncode}"
+        body.strip() or stderr.strip() or f"latchkey curl exited {returncode}"
     )[:300]
 
 
@@ -713,7 +715,7 @@ def check(
         result = run(command, capture_output=True, text=True)
     except OSError as e:
         raise ImportChatsError(f"cannot run latchkey: {e}") from e
-    return classify_check(result.returncode, result.stdout + result.stderr)
+    return classify_check(result.returncode, result.stdout, result.stderr)
 
 
 def _sources(keys: Sequence[str]) -> list[ChatSource]:
