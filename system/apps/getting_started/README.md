@@ -7,8 +7,8 @@ copy the user's Claude and ChatGPT conversations into the workspace (until it is
 "Start something", eight intents two to a row (four at first, the rest behind "See more"),
 each with a seeded first message; "Start from a template", the published template catalog by
 shelf, with a detail page (the drawing, the write-up, what the template needs, its
-repository) whose two actions adopt the template into this machine or have a new machine made
-from it. Every tile and both actions start a chat through one contract message,
+repository) whose two actions adopt the template into this workspace or have a new workspace
+made from it. Every tile and both actions start a chat through one contract message,
 `shell:start-with-text`, which the desktop runs as its launcher's primary text action; the
 page names no app, and the Getting Started window stays where it is while the chat comes up
 beside it.
