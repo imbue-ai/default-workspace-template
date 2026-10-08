@@ -3,8 +3,8 @@
  * holds. On connect the server sends ``apps_updated``, ``desktops_updated``, ``avatar_status``,
  * ``update_notice_changed``, and ``presence_updated``; the window answers with its ``client_state``
  * (which client it is, on which desktop) and re-sends it on every switch, as a move of the client or, when
- * it only followed a push, as a following report that moves nothing; a pulled-out window's page answers
- * with a pop-out's ``client_state`` instead, naming its client and no desktop. ``placements_updated``,
+ * it only followed the client's stored desktop, as a following report that moves nothing; a pulled-out window's
+ * page answers with a pop-out's ``client_state`` instead, naming its client and no desktop. ``placements_updated``,
  * ``active_desktop_changed``, ``client_entries_changed``, and the transient ``layout_op`` are how this
  * client's other windows, the shell's own edits, and an agent's ops reach this one; ``avatar_status`` and
  * ``avatar_selection_changed`` are how the workspace's avatar reaches every window, ``update_notice_changed``
@@ -66,8 +66,8 @@ export interface ClientStateReport {
   readonly previousDesktop: string;
   /** The window's id for a move (``REPORT_ID_PREFIX``), echoed on the broadcast it causes; null when following. */
   readonly reportId: string | null;
-  /** Whether the window only followed the client's stored desktop (a push): the shell registers the connection
-   *  on it and moves nothing, since the record may already have moved on. */
+  /** Whether the window only followed the client's stored desktop (pushed, or read on a reconnect): the shell
+   *  registers the connection on it and moves nothing, since the record may already have moved on. */
   readonly isFollowing: boolean;
 }
 

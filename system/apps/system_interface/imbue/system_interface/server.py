@@ -587,9 +587,10 @@ def _handle_client_state_message(
     ``client_state`` is the only message type clients send: it registers the browser's client id and the
     desktop it is on, on connect and on every switch. Registration feeds the broadcaster's client registry
     (which targets layout ops), the client record, and the client-activity log (a ``desktop_switch`` when
-    the report names a different previous desktop). A following report (a window that followed a push) registers
-    the connection and records nothing. A pop-out's report registers its connection under its client and nothing
-    more: the client's record and active desktop are its main window's.
+    the report names a different previous desktop). A following report (a window that followed the client's stored
+    desktop, pushed or read on a reconnect) registers the connection and records nothing. A pop-out's report
+    registers its connection under its client and nothing more: the client's record and active desktop are its main
+    window's.
     """
     try:
         parsed = json.loads(raw_message)
@@ -608,8 +609,8 @@ def _handle_client_state_message(
         _loguru_logger.warning("Ignored a malformed client_state report: {}", e.errors()[0]["msg"])
         return False
     shell.broadcaster.set_client_info(client_queue, str(report.client_id), str(report.active_desktop))
-    # A window that followed a push may name a desktop a later move has already replaced: recording it would move the
-    # client back and set its windows following again. So it only registers the connection.
+    # A window that followed the stored desktop may name a desktop a later move has already replaced: recording it
+    # would move the client back and set its windows following again. So it only registers the connection.
     if not report.is_following:
         # A state file the shell cannot write is a warning, not a dropped socket: the live
         # registration above is what the layout ops need, and the next report retries the write.

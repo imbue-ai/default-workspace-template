@@ -125,8 +125,8 @@ class ClientStateReport(FrozenModel):
     )
     is_following: bool = Field(
         default=False,
-        description="Whether the window only followed the client's stored desktop (a push): the connection is "
-        "registered on it and the record is not moved",
+        description="Whether the window only followed the client's stored desktop (pushed, or read on a reconnect): "
+        "the connection is registered on it and the record is not moved",
     )
 
 
