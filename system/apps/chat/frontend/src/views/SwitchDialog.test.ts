@@ -134,7 +134,7 @@ function render(): void {
 function workingChat(): ChatSnapshot {
   return chatSnapshotFixture("agent-1", {
     status: "working",
-    active_agent: { harness: "claude", account_id: OWN.id },
+    active_agent: { harness: "claude", account_id: OWN.id, activity_state: "THINKING", is_busy: true },
   });
 }
 
@@ -339,6 +339,33 @@ describe("the switch dialog", () => {
     render();
     choose("switch-dialog-model", "gpt-6-sol");
     expect(ROOT().querySelector<HTMLSelectElement>("select.switch-dialog-effort")?.value).toBe("medium");
+  });
+
+  it("says an agent waiting on a background task wraps up what it is doing", () => {
+    // Between turns, but its pending task would start the next one: a switch stops it.
+    state.chat = chatSnapshotFixture("agent-1", {
+      status: "background",
+      active_agent: {
+        harness: "claude",
+        account_id: OWN.id,
+        activity_state: "IDLE",
+        is_busy: true,
+        background_tasks: [
+          {
+            id: "task-1",
+            source: "run_in_background",
+            kind: "",
+            description: "Rebuild the worker image",
+            started_at: "2026-10-08T12:00:00Z",
+          },
+        ],
+      },
+    });
+    beginSwitchTo("agent-1", CODEX as ProviderAccount);
+    render();
+    expect(ROOT().textContent).toContain(
+      "Claude Code wraps up what it is doing and hands the conversation to OpenAI (Codex)",
+    );
   });
 
   it("does not say an idle agent wraps up what it is doing", async () => {

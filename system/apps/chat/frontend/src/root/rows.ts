@@ -14,7 +14,7 @@ import type { ChatSnapshot, ProvisionalChat, ProvisionalChatPhase } from "../mod
 export interface ChatRow {
   chatId: string;
   title: string;
-  /** The contract's status (``working``, ``idle``, ``attention``, ``stopped``, ``error``). */
+  /** The contract's status (``working``, ``background``, ``idle``, ``attention``, ``stopped``, ``error``). */
   status: string;
   labels: Readonly<Record<string, string>>;
   /** Every agent of the chat, in order; a chat that moved to a new agent keeps its old ones. */

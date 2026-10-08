@@ -40,6 +40,23 @@ export interface ActiveAgent {
   // A send is in flight and waiting for the agent to come up: the Connecting sub-state of
   // Sending, shown beside the model bar.
   is_connecting: boolean;
+  // The agent will resume on its own: a turn is in flight, or a background task is pending.
+  is_busy: boolean;
+  // The background tasks the chat waits on, oldest first. Rendered as given.
+  background_tasks: BackgroundTask[];
+}
+
+/** One background task a chat waits on (the backend's ``BackgroundTaskSnapshot``): a command the agent
+ *  started whose completion will start its next turn. */
+export interface BackgroundTask {
+  id: string;
+  // Who recorded it: "run_in_background" (the workspace's runner) or "claude" (Claude's own task list).
+  source: string;
+  // Claude's task type ("shell", "monitor", "workflow", "subagent"); empty for the runner's.
+  kind: string;
+  description: string;
+  // When it started (ISO 8601, UTC).
+  started_at: string;
 }
 
 /** A handoff runs draining, summarizing, switching; a rebind runs draining, restarting; both can end failed. */
@@ -97,7 +114,8 @@ export interface ChatSnapshot {
   // The mngr ``project`` label: the project this chat was created in, which mngr propagates to
   // the agent's own children. Null when the agent carries no label.
   project: string | null;
-  // The chat's status: the `ChatStatus` value the `chats_updated` snapshot carries.
+  // The chat's status: the `ChatStatus` value the `chats_updated` snapshot carries (working,
+  // background, idle, attention, stopped, error).
   status: string;
   // The active agent's mngr labels.
   labels: Record<string, string>;

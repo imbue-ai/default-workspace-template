@@ -57,11 +57,13 @@ export interface ChatRailAttrs {
   isReferenceDraftAvailable: boolean;
 }
 
-/** The status each dot stands for: working is the accent and breathes; done (a finished turn
+/** The status each dot stands for: working is the accent and breathes; background (no turn, but a
+ *  pending task will start one) is a dashed accent ring that turns slowly; done (a finished turn
  *  the user has not looked at, see ``chatUnread``) is a green check; attention is amber; idle
  *  is a hollow grey ring; error is red; stopped wears a pause mark. */
 const DOT_CLASS_BY_STATUS: Readonly<Record<string, string>> = {
   working: "chat-rail-dot--pulse bg-accent",
+  background: "chat-rail-dot--dashed",
   attention: "bg-warning",
   error: "bg-danger",
   idle: "border border-faint bg-transparent",

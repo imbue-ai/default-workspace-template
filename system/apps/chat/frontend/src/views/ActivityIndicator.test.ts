@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
+import type { BackgroundTask } from "../models/Chats";
 import type { TranscriptEvent } from "../models/Response";
 import {
   ActivityIndicator,
@@ -8,12 +9,17 @@ import {
   labelForActivityState,
   wakeUpSpinnerDeadline,
 } from "./ActivityIndicator";
+import { BackgroundTasksLine } from "./BackgroundTasksLine";
 import { notePermissionResolutions, resetShellPermissionResolutionsForTesting } from "./permission-card";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
 
 // The component reads the agent's server-derived state through the chats model; the
 // mock factory is hoisted, so the state it serves lives in a mutable holder.
-const agentState: { activity_state: string | null; harness: string } = { activity_state: null, harness: "claude" };
+const agentState: { activity_state: string | null; harness: string; background_tasks: BackgroundTask[] } = {
+  activity_state: null,
+  harness: "claude",
+  background_tasks: [],
+};
 const handoffState: { handoff: unknown } = { handoff: null };
 vi.mock("../models/Chats", () => ({
   getChatById: () => ({ active_agent: agentState, handoff: handoffState.handoff }),
@@ -250,6 +256,7 @@ describe("ActivityIndicator — what the strip actually renders", () => {
   beforeEach(() => {
     resetShellPermissionResolutionsForTesting();
     agentState.activity_state = null;
+    agentState.background_tasks = [];
     vi.spyOn(m, "redraw").mockImplementation(() => undefined);
     vi.spyOn(Date, "now").mockReturnValue(NOW);
   });
@@ -306,6 +313,33 @@ describe("ActivityIndicator — what the strip actually renders", () => {
     expect(strip).not.toBeNull();
     expect((strip?.attrs as Record<string, unknown>)["data-state"]).toBe("WAKING");
     expect(labelTextOf(strip)).toBe("Confirming permission changes…");
+  });
+
+  it("puts the wait line under the activity line while tasks are pending, whatever the activity", () => {
+    agentState.background_tasks = [
+      {
+        id: "task-1",
+        source: "run_in_background",
+        kind: "",
+        description: "Rebuild the worker image",
+        started_at: "2027-01-15T08:00:00Z",
+      },
+    ];
+
+    agentState.activity_state = "THINKING";
+    const working = render();
+    const [activityLine, waitLine] = (working?.children ?? []) as (m.Vnode | null)[];
+    expect((activityLine?.attrs as Record<string, unknown>)["data-state"]).toBe("THINKING");
+    expect(waitLine?.tag).toBe(BackgroundTasksLine);
+    expect((waitLine?.attrs as { tasks: BackgroundTask[] }).tasks).toEqual(agentState.background_tasks);
+
+    // Between turns the activity line has nothing to say; the wait line stands alone.
+    agentState.activity_state = "IDLE";
+    const waiting = render();
+    expect(((waiting?.children ?? []) as (m.Vnode | null)[]).map((child) => child?.tag ?? null)).toEqual([
+      null,
+      BackgroundTasksLine,
+    ]);
   });
 
   it("lets a real turn outrank the wake-up caption", () => {
