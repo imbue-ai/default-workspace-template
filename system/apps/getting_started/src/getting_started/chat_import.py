@@ -41,6 +41,12 @@ class ChatImportSource(FrozenModel):
     updated_at: str = Field(default="", description="When the record was last written, ISO 8601")
     detail: str = Field(default="", description="Why the last import failed; empty otherwise")
     pid: int | None = Field(default=None, description="The sync's process while it is importing")
+    fetched: int | None = Field(
+        default=None, ge=0, description="Conversations the running import has fetched; None when it reports no total"
+    )
+    to_fetch: int | None = Field(
+        default=None, ge=0, description="Conversations the running import set out to fetch; None when unknown"
+    )
 
 
 def is_process_alive(pid: int) -> bool:

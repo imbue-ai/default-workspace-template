@@ -54,6 +54,20 @@ describe("the chat import card", () => {
     expect(root.querySelector("[data-chat-import-action]")).toBeNull();
   });
 
+  it("shows how many of its conversations a source has fetched, with a bar, when it reports a total", () => {
+    const { root } = render({
+      is_dismissed: false,
+      sources: { chatgpt: source("importing", 40, { fetched: 166, to_fetch: 582 }), claude: source("importing", 7) },
+    });
+    expect(Array.from(root.querySelectorAll("[data-chat-import-source]")).map((line) => line.textContent)).toEqual([
+      "Claude: 7 so far",
+      "ChatGPT: 166 of 582",
+    ]);
+    const bar = root.querySelector<HTMLElement>('[data-chat-import-bar="chatgpt"] > div')!;
+    expect(bar.style.width).toBe("28.5%");
+    expect(root.querySelector('[data-chat-import-bar="claude"]')).toBeNull();
+  });
+
   it("says which source needs the user and resumes the import of that source from a chat", () => {
     const { root, started } = render({
       is_dismissed: false,

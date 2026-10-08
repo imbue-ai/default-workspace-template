@@ -11,7 +11,7 @@ import sys
 import tarfile
 import threading
 import tomllib
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
@@ -77,6 +77,23 @@ class _FakeDatalib:
         return subprocess.CompletedProcess(
             command, returncode, self.stdout, self.stderr
         )
+
+
+def _streaming(
+    run: Callable[..., subprocess.CompletedProcess],
+) -> Callable[[Sequence[str], Callable[[str], None]], subprocess.CompletedProcess]:
+    """A ``stream`` for ``sync`` built from a ``run`` fake: it runs the command, then hands over its stderr one line
+    at a time, as the real ``stream_process`` does while the command runs."""
+
+    def stream(
+        command: Sequence[str], on_stderr_line: Callable[[str], None]
+    ) -> subprocess.CompletedProcess:
+        result = run(command, capture_output=True, text=True)
+        for line in result.stderr.splitlines(keepends=True):
+            on_stderr_line(line)
+        return result
+
+    return stream
 
 
 def _installed(home: Path) -> object:
@@ -253,7 +270,12 @@ def test_a_sync_writes_the_config_runs_the_named_ingests_and_records_what_it_imp
     )
 
     is_imported = import_chats.sync(
-        [CLAUDE, CHATGPT], install, data_root, status_path, datalib
+        [CLAUDE, CHATGPT],
+        install,
+        data_root,
+        status_path,
+        datalib,
+        stream=_streaming(datalib),
     )
 
     assert is_imported is True
@@ -300,7 +322,14 @@ def test_a_sync_records_a_sign_in_problem_for_one_source_and_success_for_the_oth
     )
 
     assert (
-        import_chats.sync([CLAUDE, CHATGPT], install, data_root, status_path, datalib)
+        import_chats.sync(
+            [CLAUDE, CHATGPT],
+            install,
+            data_root,
+            status_path,
+            datalib,
+            stream=_streaming(datalib),
+        )
         is False
     )
 
@@ -335,7 +364,14 @@ def test_a_sync_whose_pages_did_not_render_records_the_render_failure(
     )
 
     assert (
-        import_chats.sync([CLAUDE, CHATGPT], install, data_root, status_path, datalib)
+        import_chats.sync(
+            [CLAUDE, CHATGPT],
+            install,
+            data_root,
+            status_path,
+            datalib,
+            stream=_streaming(datalib),
+        )
         is False
     )
 
@@ -362,7 +398,15 @@ def test_a_sync_that_never_summarised_records_the_failure_and_its_output(
     )
 
     assert (
-        import_chats.sync([CLAUDE], install, data_root, status_path, datalib) is False
+        import_chats.sync(
+            [CLAUDE],
+            install,
+            data_root,
+            status_path,
+            datalib,
+            stream=_streaming(datalib),
+        )
+        is False
     )
 
     record = import_chats.read_status(status_path)["sources"]["claude"]
@@ -386,7 +430,17 @@ def test_a_sync_that_followed_another_ones_run_to_the_end_records_what_it_import
         returncode=0,
     )
 
-    assert import_chats.sync([CLAUDE], install, data_root, status_path, datalib) is True
+    assert (
+        import_chats.sync(
+            [CLAUDE],
+            install,
+            data_root,
+            status_path,
+            datalib,
+            stream=_streaming(datalib),
+        )
+        is True
+    )
 
     record = import_chats.read_status(status_path)["sources"]["claude"]
     assert (record["state"], record["conversations"]) == ("imported", 2)
@@ -408,7 +462,14 @@ def test_a_sync_marks_its_sources_importing_with_its_pid_while_it_runs(
             _run_summary({"step": "claude_chats/ingest", "status": "succeeded"}),
         )
 
-    import_chats.sync([CLAUDE], install, tmp_path / "datalib", status_path, run)
+    import_chats.sync(
+        [CLAUDE],
+        install,
+        tmp_path / "datalib",
+        status_path,
+        run,
+        stream=_streaming(run),
+    )
 
     assert {(record["state"], record["pid"]) for record in seen} == {
         ("importing", os.getpid())
@@ -425,7 +486,14 @@ def test_a_sync_whose_install_fails_records_the_failure_and_says_why(
         return subprocess.CompletedProcess(command, 1, "", "no network\n")
 
     with pytest.raises(import_chats.ImportChatsError, match="no network"):
-        import_chats.sync([CHATGPT], install, tmp_path / "datalib", status_path, run)
+        import_chats.sync(
+            [CHATGPT],
+            install,
+            tmp_path / "datalib",
+            status_path,
+            run,
+            stream=_streaming(run),
+        )
 
     record = import_chats.read_status(status_path)["sources"]["chatgpt"]
     assert record["state"] == "failed"
@@ -445,7 +513,14 @@ def test_a_sync_whose_runtime_fetch_hangs_gives_up_and_records_the_failure(
         raise subprocess.TimeoutExpired(command, timeout)
 
     with pytest.raises(import_chats.ImportChatsError, match="no answer in"):
-        import_chats.sync([CLAUDE], install, tmp_path / "datalib", status_path, run)
+        import_chats.sync(
+            [CLAUDE],
+            install,
+            tmp_path / "datalib",
+            status_path,
+            run,
+            stream=_streaming(run),
+        )
 
     record = import_chats.read_status(status_path)["sources"]["claude"]
     assert record["state"] == "failed"
@@ -462,7 +537,14 @@ def test_a_sync_that_cannot_run_datalib_records_the_failure_and_reports_it_as_an
         raise PermissionError(13, "Permission denied", command[0])
 
     with pytest.raises(import_chats.ImportChatsError, match="Permission denied"):
-        import_chats.sync([CLAUDE], install, tmp_path / "datalib", status_path, run)
+        import_chats.sync(
+            [CLAUDE],
+            install,
+            tmp_path / "datalib",
+            status_path,
+            run,
+            stream=_streaming(run),
+        )
 
     record = import_chats.read_status(status_path)["sources"]["claude"]
     assert record["state"] == "failed"
@@ -693,7 +775,14 @@ def test_a_sync_rewrites_the_index_of_each_source_it_synced(tmp_path: Path) -> N
         {"claude_chats": 2},
     )
 
-    import_chats.sync([CLAUDE, CHATGPT], install, data_root, status_path, datalib)
+    import_chats.sync(
+        [CLAUDE, CHATGPT],
+        install,
+        data_root,
+        status_path,
+        datalib,
+        stream=_streaming(datalib),
+    )
 
     assert (
         "2 conversations" in (tmp_path / "import-chats" / "claude-chats.md").read_text()
@@ -762,7 +851,13 @@ def test_a_running_sync_records_the_pages_rendered_so_far(tmp_path: Path) -> Non
         return subprocess.CompletedProcess(command, 0, "", summary)
 
     import_chats.sync(
-        [CHATGPT], install, data_root, status_path, run, progress_interval_seconds=0.01
+        [CHATGPT],
+        install,
+        data_root,
+        status_path,
+        run,
+        stream=_streaming(run),
+        progress_interval_seconds=0.01,
     )
 
     assert seen_counts[0] == 0
@@ -770,4 +865,88 @@ def test_a_running_sync_records_the_pages_rendered_so_far(tmp_path: Path) -> Non
     assert (
         import_chats.read_status(status_path)["sources"]["chatgpt"]["state"]
         == "imported"
+    )
+
+
+def _progress_event(event: str, step: str, **fields: object) -> str:
+    return json.dumps({"event": event, "step": step, **fields}) + "\n"
+
+
+def test_ingest_progress_follows_each_ingests_length_and_increments() -> None:
+    progress = import_chats.IngestProgress()
+    assert progress.of(CHATGPT) is None
+
+    for line in [
+        "not an event\n",
+        _progress_event("progress_length", "chatgpt_chats/render_markdown", total=9),
+        _progress_event("progress_inc", "chatgpt_chats/ingest", delta=1),
+        _progress_event("progress_length", "chatgpt_chats/ingest", total=3),
+        _progress_event("progress_inc", "chatgpt_chats/ingest", delta=1),
+        _progress_event("progress_message", "chatgpt_chats/ingest", msg="conv-1"),
+        _progress_event("progress_inc", "chatgpt_chats/ingest", delta=4),
+    ]:
+        progress.observe(line)
+
+    assert progress.of(CHATGPT) == import_chats.FetchProgress(fetched=3, total=3)
+    assert progress.of(CLAUDE) is None
+
+
+def test_stream_process_hands_over_stderr_lines_as_they_come_and_keeps_both_streams() -> (
+    None
+):
+    seen: list[str] = []
+    script = "import sys; print('report'); [print(f'line {i}', file=sys.stderr, flush=True) for i in range(3)]; sys.exit(2)"
+
+    result = import_chats.stream_process([sys.executable, "-c", script], seen.append)
+
+    assert seen == ["line 0\n", "line 1\n", "line 2\n"]
+    assert (result.returncode, result.stdout, result.stderr) == (
+        2,
+        "report\n",
+        "line 0\nline 1\nline 2\n",
+    )
+
+
+def test_a_running_sync_records_how_many_of_its_conversations_it_has_fetched(
+    tmp_path: Path,
+) -> None:
+    install = _installed(tmp_path / "home")
+    status_path = tmp_path / "status.json"
+    seen: list[tuple[object, object]] = []
+
+    def stream(
+        command: Sequence[str], on_stderr_line: Callable[[str], None]
+    ) -> subprocess.CompletedProcess:
+        for line in [
+            _progress_event("progress_length", "chatgpt_chats/ingest", total=5),
+            _progress_event("progress_inc", "chatgpt_chats/ingest", delta=1),
+            _progress_event("progress_inc", "chatgpt_chats/ingest", delta=1),
+        ]:
+            on_stderr_line(line)
+        pause = threading.Event()
+        for _ in range(500):
+            record = import_chats.read_status(status_path)["sources"]["chatgpt"]
+            seen.append((record["fetched"], record["to_fetch"]))
+            if seen[-1] == (2, 5):
+                break
+            pause.wait(0.01)
+        summary = _run_summary({"step": "chatgpt_chats/ingest", "status": "succeeded"})
+        return subprocess.CompletedProcess(command, 0, "", summary)
+
+    import_chats.sync(
+        [CHATGPT],
+        install,
+        tmp_path / "datalib",
+        status_path,
+        _FakeDatalib(tmp_path / "datalib", "", {}),
+        stream=stream,
+        progress_interval_seconds=0.01,
+    )
+
+    assert seen[-1] == (2, 5)
+    final = import_chats.read_status(status_path)["sources"]["chatgpt"]
+    assert (final["state"], final["fetched"], final["to_fetch"]) == (
+        "imported",
+        None,
+        None,
     )

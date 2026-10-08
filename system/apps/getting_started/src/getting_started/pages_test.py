@@ -118,7 +118,16 @@ def test_the_chat_import_route_answers_what_was_imported_until_the_card_is_put_a
     )
     assert client.get("/api/chat-import").get_json() == {
         "is_dismissed": False,
-        "sources": {"claude": {"state": "imported", "conversations": 12, "updated_at": "t", "detail": ""}},
+        "sources": {
+            "claude": {
+                "state": "imported",
+                "conversations": 12,
+                "updated_at": "t",
+                "detail": "",
+                "fetched": None,
+                "to_fetch": None,
+            }
+        },
     }
 
     dismissed = client.post("/api/chat-import/dismiss")

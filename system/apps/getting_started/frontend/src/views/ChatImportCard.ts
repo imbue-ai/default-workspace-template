@@ -32,10 +32,21 @@ export interface ChatImportCardAttrs {
   readonly onDismiss: () => void;
 }
 
+/** A running import's fetched and to-fetch counts, when the source reports a total. */
+function fetchProgress(source: ChatImportSource): { fetched: number; total: number } | null {
+  if (source.state !== "importing" || typeof source.to_fetch !== "number" || typeof source.fetched !== "number") {
+    return null;
+  }
+  return { fetched: source.fetched, total: source.to_fetch };
+}
+
 function sourceLine(label: string, source: ChatImportSource): string {
+  const progress = fetchProgress(source);
   switch (source.state) {
     case "importing":
-      return `${label}: ${source.conversations.toLocaleString()} so far`;
+      return progress === null
+        ? `${label}: ${source.conversations.toLocaleString()} so far`
+        : `${label}: ${progress.fetched.toLocaleString()} of ${progress.total.toLocaleString()}`;
     case "imported":
       return `${label}: ${source.conversations.toLocaleString()} imported`;
     case "needs_sign_in":
@@ -51,7 +62,23 @@ function sourceLines(sources: Record<string, ChatImportSource>): m.Vnode {
     { class: "chat-import-sources mt-2 type-helper text-secondary" },
     SOURCE_LABELS.flatMap(([key, label]) => {
       const source = sources[key];
-      return source === undefined ? [] : [m("li", { key, "data-chat-import-source": key }, sourceLine(label, source))];
+      if (source === undefined) return [];
+      const progress = fetchProgress(source);
+      return [
+        m("li", { key, "data-chat-import-source": key }, [
+          sourceLine(label, source),
+          progress === null || progress.total === 0
+            ? null
+            : m(
+                "div",
+                { class: "mt-1 h-1 max-w-xs overflow-hidden rounded-full bg-fill-hover", "data-chat-import-bar": key },
+                m("div", {
+                  class: "h-full rounded-full bg-accent",
+                  style: `width: ${Math.min(100, (100 * progress.fetched) / progress.total).toFixed(1)}%`,
+                }),
+              ),
+        ]),
+      ];
     }),
   );
 }

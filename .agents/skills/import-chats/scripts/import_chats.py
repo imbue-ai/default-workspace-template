@@ -190,7 +190,13 @@ def write_status(path: Path, document: Mapping) -> None:
 
 
 def record_source(
-    path: Path, key: str, state: str, conversations: int, detail: str, pid: int | None
+    path: Path,
+    key: str,
+    state: str,
+    conversations: int,
+    detail: str,
+    pid: int | None,
+    fetch_progress: FetchProgress | None = None,
 ) -> None:
     document = read_status(path)
     document["sources"][key] = {
@@ -199,6 +205,8 @@ def record_source(
         "updated_at": _now(),
         "detail": detail,
         "pid": pid,
+        "fetched": None if fetch_progress is None else fetch_progress.fetched,
+        "to_fetch": None if fetch_progress is None else fetch_progress.total,
     }
     write_status(path, document)
 
@@ -573,11 +581,61 @@ def install_datalib(
         )
 
 
+@dataclass(frozen=True)
+class FetchProgress:
+    """How far a source's ingest has got through the conversations it set out to fetch this run."""
+
+    fetched: int
+    total: int
+
+
+class IngestProgress:
+    """Each ingest step's progress, read off ``datalib-dag``'s event stream as it arrives.
+
+    An ingest that knows how much it has to fetch says so with ``progress_length`` and counts each item with
+    ``progress_inc`` (datalib's ChatGPT ingest does; its Claude ingest reports no length, so it has no entry here).
+    Fed from the thread reading the stream and read by the one recording progress, hence the lock.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._total_by_step: dict[str, int] = {}
+        self._fetched_by_step: dict[str, int] = {}
+
+    def observe(self, line: str) -> None:
+        event = _event(line)
+        if event is None or not str(event.get("step", "")).endswith("/ingest"):
+            return
+        step = str(event["step"])
+        with self._lock:
+            if event.get("event") == "progress_length" and isinstance(
+                event.get("total"), int
+            ):
+                self._total_by_step[step] = event["total"]
+            elif event.get("event") == "progress_inc" and isinstance(
+                event.get("delta"), int
+            ):
+                self._fetched_by_step[step] = (
+                    self._fetched_by_step.get(step, 0) + event["delta"]
+                )
+
+    def of(self, source: ChatSource) -> FetchProgress | None:
+        step = f"{source.group}/ingest"
+        with self._lock:
+            total = self._total_by_step.get(step)
+            if total is None:
+                return None
+            return FetchProgress(
+                fetched=min(self._fetched_by_step.get(step, 0), total), total=total
+            )
+
+
 def _record_progress_until(
     is_done: threading.Event,
     named: Sequence[ChatSource],
     data_root: Path,
     status_path: Path,
+    progress: IngestProgress,
     interval_seconds: float,
 ) -> None:
     while not is_done.wait(interval_seconds):
@@ -589,7 +647,43 @@ def _record_progress_until(
                 count_conversations(data_root, source),
                 "",
                 pid=os.getpid(),
+                fetch_progress=progress.of(source),
             )
+
+
+def stream_process(
+    command: Sequence[str], on_stderr_line: Callable[[str], None]
+) -> subprocess.CompletedProcess:
+    """Run ``command``, handing each line of its stderr to ``on_stderr_line`` as it arrives.
+
+    ``datalib-dag`` writes its event stream to stderr, so this is how a sync is followed while it runs. stdout is
+    drained on its own thread so neither pipe can fill and stall the process. Returns everything both streams
+    said, as ``subprocess.run`` would.
+    """
+    process = subprocess.Popen(
+        list(command),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    assert process.stdout is not None and process.stderr is not None
+    stdout_chunks: list[str] = []
+    stdout_reader = threading.Thread(
+        target=lambda: stdout_chunks.append(process.stdout.read()),
+        name="datalib-dag-stdout",
+        daemon=True,
+    )
+    stdout_reader.start()
+    stderr_lines: list[str] = []
+    for line in process.stderr:
+        stderr_lines.append(line)
+        on_stderr_line(line)
+    returncode = process.wait()
+    stdout_reader.join()
+    return subprocess.CompletedProcess(
+        list(command), returncode, "".join(stdout_chunks), "".join(stderr_lines)
+    )
 
 
 def _run_dag_with_progress(
@@ -598,21 +692,31 @@ def _run_dag_with_progress(
     config_path: Path,
     data_root: Path,
     status_path: Path,
-    run: Callable[..., subprocess.CompletedProcess],
+    stream: Callable[
+        [Sequence[str], Callable[[str], None]], subprocess.CompletedProcess
+    ],
     progress_interval_seconds: float,
 ) -> subprocess.CompletedProcess:
-    """Run one ``datalib-dag`` sync of ``named``'s ingests, recording their page counts as it goes."""
+    """Run one ``datalib-dag`` sync of ``named``'s ingests, recording how far each has got as it goes."""
     roots = ",".join(f"{source.group}/ingest" for source in named)
+    progress = IngestProgress()
     is_done = threading.Event()
     reporter = threading.Thread(
         target=_record_progress_until,
-        args=(is_done, named, data_root, status_path, progress_interval_seconds),
+        args=(
+            is_done,
+            named,
+            data_root,
+            status_path,
+            progress,
+            progress_interval_seconds,
+        ),
         name="import-chats-progress",
         daemon=True,
     )
     reporter.start()
     try:
-        return run(
+        return stream(
             [
                 str(install.binary("datalib-dag")),
                 str(config_path),
@@ -621,8 +725,7 @@ def _run_dag_with_progress(
                 "--by",
                 SYNC_REQUESTER,
             ],
-            capture_output=True,
-            text=True,
+            progress.observe,
         )
     finally:
         is_done.set()
@@ -649,6 +752,9 @@ def sync(
     data_root: Path,
     status_path: Path,
     run: Callable[..., subprocess.CompletedProcess],
+    stream: Callable[
+        [Sequence[str], Callable[[str], None]], subprocess.CompletedProcess
+    ] = stream_process,
     progress_interval_seconds: float = PROGRESS_INTERVAL_SECONDS,
 ) -> bool:
     """Import ``named``: install datalib if needed, write the config, run one sync, and record each source's
@@ -680,7 +786,7 @@ def sync(
             config_path,
             data_root,
             status_path,
-            run,
+            stream,
             progress_interval_seconds,
         )
     except ImportChatsError as e:

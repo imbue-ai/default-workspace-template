@@ -92,3 +92,15 @@ def test_the_card_stays_put_away_once_dismissed(tmp_path: Path) -> None:
         "is_dismissed": True,
         "sources": {},
     }
+
+
+def test_a_running_imports_fetch_progress_reaches_the_card(tmp_path: Path) -> None:
+    status_path = tmp_path / "status.json"
+    _write_status(
+        status_path,
+        {"chatgpt": {"state": "importing", "conversations": 40, "pid": os.getpid(), "fetched": 166, "to_fetch": 582}},
+    )
+
+    wire = ChatImportStore(status_path=status_path, dismissal_path=tmp_path / "chat_import.json").wire_json()
+
+    assert (wire["sources"]["chatgpt"]["fetched"], wire["sources"]["chatgpt"]["to_fetch"]) == (166, 582)

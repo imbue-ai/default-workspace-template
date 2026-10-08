@@ -19,6 +19,9 @@ export interface ChatImportSource {
   conversations: number;
   updated_at: string;
   detail: string;
+  /** While importing: conversations fetched of ``to_fetch``. Null when the source reports no total. */
+  fetched?: number | null;
+  to_fetch?: number | null;
 }
 
 export interface ChatImport {

@@ -7,8 +7,12 @@ import type { ChatImportSource, ChatImportSourceState } from "../models/ChatImpo
 import type { CatalogTemplate } from "../models/TemplateCatalog";
 
 /** A chat import source in ``state`` holding ``conversations`` pages, with no timestamp or detail. */
-export function chatImportSourceRecord(state: ChatImportSourceState, conversations = 0): ChatImportSource {
-  return { state, conversations, updated_at: "", detail: "" };
+export function chatImportSourceRecord(
+  state: ChatImportSourceState,
+  conversations = 0,
+  overrides: Partial<ChatImportSource> = {},
+): ChatImportSource {
+  return { state, conversations, updated_at: "", detail: "", ...overrides };
 }
 
 function capitalized(name: string): string {
