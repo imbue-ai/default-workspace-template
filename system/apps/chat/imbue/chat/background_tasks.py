@@ -2,9 +2,9 @@
 
 A chat is busy when its agent will resume on its own: its active agent has a turn in flight, or
 its chat has a pending background task, whose completion starts one. Only the chat app knows the
-first (the script's own file fallback, used when the app cannot answer, sees the tasks alone). The pending tasks are one
-marker file each under ``<chat data dir>/background_tasks/<chat-id>/``, written by
-``run_in_background.py`` and by Claude's Stop hook. The script is their one reader: it is
+first (the script's own file fallback, used when the app cannot answer, sees the tasks alone).
+The pending tasks are one marker file each under ``<chat data dir>/background_tasks/<chat-id>/``,
+written by ``run_in_background.py`` and by Claude's Stop hook. The script is their one reader: it is
 standard library only (the hooks and skills run it with a bare ``python3``) and lives outside
 this package, so the chat app loads it by path, as the module it is rather than through
 ``sys.path``, whose ``system/scripts`` holds generic module names, and wraps what it reads in

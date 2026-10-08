@@ -8,7 +8,8 @@ and invokes ``create_worker.py``; ``create_worker.py`` provisions the worker and
 polls for the report named in that task file; the worker reads the task file
 back with ``parse_task_frontmatter.py`` and pushes its report to the path it
 names. Meanwhile the lead's poll reads the worker's busy marker, which the
-worker's own ``run_in_background.py`` writes when it parks on a command. Each hand has its own unit tests; nothing else checks that they agree.
+worker's own ``run_in_background.py`` writes when it parks on a command. Each
+hand has its own unit tests; nothing else checks that they agree.
 These tests take the prose literally -- they execute the real fenced ``bash``
 blocks that write task files and parse the real ``create_worker.py`` argvs the
 prose contains -- so a drift in any hand (a renamed flag, a moved runtime dir,

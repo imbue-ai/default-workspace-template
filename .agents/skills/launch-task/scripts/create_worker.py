@@ -249,9 +249,9 @@ _AWAIT_TIMEOUT_RC = 124
 _AWAIT_SHED_RC = 75
 # Distinct exit code for an await that stopped early because the worker's agent
 # went idle (ended its turn, and is no longer busy) without the report ever
-# appearing -- a finished or stalled worker whose delivery failed will never report, so waiting out the
-# full timeout only hides the problem. The message points at the worker's own
-# worktree, where an undelivered report usually sits.
+# appearing -- a finished or stalled worker whose delivery failed will never
+# report, so waiting out the full timeout only hides the problem. The message
+# points at the worker's own worktree, where an undelivered report usually sits.
 _AWAIT_IDLE_RC = 76
 # Consecutive idle observations required before concluding the worker ended its
 # turn without reporting. Multiple observations (spaced by the poll interval)

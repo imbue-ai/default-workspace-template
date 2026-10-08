@@ -336,8 +336,8 @@ the worker reports, this chat has ended its turn but is busy on the poll below,
 so the Imbue Studio app reads it as updating rather than "waiting for you";
 naming the worker lets the app read the worker's liveness as well), then
 background-poll through `run_in_background.py`, which delivers `await`'s result
-to this chat as a message that starts your next turn, whatever your harness. Run the staged
-skill's copy of it: this workspace's own tree may predate the script.
+to this chat as a message that starts your next turn, whatever your harness. Run
+the staged skill's copy of it: this workspace's own tree may predate the script.
 
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py launch \

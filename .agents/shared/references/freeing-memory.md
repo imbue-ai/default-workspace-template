@@ -17,10 +17,10 @@ what could be freed and let them choose; you never stop anything on your own.
    have sat idle (with when each was last active and how much memory it holds),
    and the browsers no window is showing. A chat or agent that ended its turn
    to wait on a background task is not idle -- the task will wake it, and
-   stopping it would lose the work -- so it is never listed. It only reads; it stops nothing. A
-   section it could not read says so: that means "unknown", not "nothing to
-   stop". `system/services/oom_priority/README.md` ("Memory candidates") has
-   the details.
+   stopping it would lose the work -- so it is never listed. It only reads; it
+   stops nothing. A section it could not read says so: that means "unknown",
+   not "nothing to stop". `system/services/oom_priority/README.md` ("Memory
+   candidates") has the details.
 
 2. **Offer them to the user.** In plain language, say that the workspace ran
    low on memory and something was paused, how much memory is free, and each
