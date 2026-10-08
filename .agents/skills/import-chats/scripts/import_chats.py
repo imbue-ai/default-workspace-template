@@ -791,11 +791,11 @@ def sync(
         )
     try:
         install_datalib(install, run)
-        data_root.mkdir(parents=True, exist_ok=True)
         config_path = data_root / "config.toml"
-        config_path.write_text(
+        # A loop another sync runs on this root re-reads the config, so it must never see a partial one.
+        _write_text_atomic(
+            config_path,
             render_config(configured_sources(read_status(status_path), named)),
-            encoding="utf-8",
         )
         result = _run_dag_with_progress(
             named,
