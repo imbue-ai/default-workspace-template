@@ -529,12 +529,13 @@ def _rendered_page(
         f'<div class="msg"><h2><time class="msg-ts" datetime="{when}" title="{when}">{when}</time></h2>Hi</div>'
         for when in message_times
     )
+    quoted = '"' + title.replace('"', '\\"') + '"'
     page.write_text(
         "---\n"
-        f"title: {json.dumps(title)}\n"
+        f"title: {quoted}\n"
         "provider: claude\n"
         f"chat_uuid: {uuid}\n"
-        f"display: {json.dumps(title)}\n"
+        f"display: {quoted}\n"
         "item_count: 2\n"
         "---\n\n"
         f'<h1 class="page-title">{title} <a class="source-link" href="{original_url}" target="_blank">x</a></h1>\n\n'
@@ -550,18 +551,22 @@ def test_a_page_is_read_for_its_title_its_original_and_its_latest_message(
         tmp_path,
         "claude_chats",
         "u1",
-        'Drafting a "greeting"',
+        'Drafting a "greeting" in C:\\temp\\new with \\frac{1}{2}',
         "https://claude.ai/chat/c1",
         ["2026-09-30T10:00:00+00:00", "2026-10-02T09:00:00+02:00", "not a time"],
     )
 
     page = import_chats.read_page(path)
 
-    assert page.title == 'Drafting a "greeting"'
+    assert page.title == 'Drafting a "greeting" in C:\\temp\\new with \\frac{1}{2}'
     assert page.original_url == "https://claude.ai/chat/c1"
     assert page.last_message_at is not None
     assert page.last_message_at.isoformat() == "2026-10-02T09:00:00+02:00"
     assert page.is_project is False
+    two_lines = _rendered_page(
+        tmp_path, "claude_chats", "u2", "First line\nsecond line", "", []
+    )
+    assert import_chats.read_page(two_lines).title == "First line"
 
 
 def test_a_page_without_frontmatter_or_times_is_listed_by_its_directory(

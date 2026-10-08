@@ -296,12 +296,11 @@ class IndexedPage:
 
 
 def _frontmatter_value(raw: str) -> str:
+    """A frontmatter value as datalib's chat renderer writes it: in double quotes, with only its double quotes
+    escaped (backslashes are written as they are). A name with a line break leaves just its first line here."""
     raw = raw.strip()
     if raw.startswith('"'):
-        try:
-            return str(json.loads(raw))
-        except ValueError:
-            return raw.strip('"')
+        return raw[1:].removesuffix('"').replace('\\"', '"')
     return raw
 
 
