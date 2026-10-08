@@ -181,21 +181,30 @@ function clickedLink(event: MouseEvent): HTMLAnchorElement | HTMLAreaElement | n
   return null;
 }
 
+function isModifiedClick(event: MouseEvent): boolean {
+  return event.button === MIDDLE_BUTTON || event.metaKey || event.ctrlKey || event.shiftKey;
+}
+
 /** Whether a click asks for another window rather than this page: a middle or modified click, or a link that names
  *  another browsing context (``_top`` and ``_parent`` included, which would take the shell's page). */
 function isNewWindowClick(event: MouseEvent, link: HTMLAnchorElement | HTMLAreaElement): boolean {
   const target = link.target.toLowerCase();
-  return (
-    event.button === MIDDLE_BUTTON ||
-    event.metaKey ||
-    event.ctrlKey ||
-    event.shiftKey ||
-    (target !== "" && target !== "_self")
+  return isModifiedClick(event) || (target !== "" && target !== "_self");
+}
+
+/** Whether a link's ``target`` names a frame of the page itself (an ``<iframe name>``), which a plain click loads the
+ *  link into. */
+function targetsFrameOfPage(link: HTMLAnchorElement | HTMLAreaElement, view: Window): boolean {
+  const name = link.target;
+  if (name === "" || name.startsWith("_")) return false;
+  return Array.from(view.document.querySelectorAll("iframe[name], frame[name]")).some(
+    (frame) => frame.getAttribute("name") === name,
   );
 }
 
 /** Follow a framed page's link click by the contract's rule (see the module docs); a click the page already handled
- *  (``defaultPrevented``), a download link, or a link to a scheme the rule does not hand on is left alone. */
+ *  (``defaultPrevented``), a download link, a plain click on a link into a frame of the page, or a link to a scheme
+ *  the rule does not hand on is left alone. */
 function followLinkClick(
   event: MouseEvent,
   view: Window,
@@ -205,6 +214,7 @@ function followLinkClick(
   if (event.button !== (event.type === "auxclick" ? MIDDLE_BUTTON : PRIMARY_BUTTON)) return;
   const link = clickedLink(event);
   if (link === null || link.hasAttribute("download")) return;
+  if (!isModifiedClick(event) && targetsFrameOfPage(link, view)) return;
   let url: URL;
   try {
     url = new URL(link.href);

@@ -278,6 +278,7 @@ describe("a framed page's link clicks", () => {
   it.each<[string, string, MouseEventInit, "click" | "auxclick"]>([
     ["a link naming a new browsing context", ' target="_blank"', {}, "click"],
     ["a link naming the top browsing context", ' target="_top"', {}, "click"],
+    ["a link naming a browsing context that is no frame of the page", ' target="docs"', {}, "click"],
     ["a command-click", "", { metaKey: true }, "click"],
     ["a control-click", "", { ctrlKey: true }, "click"],
     ["a shift-click", "", { shiftKey: true }, "click"],
@@ -302,6 +303,17 @@ describe("a framed page's link clicks", () => {
     expect(sentAfterConnect(parent)).toEqual([]);
     expect(opened).not.toHaveBeenCalled();
     expect(cancelled).toEqual([true, false, false, false]);
+  });
+
+  it("leaves a plain click on a link into a frame of the page to the page, and opens a window for a modified one", () => {
+    const parent = connect();
+    const frameAndLink = (href: string): string =>
+      `<iframe name="preview"></iframe><a href="${href}" target="preview">x</a>`;
+    click(frameAndLink("http://localhost:5173/"));
+    click(frameAndLink("/docs/intro"));
+    click(frameAndLink("/docs/intro"), { metaKey: true });
+    expect(sentAfterConnect(parent)).toEqual([[{ type: SHELL_OPEN, path: "/docs/intro", ifPresent: "focus" }, "*"]]);
+    expect(cancelled).toEqual([false, false, true]);
   });
 
   it("leaves every link click alone on a top-level page, and once disconnected", () => {
