@@ -289,9 +289,13 @@ def collect_references(repo_root: Path) -> dict[str, list[str]]:
         if not path.is_file():
             continue
         relative = path.relative_to(repo_root).as_posix()
-        for match in _SECRET_REFERENCE_RE.finditer(
-            path.read_text(encoding="utf-8", errors="replace")
-        ):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if path.suffix == ".conf":
+            # A supervisord comment that mentions a secret file (the stock
+            # host-backup and share-gateway drop-ins document theirs that way)
+            # is not a program running under it.
+            text = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith((";", "#")))
+        for match in _SECRET_REFERENCE_RE.finditer(text):
             sources_by_file.setdefault(match.group(1), []).append(relative)
     return sources_by_file
 

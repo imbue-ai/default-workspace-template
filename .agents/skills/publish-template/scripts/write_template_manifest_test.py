@@ -96,6 +96,24 @@ def test_references_are_read_off_mcp_config_and_supervisord_programs(
     }
 
 
+def test_a_secret_file_named_only_in_a_supervisord_comment_is_not_a_reference(
+    tmp_path: Path,
+) -> None:
+    # The stock host-backup and share-gateway drop-ins document the secret file
+    # Imbue Studio injects in a header comment; that is not a program running under it.
+    root = _tree(tmp_path)
+    (root / "system/supervisord.conf.d/host-backup.conf").write_text(
+        "# Runs the hourly backup.\n"
+        "# data/.secrets/restic.env is injected by the app.\n"
+        "; data/.secrets/other.env is mentioned here too.\n"
+        "[program:host-backup]\n"
+        "command=python3 system/services/host_backup/run.py\n"
+    )
+    assert writer.collect_references(root) == {
+        "widget": ["system/supervisord.conf.d/widget-app.conf"],
+    }
+
+
 def test_an_undeclared_reference_and_a_missing_variable_stop_the_publish(
     tmp_path: Path,
 ) -> None:
