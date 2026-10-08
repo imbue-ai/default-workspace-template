@@ -659,29 +659,34 @@ def stream_process(
 
     ``datalib-dag`` writes its event stream to stderr, so this is how a sync is followed while it runs. stdout is
     drained on its own thread so neither pipe can fill and stall the process. Returns everything both streams
-    said, as ``subprocess.run`` would.
+    said, as ``subprocess.run`` would, and like it kills the command when following it fails.
     """
-    process = subprocess.Popen(
+    with subprocess.Popen(
         list(command),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
-    )
-    assert process.stdout is not None and process.stderr is not None
-    stdout_chunks: list[str] = []
-    stdout_reader = threading.Thread(
-        target=lambda: stdout_chunks.append(process.stdout.read()),
-        name="datalib-dag-stdout",
-        daemon=True,
-    )
-    stdout_reader.start()
-    stderr_lines: list[str] = []
-    for line in process.stderr:
-        stderr_lines.append(line)
-        on_stderr_line(line)
-    returncode = process.wait()
-    stdout_reader.join()
+    ) as process:
+        assert process.stdout is not None and process.stderr is not None
+        stdout_chunks: list[str] = []
+        stdout_reader = threading.Thread(
+            target=lambda: stdout_chunks.append(process.stdout.read()),
+            name="datalib-dag-stdout",
+            daemon=True,
+        )
+        stdout_reader.start()
+        stderr_lines: list[str] = []
+        try:
+            for line in process.stderr:
+                stderr_lines.append(line)
+                on_stderr_line(line)
+        except BaseException:
+            process.kill()
+            raise
+        finally:
+            stdout_reader.join()
+        returncode = process.wait()
     return subprocess.CompletedProcess(
         list(command), returncode, "".join(stdout_chunks), "".join(stderr_lines)
     )

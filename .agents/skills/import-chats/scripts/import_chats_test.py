@@ -926,6 +926,22 @@ def test_stream_process_hands_over_stderr_lines_as_they_come_and_keeps_both_stre
     )
 
 
+def test_stream_process_stops_the_command_when_following_it_fails() -> None:
+    script = "import os, sys, time; print(os.getpid(), file=sys.stderr, flush=True); time.sleep(60)"
+    pids: list[int] = []
+
+    def fail(line: str) -> None:
+        pids.append(int(line))
+        raise RuntimeError("could not follow the command")
+
+    with pytest.raises(RuntimeError, match="could not follow"):
+        import_chats.stream_process([sys.executable, "-c", script], fail)
+
+    (pid,) = pids
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
 def test_a_running_sync_records_how_many_of_its_conversations_it_has_fetched(
     tmp_path: Path,
 ) -> None:
