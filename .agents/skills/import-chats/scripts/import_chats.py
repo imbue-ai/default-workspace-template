@@ -106,6 +106,8 @@ _SIGN_IN_MARKERS = (
     "HTTP 403",
     "token_expired",
 )
+# The run summary's ``failure`` for a step whose credential failed.
+_AUTH_FAILURE_KIND = "auth"
 
 
 @dataclass(frozen=True)
@@ -447,13 +449,16 @@ def runner_error(result: subprocess.CompletedProcess) -> str:
     )
 
 
-def classify_failure(error: str) -> str:
-    """A failed ingest's state: a sign-in problem the user can fix by signing in again, or any other failure."""
-    return (
-        STATE_NEEDS_SIGN_IN
-        if any(marker in error for marker in _SIGN_IN_MARKERS)
-        else STATE_FAILED
-    )
+def classify_failure(error: str, failure_kind: str | None) -> str:
+    """A failed ingest's state: a sign-in problem the user can fix by signing in again, or any other failure.
+
+    ``failure_kind`` is the run summary's ``failure`` for the step, which datalib sets to ``auth`` when the
+    credential is what failed; the markers catch the refusals it does not classify that way."""
+    if failure_kind == _AUTH_FAILURE_KIND or any(
+        marker in error for marker in _SIGN_IN_MARKERS
+    ):
+        return STATE_NEEDS_SIGN_IN
+    return STATE_FAILED
 
 
 def failure_detail(error: str) -> str:
@@ -648,12 +653,14 @@ def sync(
         is_every_source_imported = False
         if ingest is None:
             error = runner_error(result)
+            failure_kind = None
         else:
             error = str(ingest.get("error", ""))
+            failure_kind = ingest.get("failure")
         record_source(
             status_path,
             source.key,
-            classify_failure(error),
+            classify_failure(error, failure_kind),
             conversations,
             failure_detail(error),
             pid=None,

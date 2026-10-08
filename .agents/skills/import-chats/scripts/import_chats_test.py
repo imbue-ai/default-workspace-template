@@ -152,24 +152,28 @@ def test_the_run_summary_is_read_from_the_last_summary_line_among_the_event_stre
 
 
 @pytest.mark.parametrize(
-    ("error", "state"),
+    ("error", "failure_kind", "state"),
     [
         (
             "caused by: list orgs: claude: latchkey curl exit 1: No credentials found for claude-ai.",
+            None,
             "needs_sign_in",
         ),
-        ("caused by: chatgpt: HTTP 401 token_expired", "needs_sign_in"),
+        ("caused by: chatgpt: HTTP 401 token_expired", None, "needs_sign_in"),
         (
             "caused by: No service matches URL: https://chatgpt.com/backend-api/me",
+            None,
             "needs_sign_in",
         ),
-        ("caused by: disk full", "failed"),
+        ("caused by: session no longer valid", "auth", "needs_sign_in"),
+        ("caused by: disk full", "data", "failed"),
+        ("caused by: disk full", None, "failed"),
     ],
 )
 def test_a_failed_ingest_that_a_sign_in_fixes_is_told_apart_from_any_other_failure(
-    error: str, state: str
+    error: str, failure_kind: str | None, state: str
 ) -> None:
-    assert import_chats.classify_failure(error) == state
+    assert import_chats.classify_failure(error, failure_kind) == state
 
 
 def test_the_failure_detail_is_the_caused_by_line_or_else_the_last_line() -> None:
