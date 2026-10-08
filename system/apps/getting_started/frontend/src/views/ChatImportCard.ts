@@ -50,6 +50,11 @@ function sourceLines(sources: Record<string, ChatImportSource>): m.Vnode {
   );
 }
 
+/** The ghost button that puts the card away, labelled for the phase it closes. */
+function dismissButton(onDismiss: () => void, label: string): m.Vnode {
+  return m(Button, { variant: "ghost", sm: true, "data-chat-import-action": "dismiss", onclick: onDismiss }, label);
+}
+
 export const ChatImportCard: m.Component<ChatImportCardAttrs> = {
   view({ attrs }) {
     const phase = cardPhase(attrs.chatImport);
@@ -74,11 +79,7 @@ export const ChatImportCard: m.Component<ChatImportCardAttrs> = {
             { variant: "primary", sm: true, "data-chat-import-action": "import", onclick: start(IMPORT_PROMPT) },
             "Import my chats",
           ),
-          m(
-            Button,
-            { variant: "ghost", sm: true, "data-chat-import-action": "dismiss", onclick: attrs.onDismiss },
-            "Not now",
-          ),
+          dismissButton(attrs.onDismiss, "Not now"),
         ];
         break;
       case "importing":
@@ -95,11 +96,7 @@ export const ChatImportCard: m.Component<ChatImportCardAttrs> = {
             { variant: "primary", sm: true, "data-chat-import-action": "resume", onclick: start(RESUME_PROMPT) },
             "Finish importing",
           ),
-          m(
-            Button,
-            { variant: "ghost", sm: true, "data-chat-import-action": "dismiss", onclick: attrs.onDismiss },
-            "Hide",
-          ),
+          dismissButton(attrs.onDismiss, "Hide"),
         ];
         break;
       case "imported":
@@ -111,11 +108,7 @@ export const ChatImportCard: m.Component<ChatImportCardAttrs> = {
             { variant: "secondary", sm: true, "data-chat-import-action": "update", onclick: start(UPDATE_PROMPT) },
             "Check for new chats",
           ),
-          m(
-            Button,
-            { variant: "ghost", sm: true, "data-chat-import-action": "dismiss", onclick: attrs.onDismiss },
-            "Hide",
-          ),
+          dismissButton(attrs.onDismiss, "Hide"),
         ];
         break;
     }
