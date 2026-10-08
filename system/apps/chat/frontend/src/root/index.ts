@@ -6,8 +6,7 @@
  * The root owns the shell connection: it reports ``/?chat=<id>`` and the selected chat's
  * title as its location, handles ``shell:navigate`` by changing the selection, applies the
  * pending intake an ``intake=<token>`` in its URL names (a draft into a composer, a choice of
- * chat through the picker, or a first message that launches a chat through the provider
- * chooser) exactly once and then reports the selection alone, and drives its inner pages
+ * chat through the picker, or a first message that launches a chat) exactly once and then reports the selection alone, and drives its inner pages
  * directly (they share an origin) with the shell's handshake and its shown and hidden states,
  * so each page's presence reports key on the chat it shows. The inner pages' own ``minds:``,
  * ``shell:focused``, and sub-agent ``shell:open`` messages go up through ``relay.ts``; a page
@@ -44,14 +43,10 @@ import {
 import type { AppliedIntake, PendingIntake } from "../models/Chats";
 import {
   accountForFirstSend,
-  closeProviderChooser,
   getSelectedAccount,
-  isProviderChooserOpen,
   loadAccountsWithRetry,
-  openProviderChooser,
   whenAccountsReadyToChoose,
 } from "../models/Providers";
-import { ProviderChooserModal } from "../views/ProviderChooserModal";
 import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { COMPACT_MEDIA_QUERY } from "../compactLayout";
 import { ChatDrawer } from "./ChatDrawer";
@@ -178,26 +173,37 @@ function openChatForEmptyList(): void {
     });
 }
 
-async function createAndSelect(accountId: string): Promise<void> {
-  try {
-    const created = await createChat("", accountId);
-    startedHere.add(created.chatId);
-    awaitingListing.add(created.chatId);
-    select(created.chatId);
-  } catch (error) {
-    alert(`Failed to create chat: ${(error as Error).message}`);
-  }
+async function createOnAccountAndSelect(accountId: string): Promise<void> {
+  const created = await createChat("", accountId);
+  startedHere.add(created.chatId);
+  awaitingListing.add(created.chatId);
+  select(created.chatId);
 }
 
-/** The New chat button: a chat on the selected account, or after a sign-in when nothing is signed in. */
+/** The New chat button: a chat on the selected account, or with nothing signed in the chat awaiting its first
+ *  send, whose page asks for a provider. */
 async function startNewChat(): Promise<void> {
   await whenAccountsReadyToChoose();
   const account = getSelectedAccount();
   if (account !== null) {
-    await createAndSelect(account.id);
-    return;
+    try {
+      await createOnAccountAndSelect(account.id);
+      return;
+    } catch (error) {
+      // An account the chat app no longer has: the chat awaiting its first send shows what is needed instead.
+      console.warn(
+        "[chat-root] could not create a chat on the selected account; opening one awaiting a provider",
+        error,
+      );
+    }
   }
-  openProviderChooser({ onSignedIn: (signedInAccountId) => void createAndSelect(signedInAccountId) });
+  try {
+    const chatId = await awaitingChatForEmptyList();
+    awaitingListing.add(chatId);
+    select(chatId);
+  } catch (error) {
+    alert(`Failed to create chat: ${(error as Error).message}`);
+  }
 }
 
 /** Show ``chatId`` once the pending intake is applied or given up, reporting the selection even when it is the one
@@ -218,14 +224,13 @@ function draftInto(chatId: string, text: string): void {
 }
 
 /** Launch a chat awaiting its first send with ``text`` (an intake that could not launch it at once): on the account
- *  the chat was minted for when it names one, else the signed-in account when one has appeared meanwhile, else
- *  through the provider chooser, as the composer's first send does; a dismissed chooser leaves the text in the
- *  composer, where the next send offers the chooser again. A chooser already open (for the New chat button) takes
- *  no second intent, so the text goes to the composer at once. */
+ *  the chat was minted for when it names one, else the signed-in account when one has appeared meanwhile. With
+ *  nothing signed in the text goes into the chat's composer, whose page asks for a provider. */
 async function launchWithFirstMessage(chatId: string, text: string): Promise<void> {
+  // A launch the chat app refuses leaves the text in the chat's composer, where the chat shows what it needs.
   const launchOrDraft = (accountId: string): void => {
     launchChat(chatId, accountId, text).catch((error: unknown) => {
-      alert(`Failed to start the chat: ${(error as Error).message}`);
+      console.warn("[chat-root] could not launch the chat with its first message; drafting it", error);
       draftInto(chatId, text);
     });
   };
@@ -236,11 +241,7 @@ async function launchWithFirstMessage(chatId: string, text: string): Promise<voi
     launchOrDraft(account.id);
     return;
   }
-  if (isProviderChooserOpen()) {
-    draftInto(chatId, text);
-    return;
-  }
-  openProviderChooser({ onSignedIn: launchOrDraft, onDismissed: () => draftInto(chatId, text) });
+  draftInto(chatId, text);
 }
 
 /** A reference drafted from the root's own chrome (the rail, the empty slot): into the selected chat's composer,
@@ -393,13 +394,12 @@ const ChatRoot: m.Component = {
         isCompact && isDrawerOpen
           ? m(ChatDrawer, {
               rail,
-              isCovered: isProviderChooserOpen() || pendingPick !== null,
+              isCovered: pendingPick !== null,
               onDismiss: () => {
                 isDrawerOpen = false;
               },
             })
           : null,
-        isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
         pendingPick === null
           ? null
           : m(SendPicker, {

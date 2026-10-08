@@ -1,0 +1,3 @@
+With nothing signed in, a chat now asks for an AI provider before anything else: the provider chooser opens in the chat as soon as it is shown, instead of after the first message has been typed.
+
+This is the only way the chooser opens for a missing provider. A chat waiting for its first message shows "Connect an AI provider to start chatting." and a "Choose a provider" button above the message box, which stays in view (keeping anything already in it) but disabled until a provider is signed in; the button opens the same chooser in the same place. The New chat button opens that waiting chat instead of a chooser of its own, and a message sent in from the launcher waits in the chat's message box, with no "Failed to start the chat" dialog, until a provider is signed in.
