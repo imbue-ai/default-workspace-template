@@ -90,8 +90,8 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
   connection = connectToShell({ onHandshake, onShown, onHidden });
   if (connection.isFramed) {
     // The chat root frames chat pages from this same origin and drives them by calling in
-    // rather than by messaging (only the shell's handshake comes down as a message); the
-    // shell's own frames ignore this, since a cross-origin parent cannot reach it.
+    // rather than by messaging (of the shell's messages, only the handshake comes down as one);
+    // the shell's own frames ignore this, since a cross-origin parent cannot reach it.
     const embedApi: ChatPageEmbedApi = {
       shown: onShown,
       hidden: onHidden,
