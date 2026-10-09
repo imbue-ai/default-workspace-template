@@ -462,7 +462,7 @@ as shown, since a window for each is worse than missing one.
 
 ```bash
 # Backend, from the repo root (the app's data paths are relative to it)
-uv run --no-sync chat-app --no-register
+.venv/bin/chat-app --no-register
 
 # Tests
 cd system/apps/chat

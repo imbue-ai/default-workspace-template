@@ -45,7 +45,7 @@ into `src/getting_started/static/` by `npm run build`; its tests run with `vites
 
 ```bash
 # Backend, from the repo root
-uv run --no-sync getting-started
+.venv/bin/getting-started
 
 # Frontend
 cd system/apps/getting_started/frontend && npm run dev
