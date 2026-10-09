@@ -132,13 +132,7 @@ by hand. Say so to the user if that is the update you are running.
 The results message always offers a rollback, and the offer must be real. If
 the user wants the update (or one piece of it) gone: create a **forward
 revert** on a branch -- `git revert -m 1 <merge sha>` for the whole update, or
-a commit reverting just the paths they dislike; never rewind history -- and
-land it with the same machinery:
-
-```bash
-python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py apply \
-    --merge-ref <that branch>
-```
+a commit reverting just the paths they dislike; never rewind history.
 
 `<merge sha>` is the update's `update-self:` merge, not the tip the apply
 landed. After a catch-up that tip (and the sha the version history records) is
@@ -150,11 +144,19 @@ git log --first-parent -1 --format=%H --fixed-strings \
     --grep "update-self: merge upstream template"
 ```
 
-(ordinary merge mode, no `--target-ref`), so the revert gets the same refresh,
-restart and health-probe motion the update got. Two residues to mention when
-they matter: the apt snapshot advanced by `env-converge upgrade` stays
-advanced, and the version-history entry stays (the revert is its own history).
-The full-rewind fallback is the Step 1 backup, when one was captured.
+Land the revert with the same machinery, in ordinary merge mode (no
+`--target-ref`), so it gets the same refresh, restart and health-probe motion
+the update got:
+
+```bash
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py apply \
+    --merge-ref <that branch>
+```
+
+Two residues to mention when they matter: the apt snapshot advanced by
+`env-converge upgrade` stays advanced, and the version-history entry stays
+(the revert is its own history). The full-rewind fallback is the Step 1
+backup, when one was captured.
 
 ## Migration-required updates
 
