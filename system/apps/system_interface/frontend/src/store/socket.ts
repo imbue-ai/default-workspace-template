@@ -71,8 +71,8 @@ export interface ClientStateReport {
   readonly isFollowing: boolean;
   /** This page's id (``PAGE_ID_PREFIX``), which tells the shell its own moves from the others'. */
   readonly pageId: string;
-  /** For a move, the newest desktop revision the window had heard: the shell records no move made before a move
-   *  the window had not heard of yet. Null when following. */
+  /** For a move, the newest desktop revision the window had heard: the shell does not record a move made before
+   *  another page's or an op's move the window had not heard of yet. Null when following. */
   readonly revision: number | null;
 }
 
