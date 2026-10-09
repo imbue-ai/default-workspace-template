@@ -38,7 +38,7 @@ primary, because it holds next to no memory and shedding it would lose the repor
 Standard library only, and kept byte-identical at two paths:
 
     system/scripts/workspace_bare_scripts/run_in_background.py
-    .agents/skills/update-self/scripts/update_self_skill/run_in_background.py
+    .agents/skills/update-self/python/update_self_skill/run_in_background.py
 
 ``update-self`` stages its own skill directory from the release it updates to and runs that
 staged copy in a workspace that may predate this script, so the second copy travels with the
@@ -314,6 +314,7 @@ def run_and_deliver(
 
 
 def _start_detached(
+    entry_script: Path,
     task_dir: Path,
     description: str,
     chat_id: str,
@@ -328,7 +329,7 @@ def _start_detached(
         subprocess.Popen(
             [
                 sys.executable,
-                str(Path(__file__).resolve().parents[1] / "run_in_background.py"),
+                str(entry_script),
                 "--foreground",
                 "--task-dir",
                 str(task_dir),
@@ -390,8 +391,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(
-    argv: Sequence[str] | None = None, environ: Mapping[str, str] | None = None
+    entry_script: Path,
+    argv: Sequence[str] | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> int:
+    """Run the CLI; ``entry_script`` is the script that started it, which the detached
+    runner re-executes (it lives at a different place in each copy of this module)."""
     parser = _build_parser()
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     if "--" not in raw_argv:
@@ -425,7 +430,9 @@ def main(
         return run_and_deliver(
             task_dir, args.description, chat_id, command, command_environ
         )
-    _start_detached(task_dir, args.description, chat_id, command, resolved_environ)
+    _start_detached(
+        entry_script, task_dir, args.description, chat_id, command, resolved_environ
+    )
     print(
         f"Started in the background as task {task_dir.name}. When the command exits, its exit "
         "code and output arrive in this chat as a message, and that message starts your next "

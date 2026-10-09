@@ -320,7 +320,7 @@ on *now*. Two questions, one marker convention. The update apply seeds the same
 line from its own inline copy of the `--origin` rule, because it runs from a
 `git archive` of the update-self skill directory alone and cannot import
 anything outside it -- see `_origin_line` in `update-self`'s
-`scripts/update_self_skill/update_ledger.py`.)
+`python/update_self_skill/update_ledger.py`.)
 
 **Also capture `SOURCE_SHA` -- the source commit the snapshot is cut from.**
 The worker's worktree branches off `/home/user/workspace`'s current `HEAD`, so that commit is

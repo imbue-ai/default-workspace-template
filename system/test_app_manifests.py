@@ -14,9 +14,7 @@ from pathlib import Path
 import pytest
 from app_manifest.manifest import MANIFEST_FILENAME, load_manifest
 from app_manifest.primitives import RESERVED_APP_NAMES
-from app_manifest.scope import APP_CONVENTIONS
-from app_manifest.scope import SKILL_CONVENTIONS
-from app_manifest.scope import compute_app_scope
+from app_manifest.scope import APP_CONVENTIONS, SKILL_CONVENTIONS, compute_app_scope
 from oom_priority import bands
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]

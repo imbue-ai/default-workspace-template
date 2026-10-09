@@ -16,7 +16,7 @@ how.
 Code reaches Claude in one of two ways, depending on whether an
 `ANTHROPIC_API_KEY` is configured for the workspace: with a key, call `litellm`
 directly; without one, use the `claude -p` helper in this skill's
-`scripts/use_ai_integration_skill/claude_p.py`.
+`python/use_ai_integration_skill/claude_p.py`.
 
 Credentials live in a provider account under `~/.minds/accounts/<id>/`, written
 by the provider chooser and pointed at by `CLAUDE_CONFIG_DIR`. NOT in the
@@ -121,7 +121,7 @@ text = resp.choices[0].message.content
 cost = completion_cost(completion_response=resp)  # USD for this call
 ```
 
-**Keyless (no key): copy this skill's `scripts/use_ai_integration_skill/claude_p.py` and call `claude_p_completion`.**
+**Keyless (no key): copy this skill's `python/use_ai_integration_skill/claude_p.py` and call `claude_p_completion`.**
 It disables tools and runs from an isolated working directory so the repo's
 `CLAUDE.md` / `.claude` hooks can't hijack the answer; `system` is required.
 
@@ -150,7 +150,7 @@ provider's own JSON / structured-output mode over parsing free text and retrying
 
 Always `claude -p` (it has tools and file access; a plain API call does not), so
 this path is the same whether or not a key is set. Copy this skill's
-`scripts/use_ai_integration_skill/claude_p.py` and
+`python/use_ai_integration_skill/claude_p.py` and
 call `claude_p_task`: tools stay enabled, it runs in the repo working directory,
 and it defaults `permission_mode="bypassPermissions"` (load-bearing -- a headless
 run has no human to approve tool use).

@@ -86,10 +86,10 @@ def _schema_module_candidates(module_path: Path) -> tuple[Path, ...]:
     Never relative to the tree being validated: that is an assembled snapshot
     and does not necessarily carry a usable copy of the schema.
 
-    The copy beside the entry file (this module's package directory's parent)
-    comes first -- that is the copy `build_template.sh` snapshots out of the
-    worktree ahead of its reset, and in that mode this module lives in a
-    shallow mktemp dir like `/tmp/tmp.XXXXXX/publish_template_skill/`. Walking
+    The copy beside this module's package directory comes first -- that is the
+    copy `build_template.sh` snapshots out of the worktree ahead of its reset,
+    and in that mode this module lives in a shallow mktemp dir like
+    `/tmp/tmp.XXXXXX/python/publish_template_skill/`. Walking
     every ancestor for the in-repo path (rather than indexing a fixed number of
     levels up) is what keeps that case working: a fixed `parents[4]` raises
     IndexError on a path that shallow, and it did -- failing every real

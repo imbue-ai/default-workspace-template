@@ -91,18 +91,19 @@ package = false
 # this venv. Both kinds are members: one lockfile keeps every environment on the
 # same versions, and a user-built app never has to edit this file; an app's own
 # tool environment keeps it running while this venv is rewritten or broken.
-# A skill's scripts/ is its own project (scripts/pyproject.toml, package
-# scripts/<skill_name>_skill/), so a skill's dependencies join the same lock;
-# uv refuses a glob-matched directory with no pyproject.toml, which is why every
-# skill scripts/ dir carries one (system/test_meta_ratchets.py). The shared skill
-# scripts and system/scripts are a project each too.
+# A skill's Python lives in its own project, .agents/skills/<name>/python/
+# (pyproject.toml plus the <skill_name>_skill package), so a skill's dependencies
+# join the same lock; its scripts/ dir keeps only entry files and shell scripts.
+# uv refuses a glob-matched directory with no pyproject.toml, and scripts/ is the
+# standard Agent Skills dir name, so the glob names a dir only this layout uses.
+# The shared skill scripts and system/scripts are a project each too.
 members = [
     "system/libs/*",
     "system/services/*",
     "system/apps/*",
     "system/scripts",
     ".agents/shared/scripts",
-    ".agents/skills/*/scripts",
+    ".agents/skills/*/python",
 ]
 # system/libs/workspace_ui is a JavaScript library (the frontends' shared code), not a Python
 # package; system/apps/terminal_pty is a manifest alone (the terminal's pty origin), whose

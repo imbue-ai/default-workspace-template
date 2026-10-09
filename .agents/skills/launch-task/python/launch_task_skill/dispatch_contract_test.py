@@ -1,7 +1,7 @@
 """Contract tests between the skill prose that dispatches workers and the code
 that carries the dispatch.
 
-Run via: ``uv run --no-sync pytest .agents/skills/launch-task/scripts/launch_task_skill/dispatch_contract_test.py``
+Run via: ``uv run --no-sync pytest .agents/skills/launch-task/python/launch_task_skill/dispatch_contract_test.py``
 
 A worker dispatch crosses three hands: a lead skill's prose writes a task file
 and invokes ``create_worker.py``; ``create_worker.py`` provisions the worker and
@@ -42,7 +42,7 @@ from agents_shared import parse_task_frontmatter
 
 from launch_task_skill import create_worker
 
-# This file lives at .agents/skills/launch-task/scripts/launch_task_skill/<file>;
+# This file lives at .agents/skills/launch-task/python/launch_task_skill/<file>;
 # the repo root is five directories up.
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 _SKILLS_ROOT = _REPO_ROOT / ".agents" / "skills"

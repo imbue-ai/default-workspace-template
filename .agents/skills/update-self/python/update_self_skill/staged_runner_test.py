@@ -22,10 +22,10 @@ import pytest
 from update_self_skill.messenger_testing import RecordingMessengers
 
 _AGENT_ID = "agent-0123456789abcdef0123456789abcdef"
-# The skill's scripts dir: the runner's entry stub and the package it imports.
-_SCRIPTS_DIR = Path(__file__).resolve().parents[1]
+# The skill dir: the runner's entry stub in scripts/ and the package it imports in python/.
+_SKILL_DIR = Path(__file__).resolve().parents[2]
 # Where ``bootstrap-skill`` lays the target's skill down, relative to the workspace.
-_STAGED_SCRIPTS_REL = (
+_STAGED_SKILL_REL = (
     Path("data")
     / ".tasks"
     / "update-self"
@@ -33,7 +33,6 @@ _STAGED_SCRIPTS_REL = (
     / ".agents"
     / "skills"
     / "update-self"
-    / "scripts"
 )
 _DELIVERY_DEADLINE_SECONDS = 8.0
 
@@ -58,11 +57,14 @@ _MESSENGER_OPTIONS_AT_FLOOR: dict[str, frozenset[str]] = {
 
 
 def _stage_runner(workspace: Path) -> Path:
-    staged_scripts = workspace / _STAGED_SCRIPTS_REL
-    shutil.copytree(
-        _SCRIPTS_DIR, staged_scripts, ignore=shutil.ignore_patterns("__pycache__")
-    )
-    return staged_scripts / "run_in_background.py"
+    staged_skill = workspace / _STAGED_SKILL_REL
+    for part in ("scripts", "python"):
+        shutil.copytree(
+            _SKILL_DIR / part,
+            staged_skill / part,
+            ignore=shutil.ignore_patterns("__pycache__", ".venv"),
+        )
+    return staged_skill / "scripts" / "run_in_background.py"
 
 
 @pytest.mark.parametrize(

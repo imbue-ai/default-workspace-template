@@ -43,8 +43,9 @@ def _write_skill(
 ) -> Path:
     """Build a skill directory on disk; return the skill path.
 
-    With scripts, ``scripts/`` is laid out the way the spec asks: a
-    ``pyproject.toml`` naming ``<name>-skill``, its package, and a ``run.py`` stub.
+    With scripts, the skill is laid out the way the spec asks: a ``python/`` project
+    whose ``pyproject.toml`` names ``<name>-skill`` and its package, and a
+    ``scripts/run.py`` stub.
     """
     skill = base / name
     skill.mkdir(parents=True)
@@ -60,13 +61,14 @@ def _write_skill(
         include_scripts = metadata_crystallized
     if include_scripts:
         package = name.replace("-", "_") + "_skill"
-        scripts = skill / "scripts"
-        (scripts / package).mkdir(parents=True)
-        (scripts / package / "__init__.py").write_text("")
-        (scripts / "pyproject.toml").write_text(
+        project = skill / "python"
+        (project / package).mkdir(parents=True)
+        (project / package / "__init__.py").write_text("")
+        (project / "pyproject.toml").write_text(
             _PYPROJECT.format(project=f"{name}-skill", package=package)
         )
-        (scripts / "run.py").write_text(f"from {package} import cli\n")
+        (skill / "scripts").mkdir()
+        (skill / "scripts" / "run.py").write_text(f"from {package} import cli\n")
     return skill
 
 
@@ -122,7 +124,7 @@ def test_packaged_scripts_are_valid(tmp_path: Path) -> None:
 
 def test_scripts_without_a_pyproject_are_invalid(tmp_path: Path) -> None:
     skill = _write_skill(tmp_path, "my-skill", include_scripts=True)
-    (skill / "scripts" / "pyproject.toml").unlink()
+    (skill / "python" / "pyproject.toml").unlink()
     error = validate_skill.validate(skill)
     assert error is not None
     assert "pyproject.toml is missing" in error
@@ -130,7 +132,7 @@ def test_scripts_without_a_pyproject_are_invalid(tmp_path: Path) -> None:
 
 def test_a_project_not_named_for_the_skill_is_invalid(tmp_path: Path) -> None:
     skill = _write_skill(tmp_path, "my-skill", include_scripts=True)
-    (skill / "scripts" / "pyproject.toml").write_text(
+    (skill / "python" / "pyproject.toml").write_text(
         _PYPROJECT.format(project="my-scripts", package="my_skill_skill")
     )
     error = validate_skill.validate(skill)
@@ -140,7 +142,7 @@ def test_a_project_not_named_for_the_skill_is_invalid(tmp_path: Path) -> None:
 
 def test_a_package_not_named_for_the_skill_is_invalid(tmp_path: Path) -> None:
     skill = _write_skill(tmp_path, "my-skill", include_scripts=True)
-    (skill / "scripts" / "pyproject.toml").write_text(
+    (skill / "python" / "pyproject.toml").write_text(
         _PYPROJECT.format(project="my-skill-skill", package="helpers")
     )
     error = validate_skill.validate(skill)
@@ -148,20 +150,17 @@ def test_a_package_not_named_for_the_skill_is_invalid(tmp_path: Path) -> None:
     assert "'my_skill_skill'" in error
 
 
-def test_a_bash_only_scripts_dir_may_skip_the_package(tmp_path: Path) -> None:
+def test_a_shell_only_scripts_dir_needs_no_python_project(tmp_path: Path) -> None:
     skill = _write_skill(tmp_path, "my-skill")
     scripts = skill / "scripts"
     scripts.mkdir()
     (scripts / "run.sh").write_text("echo hi\n")
-    (scripts / "pyproject.toml").write_text(
-        '[project]\nname = "my-skill-skill"\nversion = "0.1.0"\n\n[tool.uv]\npackage = false\n'
-    )
     assert validate_skill.validate(skill) is None
 
     (scripts / "run.py").write_text("print('hi')\n")
     error = validate_skill.validate(skill)
     assert error is not None
-    assert "package = false" in error
+    assert "python/pyproject.toml is missing" in error
 
 
 def test_missing_frontmatter(tmp_path: Path) -> None:
@@ -253,8 +252,8 @@ def test_check_runnable_checks_the_lock_then_runs_every_entry(tmp_path: Path) ->
     skill = _write_skill(tmp_path, "s", include_scripts=True)
     scripts = (skill / "scripts").resolve()
     (scripts / "extra.py").write_text("")
-    (scripts / "s_skill" / "cli_test.py").write_text("")
     (scripts / "conftest.py").write_text("")
+    (skill / "python" / "s_skill" / "cli_test.py").write_text("")
     runner = _RecordingRunner()
 
     assert validate_skill.check_runnable(skill, runner=runner) is None
@@ -312,14 +311,14 @@ def test_check_runnable_uv_missing(tmp_path: Path) -> None:
     assert "`uv` was not found" in error
 
 
-_SKILLS_WITH_SCRIPTS = sorted(
-    path.parent for path in (_REPO_ROOT / ".agents" / "skills").glob("*/scripts")
+_SKILLS_WITH_PYTHON = sorted(
+    path.parent for path in (_REPO_ROOT / ".agents" / "skills").glob("*/python")
 )
 
 
 # Real `uv lock --check` and `uv run --no-sync <entry> --help` runs against the workspace:
 # a cold lock check resolves git sources, far past the suite's 10s default.
 @pytest.mark.timeout(300)
-@pytest.mark.parametrize("skill", _SKILLS_WITH_SCRIPTS, ids=lambda path: path.name)
-def test_every_built_in_skill_with_scripts_is_runnable(skill: Path) -> None:
+@pytest.mark.parametrize("skill", _SKILLS_WITH_PYTHON, ids=lambda path: path.name)
+def test_every_built_in_skill_with_python_is_runnable(skill: Path) -> None:
     assert validate_skill.check_runnable(skill) is None

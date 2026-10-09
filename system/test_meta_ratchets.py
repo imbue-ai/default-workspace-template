@@ -165,40 +165,37 @@ def _find_bash_scripts_without_strict_mode() -> list[str]:
     return sorted(violations)
 
 
-def _skill_scripts_dirs_without_a_pyproject(skills_root: Path) -> list[str]:
-    """Every ``<skill>/scripts`` dir with no ``pyproject.toml``.
+def _skill_python_dirs_without_a_pyproject(skills_root: Path) -> list[str]:
+    """Every ``<skill>/python`` dir with no ``pyproject.toml``.
 
-    The root workspace's ``.agents/skills/*/scripts`` member glob makes each one a uv
+    The root workspace's ``.agents/skills/*/python`` member glob makes each one a uv
     project, and uv refuses a glob-matched directory without a ``pyproject.toml``: one
     such directory breaks every ``uv lock``, ``uv sync`` and ``uv run`` in the workspace.
-    A bash-only ``scripts/`` dir needs one too (``[tool.uv] package = false``).
     """
     return sorted(
-        str(scripts.relative_to(skills_root))
-        for scripts in skills_root.glob("*/scripts")
-        if scripts.is_dir() and not (scripts / "pyproject.toml").is_file()
+        str(project.relative_to(skills_root))
+        for project in skills_root.glob("*/python")
+        if project.is_dir() and not (project / "pyproject.toml").is_file()
     )
 
 
-def test_every_skill_scripts_dir_has_a_pyproject() -> None:
-    missing = _skill_scripts_dirs_without_a_pyproject(_REPO_ROOT / ".agents" / "skills")
+def test_every_skill_python_dir_has_a_pyproject() -> None:
+    missing = _skill_python_dirs_without_a_pyproject(_REPO_ROOT / ".agents" / "skills")
     assert not missing, (
-        "These skill scripts/ dirs have no pyproject.toml, which breaks uv for the whole workspace. "
-        "Give each one (see .agents/shared/references/running-python.md):\n"
+        "These skill python/ dirs have no pyproject.toml, which breaks uv for the whole workspace. "
+        "Give each one (see .agents/shared/references/spec-summary.md, Packaging):\n"
         + "\n".join(f"  - {m}" for m in missing)
     )
 
 
-def test_a_scripts_dir_without_a_pyproject_is_caught(tmp_path: Path) -> None:
-    (tmp_path / "python-skill" / "scripts").mkdir(parents=True)
-    (tmp_path / "python-skill" / "scripts" / "run.py").write_text("print('hi')\n")
-    (tmp_path / "bash-skill" / "scripts").mkdir(parents=True)
-    (tmp_path / "bash-skill" / "scripts" / "run.sh").write_text("echo hi\n")
-    (tmp_path / "packaged-skill" / "scripts").mkdir(parents=True)
-    (tmp_path / "packaged-skill" / "scripts" / "pyproject.toml").write_text("[project]\n")
-    (tmp_path / "prose-skill").mkdir()
+def test_a_python_dir_without_a_pyproject_is_caught_and_a_plain_scripts_dir_is_not(tmp_path: Path) -> None:
+    (tmp_path / "half-built-skill" / "python" / "half_built_skill_skill").mkdir(parents=True)
+    (tmp_path / "packaged-skill" / "python").mkdir(parents=True)
+    (tmp_path / "packaged-skill" / "python" / "pyproject.toml").write_text("[project]\n")
+    (tmp_path / "third-party-skill" / "scripts").mkdir(parents=True)
+    (tmp_path / "third-party-skill" / "scripts" / "run.py").write_text("print('hi')\n")
 
-    assert _skill_scripts_dirs_without_a_pyproject(tmp_path) == ["bash-skill/scripts", "python-skill/scripts"]
+    assert _skill_python_dirs_without_a_pyproject(tmp_path) == ["half-built-skill/python"]
 
 
 def test_prevent_bash_without_strict_mode() -> None:

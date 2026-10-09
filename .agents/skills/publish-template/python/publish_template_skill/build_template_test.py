@@ -14,8 +14,9 @@ from pathlib import Path
 
 import pytest
 
-_SCRIPTS_DIR = Path(__file__).resolve().parents[1]
-_REPO_ROOT = _SCRIPTS_DIR.parents[3]
+_SKILL_DIR = Path(__file__).resolve().parents[2]
+_SCRIPTS_DIR = _SKILL_DIR / "scripts"
+_REPO_ROOT = _SKILL_DIR.parents[2]
 _SCHEMA = (
     _REPO_ROOT / "system/services/env_converge/src/env_converge/template_manifest.py"
 )
@@ -87,8 +88,8 @@ def _make_source_repo(root: Path) -> tuple[Path, str]:
     ):
         shutil.copy(_SCRIPTS_DIR / name, scripts / name)
     shutil.copytree(
-        _SCRIPTS_DIR / "publish_template_skill",
-        scripts / "publish_template_skill",
+        _SKILL_DIR / "python" / "publish_template_skill",
+        scripts.parent / "python" / "publish_template_skill",
         ignore=shutil.ignore_patterns("*_test.py", "__pycache__"),
     )
     shutil.copy(_SCHEMA, source / "system/services/env_converge/src/env_converge")

@@ -9,7 +9,7 @@ stale copy is what they run while the refreshed one reports success.
 
 Two programs need this at different points in a workspace's life: the build
 (``system/scripts/build_workspace.sh``, at image build and at a create) and the update
-apply (``.agents/skills/update-self/scripts/update_self_skill/update_environment.py``, on a workspace that
+apply (``.agents/skills/update-self/python/update_self_skill/update_environment.py``, on a workspace that
 already exists). They differ only in how they name the installation to keep -- the build
 pins it, the apply resolves it from ``PATH`` -- so both pass it in.
 
@@ -18,7 +18,7 @@ divergence between the tree it came from and the tree it is landing. That rules 
 importing across the two, and this file therefore exists twice, byte for byte:
 
     system/scripts/workspace_bare_scripts/tool_env.py
-    .agents/skills/update-self/scripts/update_self_skill/tool_env.py
+    .agents/skills/update-self/python/update_self_skill/tool_env.py
 
 ``system/scripts/update_self_mirrors_sync_test.py`` fails if they differ; edit one and copy it over
 the other. They are kept identical rather than merely equivalent because the equivalent

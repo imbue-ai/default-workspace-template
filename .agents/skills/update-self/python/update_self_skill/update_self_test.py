@@ -39,7 +39,7 @@ from update_self_skill import (
 )
 
 _PACKAGE_DIR = Path(__file__).parent
-# ``.agents/skills/update-self/scripts/update_self_skill/`` -> the skill dir and the workspace root.
+# ``.agents/skills/update-self/python/update_self_skill/`` -> the skill dir and the workspace root.
 _SKILL_DIR = _PACKAGE_DIR.parents[1]
 _WORKSPACE_ROOT = _PACKAGE_DIR.parents[4]
 
@@ -2089,7 +2089,7 @@ def _placeholder_after(runner: _RecordingRunner, *prefix: str):
 
 def _refreshed_the_view(runner: _RecordingRunner, repo_root: Path) -> bool:
     return runner.ran(
-        sys.executable, str(repo_root / "system/scripts/refresh_workspace_view.py")
+        "uv", "run", "--no-sync", str(repo_root / "system/scripts/refresh_workspace_view.py")
     )
 
 
@@ -4793,7 +4793,7 @@ def test_a_refresh_that_cannot_run_does_not_fail_an_apply_that_landed(
     apply_repo: Path, failure: Exception, capsys
 ) -> None:
     runner = _apply_runner(_BACKEND_DIFF, apply_repo)
-    runner.respond((sys.executable,), failure)
+    runner.respond(("uv", "run", "--no-sync"), failure)
 
     code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
 
@@ -4924,7 +4924,7 @@ def test_marker_comes_down_before_the_view_refresh(apply_repo: Path) -> None:
     seen: dict[str, bool] = {}
 
     def capture(argv: list[str]) -> None:
-        if argv[:1] == [sys.executable] and argv[1].endswith(
+        if argv[:3] == ["uv", "run", "--no-sync"] and argv[3].endswith(
             "refresh_workspace_view.py"
         ):
             seen["marker_at_refresh"] = _marker_exists(apply_repo)
@@ -4944,7 +4944,7 @@ def test_marker_comes_down_before_the_view_refresh(apply_repo: Path) -> None:
     refresh_at = next(
         index
         for index, c in enumerate(runner.calls)
-        if c[:1] == [sys.executable] and c[1].endswith("refresh_workspace_view.py")
+        if c[:3] == ["uv", "run", "--no-sync"] and c[3].endswith("refresh_workspace_view.py")
     )
     assert restart_at < refresh_at
 

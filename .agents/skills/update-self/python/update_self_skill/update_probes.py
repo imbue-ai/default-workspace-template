@@ -554,11 +554,12 @@ def refresh_workspace_view(repo_root: Path, runner: Runner) -> None:
     """Ask every open view of this workspace to reload the changed interface.
 
     Best-effort and never fatal: the change is already on disk and will load on
-    the next visit regardless.
+    the next visit regardless. Runs from the workspace venv, which every caller
+    has just brought in line with the tree it refreshes.
     """
     try:
         completed = runner.run(
-            [sys.executable, str(repo_root / _REFRESH_SCRIPT)],
+            ["uv", "run", "--no-sync", str(repo_root / _REFRESH_SCRIPT)],
             cwd=str(repo_root),
             capture_output=True,
             text=True,

@@ -445,7 +445,7 @@ offer to lay things out if the user asks.
 
 **The AI-integration review.** For each `ai` finding: rewrite the call site onto
 the current credential resolver (`read_workspace_ai_credentials()` in
-`.agents/skills/use-ai-integration/scripts/use_ai_integration_skill/claude_p.py`), and re-snapshot the
+`.agents/skills/use-ai-integration/python/use_ai_integration_skill/claude_p.py`), and re-snapshot the
 credential where the answer is unambiguous. **Ask the user whenever billing is at
 stake** -- a copied API key in a subscription-auth workspace silently bills full
 API rates, so that case is always a question. See the `use-ai-integration` skill.

@@ -8,8 +8,9 @@ on:
 
 jobs:
   # Changelog gate. Diffs the PR branch against its real base branch and fails
-  # if any touched project is missing its per-PR changelog entry. Pure stdlib,
-  # so no `uv sync`; just enough git history to compute the diff.
+  # if any touched project is missing its per-PR changelog entry. The gate is a
+  # workspace script, so it runs from a frozen sync of the scripts package, the
+  # way agents run it (`uv run --no-sync`), plus enough git history for the diff.
   #
   # Opt-in: this job only runs when the repository variable ENFORCE_CHANGELOG is
   # set to 'true' (Settings -> Secrets and variables -> Actions -> Variables).
@@ -46,13 +47,16 @@ jobs:
           git update-ref "refs/remotes/origin/${CHANGELOG_BASE_REF}" FETCH_HEAD
           git rev-parse --verify "refs/remotes/origin/${CHANGELOG_BASE_REF}" >/dev/null
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
         with:
-          python-version: '3.12'
+          version: "latest"
+
+      - name: Sync the scripts package
+        run: uv sync --frozen --package workspace-scripts
 
       - name: Check changelog entries
-        run: python system/scripts/check_changelog_entries.py
+        run: uv run --no-sync system/scripts/check_changelog_entries.py
 
   # The mngr pin must name the public mirror before a branch merges: a private
   # pin builds only with a credential, which no user's machine and no CI here

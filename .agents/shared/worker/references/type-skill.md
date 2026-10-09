@@ -21,11 +21,11 @@ when batches keep arriving and overlap -- build its pipeline by following the
 pipeline is part of this skill, not a separate creation:
 
 - All of its modules (`sources.py`, `store.py`, ...) go in the skill's package,
-  `.agents/skills/<name>/scripts/<name_with_underscores>_skill/`, with `run.py`
-  beside the package as its entry point, and its dependencies in
-  `scripts/pyproject.toml` (layout and rules: `spec-summary.md`, "Packaging").
+  `.agents/skills/<name>/python/<name_with_underscores>_skill/`, with its
+  dependencies in `python/pyproject.toml` and `scripts/run.py` as its entry
+  point (layout and rules: `spec-summary.md`, "Packaging").
 - Its tests go in the package too: where data-pipeline-builder says
-  `tests/test_parse.py`, write `.agents/skills/<name>/scripts/<name>_skill/test_parse.py`.
+  `tests/test_parse.py`, write `.agents/skills/<name>/python/<name>_skill/test_parse.py`.
   pytest imports it as `<name>_skill.test_parse`, so the name cannot collide
   with another skill's.
 - Fixtures go in `.agents/skills/<name>/tests/fixtures/` as usual.
@@ -94,7 +94,7 @@ belongs to the app itself is that app's own pass.
   walk the SKILL.md instructions as the executing agent.
 - The universal fixture-test rule (`harden-creation.md`), for a skill: save 1-3
   samples under `.agents/skills/<name>/tests/fixtures/` and add a
-  `.agents/skills/<name>/scripts/<name>_test.py` that feeds each through the
+  `.agents/skills/<name>/python/<name>_skill/<name>_test.py` that feeds each through the
   parser and asserts the exact output shape.
 
 ## Data capture

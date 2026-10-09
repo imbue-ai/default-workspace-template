@@ -18,7 +18,7 @@ _UPDATE_SELF_PACKAGE_DIR = (
     / ".agents"
     / "skills"
     / "update-self"
-    / "scripts"
+    / "python"
     / "update_self_skill"
 )
 
