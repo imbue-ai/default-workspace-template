@@ -520,6 +520,7 @@ what they change.
 
 ```bash
 PRE=$(git rev-parse HEAD)
+rm -f data/.tasks/update-self/catchup-impacted.txt
 git merge --no-ff <the commit the lead named> -m "Catch up to the workspace's latest work (<its short sha>)"
 ```
 
