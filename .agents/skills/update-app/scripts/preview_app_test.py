@@ -241,15 +241,18 @@ def test_the_app_runs_with_neither_the_live_repos_venv_nor_the_active_one_on_its
 
 
 def test_a_preview_that_opens_on_an_instance_needs_its_key(tmp_path: Path) -> None:
+    """Refused before the worktree's sync, which a fresh worktree waits minutes for."""
     worktree = _write_worktree(tmp_path)
+    runner = _RecordingRunner(tmp_path)
     with pytest.raises(mod.PreviewError, match="--instance-key"):
         mod.up(
             "chat",
             worktree,
             tmp_path,
-            runner=_RecordingRunner(tmp_path),
+            runner=runner,
             dump_registry=_dump_registry,
         )
+    assert runner.synced == []
 
 
 def test_an_app_with_no_table_previews_by_the_scaffold_convention(

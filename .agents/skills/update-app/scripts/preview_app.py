@@ -429,6 +429,7 @@ def _up(
         )
         return 1
     manifest_path, manifest = find_manifest(worktree, app_name)
+    inner_path = resolve_open_path(manifest, instance_key)
     if not worktree_synced:
         sync_worktree(worktree, runner)
     dump = (
@@ -474,7 +475,7 @@ def _up(
         repo_root,
         title if title is not None else f"{manifest.display_name} ({worktree.name})",
         registry_copy,
-        resolve_open_path(manifest, instance_key),
+        inner_path,
     )
     # An earlier ``up --with`` of this preview may have booted siblings this call does not
     # name; they are still running, and ``down`` finds them only through this record.
