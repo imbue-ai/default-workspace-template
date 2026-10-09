@@ -540,9 +540,12 @@ its windows, and every desktop).
 ## Step 5: Finalize in the background (after the user confirms the working site)
 
 The foreground work stops at a usable, surfaced site. The thorough pass --
-extending Playwright coverage, the full test suite and ratchets, review gates
- -- runs in a **background harden worker**, never in the
-main agent. This is skeleton phase 7: the harden pass
+extending Playwright coverage, the full test suite and ratchets over the
+extended tests, review gates -- runs in a **background harden worker**, never
+in the main agent. The test gate AGENTS.md has you run through
+`system/scripts/run_in_background.py` checks the app against the tests it
+already has, so it is not this pass: run it anyway, since the worker may never
+be dispatched. This is skeleton phase 7: the harden pass
 (`.agents/shared/worker/references/harden-creation.md`), here the **crystallize**
 operation with the **app** type -- the scaffolded app is already on
 disk and the user confirmed it live, so nothing needs reconstructing and there
@@ -559,8 +562,8 @@ invalidate.)
 Reading the confirmation signal:
 
 - If the user keeps asking for changes, each one is a **cheap foreground
-  iteration that resets the clock** -- you have run no gates or thorough tests
-  yet, so pivots stay cheap. Do not hand off until their response is a
+  iteration that resets the clock** -- you have run no review gates or thorough
+  tests yet, so pivots stay cheap. Do not hand off until their response is a
   confirmation rather than a change request.
 - If the user starts asking for surface-level (cosmetic) tweaks, or pivots to a
   slightly unrelated task or follow-up, treat that as a sign the core is settled:

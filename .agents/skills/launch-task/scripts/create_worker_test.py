@@ -35,6 +35,7 @@ _WORKER_ID = "agent-00000000000000000000000000abcdef"
 _CREATED_EVENT = (
     json.dumps({"event": "created", "agent_id": _WORKER_ID, "host_id": "host-1"}) + "\n"
 )
+_UNARCHIVE_ARGV = ["mngr", "label", _WORKER_ID, "-l", "archived_at="]
 _spec = importlib.util.spec_from_file_location("create_worker", _SCRIPT)
 assert _spec is not None and _spec.loader is not None
 create_worker_mod = importlib.util.module_from_spec(_spec)
@@ -244,9 +245,11 @@ def test_happy_path_no_artifacts(
     assert f"worker_agent_id: {_WORKER_ID}" in task.read_text()
 
 
-def test_launch_falls_back_to_mngr_message_by_name_when_the_create_reports_no_id(
+def test_launch_sends_no_task_when_the_create_reports_no_id(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Without an id the task could only go by name, and ``reply`` could never
+    reach the worker, so the launch stops at the create and says so."""
     runtime, task, _ = _make_layout(tmp_path)
     runner = _RecordingRunner()
     runner.respond(("mngr", "create"), _StubResult(stdout="not an event\n"))
@@ -259,16 +262,10 @@ def test_launch_falls_back_to_mngr_message_by_name_when_the_create_reports_no_id
         runner=runner,
     )
 
-    assert rc == 0
-    assert runner.calls[-1].argv == [
-        "mngr",
-        "message",
-        "demo-worker",
-        "--message-file",
-        str(task),
-    ]
+    assert rc == 2
+    assert runner.calls[-1].argv == _create_argv(runtime)
     assert "worker_agent_id" not in task.read_text()
-    assert "reported no agent id" in capsys.readouterr().err
+    assert "destroy --name demo-worker" in capsys.readouterr().err
 
 
 def test_branch_passthrough_checks_out_existing_branch(tmp_path: Path) -> None:
@@ -1674,7 +1671,7 @@ def test_await_returns_shed_code_when_worker_shed(
     assert rc == create_worker_mod._AWAIT_SHED_RC
     assert out.getvalue() == ""
     err = capsys.readouterr().err
-    assert "demo" in err and "--restart" in err
+    assert "demo" in err and "create_worker.py reply" in err
 
 
 def test_await_returns_idle_code_when_worker_idle_without_report(
@@ -4009,38 +4006,119 @@ def test_launch_sync_collects_the_terminal_report_despite_a_milestone(
 # --- reply ------------------------------------------------------------------
 
 
+def _stamped_task_file(tmp_path: Path) -> Path:
+    """A task file carrying the worker id ``launch`` stamps, which ``reply`` addresses."""
+    task = tmp_path / "task.md"
+    task.write_text(f"---\nworker_agent_id: {_WORKER_ID}\n---\n\nbody\n")
+    return task
+
+
+def _worker_listing(state: str, archived: bool) -> _StubResult:
+    """``mngr list`` showing the stamped worker, with or without the label ``stop`` sets."""
+    return _listing(
+        {**_agent_record("demo-worker", state, archived=archived), "id": _WORKER_ID}
+    )
+
+
 def test_reply_goes_through_the_chat_messenger_by_the_stamped_worker_id(
     tmp_path: Path,
 ) -> None:
-    task = tmp_path / "task.md"
-    task.write_text(
-        f"---\nlead_agent: agent-lead\nworker_agent_id: {_WORKER_ID}\n---\n\nbody\n"
-    )
+    task = _stamped_task_file(tmp_path)
     runner = _RecordingRunner()
     runner.respond(
         (sys.executable, str(_MESSAGE_CHAT_SCRIPT)), _StubResult(returncode=7)
     )
+    runner.respond(("mngr", "list"), _worker_listing("STOPPED", archived=True))
 
     rc = create_worker_mod.reply(
-        task_file=task, message="-continue", message_file=None, name=None, runner=runner
+        task_file=task, message="-continue", message_file=None, runner=runner
     )
 
-    # The messenger's exit status (mngr message's codes) is passed through.
+    # The messenger's exit status (mngr message's codes) is passed through, and
+    # "delivered but blocked" still counts as delivered for the label.
     assert rc == 7
-    assert [c.argv for c in runner.calls] == [
+    assert [c.argv for c in runner.calls if c.argv[:2] != ["mngr", "list"]] == [
         [sys.executable, str(_MESSAGE_CHAT_SCRIPT), _WORKER_ID, "--message=-continue"],
+        _UNARCHIVE_ARGV,
     ]
+    assert_mngr_argv_valid(_UNARCHIVE_ARGV)
+
+
+def test_reply_writes_no_label_on_a_worker_that_was_never_archived(
+    tmp_path: Path,
+) -> None:
+    """mngr reads a present ``archived_at`` as archived even when it is empty, so
+    a gate answer to a live worker must not add one."""
+    task = _stamped_task_file(tmp_path)
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _worker_listing("WAITING", archived=False))
+
+    rc = create_worker_mod.reply(
+        task_file=task, message="yes", message_file=None, runner=runner
+    )
+
+    assert rc == 0
+    assert _mngr_argvs(runner, "label") == []
+
+
+def test_reply_blanks_the_label_when_the_listing_cannot_say(tmp_path: Path) -> None:
+    """A failed listing is no evidence the worker was never stopped, and leaving
+    a revived worker marked as stopped on purpose is the costlier mistake."""
+    task = _stamped_task_file(tmp_path)
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _StubResult(returncode=1))
+
+    rc = create_worker_mod.reply(
+        task_file=task, message="go", message_file=None, runner=runner
+    )
+
+    assert rc == 0
+    assert _mngr_argvs(runner, "label") == [_UNARCHIVE_ARGV]
+
+
+def test_reply_leaves_the_label_when_the_send_fails(tmp_path: Path) -> None:
+    """A worker the reply did not reach stays marked as stopped on purpose, so
+    nobody restarts it as a crash."""
+    task = _stamped_task_file(tmp_path)
+    runner = _RecordingRunner()
+    runner.respond(
+        (sys.executable, str(_MESSAGE_CHAT_SCRIPT)), _StubResult(returncode=1)
+    )
+
+    rc = create_worker_mod.reply(
+        task_file=task, message="go", message_file=None, runner=runner
+    )
+
+    assert rc == 1
+    assert _mngr_argvs(runner, "label") == []
+
+
+def test_reply_still_succeeds_when_the_label_cannot_be_blanked(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The message already landed, so a failed label write must not read as a
+    failed reply: the lead would send it again."""
+    task = _stamped_task_file(tmp_path)
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _worker_listing("STOPPED", archived=True))
+    runner.respond(("mngr", "label"), _StubResult(returncode=1))
+
+    rc = create_worker_mod.reply(
+        task_file=task, message="go", message_file=None, runner=runner
+    )
+
+    assert rc == 0
+    assert "archived_at" in capsys.readouterr().err
 
 
 def test_reply_takes_a_message_file(tmp_path: Path) -> None:
-    task = tmp_path / "task.md"
-    task.write_text(f"---\nworker_agent_id: {_WORKER_ID}\n---\n\nbody\n")
+    task = _stamped_task_file(tmp_path)
     answer = tmp_path / "answer.md"
     answer.write_text("yes, do that")
     runner = _RecordingRunner()
 
     rc = create_worker_mod.reply(
-        task_file=task, message=None, message_file=answer, name=None, runner=runner
+        task_file=task, message=None, message_file=answer, runner=runner
     )
 
     assert rc == 0
@@ -4053,39 +4131,21 @@ def test_reply_takes_a_message_file(tmp_path: Path) -> None:
     ]
 
 
-def test_reply_falls_back_to_mngr_message_by_name_for_a_task_file_without_the_stamp(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_reply_refuses_a_task_file_without_the_stamp(tmp_path: Path) -> None:
     task = tmp_path / "task.md"
     task.write_text("---\nlead_agent: lead\n---\n\nbody\n")
     runner = _RecordingRunner()
 
-    assert (
-        create_worker_mod.reply(
-            task_file=task, message="hi", message_file=None, name=None, runner=runner
-        )
-        == 2
-    )
-    assert runner.calls == []
-    assert "no worker_agent_id" in capsys.readouterr().err
-
     rc = create_worker_mod.reply(
-        task_file=task,
-        message="hi",
-        message_file=None,
-        name="demo-worker",
-        runner=runner,
+        task_file=task, message="hi", message_file=None, runner=runner
     )
 
-    assert rc == 0
-    [fallback_argv] = [c.argv for c in runner.calls]
-    assert fallback_argv == ["mngr", "message", "demo-worker", "--message=hi"]
-    assert_mngr_argv_valid(fallback_argv)
+    assert rc == 2
+    assert runner.calls == []
 
 
 def test_main_reply_requires_exactly_one_message_source(tmp_path: Path) -> None:
-    task = tmp_path / "task.md"
-    task.write_text(f"---\nworker_agent_id: {_WORKER_ID}\n---\n\nbody\n")
+    task = _stamped_task_file(tmp_path)
 
     with pytest.raises(SystemExit):
         create_worker_mod.main(

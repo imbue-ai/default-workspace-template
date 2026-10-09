@@ -37,18 +37,21 @@ Address that path by literal each time (each bash invocation is a fresh shell).
 
 ## 1. Preconditions
 
-**Back up first.** Capture a restore point of the whole workspace; it is the
-last-resort recovery path if the apply's own rollback and `recover` both fail:
+**Check the backup first.** The backup service's periodic restore point of the
+whole workspace is the last-resort recovery path if the apply's own rollback
+and `recover` both fail. Confirm there is a recent one; this reads the
+service's log and waits for nothing:
 
 ```bash
-uv run host-backup-now
+uv run host-backup-now --check
 ```
 
-Exit 0 means `restic_backup_succeeded`; 3 (not configured), 1 (failed) and 2
-(outcome not observable) mean there is **no** confirmed restore point. **None
-of them blocks the pass**: note which it was, carry it into the results message
-as a caveat, and continue -- git still holds every version of the tree. Do not
-stop to ask for a go-ahead.
+Exit 0 means a recent `restic_backup_succeeded`; 3 (not configured), 1 (no
+recent success: the service is down or its ticks fail) and 2 (not observable)
+mean there is **no** confirmed restore point. **None of them blocks the
+pass**: note which it was, carry it into the results message as a caveat, and
+continue -- git still holds every version of the tree. Do not stop to ask for
+a go-ahead.
 
 **Take the "updating workspace" lease.** One update flow at a time (worker
 name, branch and runtime dir are fixed, and two applies must never interleave).
@@ -382,8 +385,9 @@ report, re-arm the poll.
    question about whether its impact analysis runs, whether a validation item
    runs, or whether and at what scope the review gates run. Answer it by the
    rule it names as written; where the rule is silent, the fallback is more
-   coverage, never less. Escalate only if it contains a real question of user
-   intent.
+   coverage, never less. A `select-tests` output is not silence: what it
+   printed for a commit is that commit's whole gate. Escalate only if it
+   contains a real question of user intent.
 3. **A customization hold** (its §4b verdict): something the user built that
    the update **cannot keep**, after the worker genuinely tried to re-fit it.
    This is the one gate that reaches the user; see below. A cosmetic shift
@@ -418,7 +422,8 @@ carry on into §5 and get their verdict there.
 ## 5. Terminal status
 
 - **`stuck`** or a dead-worker timeout -> surface per
-  `.agents/skills/launch-task/references/worker-failure.md`. Nothing is merged
+  `.agents/skills/launch-task/references/worker-failure.md` (if the user
+  then overrides, see "Resuming after `stuck`" below). Nothing is merged
   or applied. Compose it as a plain-language lead ("I couldn't complete this
   update cleanly; your workspace is untouched") followed by a clearly-marked
   technical block with the specifics **verbatim** (target ref, failing step,
@@ -456,9 +461,11 @@ message is composed *after* the apply, per `references/results-message.md`.
 
 ### 5b. Apply the update (one atomic motion)
 
-**Rebuild-only findings do not block the apply**; they become leading caveats
-of the results message (a global-dependency bump coupled to a user-created
-dependent: name it, check it, offer rollback or a workspace recreate; a
+**Rebuild-only findings do not block the apply**, and neither does a
+user-created dependent the worker could not verify; they become leading
+caveats of the results message (a global-dependency bump coupled to a
+user-created dependent: name it, check it after the apply, offer rollback or a
+workspace recreate; a
 container build/launch parameter a running container cannot adopt: say it
 stays inert until a recreate). A genuinely breaking case takes the migration
 path below instead.
@@ -581,6 +588,28 @@ message with the submission offered. A flaky test of a creation the workspace
 built is not built-in: file a regular ticket for it (`tk create`).
 
 Then compose the results message per `references/results-message.md`.
+
+## Resuming after `stuck`
+
+When the user overrides a `stuck` verdict, resume the same pass with the same
+worker as `.agents/shared/references/lead-proxy.md` ("Resuming after the user
+overrides a failure") says. This flow's preconditions, re-taken before the
+`reply`, each `tk` call as its own command:
+
+1. The `updating workspace` lease, exactly as Step 1 takes it.
+2. The run record, and the target the task file carries:
+
+   ```bash
+   python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+       run-status start
+   REF=$(sed -n 's/^target_ref: //p' data/.tasks/update-self/task.md)
+   ```
+
+3. The history bridge, with Step 3a's two commands (the forced tag fetch,
+   then `bridge-history --ref "$REF"`).
+
+After the `reply`, `run-status delegate update-self` before the `await` poll,
+as Step 3b does.
 
 ## Migration-required updates
 

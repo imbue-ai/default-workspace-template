@@ -291,8 +291,7 @@ gets validated below; an impacted skill gets validated per its own contract.
 **Provisioning files** (`system/scripts/setup_system.sh`, the installers it
 chains, `.mngr/**`) and **global-dependency bumps** always count as impacted
 even though nothing imports them; work them per
-`references/worker-provisioning-changes.md` and report each as
-live-applicable, rebuild-only, or `stuck`.
+`references/worker-provisioning-changes.md` and report each there.
 
 ### 4b. Validate
 
@@ -360,8 +359,9 @@ in your report.
   every printed line, in order, plus `uv run ruff check` when a Python file is
   in the list, and handle a failing test and a shed command the way
   `.agents/shared/worker/references/harden-creation.md` ("The test gate")
-  says, naming a flaky test under your report's Validation. mngr's own suite
-  runs in its repo, not here.
+  says, naming a flaky test under your report's Validation; the tree before
+  your change, for attributing a failure, is `$MERGE^1` (a test absent there
+  arrived with the update). mngr's own suite runs in its repo, not here.
 - **Isolated-service boots** for each service with a file in the merged set,
   and for each service 4a found impacted that carries local content of its
   own -- one the workspace created, or a built-in one it has modified (a
@@ -492,14 +492,16 @@ Valid `name:` values:
   - **Provisioning changes** and **global-dependency bumps** (if any) -- per
     `references/worker-provisioning-changes.md`: each classified
     live-applicable (naming the in-branch mirror edits you made) or
-    rebuild-only, with the version delta (and, for a user-created dependent,
-    what your research turned up); a genuinely breaking, unapplyable change
-    is a `stuck` report, not a `done`.
+    rebuild-only, with the version delta; a user-created dependent of a pin
+    bump is "applied live, unverified in the worktree; the lead checks it
+    after the apply", with what your research turned up. Only a change whose
+    absence would break the running workspace is a `stuck` report.
   - **Validation** -- **which branch of the 4b scope rule applied, with its
     evidence** (each item's condition and whether it held; on a clean pull
     with no footprint, that nothing ran and why), then the suites, boots and
     Playwright that did run, all passing, and any test that failed and then
-    passed when rerun alone, here or after a 4c commit, as flaky; **which
+    passed when rerun alone, here or after a 4c commit, as flaky; each
+    failing test's attribution (caused by the update, or pre-existing); **which
     branch of the 4c rule
     applied, with its evidence** (the clean-pull skip's three conditions, or
     the gate run's kept/reverted fix commits -- or "gate ran clean" -- and the
