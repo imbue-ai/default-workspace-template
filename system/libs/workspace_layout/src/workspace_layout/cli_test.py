@@ -586,11 +586,13 @@ def test_list_gives_each_app_the_link_to_write_for_it(
     loopback_shell: LoopbackShell, layout_context: LayoutCliContext, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """An app's address on the domain the workspace was last shared under is its link, so any client the workspace
-    is shared with can open it; with none, the registered backend URL is."""
+    is shared with can open it; with none, its port-less ``<label>.localhost`` address is (``<name>.localhost`` for a
+    row with no label), which no change of the app's port leaves stale."""
     shared = fake_app("files").model_copy(update={"share_url": "https://files-ab12cd34.0123.us1.example.com/"})
-    unshared = fake_app("notes").model_copy(update={"url": AppUrl("http://localhost:8095")})
+    unshared = fake_app("notes").model_copy(update={"label": "notes-zz11yy22", "url": AppUrl("http://localhost:8095")})
+    unlabelled = fake_app("legacy").model_copy(update={"url": AppUrl("http://localhost:8096")})
     inventory = InventoryDocument(
-        is_preview=False, workspace_name="workspace", desktops=(), apps=(shared, unshared), clients=()
+        is_preview=False, workspace_name="workspace", desktops=(), apps=(shared, unshared, unlabelled), clients=()
     )
     loopback_shell.get_answers[INVENTORY_ROUTE] = (200, inventory.model_dump(mode="json"))
 
@@ -599,7 +601,8 @@ def test_list_gives_each_app_the_link_to_write_for_it(
     listing = json.loads(capsys.readouterr().out)
     assert [(app["name"], app["link"]) for app in listing["apps"]] == [
         ("files", "https://files-ab12cd34.0123.us1.example.com/"),
-        ("notes", "http://localhost:8095/"),
+        ("notes", "http://notes-zz11yy22.localhost/"),
+        ("legacy", "http://legacy.localhost/"),
     ]
 
 

@@ -87,7 +87,9 @@ local absolute-path form for files you produced on this machine.
 - For an app registered with the workspace, link the `link`
   `uv run --no-sync workspace-layout list` prints for it: its share address
   once the workspace has been shared (it opens for anyone the workspace is
-  shared with), else its localhost URL. Either opens the app's own window.
+  shared with), else its port-less `http://<label>.localhost/` address,
+  which stays good when the app's port changes. Either opens the app's own
+  window; add the page's path to it.
   For any other local web server, link its localhost URL
   (`[the preview](http://localhost:3000/)`), which opens in the workspace's
   browser.

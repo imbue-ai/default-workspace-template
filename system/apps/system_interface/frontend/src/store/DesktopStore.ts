@@ -36,7 +36,7 @@ import {
   textRowDisabledReason,
 } from "../model/launch";
 import { applyPresence } from "../model/Presence";
-import { labelForApp, shareDomainOf, windowAtBackendUrl } from "../model/pageUrl";
+import { labelForApp, shareDomainOf, windowAtBackendUrl, windowAtLocalAppHost } from "../model/pageUrl";
 import type {
   AppRecord,
   AvatarCatalog,
@@ -1061,8 +1061,9 @@ export class DesktopStore {
     return true;
   }
 
-  /** Open a link where it belongs in this workspace: a file in the File Viewer (``open:file``), a local URL at an
-   *  app's registered backend port as that app's window at its path, any other local URL in the workspace's browser
+  /** Open a link where it belongs in this workspace: a file in the File Viewer (``open:file``), a local URL on an
+   *  app's ``<label>.localhost`` (or ``<name>.localhost``) host, or else at its registered backend port, as that app's
+   *  window at its path, any other local URL in the workspace's browser
    *  (``open:url``), one of this workspace's app addresses (on its share domain too) as that app's window at its
    *  path, an external link in the app registered for its kind (``open:web``, ``open:mailto``, ``open:tel``) or else
    *  outside the workspace. Another workspace's address is refused with a notice.
@@ -1075,7 +1076,8 @@ export class DesktopStore {
         await this.deliverMessage({ type: OPEN_FILE_MESSAGE, path: target.path }, senderApp ?? EMBEDDER_SENDER);
         return;
       case "local-url": {
-        const backendWindow = windowAtBackendUrl(openableApps(this.state), target.url);
+        const apps = openableApps(this.state);
+        const backendWindow = windowAtLocalAppHost(apps, target.url) ?? windowAtBackendUrl(apps, target.url);
         if (backendWindow !== null) {
           await this.focusOrOpenWindowAt(backendWindow.app.name, backendWindow.path);
           return;

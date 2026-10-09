@@ -1408,6 +1408,37 @@ describe("links Imbue Studio hands over", () => {
     expect(api.relayedMessages).toEqual([]);
   });
 
+  it("opens a port-less <label>.localhost or <name>.localhost link as that app's window at its path and query", async () => {
+    const store = await startedStore();
+    socket
+      .deliver()
+      .onAppsUpdated([appRecord("docs"), appRecord("news", { label: "news-ab12cd34", url: "http://127.0.0.1:8095" })]);
+
+    await store.openLink("http://news-ab12cd34.localhost/story/7?ref=chat", SHELL_HOST, "chat");
+    await store.openLink("http://news.localhost:4000/front", SHELL_HOST, "chat");
+
+    expect(api.calls).toContain("openWindow:home:news:/story/7?ref=chat:focus");
+    expect(api.calls).toContain("openWindow:home:news:/front:focus");
+    expect(api.relayedMessages).toEqual([]);
+  });
+
+  it("opens a <x>.localhost link no openable app answers to in the browser", async () => {
+    const store = await startedStore();
+    socket
+      .deliver()
+      .onAppsUpdated([appRecord("docs"), appRecord("hidden", { label: "hidden-zz11yy22", internal: true })]);
+
+    await store.openLink("http://vite.localhost:5173/", SHELL_HOST, "chat");
+    await store.openLink("http://hidden-zz11yy22.localhost/", SHELL_HOST, "chat");
+    await store.openLink("http://a.docs.localhost/", SHELL_HOST, "chat");
+
+    expect(api.relayedMessages.map((message) => message.payload)).toEqual([
+      { url: "http://vite.localhost:5173/" },
+      { url: "http://hidden-zz11yy22.localhost/" },
+      { url: "http://a.docs.localhost/" },
+    ]);
+  });
+
   it("opens a local URL at an internal app's port in the browser, an internal app having no window to open", async () => {
     const store = await startedStore();
     socket

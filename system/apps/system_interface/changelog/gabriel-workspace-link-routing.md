@@ -8,6 +8,8 @@ The desktop delivers messages that apps send each other, and opens the links app
 
 - A link in the desktop's own chrome opens the same way a forwarded popup does.
 
+- A port-less link to `<label>.localhost` (or `<name>.localhost`) opens that app's window at the link's path, the way an agent links an app of a workspace never shared; a `localhost:<port>` link at an app's registered port still does too.
+
 - An address on the domain the workspace was last shared under (`https://<label>.<share domain>/...`) opens as that app's window, in the desktop app and in a shared browser alike, so a share link an agent writes or a user pastes stays inside the workspace.
 
 - An external web, mail, or phone link goes to the app registered for `open:web`, `open:mailto` or `open:tel`; with none, it goes back to Imbue Studio (`minds:open-external`), or opens in a new browser tab when no Imbue Studio chrome frames the desktop.

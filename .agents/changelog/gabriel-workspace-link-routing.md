@@ -1,4 +1,4 @@
-- The show-files-in-chat skill links files (and folders) by absolute path or `file:///` URL so a click opens them in the File Viewer, links a registered app by the `link` `workspace-layout list` prints for it (its share address once the workspace has been shared, so the link opens for anyone it is shared with; else its localhost URL), and other local services by their localhost URL.
+- The show-files-in-chat skill links files (and folders) by absolute path or `file:///` URL so a click opens them in the File Viewer, links a registered app by the `link` `workspace-layout list` prints for it (its share address once the workspace has been shared, so the link opens for anyone it is shared with; else its port-less `<label>.localhost` address, which stays good when the app's port changes), and other local services by their localhost URL.
 
 - The build-app skill's public URL reference says where an app's share address comes from (`workspace-layout list`) instead of telling agents to ask the user for it.
 

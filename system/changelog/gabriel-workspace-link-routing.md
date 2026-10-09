@@ -2,7 +2,7 @@ Links clicked inside a workspace open inside the workspace: files in the File Vi
 
 - The File Viewer registers `open:file`, shown on the file's (or folder's) view page and raising a window already there.
 
-- AGENTS.md tells agents to link files by absolute path, a registered app by the `link` `workspace-layout list` prints for it (its share address once the workspace has been shared, else its localhost URL), and other services running in the workspace by their localhost URL.
+- AGENTS.md tells agents to link files by absolute path, a registered app by the `link` `workspace-layout list` prints for it (its share address once the workspace has been shared, else its port-less `<label>.localhost` address), and other services running in the workspace by their localhost URL.
 
 - The desktop-interface contract describes each app's `share_url` in the inventory, the recorded share domain, and the `open:web`, `open:mailto` and `open:tel` messages external links become.
 

@@ -57,6 +57,27 @@ function loopbackUrl(url: string): URL | null {
   return LOCAL_HOSTNAMES.has(parsed.hostname) ? parsed : null;
 }
 
+/** The window a link to ``<app>.localhost`` (any port, usually none) is a page of: the app of ``apps`` whose label, or
+ *  else name, is the host's one label, and the URL's path. This is how an agent links an app of a workspace never
+ *  shared, with no port to go stale when the app's port changes. Null for any other URL. */
+export function windowAtLocalAppHost(
+  apps: readonly AppRecord[],
+  url: string,
+): { readonly app: AppRecord; readonly path: string } | null {
+  let link: URL;
+  try {
+    link = new URL(url);
+  } catch {
+    return null;
+  }
+  const labels = link.hostname.toLowerCase().split(".");
+  if (labels.length !== 2 || labels[1] !== "localhost") return null;
+  const app =
+    apps.find((candidate) => labelForApp(candidate) === labels[0]) ??
+    apps.find((candidate) => candidate.name === labels[0]);
+  return app === undefined ? null : { app, path: `${link.pathname}${link.search}` };
+}
+
 /** The window a local URL is a page of: the app of ``apps`` whose registered backend URL has the URL's scheme and
  *  port (on any loopback host name), and the URL's path. This is how a link an agent writes to an app it runs
  *  (``http://localhost:<port>/...``, the only address of it the agent knows) opens as that app's window. Null when

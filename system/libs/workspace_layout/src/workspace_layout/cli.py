@@ -603,11 +603,12 @@ def _listed_clients(inventory: _Answer) -> list[dict[str, Any]]:
 @pure
 def _app_link(app: Mapping[str, Any]) -> str:
     """The link to write for an app: its address on the domain the workspace was last shared under, which opens it
-    from any client the workspace is shared with, else its backend URL, which opens it only from inside."""
+    from any client the workspace is shared with, else its port-less ``<label>.localhost`` address, which opens it
+    only from inside and outlasts any change of its port."""
     share_url = app.get("share_url")
     if isinstance(share_url, str) and share_url != "":
         return share_url
-    return f"{str(app['url']).rstrip('/')}/"
+    return f"http://{app['label'] or app['name']}.localhost/"
 
 
 @pure
