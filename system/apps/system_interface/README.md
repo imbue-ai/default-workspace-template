@@ -472,8 +472,8 @@ frame, plus the Imbue Studio app's own refresh endpoint). On any failure it reve
 the merge as a forward revert commit, restores the pre-apply snapshots it took
 before anything destructive ran, and re-confirms health; the exit code reports
 the outcome (`0` applied, `2` rolled back, `3` emergency, `1` precondition).
-The scripts under `.agents/skills/update-self/scripts/` and that skill's
-`SKILL.md` are the reference.
+The `update_self_skill` package in `.agents/skills/update-self/python/` and that
+skill's `SKILL.md` are the reference.
 
 ## When the bundle is missing
 

@@ -23,8 +23,8 @@ How each shows up during the update:
 ## A user skill with scripts
 
 For a skill with Python in `.agents/skills/<name>/scripts/` (package name
-`<name>` with hyphens turned to underscores, plus `_skill`; a `scripts/` dir of
-shell scripts only needs nothing):
+`<name>` with hyphens turned to underscores, plus `_skill`; a skill whose
+`scripts/` holds only shell scripts needs none of this):
 
 1. Create `.agents/skills/<name>/python/pyproject.toml` in the shape
    `spec-summary.md` ("Packaging") shows: project `<name>-skill`, hatchling,
@@ -79,4 +79,4 @@ check that fails loudly where `None` cannot happen, give a dict the key type its
 callers use, correct a wrong annotation. Don't silence a rule with an ignore
 comment unless the code is correct and ty cannot express it, and say so in the
 report when you do. A skill's own dependency that ty cannot resolve is missing from
-its `scripts/pyproject.toml` (see the first section).
+its `python/pyproject.toml` (see the first section).
