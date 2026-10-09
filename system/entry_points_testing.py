@@ -25,7 +25,7 @@ BARE_PACKAGES = frozenset({"workspace_bare_scripts", "update_self_skill"})
 STANDALONE_BARE_DIRS = (REPO_ROOT / "system" / "services" / "oom_priority" / "bin",)
 STANDALONE_BARE_SCRIPTS = (REPO_ROOT / "catalog" / "build_catalog_from_export.py",)
 
-# Where a scripts directory declares the heavy modules an entry point may load at import.
+# Where an entry point's project declares the heavy modules the entry may load at import.
 ENTRY_POINTS_TABLE = ("workspace-template", "entry-points")
 
 
