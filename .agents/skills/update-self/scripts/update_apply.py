@@ -1105,7 +1105,7 @@ def apply_update(
                 + (
                     "A refused fast-forward means HEAD moved under the pass -- "
                     "keep the worker and have it merge the current HEAD into its branch "
-                    "and re-verify (harden-contention.md, 'Catching up a stale pass'); "
+                    "and re-verify (update-self SKILL.md, 5b); "
                     "do not destroy it or resolve this by hand.\n"
                     if ff_only
                     else "Have the worker merge the current HEAD into its branch, resolve "
