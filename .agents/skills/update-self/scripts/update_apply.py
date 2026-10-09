@@ -1104,9 +1104,13 @@ def apply_update(
                 "Nothing was changed. "
                 + (
                     "A refused fast-forward means HEAD moved under the pass -- "
-                    "re-dispatch off the current HEAD rather than hand-resolving.\n"
+                    "keep the worker and have it merge the current HEAD into its branch "
+                    "and re-verify (harden-contention.md, 'Catching up a stale pass'); "
+                    "do not destroy it or resolve this by hand.\n"
                     if ff_only
-                    else "Resolve the conflict via a fresh worker pass rather than by hand.\n"
+                    else "Have the worker merge the current HEAD into its branch, resolve "
+                    "the conflict there and re-verify (harden-contention.md, 'Catching up "
+                    "a stale pass'), rather than resolving it by hand.\n"
                 )
             )
             return 1

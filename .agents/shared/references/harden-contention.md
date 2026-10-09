@@ -7,17 +7,18 @@ branch, and runtime dir are all derived from the creation name), and a
 hardened branch getting merged after the base it was verified against has
 moved.
 
-Two principles drive every rule below:
+Three principles drive every rule below:
 
 - **A hardened branch is only trustworthy against the exact base it was
   verified on.** Merging it after the creation changed underneath -- or
-  hand-resolving a conflicted merge -- ships a combination nobody tested,
-  which defeats the point of the pass.
+  resolving a conflicted merge on the lead's side -- ships a combination
+  nobody tested, which defeats the point of the pass.
 - **The foreground always wins.** A user waiting in chat outranks a
-  background pass, and re-running a pass is cheap (a committed-origin worker
-  often produces no commits of its own). A foreground change never waits for
-  an in-flight pass; it just makes that pass stale, and staleness is handled
-  here.
+  background pass. A foreground change never waits for an in-flight pass; it
+  just makes that pass stale, and staleness is handled here.
+- **A stale pass is caught up, not redone.** Its worker brings its branch up
+  to the new base and verifies what moved in, so the work it already verified
+  is kept. A fresh pass replaces it only when the worker is gone.
 
 ## Before dispatch: one pass per creation (single-flight)
 
@@ -31,28 +32,31 @@ grep -E "(update|heal) $TARGET" /tmp/harden-inflight.txt
 ```
 
 - **No match** -- dispatch normally.
-- **A match assigned to you** -- you already have a pass in flight; supersede
-  it (below) rather than launching a sibling.
+- **A match assigned to you** -- you already have a pass in flight; do not
+  launch a sibling. Note your new commits on your own ticket, as in the
+  "Live" case below: the catch-up your merge-time freshness check forces
+  covers them.
 - **A match assigned to another agent** -- check whether it is actually
   live: the worker session responds to the liveness probe in
   `lead-proxy.md` (`tmux capture-pane -t minds-<worker-name>:claude -p -S -20`),
   or the ticket has recent notes/reports. Then:
   - **Live**: do NOT dispatch a second pass. Leave a note on their ticket so
-    the owner coalesces your change at merge time, and stop -- your turn-end
-    obligation is met, because the superseding pass their merge-time
-    freshness check forces will cover your commits too:
+    the owner covers your change at merge time, and stop -- your turn-end
+    obligation is met, because the catch-up their merge-time freshness check
+    forces will harden your commits too:
 
     ```bash
-    tk add-note <their-ticket-id> "Commits <range> also change $TARGET; this pass is now stale. Coalesce at merge time per harden-contention.md."
+    tk add-note <their-ticket-id> "Commits <range> also change $TARGET; this pass is now stale. Catch it up at merge time per harden-contention.md."
     ```
   - **Abandoned** (worker session gone, no report, holder agent not
     running): take it over. Destroy the worker with the launcher
     (`--delete-branches`, which also takes its sub-workers and their branches),
     close their ticket with a note saying you superseded it, then dispatch
-    your own pass covering the union (see "Superseding a stale pass").
+    your own pass covering the union (see "Superseding a pass whose worker is
+    gone").
 
 Do not queue a second pass behind a live one. Queued passes verify obsolete
-states; the newest pass always covers the union instead.
+states; the live pass, caught up, covers the union instead.
 
 ## Before merge: lease, freshness, conflicts
 
@@ -101,7 +105,7 @@ or a provisional milestone merge:
    check over each leased app's `system/apps/<package>/` together with
    `system/libs/workspace_ui/`, `system/libs/workspace_layout/`, `system/package.json`,
    `system/package-lock.json`, and every file the pass branch changes. Empty output means fresh: merge normally. Any output means the base moved under
-   the worker: the pass is stale -- do not merge; supersede it (below).
+   the worker: the pass is stale -- do not merge; catch it up (below).
 
    No shared *authored* file remains in that footprint -- a creation's
    supervisord program lives in its own drop-in rather than in the shared
@@ -126,23 +130,25 @@ or a provisional milestone merge:
    creation's scaffold regenerates it, and `.gitattributes` marks it
    `merge=binary` so any divergence is a hard conflict -- including it would
    make two concurrent creations collide on a generated file and force one of
-   them into a full re-harden. See step 3.
+   them into a catch-up. See step 3.
 
-3. **Never hand-resolve a conflicted hardened branch.** If the merge itself
-   conflicts, `git merge --abort` and treat the pass as stale. Resolving the
-   conflict by hand would reintroduce exactly the unverified state the pass
-   exists to prevent.
+3. **Never resolve a conflicted hardened branch on your side.** If the merge
+   itself conflicts, `git merge --abort` and catch the pass up (below): the
+   worker resolves the conflict on its own branch and verifies the result, so
+   the resolution lands tested. Resolving it here would ship exactly the
+   unverified state the pass exists to prevent.
 
    One carve-out: a conflict confined to a **generated lockfile** (`uv.lock`,
    `package-lock.json`). Those are derived, not authored, and every creation's
    scaffold regenerates them, so two concurrent creations conflict there as a
-   matter of course -- treating that as a stale pass would serialize exactly
-   the work this layout exists to parallelize. Regenerate the lock from the
-   merged manifest instead (`uv lock`, or `npm install --package-lock-only`)
-   and continue the merge. This is the same rule `.gitattributes` states and
-   `update-self`'s worker already follows; it is not hand-resolving, because
-   nothing is being chosen by hand. If anything *outside* the lockfiles also
-   conflicts, the carve-out does not apply -- abort and supersede.
+   matter of course -- sending every one of them back to the worker would
+   serialize exactly the work this layout exists to parallelize. Regenerate the
+   lock from the merged manifest instead (`uv lock`, or `npm install
+   --package-lock-only`) and continue the merge. This is the same rule
+   `.gitattributes` states and `update-self`'s worker already follows; it is
+   not hand-resolving, because nothing is being chosen by hand. If anything
+   *outside* the lockfiles also conflicts, the carve-out does not apply --
+   abort and catch the pass up.
 
 ### Provisional milestone merges
 
@@ -150,7 +156,8 @@ A worker can declare a **milestone** mid-pass: a commit it says is already worth
 using (`worker-reporting.md` for the worker's side, `lead-proxy.md`'s
 "Milestone reports: provisional merge" for the lead's). Merging one runs the
 same three checks above, with the target pinned to the milestone's `commit:`
-rather than the branch tip.
+rather than the branch tip. A milestone that fails them is simply not merged:
+the worker is still mid-pass, and its `done` is caught up as usual.
 
 This is the **one sanctioned way not-yet-hardened work reaches the lead's
 branch**. The merge commit says so (`Provisional merge of <worker> at milestone
@@ -161,24 +168,60 @@ The freshness rule composes: the provisional merge advances
 same check covers exactly the window since that merge, and a foreground edit
 inside it makes the pass stale by the usual rule.
 
-## Superseding a stale pass (coalescing)
+## Catching up a stale pass
 
-Whoever finds the staleness -- the pass owner at merge time, or the agent
-taking over an abandoned pass -- replaces it with **one** new pass:
+Whoever finds the staleness at merge time -- a moved base, a conflicted merge,
+or an apply refused because `HEAD` moved -- sends the pass back to its worker
+to catch up. **Keep the worker**: its branch, its worktree and anything it
+built (a critical app's bundles) are the verified work the catch-up builds on.
+Never destroy it to make room for a new pass.
+
+Ask it with a reply naming your current `HEAD` and what moved, then re-arm the
+poll exactly as for a gate (`lead-proxy.md`):
+
+```bash
+uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+    --task-file <TASK_FILE> -m "Catch up to $(git rev-parse HEAD) per harden-contention.md: merge it into your branch, resolve any conflict, harden and verify what it brings in, and report done again. What moved: <the \$BASE..HEAD commits touching the creation, a conflicted path, and any notes on the ticket>."
+```
+
+The worker's side is `.agents/shared/worker/references/harden-creation.md`
+("Catching up to a moved base"), or its own flow's catch-up section where one
+exists (`update-self`'s worker has its own). It merges your `HEAD` into its
+branch, so merging that branch back into yours conflicts with nothing. It
+resolves every conflict on its side, regenerating lockfiles rather than
+choosing sides. The commits it brings in get the same hardening as the rest of
+the pass, and its test gate re-runs over exactly what the catch-up changed.
+Then it reports `done` again.
+
+That report goes through the same checks before merge as the first one.
+Usually it is fresh now. If `HEAD` moved again while the worker caught up,
+catch it up again: each round covers only the commits since the last, so the
+rounds shrink. A worker that cannot reconcile the new base reports `stuck` or
+asks a `question`, handled as on any run.
+
+A reverted provisional milestone (below) must be reinstated before you ask:
+the catch-up merges your `HEAD`, revert included, into the worker's branch,
+which takes the milestone's commits back out of it.
+
+## Superseding a pass whose worker is gone
+
+When there is no worker left to catch up -- an abandoned pass whose session is
+gone, one stopped after a failure, or one that reported `stuck` on the catch-up
+itself -- replace it with **one** new pass:
 
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name <worker-name> --delete-branches
-tk close <old-ticket-id> "Superseded -- base moved under the pass; re-dispatched covering the union."
+tk close <old-ticket-id> "Superseded -- worker gone; re-dispatched covering the union."
 ```
 
-Deleting the branches is deliberate: the verification ran against a base
-that no longer exists, so nothing on the pass or its sub-workers is worth
-keeping. Then dispatch a
-fresh pass through the normal flow (Steps 1-3 of the calling skill) whose
-scope covers **everything since the last hardened merge**: at minimum the
-`$BASE..HEAD` commits touching the creation, plus whatever any notes on the
-old ticket describe. One superseding pass validates the union of all pending
-changes together -- which is the only combination that will actually run.
+Deleting the branches is deliberate: nothing is left to verify the old branch
+against the new base, and the launch cannot reuse the worker's name while they
+exist. Then dispatch a fresh pass through the normal flow (Steps 1-3 of the
+calling skill) whose scope covers **everything since the last hardened merge**:
+at minimum the `$BASE..HEAD` commits touching the creation, plus whatever any
+notes on the old ticket describe. One superseding pass validates the union of
+all pending changes together -- which is the only combination that will
+actually run.
 
 Two wrinkles when the pass had already delivered a provisional milestone
 merge:
@@ -189,7 +232,8 @@ merge:
   it.
 - **A reverted milestone must be reinstated or superseded.** If you rolled a
   provisional merge back with `git revert -m 1 <merge-commit>`, the reverted
-  commits are still ancestors of HEAD, so any later merge from that branch
-  silently omits them. Reinstate them with `git revert <revert-commit>` before
-  merging from that branch again, or supersede the pass so a fresh one rebuilds
-  the work from the current base.
+  commits are still ancestors of HEAD, so any later merge from that branch --
+  and any catch-up into it -- silently omits them. Reinstate them with `git
+  revert <revert-commit>` before merging from that branch or catching it up,
+  or supersede the pass so a fresh one rebuilds the work from the current
+  base.

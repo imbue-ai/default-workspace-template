@@ -450,6 +450,12 @@ over the gap. A deviation stands only when the worker is gone and the gap
 cannot be closed from here, and then the results message states it plainly as
 a caveat.
 
+A `done` that answers a catch-up (5b) carries a **Catch-up** section, and the
+audit reads it the same way: it must show which of the worker guide's §7 items
+ran over the commits it brought in, each with its evidence, and how each
+conflict there was resolved. The worker's earlier evidence for the rest of the
+pass still stands.
+
 There is no approval gate: the audit, not the user, authorizes the apply. The
 `done` report is your raw material, not the user's message; the results
 message is composed *after* the apply, per `references/results-message.md`.
@@ -485,6 +491,44 @@ instead of proceeding. Release them afterwards.
 
 The apply run from here keeps its own run record and raises no "recently
 updated" notice: `--keep-rollback-point` is the careful flow's, not this one's.
+
+**Before the apply, let other chats' work settle.** Other chats keep working
+while the worker runs. If the tree is dirty, or another agent holds an
+`editing service <name>` or `editing critical app <name>` lease, they are
+mid-edit: wait for them rather than refusing or re-dispatching. Wait in the
+background and end your turn; the result starts your next one:
+
+```bash
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/run_in_background.py \
+    --description "Wait for other chats to finish their edits" -- \
+    bash -c 'for i in $(seq 1 360); do if [ -z "$(git status --porcelain)" ] && ! tk ready 2>/dev/null | grep -q -- "- editing \(service\|critical app\) "; then echo settled; exit 0; fi; sleep 10; done; echo "still busy after an hour"; git status --porcelain; exit 1'
+```
+
+Take this pass's own `editing critical app` leases only after it settles, so
+the wait does not find them. If it is still busy after the hour, tell the user
+which chat's edit is holding the update and that nothing has been applied;
+a lease is broken only on their call. Once it settles, check whether those
+chats committed since the worker branched:
+
+```bash
+git merge-base --is-ancestor HEAD mngr/update-self
+```
+
+Exit 0 means the branch still fast-forwards: apply. Exit 1 means `HEAD` moved
+under the pass, and the apply would refuse it: **catch the worker up** instead
+of redoing the pass. Reply to the worker (it is still waiting, and holds the
+branch and any bundles it built), re-arm the poll as in Step 3b, and audit the
+`done` it sends back (5a):
+
+```bash
+uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+    --task-file data/.tasks/update-self/task.md \
+    -m "Catch up to $(git rev-parse HEAD) per §7 of your worker guide, then report done again."
+```
+
+Never destroy or stop the worker to make room for a new pass. A fresh pass
+(Step 3b) is only for a worker that is gone, or one that reports `stuck` on
+the catch-up.
 
 Run the apply from the staged copy, in the **foreground**: its output (refusal
 and resume messages, any provisioner warning, the `apply phase timings:` line)
@@ -532,7 +576,10 @@ Exit codes:
 - **`1` -- precondition; nothing changed** (dirty tree, `HEAD` moved under the
   pass, another apply in flight, this merge already landed and rolled back, or
   a merge that does not first revert an earlier update's rollback commit).
-  Re-dispatch a fresh worker pass off the current `HEAD`; the refusal names the
+  A dirty tree or a moved `HEAD` is the settle-and-catch-up case above: wait,
+  catch the worker up, and apply again. A merge that leaves a rollback in
+  place, or one already landed and rolled back, needs a fresh worker pass off
+  the current `HEAD` (`references/apply-outcomes.md`); the refusal names the
   commits to revert.
 
 What each outcome means for the user, the `provision-incomplete` and

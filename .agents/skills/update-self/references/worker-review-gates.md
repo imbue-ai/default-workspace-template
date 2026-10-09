@@ -26,7 +26,9 @@ All three must hold:
    `<merge-sha>` is this pass's merge or, on a retry of a release already in
    history (whose merge adds no commit), that release's landed merge. Name the
    merge, each revert sha, and any revert conflict with how you resolved it
-   in the report as this condition's evidence.
+   in the report as this condition's evidence. A catch-up merge (the worker
+   guide's §7) is not an edit of yours: what it brings in is the workspace's
+   own work. A conflict you resolved in it is.
 
 Every changed file then arrives exactly as upstream shipped and tested it, and
 there is nothing local for a review to protect. Running `/autofix` here would

@@ -473,6 +473,6 @@ them.
 
 Both flows enforce single-flight per creation: if another chat already has a
 harden pass in flight for this service, they leave a note on its ticket
-instead of dispatching a sibling, and the eventual superseding pass covers
-both changes. See
+instead of dispatching a sibling, and that pass catches up at merge time to
+cover both changes. See
 [`.agents/shared/references/harden-contention.md`](../../shared/references/harden-contention.md).

@@ -238,6 +238,8 @@ git revert <revert-commit>
 ```
 
 or supersede the pass per `.agents/shared/references/harden-contention.md`.
+Reinstate it before asking the worker to catch up, too: the catch-up merges
+your `HEAD`, revert included, into its branch.
 
 ## Terminal status: act and stop polling
 
@@ -281,8 +283,9 @@ On `type: status`:
   On a conflict, recovery depends on the calling skill: if it defines
   a staleness rule (the harden flows do -- see
   `.agents/shared/references/harden-contention.md`), abort the merge and
-  follow that rule rather than hand-resolving; otherwise resolve the conflict
-  manually.
+  follow that rule -- the worker catches its branch up and resolves the
+  conflict there -- rather than resolving it yourself; otherwise resolve the
+  conflict manually.
 
 - `name: stuck`, or the 30m timeout tripped without a report arriving -- follow
   `.agents/skills/launch-task/references/worker-failure.md`: surface the report

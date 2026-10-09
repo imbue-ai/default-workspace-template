@@ -70,7 +70,10 @@ At each gate or terminal status:
 
 3. Stop your turn. For gate reports, the lead's reply arrives as a message in
    your chat and you resume; for terminal reports, the lead acts on the report
-   and the run ends. Only gates and terminal statuses stop your turn: the
+   and the run ends -- unless its base moved before it could merge you, in
+   which case it asks you to catch up and report again (your flow's catch-up
+   section; for a harden pass, `harden-creation.md`'s "Catching up to a moved
+   base"). Only gates and terminal statuses stop your turn: the
    milestone reports below are non-blocking, and you keep working straight
    through one.
 
