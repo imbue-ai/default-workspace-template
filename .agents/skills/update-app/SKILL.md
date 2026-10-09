@@ -374,7 +374,9 @@ where the data dies. Encode these, cheapest first:
   previewed chat that way, and a terminal preview needs `--with terminal-pty`,
   since its pages frame the pty the registry names;
   `--instance-key <key>` names the instance the window opens on, for an app
-  whose `open_path` takes one (a chat opens on a conversation). The worktree is
+  whose `open_path` takes one (a chat opens on a conversation). `up` and
+  `refresh` run `uv sync --all-packages` in the worktree first, so a fresh
+  worktree needs no setup of its own; if that sync fails, nothing boots. The worktree is
   the app's code isolation when the change is one the user must see before it
   lands; for a contained change exercised against a data copy, the raw
   `serve_isolated_instance.py` call above, from the live tree, is still the

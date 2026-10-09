@@ -1,0 +1,3 @@
+An app preview booted from a fresh worktree now runs the worktree's code. Before, the update-app skill's `preview_app.py` started the app with `uv run <app>` in the worktree, which installs only the root project's packages and leaves out user-built apps. The app's command then fell through to the live repo's install, still on PATH from the `uv run` that ran the script, so the preview served the live app with no error or warning.
+
+`preview_app.py up` and `refresh` now run `uv sync --all-packages` in the worktree first and stop if it fails. The app also runs with `VIRTUAL_ENV` unset and the live repo's venv removed from PATH, so a command the worktree lacks fails to boot instead of running the live one.
