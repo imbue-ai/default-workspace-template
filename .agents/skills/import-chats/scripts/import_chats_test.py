@@ -634,7 +634,7 @@ def _rendered_page(
         f'<div class="msg"><h2><time class="msg-ts" datetime="{when}" title="{when}">{when}</time></h2>Hi</div>'
         for when in message_times
     )
-    quoted = '"' + title.replace('"', '\\"') + '"'
+    quoted = json.dumps(title)
     page.write_text(
         "---\n"
         f"title: {quoted}\n"
@@ -671,7 +671,7 @@ def test_a_page_is_read_for_its_title_its_original_and_its_latest_message(
     two_lines = _rendered_page(
         tmp_path, "claude_chats", "u2", "First line\nsecond line", "", []
     )
-    assert import_chats.read_page(two_lines).title == "First line"
+    assert import_chats.read_page(two_lines).title == "First line\nsecond line"
 
 
 def test_a_page_without_frontmatter_or_times_is_listed_by_its_directory(

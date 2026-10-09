@@ -72,11 +72,11 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-DATALIB_VERSION = "v0.40.0"
+DATALIB_VERSION = "v0.41.0"
 # The fully static builds: they run on any Linux of the right arch, whatever its libc.
 _TARBALL_SHA256_BY_ARCH = {
-    "x86_64": "b777dc02be0f6ea1d1e712dfe020be6fecd5468478380a208793706f2c722b04",
-    "aarch64": "488d9fa8fd232e6a5a2041762fe421c9173e1af1d4cf914e118dbcb99752b707",
+    "x86_64": "12120e655284ef17fd053682bf45617d000bd684150df55951b68bcb29a3806f",
+    "aarch64": "c53ff2d148465b218214c1b7b65e4aa5dc70b50386fd053f1a1bc096160899cc",
 }
 _RELEASE_URL = "https://github.com/imbue-ai/datalib/releases/download"
 _DOWNLOAD_TIMEOUT_SECONDS = 300.0
@@ -327,11 +327,14 @@ class IndexedPage:
 
 
 def _frontmatter_value(raw: str) -> str:
-    """A frontmatter value as datalib's chat renderer writes it: in double quotes, with only its double quotes
-    escaped (backslashes are written as they are). A name with a line break leaves just its first line here."""
+    """A frontmatter value as datalib writes it: a JSON string (its ``yaml_scalar``), so quotes, backslashes and line
+    breaks come back as they were. A value that is not one is taken as written, without its outer quotes."""
     raw = raw.strip()
     if raw.startswith('"'):
-        return raw[1:].removesuffix('"').replace('\\"', '"')
+        try:
+            return str(json.loads(raw))
+        except ValueError:
+            return raw.strip('"')
     return raw
 
 
