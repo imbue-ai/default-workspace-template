@@ -511,9 +511,18 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
     bash -c 'for i in $(seq 1 360); do leases=$(tk ready) || { echo "tk ready failed"; exit 1; }; if [ -z "$(git status --porcelain)" ] && ! printf "%s\n" "$leases" | grep -q -- "- editing service "; then echo settled; exit 0; fi; sleep 10; done; echo "still busy after an hour"; git status --porcelain; exit 1'
 ```
 
-If it is still busy after the hour, tell the user which chat's edit is holding
-the update and that nothing has been applied; a lease is broken only on their
-call. If it says `tk ready failed`, the leases could not be read: find out why
+If it is still busy after the hour, record the hold so the app shows what the
+update is waiting on, then tell the user which chat's edit is holding the
+update and that nothing has been applied; a lease is broken only on their
+call. Record `run-status resume` once they answer:
+
+```bash
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    run-status hold \
+    --detail "<one plain line: which chat's unfinished edit is holding the update>"
+```
+
+If it says `tk ready failed`, the leases could not be read: find out why
 and wait again. Once it settles, check whether those chats committed since the
 worker branched:
 
@@ -540,6 +549,11 @@ mkdir -p data/.tasks/update-self/reports/consumed
 mngr message update-self \
     -m "Catch up to $(git rev-parse HEAD) per §7 of your worker guide, then report done again."
 ```
+
+A non-zero exit means the message did not reach the worker: do not re-arm the
+poll on it. Check whether the worker is alive ("Diagnose worker liveness" in
+`.agents/shared/references/lead-proxy.md`) and send again; a worker that is
+gone takes the fresh pass below.
 
 Never destroy or stop the worker to make room for a new pass. A fresh pass
 (Step 3b) is only for a worker that is gone, or one that reports `stuck` on
