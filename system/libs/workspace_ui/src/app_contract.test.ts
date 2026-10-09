@@ -394,6 +394,28 @@ describe("a framed page's scripted popups", () => {
     expect(sentAfterConnect(parent)).toEqual([]);
   });
 
+  it("follows a call naming _self as a plain click, and leaves one naming a frame of the page to the browser", () => {
+    const parent = framed();
+    connection = connectToShell({});
+    document.body.innerHTML = '<iframe name="preview"></iframe>';
+    const open = window.open as (...a: unknown[]) => Window | null;
+    expect(open("/docs/intro", "_self")).toEqual({ closed: false });
+    expect(open("http://localhost:5173/preview", "_SELF")).toBeNull();
+    expect(open("https://example.com/docs", "_self")).toBeNull();
+    expect(open("http://localhost:5173/preview", "preview")).toEqual({ closed: false });
+    expect(open("/docs/intro", "preview")).toEqual({ closed: false });
+    expect(nativeOpen.mock.calls).toEqual([
+      ["/docs/intro", "_self"],
+      ["http://localhost:5173/preview", "preview"],
+      ["/docs/intro", "preview"],
+    ]);
+    expect(sentAfterConnect(parent)).toEqual([
+      [{ type: SHELL_OPEN_LINK, url: "http://localhost:5173/preview" }, "*"],
+      [{ type: SHELL_OPEN_LINK, url: "https://example.com/docs" }, "*"],
+    ]);
+    document.body.innerHTML = "";
+  });
+
   it("leaves window.open alone on a top-level page, and puts it back once disconnected", () => {
     connection = connectToShell({});
     expect(window.open).toBe(nativeOpen);

@@ -30,6 +30,9 @@
  * URL, another app's address (on the page's own share domain too) or a ``file:`` URL goes to the
  * shell; the call answers null, as a blocked popup does. A popup to any other site, a blank window,
  * and other schemes stay the browser's, since a script that opened one may need the window back.
+ * A call that names a frame of the page stays the browser's, and one that names ``_self`` follows
+ * the rule for a plain click: the page's own origin navigates the page, any other link goes to the
+ * shell.
  */
 
 /** Shell to app: sent after every `load` of the frame; says which window, desktop, path, and client this page is in. */
@@ -226,10 +229,9 @@ function isNewWindowClick(event: MouseEvent, link: HTMLAnchorElement | HTMLAreaE
   return isModifiedClick(event) || (target !== "" && target !== "_self");
 }
 
-/** Whether a link's ``target`` names a frame of the page itself (an ``<iframe name>``), which a plain click loads the
- *  link into. */
-function targetsFrameOfPage(link: HTMLAnchorElement | HTMLAreaElement, view: Window): boolean {
-  const name = link.target;
+/** Whether ``name`` (a link's ``target``, or a ``window.open`` call's) names a frame of the page itself (an
+ *  ``<iframe name>``), which a plain click or the call loads the URL into. */
+function namesFrameOfPage(name: string, view: Window): boolean {
   if (name === "" || name.startsWith("_")) return false;
   return Array.from(view.document.querySelectorAll("iframe[name], frame[name]")).some(
     (frame) => frame.getAttribute("name") === name,
@@ -248,7 +250,7 @@ function followLinkClick(
   if (event.button !== (event.type === "auxclick" ? MIDDLE_BUTTON : PRIMARY_BUTTON)) return;
   const link = clickedLink(event);
   if (link === null || link.hasAttribute("download")) return;
-  if (!isModifiedClick(event) && targetsFrameOfPage(link, view)) return;
+  if (!isModifiedClick(event) && namesFrameOfPage(link.target, view)) return;
   let url: URL;
   try {
     url = new URL(link.href);
@@ -267,20 +269,27 @@ function followLinkClick(
   send(SHELL_OPEN_LINK, { url: url.href });
 }
 
-/** What the shell is sent for a popup a framed page's script opens to ``url`` (see the module docs), or null for one
- *  the browser's own ``window.open`` opens. */
+/** What the shell is sent for a ``window.open(url, windowName)`` a framed page's script calls (see the module docs),
+ *  or null for one the browser's own ``window.open`` opens. */
 function popupHandedOn(
   url: unknown,
+  windowName: unknown,
   view: Window,
 ): { readonly type: string; readonly payload: Record<string, unknown> } | null {
   if (url === undefined || url === null || String(url) === "") return null;
+  const name = windowName === undefined || windowName === null ? "" : String(windowName);
+  if (namesFrameOfPage(name, view)) return null;
   let target: URL;
   try {
     target = new URL(String(url), view.location.href);
   } catch {
     return null;
   }
-  if (target.protocol === "file:") return { type: SHELL_OPEN_LINK, payload: { url: target.href } };
+  const openLink = { type: SHELL_OPEN_LINK, payload: { url: target.href } };
+  if (name.toLowerCase() === "_self") {
+    return HANDED_ON_SCHEMES.has(target.protocol) && target.origin !== view.location.origin ? openLink : null;
+  }
+  if (target.protocol === "file:") return openLink;
   if (target.protocol !== "http:" && target.protocol !== "https:") return null;
   if (target.origin === view.location.origin) {
     return { type: SHELL_OPEN, payload: { path: `${target.pathname}${target.search}`, ifPresent: "focus" } };
@@ -289,9 +298,7 @@ function popupHandedOn(
   const isOnPageCoordinate =
     hasWorkspaceCoordinate(host) &&
     workspaceHostCoordinate(host) === workspaceHostCoordinate(view.location.host.toLowerCase());
-  return !isExternalUrl(target) || isOnPageCoordinate
-    ? { type: SHELL_OPEN_LINK, payload: { url: target.href } }
-    : null;
+  return !isExternalUrl(target) || isOnPageCoordinate ? openLink : null;
 }
 
 /**
@@ -344,7 +351,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
   const nativeOpen = boundWindow.open;
   const routedOpen: typeof boundWindow.open = new Proxy(nativeOpen, {
     apply(target, thisArg, args: unknown[]) {
-      const handedOn = popupHandedOn(args[0], boundWindow);
+      const handedOn = popupHandedOn(args[0], args[1], boundWindow);
       if (handedOn === null) return Reflect.apply(target, thisArg, args);
       send(handedOn.type, handedOn.payload);
       return null;
