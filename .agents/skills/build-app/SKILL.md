@@ -221,7 +221,9 @@ What gets generated:
   under `[[references]]` with a `note` naming the surface it uses.
 - `system/apps/<package>/pyproject.toml` -- declares
   `[project.scripts] <name> = "<package>.runner:main"`, the entry point
-  the app's own tool environment exposes.
+  the app's own tool environment exposes, and makes the directory its own
+  `ty` project (an empty `[tool.ty]` table and a pinned `ty` dev dependency)
+  for the ratchets' type check.
 - `system/apps/<package>/src/<package>/__init__.py` -- empty.
 - `system/apps/<package>/src/<package>/runner.py` -- sync Flask starter.
   Builds a `Flask` app and serves it with
@@ -255,7 +257,7 @@ What gets generated:
   interactive control a stable `id` or a first class that names it, and a
   reference resolves to one thing.
 - `system/apps/<package>/test_<package>_ratchets.py` -- standard ratchets at
-  zero.
+  zero, plus `test_no_type_errors`, which fails on any `ty` error in the app.
 - `system/apps/<package>/README.md` -- one-line description.
 
 What gets updated and installed -- no shared file is authored, which is what
@@ -503,7 +505,9 @@ nudged sideways only if there is no room beside it, and then by the least that
 makes room; it is resized only if it is over half the backdrop wide. Most of the
 time nothing about it changes. Drop the flag
 only for an app the user wanted running rather than shown; with no chat on that
-desktop it is already a no-op.
+desktop it is already a no-op. When the user has popped the chat out into its own
+window, the app opens unpaired where a plain `open` puts it and the summary says
+so; that is fine, and there is no need to `--force` the chat back.
 
 With no `--desktop`, the op edits the desktop the target client is looking
 at, which is where the user expects the new window. (Pass `--desktop <name>`

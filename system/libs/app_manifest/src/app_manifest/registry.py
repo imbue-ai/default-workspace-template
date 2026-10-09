@@ -147,7 +147,9 @@ def read_registry(path: Path) -> list[RegistryRow]:
             logger.warning(
                 "Skipped registry row {} ({}) in {}: {}",
                 row_idx,
-                raw_row.get("name", "<unnamed>") if isinstance(raw_row, dict) else "<not a table>",
+                raw_row.get("name", "<unnamed>")  # ty: ignore[no-matching-overload]
+                if isinstance(raw_row, dict)
+                else "<not a table>",
                 path,
                 describe_validation_error(e),
             )
