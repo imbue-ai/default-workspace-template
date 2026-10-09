@@ -33,7 +33,7 @@ crystallized skill path. The standard switch is:
 | -------------------------------------------------------------- | -------------------------------------------------------- |
 | `data/.tasks/fetch-process-show/<slug>/fetch.py`                     | `.agents/skills/<name>/scripts/run.py`                   |
 | `data/.tasks/fetch-process-show/<slug>/sample.json`                  | run the skill with `--output <path>` to regenerate       |
-| Inline import of the fetch script                              | `subprocess.run(["uv", "run", "python", "<skill-path>"])`|
+| Inline import of the fetch script                              | `from <name_with_underscores>_skill.<module> import ...` (root venv), or `subprocess.run(["uv", "run", "--no-sync", ".agents/skills/<name>/scripts/run.py", ...])` |
 
 If a consumer has explicit fallback logic (e.g. "use the skill if
 installed, else use the runtime path"), that fallback can stay until
