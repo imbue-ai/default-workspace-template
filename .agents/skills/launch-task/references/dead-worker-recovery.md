@@ -17,7 +17,7 @@ grep '"agent_name": *"<worker>"' /home/user/workspace/data/.state/oom_priority/e
 
 Revival guidelines when a worker was shed (first free memory with the user per `.agents/shared/references/freeing-memory.md`, or the revival lands in the same pressure):
 
-- **Revive at most once** with `mngr start <worker> --restart`, then nudge it to continue (`uv run .agents/skills/launch-task/scripts/create_worker.py reply --task-file data/.tasks/launch-task/<worker>/task.md -m continue`). A shed agent needs `--restart` -- a plain `mngr start` or a message will not relaunch it. You do not need to resend the task: it survives in the worker's conversation history, and a SessionStart hook already tells the revived worker it was paused, so it re-checks state before continuing.
+- **Revive at most once** with `mngr start <worker> --restart`, then nudge it to continue (`uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply --task-file data/.tasks/launch-task/<worker>/task.md -m continue`). A shed agent needs `--restart` -- a plain `mngr start` or a message will not relaunch it. You do not need to resend the task: it survives in the worker's conversation history, and a SessionStart hook already tells the revived worker it was paused, so it re-checks state before continuing.
 - **If the same worker has already been shed twice** (two `process_shed` lines naming it): stop. Do not keep reviving -- surface to the user with the ledger details, because something about this worker's footprint is incompatible with the current memory budget. Reviving again will most likely just be shed a third time.
 
 If the worker was *not* in the ledger, it died for some other reason (e.g. a claude crash); proceed with the normal restart path below, where a plain `mngr start` suffices.
@@ -33,7 +33,7 @@ If the worker was *not* in the ledger, it died for some other reason (e.g. a cla
 2. Once it reaches `WAITING`, message it like any live agent -- ask it to continue, finish, or submit:
 
    ```bash
-   uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+   uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply \
        --task-file data/.tasks/launch-task/<worker>/task.md \
        -m "your previous run died. inspect git status and continue / submit as appropriate."
    ```
@@ -71,7 +71,7 @@ Only fall back to this path when the default doesn't apply: `mngr start` itself 
 4. Destroy the dead agent (and any sub-workers it launched) without dropping its branch:
 
    ```bash
-   uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name <worker>
+   uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py destroy --name <worker>
    ```
 
    Destroy keeps the branch unless `--delete-branches` is passed, and mngr preserves the transcript, so the WIP commit you just made stays reachable.

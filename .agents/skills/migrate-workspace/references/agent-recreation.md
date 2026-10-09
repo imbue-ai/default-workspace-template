@@ -107,7 +107,7 @@ being brought over. `cp -n` keeps a re-run from overwriting an already-staged fi
 ## 4. Recreate, dormant
 
 ```bash
-uv run .agents/skills/migrate-workspace/scripts/migrate_workspace.py recreate-agents \
+uv run --no-sync .agents/skills/migrate-workspace/scripts/migrate_workspace.py recreate-agents \
     --agents-json data/.tasks/migrate-workspace/agents.json \
     --sessions-dir data/.tasks/migrate-workspace/sessions
 ```

@@ -178,7 +178,7 @@ hardening inline: commit, then dispatch. Hardening always runs in the background
 worker.
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py launch \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
     --name crystallize-$NAME \
     --template worker \
     --runtime-dir data/.tasks/harden/crystallize-$NAME/ \
@@ -197,7 +197,7 @@ your next turn; handle it then.
 
 ```bash
 python3 system/scripts/run_in_background.py --description "Wait for the background agent" -- \
-    uv run .agents/skills/launch-task/scripts/create_worker.py await \
+    uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name crystallize-$NAME \
     --task-file data/.tasks/harden/crystallize-$NAME/task.md \
     --timeout 90m

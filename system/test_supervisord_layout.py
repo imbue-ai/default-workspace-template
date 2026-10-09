@@ -28,6 +28,8 @@ from pathlib import Path
 from types import ModuleType
 
 from app_manifest import scope
+from build_app_skill import scaffold_flask_lib
+from migrate_workspace_skill import migrate_workspace
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SUPERVISORD_CONF = _REPO_ROOT / "system" / "supervisord.conf"
@@ -73,14 +75,12 @@ def _programs_declared_in(parser: configparser.ConfigParser) -> set[str]:
     }
 
 
-# The in-repo readers that have to be loaded by path: they sit in four separate uv workspace
-# members, and two of them are standalone scripts. (``app_manifest.scope`` is a library and is
-# imported normally below.) migrate-workspace's REMOTE reader lists the directory over SSH, in
-# shell, so its own suite runs that shell against a local workspace instead.
+# The readers that live in test modules, loaded by path under their own module names so
+# pytest's own copies are untouched. (The scaffolder, migrate-workspace and
+# ``app_manifest.scope`` are packages and are imported normally.) migrate-workspace's REMOTE
+# reader lists the directory over SSH, in shell, so its own suite runs that shell against a
+# local workspace instead.
 _READER_PATHS: dict[str, Path] = {
-    "scaffolder": _REPO_ROOT / ".agents/skills/build-app/scripts/scaffold_flask_lib.py",
-    "migrate_workspace": _REPO_ROOT
-    / ".agents/skills/migrate-workspace/scripts/migrate_workspace.py",
     "app_manifests": _REPO_ROOT / "system/test_app_manifests.py",
     "oom_bands": _REPO_ROOT
     / "system/services/oom_priority/bin/oom_tag_service_test.py",
@@ -129,11 +129,11 @@ def test_every_reader_sees_every_program_the_include_glob_reaches() -> None:
     )
 
     assert (
-        _declared_in(_load("scaffolder")._supervisord_conf_files(_SUPERVISORD_CONF))
+        _declared_in(scaffold_flask_lib._supervisord_conf_files(_SUPERVISORD_CONF))
         == canonical
     )
     assert (
-        _declared_in(_load("migrate_workspace")._local_supervisord_configs(_REPO_ROOT))
+        _declared_in(migrate_workspace._local_supervisord_configs(_REPO_ROOT))
         == canonical
     )
     # An empty read is this reader's ordinary answer ("the app is not registered yet"), so a

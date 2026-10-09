@@ -1,0 +1,15 @@
+[project]
+name = "connect-external-service-skill"
+version = "0.1.0"
+description = "Files a secret request through the chat's secret card"
+requires-python = ">=3.11"
+dependencies = [
+    "workspace-scripts",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["connect_external_service_skill"]

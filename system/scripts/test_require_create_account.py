@@ -11,7 +11,6 @@ So these run the real thing, which costs a `uv run mngr create` apiece.
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import shutil
 import subprocess
@@ -19,15 +18,10 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from workspace_bare_scripts import require_create_account
 
 _SCRIPT = Path(__file__).with_name("require_create_account.py")
-_spec = importlib.util.spec_from_file_location(
-    "require_create_account_for_e2e", _SCRIPT
-)
-assert _spec is not None and _spec.loader is not None
-_module = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_module)
-NO_ACCOUNT_MESSAGE: str = _module.NO_ACCOUNT_MESSAGE
+NO_ACCOUNT_MESSAGE: str = require_create_account.NO_ACCOUNT_MESSAGE
 
 _COMMITTED_SETTINGS = _SCRIPT.parents[2] / ".mngr" / "settings.toml"
 

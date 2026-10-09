@@ -29,7 +29,7 @@ and wait for one finish report use the same `await` (or the synchronous
 
 ```bash
 python3 system/scripts/run_in_background.py --description "Wait for the background agent" -- \
-    uv run .agents/skills/launch-task/scripts/create_worker.py await \
+    uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name <WORKER_NAME> \
     --task-file <TASK_FILE>
 ```
@@ -152,7 +152,7 @@ The worker is framed as addressing the user directly. When you answer, write
 your reply in the user's voice and forward it to the worker's chat:
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply \
     --task-file <TASK_FILE> -m "<reply, in the user's voice>"
 ```
 
@@ -226,7 +226,7 @@ de facto "no with notes" (the merge commit's subject names the worker and
 milestone, so the target is easy to find).
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply \
     --task-file <TASK_FILE> -m "<why the milestone was reverted, in the user's voice>"
 ```
 
@@ -270,7 +270,7 @@ On `type: status`:
   On a clean merge, close any tracking ticket and destroy the worker before
   the calling skill's go-live:
   ```bash
-  uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name <WORKER_NAME>
+  uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py destroy --name <WORKER_NAME>
   ```
   Destroy takes the worker's sub-workers with it and keeps what you may
   still need: the branch `mngr/<WORKER_NAME>`, the transcript (under
@@ -289,7 +289,7 @@ On `type: status`:
   body (or its absence) to the user, point at the branch and worker agent, then
   stop the worker (and its sub-workers) so no process stays behind:
   ```bash
-  uv run .agents/skills/launch-task/scripts/create_worker.py stop --name <WORKER_NAME>
+  uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py stop --name <WORKER_NAME>
   ```
   Its branch, worktree, and transcript stay for inspection. A timeout is
   the same once the liveness diagnosis says the worker is dead or wedged.

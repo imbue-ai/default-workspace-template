@@ -130,7 +130,7 @@ closed you can drive it freely on its own port.
 it first, on its own:
 
 ```bash
-uv run python3 .agents/skills/update-app/scripts/preview_app.py up \
+uv run --no-sync .agents/skills/update-app/scripts/preview_app.py up \
     --app <name> --worktree "data/.tasks/critical-live/update-$SLUG" \
     [--with <sibling>]... [--instance-key <key>]
 ```
@@ -212,7 +212,7 @@ Then edit, and refresh the preview in place:
   ports.
 
   ```bash
-  uv run python3 .agents/skills/update-app/scripts/preview_app.py refresh --app <name>
+  uv run --no-sync .agents/skills/update-app/scripts/preview_app.py refresh --app <name>
   ```
 
   If `refresh` exits non-zero the new build did not boot. Fix it and refresh
@@ -255,7 +255,7 @@ worktrees, so before creating the worker, release your hold on it:
 
 ```bash
 uv run --no-sync workspace-layout close <name>-preview
-uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
+uv run --no-sync .agents/skills/update-app/scripts/preview_app.py down --app <name>
 git worktree remove "data/.tasks/critical-live/update-$SLUG"
 ```
 
@@ -276,7 +276,7 @@ frontmatter, launch, background-poll) with these specifics:
   the branch you built up instead of branching anew from the served HEAD:
 
   ```bash
-  uv run .agents/skills/launch-task/scripts/create_worker.py launch \
+  uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
       --name "update-$SLUG" --template worker \
       --runtime-dir "data/.tasks/harden/update-$SLUG/" \
       --task-file "data/.tasks/harden/update-$SLUG/task.md" \
@@ -311,7 +311,7 @@ round:
 ```bash
 WORK_DIR=$(mngr ls --include "name == \"update-$SLUG\"" --format json \
     | python3 -c 'import sys, json; print(json.load(sys.stdin)["agents"][0]["work_dir"])')
-uv run python3 .agents/skills/update-app/scripts/preview_app.py up \
+uv run --no-sync .agents/skills/update-app/scripts/preview_app.py up \
     --app <name> --worktree "$WORK_DIR" [--with <sibling>]... [--instance-key <key>]
 uv run --no-sync workspace-layout open <name>-preview
 ```
@@ -409,7 +409,7 @@ another critical app may have applied since you branched.
 
    ```bash
    uv run --no-sync workspace-layout close <name>-preview
-   uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
+   uv run --no-sync .agents/skills/update-app/scripts/preview_app.py down --app <name>
    ```
 
    The close goes first: nothing takes a window away when its app leaves the
@@ -420,7 +420,7 @@ another critical app may have applied since you branched.
    destroy it:
 
    ```bash
-   uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name "update-$SLUG"
+   uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py destroy --name "update-$SLUG"
    ```
 
    After a failed apply (`1`, `2`, `3`), stop it instead

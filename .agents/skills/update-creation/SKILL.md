@@ -180,7 +180,7 @@ hardening inline: commit, then dispatch. Hardening always runs in the background
 worker.
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py launch \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
     --name update-$TARGET \
     --template worker \
     --runtime-dir data/.tasks/harden/update-$TARGET/ \

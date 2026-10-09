@@ -91,7 +91,20 @@ package = false
 # this venv. Both kinds are members: one lockfile keeps every environment on the
 # same versions, and a user-built app never has to edit this file; an app's own
 # tool environment keeps it running while this venv is rewritten or broken.
-members = ["system/libs/*", "system/services/*", "system/apps/*"]
+# A skill's Python lives in its own project, .agents/skills/<name>/python/
+# (pyproject.toml plus the <skill_name>_skill package), so a skill's dependencies
+# join the same lock; its scripts/ dir keeps only entry files and shell scripts.
+# uv refuses a glob-matched directory with no pyproject.toml, and scripts/ is the
+# standard Agent Skills dir name, so the glob names a dir only this layout uses.
+# The shared skill scripts and system/scripts are a project each too.
+members = [
+    "system/libs/*",
+    "system/services/*",
+    "system/apps/*",
+    "system/scripts",
+    ".agents/shared/scripts",
+    ".agents/skills/*/python",
+]
 # system/libs/workspace_ui is a JavaScript library (the frontends' shared code), not a Python
 # package; system/apps/terminal_pty is a manifest alone (the terminal's pty origin), whose
 # program is an entry point of system/apps/terminal, and system/apps/files is a manifest
@@ -114,6 +127,9 @@ workspace-layout = { workspace = true }
 # Apps that other members depend on (their test suites boot each other).
 system-interface = { workspace = true }
 chat = { workspace = true }
+# The workspace's own scripts, which skill scripts import.
+workspace-scripts = { workspace = true }
+agents-shared = { workspace = true }
 imbue-common = { git = "https://github.com/imbue-ai/mngr", rev = "c3325ef574b70bcbf2b9057c1b596df3665bb081", subdirectory = "libs/imbue_common" }
 imbue-mngr = { git = "https://github.com/imbue-ai/mngr", rev = "c3325ef574b70bcbf2b9057c1b596df3665bb081", subdirectory = "libs/mngr" }
 imbue-mngr-claude = { git = "https://github.com/imbue-ai/mngr", rev = "c3325ef574b70bcbf2b9057c1b596df3665bb081", subdirectory = "libs/mngr_claude" }

@@ -1,0 +1,15 @@
+[project]
+name = "migrate-workspace-skill"
+version = "0.1.0"
+description = "Moves a workspace's work onto a fresh template checkout"
+requires-python = ">=3.11"
+dependencies = [
+    "agents-shared",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["migrate_workspace_skill"]

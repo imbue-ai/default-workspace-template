@@ -2954,7 +2954,7 @@ def test_the_messaging_scripts_create_is_the_one_this_route_takes(app: Flask) ->
     pinned here. ``CreateChatRequest`` forbids unknown fields, and the script reads that refusal as
     a chat app from before them: a rename on this side would send every Imbue Studio chat back to the
     bare ``mngr create`` without a single failing test."""
-    script = Path(__file__).resolve().parents[4] / "scripts" / "message_chat.py"
+    script = Path(__file__).resolve().parents[4] / "scripts" / "workspace_bare_scripts" / "message_chat.py"
     spec = importlib.util.spec_from_file_location("message_chat_for_create_pin", script)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

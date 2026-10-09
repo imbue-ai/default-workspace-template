@@ -35,7 +35,7 @@ from imbue.mngr.interfaces.data_types import CertifiedHostData
 from imbue.mngr.primitives import AgentId, HostId
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_COLLECTOR_PATH = Path(__file__).parent / "collect_bug_report_diagnostics.py"
+_COLLECTOR_PATH = Path(__file__).parent / "workspace_bare_scripts" / "collect_bug_report_diagnostics.py"
 
 
 def _load_collector(mngr_binary: str) -> ModuleType:

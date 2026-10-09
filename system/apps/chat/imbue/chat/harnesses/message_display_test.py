@@ -338,8 +338,8 @@ def test_permission_resolution_reads_the_machine_tag_first() -> None:
 
 
 def _load_system_script(filename: str) -> Any:
-    """A standard-library-only script from ``system/scripts/``, which this package cannot import."""
-    script = Path(__file__).resolve().parents[5] / "scripts" / filename
+    """A standard-library-only module of ``system/scripts/``'s bare package, which this package does not depend on."""
+    script = Path(__file__).resolve().parents[5] / "scripts" / "workspace_bare_scripts" / filename
     spec = importlib.util.spec_from_file_location(f"{script.stem}_for_tag_pin", script)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

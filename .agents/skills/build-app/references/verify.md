@@ -13,10 +13,10 @@ the app name:
 
 ```bash
 # Fast HTTP readiness & content marker check (<0.1s):
-python3 system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>"
+uv run --no-sync system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>"
 
 # Full headless browser render + visual screenshot (~1.3s):
-python3 system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>" --screenshot /tmp/app_mock.png
+uv run --no-sync system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>" --screenshot /tmp/app_mock.png
 ```
 
 
