@@ -138,7 +138,7 @@ A window argument is one of:
 |---|---|
 | See which client asked for something | `uv run --no-sync workspace-layout context` |
 | List every desktop, its windows (id, app, path, title), and every client | `uv run --no-sync workspace-layout desktops` |
-| List every app with its launch paths and windows | `uv run --no-sync workspace-layout list` |
+| List every app with its link, launch paths and windows | `uv run --no-sync workspace-layout list` |
 | Switch a client onto a desktop | `uv run --no-sync workspace-layout load <desktop> [--client <id>]` |
 | Open an app (at its default launch path) | `uv run --no-sync workspace-layout open terminal` |
 | Open a specific page of an app | `uv run --no-sync workspace-layout open files --path /home/user/workspace/data/notes/` |
@@ -259,7 +259,7 @@ minimized), `popped_out` (the windows it popped out into their own
 windows, on any desktop; see "Popped-out windows"), and `shown_history` (what
 its phone layout showed, most recent last: window ids, and `home` for the home
 grid; a phone places the windows it shows minimized, so its `shown` is usually
-empty and the last entry here is what is on its screen). `list` prints every app with its launch paths, whether it is
+empty and the last entry here is what is on its screen). `list` prints every app with the `link` to write for it, its launch paths, whether it is
 running, and where its windows are, plus the same desktops and clients. Both
 print JSON.
 
