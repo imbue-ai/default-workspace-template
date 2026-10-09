@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 import tomllib
 from collections.abc import Sequence
@@ -210,6 +211,33 @@ def test_up_hands_the_manifests_table_to_the_shared_script_with_its_own_placehol
         "CHAT_DATA_DIR={copy:data}",
     ]
     assert _launch(argv) == ["uv", "run", "chat-app", "--secondary"]
+
+
+def test_the_app_runs_with_neither_the_live_repos_venv_nor_the_active_one_on_its_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Either venv's bin left on PATH answers for a console script the worktree lacks."""
+    worktree = _write_worktree(tmp_path)
+    active_venv = tmp_path / "elsewhere" / ".venv"
+    monkeypatch.setenv("VIRTUAL_ENV", str(active_venv))
+    monkeypatch.setenv(
+        "PATH",
+        os.pathsep.join(
+            [str(tmp_path / ".venv" / "bin"), str(active_venv / "bin"), "/usr/bin"]
+        ),
+    )
+    runner = _RecordingRunner(tmp_path)
+
+    assert (
+        mod.up("notes", worktree, tmp_path, runner=runner, dump_registry=_dump_registry)
+        == 0
+    )
+
+    argv = runner.up_argv("notes-preview")
+    assert _flag_values(argv, "--unset-env") == ["VIRTUAL_ENV"]
+    assert [
+        value for value in _flag_values(argv, "--env") if value.startswith("PATH=")
+    ] == ["PATH=/usr/bin"]
 
 
 def test_a_preview_that_opens_on_an_instance_needs_its_key(tmp_path: Path) -> None:
