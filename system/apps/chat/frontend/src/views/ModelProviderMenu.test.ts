@@ -226,14 +226,9 @@ function withFastModel(): void {
 
 afterEach(() => {
   vi.useRealTimers();
-  vi.restoreAllMocks();
 });
 
 beforeEach(() => {
-  // The menu reads the chat's offerable models when it opens. Answered at once, as "offer the whole catalog",
-  // rather than left to a real request that fails whenever it fails: a failure logged after the file's last test
-  // reaches a worker that has already closed, and vitest counts that as an error of the run.
-  vi.spyOn(m, "request").mockResolvedValue({ models: null });
   document.body.innerHTML = '<div id="root"></div>';
   fastModeState.state = { mode: "auto", is_switched: false };
   fastModeLoads.length = 0;
@@ -256,6 +251,10 @@ beforeEach(() => {
   providerState.accounts = [ACCOUNT];
   setPendingAccount("a1", null);
   setSwitchSending("a1", false);
+  // Opening the menu on a dynamic or searchable picker loads the chat's offerable models. Answered
+  // here, so the load settles in the test that opened the menu: unanswered, it goes out to jsdom's
+  // localhost and its failure is logged after the file's environment has been torn down.
+  vi.spyOn(m, "request").mockResolvedValue({ models: null, options: null });
 });
 
 describe("the combo card", () => {

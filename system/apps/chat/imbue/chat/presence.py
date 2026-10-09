@@ -9,12 +9,18 @@ once per page load), and one standing report per chat and instance is kept here,
 of one chat in the same client (a pulled-out chat and its hidden copy in the main window)
 never overwrite each other. Only the chat's own page reports, never a subagent view.
 
+A page numbers its reports in the order it sends them. Each is its own request, and the
+threaded server can record two sent a moment apart in either order, so a report numbered at
+or below the instance's standing one is stale and dropped. A ``closed`` report stays as the
+instance's standing report, counting as neither open nor visible, so a report it overtook
+cannot reopen the page.
+
 Two readers. The OOM prioritizer reads the aggregate: a chat is *open* while any instance has
-an unexpired report, and *visible* while any instance's last report says so; a report expires
-after ten minutes, so a page that vanished without its ``pagehide`` (a crashed tab, a lost
-laptop) stops counting on its own. The notify path reads the *watchers*: the instances whose
-last report is visible and focused and younger than ninety seconds, three heartbeats, so a
-watcher that went away unannounced stops suppressing notifications quickly.
+an unexpired visible or hidden report, and *visible* while any instance's last report says so;
+a report expires after ten minutes, so a page that vanished without its ``pagehide`` (a
+crashed tab, a lost laptop) stops counting on its own. The notify path reads the *watchers*:
+the instances whose last report is visible and focused and younger than ninety seconds, three
+heartbeats, so a watcher that went away unannounced stops suppressing notifications quickly.
 """
 
 import threading
@@ -58,6 +64,7 @@ class PresenceReport(FrozenModel):
     )
     state: PresenceState = Field(description="The page's state")
     is_focused: bool = Field(description="Whether the page's document has focus")
+    sequence: int = Field(ge=1, description="The report's place in the order the page sent its reports")
 
 
 class PresenceTransition(FrozenModel):
@@ -70,9 +77,10 @@ class PresenceTransition(FrozenModel):
 class _InstancePresence(FrozenModel):
     """One page instance's standing report about its chat."""
 
-    state: PresenceState = Field(description="visible or hidden; a closed report deletes the record instead")
+    state: PresenceState = Field(description="The page's last state; closed counts as neither open nor visible")
     is_focused: bool = Field(description="Whether the page's document had focus")
     reported_at: float = Field(description="Wall-clock epoch seconds of the report, for expiry and staleness")
+    sequence: int = Field(description="The report's sequence number, which a later report must exceed")
 
 
 class PresenceTracker(MutableModel):
@@ -96,22 +104,19 @@ class PresenceTracker(MutableModel):
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
     def record(self, chat_id: ChatId, report: PresenceReport) -> PresenceTransition:
-        """Replace the instance's standing report about ``chat_id`` (``CLOSED`` drops it), and say what changed."""
+        """Replace the instance's standing report about ``chat_id`` unless it is stale, and say what changed."""
         now = self.clock()
         with self._lock:
             by_instance = self._live_reports_locked(chat_id, now)
+            standing = by_instance.get(report.instance_id)
+            if standing is not None and report.sequence <= standing.sequence:
+                return PresenceTransition(is_newly_visible=False, is_newly_watched=False)
             was_visible = _is_any_visible(by_instance)
             was_watched = len(self._watchers_among(by_instance, now)) > 0
-            if report.state is PresenceState.CLOSED:
-                by_instance.pop(report.instance_id, None)
-            else:
-                by_instance[report.instance_id] = _InstancePresence(
-                    state=report.state, is_focused=report.is_focused, reported_at=now
-                )
-            if by_instance:
-                self._presence_by_instance_by_chat[chat_id] = by_instance
-            else:
-                self._presence_by_instance_by_chat.pop(chat_id, None)
+            by_instance[report.instance_id] = _InstancePresence(
+                state=report.state, is_focused=report.is_focused, reported_at=now, sequence=report.sequence
+            )
+            self._presence_by_instance_by_chat[chat_id] = by_instance
             return PresenceTransition(
                 is_newly_visible=not was_visible and _is_any_visible(by_instance),
                 is_newly_watched=not was_watched and len(self._watchers_among(by_instance, now)) > 0,
@@ -124,7 +129,10 @@ class PresenceTracker(MutableModel):
     def is_open(self, chat_id: ChatId) -> bool:
         """Whether any instance holds an unexpired report about the chat, visible or hidden."""
         with self._lock:
-            return len(self._live_reports_locked(chat_id, self.clock())) > 0
+            return any(
+                report.state is not PresenceState.CLOSED
+                for report in self._live_reports_locked(chat_id, self.clock()).values()
+            )
 
     def is_visible(self, chat_id: ChatId) -> bool:
         """Whether any instance's unexpired last report says the chat is showing."""
