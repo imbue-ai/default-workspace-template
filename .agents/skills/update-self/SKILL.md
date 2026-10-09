@@ -496,24 +496,24 @@ updated" notice: `--keep-rollback-point` is the careful flow's, not this one's.
 
 **Before the apply, let other chats' work settle.** Other chats keep working
 while the worker runs. If the tree is dirty, or another agent holds an
-`editing service <name>` or `editing critical app <name>` lease, they are
-mid-edit: wait for them rather than refusing or re-dispatching. Wait in the
-background and end your turn; the result starts your next one:
+`editing service <name>` lease, a chat is mid-edit in the served tree: wait
+for it rather than refusing or re-dispatching. (An `editing critical app`
+lease is not a reason to wait: that flow edits in its own worktree, never the
+served tree, and the lease check above already covers the critical apps this
+update touches.) Wait in the background and end your turn; the result starts
+your next one:
 
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/run_in_background.py \
     --description "Wait for other chats to finish their edits" -- \
-    bash -c 'for i in $(seq 1 360); do leases=$(tk ready) || { echo "tk ready failed"; exit 1; }; if [ -z "$(git status --porcelain)" ] && ! printf "%s\n" "$leases" | grep -q -- "- editing \(service\|critical app\) "; then echo settled; exit 0; fi; sleep 10; done; echo "still busy after an hour"; git status --porcelain; exit 1'
+    bash -c 'for i in $(seq 1 360); do leases=$(tk ready) || { echo "tk ready failed"; exit 1; }; if [ -z "$(git status --porcelain)" ] && ! printf "%s\n" "$leases" | grep -q -- "- editing service "; then echo settled; exit 0; fi; sleep 10; done; echo "still busy after an hour"; git status --porcelain; exit 1'
 ```
 
-Take this pass's own `editing critical app` leases only once it has settled
-and the branch fast-forwards (below), right before the apply, and release
-them before any catch-up, so no round of this wait finds them. If it is still
-busy after the hour, tell the user which chat's edit is holding the update and
-that nothing has been applied; a lease is broken only on their call. If it
-says `tk ready failed`, the leases could not be read: find out why and wait
-again. Once it settles, check whether those
-chats committed since the worker branched:
+If it is still busy after the hour, tell the user which chat's edit is holding
+the update and that nothing has been applied; a lease is broken only on their
+call. If it says `tk ready failed`, the leases could not be read: find out why
+and wait again. Once it settles, check whether those chats committed since the
+worker branched:
 
 ```bash
 git merge-base --is-ancestor HEAD mngr/update-self
@@ -590,9 +590,9 @@ Exit codes:
 - **`1` -- precondition; nothing changed** (dirty tree, `HEAD` moved under the
   pass, another apply in flight, this merge already landed and rolled back, or
   a merge that does not first revert an earlier update's rollback commit).
-  A dirty tree or a moved `HEAD` is the settle-and-catch-up case above:
-  release this pass's critical-app leases, wait, and come back through the
-  fast-forward check, catching the worker up only if `HEAD` moved. Another
+  A dirty tree or a moved `HEAD` is the settle-and-catch-up case above: wait,
+  and come back through the fast-forward check, catching the worker up only
+  if `HEAD` moved. Another
   apply in flight is the same: wait for it to finish, then come back through
   that check, since it has likely moved `HEAD`. A
   merge that leaves a rollback in place, or one already landed and rolled
