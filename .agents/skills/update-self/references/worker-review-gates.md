@@ -26,7 +26,20 @@ All three must hold:
    `<merge-sha>` is this pass's merge or, on a retry of a release already in
    history (whose merge adds no commit), that release's landed merge. Name the
    merge, each revert sha, and any revert conflict with how you resolved it
-   in the report as this condition's evidence.
+   in the report as this condition's evidence. A catch-up merge (the worker
+   guide's §7) is not an edit of yours: what it brings in is the workspace's
+   own work, so after one the diff runs to your tip before the *first*
+   catch-up merge (§7's `$PRE` names the newest round's, which already holds
+   the earlier rounds' incoming work):
+
+   ```bash
+   FIRST=$(git log --first-parent --merges --format=%H --fixed-strings \
+       --grep "Catch up to the workspace's latest work" "<merge-sha>..HEAD" | tail -n 1)
+   git diff <merge-sha> "$FIRST^1"
+   ```
+
+   A conflict you resolved in any catch-up, a lockfile you regenerated in one,
+   and any commit you added after one are edits.
 
 Every changed file then arrives exactly as upstream shipped and tested it, and
 there is nothing local for a review to protect. Running `/autofix` here would

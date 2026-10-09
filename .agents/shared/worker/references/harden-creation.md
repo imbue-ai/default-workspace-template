@@ -385,6 +385,52 @@ the rest of this section.
 
 When complete, report back to the lead.
 
+## Catching up to a moved base
+
+After your `done`, the lead may find that its `HEAD` moved before it could
+merge you, and reply asking you to catch up to a named commit
+(`.agents/shared/references/harden-contention.md`, "Catching up a stale
+pass"). Your verified work stands; extend it to the new base rather than
+starting over.
+
+1. Commit anything outstanding and merge the lead's commit into your branch:
+
+   ```bash
+   git merge --no-ff <the commit the lead named> -m "Catch up to <its short sha>"
+   ```
+
+2. Resolve every conflict on your branch. Regenerate a lockfile from its
+   merged manifest (`uv lock`, `npm install --package-lock-only`), never pick
+   a side of it. For anything else, the commits you are bringing in are the
+   user's latest word: keep what they do and fit your hardening around them.
+   A conflict whose answer depends on intent you cannot see is a `question`
+   gate. Conclude the merge with `git commit --no-edit`, which keeps the
+   subject step 4 finds it by.
+3. **Harden what came in.** Commits that touch the creation are now part of
+   the change you are hardening, under this whole contract: tests that cover
+   their behavior, the invariants above, and anything your operation
+   reference requires of a change (a critical app's bundles are rebuilt and
+   re-reported, `type-app.md`). Commits that touch nothing of the creation
+   need nothing from you.
+4. **Re-run the test gate over exactly what the catch-up changed**, after
+   committing, from your branch's tip before the catch-up merge (that merge's
+   first parent):
+
+   ```bash
+   PRE=$(git rev-parse "$(git log --first-parent --merges -1 --format=%H --fixed-strings \
+       --grep "Catch up to")^1")
+   uv run app-manifest select-tests --diff-base "$PRE"
+   ```
+
+   That covers what the merge brought in, your conflict resolutions, and
+   anything you committed since. Do not re-run the gate over `$DIFF_BASE`:
+   what it already passed still stands.
+5. Regenerate the scope file and report `done` again, with a `Caught up:`
+   section naming the commit you merged, each conflict and how you resolved
+   it, and what the re-run gate ran. Paths the merge brought in that lie
+   outside the creation are the lead's own work, not yours to account for
+   under `Outside footprint:`.
+
 ## If you need to give up
 
 If you cannot reach a tested, clean state (a dependency you cannot resolve, an

@@ -67,6 +67,15 @@ the pre-merge layout, and a `scripts/` directory that is staged and run as one
 unit (the entry script imports its sibling modules by name from its own
 directory).
 
+A caught-up pass (SKILL.md 5b, the worker guide's §7) lands a tip whose first
+parent is the worker's line and whose second parent is the workspace's `HEAD`
+from before the apply. So the `update-self:` merge stays on `HEAD`'s
+first-parent line, which is what the apply, `footprint-ranges` and
+`resolve_template_base.py` walk, but the commits other chats made during the
+pass do not. A tool that walks the first-parent line to list the workspace's
+own commits misses them; find them through the second parent of a catch-up
+merge instead.
+
 ## Trust
 
 The handoff runs the target ref's `update_self.py` and follows its prose
