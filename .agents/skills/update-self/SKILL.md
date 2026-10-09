@@ -550,10 +550,13 @@ mngr message update-self --on-error abort \
     -m "Catch up to $(git rev-parse HEAD) per §7 of your worker guide, then report done again."
 ```
 
-A non-zero exit, or a `No agents found` line, means the message did not reach
-the worker: do not re-arm the poll on it. Check whether the worker is alive ("Diagnose worker liveness" in
+A non-zero exit other than 7, or a `No agents found` line, means the message
+did not reach the worker: do not re-arm the poll on it. Check whether the
+worker is alive ("Diagnose worker liveness" in
 `.agents/shared/references/lead-proxy.md`) and send again; a worker that is
-gone takes the fresh pass below.
+gone takes the fresh pass below. Exit 7 means it arrived but the worker sits
+on a dialog it could not dismiss: do not send it again; re-arm the poll, and
+diagnose liveness the same way if no report comes.
 
 Never destroy or stop the worker to make room for a new pass. A fresh pass
 (Step 3b) is only for a worker that is gone, or one that reports `stuck` on
