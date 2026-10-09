@@ -49,12 +49,17 @@
 
 - **Why.** Skill scripts and `system/scripts` were written as standalone files on the theory that each is an isolated unit. In practice that theory is worked around everywhere: 11 files with `sys.path` inserts (plus 6 in `oom_priority/bin`), about 33 test files loading scripts by path, 8 PEP 723 scripts with private environments, and nothing type-checks any of it (114 ty errors at #831's tip `1f5697934`, after its main merge). Packaging the scripts removes the workarounds and makes them checkable.
 - **The real constraint is the environment, not the layout.** Some code must run when the venv is missing or broken, or is called by path from another release, or sits in a long-running process's launch chain. That is the **bare tier**: system `python3`, stdlib only. Everything else is the **venv tier**. Both are packages; only the interpreter differs.
-- **uv overhead decides how things launch** (measured by 23f0b3f3 on workspace-1, gVisor):
-  - `python3 layout.py`: 135 ms.
+- **Startup cost: imports matter more than uv.** 23f0b3f3 measured this on workspace-1 (gVisor) on 2026-10-08, against the earlier, pydantic-based `workspace-layout` CLI:
+  - `python3 layout.py` (the old script): 135 ms.
   - `.venv/bin/workspace-layout`: 582 ms.
   - `uv run --no-sync workspace-layout`: 623 ms.
   - Plain `uv run workspace-layout`: 731 ms.
-  - Imports (pydantic and model building) dominate. A resident `uv run` parent also costs about 19 MB per long-running process (commit `4824214bd`). A plain `uv run` rewrote workspace-1's `uv.lock` on 10-07.
+  - **These numbers no longer describe `workspace-layout`.** #759 has since made its CLI a stdlib-only thin client, precisely because of them, and it hasn't been re-measured. What still holds:
+    - `--no-sync` leaves about 40 ms of uv over running the entry point directly;
+    - plain `uv run` adds roughly 100-140 ms more for its lock/sync check;
+    - top-level imports (pydantic, model building) were the dominant cost, at about 450-560 ms.
+  - A resident `uv run` parent also costs about 19 MB per long-running process (commit `4824214bd`).
+  - A plain `uv run` rewrote workspace-1's `uv.lock` on 10-07.
 - **Launch principles.** Long-running processes `exec` their entry point directly (after a `--frozen` sync). One-offs use `uv run --no-sync`, and keep their top-level imports light.
 - **Layout decisions:**
   - A skill's `scripts/` dir is its uv project (`scripts/pyproject.toml`, package `scripts/<skill_name>_skill/`). The workspace glob `.agents/skills/*/scripts` picks it up, because uv requires every glob-matched dir to have a `pyproject.toml` ([uv workspaces docs](https://github.com/astral-sh/uv/blob/main/docs/concepts/projects/workspaces.md)).
