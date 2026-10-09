@@ -122,4 +122,3 @@ def main() -> None:
         f"docs-viewer serving {DOCS_DIR} on http://{args.host}:{args.port}", flush=True
     )
     server.serve_forever()
-

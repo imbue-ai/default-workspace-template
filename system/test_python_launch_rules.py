@@ -48,7 +48,15 @@ _UV_RUN_RE = re.compile(r"\buv run\b")
 _NON_SYNCING_OPTIONS = frozenset({"--no-sync", "--no-project"})
 # uv run options that take a separate value word.
 _OPTIONS_WITH_VALUES = frozenset(
-    {"--package", "--with", "--env-file", "--python", "--directory", "--project", "--group"}
+    {
+        "--package",
+        "--with",
+        "--env-file",
+        "--python",
+        "--directory",
+        "--project",
+        "--group",
+    }
 )
 
 # Deliberate plain ``uv run`` lines: (repo-relative path, a substring of the line).
@@ -60,8 +68,14 @@ _DELIBERATE_SYNCS: tuple[tuple[str, str], ...] = (
         "uv run --frozen --package app-manifest app-manifest",
     ),
     # The migration reference quotes the forms an existing workspace's files still use.
-    (".agents/skills/update-self/references/python-packaging-migration.md", "runs `uv run <name>`"),
-    (".agents/skills/update-self/references/python-packaging-migration.md", "a plain `uv run X` becomes"),
+    (
+        ".agents/skills/update-self/references/python-packaging-migration.md",
+        "runs `uv run <name>`",
+    ),
+    (
+        ".agents/skills/update-self/references/python-packaging-migration.md",
+        "a plain `uv run X` becomes",
+    ),
 )
 
 
@@ -100,7 +114,10 @@ def _program_commands(conf: Path) -> list[tuple[str, str]]:
 
 
 def _programs_under_uv_run(supervisord_dir: Path) -> list[str]:
-    confs = [supervisord_dir / "supervisord.conf", *sorted((supervisord_dir / "supervisord.conf.d").glob("*.conf"))]
+    confs = [
+        supervisord_dir / "supervisord.conf",
+        *sorted((supervisord_dir / "supervisord.conf.d").glob("*.conf")),
+    ]
     return [
         f"{conf.name} {section}: {command}"
         for conf in confs
@@ -138,9 +155,15 @@ def _plain_uv_runs(text: str) -> list[tuple[int, str]]:
     ]
 
 
-def _agent_facing_files(suffixes: tuple[str, ...] = _AGENT_FACING_SUFFIXES) -> list[Path]:
+def _agent_facing_files(
+    suffixes: tuple[str, ...] = _AGENT_FACING_SUFFIXES,
+) -> list[Path]:
     tracked = subprocess.run(
-        ["git", "ls-files", "-z"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
+        ["git", "ls-files", "-z"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.split("\0")
     return [
         REPO_ROOT / relative
@@ -162,14 +185,16 @@ def _plain_uv_run_violations() -> list[tuple[str, str]]:
 
 
 def _is_deliberate(relative: str, line: str) -> bool:
-    return any(relative == path and context in line for path, context in _DELIBERATE_SYNCS)
+    return any(
+        relative == path and context in line for path, context in _DELIBERATE_SYNCS
+    )
 
 
 def test_no_supervisord_program_runs_under_uv_run() -> None:
     offenders = _programs_under_uv_run(_SUPERVISORD_DIR)
     assert not offenders, (
         "These supervisord programs run under `uv run`, which stays resident as their parent and can "
-        "relock the workspace. Use `bash -c \"uv sync --all-packages --frozen && exec .venv/bin/<name>\"` "
+        'relock the workspace. Use `bash -c "uv sync --all-packages --frozen && exec .venv/bin/<name>"` '
         "(see .agents/shared/references/running-python.md):\n" + "\n".join(offenders)
     )
 
@@ -189,7 +214,10 @@ def test_a_planted_uv_run_program_is_caught_in_either_form(tmp_path: Path) -> No
 
     offenders = _programs_under_uv_run(tmp_path)
 
-    assert [offender.split(" ", 1)[0] for offender in offenders] == ["direct.conf", "tagged.conf"]
+    assert [offender.split(" ", 1)[0] for offender in offenders] == [
+        "direct.conf",
+        "tagged.conf",
+    ]
 
 
 def test_no_plain_uv_run_in_agent_facing_files() -> None:
@@ -210,9 +238,13 @@ def test_every_deliberate_sync_exception_still_matches_a_line() -> None:
     stale = [
         (path, context)
         for path, context in _DELIBERATE_SYNCS
-        if not any(relative == path and context in line for relative, line in violations)
+        if not any(
+            relative == path and context in line for relative, line in violations
+        )
     ]
-    assert not stale, f"These deliberate-sync exceptions no longer match any line: {stale}"
+    assert not stale, (
+        f"These deliberate-sync exceptions no longer match any line: {stale}"
+    )
 
 
 def test_the_plain_uv_run_scan_catches_a_planted_command_and_skips_mentions() -> None:
@@ -232,12 +264,16 @@ def test_the_plain_uv_run_scan_catches_a_planted_command_and_skips_mentions() ->
 def test_changelogs_and_fixtures_are_not_scanned() -> None:
     scanned = {str(path.relative_to(REPO_ROOT)) for path in _agent_facing_files()}
 
-    assert not any("/changelog/" in path or path.endswith("CHANGELOG.md") for path in scanned)
+    assert not any(
+        "/changelog/" in path or path.endswith("CHANGELOG.md") for path in scanned
+    )
     assert "AGENTS.md" in scanned
 
 
 # ``python3 [flags] <path>.py``, the path optionally quoted (JSON escapes its quotes).
-_PYTHON3_SCRIPT_RE = re.compile(r"(?<![\w./-])python3((?:\s+-[A-Za-z]+)*)\s+\\?[\"']?([^\s\"'`)\\]+\.py)\b")
+_PYTHON3_SCRIPT_RE = re.compile(
+    r"(?<![\w./-])python3((?:\s+-[A-Za-z]+)*)\s+\\?[\"']?([^\s\"'`)\\]+\.py)\b"
+)
 # A ``python3`` that ``uv run`` starts runs from the venv, so it is not this rule's concern.
 _UNDER_UV_RUN_RE = re.compile(r"\buv run(?:\s+--[\w-]+)*\s+$")
 # Spellings of the repo root (and of update-self's staged copy of it) in commands.
@@ -252,7 +288,9 @@ REPO_ROOT_PREFIXES = (
 )
 
 
-def _named_python3_scripts(text: str, file_dir: Path, repo_root: Path) -> list[tuple[str, Path | None]]:
+def _named_python3_scripts(
+    text: str, file_dir: Path, repo_root: Path
+) -> list[tuple[str, Path | None]]:
     """Every ``(as written, resolved path)`` a ``python3`` in ``text`` runs; None when it cannot be resolved.
 
     A placeholder (``<name>``) or a scratch path under /tmp names no file in the tree and is skipped.
@@ -282,13 +320,17 @@ def _python3_violations(files: list[Path], repo_root: Path) -> list[str]:
     return [
         f"{path.relative_to(repo_root)}: python3 {written}"
         for path in files
-        for written, resolved in _named_python3_scripts(path.read_text(errors="replace"), path.parent, repo_root)
+        for written, resolved in _named_python3_scripts(
+            path.read_text(errors="replace"), path.parent, repo_root
+        )
         if resolved is None or not is_bare_entry(resolved)
     ]
 
 
 def test_python3_invocations_name_bare_entry_points() -> None:
-    offenders = _python3_violations(_agent_facing_files(_PYTHON3_SCANNED_SUFFIXES), REPO_ROOT)
+    offenders = _python3_violations(
+        _agent_facing_files(_PYTHON3_SCANNED_SUFFIXES), REPO_ROOT
+    )
     assert not offenders, (
         "These run a script with the system python3, but it is not a bare entry point (or does not exist): "
         "the system python3 has no venv. Run it with `uv run --no-sync <path>` instead "
@@ -296,7 +338,9 @@ def test_python3_invocations_name_bare_entry_points() -> None:
     )
 
 
-def test_the_python3_scan_catches_a_venv_script_and_a_stale_path(tmp_path: Path) -> None:
+def test_the_python3_scan_catches_a_venv_script_and_a_stale_path(
+    tmp_path: Path,
+) -> None:
     doc = tmp_path / "doc.md"
     doc.write_text(
         "\n".join(
@@ -312,7 +356,9 @@ def test_the_python3_scan_catches_a_venv_script_and_a_stale_path(tmp_path: Path)
 
     offenders = [
         written
-        for written, resolved in _named_python3_scripts(doc.read_text(), doc.parent, REPO_ROOT)
+        for written, resolved in _named_python3_scripts(
+            doc.read_text(), doc.parent, REPO_ROOT
+        )
         if resolved is None or not is_bare_entry(resolved)
     ]
 
@@ -344,11 +390,21 @@ _ALLOWED_SYS_PATH_EDITS = frozenset(
 
 def _edits_sys_path(source: str) -> bool:
     for node in ast.walk(ast.parse(source)):
-        target = node.func.value if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) else None
+        target = (
+            node.func.value
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            else None
+        )
         if isinstance(node, (ast.Assign, ast.AugAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            target = next((t.value if isinstance(t, ast.Subscript) else t for t in targets), None)
-        if isinstance(target, ast.Attribute) and target.attr == "path" and isinstance(target.value, ast.Name):
+            target = next(
+                (t.value if isinstance(t, ast.Subscript) else t for t in targets), None
+            )
+        if (
+            isinstance(target, ast.Attribute)
+            and target.attr == "path"
+            and isinstance(target.value, ast.Name)
+        ):
             if target.value.id == "sys":
                 return True
     return False
@@ -356,7 +412,11 @@ def _edits_sys_path(source: str) -> bool:
 
 def _sys_path_editors(repo_root: Path) -> list[str]:
     tracked = subprocess.run(
-        ["git", "ls-files", "-z", "--", "*.py"], cwd=repo_root, capture_output=True, text=True, check=True
+        ["git", "ls-files", "-z", "--", "*.py"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.split("\0")
     return sorted(
         relative

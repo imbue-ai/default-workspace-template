@@ -252,4 +252,3 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"with_secrets: cannot run {command[0]}: {exc}", file=sys.stderr)
         return EXIT_USAGE
     return 0
-

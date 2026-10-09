@@ -170,4 +170,3 @@ def main() -> None:
         if was_created
         else "repository already initialized\n"
     )
-

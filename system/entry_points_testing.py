@@ -51,7 +51,11 @@ def scripts_dirs(repo_root: Path = REPO_ROOT) -> list[Path]:
 
 
 def is_test_file(path: Path) -> bool:
-    return path.name.endswith("_test.py") or path.name.startswith("test_") or path.name == "conftest.py"
+    return (
+        path.name.endswith("_test.py")
+        or path.name.startswith("test_")
+        or path.name == "conftest.py"
+    )
 
 
 def entry_files(scripts_dir: Path) -> list[Path]:
@@ -61,7 +65,9 @@ def entry_files(scripts_dir: Path) -> list[Path]:
 def project_dir(entry: Path) -> Path:
     """The uv project an entry's package lives in: its own dir, or a skill's ``python/``."""
     skill_project = entry.parent.parent / "python"
-    return skill_project if (skill_project / "pyproject.toml").is_file() else entry.parent
+    return (
+        skill_project if (skill_project / "pyproject.toml").is_file() else entry.parent
+    )
 
 
 def entry_package(entry: Path) -> str | None:

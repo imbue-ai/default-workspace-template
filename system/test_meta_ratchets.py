@@ -188,14 +188,22 @@ def test_every_skill_python_dir_has_a_pyproject() -> None:
     )
 
 
-def test_a_python_dir_without_a_pyproject_is_caught_and_a_plain_scripts_dir_is_not(tmp_path: Path) -> None:
-    (tmp_path / "half-built-skill" / "python" / "half_built_skill_skill").mkdir(parents=True)
+def test_a_python_dir_without_a_pyproject_is_caught_and_a_plain_scripts_dir_is_not(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "half-built-skill" / "python" / "half_built_skill_skill").mkdir(
+        parents=True
+    )
     (tmp_path / "packaged-skill" / "python").mkdir(parents=True)
-    (tmp_path / "packaged-skill" / "python" / "pyproject.toml").write_text("[project]\n")
+    (tmp_path / "packaged-skill" / "python" / "pyproject.toml").write_text(
+        "[project]\n"
+    )
     (tmp_path / "third-party-skill" / "scripts").mkdir(parents=True)
     (tmp_path / "third-party-skill" / "scripts" / "run.py").write_text("print('hi')\n")
 
-    assert _skill_python_dirs_without_a_pyproject(tmp_path) == ["half-built-skill/python"]
+    assert _skill_python_dirs_without_a_pyproject(tmp_path) == [
+        "half-built-skill/python"
+    ]
 
 
 def test_prevent_bash_without_strict_mode() -> None:

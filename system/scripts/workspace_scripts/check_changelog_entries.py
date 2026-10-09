@@ -288,4 +288,3 @@ def main(repo_root: Path = _REPO_ROOT) -> int:
         file=sys.stderr,
     )
     return 1
-

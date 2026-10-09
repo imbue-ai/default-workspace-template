@@ -33,10 +33,13 @@ _HEAVY_VENV_MODULES = frozenset({"pydantic", "loguru", "click", "tenacity", "htt
 _HEAVY_STDLIB_MODULES = frozenset({"asyncio"})
 
 
-
 def _all_entry_points() -> list[Path]:
-    entries = [entry for directory in scripts_dirs() for entry in entry_files(directory)]
-    entries += [path for directory in STANDALONE_BARE_DIRS for path in entry_files(directory)]
+    entries = [
+        entry for directory in scripts_dirs() for entry in entry_files(directory)
+    ]
+    entries += [
+        path for directory in STANDALONE_BARE_DIRS for path in entry_files(directory)
+    ]
     entries += list(STANDALONE_BARE_SCRIPTS)
     return entries
 
@@ -47,7 +50,11 @@ def _loaded_modules(entry: Path, *, bare: bool) -> frozenset[str]:
         [sys.executable, *flags, "-c", IMPORT_PROBE, str(entry)],
         cwd=REPO_ROOT,
         # As a real run sees it: some libraries change behaviour when they detect pytest.
-        env={name: value for name, value in os.environ.items() if not name.startswith("PYTEST_")},
+        env={
+            name: value
+            for name, value in os.environ.items()
+            if not name.startswith("PYTEST_")
+        },
         capture_output=True,
         text=True,
         timeout=60,
@@ -58,8 +65,12 @@ def _loaded_modules(entry: Path, *, bare: bool) -> frozenset[str]:
 
 
 def _undeclared_heavy_imports(entry: Path, *, bare: bool) -> set[str]:
-    heavy = _HEAVY_STDLIB_MODULES if bare else _HEAVY_VENV_MODULES | _HEAVY_STDLIB_MODULES
-    return set(_loaded_modules(entry, bare=bare) & heavy) - declared_heavy_imports(entry)
+    heavy = (
+        _HEAVY_STDLIB_MODULES if bare else _HEAVY_VENV_MODULES | _HEAVY_STDLIB_MODULES
+    )
+    return set(_loaded_modules(entry, bare=bare) & heavy) - declared_heavy_imports(
+        entry
+    )
 
 
 @pytest.mark.timeout(60)
@@ -72,7 +83,11 @@ def test_an_entry_point_loads_no_undeclared_heavy_module(entry: Path) -> None:
     assert not offenders, (
         f"importing {entry.relative_to(REPO_ROOT)} loads {sorted(offenders)}. Import them inside "
         "the function that uses them"
-        + ("" if bare else ', or declare them under [tool.workspace-template.entry-points."<entry>.py"]')
+        + (
+            ""
+            if bare
+            else ', or declare them under [tool.workspace-template.entry-points."<entry>.py"]'
+        )
     )
 
 
@@ -100,7 +115,9 @@ def _skill_scripts(tmp_path: Path, module_source: str, pyproject: str = "") -> P
 
 @pytest.mark.timeout(60)
 def test_the_probe_catches_a_top_level_heavy_import(tmp_path: Path) -> None:
-    entry = _skill_scripts(tmp_path, "import pydantic\n\n\ndef main() -> None:\n    pass\n")
+    entry = _skill_scripts(
+        tmp_path, "import pydantic\n\n\ndef main() -> None:\n    pass\n"
+    )
 
     assert _undeclared_heavy_imports(entry, bare=False) == {"pydantic"}
 
@@ -118,21 +135,27 @@ def test_a_declared_heavy_import_passes(tmp_path: Path) -> None:
 
 @pytest.mark.timeout(60)
 def test_a_heavy_import_inside_a_subcommand_passes(tmp_path: Path) -> None:
-    entry = _skill_scripts(tmp_path, "def main() -> None:\n    import pydantic\n\n    del pydantic\n")
+    entry = _skill_scripts(
+        tmp_path, "def main() -> None:\n    import pydantic\n\n    del pydantic\n"
+    )
 
     assert _undeclared_heavy_imports(entry, bare=False) == set()
 
 
 @pytest.mark.timeout(60)
 def test_a_bare_entry_is_probed_without_site_packages(tmp_path: Path) -> None:
-    entry = _skill_scripts(tmp_path, "import asyncio\n\n\ndef main() -> None:\n    pass\n")
+    entry = _skill_scripts(
+        tmp_path, "import asyncio\n\n\ndef main() -> None:\n    pass\n"
+    )
 
     assert _undeclared_heavy_imports(entry, bare=True) == {"asyncio"}
 
 
 @pytest.mark.timeout(60)
 def test_a_bare_entry_cannot_reach_the_venv(tmp_path: Path) -> None:
-    entry = _skill_scripts(tmp_path, "import pydantic\n\n\ndef main() -> None:\n    pass\n")
+    entry = _skill_scripts(
+        tmp_path, "import pydantic\n\n\ndef main() -> None:\n    pass\n"
+    )
 
     with pytest.raises(AssertionError, match="ModuleNotFoundError"):
         _loaded_modules(entry, bare=True)

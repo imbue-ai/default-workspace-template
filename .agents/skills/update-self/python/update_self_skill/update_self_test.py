@@ -1616,7 +1616,9 @@ def test_skill_md_runs_its_scripts_from_the_staged_copy_below_step_3() -> None:
     staged = "data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py"
     strays = [line for line in invocations if staged not in line]
     assert len(strays) == 1
-    assert strays[0].startswith("python3 .agents/skills/update-self/scripts/update_self.py ")
+    assert strays[0].startswith(
+        "python3 .agents/skills/update-self/scripts/update_self.py "
+    )
     assert "run-status verdict NEEDS_RECREATION" in strays[0]
 
 
@@ -2090,7 +2092,10 @@ def _placeholder_after(runner: _RecordingRunner, *prefix: str):
 
 def _refreshed_the_view(runner: _RecordingRunner, repo_root: Path) -> bool:
     return runner.ran(
-        "uv", "run", "--no-sync", str(repo_root / "system/scripts/refresh_workspace_view.py")
+        "uv",
+        "run",
+        "--no-sync",
+        str(repo_root / "system/scripts/refresh_workspace_view.py"),
     )
 
 
@@ -4945,7 +4950,8 @@ def test_marker_comes_down_before_the_view_refresh(apply_repo: Path) -> None:
     refresh_at = next(
         index
         for index, c in enumerate(runner.calls)
-        if c[:3] == ["uv", "run", "--no-sync"] and c[3].endswith("refresh_workspace_view.py")
+        if c[:3] == ["uv", "run", "--no-sync"]
+        and c[3].endswith("refresh_workspace_view.py")
     )
     assert restart_at < refresh_at
 

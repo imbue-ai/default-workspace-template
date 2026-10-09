@@ -97,4 +97,3 @@ def migrate() -> bool:
         "Existing chats keep their current credential; new chats will use this account."
     )
     return True
-

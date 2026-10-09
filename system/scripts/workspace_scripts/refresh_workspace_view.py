@@ -291,4 +291,3 @@ def refresh(
 
 def main() -> int:
     return refresh(runner=Runner(), http=HttpClient())
-

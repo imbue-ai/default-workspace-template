@@ -225,16 +225,23 @@ def test_name_too_long(tmp_path: Path) -> None:
 class _RecordingRunner:
     """Answers each command with the result its argv prefix is mapped to (exit 0 otherwise)."""
 
-    def __init__(self, failures: dict[tuple[str, ...], subprocess.CompletedProcess[str]] | None = None) -> None:
+    def __init__(
+        self,
+        failures: dict[tuple[str, ...], subprocess.CompletedProcess[str]] | None = None,
+    ) -> None:
         self.failures = failures or {}
         self.calls: list[list[str]] = []
 
-    def __call__(self, argv: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    def __call__(
+        self, argv: Sequence[str], cwd: Path
+    ) -> subprocess.CompletedProcess[str]:
         self.calls.append(list(argv))
         for prefix, result in self.failures.items():
             if tuple(argv[: len(prefix)]) == prefix:
                 return result
-        return subprocess.CompletedProcess(args=list(argv), returncode=0, stdout="", stderr="")
+        return subprocess.CompletedProcess(
+            args=list(argv), returncode=0, stdout="", stderr=""
+        )
 
 
 def _failed(stderr: str) -> subprocess.CompletedProcess[str]:
@@ -266,7 +273,9 @@ def test_check_runnable_checks_the_lock_then_runs_every_entry(tmp_path: Path) ->
 
 def test_check_runnable_reports_a_stale_lock(tmp_path: Path) -> None:
     skill = _write_skill(tmp_path, "s", include_scripts=True)
-    runner = _RecordingRunner({("uv", "lock"): _failed("The lockfile needs to be updated")})
+    runner = _RecordingRunner(
+        {("uv", "lock"): _failed("The lockfile needs to be updated")}
+    )
 
     error = validate_skill.check_runnable(skill, runner=runner)
 
@@ -278,7 +287,11 @@ def test_check_runnable_reports_a_stale_lock(tmp_path: Path) -> None:
 def test_check_runnable_reports_an_entry_that_cannot_import(tmp_path: Path) -> None:
     skill = _write_skill(tmp_path, "s", include_scripts=True)
     runner = _RecordingRunner(
-        {("uv", "run"): _failed("ModuleNotFoundError: No module named 'missing_dependency'")}
+        {
+            ("uv", "run"): _failed(
+                "ModuleNotFoundError: No module named 'missing_dependency'"
+            )
+        }
     )
 
     error = validate_skill.check_runnable(skill, runner=runner)

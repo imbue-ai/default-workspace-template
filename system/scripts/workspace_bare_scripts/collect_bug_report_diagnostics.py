@@ -1215,4 +1215,3 @@ def main(argv: Sequence[str]) -> None:
     encoded = encode_zip(members)
     if encoded is not None:
         print(encoded)
-

@@ -41,7 +41,12 @@ _OOM_PRIORITY_SRC = REPO_ROOT / "system" / "services" / "oom_priority" / "src"
 # Where the bare tier's imports resolve from at runtime: system/scripts (the stubs' own
 # directory), update-self's python/ and the stdlib-only library trees, which the stubs and
 # update-self put on sys.path.
-_BARE_SEARCH_PATHS = (_SYSTEM_SCRIPTS, _UPDATE_SELF_PYTHON, _TK_COMMAND_PARSING_SRC, _OOM_PRIORITY_SRC)
+_BARE_SEARCH_PATHS = (
+    _SYSTEM_SCRIPTS,
+    _UPDATE_SELF_PYTHON,
+    _TK_COMMAND_PARSING_SRC,
+    _OOM_PRIORITY_SRC,
+)
 
 
 def _is_test_support(path: Path) -> bool:
@@ -49,17 +54,33 @@ def _is_test_support(path: Path) -> bool:
 
 
 def _bare_packages(stubs: list[Path]) -> set[Path]:
-    return {project_dir(stub) / package for stub in stubs if (package := entry_package(stub)) is not None}
+    return {
+        project_dir(stub) / package
+        for stub in stubs
+        if (package := entry_package(stub)) is not None
+    }
 
 
 def _bare_files() -> list[Path]:
-    stubs = [entry for directory in scripts_dirs() for entry in entry_files(directory) if is_bare_entry(entry)]
-    stubs += [entry for directory in STANDALONE_BARE_DIRS for entry in entry_files(directory)]
+    stubs = [
+        entry
+        for directory in scripts_dirs()
+        for entry in entry_files(directory)
+        if is_bare_entry(entry)
+    ]
+    stubs += [
+        entry for directory in STANDALONE_BARE_DIRS for entry in entry_files(directory)
+    ]
     stubs += STANDALONE_BARE_SCRIPTS
     packages = _bare_packages(stubs)
     assert {package.name for package in packages} == BARE_PACKAGES
     trees = [*packages, _TK_COMMAND_PARSING_SRC, _OOM_PRIORITY_SRC]
-    modules = [path for tree in trees for path in sorted(tree.rglob("*.py")) if not _is_test_support(path)]
+    modules = [
+        path
+        for tree in trees
+        for path in sorted(tree.rglob("*.py"))
+        if not _is_test_support(path)
+    ]
     return sorted({*stubs, *modules})
 
 
@@ -76,12 +97,23 @@ def _run_ty(arguments: list[str]) -> subprocess.CompletedProcess[str]:
 
 def _empty_environment(tmp_path: Path) -> Path:
     environment = tmp_path / "bare-env"
-    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(environment)], check=True, timeout=120)
+    subprocess.run(
+        [sys.executable, "-m", "venv", "--without-pip", str(environment)],
+        check=True,
+        timeout=120,
+    )
     return environment
 
 
-def _check_bare(files: list[Path], search_paths: tuple[Path, ...], tmp_path: Path) -> subprocess.CompletedProcess[str]:
-    arguments = ["--python", str(_empty_environment(tmp_path)), "--python-version", _FLOOR_PYTHON_VERSION]
+def _check_bare(
+    files: list[Path], search_paths: tuple[Path, ...], tmp_path: Path
+) -> subprocess.CompletedProcess[str]:
+    arguments = [
+        "--python",
+        str(_empty_environment(tmp_path)),
+        "--python-version",
+        _FLOOR_PYTHON_VERSION,
+    ]
     for search_path in search_paths:
         arguments += ["--extra-search-path", str(search_path)]
     return _run_ty([*arguments, *(str(path) for path in files)])
@@ -90,11 +122,15 @@ def _check_bare(files: list[Path], search_paths: tuple[Path, ...], tmp_path: Pat
 @pytest.mark.timeout(600)
 def test_the_root_project_has_no_type_errors() -> None:
     result = _run_ty([])
-    assert result.returncode == 0, f"ty found problems in the root project:\n{result.stdout}\n{result.stderr}"
+    assert result.returncode == 0, (
+        f"ty found problems in the root project:\n{result.stdout}\n{result.stderr}"
+    )
 
 
 @pytest.mark.timeout(600)
-def test_the_bare_tier_type_checks_against_the_standard_library_alone(tmp_path: Path) -> None:
+def test_the_bare_tier_type_checks_against_the_standard_library_alone(
+    tmp_path: Path,
+) -> None:
     files = _bare_files()
     assert _SYSTEM_SCRIPTS / "forward_port.py" in files
     assert _UPDATE_SELF_SCRIPTS / "update_self.py" in files
@@ -109,14 +145,18 @@ def test_the_bare_tier_type_checks_against_the_standard_library_alone(tmp_path: 
 
 
 @pytest.mark.timeout(600)
-def test_the_bare_check_rejects_a_third_party_import_and_accepts_the_floor_syntax(tmp_path: Path) -> None:
+def test_the_bare_check_rejects_a_third_party_import_and_accepts_the_floor_syntax(
+    tmp_path: Path,
+) -> None:
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     leaky = scripts / "leaky.py"
     leaky.write_text("import yaml\n\nyaml.safe_dump({})\n")
     modern = scripts / "modern.py"
     # A PEP 695 type alias: syntax that exists from Python 3.12, the floor.
-    modern.write_text("type Pair = tuple[int, int]\n\n\ndef first(pair: Pair) -> int:\n    return pair[0]\n")
+    modern.write_text(
+        "type Pair = tuple[int, int]\n\n\ndef first(pair: Pair) -> int:\n    return pair[0]\n"
+    )
 
     result = _check_bare([leaky, modern], (scripts,), tmp_path)
 

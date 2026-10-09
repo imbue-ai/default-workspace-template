@@ -112,7 +112,6 @@ class WatchersUnknownError(Exception):
     """The chat app could not say who is watching this chat."""
 
 
-
 def watchers_of_chat(http: HttpClient, environ: dict[str, str]) -> list[str]:
     """The instance ids of the pages watching this chat; raises WatchersUnknownError naming why they are unknown."""
     chat_id = environ.get(ENV_CHAT_ID, "") or environ.get(ENV_AGENT_ID, "")
@@ -217,4 +216,3 @@ def main(argv: list[str] | None = None) -> int:
     if is_accepted:
         sys.stderr.write("notify-user: notification sent.\n")
     return 0 if is_accepted else 1
-
