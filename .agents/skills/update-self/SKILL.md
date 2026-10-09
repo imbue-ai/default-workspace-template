@@ -454,7 +454,9 @@ A `done` that answers a catch-up (5b) carries a **Catch-up** section, and the
 audit reads it the same way: it must show which of the worker guide's §7 items
 ran over the commits it brought in, each with its evidence, and how each
 conflict there was resolved. The worker's earlier evidence for the rest of the
-pass still stands.
+pass still stands. The clean-pull skip's empty diff then runs to the branch's
+tip before its first catch-up merge, not to its tip
+(`references/worker-review-gates.md`).
 
 There is no approval gate: the audit, not the user, authorizes the apply. The
 `done` report is your raw material, not the user's message; the results
