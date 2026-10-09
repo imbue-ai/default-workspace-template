@@ -6,14 +6,7 @@
  * from one of the root's own inner frames counts.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SHELL_HANDSHAKE } from "@imbue/workspace-ui/src/app_contract";
-import {
-  handHandshakeDown,
-  isForwardedToInnerFrames,
-  isForwardedToShell,
-  rootOpenDecision,
-  startInnerFrameRelay,
-} from "./relay";
+import { isForwardedToInnerFrames, isForwardedToShell, rootOpenDecision, startInnerFrameRelay } from "./relay";
 
 /** Frame this window under a spy parent for the duration of the test. */
 function framed(): { postMessage: ReturnType<typeof vi.fn> } {
@@ -123,17 +116,6 @@ describe("startInnerFrameRelay", () => {
 
     expect(selected).toEqual(["agent-2", "agent-4"]);
     expect(parent.postMessage).not.toHaveBeenCalled();
-  });
-});
-
-describe("handHandshakeDown", () => {
-  it("posts the shell's handshake to an inner page as the shell's own message", () => {
-    const page = { postMessage: vi.fn() };
-    const handshake = { clientId: "client-1", windowId: "win-1", desktopId: "home", app: "chat", path: "/" };
-
-    handHandshakeDown(page as unknown as Window, handshake);
-
-    expect(page.postMessage.mock.calls).toEqual([[{ type: SHELL_HANDSHAKE, ...handshake }, "*"]]);
   });
 });
 
