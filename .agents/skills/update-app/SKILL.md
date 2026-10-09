@@ -376,12 +376,12 @@ where the data dies. Encode these, cheapest first:
   `--instance-key <key>` names the instance the window opens on, for an app
   whose `open_path` takes one (a chat opens on a conversation). `up` and
   `refresh` run `uv sync --all-packages` in the worktree first, so a fresh
-  worktree needs no setup of its own; if that sync fails, nothing boots. The worktree is
-  the app's code isolation when the change is one the user must see before it
-  lands; for a contained change exercised against a data copy, the raw
-  `serve_isolated_instance.py` call above, from the live tree, is still the
-  cheaper shape, and the only shape for a service with no manifest. Either way
-  the preview's window is the same labeled frame.
+  worktree needs no setup of its own; if that sync fails, nothing boots. The
+  worktree is the app's code isolation when the change is one the user must
+  see before it lands; for a contained change exercised against a data copy,
+  the raw `serve_isolated_instance.py` call above, from the live tree, is
+  still the cheaper shape, and the only shape for a service with no manifest.
+  Either way the preview's window is the same labeled frame.
 
 - **Never "clean up" test data by deleting from the live store.** If you
   did leave a stray test record in it, leave it -- an additive junk record
