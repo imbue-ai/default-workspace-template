@@ -516,13 +516,13 @@ git merge-base --is-ancestor HEAD mngr/update-self
 
 Exit 0 means the branch still fast-forwards: apply. Exit 1 means `HEAD` moved
 under the pass, and the apply would refuse it: **catch the worker up** instead
-of redoing the pass. Reply to the worker (it is still waiting, and holds the
+of redoing the pass. Message the worker (it is still waiting, and holds the
 branch and any bundles it built), re-arm the poll as in Step 3b, and audit the
-`done` it sends back (5a):
+`done` it sends back (5a). Plain `mngr message`, as Step 3b's cleanup uses
+plain `mngr`: the workspace's own launcher may predate a reply subcommand.
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py reply \
-    --task-file data/.tasks/update-self/task.md \
+mngr message update-self \
     -m "Catch up to $(git rev-parse HEAD) per §7 of your worker guide, then report done again."
 ```
 
