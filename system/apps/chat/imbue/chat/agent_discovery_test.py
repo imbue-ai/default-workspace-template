@@ -8,17 +8,25 @@ import pytest
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.agent_discovery import _first_failure
 from imbue.chat.agent_discovery import discover_agents
+from imbue.chat.agent_discovery import mngr_context
 from imbue.chat.agent_discovery import read_claude_config_dir_from_env_file
+from imbue.chat.agent_discovery import read_plugin_config
+from imbue.chat.agent_discovery import start_agent
+from imbue.chat.testing import provider_cache_keys
+from imbue.concurrency_group.concurrency_group import ConcurrencyGroupState
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.message import AgentSendFailure
 from imbue.mngr.api.message import MessageResult
+from imbue.mngr.api.providers import get_provider_instance
 from imbue.mngr.config.data_types import MngrContext
+from imbue.mngr.errors import AgentNameNotFoundError
 from imbue.mngr.errors import SendFailureKind
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentName
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostName
 from imbue.mngr.primitives import ProviderInstanceName
+from imbue.mngr_autocompact.config import AutoCompactPluginConfig
 
 
 def test_reads_claude_config_dir_from_env_file(tmp_path: Path) -> None:
@@ -293,7 +301,7 @@ def test_unknown_config_field_degrades_to_a_warning_not_a_failure(
 
     During an update the on-disk `.mngr/settings.toml` can briefly be newer than
     the mngr this long-lived process imported. Under strict parsing every read
-    path through `_get_mngr_context` -- listing agents, sending a message --
+    path through `mngr_context` -- listing agents, sending a message --
     became a 500, which took down the very chat channel needed to finish the
     update. The live read is therefore non-strict: the unknown field is dropped
     with a logged warning and agents still list.
@@ -312,3 +320,145 @@ def test_unknown_config_field_degrades_to_a_warning_not_a_failure(
     # the unknown field was reported rather than swallowed silently.
     assert agents == []
     assert any("field_from_a_newer_mngr" in record for record in loguru_records)
+
+
+# Every operation builds a fresh mngr context, and mngr caches each provider it builds against
+# that context's identity until something closes them. These pin that every entry point leaves
+# the cache as it found it, so a long-running server does not keep every context it ever built.
+
+_LOCAL = ProviderInstanceName("local")
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+def test_send_to_agent_releases_the_providers_its_context_built() -> None:
+    cached_during_sends: list[tuple[ProviderInstanceName, int]] = []
+
+    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
+        return ()
+
+    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
+        get_provider_instance(_LOCAL, ctx)
+        cached_during_sends.extend(key for key in provider_cache_keys() if key == (_LOCAL, id(ctx)))
+        return MessageResult(successful_agents=[str(m.agent_id) for m in matches])
+
+    messenger = MngrMessenger(discover=_discover, send=_send)
+    before = provider_cache_keys()
+    for _ in range(3):
+        assert messenger.send_to_agent(_AGENT_ID, "hi", (_make_match(),)) is None
+
+    assert len(cached_during_sends) == 3
+    assert provider_cache_keys() == before
+    assert provider_cache_keys().isdisjoint(cached_during_sends)
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+def test_press_key_chord_to_agent_releases_the_providers_its_context_built() -> None:
+    cached_during_presses: list[tuple[ProviderInstanceName, int]] = []
+
+    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
+        return ()
+
+    def _press(matches: Sequence[AgentMatch], key: str, ctx: MngrContext) -> MessageResult:
+        get_provider_instance(_LOCAL, ctx)
+        cached_during_presses.extend(key for key in provider_cache_keys() if key == (_LOCAL, id(ctx)))
+        return MessageResult(successful_agents=[str(m.agent_id) for m in matches])
+
+    messenger = MngrMessenger(discover=_discover, press=_press)
+    before = provider_cache_keys()
+    for _ in range(3):
+        assert messenger.press_key_chord_to_agent(_AGENT_ID, "M-q", (_make_match(),)) is True
+
+    assert len(cached_during_presses) == 3
+    assert provider_cache_keys() == before
+    assert provider_cache_keys().isdisjoint(cached_during_presses)
+
+
+@pytest.mark.usefixtures("isolated_mngr_host_dir")
+def test_discover_agents_releases_the_providers_its_listing_built() -> None:
+    before = provider_cache_keys()
+    for _ in range(3):
+        assert discover_agents(provider_names=("local",)) == []
+
+    assert provider_cache_keys() == before
+
+
+@pytest.mark.usefixtures("isolated_mngr_host_dir")
+def test_start_agent_releases_its_providers_and_raises_the_bare_mngr_error() -> None:
+    """The lookup builds providers and then fails; the failure still releases them.
+
+    The error is mngr's own, not a ``ConcurrencyExceptionGroup`` wrapping it: the endpoints
+    that open a terminal or revive an agent catch ``MngrError``, and a group is not one.
+    """
+    before = provider_cache_keys()
+    for _ in range(3):
+        with pytest.raises(AgentNameNotFoundError):
+            start_agent("no-such-agent")
+
+    assert provider_cache_keys() == before
+
+
+def test_read_plugin_config_releases_its_context() -> None:
+    before = provider_cache_keys()
+    for _ in range(3):
+        assert read_plugin_config("autocompact", AutoCompactPluginConfig) == AutoCompactPluginConfig()
+
+    assert provider_cache_keys() == before
+
+
+class _BodyFailedError(Exception):
+    """What a test's ``mngr_context`` body raises."""
+
+
+class _CloseFailedError(Exception):
+    """What a test's injected provider close raises."""
+
+
+def test_a_body_that_raises_still_releases_its_providers_and_exits_the_group() -> None:
+    failure = _BodyFailedError("the body failed")
+    contexts: list[MngrContext] = []
+    before = provider_cache_keys()
+
+    with pytest.raises(_BodyFailedError) as excinfo:
+        with mngr_context() as mngr_ctx:
+            contexts.append(mngr_ctx)
+            get_provider_instance(_LOCAL, mngr_ctx)
+            assert (_LOCAL, id(mngr_ctx)) in provider_cache_keys()
+            raise failure
+
+    assert excinfo.value is failure
+    (mngr_ctx,) = contexts
+    assert (_LOCAL, id(mngr_ctx)) not in provider_cache_keys()
+    assert provider_cache_keys() == before
+    assert mngr_ctx.concurrency_group.state is ConcurrencyGroupState.EXITED
+
+
+def test_a_close_that_raises_propagates_and_still_exits_the_group() -> None:
+    closed: list[MngrContext] = []
+
+    def _failing_close(mngr_ctx: MngrContext) -> None:
+        closed.append(mngr_ctx)
+        raise _CloseFailedError("the close failed")
+
+    with pytest.raises(_CloseFailedError):
+        with mngr_context(close_providers=_failing_close):
+            pass
+
+    (mngr_ctx,) = closed
+    assert mngr_ctx.concurrency_group.state is ConcurrencyGroupState.EXITED
+
+
+def test_a_close_that_raises_after_a_failed_body_carries_the_body_failure() -> None:
+    body_failure = _BodyFailedError("the body failed")
+    closed: list[MngrContext] = []
+
+    def _failing_close(mngr_ctx: MngrContext) -> None:
+        closed.append(mngr_ctx)
+        raise _CloseFailedError("the close failed")
+
+    with pytest.raises(_CloseFailedError) as excinfo:
+        with mngr_context(close_providers=_failing_close):
+            raise body_failure
+
+    assert excinfo.value.__context__ is body_failure
+    (mngr_ctx,) = closed
+    assert mngr_ctx.concurrency_group.state is ConcurrencyGroupState.EXITED
