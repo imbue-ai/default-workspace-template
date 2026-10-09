@@ -1505,10 +1505,9 @@ def apply_update(
 
     # Post-success bookkeeping (update-self mode only).
     if target_ref is not None:
-        # The fast-forward lands the worker branch's tip (its `update-self:`
-        # merge, or a catch-up merge on top of it), so the sha is re-derivable
-        # on any re-run -- which is what keeps the ledger append a no-op after
-        # an interruption.
+        # The fast-forward lands the worker branch's tip, so the sha is
+        # re-derivable on any re-run -- which is what keeps the ledger append a
+        # no-op after an interruption.
         try:
             merge_sha = git_out(runner, repo_root, ["rev-parse", merge_ref])
             write_version_history_entry(
