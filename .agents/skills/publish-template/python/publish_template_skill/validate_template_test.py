@@ -14,11 +14,11 @@ def test_a_shallow_snapshot_dir_still_finds_the_sibling_schema() -> None:
     every real publish (exit 6) while passing tests that happened to run from
     a deeply-nested directory.
     """
-    shallow = Path("/tmp/tmp.ABC123/publish_template_skill/validate_template.py")
+    shallow = Path("/tmp/tmp.ABC123/python/publish_template_skill/validate_template.py")
 
     candidates = validate_template._schema_module_candidates(shallow)
 
-    assert candidates[0] == Path("/tmp/tmp.ABC123/template_manifest.py")
+    assert candidates[0] == Path("/tmp/tmp.ABC123/python/template_manifest.py")
     assert len(candidates) > 1
 
 
