@@ -159,7 +159,7 @@ def _flag_values(argv: Sequence[str], flag: str) -> list[str]:
 
 
 def _manifest_envs(argv: Sequence[str]) -> list[str]:
-    """The ``--env`` values after the PATH this script sets to keep the live venv out."""
+    """The ``--env`` values other than the PATH this script sets to keep the live venv out."""
     return [
         value for value in _flag_values(argv, "--env") if not value.startswith("PATH=")
     ]
