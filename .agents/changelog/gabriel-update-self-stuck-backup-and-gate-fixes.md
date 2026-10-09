@@ -9,3 +9,5 @@ Before changing a test that failed, a harden worker runs it on the tree before i
 `reply --name` is gone: it reached workers whose task file predates the `worker_agent_id` stamp, which shipped in minds-v0.6.0. A `launch` whose `mngr create` reports no agent id now fails before sending the task (exit 2, with the worker named for `destroy`) instead of sending it by name.
 
 update-self's Step 1 no longer triggers a backup and waits for it. It runs `host-backup-now --check`, which reads the backup service's log and reports whether a recent restore point exists, with the same exit codes as before; the apply has no backup step.
+
+build-app's Step 5 says the background test-gate run AGENTS.md asks of a chat is not the harden worker's thorough pass, so a chat still runs it before handing a new app to a worker that may never be dispatched.

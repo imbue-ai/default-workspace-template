@@ -542,7 +542,9 @@ its windows, and every desktop).
 The foreground work stops at a usable, surfaced site. The thorough pass --
 extending Playwright coverage, the full test suite and ratchets, review gates
  -- runs in a **background harden worker**, never in the
-main agent. This is skeleton phase 7: the harden pass
+main agent. The test gate AGENTS.md has you run through
+`system/scripts/run_in_background.py` is not this pass: run it anyway, since
+the worker may never be dispatched. This is skeleton phase 7: the harden pass
 (`.agents/shared/worker/references/harden-creation.md`), here the **crystallize**
 operation with the **app** type -- the scaffolded app is already on
 disk and the user confirmed it live, so nothing needs reconstructing and there
