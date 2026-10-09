@@ -724,13 +724,7 @@ def test_a_client_state_report_survives_an_unwritable_state_file(app: Flask) -> 
     (shell.activity.events_path).mkdir(parents=True)
     client_queue = shell.broadcaster.register()
     try:
-        report = {
-            "type": "client_state",
-            "client_id": "c1",
-            "active_desktop": "home",
-            "page_id": TEST_PAGE_ID,
-            "revision": 0,
-        }
+        report = _moving_report("c1", "home")
         assert _handle_client_state_message(json.dumps(report), client_queue, shell, is_first_report=True) is True
         switched = {**report, "active_desktop": "alpha", "previous_desktop": "home"}
         assert _handle_client_state_message(json.dumps(switched), client_queue, shell, is_first_report=False) is True
