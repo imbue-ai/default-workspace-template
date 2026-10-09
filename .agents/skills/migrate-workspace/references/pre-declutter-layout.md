@@ -264,7 +264,7 @@ broken" without checking the events log.
 ## Two gotchas specific to this crossing
 
 - **The AI-integration helper moved *and* changed shape.** `claude_p.py` now lives
-  at `.agents/skills/use-ai-integration/scripts/claude_p.py`. More importantly,
+  at `.agents/skills/use-ai-integration/scripts/use_ai_integration_skill/claude_p.py`. More importantly,
   credentials now resolve through `read_workspace_ai_credentials()` -- the
   `data/.secrets/anthropic.env` snapshot first, then the Claude account's settings,
   then the process env -- rather than from the process environment. A migrated call

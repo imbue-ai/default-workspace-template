@@ -92,7 +92,7 @@ data parsing). Fix the creation when a scenario fails; fix the scenario when the
 creation is right but the scenario was wrong.
 
 **Reconstruct shape (skill):** once the scenarios pass and
-`uv run .agents/shared/scripts/validate_skill.py .agents/skills/<name>` prints
+`uv run --no-sync .agents/shared/scripts/validate_skill.py .agents/skills/<name>` prints
 `ok`, commit and declare a **milestone** per `worker-reporting.md`'s "Milestone
 reports (non-blocking)". Name it for what is true at that commit; its
 `## Tested` section lists the scenarios you ran and their results, the

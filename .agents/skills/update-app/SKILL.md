@@ -210,7 +210,7 @@ process restarts:
   path for landing an `update-self` merge -- that restarts the whole services
   agent (`mngr start --restart system-services`) so `bootstrap` re-runs too,
   and must be followed by
-  `python3 system/scripts/refresh_workspace_view.py` (see step 3).
+  `uv run --no-sync system/scripts/refresh_workspace_view.py` (see step 3).
 
 If it doesn't come back `RUNNING`, read
 `/var/log/supervisor/<name>-stderr.log` or
@@ -246,7 +246,7 @@ window refresh is not enough -- the workspace shell itself was bounced. Rebuild
 the user's whole view instead:
 
 ```bash
-python3 system/scripts/refresh_workspace_view.py
+uv run --no-sync system/scripts/refresh_workspace_view.py
 ```
 
 Nothing else does this for you. The Imbue Studio app only intervenes when a workspace
@@ -318,7 +318,7 @@ where the data dies. Encode these, cheapest first:
   and deletes the copy:
 
   ```bash
-  URL=$(python3 .agents/shared/scripts/serve_isolated_instance.py up \
+  URL=$(uv run --no-sync .agents/shared/scripts/serve_isolated_instance.py up \
       --name <name>-test --cwd . \
       --port-env <PACKAGE_UPPER>_PORT \
       --copy data=data/.apps/<name> \
@@ -326,7 +326,7 @@ where the data dies. Encode these, cheapest first:
       --health-path /health \
       -- .venv/bin/<name>)
   # ...exercise the change at "$URL" (curl / Playwright); it can write freely...
-  python3 .agents/shared/scripts/serve_isolated_instance.py down --name <name>-test
+  uv run --no-sync .agents/shared/scripts/serve_isolated_instance.py down --name <name>-test
   ```
 
   **Never copy app data into `/tmp`.** In the workspace container `/tmp` is a
@@ -343,7 +343,7 @@ where the data dies. Encode these, cheapest first:
   port, leaving the port, the service registration, and any window untouched:
 
   ```bash
-  python3 .agents/shared/scripts/serve_isolated_instance.py refresh --name <name>-test
+  uv run --no-sync .agents/shared/scripts/serve_isolated_instance.py refresh --name <name>-test
   ```
 
   A change that only alters files the running process reads from disk on each
@@ -362,11 +362,11 @@ where the data dies. Encode these, cheapest first:
   names, surfaced as the labeled `<name>-preview` app:
 
   ```bash
-  uv run python3 .agents/skills/update-app/scripts/preview_app.py up \
+  uv run --no-sync .agents/skills/update-app/scripts/preview_app.py up \
       --app <name> --worktree <dir>          # prints <name>-preview
   uv run --no-sync workspace-layout open <name>-preview   # puts a window of it in front of the user
-  uv run python3 .agents/skills/update-app/scripts/preview_app.py refresh --app <name>   # after a rebuild, in place
-  uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
+  uv run --no-sync .agents/skills/update-app/scripts/preview_app.py refresh --app <name>   # after a rebuild, in place
+  uv run --no-sync .agents/skills/update-app/scripts/preview_app.py down --app <name>
   ```
 
   `--with <sibling>` boots a sibling app's preview from the same worktree first

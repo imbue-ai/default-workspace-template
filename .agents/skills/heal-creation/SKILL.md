@@ -128,7 +128,7 @@ reason to do the fix inline: commit, then dispatch. Healing always runs in the
 background worker.
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py launch \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
     --name heal-$TARGET \
     --template worker \
     --runtime-dir data/.tasks/harden/heal-$TARGET/ \

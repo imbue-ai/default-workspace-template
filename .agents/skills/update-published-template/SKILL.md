@@ -176,7 +176,7 @@ and a correct base descends from that one:
 ```bash
 PUBLISHED_BASE="$(git log --first-parent --format='%H %s' "$PUBLISHED_TIP" \
     | awk '$2 != "template:" {print $1; exit}')"
-INITIAL="$(uv run .agents/shared/scripts/resolve_template_base.py --origin)"
+INITIAL="$(uv run --no-sync .agents/shared/scripts/resolve_template_base.py --origin)"
 if [ -z "$PUBLISHED_BASE" ]; then
     echo "NO BASE"
 elif [ -n "$INITIAL" ] && [ "$INITIAL" != "$PUBLISHED_BASE" ] \

@@ -43,16 +43,17 @@ target release's own copy (or the local one, when the ref predates the skill).
   launch-time `lead_agent` stamping; under an old launcher the line is the
   only thing that gives the worker a report address.
 - **The prose asks of `create_worker.py` only what every supported launcher
-  provides** (`scripts/launcher_contract_test.py` pins that set to the oldest
+  provides** (`scripts/update_self_skill/launcher_contract_test.py` pins that set to the oldest
   release the app updates from). Clearing the previous pass's worker uses
   plain `mngr list` / `mngr destroy` for this reason.
 - **The report poll runs the staged skill's own `scripts/run_in_background.py`**,
-  a byte-identical mirror of `system/scripts/run_in_background.py` (a test
-  holds the two equal), not the workspace's `system/scripts/` copy, which an
+  whose code (`scripts/update_self_skill/run_in_background.py`) is a
+  byte-identical mirror of `system/scripts/workspace_bare_scripts/run_in_background.py`
+  (a test holds the two equal), not the workspace's `system/scripts/` copy, which an
   older tree lacks. It is standard-library only, wraps the floor launcher's
   `await`, and looks up its messenger in the workspace's tree:
   `system/scripts/message_chat.py` where there is one (minds-v0.6.1 on), else
-  `mngr message`. `scripts/staged_runner_test.py` holds what it asks of each
+  `mngr message`. `scripts/update_self_skill/staged_runner_test.py` holds what it asks of each
   to the oldest release that has it.
 
 ## What the apply must tolerate
@@ -64,8 +65,9 @@ must keep tolerating older pre-merge trees: guarded imports (the
 `oom_priority` bands module is loaded off the pre-merge tree and refused
 wholesale when it lacks any attribute the apply reads), no assumptions about
 the pre-merge layout, and a `scripts/` directory that is staged and run as one
-unit (the entry script imports its sibling modules by name from its own
-directory).
+unit (the entry script imports the `update_self_skill` package beside it, its own
+directory being first on `sys.path`, so the staged copy never reaches the
+workspace's own tree or venv).
 
 ## Trust
 

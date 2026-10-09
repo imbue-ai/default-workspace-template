@@ -16,7 +16,7 @@ how.
 Code reaches Claude in one of two ways, depending on whether an
 `ANTHROPIC_API_KEY` is configured for the workspace: with a key, call `litellm`
 directly; without one, use the `claude -p` helper in this skill's
-`scripts/claude_p.py`.
+`scripts/use_ai_integration_skill/claude_p.py`.
 
 Credentials live in a provider account under `~/.minds/accounts/<id>/`, written
 by the provider chooser and pointed at by `CLAUDE_CONFIG_DIR`. NOT in the
@@ -31,7 +31,7 @@ recently used one), for both its resolver and the `claude -p` it launches.
 Either way, use its resolver rather than reading a path yourself:
 
 ```bash
-uv run --no-sync python -c "from claude_p import read_workspace_ai_credentials; print('keyed' if read_workspace_ai_credentials().api_key else 'keyless')"
+uv run --no-sync python -c "from use_ai_integration_skill.claude_p import read_workspace_ai_credentials; print('keyed' if read_workspace_ai_credentials().api_key else 'keyless')"
 ```
 
 **Keyed setups snapshot the key at setup time.** When the check says `keyed`,
@@ -42,7 +42,7 @@ already resolves that file first, so callers using it get this for free. Run
 once while setting up:
 
 ```bash
-uv run --no-sync python -c "from claude_p import write_anthropic_env_snapshot; print(write_anthropic_env_snapshot())"
+uv run --no-sync python -c "from use_ai_integration_skill.claude_p import write_anthropic_env_snapshot; print(write_anthropic_env_snapshot())"
 ```
 
 Only the key + base URL go in the snapshot -- NEVER `CLAUDE_CODE_OAUTH_TOKEN`
@@ -121,7 +121,7 @@ text = resp.choices[0].message.content
 cost = completion_cost(completion_response=resp)  # USD for this call
 ```
 
-**Keyless (no key): copy this skill's `scripts/claude_p.py` and call `claude_p_completion`.**
+**Keyless (no key): copy this skill's `scripts/use_ai_integration_skill/claude_p.py` and call `claude_p_completion`.**
 It disables tools and runs from an isolated working directory so the repo's
 `CLAUDE.md` / `.claude` hooks can't hijack the answer; `system` is required.
 
@@ -150,7 +150,7 @@ provider's own JSON / structured-output mode over parsing free text and retrying
 
 Always `claude -p` (it has tools and file access; a plain API call does not), so
 this path is the same whether or not a key is set. Copy this skill's
-`scripts/claude_p.py` and
+`scripts/use_ai_integration_skill/claude_p.py` and
 call `claude_p_task`: tools stay enabled, it runs in the repo working directory,
 and it defaults `permission_mode="bypassPermissions"` (load-bearing -- a headless
 run has no human to approve tool use).
@@ -182,7 +182,7 @@ Launch the worker synchronously and collect its structured result -- do not wrap
 it; call the script directly:
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py launch-sync \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch-sync \
   --name email-triage-fix-123 --template worker \
   --runtime-dir data/.apps/email-triage/fix-123 \
   --task-file  data/.apps/email-triage/fix-123/task.md \

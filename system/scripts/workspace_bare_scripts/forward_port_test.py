@@ -8,14 +8,12 @@ way supervisord and services invoke it -- with ``MINDS_APPS_FILE`` pointed at
 a sandboxed registry.
 """
 
-import importlib.util
 import os
 import re
 import subprocess
 import sys
 import tomllib
 from pathlib import Path
-from types import ModuleType
 
 import pytest
 from app_manifest.errors import InvalidManifestValueError
@@ -25,6 +23,7 @@ from app_manifest.primitives import (
     DisplayName,
     describe_app_name_problem,
 )
+from build_app_skill import scaffold_flask_lib
 
 from workspace_bare_scripts import forward_port
 
@@ -589,14 +588,6 @@ def test_a_missing_icon_file_fails_loudly(tmp_path: Path) -> None:
     assert not apps_file.exists()
 
 
-def _load_module(module_name: str, path: Path) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def test_every_carrier_of_the_reserved_name_set_holds_the_same_set() -> None:
     """Drift guard: two places in this repo carry the reserved-name set, because
     ``forward_port.py`` is stdlib-only by contract and cannot import the
@@ -676,16 +667,6 @@ def test_scaffold_name_rule_stays_a_subset_of_the_registration_rule() -> None:
     deliberately stricter -- letter-start, no underscores, its own reserved
     list -- but every name it accepts must register cleanly.)
     """
-    repo_root = Path(__file__).resolve().parents[3]
-    scaffold = _load_module(
-        "_scaffold_drift_check",
-        repo_root
-        / ".agents"
-        / "skills"
-        / "build-app"
-        / "scripts"
-        / "scaffold_flask_lib.py",
-    )
     names = (
         "web",
         "my-app2",
@@ -709,7 +690,7 @@ def test_scaffold_name_rule_stays_a_subset_of_the_registration_rule() -> None:
         # restatement goes stale the moment the check changes, which is the
         # failure this guard exists to catch.
         try:
-            scaffold._validate_name(name)
+            scaffold_flask_lib._validate_name(name)
         except SystemExit:
             continue
         assert forward_port.validate_service_name(name) is None, name

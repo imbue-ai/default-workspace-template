@@ -160,7 +160,7 @@ under `system/apps/<your-package>/` so they get an isolated window and origin.
 ## Step 1: Run the scaffolder (canonical path)
 
 ```bash
-uv run .agents/skills/build-app/scripts/scaffold_flask_lib.py \
+uv run --no-sync .agents/skills/build-app/scripts/scaffold_flask_lib.py \
     --name <service-name> \
     --description "<one-liner>" \
     --icon-file <path-to-svg> \
@@ -475,12 +475,12 @@ Both paths use the same verification recipe. See
 [references/verify.md](references/verify.md) -- use `system/scripts/smoketest_app.py`:
 
 ```bash
-python3 system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>"
+uv run --no-sync system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>"
 ```
 
 Or with a visual screenshot:
 ```bash
-python3 system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>" --screenshot /tmp/app.png
+uv run --no-sync system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>" --screenshot /tmp/app.png
 ```
 
 If verification surfaces something unexpected (connection refused,

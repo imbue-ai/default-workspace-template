@@ -268,13 +268,23 @@ done
 # Same problem, same fix, for the manifest tooling: the reset would remove these
 # from the worktree (and takes .venv with it, which is why the validator runs
 # under `uv run --no-project` against a snapshotted copy of the schema module
-# rather than importing it from the workspace).
-for tool_file in write_template_manifest.py validate_template.py; do
+# rather than importing it from the workspace). The entry files import the
+# publish_template_skill package, so it is copied beside them: an entry's own
+# directory is first on sys.path, so the import finds the snapshot's copy.
+TOOL_PACKAGE="publish_template_skill"
+for tool_file in write_template_manifest.py validate_template.py "$TOOL_PACKAGE/__init__.py"; do
     if [ ! -f "$SCRIPT_DIR/$tool_file" ]; then
         echo "build_template.sh: $SCRIPT_DIR/$tool_file is missing (required to generate and validate the manifest); aborting before touching the worktree" >&2
         exit 1
     fi
-    cp "$SCRIPT_DIR/$tool_file" "$SCAN_TOOLS_DIR/"
+done
+cp "$SCRIPT_DIR/write_template_manifest.py" "$SCRIPT_DIR/validate_template.py" "$SCAN_TOOLS_DIR/"
+mkdir "$SCAN_TOOLS_DIR/$TOOL_PACKAGE"
+for module in "$SCRIPT_DIR/$TOOL_PACKAGE"/*.py; do
+    case "$module" in
+        *_test.py) ;;
+        *) cp "$module" "$SCAN_TOOLS_DIR/$TOOL_PACKAGE/" ;;
+    esac
 done
 SCHEMA_MODULE="$REPO/system/services/env_converge/src/env_converge/template_manifest.py"
 if [ ! -f "$SCHEMA_MODULE" ]; then

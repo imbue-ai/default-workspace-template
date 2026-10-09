@@ -292,7 +292,7 @@ stays reachable for bug reports). A worker of that name in state `STOPPED` or
 conflict, resolved per the lease check in Step 1, never forced past. Plain
 `mngr` and `git` commands on purpose: this prose runs from the target's copy
 but launches with the workspace's own, possibly older, `create_worker.py`
-(`scripts/launcher_contract_test.py` pins what it may ask of it):
+(`scripts/update_self_skill/launcher_contract_test.py` pins what it may ask of it):
 
 ```bash
 mngr list --format "{name}	{state}" 2>/dev/null | grep -P "^update-self\t"
@@ -339,7 +339,7 @@ a message that starts your next turn, whatever your harness. Run the staged
 skill's copy of it: this workspace's own tree may predate the script.
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py launch \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
     --name update-self --template worker \
     --runtime-dir data/.tasks/update-self/ --task-file data/.tasks/update-self/task.md
 ```
@@ -352,7 +352,7 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/run_in_background.py \
     --description "Wait for the update's background agent" -- \
-    uv run .agents/skills/launch-task/scripts/create_worker.py await \
+    uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name update-self --task-file data/.tasks/update-self/task.md --timeout 90m
 ```
 
@@ -610,7 +610,7 @@ down with the preview script and close its window:
 
 ```bash
 uv run --no-sync workspace-layout close <name>-preview
-uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
+uv run --no-sync .agents/skills/update-app/scripts/preview_app.py down --app <name>
 ```
 
 The close goes first: nothing takes a window away when its app leaves the registry, so

@@ -22,17 +22,13 @@ they were created with and only new ones use the migrated account.
 Idempotent: re-running after a successful migration is a no-op, since no managed keys
 remain in the host env.
 
-Run from the repo root: ``uv run python system/scripts/migrate_claude_auth.py``.
+Run from the repo root: ``uv run --no-sync system/scripts/migrate_claude_auth.py``.
 """
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
-
-from imbue.chat.harnesses.auth_flows import AuthFlowService
-from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS, derive_auth_mode
-from imbue.mngr.utils.env_utils import parse_env_file
 
 
 def _format_env_value(value: str) -> str:
@@ -63,6 +59,10 @@ def migrate() -> bool:
 
     Returns True when anything changed.
     """
+    from imbue.chat.harnesses.auth_flows import AuthFlowService
+    from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS, derive_auth_mode
+    from imbue.mngr.utils.env_utils import parse_env_file
+
     host_env_path = _resolve_host_env_path()
     host_env = (
         parse_env_file(host_env_path.read_text()) if host_env_path.exists() else {}

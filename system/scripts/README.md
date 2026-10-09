@@ -1,13 +1,18 @@
 # system/scripts/
 
-Provisioning and utility scripts:
+Provisioning and utility scripts. The Python ones are entry stubs at the paths
+below; their code lives in one of two packages beside them (one uv project,
+`pyproject.toml`): `workspace_bare_scripts/`, which the system `python3` runs
+with no venv and which imports only the standard library, and `workspace_scripts/`,
+which runs from the root venv (`uv run --no-sync`). See
+`.agents/shared/references/running-python.md`.
 
 - Image build / provisioning: `setup_system.sh`, `install_dependencies.sh`,
   `build_workspace.sh`, `write_apt_sources.sh`, `seed_home_skeleton.sh`,
   `default_workspace_template_seed.sh`, `install_secret_scanners.sh`,
   `_provision_guard.sh`, `_tool_env.sh`, `install_mngr.py`, `tool_env.py`
-  (vendored byte-identically into `.agents/skills/update-self/scripts/`, which
-  the apply runs as a self-contained unit), and the boot-convergence units in
+  (vendored byte-identically into `.agents/skills/update-self/scripts/update_self_skill/`,
+  which the apply runs as a self-contained unit), and the boot-convergence units in
   `env.d/`.
 - Cross-harness agent policy hooks (`agent_*.sh` / `agent_*.py`), wired in
   `.claude/settings.json` for claude and `.codex/hooks.json` for codex; pi's
@@ -33,7 +38,7 @@ Provisioning and utility scripts:
   command detached and, when it exits, send its exit code and output to the
   caller's own chat as a message that starts the agent's next turn, on any
   harness; how a lead waits for a worker's report; vendored byte-identically into
-  `.agents/skills/update-self/scripts/`, whose staged copy update-self waits
+  `.agents/skills/update-self/scripts/update_self_skill/`, whose staged copy update-self waits
   through), `with_secrets.py` (run a
   command with one `data/.secrets/<name>.env` file's variables in its
   environment; the one sanctioned reader of that directory, which

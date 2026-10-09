@@ -11,7 +11,7 @@ Your worker SKILL.md lists any additional inputs the calling flow stages
 alongside it. At the start of your run, extract the lead's address with:
 
 ```bash
-eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py <TASK_FILE>)"
+eval "$(uv run --no-sync .agents/shared/scripts/parse_task_frontmatter.py <TASK_FILE>)"
 ```
 
 `<TASK_FILE>` is the `task_file` value in the frontmatter you were sent -- the
@@ -47,7 +47,7 @@ At each gate or terminal status:
    prints where it landed:
 
    ```bash
-   uv run .agents/skills/launch-task/scripts/create_worker.py report \
+   uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py report \
        --task-file "$TASK_FILE" \
        --type gate \
        --name question \

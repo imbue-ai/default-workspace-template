@@ -249,7 +249,7 @@ commit the agent started from (or last updated itself to). Resolve it with the
 shared script, never by hand:
 
 ```bash
-BASE_REF=$(uv run .agents/shared/scripts/resolve_template_base.py)
+BASE_REF=$(uv run --no-sync .agents/shared/scripts/resolve_template_base.py)
 ```
 
 It walks HEAD's first-parent history for the NEWEST template-state marker:
@@ -320,7 +320,7 @@ on *now*. Two questions, one marker convention. The update apply seeds the same
 line from its own inline copy of the `--origin` rule, because it runs from a
 `git archive` of the update-self skill directory alone and cannot import
 anything outside it -- see `_origin_line` in `update-self`'s
-`scripts/update_ledger.py`.)
+`scripts/update_self_skill/update_ledger.py`.)
 
 **Also capture `SOURCE_SHA` -- the source commit the snapshot is cut from.**
 The worker's worktree branches off `/home/user/workspace`'s current `HEAD`, so that commit is
@@ -348,7 +348,7 @@ block and designs the bespoke thumbnail. `/home/user/workspace` is never modifie
 
 The worker name is `<slug>`. Names must be unique: if a previous attempt left
 a worker or branch with this name, clean it up first
-(`uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name <slug>`,
+(`uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py destroy --name <slug>`,
 then `git branch -D "mngr/<slug>"` once no worktree holds it).
 
 Per `launch-task`, the whole delegation is ONE step in your timeline:
@@ -640,7 +640,7 @@ BODY_EOF
 **Launch** (foreground, so a failed launch surfaces immediately):
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py launch \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
     --name <slug> \
     --template worker \
     --runtime-dir data/.tasks/launch-task/<slug>/ \
@@ -652,7 +652,7 @@ uv run .agents/skills/launch-task/scripts/create_worker.py launch \
 
 ```bash
 python3 system/scripts/run_in_background.py --description "Wait for the background agent" -- \
-    uv run .agents/skills/launch-task/scripts/create_worker.py await \
+    uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name <slug> \
     --task-file data/.tasks/launch-task/<slug>/task.md
 ```
@@ -1244,7 +1244,7 @@ retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
 
 - **Seed the `## Workspace` origin line if it is absent** -- exactly once per
   workspace, as the FIRST line under `## Workspace`. Resolve where the agent
-  started with `uv run .agents/shared/scripts/resolve_template_base.py --origin`
+  started with `uv run --no-sync .agents/shared/scripts/resolve_template_base.py --origin`
   (its own `Initial workspace commit`; fall back to the first-parent root when
   that exits 1), and resolve its date/version/sha from that commit itself.
   **Use `git describe --tags --abbrev=0 --match 'minds-v*' "$CREATION"`
@@ -1354,7 +1354,7 @@ branch's final tree and lives on the new remote (the branch's intermediate
 commits were never pushed, by design):
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name <slug>
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py destroy --name <slug>
 git worktree prune
 git branch -D "mngr/<slug>"
 ```

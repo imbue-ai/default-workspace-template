@@ -14,3 +14,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["update_app_skill"]
+
+# preview_app's up and down both read manifests through app_manifest, and its
+# signatures name AppManifest, so the library (and the pydantic it loads) is
+# imported at module level.
+[tool.workspace-template.entry-points."preview_app.py"]
+heavy-imports = ["pydantic"]

@@ -19,7 +19,7 @@ scripted; Step 4a is your recipe for it.
 ## 1. Resolve inputs
 
 ```bash
-eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
+eval "$(uv run --no-sync .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
 ```
 
 Sets `LEAD_AGENT`, `LEAD_WORK_DIR`, `FINISH_REPORT_PATH`, and `TARGET_REF`. If the worktree has
@@ -155,7 +155,7 @@ whether the creation carries the workspace's own content, and whether the
 update reached it.
 
 ```bash
-eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
+eval "$(uv run --no-sync .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
 SCOPES=data/.tasks/update-self/scopes
 RANGES=data/.tasks/update-self/footprint-ranges.json
 rm -rf "$SCOPES" && mkdir -p "$SCOPES"
@@ -315,7 +315,10 @@ in your report.
 - **Environment gate first**, whenever a manifest or lockfile is in the
   merged set: `uv lock --check` then `uv sync --all-packages`. A failure here
   is a precise blocker (an unparseable root lock means no service in the
-  workspace can start); fix it before running anything else.
+  workspace can start); fix it before running anything else. A failure on the
+  workspace's own skills, services or docs that the update's changelog ties to
+  a changed rule (for example a user skill's `scripts/` with no
+  `pyproject.toml`) is fixed by following `references/python-packaging-migration.md`.
 - **Suites, lint, ratchets** for what the merged set, the update's changes to
   your creations, 4a's impacted consumers, and your own edits can reach, and
   for nothing else (with none of them, no suite runs at all). The test

@@ -72,9 +72,13 @@ A mixed flow of all three kinds is the norm for useful skills.
 ```
 .agents/skills/<name>/
   SKILL.md                  # required; body <= 500 lines (progressive disclosure)
-  scripts/
-    run.py                  # optional; include when there are deterministic steps
-    *.py                    # optional helpers
+  scripts/                  # optional; include when there are deterministic steps
+    pyproject.toml          # required whenever scripts/ exists (see Packaging)
+    run.py                  # the entry point: a thin dispatcher into the package
+    <name_with_underscores>_skill/
+      __init__.py           # empty
+      *.py                  # the implementation, one module per concern
+      *_test.py             # tests, beside the modules they cover
   references/*.md           # optional long-form docs; load on demand
   assets/...                # optional static resources (templates, samples)
 ```
@@ -146,17 +150,52 @@ chain runs end-to-end.
 
 ### Packaging
 
-Packaging: `run.py` should be an ordinary self-contained PEP 723 script. 
-For [ai-script] steps, make sure to read and follow the instructions in the **`use-ai-integration`** skill;
-add appropriate dependencies to your PEP 723 header.
+A skill's `scripts/` dir is a uv project of its own, and a member of the root
+workspace (the `.agents/skills/*/scripts` glob), so its dependencies resolve in
+the one workspace lock and install into the root venv:
 
-- Begin every `run.py` with a PEP 723 header pinning its inline deps:
-  ```python
-  # /// script
-  # requires-python = ">=3.11"
-  # dependencies = ["rich>=13"]
-  # ///
+- `scripts/pyproject.toml` names the project `<name>-skill` and its package
+  `<name_with_underscores>_skill`, built with hatchling:
+  ```toml
+  [project]
+  name = "<name>-skill"
+  version = "0.1.0"
+  requires-python = ">=3.11"
+  dependencies = ["rich>=13"]
+
+  [build-system]
+  requires = ["hatchling"]
+  build-backend = "hatchling.build"
+
+  [tool.hatch.build.targets.wheel]
+  packages = ["<name_with_underscores>_skill"]
   ```
+  A `scripts/` dir that holds only shell scripts still needs a
+  `pyproject.toml` (a `[project]` table plus `[tool.uv] package = false`):
+  uv refuses a member directory without one, and that breaks every `uv`
+  command in the workspace.
+- The code lives in the package; `run.py` (and any other entry file at the top
+  of `scripts/`) is a thin dispatcher that imports it. Tests sit in the package
+  beside their modules and import them normally
+  (`from <name>_skill.parse import parse_rows`).
+- Keep the entry cheap to start: it runs on every call, so its module imports
+  only what every invocation needs at the top, and each subcommand imports its
+  implementation (and any heavy library -- pydantic, loguru, click, httpx, ...)
+  inside the function that runs it. A test fails an entry that loads one of
+  those at import time; one that truly needs it at import declares it in
+  `scripts/pyproject.toml` under
+  `[tool.workspace-template.entry-points."run.py"]` as
+  `heavy-imports = ["pydantic"]`.
+- A dependency must co-resolve with the rest of the workspace, the same as an
+  app's. After adding or changing one, run `uv lock` and then
+  `uv sync --all-packages`, and commit `uv.lock` with the change; a clash
+  surfaces at `uv lock`.
+
+See `.agents/shared/references/running-python.md` for why, and for the bare
+tier (scripts the system `python3` runs) that only built-in code uses.
+
+For [ai-script] steps, make sure to read and follow the instructions in the **`use-ai-integration`** skill.
+
 - `argparse` entry point; no interactive prompts.
 - Stateless across runs by default -- transient per-step I/O between
   subcommands is fine, durable cross-run state is not. If durable state is
@@ -164,21 +203,22 @@ add appropriate dependencies to your PEP 723 header.
   unilaterally.
 - Fail loudly: exit non-zero on error, write the error to stderr.
 - Document the invocation in SKILL.md:
-  `uv run .agents/skills/<name>/scripts/run.py <args>`
+  `uv run --no-sync .agents/skills/<name>/scripts/run.py <args>`
 
 ## Validation
 
-`uv run .agents/shared/scripts/validate_skill.py <skill_dir>` checks SKILL.md
+`uv run --no-sync .agents/shared/scripts/validate_skill.py <skill_dir>` checks SKILL.md
 frontmatter, the kebab-case name rules, directory-name match, description
-length, 500-line body limit, and that any `run.py` begins with a PEP 723
-header. When those static checks pass and a `run.py` exists, it also runs
-`uv run .agents/skills/<name>/scripts/run.py --help`, which forces `uv` to
-resolve the script's PEP 723 dependencies and import the module -- so a broken
-import or unresolvable dependency fails validation here rather than only at
-scenario time. (This is a shallow import check: `--help` exercises top-level
-imports and the argparse wiring, not imports done lazily inside subcommand
-bodies -- those are left to scenario testing.) Prints `ok` and exits 0 on
-success; exits 1 with a clear error on failure.
+length and the 500-line body limit. When the skill has a `scripts/` dir it
+also checks that `scripts/pyproject.toml` exists and names the project
+`<name>-skill` and the package `<name_with_underscores>_skill`, that `uv lock
+--check` passes (the workspace lock includes the skill's dependencies), and
+that `uv run --no-sync <entry> --help` exits 0 for every entry file at the top
+of `scripts/` -- so a broken import or a missing dependency fails validation
+here rather than only at scenario time. (This is a shallow import check:
+`--help` exercises top-level imports and the argparse wiring, not imports done
+lazily inside subcommand bodies -- those are left to scenario testing.) Prints
+`ok` and exits 0 on success; exits 1 with a clear error on failure.
 
 ## Scenario template
 
@@ -188,7 +228,7 @@ Record each scenario in the transcript in this form:
 
 ```
 ### Scenario: <one-line description>
-- Command: `uv run .agents/skills/<name>/scripts/run.py <args>`
+- Command: `uv run --no-sync .agents/skills/<name>/scripts/run.py <args>`
 - Input: <stdin / files / env / CLI args>
 - Expected: <exit code + stdout/file contents assertion>
 - Actual: <observed>
