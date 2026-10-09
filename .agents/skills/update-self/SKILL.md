@@ -547,7 +547,7 @@ mkdir -p data/.tasks/update-self/reports/consumed
 ```
 
 ```bash
-mngr message update-self --on-error abort \
+mngr message update-self \
     -m "Catch up to $(git rev-parse HEAD) per §7 of your worker guide, then report done again."
 ```
 
