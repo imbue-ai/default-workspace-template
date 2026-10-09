@@ -88,7 +88,8 @@ export const PROVIDER_SIGN_IN_END: "minds:provider-sign-in-end" =
 // WORKSPACE_READY.
 export const OPEN_LINK: "minds:open-link" = "OPEN_LINK" in embedContract ? embedContract.OPEN_LINK : "minds:open-link";
 // Workspace -> embedder (contract v8): open an external web, mailto or tel link outside the workspace, which no app of
-// it takes. Payload: { url }. Sent only to an embedder that said ``opensExternalLinks`` with EMBEDDER_CAPABILITIES.
+// it takes. Payload: { url }. Sent only to an embedder that said ``opensExternalLinks`` with EMBEDDER_CAPABILITIES, or
+// for an external link that embedder handed over with OPEN_LINK.
 export const OPEN_EXTERNAL: "minds:open-external" =
   "OPEN_EXTERNAL" in embedContract ? embedContract.OPEN_EXTERNAL : "minds:open-external";
 
