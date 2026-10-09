@@ -1640,25 +1640,29 @@ def test_a_replys_file_link_opens_in_the_file_viewer_and_its_local_link_goes_to_
             assert page.context.pages == [page]
 
 
+_NEWS_LABEL = "news-ab12cd34"
+
+
 @pytest.mark.timeout(120, func_only=False)
-def test_a_replys_localhost_link_to_a_registered_apps_port_opens_that_apps_window_not_the_browser(
-    tmp_path: Path, page: Page
+@pytest.mark.parametrize("is_label_host_link", [False, True], ids=["backend_port", "label_host"])
+def test_a_replys_link_to_a_registered_app_opens_that_apps_window_not_the_browser(
+    tmp_path: Path, page: Page, is_label_host_link: bool
 ) -> None:
-    """A reply's link to an app's backend ``http://localhost:<port>`` URL, as an agent may write for an app it runs,
-    opens the app's own window at the link's path and query, and nothing is posted to the app that opens URLs."""
+    """A reply's link to an app, either by the port-less ``http://<label>.localhost/`` address ``workspace-layout
+    list`` gives an agent or by its backend's ``http://localhost:<port>`` URL, opens the app's own window at the
+    link's path and query, and nothing is posted to the app that opens URLs."""
     opened_urls: list[dict[str, Any]] = []
     with (
         serve_app(message_handling_app([], "/unused", 200)) as news,
         serve_app(message_handling_app(opened_urls, _OPEN_URL_HANDLER_PATH, 200)) as url_opener,
     ):
         rows = (
-            registry_row_toml("news", news.http_url),
+            registry_row_toml("news", news.http_url, label=_NEWS_LABEL),
             registry_row_toml("browser", url_opener.http_url, message_handlers=[("open:url", _OPEN_URL_HANDLER_PATH)]),
         )
+        origin = f"http://{_NEWS_LABEL}.localhost" if is_label_host_link else f"http://localhost:{news.port}"
         session_events = _question_and_reply_events(
-            "uuid-app-link",
-            "Where is the story?",
-            f"It is in [the news app](http://localhost:{news.port}/story/7?ref=chat).",
+            "uuid-app-link", "Where is the story?", f"It is in [the news app]({origin}/story/7?ref=chat)."
         )
         with _running_e2e_server(tmp_path, session_events=session_events, extra_rows=rows) as server:
             _open_fixture_chat(page, server)
