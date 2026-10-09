@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tomllib
 from collections.abc import Sequence
@@ -109,11 +110,16 @@ class _RecordingRunner(mod.Runner):
         self.calls: list[list[str]] = []
         self.synced: list[Path] = []
         self.sync_code = 0
+        self.is_sync_hung = False
         self.next_port = next_port
         self.failing_names = set(failing_names)
 
     def sync(self, worktree: Path) -> int:
         self.synced.append(worktree)
+        if self.is_sync_hung:
+            raise subprocess.TimeoutExpired(
+                list(mod.SYNC_COMMAND), mod.SYNC_TIMEOUT_SECONDS
+            )
         return self.sync_code
 
     def run(self, argv: Sequence[str], cwd: Path) -> int:
@@ -539,7 +545,7 @@ def test_a_failed_boot_keeps_the_record_of_the_siblings_it_booted(
     assert downs == ["system_interface-preview", "chat-preview"]
 
 
-def test_up_and_refresh_sync_the_worktree_first_and_a_failed_sync_stops_them(
+def test_up_and_refresh_sync_the_worktree_first_and_a_failed_or_hung_sync_stops_them(
     tmp_path: Path,
 ) -> None:
     """An unsynced worktree's environment lacks the app's console script, so the boot would
@@ -561,6 +567,11 @@ def test_up_and_refresh_sync_the_worktree_first_and_a_failed_sync_stops_them(
     with pytest.raises(mod.PreviewError, match="exit 2"):
         mod.up("notes", worktree, tmp_path, runner=runner, dump_registry=_dump_registry)
     with pytest.raises(mod.PreviewError, match="exit 2"):
+        mod.refresh("notes", tmp_path, runner=runner)
+    runner.is_sync_hung = True
+    with pytest.raises(mod.PreviewError, match="did not finish"):
+        mod.up("notes", worktree, tmp_path, runner=runner, dump_registry=_dump_registry)
+    with pytest.raises(mod.PreviewError, match="did not finish"):
         mod.refresh("notes", tmp_path, runner=runner)
 
     assert runner.calls == []

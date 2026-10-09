@@ -134,43 +134,45 @@ class Runner:
     def sync(self, worktree: Path) -> int:
         """Install every workspace member into the worktree's own environment.
 
-        Its output goes to stderr, since ``up``'s stdout is the preview's app name.
+        Its output goes to stderr, since ``up``'s stdout is the preview's app name. Raises
+        ``subprocess.TimeoutExpired`` once it has run ``SYNC_TIMEOUT_SECONDS``.
         """
         env = {
             key: value for key, value in os.environ.items() if key != ACTIVE_VENV_ENV
         }
-        started_at = time.monotonic()
-        try:
-            completed = subprocess.run(
+        return int(
+            subprocess.run(
                 list(SYNC_COMMAND),
                 cwd=str(worktree),
                 env=env,
                 stdout=sys.stderr,
                 check=False,
                 timeout=SYNC_TIMEOUT_SECONDS,
-            )
-        except subprocess.TimeoutExpired as e:
-            raise PreviewError(
-                f"'{SYNC_COMMAND_TEXT}' in {worktree} did not finish within "
-                f"{SYNC_TIMEOUT_SECONDS}s"
-            ) from e
-        elapsed = time.monotonic() - started_at
-        if completed.returncode == 0 and elapsed > SYNC_SLOW_SECONDS:
-            sys.stderr.write(
-                f"preview: '{SYNC_COMMAND_TEXT}' in {worktree} took {elapsed:.0f}s, "
-                f"slow for a sync that times out at {SYNC_TIMEOUT_SECONDS}s.\n"
-            )
-        return int(completed.returncode)
+            ).returncode
+        )
 
 
 def sync_worktree(worktree: Path, runner: Runner) -> None:
     if not worktree.is_dir():
         raise PreviewError(f"the worktree {worktree} no longer exists")
-    code = runner.sync(worktree)
+    started_at = time.monotonic()
+    try:
+        code = runner.sync(worktree)
+    except subprocess.TimeoutExpired as e:
+        raise PreviewError(
+            f"'{SYNC_COMMAND_TEXT}' in {worktree} did not finish within "
+            f"{SYNC_TIMEOUT_SECONDS}s"
+        ) from e
     if code != 0:
         raise PreviewError(
             f"'{SYNC_COMMAND_TEXT}' failed in {worktree} (exit {code}), so its "
             "environment cannot run the worktree's code; fix that and retry"
+        )
+    elapsed = time.monotonic() - started_at
+    if elapsed > SYNC_SLOW_SECONDS:
+        sys.stderr.write(
+            f"preview: '{SYNC_COMMAND_TEXT}' in {worktree} took {elapsed:.0f}s, "
+            f"slow for a sync that times out at {SYNC_TIMEOUT_SECONDS}s.\n"
         )
 
 
