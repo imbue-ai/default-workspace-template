@@ -2223,7 +2223,7 @@ def test_read_app_tools_lists_every_python_app_in_the_tree() -> None:
 def test_read_app_tools_leaves_a_pre_manifest_app_to_the_root_venv(
     tmp_path: Path, capsys
 ) -> None:
-    # An app with a pyproject but no app.toml runs `uv run <name>` from the
+    # An app with a pyproject but no app.toml runs `.venv/bin/<name>` from the
     # root venv, so the apply must neither install nor reinstall a tool for
     # it, and its absence is expected rather than a note.
     repo_root = _make_apply_repo(tmp_path)

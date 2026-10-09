@@ -345,7 +345,7 @@ def read_app_tools(repo_root: Path) -> tuple[AppTool, ...]:
 
     The manifest is the discriminator: an app with both a ``pyproject.toml``
     and an ``app.toml`` runs from its own uv tool environment, while an app
-    with no ``app.toml`` runs ``uv run <name>`` from the root venv and is left
+    with no ``app.toml`` runs ``.venv/bin/<name>`` from the root venv and is left
     alone.
 
     Read off the tree being applied (the merged tree, or the restored one on
