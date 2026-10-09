@@ -1493,23 +1493,25 @@ class _DesktopTraffic(MutableModel):
     moves: list[dict[str, Any]] = Field(description="Every ``active_desktop_changed`` the page received")
 
 
+def _take_sent(traffic: _DesktopTraffic, payload: str | bytes) -> None:
+    message = json.loads(payload)
+    if message.get("type") == "client_state":
+        traffic.reports.append(message)
+
+
+def _take_received(traffic: _DesktopTraffic, payload: str | bytes) -> None:
+    message = json.loads(payload)
+    if message.get("type") == "active_desktop_changed":
+        traffic.moves.append(message)
+
+
 def _record_desktop_traffic(page: Page) -> _DesktopTraffic:
     """Record the page's desktop traffic from here on; call before the page loads."""
     traffic = _DesktopTraffic(reports=[], moves=[])
 
     def _watch(websocket: WebSocket) -> None:
-        def _on_sent(payload: str | bytes) -> None:
-            message = json.loads(payload)
-            if message.get("type") == "client_state":
-                traffic.reports.append(message)
-
-        def _on_received(payload: str | bytes) -> None:
-            message = json.loads(payload)
-            if message.get("type") == "active_desktop_changed":
-                traffic.moves.append(message)
-
-        websocket.on("framesent", _on_sent)
-        websocket.on("framereceived", _on_received)
+        websocket.on("framesent", lambda payload: _take_sent(traffic, payload))
+        websocket.on("framereceived", lambda payload: _take_received(traffic, payload))
 
     page.on("websocket", _watch)
     return traffic
@@ -1523,21 +1525,29 @@ def _create_desktop_shown_on(server: E2EServer, pages: list[Page]) -> str:
     return desktop_id
 
 
+def _pump_until(page: Page, condition: Callable[[], bool], what: str) -> None:
+    """Wait through the sync API, which hands the pages' socket events over only while it is called."""
+    for _ in range(_HEARD_EVERY_SWITCH_POLLS):
+        if condition():
+            return
+        page.wait_for_timeout(100)
+    raise AssertionError(f"never saw {what}")
+
+
 def _switch_rapidly(page: Page, desktop_ids: list[str], traffics: list[_DesktopTraffic]) -> None:
     """Click the desktops in turn as fast as the pointer goes, waiting on nothing between clicks, then wait until
     every page has heard the move of each click."""
     heard_before = [len(traffic.moves) for traffic in traffics]
     for desktop_id in desktop_ids:
         page.locator(f'[data-desktop-switch="{desktop_id}"]').click()
-    # The sync API hands the pages' socket events over only while it is called, so the wait goes through it.
-    for _ in range(_HEARD_EVERY_SWITCH_POLLS):
-        if all(
+    _pump_until(
+        page,
+        lambda: all(
             len(traffic.moves) >= before + len(desktop_ids)
             for traffic, before in zip(traffics, heard_before, strict=True)
-        ):
-            return
-        page.wait_for_timeout(100)
-    raise AssertionError("a page never heard every switch")
+        ),
+        "every page hear every switch",
+    )
 
 
 def _expect_settled_on(page: Page, desktop_id: str, window_id: str) -> None:
@@ -1595,13 +1605,11 @@ def test_two_windows_of_one_client_settle_together_after_rapid_switches(e2e_serv
     assert [client["active_desktop"] for client in clients] == [_HOME_DESKTOP_ID]
 
 
-class _HeldSocket(MutableModel):
+class _HeldSocket(_DesktopTraffic):
     """A page's shell socket with what the page sends held back from the shell until released."""
 
     is_holding: bool = Field(description="Whether what the page sends is held rather than passed on")
     held: list[str] = Field(description="What the page sent while held, oldest first")
-    reports: list[dict[str, Any]] = Field(description="Every ``client_state`` the page sent")
-    moves: list[dict[str, Any]] = Field(description="Every ``active_desktop_changed`` the page received")
 
 
 def _hold_page_socket(page: Page) -> tuple[_HeldSocket, Callable[[], None]]:
@@ -1615,18 +1623,14 @@ def _hold_page_socket(page: Page) -> tuple[_HeldSocket, Callable[[], None]]:
         shell_sides.append(shell_side)
 
         def _from_page(payload: str | bytes) -> None:
-            message = json.loads(payload)
-            if message.get("type") == "client_state":
-                socket.reports.append(message)
+            _take_sent(socket, payload)
             if socket.is_holding:
                 socket.held.append(str(payload))
             else:
                 shell_side.send(payload)
 
         def _from_shell(payload: str | bytes) -> None:
-            message = json.loads(payload)
-            if message.get("type") == "active_desktop_changed":
-                socket.moves.append(message)
+            _take_received(socket, payload)
             page_side.send(payload)
 
         page_side.on_message(_from_page)
@@ -1640,15 +1644,6 @@ def _hold_page_socket(page: Page) -> tuple[_HeldSocket, Callable[[], None]]:
 
     page.route_web_socket("**/api/ws", _route)
     return socket, _release
-
-
-def _pump_until(page: Page, condition: Callable[[], bool], what: str) -> None:
-    """Wait through the sync API, which hands the routed socket's messages over only while it is called."""
-    for _ in range(_HEARD_EVERY_SWITCH_POLLS):
-        if condition():
-            return
-        page.wait_for_timeout(100)
-    raise AssertionError(f"never saw {what}")
 
 
 @pytest.mark.timeout(60, func_only=False)
