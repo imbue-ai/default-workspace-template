@@ -135,8 +135,8 @@ needs the lease.
 `tk ready` also shows an in-progress `update <name>` or `heal <name>` ticket
 (a background pass hardening an earlier change to this service), proceed with
 your edit; your change simply makes that pass stale. Leave a note on that
-ticket (`tk add-note <id> "..."`) so its owner coalesces at merge time. The
-full contention rules live in
+ticket (`tk add-note <id> "..."`) so its owner catches the pass up to cover
+it at merge time. The full contention rules live in
 [`.agents/shared/references/harden-contention.md`](../../shared/references/harden-contention.md).
 
 ## The live change loop
