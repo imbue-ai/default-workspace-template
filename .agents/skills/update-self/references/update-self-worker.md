@@ -423,6 +423,70 @@ commits are in
 or should run at another scope, in a situation the rule does not cover, that is
 a `question` gate for the lead -- never a silent adaptation.
 
+### 4d. Decide whether running agents need a restart
+
+The apply restarts the services, never the agents: every chat and worker keeps
+the harness process it had, which loaded its binary and some of its config
+once, when it started. After a successful apply the lead restarts them all
+(itself last) when the update changes what those processes loaded. **Whether
+that happens is decided by rule**; record the verdict and its evidence in your
+report. The mechanical half is a command, run from the tree the live workspace
+runs (`footprint-ranges`' `update_base`, the same base Step 4's update range
+reads from) to `HEAD`, wherever 4c's fix commits left it. After a rolled-back
+update that tree is the commit under Step 1's rollback reverts: the reverts,
+and a merge made on top of them, already carry a release the running agents
+never loaded:
+
+```bash
+eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
+RANGES=data/.tasks/update-self/footprint-ranges.json
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    footprint-ranges --target "$TARGET_REF" > "$RANGES" || exit 1
+LIVE=$(jq -r .update_base "$RANGES")
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    agent-restart-verdict --before "$LIVE" --after HEAD
+```
+
+Its `triggers` name every change it knows makes a restart **needed**: a
+harness version pin in `system/scripts/setup_system.sh` or an
+`[agent_types.*]` `version` in `.mngr/settings.toml` (the apply's provisioner
+installs the new binary, but a running agent keeps executing the old one),
+the versioned Antigravity installer (`system/scripts/agy_install-*.sh`), and
+code a harness loads into its process at start (`.pi/extensions/**`). When
+`needed` is `true`, the verdict is `needed`, and its triggers are the
+evidence. When it is `false`, read the rest of the diff (`git diff
+--name-only "$(jq -r .update_base data/.tasks/update-self/footprint-ranges.json)"
+HEAD`) for what the command cannot see, which also makes a restart
+**needed**:
+
+- **A harness extension or plugin tree the update adds**, like
+  `.pi/extensions/`, that a harness loads when it starts. Name it for the
+  command too, as a `submit-upstream-changes` candidate, so the next update
+  sees it.
+- **Other harness config whose live reload you cannot establish** (for example
+  `.codex/hooks.json`): a harness that re-reads it on its own needs no
+  restart, but only its documentation can tell you that, and when it does not
+  say, count it as loaded at start. A restart of an idle agent is cheap; an
+  agent left on half-applied config is not.
+
+A restart is **not needed** for:
+
+- **`.claude/settings.json`**: Claude Code's file watcher picks up edits to
+  it, hooks included, in a running session.
+- **A script a hook or tool runs** (`system/scripts/agent_*.sh`, a guard's
+  checker): each call runs the file as it is on disk.
+- **An agent's launch command, arguments or environment** (`[agent_types.*]`
+  in `.mngr/settings.toml` other than `version`), and files mngr writes into
+  an agent's state directory when it creates the agent (a move of the mngr pin
+  can change these): mngr records both at create, and a restart replays them
+  unchanged. They reach only agents created after the update. When that
+  matters to the user, say so under **Agent restarts** so the results message
+  can offer a fresh chat.
+
+When the rule is unclear for a file (a new harness, a config file whose
+loading you cannot place), that is a `question` gate (Step 6), and the
+fallback is a restart.
+
 ## 5. Gather the "what's new" inputs
 
 ```bash
@@ -456,8 +520,9 @@ Valid `name:` values:
 - `question` (`type: gate`) -- three cases; say which in the first line.
   (a) A genuine, unresolvable merge conflict: the file, what each side did,
   the options. (b) The scope escape hatch of 4a (the impact analysis), 4b (a
-  validation item) or 4c (the review gates): which rule, its conditions as you
-  read them, your situation, what you would do instead. (c) A
+  validation item), 4c (the review gates) or 4d (the agent-restart rule):
+  which rule, its conditions as you read them, your situation, what you would
+  do instead. (c) A
   **customization the update cannot keep** (the 4b verdict): what the user
   built, what the update does to it, the adaptation you attempted and why it
   failed, the before/after evidence (paths in your worktree), and the options.
@@ -495,6 +560,12 @@ Valid `name:` values:
     rebuild-only, with the version delta (and, for a user-created dependent,
     what your research turned up); a genuinely breaking, unapplyable change
     is a `stuck` report, not a `done`.
+  - **Agent restarts** -- the 4d verdict, `needed` or `not needed`, with
+    `agent-restart-verdict`'s output and any changed file you judged beyond
+    it, and, when needed, one plain line naming what
+    the restart picks up (for example "Claude Code 2.1.300" or "new pi command
+    guards"); the lead passes that line to the restart. Add any change that
+    reaches only newly created agents.
   - **Validation** -- **which branch of the 4b scope rule applied, with its
     evidence** (each item's condition and whether it held; on a clean pull
     with no footprint, that nothing ran and why), then the suites, boots and

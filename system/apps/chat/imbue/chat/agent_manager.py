@@ -30,6 +30,7 @@ from imbue.chat.accounts import resolve_account
 from imbue.chat.accounts import set_mru
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import RUNNING_LIFECYCLE_STATES
+from imbue.chat.activity_state import WAITING_LIFECYCLE_STATE
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import MngrMessenger
@@ -520,6 +521,39 @@ def chat_status_for_agent(
     if activity_state in (ActivityState.THINKING, ActivityState.TOOL_RUNNING):
         return ChatStatus.WORKING
     return ChatStatus.IDLE
+
+
+UNREADABLE_CHAT_BUSY_REASON: Final[str] = "in a state the chat app cannot read"
+
+
+@pure
+def restart_busy_reason(
+    lifecycle_state: str,
+    activity_state: ActivityState | None,
+    is_active_marker_present: bool,
+    is_permission_pending: bool,
+    is_connecting: bool,
+    has_queued_messages: bool,
+) -> str | None:
+    """What a chat is in the middle of that a restart would cut short, in plain words; None when it is idle.
+
+    Idle needs the harness to have ended its turn (WAITING, with no ``active`` turn marker), not just a
+    transcript that reads idle: between an assistant message and the tool call after it the transcript
+    shows no turn in flight. The marker covers a turn the observe-reported WAITING has not caught up with.
+    """
+    if is_permission_pending:
+        return "waiting on a dialog"
+    if is_connecting:
+        return "receiving a message"
+    if has_queued_messages:
+        return "holding queued messages"
+    if (
+        lifecycle_state != WAITING_LIFECYCLE_STATE
+        or is_active_marker_present
+        or activity_state in (ActivityState.THINKING, ActivityState.TOOL_RUNNING)
+    ):
+        return "working"
+    return None
 
 
 class _ResolvedChat(FrozenModel):
@@ -1534,6 +1568,37 @@ class AgentManager:
         """Stamp a chat as just-messaged for the OOM prioritizer's recency ranking (and on disk, for the next restart)."""
         self._oom_prioritizer.record_message(chat_id)
         self._message_stamps.record(chat_id)
+
+    def restart_busy_reason_for_chat(self, chat_id: ChatId) -> str | None:
+        """What the chat's active agent is in the middle of (``restart_busy_reason``); None when it is idle.
+
+        A chat or agent this manager cannot resolve counts as busy: an unattended restart must
+        know the agent has ended its turn, not merely fail to see that it has not.
+        """
+        with self._lock:
+            chat = self._resolve_chat_locked(chat_id)
+            agent_id = chat.active_agent_id if chat is not None else None
+            tracker = self._activity_tracker_by_agent.get(agent_id) if agent_id else None
+        if not agent_id:
+            return UNREADABLE_CHAT_BUSY_REASON
+        # The observe-reported lifecycle trails a turn's start; the marker flips at once (stat outside the lock).
+        active_marker_filename = tracker.active_marker_filename if tracker is not None else None
+        is_active_marker_present = (
+            active_marker_filename is not None
+            and (self._get_agent_state_dir(agent_id) / active_marker_filename).exists()
+        )
+        with self._lock:
+            agent = self._agents.get(agent_id)
+            if agent is None:
+                return UNREADABLE_CHAT_BUSY_REASON
+            return restart_busy_reason(
+                agent.state,
+                agent.activity_state,
+                is_active_marker_present,
+                bool(self._pending_permission_ids_by_agent.get(agent.id)),
+                bool(self._connecting_message_ids_by_agent.get(agent.id)),
+                bool(agent.queued_messages),
+            )
 
     def has_pending_permission(self, chat_id: ChatId) -> bool:
         """Whether a permission request the chat's active agent filed is still awaiting the user's verdict."""
