@@ -617,7 +617,9 @@ class ShellState(MutableModel):
         """Move a client onto a desktop and tell its windows; answers whether the stored desktop actually moved."""
         outcome = self.clients.set_active_desktop(client_id, desktop_id, datetime.now(timezone.utc))
         if outcome.is_active_desktop_changed:
-            self.broadcaster.broadcast_active_desktop_changed(str(client_id), str(desktop_id))
+            self.broadcaster.broadcast_active_desktop_changed(
+                str(client_id), str(desktop_id), outcome.record.desktop_revision, None
+            )
         return outcome.is_active_desktop_changed
 
     def arrive_client(self, client_id: ClientId, identity: RequestIdentity) -> ClientArrivalOutcome | None:
@@ -651,7 +653,9 @@ class ShellState(MutableModel):
             self.broadcast_desktops_updated()
         # A client that already had a record may have other windows open on the desktop it was moved off.
         if record is not None and recorded.is_active_desktop_changed:
-            self.broadcaster.broadcast_active_desktop_changed(str(client_id), str(outcome.desktop_id))
+            self.broadcaster.broadcast_active_desktop_changed(
+                str(client_id), str(outcome.desktop_id), recorded.record.desktop_revision, None
+            )
         return outcome
 
     def _land_visiting_user(
@@ -749,21 +753,29 @@ class ShellState(MutableModel):
         """The desktop a client is on by the rule of desktop contracts.md section 4.3; None with no desktops."""
         return resolve_active_desktop(self.clients.get_client(client_id), self.list_desktops())
 
+    def record_client_seen(self, client_id: ClientId) -> ClientRecord:
+        """Stamp a recorded client as seen without moving it (a following ``client_state`` report); raises
+        ClientNotFoundError."""
+        return self.clients.record_seen(client_id, datetime.now(timezone.utc))
+
     def record_client_report(self, report: ClientStateReport) -> ClientReportOutcome:
         """Record a ``client_state`` report and announce what moved; a report naming a desktop that no longer exists
-        lands the client on the first desktop instead (desktop plan section 3.5)."""
+        lands the client on the first desktop instead (desktop plan section 3.5), and a superseded report (made before
+        a move its page had not heard of) is neither recorded nor announced."""
         desktops = self.list_desktops()
         resolved = report
         if desktops and report.active_desktop not in {desktop.id for desktop in desktops}:
             resolved = report.model_copy_update(to_update(report.field_ref().active_desktop, desktops[0].id))
-        outcome = self.clients.record_report(resolved, datetime.now(timezone.utc))
-        # Only a report that moved the stored desktop, or that was redirected off a desktop that no longer exists,
-        # is broadcast: a window following a push reports what it was pushed to, which matches the record, so the
-        # chain ends after one hop.
         is_redirected = resolved is not report
-        if outcome.is_active_desktop_changed or is_redirected:
+        outcome = self.clients.record_report(resolved, datetime.now(timezone.utc), is_redirected=is_redirected)
+        # Only a report that moved the stored desktop, or that was redirected off a desktop that no longer exists,
+        # is broadcast; a superseded one is not, even when redirected.
+        if outcome.is_active_desktop_changed or (is_redirected and not outcome.is_superseded):
             self.broadcaster.broadcast_active_desktop_changed(
-                str(report.client_id), str(outcome.record.active_desktop)
+                str(report.client_id),
+                str(outcome.record.active_desktop),
+                outcome.record.desktop_revision,
+                report.report_id,
             )
         return outcome
 

@@ -163,6 +163,7 @@ export function clientRecord(id: string, overrides: Partial<ClientRecord> = {}):
     is_connected: true,
     entries: {},
     shown_history: [],
+    desktop_revision: 0,
     ...overrides,
   };
 }

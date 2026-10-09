@@ -13,6 +13,8 @@ Wire spelling is `snake_case` in JSON bodies and files, and `camelCase` in the c
 - A **launch path id** matches `^[a-z0-9][a-z0-9-]{0,31}$` and is unique within its manifest; `open` is reserved for the synthesized one.
 - A **client id** is the uuid the browser keeps in local storage under `si-client-id`, held to `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`.
 - A **save id** is `save-<16 hex>`, minted by a window (browser sense) for each placements save it makes.
+- A **report id** is `report-<16 hex>`, minted by a window for each `client_state` report that moves its client (section 6).
+- A **page id** is `page-<16 hex>`, minted once by a window as its page loads, and carried on its `client_state` reports (section 6).
 - A **path** is a path under an app's origin: a single leading `/` (never `//`), at most 2048 characters, no control characters, query string allowed.
 - A **title** is trimmed, at most 256 characters; empty means "use the app's display name".
 
@@ -128,8 +130,10 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
 
 ### 4.3 `clients.json`
 
-`{"version": 2, "clients": {"<client_id>": {"active_desktop": "<desktop_id>", "last_seen": "<RFC 3339>", "user_id": "<user_id>" | null, "entries": {"<app>": {"mode": "bar" | "floating", "style": "plain" | "avatar", "position": {"x": 0.9, "y": 0.85} | null}}, "shown_history": ["<window_id>" | "home", ...]}}}`.
+`{"version": 2, "clients": {"<client_id>": {"active_desktop": "<desktop_id>", "last_seen": "<RFC 3339>", "user_id": "<user_id>" | null, "entries": {"<app>": {"mode": "bar" | "floating", "style": "plain" | "avatar", "position": {"x": 0.9, "y": 0.85} | null}}, "shown_history": ["<window_id>" | "home", ...], "desktop_revision": 0, "desktop_moved_by": "<page_id>" | null}}}`.
 `user_id` is the signed-in visitor the client last arrived as (section 5.5), null for the owner or an anonymous client; an entry without the key reads as null. `entries` (default `{}`) is how the client shows each pinned entry.
+`desktop_revision` (default `0`) counts the moves of `active_desktop`: every write that changes it adds one, as does a report the shell lands off a deleted desktop (section 6) even when the stored desktop stays, under the same lock as the write, so the revisions order the moves as they were written.
+`desktop_moved_by` (default null) is the page whose report wrote the current revision, null when an op or an arrival did; the shell keeps it to order a page's reports against the moves it had not heard of (section 6), and does not answer it.
 `shown_history` (default `[]`) is what the client's phone layout showed (`plan-phone-interface.md`), most recent last: window ids, and `"home"` for the home grid, each at most once and at most 20; a close drops the window from every client's history.
 A version-1 file (with `device_kind` and `active_view`) is read with `active_view` taken as the active desktop when a desktop of that id exists, else the first desktop, and rewritten at version 2 on the next write.
 
@@ -214,7 +218,7 @@ A save whose placements name windows the desktop does not hold is accepted with 
 
 | Route | Response |
 |---|---|
-| `GET /api/clients` | `{"clients": [{"id", "active_desktop", "last_seen", "is_connected", "user_id", "entries", "shown_history"}]}` |
+| `GET /api/clients` | `{"clients": [{"id", "active_desktop", "last_seen", "is_connected", "user_id", "entries", "shown_history", "desktop_revision"}]}` |
 | `POST /api/clients/<client_id>/shown` | takes `{"window_id": "<id>" \| null}` (null for the home grid) and records it at the end of the client's `shown_history` (section 4.3); answers the client record; `404` for a window no desktop holds or an unknown client |
 | `POST /api/clients/<client_id>/arrive` | `{"desktop_id", "created_desktop": desktop \| null, "replaced_desktop_name": string \| null}` |
 | `POST /api/clients/<client_id>/entries/<app>` | takes `{"mode", "style", "position"}` (section 4.3), for a pinned non-internal app, the style `plain` or the pin's; answers the client record and announces `client_entries_changed` to that client's windows |
@@ -246,7 +250,17 @@ It answers `200 {"type", "deliveries": [{"app", "status", "detail"}, ...]}` when
 
 Route `/api/ws`, one connection per browser window.
 
-Inbound: `client_state {"client_id", "active_desktop", "previous_desktop"}` on connect and on every desktop switch; the shell records the active desktop and `last_seen`, and logs a `desktop_switch` activity when `previous_desktop` differs.
+Inbound: `client_state {"client_id", "active_desktop", "previous_desktop", "report_id", "is_following", "page_id", "revision"}` on connect and on every desktop switch.
+A report that moves the client (the user's switch, naming the desktop it left in `previous_desktop`; or the page's landing, its landing on the first desktop when the one it showed was deleted, and its re-registration on a reconnect onto a desktop other than the one its client record names, naming none) carries a fresh `report_id` and `is_following` false: the shell records the active desktop and `last_seen`, and logs a `desktop_switch` activity when `previous_desktop` differs.
+Every report carries the window's `page_id`, and a moving report also carries, in `revision`, the newest desktop revision the window had heard (pushed, or read from its client record).
+The shell does not record or broadcast a moving report whose `revision` is below the client's `desktop_revision` unless the page that wrote that revision is the report's own: such a report was made before the window heard of a move something else made since (an op, an arrival, another window of the client), and the window follows that move's `active_desktop_changed` instead, so the move is never undone by a report that crossed it on the way.
+The shell sends the reporting connection alone an `active_desktop_changed` naming the client's record (its `desktop_revision`, a null `report_id`), since the move may have been announced before the connection could hear it (an op landing as the page loads); a window that heard it already ignores it.
+A window's own reports are exempt because it makes them faster than it hears them back (rapid switches); since a report is recorded only past moves its page heard or made, a page that wrote the latest revision wrote every one since the revisions it reports.
+A report without a `page_id`, a moving report without a `revision`, or a following report with one is malformed and ignored.
+A window that followed the client's stored desktop (an `active_desktop_changed`, or a newer record read on a reconnect), or that reconnects on the desktop its client record names, reports it with `is_following` true, a null `report_id` and a null `revision`: the shell registers the connection on that desktop and stamps the client's `last_seen`, and moves nothing, since a later move may already have replaced what the window followed.
+A window takes an `active_desktop_changed` only when its `revision` is newer than any it has heard (pushed, or read from its client record), and not when it is the echo of a report the window has since replaced with another (what the later report leaves the client on is announced at a newer revision): so a window that switched several times before the first echo came back ends on its last switch, and no report a window makes in following can move the client and set its other windows following in turn.
+A record read on a reconnect whose revision is below the newest the window had heard when it asked for it (or no record at all) was reset under the page, restored or pruned, and the window counts from the record's revision again.
+A window that hears an `active_desktop_changed` newer than the record while it reads the record follows that news, and reports its reconnect with `is_following` true: its desktop may still be the one the news moved the client off.
 A solo page (section 9) sends `client_state {"client_id", "is_pop_out": true}` on every connect instead: the shell registers the connection under the client, so the ops targeting the client (section 8) reach it, and records nothing else. It never becomes the client's report, never logs a desktop switch, and never supplies an active desktop to `context` or anything else: the client's active desktop stays its main window's.
 
 Outbound:
@@ -256,7 +270,7 @@ Outbound:
 | `apps_updated` | `{"apps": [app, ...]}` | on connect (a resync: the page's first app list is the inventory's, section 5.5), and when any row or liveness changed |
 | `desktops_updated` | `{"desktops": [desktop, ...]}` | on connect, and after any write of `desktops.json` (a desktop, shortcut, wallpaper, window open or close, or location change) |
 | `placements_updated` | `{"desktop_id", "client_id", "save_id"}` | after any write of a layout file, and after a write of a client's window path (with a shell-minted save id); a window applies it only when `client_id` is its own, the desktop is the one it shows, and `save_id` is not one it minted |
-| `active_desktop_changed` | `{"client_id", "desktop_id"}` | after a `client_state` report, an op, or an arrival (section 5.5) changed the client's stored active desktop |
+| `active_desktop_changed` | `{"client_id", "desktop_id", "revision", "report_id"}` | after a `client_state` report, an op, or an arrival (section 5.5) changed the client's stored active desktop (and after a report naming a deleted desktop, which lands the client on the first); `revision` is the client's `desktop_revision` as written, and `report_id` the moving report's, null for an op or an arrival |
 | `layout_op` | `{"op", "args", "requester", "target_client_id"}` | the transient ops `refresh` and `reload_system_interface`, and, to the target client, every `show` (`{"window", "is_detached"}`), every placed `open` and every `focus` on a window not popped out (`{"window"}`) (section 8): a phone shows that window, and a desktop's page, and the solo page (section 9) of that very window, raise the desktop window of a `show` whose window is pulled out |
 | `client_entries_changed` | `{"client_id", "entries"}` | to that client's windows, after its entry presentations were written |
 | `avatar_status` | `{"mood": "idle" \| "working", "is_stale"}` | on connect, and when either changes |

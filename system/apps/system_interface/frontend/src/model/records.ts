@@ -201,6 +201,9 @@ export interface ClientRecord {
   /** What the client's phone layout has shown (plan-phone-interface.md), most recent last: window ids, and
    *  ``SHOWN_HOME`` for the home grid. */
   readonly shown_history: readonly string[];
+  /** Counts the moves of the client's stored desktop and the reports the shell redirected off a deleted desktop:
+   *  orders what a window hears of its desktop. */
+  readonly desktop_revision: number;
 }
 
 /** The ``shown_history`` entry that stands for the phone's home grid rather than a window. */
@@ -538,6 +541,7 @@ export function parseClientRecord(raw: unknown): ClientRecord {
     shown_history: asArray(record.shown_history ?? [], "client.shown_history").map((entry, index) =>
       asString(entry, `client.shown_history[${index}]`),
     ),
+    desktop_revision: asNumber(record.desktop_revision ?? 0, "client.desktop_revision"),
   };
 }
 

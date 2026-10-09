@@ -57,7 +57,7 @@ import type {
 } from "../model/records";
 import { isSameCell, isSameWindowPaths, shortcutKey } from "../model/records";
 import { ToastQueue } from "../model/Toasts";
-import { SaveIdMinter } from "../model/saveIds";
+import { OwnIdMinter, PAGE_ID_PREFIX, REPORT_ID_PREFIX, SAVE_ID_PREFIX, mintHex } from "../model/ownIds";
 import { isPreviewShell } from "../model/PreviewShell";
 import { noticeFromWire } from "../model/UpdateNotice";
 import type { DeepLink } from "../model/deepLinks";
@@ -132,6 +132,10 @@ import type {
 // A gesture's save lands shortly after it ends; the shell edits the saved layout for agent ops, and
 // an op that follows a gesture has to see the gesture in the file.
 const SAVE_DEBOUNCE_MS = 300;
+
+/** Why a window switches desktops: the user chose one ("user"), the bootstrap lands it ("landing"), or it follows the
+ *  client's stored desktop, pushed or re-read ("follow"). The first two move the client; a follow moves nothing. */
+export type SwitchCause = "user" | "landing" | "follow";
 
 // How long a solo shell whose first layout does not say its window is out waits for the desktop's word before
 // writing the detach itself: the main window's shell writes it as the window leaves, and that save is on its
@@ -345,7 +349,12 @@ export class DesktopStore {
   // Set when the shell had to seed a fresh desktop for this user at arrival; the notice shows once.
   private replacedDesktop: ReplacedDesktop | null = null;
   private readonly listeners = new Set<Listener>();
-  private readonly saveIds = new SaveIdMinter();
+  private readonly saveIds = new OwnIdMinter(SAVE_ID_PREFIX);
+  private readonly reportIds = new OwnIdMinter(REPORT_ID_PREFIX);
+  private readonly pageId = `${PAGE_ID_PREFIX}${mintHex()}`;
+  // The newest revision of the client's stored desktop this window has heard of, pushed or read: news of an older
+  // one was overtaken by a later move on its way here.
+  private desktopRevisionHeard = 0;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private saveInFlight: Promise<void> | null = null;
   private layoutFetchSequence = 0;
@@ -798,7 +807,10 @@ export class DesktopStore {
     this.replacedDesktop = replacedDesktopOf(arrival);
     const own = inventory.clients.find((client) => client.id === this.deps.clientId);
     this.takeFetchedEntries(own, entryPushesBefore);
-    if (own !== undefined) this.takeShownHistory(own.shown_history);
+    if (own !== undefined) {
+      this.takeShownHistory(own.shown_history);
+      this.hearDesktopRevision(own.desktop_revision);
+    }
     // The shell's answer says where this client lands; without one (the arrival failed), the recorded desktop.
     // A solo shell lands on the desktop that holds its window, wherever the client is.
     const landing = arrival?.desktop_id ?? own?.active_desktop ?? null;
@@ -811,7 +823,7 @@ export class DesktopStore {
     const deepLinkDesktopId = this.isPhoneLayout() ? null : deepLink.desktopId;
     const chosen = chooseInitialDesktopId(inventory.desktops, soloDesktopId ?? deepLinkDesktopId, landing);
     if (chosen === null) return;
-    await this.switchDesktop(chosen, { isFollowingPush: true });
+    await this.switchDesktop(chosen, "landing");
     this.landPhone();
     if (deepLink.open === null && deepLink.launch === null) return;
     await this.appsLoaded;
@@ -833,37 +845,66 @@ export class DesktopStore {
       return;
     }
     this.hasSocketConnected = true;
-    this.reportClientState("");
+    this.reportMove("");
   }
 
-  /** The client record is the shell's word after a reconnect: another window of this client may have
-   *  switched desktops meanwhile (the ``active_desktop_changed`` is gone), and reporting this window's
-   *  own desktop would move the whole client back to it. So the recorded desktop is adopted as a push
-   *  when it differs, and the layout is read again either way, for the ``placements_updated`` missed.
-   *  The record's entries and the workspace's selection are taken again too, for the
-   *  ``client_entries_changed`` and ``avatar_selection_changed`` missed (the server resends the rest). */
+  /** The client record is the shell's word after a reconnect: another window of this client may have switched
+   *  desktops meanwhile (the ``active_desktop_changed`` is gone), and reporting this window's own desktop would move
+   *  the whole client back to it. So the recorded desktop is adopted as a push when it differs and is newer than
+   *  anything this window heard. A record no newer says nothing the window has not taken, and the window's own
+   *  desktop may be a switch whose report went down with the socket: it is reported as a move unless the record
+   *  already names it. News heard on the new socket while the record was being read, or while the pending save is
+   *  awaited, is newer than what this window had: the window follows it and only registers its connection here,
+   *  since its desktop may still be the one the news moved the client off.
+   *  The layout is read again either way, for the ``placements_updated`` missed, and the record's entries and the
+   *  workspace's selection too, for the ``client_entries_changed`` and ``avatar_selection_changed`` missed (the
+   *  server resends the rest). */
   private async resyncAfterReconnect(): Promise<void> {
     let recorded: string | null = null;
+    let isRecordedNewer = false;
+    let isResetUnderPage = false;
     const entryPushesBefore = this.entryPushes;
+    const heardBeforeRead = this.desktopRevisionHeard;
     try {
       const clients = await this.deps.api.fetchClients();
       const own = clients.find((client) => client.id === this.deps.clientId);
       this.takeFetchedEntries(own, entryPushesBefore);
       if (own !== undefined) this.takeShownHistory(own.shown_history);
+      // The shell only ever raises a record's revision, so one below what this window had heard (or no record at
+      // all) means the record was reset under the page, restored or pruned: the shell counts again from there.
+      const recordedRevision = own?.desktop_revision ?? 0;
+      isResetUnderPage = this.desktopRevisionHeard === heardBeforeRead && recordedRevision < this.desktopRevisionHeard;
+      if (isResetUnderPage) this.desktopRevisionHeard = recordedRevision;
+      isRecordedNewer = this.hearDesktopRevision(recordedRevision);
       recorded = own?.active_desktop ?? null;
     } catch (error) {
       console.warn("[si] could not read the client records after reconnecting", error);
     }
+    const heardAfterRead = this.desktopRevisionHeard;
     void this.loadAvatarSelection();
+    // The desktop shown is read after the save: a follow of news heard meanwhile waits on it to move the window.
+    await this.flushPendingSave();
+    // News is counted from the record when it set what this window has heard, newer or reset.
+    const isNewsHeard =
+      this.desktopRevisionHeard > (isRecordedNewer || isResetUnderPage ? heardAfterRead : heardBeforeRead);
     const isRecordedKnown = recorded !== null && this.state.desktops.some((desktop) => desktop.id === recorded);
     // A solo shell stays on its window's desktop: the recorded one is the main window's, and a report from
     // any other desktop would omit the solo window, which the chrome reads as its return.
-    const isRecordedAdopted = this.soloWindowId === null && isRecordedKnown && recorded !== this.state.activeDesktopId;
+    const isRecordedAdopted =
+      this.soloWindowId === null &&
+      isRecordedKnown &&
+      isRecordedNewer &&
+      !isNewsHeard &&
+      recorded !== this.state.activeDesktopId;
     if (recorded !== null && isRecordedAdopted) {
-      await this.switchDesktop(recorded, { isFollowingPush: true });
+      await this.switchDesktop(recorded, "follow");
       return;
     }
-    this.reportClientState("");
+    // A window already on the recorded desktop has nothing to re-assert, and a move would undo any switch another
+    // window made after the read.
+    const isOnRecorded = isRecordedKnown && recorded === this.state.activeDesktopId;
+    if (isNewsHeard || isOnRecorded) this.reportFollowedDesktop();
+    else this.reportMove("");
     await this.refetchLayout();
   }
 
@@ -894,13 +935,49 @@ export class DesktopStore {
     }
   }
 
-  private reportClientState(previousDesktop: string): void {
+  /** Tell the shell this window moved the client onto the desktop it is on, leaving ``previousDesktop`` ("" when it
+   *  left none). The report names the newest revision the window heard: a move written since by anything but this
+   *  page wins over the report, and the window follows that move's news when it arrives. */
+  private reportMove(previousDesktop: string): void {
+    const active = this.reportedDesktopId();
+    if (active === null) return;
+    this.deps.socket.reportClientState({
+      activeDesktop: active,
+      previousDesktop,
+      reportId: this.reportIds.mint(),
+      isFollowing: false,
+      pageId: this.pageId,
+      revision: this.desktopRevisionHeard,
+    });
+  }
+
+  /** Tell the shell this window followed the client's stored desktop, which registers it there and moves nothing. */
+  private reportFollowedDesktop(): void {
+    const active = this.reportedDesktopId();
+    if (active === null) return;
+    this.deps.socket.reportClientState({
+      activeDesktop: active,
+      previousDesktop: "",
+      reportId: null,
+      isFollowing: true,
+      pageId: this.pageId,
+      revision: null,
+    });
+  }
+
+  /** The desktop this window reports as its own, null when it reports none. */
+  private reportedDesktopId(): string | null {
     // A solo shell sits on its window's desktop without moving the client there: the client's active desktop
     // is its main window's.
-    if (this.soloWindowId !== null) return;
-    const active = this.state.activeDesktopId;
-    if (active === null) return;
-    this.deps.socket.reportClientState(active, previousDesktop);
+    if (this.soloWindowId !== null) return null;
+    return this.state.activeDesktopId;
+  }
+
+  /** Take note of a revision of the client's stored desktop; answers whether it is newer than any heard before. */
+  private hearDesktopRevision(revision: number): boolean {
+    if (revision <= this.desktopRevisionHeard) return false;
+    this.desktopRevisionHeard = revision;
+    return true;
   }
 
   private takeDesktops(desktops: readonly Desktop[]): void {
@@ -908,10 +985,10 @@ export class DesktopStore {
     this.desktopsRevision += 1;
     this.dispatch({ type: "desktops_updated", desktops });
     if (this.state.activeDesktopId !== previous) {
-      // The active desktop was deleted and the reducer landed on the fallback: this client follows as it
-      // would a push, telling the shell and fetching the layout it now shows.
+      // The active desktop was deleted and the reducer landed on the fallback: the window reports that landing as
+      // a move, as the page's own landing does, so the client's record names the desktop the user now sees.
       this.cancelGesture();
-      this.reportClientState("");
+      this.reportMove("");
       void this.refetchLayout();
     }
   }
@@ -922,11 +999,17 @@ export class DesktopStore {
     void this.refetchLayout();
   }
 
+  /** Follow the client's stored desktop when it moved, unless the news is stale: a revision no newer than one this
+   *  window heard was overtaken by a later move on its way here, and the echo of a switch this window reported and
+   *  has replaced since with another is followed by the later one's own echo. */
   private takeActiveDesktopChanged(event: ActiveDesktopChangedEvent): void {
-    if (event.clientId !== this.deps.clientId || event.desktopId === this.state.activeDesktopId) return;
+    if (event.clientId !== this.deps.clientId || !this.hearDesktopRevision(event.revision)) return;
+    if (event.reportId !== null && this.reportIds.isSuperseded(event.reportId)) return;
+    // News naming the desktop shown still goes to switchDesktop: an earlier follow waiting on a save has yet to move
+    // the window, and switchDesktop compares against the desktop only once that save is done.
     // A solo shell stays on its window's desktop whatever the client's main window switches to.
     if (this.soloWindowId !== null) return;
-    void this.switchDesktop(event.desktopId, { isFollowingPush: true });
+    void this.switchDesktop(event.desktopId, "follow");
   }
 
   private takeClientEntriesChanged(event: ClientEntriesChangedEvent): void {
@@ -1139,16 +1222,27 @@ export class DesktopStore {
     }
   }
 
-  /** Switch this client onto ``desktopId``: flush the outgoing layout's pending save, tell the shell,
-   *  and fetch the incoming layout. A switch following a push (``active_desktop_changed``, the
-   *  bootstrap) reports no previous desktop, since the shell already recorded it. */
-  async switchDesktop(desktopId: string, options: { isFollowingPush?: boolean } = {}): Promise<void> {
+  /** Switch this window onto ``desktopId``: flush the outgoing layout's pending save, tell the shell,
+   *  and fetch the incoming layout. The user's switch moves the client and names the desktop it left; the
+   *  bootstrap's landing moves it naming none; a follow of the stored desktop moves nothing. */
+  async switchDesktop(desktopId: string, cause: SwitchCause = "user"): Promise<void> {
+    // The desktop left is read after the save: an earlier switch waiting on the same save moves the window first.
+    await this.flushPendingSave();
     const previous = this.state.activeDesktopId;
     if (previous === desktopId) return;
-    await this.flushPendingSave();
     this.cancelGesture();
     this.dispatch({ type: "desktop_activated", desktopId });
-    this.reportClientState(options.isFollowingPush === true ? "" : (previous ?? ""));
+    switch (cause) {
+      case "user":
+        this.reportMove(previous ?? "");
+        break;
+      case "landing":
+        this.reportMove("");
+        break;
+      case "follow":
+        this.reportFollowedDesktop();
+        break;
+    }
     await this.refetchLayout();
   }
 

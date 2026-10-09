@@ -17,7 +17,6 @@ from workspace_layout.primitives import UserId
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
-from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.errors import LaunchUnavailableError
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
@@ -29,6 +28,7 @@ from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.testing import FakeLivenessProber
 from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import build_inventory
+from imbue.system_interface.shell.testing import client_report
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.shell.testing import message_handling_app
@@ -52,20 +52,24 @@ def _shell(app: Flask) -> ShellState:
     return state_of(app).shell
 
 
+def _heard_revision(app: Flask, client_id: str) -> int:
+    """The desktop revision a window of the client has heard once it read the client's record."""
+    record = _shell(app).clients.get_client(client_id)
+    return record.desktop_revision if record is not None else 0
+
+
 def _register_client(app: Flask, client_id: str, desktop_id: str = "home") -> "queue.Queue[str | None]":
     """A connected window of ``client_id`` on ``desktop_id``, recorded the way its ``client_state`` report records it."""
     client_queue = _shell(app).broadcaster.register()
     _shell(app).broadcaster.set_client_info(client_queue, client_id, desktop_id)
-    _shell(app).record_client_report(
-        ClientStateReport(client_id=ClientId(client_id), active_desktop=DesktopId(desktop_id))
-    )
+    _shell(app).record_client_report(client_report(client_id, desktop_id, _heard_revision(app, client_id)))
     return client_queue
 
 
 def _record_client(app: Flask, client_id: str, desktop_id: str = "home") -> None:
     """A client the shell has a record of but that is not connected."""
     _shell(app).clients.record_report(
-        ClientStateReport(client_id=ClientId(client_id), active_desktop=DesktopId(desktop_id)), TEST_NOW
+        client_report(client_id, desktop_id, _heard_revision(app, client_id)), TEST_NOW, is_redirected=False
     )
 
 
@@ -366,7 +370,16 @@ def test_a_client_records_what_its_phone_layout_shows_and_the_inventory_carries_
 
     assert answer.status_code == 200
     record = answer.get_json()
-    assert set(record) == {"id", "active_desktop", "last_seen", "is_connected", "user_id", "entries", "shown_history"}
+    assert set(record) == {
+        "id",
+        "active_desktop",
+        "last_seen",
+        "is_connected",
+        "user_id",
+        "entries",
+        "shown_history",
+        "desktop_revision",
+    }
     assert (record["id"], record["is_connected"], record["shown_history"]) == ("c1", True, [first, "home", second])
     document = client.get("/api/inventory").get_json()
     assert document["workspace_name"] == "Workspace"
@@ -1281,12 +1294,20 @@ def test_an_op_targets_the_named_desktop_and_load_switches_the_client(client: Fl
     requester = _TERMINAL_REQUESTER
     client.post("/api/desktops", json={"name": "Research", "color": "#12B5A5", "glyph": 4})
     drain_messages(client_queue)
+    registered = shell.clients.get_client("c1")
+    assert registered is not None
 
     on_research = _op(client, "open", {"app": "files", "desktop": "Research"}, requester)
     assert on_research.status_code == 200 and on_research.get_json()["desktop_id"] == "research"
     recorded = shell.clients.get_client("c1")
     assert recorded is not None and recorded.active_desktop == "research"
-    assert "active_desktop_changed" in [message["type"] for message in drain_messages(client_queue)]
+    # The op's move is announced at a newer revision, so the client's windows take it, and names no report.
+    assert recorded.desktop_revision == registered.desktop_revision + 1
+    assert [
+        (message["desktop_id"], message["revision"], message["report_id"])
+        for message in drain_messages(client_queue)
+        if message["type"] == "active_desktop_changed"
+    ] == [("research", recorded.desktop_revision, None)]
     loaded = _op(client, "load", {"desktop": "home"}, requester)
     assert loaded.status_code == 200 and loaded.get_json()["desktop_id"] == "home"
     assert _op(client, "load", {"desktop": "Nowhere"}, requester).status_code == 404

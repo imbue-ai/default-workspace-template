@@ -212,6 +212,12 @@ class ClientRecord(FrozenModel):
         description="What the client has shown on the phone layout, most recent last: window ids and 'home', "
         "each at most once",
     )
+    desktop_revision: int = Field(
+        default=0,
+        ge=0,
+        description="Counts the moves of the stored active desktop and the reports redirected off a deleted desktop: "
+        "orders the client's desktop news",
+    )
 
 
 # The views the shell's answers carry (desktop contracts.md section 5)
