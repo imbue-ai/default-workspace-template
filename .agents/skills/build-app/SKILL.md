@@ -668,8 +668,9 @@ Verification and gotchas references apply identically to this path.
 
 A wrapped tool's pages do not carry the shell page script, so a plain click
 on one of their links to a local service or another app navigates the tool's
-own window. If the tool can serve one more static file from its own origin and add a script to its pages (Jupyter's
-custom JS, a dev server's plugin hook), give it the contract: serve
+own window. If the tool can serve one more static file from its own origin
+and add a script to its pages (Jupyter's custom JS, a dev server's plugin
+hook), give it the contract: serve
 `system/apps/system_interface/imbue/system_interface/static/_static/app_contract.js`
 at `/_static/app_contract.js` and add
 `<script type="module">import { connectToShell } from "/_static/app_contract.js"; connectToShell({});</script>`
