@@ -161,7 +161,8 @@ export interface ShellConnection {
   /** Send the shell a message for the apps registered for ``type``, with ``fields`` as its own fields. */
   sendMessage(type: string, fields: Readonly<Record<string, unknown>>): void;
   /** Ask the shell to open a local URL (as the window of the app at its port, else in the workspace's browser), an
-   *  address of the workspace's apps (or another workspace's) as a window, or a ``file:`` URL in the File Viewer. */
+   *  address of the workspace's apps (or another workspace's) as a window, a ``file:`` URL in the File Viewer, or an
+   *  external web, ``mailto:`` or ``tel:`` link in the app registered for it, else outside the workspace. */
   openLink(url: string): void;
   /** Stop listening to the shell. */
   disconnect(): void;
