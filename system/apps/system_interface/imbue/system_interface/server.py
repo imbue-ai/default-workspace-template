@@ -21,6 +21,7 @@ from loguru import logger as _loguru_logger
 from pydantic import ValidationError
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
+from workspace_layout.errors import InvalidLayoutValueError
 
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import attach_state
@@ -477,7 +478,7 @@ def _presence_heartbeat_endpoint() -> Response:
         return Response(status=204)
     try:
         outcome = get_state().presence.heartbeat(identity, utc_now())
-    except InvalidShellValueError as e:
+    except (InvalidShellValueError, InvalidLayoutValueError) as e:
         return error_response(str(e), 400)
     _broadcast_presence_if_changed(outcome)
     return json_response({"identity": identity.model_dump(exclude_none=True)})
@@ -683,12 +684,18 @@ def _run_ws_broadcast_loop(websocket: Any, shell: ShellState, initial_presence: 
     _loguru_logger.info("WS /api/ws connection opened (conn {})", id(client_queue))
     disconnect_reason = "handler exited"
     try:
-        websocket.send(json.dumps({"type": "apps_updated", "apps": shell.inventory.serialized()}))
+        websocket.send(
+            json.dumps(
+                {"type": "apps_updated", "apps": [app.model_dump(mode="json") for app in shell.inventory.views()]}
+            )
+        )
         websocket.send(
             json.dumps(
                 {
                     "type": "desktops_updated",
-                    "desktops": shell.desktops_wire_json(shell.list_desktops()),
+                    "desktops": [
+                        desktop.model_dump(mode="json") for desktop in shell.desktop_views(shell.list_desktops())
+                    ],
                 }
             )
         )

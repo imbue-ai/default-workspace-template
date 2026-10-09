@@ -35,7 +35,8 @@ touches and the `app.toml` of the app that owns it (`system/apps/<package>/app.t
 If it says `critical = true` -- the shell (`system_interface`), the chat, the
 terminal, and any user app that declares it -- or if the change is under
 `system/libs/workspace_ui/` (the shared library both critical bundles are built
-from), **follow [`references/critical-app.md`](references/critical-app.md) and
+from) or `system/libs/workspace_layout/` (the layout wire contract the shell, the
+chat, and the terminal all run), **follow [`references/critical-app.md`](references/critical-app.md) and
 stop reading here.** A critical app is never edited in the served tree: that
 flow runs the same live loop against an isolated worktree, with a preview window
 as the user's view, and goes live through the atomic update apply once a
@@ -222,12 +223,12 @@ pre-change content. Refresh it so the user sees the update without being told
 to click Refresh:
 
 ```bash
-python3 system/scripts/layout.py refresh --app <name>
+uv run --no-sync workspace-layout refresh --app <name>
 ```
 
 `refresh --app` reloads every page of the service on every client. If no
 window is open yet and the change is ready to show, surface it instead with
-`python3 system/scripts/layout.py open <name>`: with no `--desktop` it lands
+`uv run --no-sync workspace-layout open <name>`: with no `--desktop` it lands
 on the desktop the user is looking at, and `--desktop <name>` targets one
 desktop (and switches the client to it).
 **That `open` puts the window on the user's screen the moment it returns** -- it
@@ -363,10 +364,17 @@ where the data dies. Encode these, cheapest first:
   ```bash
   uv run python3 .agents/skills/update-app/scripts/preview_app.py up \
       --app <name> --worktree <dir>          # prints <name>-preview
-  python3 system/scripts/layout.py open <name>-preview   # puts a window of it in front of the user
+  uv run --no-sync workspace-layout open <name>-preview   # puts a window of it in front of the user
   uv run python3 .agents/skills/update-app/scripts/preview_app.py refresh --app <name>   # after a rebuild, in place
   uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
   ```
+
+  The worktree needs its own environment before the first `up`. A fresh
+  `git worktree add` has no `.venv`, and without one the app's command
+  resolves to the live install, so the preview silently serves the live code.
+  Run `uv sync --all-packages` in the worktree first, and again before
+  `refresh` after changing a dependency or entry point. If the app has a
+  frontend, build it there too.
 
   `--with <sibling>` boots a sibling app's preview from the same worktree first
   and points the app's copied registry at it: a shell preview frames the

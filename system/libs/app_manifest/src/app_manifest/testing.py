@@ -1,16 +1,11 @@
 import json
 import subprocess
-import threading
 from collections.abc import Sequence
-from http.server import BaseHTTPRequestHandler
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Final
 
-from imbue.imbue_common.mutable_model import MutableModel
-from pydantic import Field
-from pydantic import PrivateAttr
-
+from app_manifest.registry import SHELL_APP_CONTRACT_PATH
+from app_manifest.registry import SHELL_MODULE_PATHS
 from app_manifest.selection import ALWAYS_RUN_GUARDS
 
 APP_ICON_MARKUP: Final[str] = (
@@ -157,9 +152,13 @@ def build_selection_workspace(repo_root: Path) -> None:
     (``notes``) that depends on ``midlib`` and references a script, the chat app as its own
     pytest root with a browser test and a frontend, the shared ``ui`` npm library that
     frontend depends on, a flat script and its test, a skill, the repo guards, and the check
-    that every supervisord block names its OOM band."""
+    that every supervisord block names its OOM band. The shell's modules are built, and ignored
+    by git, as in the live workspace; ``remove_shell_modules`` makes it a fresh worktree."""
     init_git_repository(repo_root)
     write_repo_file(repo_root, "pyproject.toml", _SELECTION_ROOT_PYPROJECT)
+    write_repo_file(repo_root, ".gitignore", f"{SHELL_APP_CONTRACT_PATH.parent.parent}/\n")
+    for module_path in SHELL_MODULE_PATHS:
+        write_repo_file(repo_root, str(module_path), "export {};\n")
     write_repo_file(repo_root, "conftest.py", "")
     write_repo_file(repo_root, "README.md", "# workspace\n")
     write_repo_file(repo_root, "docs/guide.md", "# guide\n")
@@ -236,6 +235,12 @@ def build_selection_workspace(repo_root: Path) -> None:
     commit_everything(repo_root, "workspace")
 
 
+def remove_shell_modules(repo_root: Path) -> None:
+    """Delete the shell's built modules, as a fresh worktree lacks them."""
+    for module_path in SHELL_MODULE_PATHS:
+        (repo_root / module_path).unlink()
+
+
 def selection_lock(requests_version: str) -> str:
     """A uv.lock for the selection workspace in which corelib depends on requests."""
     return f"""
@@ -275,57 +280,3 @@ name = "requests"
 version = "{requests_version}"
 source = {{ registry = "https://pypi.org/simple" }}
 """
-
-
-class ShellStub(MutableModel):
-    """A loopback stand-in for the shell that answers every GET with one configured status and body."""
-
-    model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
-
-    status: int = Field(default=200, description="The status every request is answered with")
-    body: str = Field(default="{}", description="The body every request is answered with")
-    _server: ThreadingHTTPServer | None = PrivateAttr(default=None)
-    _thread: threading.Thread | None = PrivateAttr(default=None)
-
-    def start(self) -> None:
-        stub = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self) -> None:
-                encoded = stub.body.encode("utf-8")
-                self.send_response(stub.status)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(encoded)))
-                self.end_headers()
-                self.wfile.write(encoded)
-
-            def log_message(self, format: str, *args: object) -> None:
-                return
-
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        self._server = server
-        self._thread = thread
-
-    @property
-    def url(self) -> str:
-        if self._server is None:
-            raise RuntimeError("the shell stub is not serving")
-        host, port = self._server.server_address[:2]
-        return f"http://{host}:{port}"
-
-    def answer(self, status: int, body: str) -> None:
-        self.status = status
-        self.body = body
-
-    def close(self) -> None:
-        """Stop serving; the URL then refuses connections, as a shell that is down does."""
-        if self._server is None:
-            return
-        self._server.shutdown()
-        self._server.server_close()
-        if self._thread is not None:
-            self._thread.join(timeout=5)
-        self._server = None
-        self._thread = None

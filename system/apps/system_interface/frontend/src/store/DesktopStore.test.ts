@@ -550,7 +550,7 @@ describe("opening", () => {
   it("shell:start-with-text runs the primary text action, and says so when there is none", async () => {
     const store = await startedStore();
     expect(await store.startWithText("hello")).toBe(false);
-    expect(last(notices())).toBe("No app on this machine can start a chat");
+    expect(last(notices())).toBe("No app in this workspace can start a chat");
     socket.deliver().onAppsUpdated([
       appRecord("docs", { launcher_rank: 20 }),
       appRecord("notes", {
@@ -570,7 +570,7 @@ describe("opening", () => {
   it("shell:draft-text drafts through the first draft row when no pinned window takes one, and says so with none", async () => {
     const store = await startedStore();
     expect(await store.draftText("Explain this element:")).toBe(false);
-    expect(last(notices())).toBe("No app on this machine can take a draft");
+    expect(last(notices())).toBe("No app in this workspace can take a draft");
     offerApps(api, socket, [
       appRecord("docs", {
         launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
@@ -1645,17 +1645,23 @@ describe("pulled-out windows", () => {
     expect(savedCalls()).toHaveLength(0);
   });
 
-  it("leaves a show op on a pulled-out window to the main window's page when it is a solo shell", async () => {
+  it("a solo shell raises its own window on a show op naming it, and leaves any other to the main window", async () => {
     api.writeLayout("home", CLIENT, {
       updated_at: null,
-      placements: [placementRecord("win-1", { is_detached: true })],
+      placements: [placementRecord("win-1", { is_detached: true }), placementRecord("win-2", { is_detached: true })],
     });
     const { store, calls } = makePopOutStore("win-1");
     await store.start(NO_LINK);
 
-    socket.deliver().onLayoutOp({ op: "show", args: { window: "win-1" }, requester: "buddy" });
-
+    socket.deliver().onLayoutOp({ op: "show", args: { window: "win-2", is_detached: true }, requester: "buddy" });
+    socket.deliver().onLayoutOp({ op: "show", args: { window: "win-1", is_detached: false }, requester: "buddy" });
     expect(calls).toEqual([]);
+
+    // The main window may be closed: the pop-out asks the chrome to raise itself, and nothing is written.
+    socket.deliver().onLayoutOp({ op: "show", args: { window: "win-1", is_detached: true }, requester: "buddy" });
+    expect(calls).toEqual([["request", expect.objectContaining({ windowId: "win-1", title: "Docs" })]]);
+    expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(true);
+    expect(savedCalls()).toHaveLength(0);
   });
 
   it("a solo shell the size of a phone stays solo when the agent ops aimed at its client reach it", async () => {

@@ -23,6 +23,9 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import pytest
+from workspace_layout.primitives import LayoutOp
+from workspace_layout.shell_url import LAYOUT_OP_ROUTE
+from workspace_layout.testing import describe_op_body_problem
 
 _SCRIPT = Path(__file__).parent / "refresh_workspace_view.py"
 _spec = importlib.util.spec_from_file_location("refresh_workspace_view", _SCRIPT)
@@ -143,6 +146,19 @@ def test_broadcast_asks_for_a_whole_interface_reload() -> None:
     assert [payload["op"] for _url, payload, _headers in broadcasts] == [
         "reload_system_interface"
     ]
+
+
+def test_the_broadcast_body_is_one_the_shells_op_route_takes() -> None:
+    """The script is stdlib-only and spells its body by hand, so this holds it to the op route's own request models
+    (the shell and the ``workspace-layout`` command read the same ones)."""
+    http = _RecordingHttp({})
+
+    refresh_workspace_view.broadcast_reload(http, _BASE_URL)
+
+    [(url, payload, _headers)] = http.posts
+    assert url == f"{_BASE_URL}{LAYOUT_OP_ROUTE}"
+    assert payload["op"] == LayoutOp.RELOAD_SYSTEM_INTERFACE
+    assert describe_op_body_problem(payload) is None
 
 
 def test_app_refresh_targets_the_primary_agent_not_the_caller() -> None:

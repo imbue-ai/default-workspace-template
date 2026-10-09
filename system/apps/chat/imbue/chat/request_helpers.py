@@ -3,6 +3,7 @@
 import json
 import traceback
 from typing import Any
+from typing import Final
 from typing import TypeVar
 
 from app_manifest.manifest import describe_validation_error
@@ -18,6 +19,9 @@ from imbue.chat.models import ErrorResponse
 from imbue.imbue_common.frozen_model import FrozenModel
 
 _RequestModel = TypeVar("_RequestModel", bound=FrozenModel)
+
+# The peer addresses a loopback-only route answers, as the shell's routes of that kind do.
+_LOOPBACK_CLIENT_HOSTS: Final[frozenset[str]] = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
 def json_response(content: Any, status_code: int = 200) -> Response:
@@ -51,6 +55,13 @@ def parse_request_body(model: type[_RequestModel]) -> _RequestModel:
         return model.model_validate(body)
     except ValidationError as e:
         raise MalformedRequestError(describe_validation_error(e)) from e
+
+
+def require_loopback() -> Response | None:
+    """A 403 for a request from a peer that is not this machine, else None."""
+    if (request.remote_addr or "") not in _LOOPBACK_CLIENT_HOSTS:
+        return json_response(ErrorResponse(detail="this route is only callable from loopback").model_dump(), 403)
+    return None
 
 
 def answer_chat_app_error(error: ChatAppError) -> Response:

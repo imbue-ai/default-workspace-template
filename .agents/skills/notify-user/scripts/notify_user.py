@@ -7,6 +7,12 @@ this script never holds one), addressed as the current runtime agent for
 authorization. The app reads that agent's chat_id label for the stable
 conversation destination, including after a chat moves between agents.
 
+Before posting it asks the chat app which pages are watching this chat (shown
+and focused, ``GET /api/chats/<chat id>/watchers``) and sends their instance
+ids as ``watched_by``, so the app can show nothing to a user who is already
+reading the chat. When that question cannot be answered in two seconds the
+notification goes out without the field, with a warning on stderr.
+
 Exit codes:
     0  -- the app accepted the notification
     1  -- it did not (no gateway env, the app unreachable, a refusal); the
@@ -20,6 +26,11 @@ Environment:
     MNGR_AGENT_ID              Current runtime agent id, registered with the
                               gateway. MINDS_CHAT_ID identifies a conversation,
                               not the agent authorized to call this route.
+    MINDS_CHAT_ID              The chat whose watchers are asked for; an agent
+                              that is its own chat may lack it, and then
+                              MNGR_AGENT_ID stands in.
+    MINDS_APPS_FILE            The app registry the chat app's address is read
+                              from (default data/.state/apps.toml).
     LATCHKEY_GATEWAY,           Gateway address + password mngr injects into the
     LATCHKEY_GATEWAY_PASSWORD   agent environment. Both must be present.
     LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE
@@ -37,13 +48,18 @@ latchkey CLI being on the PATH of whatever tool environment runs it.
 from __future__ import annotations
 
 import argparse
+import http.client
+import importlib.util
 import json
 import os
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
+from typing import Any
 
 ENV_AGENT_ID = "MNGR_AGENT_ID"
+ENV_CHAT_ID = "MINDS_CHAT_ID"
 ENV_GATEWAY = "LATCHKEY_GATEWAY"
 ENV_GATEWAY_PASSWORD = "LATCHKEY_GATEWAY_PASSWORD"
 ENV_GATEWAY_PERMISSIONS = "LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"
@@ -51,6 +67,15 @@ ENV_GATEWAY_PERMISSIONS = "LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"
 # One round trip to the desktop app; a wedged app must not stall the agent's
 # turn.
 _TIMEOUT_SECONDS = 10.0
+
+# The watcher question is a courtesy: the notification goes out without its
+# answer rather than wait on a slow chat app.
+_WATCHERS_TIMEOUT_SECONDS = 2.0
+
+# `.claude/skills` is a symlink to `.agents/skills`; resolving through it lands on
+# the real file, four directories below the repo root.
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+_MESSAGE_CHAT_SCRIPT = _REPO_ROOT / "system" / "scripts" / "message_chat.py"
 
 
 class HttpClient:
@@ -69,6 +94,66 @@ class HttpClient:
             return int(exc.code), exc.read().decode("utf-8", "replace")
         except (urllib.error.URLError, OSError) as exc:
             return None, str(exc)
+
+    def get(self, url: str, timeout: float) -> tuple[int | None, str]:
+        """GET a URL; return ``(status, response text)``, status ``None`` if unreachable, too slow, or garbled."""
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as response:
+                return int(response.status), response.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as exc:
+            return int(exc.code), exc.read().decode("utf-8", "replace")
+        except (
+            urllib.error.URLError,
+            OSError,
+            http.client.HTTPException,
+            ValueError,
+        ) as exc:
+            return None, str(exc)
+
+
+class WatchersUnknownError(Exception):
+    """The chat app could not say who is watching this chat."""
+
+
+def _chat_app_url(environ: dict[str, str]) -> str:
+    """The chat app's address from the app registry, through ``message_chat.py`` (the scripts are not a package)."""
+    spec = importlib.util.spec_from_file_location(
+        "message_chat_for_notify_user", _MESSAGE_CHAT_SCRIPT
+    )
+    if spec is None or spec.loader is None:
+        raise WatchersUnknownError(f"cannot load {_MESSAGE_CHAT_SCRIPT}")
+    module: Any = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except OSError as exc:
+        raise WatchersUnknownError(
+            f"cannot load {_MESSAGE_CHAT_SCRIPT}: {exc}"
+        ) from exc
+    return module.chat_app_url(environ, _REPO_ROOT)
+
+
+def watchers_of_chat(http: HttpClient, environ: dict[str, str]) -> list[str]:
+    """The instance ids of the pages watching this chat; raises WatchersUnknownError naming why they are unknown."""
+    chat_id = environ.get(ENV_CHAT_ID, "") or environ.get(ENV_AGENT_ID, "")
+    if not chat_id:
+        raise WatchersUnknownError(f"{ENV_CHAT_ID} is not set")
+    status, text = http.get(
+        f"{_chat_app_url(environ)}/api/chats/{chat_id}/watchers",
+        timeout=_WATCHERS_TIMEOUT_SECONDS,
+    )
+    if status is None:
+        raise WatchersUnknownError(f"the chat app did not answer: {text}")
+    if status != 200:
+        raise WatchersUnknownError(f"the chat app answered {status}")
+    try:
+        watched_by = json.loads(text).get("watched_by")
+    except (ValueError, AttributeError) as exc:
+        raise WatchersUnknownError("the chat app's answer is not JSON") from exc
+    if not isinstance(watched_by, list) or not all(
+        isinstance(item, str) for item in watched_by
+    ):
+        raise WatchersUnknownError("the chat app's answer carries no list of watchers")
+    return watched_by
 
 
 def notify(
@@ -107,9 +192,15 @@ def notify(
     permissions = environ.get(ENV_GATEWAY_PERMISSIONS, "")
     if permissions:
         headers["X-Latchkey-Gateway-Permissions-Override"] = permissions
-    payload: dict[str, str] = {"message": message.strip()}
+    payload: dict[str, str | list[str]] = {"message": message.strip()}
     if title:
         payload["title"] = title.strip()
+    try:
+        payload["watched_by"] = watchers_of_chat(http, environ)
+    except WatchersUnknownError as exc:
+        sys.stderr.write(
+            f"notify-user: could not check who is watching this chat ({exc}); sending anyway\n"
+        )
     status, text = http.post_json(
         f"{gateway.rstrip('/')}/minds-api-proxy/api/v1/agents/{agent_id}/notifications",
         payload,
@@ -131,11 +222,17 @@ def notify(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Notify the user from this chat through the Imbue Studio app.")
-    parser.add_argument("--title", default=None, help="Optional title, shown as a prefix on the message")
+    parser = argparse.ArgumentParser(
+        description="Notify the user from this chat through the Imbue Studio app."
+    )
+    parser.add_argument(
+        "--title", default=None, help="Optional title, shown as a prefix on the message"
+    )
     parser.add_argument("message", help="One sentence summarizing what was done")
     args = parser.parse_args(argv)
-    is_accepted = notify(args.message, args.title, http=HttpClient(), environ=dict(os.environ))
+    is_accepted = notify(
+        args.message, args.title, http=HttpClient(), environ=dict(os.environ)
+    )
     if is_accepted:
         sys.stderr.write("notify-user: notification sent.\n")
     return 0 if is_accepted else 1
