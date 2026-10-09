@@ -31,10 +31,16 @@ re-boots the inner process in place after a rebuild, leaving the ports, the wrap
 the registrations, and the window untouched. ``down`` tears the preview down together
 with the siblings it booted, and verifies the processes died.
 
+``up`` and ``refresh`` first sync every workspace member into the worktree's own
+environment, and the app runs with the live repo's environment off its PATH, so a
+preview can only run the worktree's code: a command the worktree lacks fails to boot
+rather than falling back to the live install.
+
 Exit codes:
     0  Success.
-    1  The manifest could not be read, the table could not be resolved, another
-       pass's preview is up, or the shared script failed (which quotes the boot log).
+    1  The worktree's environment could not be synced, the manifest could not be
+       read, the table could not be resolved, another pass's preview is up, or the
+       shared script failed (which quotes the boot log).
 """
 
 from __future__ import annotations
@@ -42,6 +48,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tomllib
@@ -81,6 +88,16 @@ SHELL_APP_NAME = "system_interface"
 # rather than the live tool's.
 LAUNCHER = ("uv", "run")
 
+# A bare ``uv run`` installs only the root project's closure, which leaves out user-built
+# apps, so the worktree's environment would lack the app's own console script.
+SYNC_COMMAND = ("uv", "sync", "--all-packages")
+
+# The live repo's environment, which the ``uv run`` that runs this script activates. Left on
+# the app's PATH, it answers for any command the worktree's environment lacks, and the
+# preview silently serves the live install.
+ACTIVE_VENV_ENV = "VIRTUAL_ENV"
+LIVE_VENV_BIN = Path(".venv") / "bin"
+
 # An app that declares ``[[secrets]]`` runs under the wrapper, which is the only reader
 # of its secret files; the preview does the same. The worktree has no ``data/``, so the
 # wrapper reads the live repo's files.
@@ -103,10 +120,55 @@ class PreviewError(Exception):
 
 
 class Runner:
-    """Indirection over ``subprocess.run`` so tests can intercept the shared script."""
+    """Indirection over ``subprocess.run`` so tests can intercept the shared script and the sync."""
 
     def run(self, argv: Sequence[str], cwd: Path) -> int:
         return int(subprocess.run(list(argv), cwd=str(cwd), check=False).returncode)
+
+    def sync(self, worktree: Path) -> int:
+        """Install every workspace member into the worktree's own environment.
+
+        Its output goes to stderr, since ``up``'s stdout is the preview's app name.
+        """
+        env = {
+            key: value for key, value in os.environ.items() if key != ACTIVE_VENV_ENV
+        }
+        return int(
+            subprocess.run(
+                list(SYNC_COMMAND),
+                cwd=str(worktree),
+                env=env,
+                stdout=sys.stderr,
+                check=False,
+            ).returncode
+        )
+
+
+def sync_worktree(worktree: Path, runner: Runner) -> bool:
+    if not worktree.is_dir():
+        sys.stderr.write(f"preview: the worktree {worktree} no longer exists.\n")
+        return False
+    code = runner.sync(worktree)
+    if code != 0:
+        sys.stderr.write(
+            f"preview: '{' '.join(SYNC_COMMAND)}' failed in {worktree} (exit {code}), so its "
+            "environment cannot run the worktree's code; fix that and retry.\n"
+        )
+    return code == 0
+
+
+def live_venv_isolation_args(repo_root: Path) -> list[str]:
+    """The shared script's flags that keep the live repo's environment away from the app."""
+    live_bins = {(repo_root / LIVE_VENV_BIN).resolve()}
+    active_venv = os.environ.get(ACTIVE_VENV_ENV)
+    if active_venv:
+        live_bins.add((Path(active_venv) / "bin").resolve())
+    path = os.pathsep.join(
+        entry
+        for entry in os.environ.get("PATH", "").split(os.pathsep)
+        if not entry or Path(entry).resolve() not in live_bins
+    )
+    return ["--unset-env", ACTIVE_VENV_ENV, "--env", f"PATH={path}"]
 
 
 def _load_forward_port_module():
@@ -297,6 +359,7 @@ def build_up_argv(
         title,
         "--inner-path",
         inner_path,
+        *live_venv_isolation_args(repo_root),
     ]
     for port_name in preview.ports:
         argv.extend(["--port", str(port_name)])
@@ -346,6 +409,8 @@ def up(
         )
         return 1
     manifest_path, manifest = find_manifest(worktree, app_name)
+    if not sync_worktree(worktree, runner):
+        return 1
     dump = (
         dump_registry
         if dump_registry is not None
@@ -465,6 +530,9 @@ def _uses_placeholder(manifest: AppManifest, placeholder: str) -> bool:
 
 def refresh(app_name: str, repo_root: Path, *, runner: Runner) -> int:
     """Re-boot the preview's inner process in place, after a rebuild in its worktree."""
+    worktree = live_preview_worktree(repo_root, app_name)
+    if worktree is not None and not sync_worktree(worktree, runner):
+        return 1
     return runner.run(
         [
             sys.executable,

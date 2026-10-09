@@ -106,8 +106,14 @@ class _RecordingRunner(mod.Runner):
     ) -> None:
         self.repo_root = repo_root
         self.calls: list[list[str]] = []
+        self.synced: list[Path] = []
+        self.sync_code = 0
         self.next_port = next_port
         self.failing_names = set(failing_names)
+
+    def sync(self, worktree: Path) -> int:
+        self.synced.append(worktree)
+        return self.sync_code
 
     def run(self, argv: Sequence[str], cwd: Path) -> int:
         argv_list = list(argv)
@@ -152,6 +158,13 @@ def _flag_values(argv: Sequence[str], flag: str) -> list[str]:
     return [argv[index + 1] for index, part in enumerate(argv) if part == flag]
 
 
+def _manifest_envs(argv: Sequence[str]) -> list[str]:
+    """The ``--env`` values after the PATH this script sets to keep the live venv out."""
+    return [
+        value for value in _flag_values(argv, "--env") if not value.startswith("PATH=")
+    ]
+
+
 def _shell_registry_copy(tmp_path: Path) -> Path:
     return mod._registry_copy_path(tmp_path, "system_interface")
 
@@ -191,7 +204,7 @@ def test_up_hands_the_manifests_table_to_the_shared_script_with_its_own_placehol
     assert _flag_values(argv, "--preview-service-name") == ["chat-preview"]
     assert _flag_values(argv, "--inner-path") == ["/?chat=agent-1"]
     # The shared script's placeholders pass through untouched.
-    assert _flag_values(argv, "--env") == [
+    assert _manifest_envs(argv) == [
         "CHAT_PORT={port:main}",
         "CHAT_HOST={host}",
         "CHAT_DATA_DIR={copy:data}",
@@ -223,7 +236,7 @@ def test_an_app_with_no_table_previews_by_the_scaffold_convention(
     )
 
     argv = runner.up_argv("notes-preview")
-    assert _flag_values(argv, "--env") == [
+    assert _manifest_envs(argv) == [
         "NOTES_PORT={port:main}",
         "NOTES_HOST={host}",
         "NOTES_DATA_DIR={copy:data}",
@@ -492,6 +505,30 @@ def test_a_failed_boot_keeps_the_record_of_the_siblings_it_booted(
         call[call.index("--name") + 1] for call in runner.calls if call[2] == "down"
     ]
     assert downs == ["system_interface-preview", "chat-preview"]
+
+
+def test_a_failed_sync_of_the_worktree_stops_the_boot_and_the_refresh(
+    tmp_path: Path,
+) -> None:
+    """An unsynced worktree's environment lacks the app's console script, so the boot would
+    fall through to the live install; neither ``up`` nor ``refresh`` may go on without it."""
+    worktree = _write_worktree(tmp_path)
+    runner = _RecordingRunner(tmp_path)
+    assert (
+        mod.up("notes", worktree, tmp_path, runner=runner, dump_registry=_dump_registry)
+        == 0
+    )
+    assert runner.synced == [worktree]
+    runner.calls.clear()
+    runner.sync_code = 2
+
+    assert (
+        mod.up("notes", worktree, tmp_path, runner=runner, dump_registry=_dump_registry)
+        == 1
+    )
+    assert mod.refresh("notes", tmp_path, runner=runner) == 1
+
+    assert runner.calls == []
 
 
 def test_main_routes_the_verbs(tmp_path: Path) -> None:

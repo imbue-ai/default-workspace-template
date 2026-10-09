@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import tomllib
@@ -87,6 +89,81 @@ ThreadingHTTPServer(("127.0.0.1", int(os.environ["FIXTURE_PORT"])), Handler).ser
 """
 
 
+# A real worktree is a checkout of the workspace, whose root is a uv project the preview
+# syncs before it boots; with apps that are packages of their own, a workspace over them.
+_ROOT_PYPROJECT = """
+[project]
+name = "fixture-workspace"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+[tool.uv]
+package = false
+"""
+_WORKSPACE_PYPROJECT = (
+    _ROOT_PYPROJECT
+    + """
+[tool.uv.workspace]
+members = ["system/apps/*"]
+"""
+)
+
+# An app that runs as its own console script, like every scaffolded app: what serves is
+# whichever install of ``fixture-serve`` the preview's command resolves to.
+_PACKAGED_MANIFEST = """
+name = "fixture"
+display_name = "Fixture"
+icon = "icon.svg"
+
+[preview]
+command = ["fixture-serve"]
+env = {FIXTURE_PORT = "{port:main}"}
+health_path = "/health"
+"""
+
+_PACKAGED_PYPROJECT = """
+[project]
+name = "fixture"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+[project.scripts]
+fixture-serve = "fixture_app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fixture_app"]
+"""
+
+_PACKAGED_SERVER = """
+import json
+import os
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+BUILD = "live build"
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = json.dumps({"build": BUILD, "path": os.environ["PATH"]}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):
+        pass
+
+
+def main():
+    ThreadingHTTPServer(("127.0.0.1", int(os.environ["FIXTURE_PORT"])), Handler).serve_forever()
+"""
+
+
 def _get(url: str) -> dict[str, object]:
     with urllib.request.urlopen(url, timeout=5) as response:
         return json.loads(response.read())
@@ -126,6 +203,7 @@ def test_a_preview_boots_from_its_manifest_refreshes_a_rebuild_in_place_and_tear
     worktree = tmp_path / "worktree"
     app_dir = worktree / "system" / "apps" / "fixture"
     app_dir.mkdir(parents=True)
+    (worktree / "pyproject.toml").write_text(_ROOT_PYPROJECT)
     (app_dir / "app.toml").write_text(_MANIFEST)
     (app_dir / "icon.svg").write_text(_ICON)
     (app_dir / "serve.py").write_text(_SERVER)
@@ -168,3 +246,63 @@ def test_a_preview_boots_from_its_manifest_refreshes_a_rebuild_in_place_and_tear
         .isdisjoint({"fixture-preview-app", "fixture-preview"})
     )
     assert mod.live_preview_url(repo_root, "fixture") is None
+
+
+@pytest.mark.timeout(_LIFECYCLE_TIMEOUT_SECONDS)
+def test_a_preview_from_a_fresh_worktree_runs_the_worktrees_code_not_the_live_install(
+    tmp_path: Path, repo_root_on_disk: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The live repo has the app installed in its venv, and ``preview_app.py`` runs under
+    ``uv run`` from the live repo, which puts that venv on PATH. A fresh worktree's own venv
+    has no ``fixture-serve`` until something installs every workspace member into it, and
+    until then the live one answers for it and the preview serves the live code."""
+    repo_root = repo_root_on_disk
+    app_dir = repo_root / "system" / "apps" / "fixture"
+    (app_dir / "src" / "fixture_app").mkdir(parents=True)
+    (repo_root / "pyproject.toml").write_text(_WORKSPACE_PYPROJECT)
+    (app_dir / "pyproject.toml").write_text(_PACKAGED_PYPROJECT)
+    (app_dir / "app.toml").write_text(_PACKAGED_MANIFEST)
+    (app_dir / "icon.svg").write_text(_ICON)
+    (app_dir / "src" / "fixture_app" / "__init__.py").write_text(_PACKAGED_SERVER)
+    worktree = tmp_path / "worktree"
+    shutil.copytree(repo_root, worktree)
+    worktree_server = (
+        worktree / "system" / "apps" / "fixture" / "src" / "fixture_app" / "__init__.py"
+    )
+    worktree_server.write_text(
+        _PACKAGED_SERVER.replace('BUILD = "live build"', 'BUILD = "worktree build"')
+    )
+
+    (repo_root / "system" / "scripts").mkdir(parents=True)
+    shutil.copy(
+        mod._FORWARD_PORT_SCRIPT, repo_root / "system" / "scripts" / "forward_port.py"
+    )
+    live_env = {key: value for key, value in os.environ.items() if key != "VIRTUAL_ENV"}
+    subprocess.run(
+        ["uv", "sync", "--all-packages"], cwd=repo_root, env=live_env, check=True
+    )
+    live_bin = repo_root / ".venv" / "bin"
+    assert (live_bin / "fixture-serve").exists()
+    monkeypatch.setenv("VIRTUAL_ENV", str(repo_root / ".venv"))
+    monkeypatch.setenv("PATH", f"{live_bin}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("MINDS_APPS_FILE", str(tmp_path / "apps.toml"))
+
+    repo_args = ["--repo-root", str(repo_root)]
+    assert (
+        mod.main(["up", "--app", "fixture", "--worktree", str(worktree), *repo_args])
+        == 0
+    )
+    try:
+        url = mod.live_preview_url(repo_root, "fixture")
+        assert url is not None
+        served = _get(url)
+    finally:
+        assert mod.main(["down", "--app", "fixture", *repo_args]) == 0
+
+    assert served["build"] == "worktree build"
+    served_path = [
+        Path(entry).resolve()
+        for entry in str(served["path"]).split(os.pathsep)
+        if entry
+    ]
+    assert live_bin.resolve() not in served_path
