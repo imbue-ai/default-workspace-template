@@ -1,14 +1,14 @@
 """The app inventory: the registry and each app's liveness.
 
-The registry (``data/.state/apps.toml``) is watched for changes, and its mtime is compared on every sweep
-as the backstop for a write no watch event reported (under gVisor and on lima, a change made outside the
-sandbox raises no inotify event in it); liveness is re-derived on the sweep and after a stop or start. Each app's address on the domain the workspace
-was last shared under (``data/.state/share_domain``, which the share gateway keeps past an unshare) is read with
-every view, so a first share reaches the clients on the next sweep. Every
-change of the inventory is broadcast as one ``apps_updated`` message, diffed against the last one sent
-(desktop contracts.md section 6), every read of the registry is handed to ``on_registry_read`` (the
-production shell's services event writer), and every read that changed the rows is announced to each registry change
-listener (the shell's desktop reconcile).
+The registry (``data/.state/apps.toml``) is watched for changes, and its mtime is compared on every sweep as
+the backstop for a write no watch event reported (under gVisor and on lima, a change made outside the sandbox
+raises no inotify event in it); liveness is re-derived on the sweep and after a stop or start. Each app's
+address on the domain the workspace was last shared under (``data/.state/share_domain``, which the share
+gateway keeps past an unshare) is read with every view, so a first share reaches the clients on the next
+sweep. Every change of the inventory is broadcast as one ``apps_updated`` message, diffed against the last one
+sent (desktop contracts.md section 6), every read of the registry is handed to ``on_registry_read`` (the
+production shell's services event writer), and every read that changed the rows is announced to each registry
+change listener (the shell's desktop reconcile).
 """
 
 import json
