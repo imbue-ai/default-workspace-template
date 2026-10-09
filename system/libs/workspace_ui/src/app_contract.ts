@@ -64,9 +64,9 @@ export const SHELL_DRAFT_TEXT = "shell:draft-text";
 export const SHELL_MESSAGE = "shell:message";
 /** App to shell: open a link that is not the page's own -- a local URL, one of the workspace's app addresses (another
  *  app's page) or another workspace's, a ``file:`` URL, an external web, ``mailto:`` or ``tel:`` link -- which only
- *  the shell can put where it belongs: it opens the app's window there (for a local URL, the app registered at its
- *  port, else the workspace's browser), the file in the File Viewer, an external link in the app registered for it
- *  or else outside the workspace, or says why it cannot. */
+ *  the shell can put where it belongs: it opens the app's window there (for a local URL, the app on whose
+ *  ``<label>.localhost`` host or registered port it is, else the workspace's browser), the file in the File Viewer, an
+ *  external link in the app registered for it or else outside the workspace, or says why it cannot. */
 export const SHELL_OPEN_LINK = "shell:open-link";
 
 /** The bare host names of this machine (a ``*.localhost`` host is local too). */
@@ -160,9 +160,10 @@ export interface ShellConnection {
   draftText(text: string): void;
   /** Send the shell a message for the apps registered for ``type``, with ``fields`` as its own fields. */
   sendMessage(type: string, fields: Readonly<Record<string, unknown>>): void;
-  /** Ask the shell to open a local URL (as the window of the app at its port, else in the workspace's browser), an
-   *  address of the workspace's apps (or another workspace's) as a window, a ``file:`` URL in the File Viewer, or an
-   *  external web, ``mailto:`` or ``tel:`` link in the app registered for it, else outside the workspace. */
+  /** Ask the shell to open a local URL (as the window of the app on its ``<label>.localhost`` host or at its port, else
+   *  in the workspace's browser), an address of the workspace's apps (or another workspace's) as a window, a ``file:``
+   *  URL in the File Viewer, or an external web, ``mailto:`` or ``tel:`` link in the app registered for it, else
+   *  outside the workspace. */
   openLink(url: string): void;
   /** Stop listening to the shell. */
   disconnect(): void;

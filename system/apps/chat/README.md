@@ -116,11 +116,12 @@ app contract's link rule, as a click in any app does. Rendering a message
 (`frontend/src/markdown.ts`) only says what each link names: an absolute path
 becomes the file's `file:` URL, which the shell opens in the File Viewer
 (`open:file`); a local address (`localhost`, `127.0.0.1`, `[::1]`,
-`*.localhost`) the shell opens as the window of the app registered at its port,
-or else in the workspace's browser; an address on the workspace's share domain
-it opens as that app's window; an external web, mail, or phone link it hands to
-the app of the workspace registered for it, or else opens in the user's own
-browser or mail or phone app; and a relative path, a fragment, or another
+`*.localhost`) the shell opens as the window of the app on whose
+`<label>.localhost` host or registered port it is, or else in the workspace's
+browser; an address on the workspace's share domain it opens as that app's
+window; an external web, mail, or phone link it hands to the app of the
+workspace registered for it, or else opens in the user's own browser or mail or
+phone app; and a relative path, a fragment, or another
 scheme is unwrapped to its text. A chat opened on its own opens a web, mail, or
 phone link itself, and does nothing for a file link: a browser does not follow
 a `file:` link from a web page. The chat root relays its chat page's

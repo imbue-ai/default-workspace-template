@@ -7,10 +7,11 @@
  *   (``open:web``, ``open:mailto``, ``open:tel``) opens it, else the user's own browser or mail or phone app.
  * - A ``file:`` URL on this machine, or an absolute path as written in a chat message, is a **file** of the
  *   workspace, opened in the File Viewer (``open:file``).
- * - A URL on a local host (``localhost``, ``127.0.0.1``, ``[::1]``, ``*.localhost``) is a **local URL**: on a bare
- *   host name, the window of the app registered at its port, else the workspace's browser (``open:url``). That is
- *   unless it is the address of an app of a workspace: one of this workspace's apps (an **app address**, opened as
- *   that app's window) or another workspace's (which the shell refuses).
+ * - A URL on a local host (``localhost``, ``127.0.0.1``, ``[::1]``, ``*.localhost``) is a **local URL**: on an app's
+ *   ``<label>.localhost`` host, or on a bare host name at the port the app registered, that app's window, else the
+ *   workspace's browser (``open:url``). That is unless it is the address of an app of a workspace: one of this
+ *   workspace's apps (an **app address**, opened as that app's window) or another workspace's (which the shell
+ *   refuses).
  * - An address on this workspace's share domain is an **app address** too, from any client, though its host is not
  *   local; another workspace's share address cannot be told from any other site, so it is external.
  * - Anything else (a relative path, a fragment, another scheme) is **unroutable**.

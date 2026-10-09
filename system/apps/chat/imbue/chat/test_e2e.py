@@ -1644,9 +1644,8 @@ def test_a_replys_file_link_opens_in_the_file_viewer_and_its_local_link_goes_to_
 def test_a_replys_localhost_link_to_a_registered_apps_port_opens_that_apps_window_not_the_browser(
     tmp_path: Path, page: Page
 ) -> None:
-    """An agent knows an app it runs only by its backend's ``http://localhost:<port>`` URL, so a reply's link to that
-    port opens the app's own window at the link's path and query, and nothing is posted to the app that opens
-    URLs."""
+    """A reply's link to an app's backend ``http://localhost:<port>`` URL, as an agent may write for an app it runs,
+    opens the app's own window at the link's path and query, and nothing is posted to the app that opens URLs."""
     opened_urls: list[dict[str, Any]] = []
     with (
         serve_app(message_handling_app([], "/unused", 200)) as news,

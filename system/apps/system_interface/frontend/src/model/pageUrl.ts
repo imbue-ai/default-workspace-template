@@ -79,9 +79,9 @@ export function windowAtLocalAppHost(
 }
 
 /** The window a local URL is a page of: the app of ``apps`` whose registered backend URL has the URL's scheme and
- *  port (on any loopback host name), and the URL's path. This is how a link an agent writes to an app it runs
- *  (``http://localhost:<port>/...``, the only address of it the agent knows) opens as that app's window. Null when
- *  none of ``apps`` is registered there. */
+ *  port (on any loopback host name), and the URL's path. This is how a link an agent wrote to an app it runs by its
+ *  backend URL (``http://localhost:<port>/...``) opens as that app's window. Null when none of ``apps`` is registered
+ *  there. */
 export function windowAtBackendUrl(
   apps: readonly AppRecord[],
   url: string,
