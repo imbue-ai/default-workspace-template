@@ -187,8 +187,13 @@ also opens links itself: it announces `opensLinks` to the chrome and opens a
 page's `shell:open-link` by the shared link classifier (`workspace_ui`'s
 `links.ts`): a `file:` URL as `open:file`, a local URL at an openable app's
 registered backend port as that app's window (`windowAtBackendUrl` in
-`frontend/src/model/pageUrl.ts`), any other local URL as `open:url`, and one of
-this workspace's app addresses as that app's window; an app's window already
+`frontend/src/model/pageUrl.ts`), any other local URL as `open:url`, one of
+this workspace's app addresses (its addresses on the domain the workspace was
+last shared under included, read off the apps' `share_url`) as that app's
+window, and an external web, `mailto:`, or `tel:` link as `open:web`,
+`open:mailto`, or `open:tel` to the app registered for it, or else outside the
+workspace: back to a chrome that says it opens external links
+(`minds:open-external`), else in a new browser tab. An app's window already
 there that the client has popped out is raised in its own window, and one a
 link opens while the client has only pop-outs open gets the same notice. An
 app that wants a window for what it was told asks the op route's `show`, which

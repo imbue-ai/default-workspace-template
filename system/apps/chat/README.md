@@ -117,12 +117,15 @@ app contract's link rule, as a click in any app does. Rendering a message
 becomes the file's `file:` URL, which the shell opens in the File Viewer
 (`open:file`); a local address (`localhost`, `127.0.0.1`, `[::1]`,
 `*.localhost`) the shell opens as the window of the app registered at its port,
-or else in the workspace's browser; an external link opens in the user's own
-browser; and a relative path, a fragment, or another scheme is unwrapped to its
-text. A chat opened on its own opens a web link in a new tab, and does nothing
-for a file link: a browser does not follow a `file:` link from a web page. The
-chat root relays its chat page's `shell:open-link` to the shell, and opened on
-its own (`frontend/src/root/relay.ts`) opens a web one in a new tab itself.
+or else in the workspace's browser; an address on the workspace's share domain
+it opens as that app's window; an external web, mail, or phone link it hands to
+the app of the workspace registered for it, or else opens in the user's own
+browser or mail or phone app; and a relative path, a fragment, or another
+scheme is unwrapped to its text. A chat opened on its own opens a web, mail, or
+phone link itself, and does nothing for a file link: a browser does not follow
+a `file:` link from a web page. The chat root relays its chat page's
+`shell:open-link` to the shell, and opened on its own
+(`frontend/src/root/relay.ts`) opens a web, `mailto:`, or `tel:` one itself.
 Sends are reported to the shell's client-activity route so agents can
 attribute a request to a client, and the app asks the shell for windows,
 through one client of the `workspace_layout` library that asks as the chat app
