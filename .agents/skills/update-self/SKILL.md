@@ -516,10 +516,18 @@ git merge-base --is-ancestor HEAD mngr/update-self
 
 Exit 0 means the branch still fast-forwards: apply. Exit 1 means `HEAD` moved
 under the pass, and the apply would refuse it: **catch the worker up** instead
-of redoing the pass. Message the worker (it is still waiting, and holds the
-branch and any bundles it built), re-arm the poll as in Step 3b, and audit the
-`done` it sends back (5a). Plain `mngr message`, as Step 3b's cleanup uses
-plain `mngr`: the workspace's own launcher may predate a reply subcommand.
+of redoing the pass. Consume the `done` you are answering first (an older
+launcher's `await` leaves it in place, and a re-armed poll would return it at
+once), then message the worker (it is still waiting, and holds the branch and
+any bundles it built), re-arm the poll as in Step 3b, and audit the `done` it
+sends back (5a). Plain `mngr message`, as Step 3b's cleanup uses plain `mngr`:
+the workspace's own launcher may predate a reply subcommand.
+
+```bash
+mkdir -p data/.tasks/update-self/reports/consumed
+[ ! -e data/.tasks/update-self/reports/report.md ] || mv data/.tasks/update-self/reports/report.md \
+    data/.tasks/update-self/reports/consumed/$(date +%s)-done.md
+```
 
 ```bash
 mngr message update-self \
