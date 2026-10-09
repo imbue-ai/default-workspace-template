@@ -27,6 +27,7 @@
 > * The PR split exists only for testing and review: all three are expected to merge together or close together, so user workspaces migrate once and the one migration reference covers everything.
 > * A paired mngr PR on `gabriel/skill-scripts-as-packages` (matching PR 2's template branch name) converts minds_evals' and minds_admin's `uv run` invocations of template scripts to `--no-sync` and runs their tests against PR 2's branch.
 > * Every long-running program line uses `bash -c "uv sync --all-packages --frozen && exec .venv/bin/<name>"`: host-backup, share-gateway, env-converge (unchanged), plus the `bootstrap` window, github-sync, and the user-service guide and its example.
+> * The `bootstrap` window uses `;` instead of `&&`: a failed boot-time sync (e.g. a skill `scripts/` dir with no `pyproject.toml`, which fails every uv command in the workspace) still starts supervisord on the existing venv, so the workspace stays reachable for an agent to repair it.
 > * The `SessionStart` sync checks the lock. If it's stale, it relocks and prints a message that the lock was regenerated and should go into the agent's next commit, phrased so the agent doesn't act on it before the user's first message. Then it syncs `--frozen`.
 > * A root test fails on any supervisord program line that runs under `uv run`, so the update worker fixes existing user services the same way it migrates user skills.
 > * On the scratch workspace after PR 1: `ps` shows no `uv` process parenting supervisord or any program, every program reaches RUNNING, and the PR records per-process memory before/after.
@@ -125,8 +126,7 @@
 
 ### PR 1 -- `gabriel/python-launch-discipline` (template; base `gabriel/ty-version-bump`)
 
-- **`.mngr/settings.toml`**: `extra_window = ["bootstrap='uv run bootstrap'"]` becomes the `bash -c "uv sync --all-packages --frozen && exec .venv/bin/bootstrap"` form.
-  - Check how mngr quotes `extra_window` values before changing the inner quoting.
+- **`.mngr/settings.toml`**: `extra_window = ["bootstrap='uv run bootstrap'"]` becomes `bash -c "uv sync --all-packages --frozen; exec .venv/bin/bootstrap"` (`;`, so a failed sync still boots). mngr's `NamedCommand.from_string` strips the outer single quotes and runs the rest as the window command.
 - **`.agents/skills/github-sync/SKILL.md`** (program line at ~174): `uv run github-sync run` becomes the same exec form.
 - **`.agents/shared/references/service-processes.md`**:
   - The example program line (line 22) becomes the exec form.
@@ -138,7 +138,7 @@
     - on failure, `uv lock` and print one line: "`uv.lock` was out of date with `pyproject.toml` and has been regenerated; include it in your next commit.";
     - then `uv sync --all-packages --frozen`.
   - `.claude/settings.json` `SessionStart` calls it instead of `uv sync --all-packages`.
-  - Same for any Codex equivalent in `.codex/hooks.json` (check whether one exists).
+  - `.codex/hooks.json` has no `SessionStart` sync, so nothing changes there.
 - **`uv run` → `uv run --no-sync`**, everywhere agents call a command, except skill and system script calls (PR 2 rewrites those):
   - `AGENTS.md`, `.mngr/settings.toml` prompts, `SKILL.md`s and references, `.sh` scripts.
   - Commands: `pytest`, `python`, `mngr`, `app-manifest`, `env-converge`, `host-backup-*`, `tk`, `ruff`, `ty`, `agentic-browser-fleet`, etc.
@@ -346,7 +346,6 @@
 - **Two top-level packages in one hatchling project**: hatchling supports `packages = [...]`, but confirm the editable install exposes both. Otherwise use two projects under `system/scripts/`.
 - **Entry-point declaration table name**: `[tool.workspace.entry-points]` is a placeholder. Pick a name that won't collide with uv/hatch tables.
 - **Test-filename-collision rule** in `type-skill.md`: drop it only after confirming pytest's import mode gives package-qualified names for tests inside `<skill>_skill/`, while `scripts/` itself has no `__init__.py`.
-- **Codex `SessionStart` equivalent**: confirm whether `.codex/hooks.json` runs a sync, and give it the same script.
 - **Expensive-stdlib list for the bare tier**: start with `asyncio`, then measure on the scratch workspace before fixing the list.
 - **Does update-self's apply health probe cover every program?** If a bare wrapper broke after an apply, would the probes catch it? Relevant only to the safety margin. The 3.12 guard makes it moot for the version case.
 - **#831 is still open**: merge its tip into the stack as it moves. #759 (thin `workspace-layout` client and its `--no-sync` changes) and #814 are already merged, and PR 1 inherits them through #831's main merge; don't redo their conversions.
