@@ -16,7 +16,17 @@ import sys
 from pathlib import Path
 
 import pytest
-from entry_points_testing import STANDALONE_BARE_DIRS, entry_files, is_bare_entry, is_test_file
+from entry_points_testing import (
+    BARE_PACKAGES,
+    STANDALONE_BARE_DIRS,
+    STANDALONE_BARE_SCRIPTS,
+    entry_files,
+    entry_package,
+    is_bare_entry,
+    is_test_file,
+    project_dir,
+    scripts_dirs,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _TY = Path(sys.executable).parent / "ty"
@@ -38,17 +48,18 @@ def _is_test_support(path: Path) -> bool:
     return is_test_file(path) or path.name.endswith("testing.py")
 
 
+def _bare_packages(stubs: list[Path]) -> set[Path]:
+    return {project_dir(stub) / package for stub in stubs if (package := entry_package(stub)) is not None}
+
+
 def _bare_files() -> list[Path]:
-    stubs = [entry for entry in entry_files(_SYSTEM_SCRIPTS) if is_bare_entry(entry)]
-    stubs += entry_files(_UPDATE_SELF_SCRIPTS)
+    stubs = [entry for directory in scripts_dirs() for entry in entry_files(directory) if is_bare_entry(entry)]
     stubs += [entry for directory in STANDALONE_BARE_DIRS for entry in entry_files(directory)]
-    packages = [
-        _SYSTEM_SCRIPTS / "workspace_bare_scripts",
-        _UPDATE_SELF_PYTHON / "update_self_skill",
-        _TK_COMMAND_PARSING_SRC,
-        _OOM_PRIORITY_SRC,
-    ]
-    modules = [path for package in packages for path in sorted(package.rglob("*.py")) if not _is_test_support(path)]
+    stubs += STANDALONE_BARE_SCRIPTS
+    packages = _bare_packages(stubs)
+    assert {package.name for package in packages} == BARE_PACKAGES
+    trees = [*packages, _TK_COMMAND_PARSING_SRC, _OOM_PRIORITY_SRC]
+    modules = [path for tree in trees for path in sorted(tree.rglob("*.py")) if not _is_test_support(path)]
     return sorted({*stubs, *modules})
 
 
@@ -87,6 +98,7 @@ def test_the_bare_tier_type_checks_against_the_standard_library_alone(tmp_path: 
     files = _bare_files()
     assert _SYSTEM_SCRIPTS / "forward_port.py" in files
     assert _UPDATE_SELF_SCRIPTS / "update_self.py" in files
+    assert set(STANDALONE_BARE_SCRIPTS) <= set(files)
 
     result = _check_bare(files, _BARE_SEARCH_PATHS, tmp_path)
 
