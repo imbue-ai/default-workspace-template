@@ -5,7 +5,7 @@
 // another app of the same share is still this workspace's, while any other site is the browser's.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SHELL_OPEN_LINK, connectToShell } from "./app_contract";
+import { SHELL_HANDSHAKE, SHELL_OPEN_LINK, connectToShell } from "./app_contract";
 import type { ShellConnection } from "./app_contract";
 
 const SHARE_DOMAIN = "0123456789abcdef0123456789abcdef.fedcba9876543210fedcba9876543210.us1.example.com";
@@ -23,6 +23,12 @@ describe("a framed page on a share address", () => {
     parent = { postMessage: vi.fn() };
     Object.defineProperty(window, "parent", { value: parent, configurable: true });
     connection = connectToShell({});
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { type: SHELL_HANDSHAKE, clientId: "client-1" },
+        source: parent as unknown as Window,
+      }),
+    );
   });
 
   afterEach(() => {

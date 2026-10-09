@@ -6,7 +6,14 @@
  * from one of the root's own inner frames counts.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isForwardedToInnerFrames, isForwardedToShell, rootOpenDecision, startInnerFrameRelay } from "./relay";
+import { SHELL_HANDSHAKE } from "@imbue/workspace-ui/src/app_contract";
+import {
+  handHandshakeDown,
+  isForwardedToInnerFrames,
+  isForwardedToShell,
+  rootOpenDecision,
+  startInnerFrameRelay,
+} from "./relay";
 
 /** Frame this window under a spy parent for the duration of the test. */
 function framed(): { postMessage: ReturnType<typeof vi.fn> } {
@@ -117,31 +124,16 @@ describe("startInnerFrameRelay", () => {
     expect(selected).toEqual(["agent-2", "agent-4"]);
     expect(parent.postMessage).not.toHaveBeenCalled();
   });
+});
 
-  it("opens a page's web, mailto, and tel links itself when no shell frames the root, and forwards them when one does", () => {
-    const opened = vi.spyOn(window, "open").mockImplementation(() => null);
-    const inner = { name: "inner" };
-    startInnerFrameRelay(
-      (source) => source === (inner as unknown as MessageEventSource),
-      () => [],
-      () => undefined,
-    );
+describe("handHandshakeDown", () => {
+  it("posts the shell's handshake to an inner page as the shell's own message", () => {
+    const page = { postMessage: vi.fn() };
+    const handshake = { clientId: "client-1", windowId: "win-1", desktopId: "home", app: "chat", path: "/" };
 
-    deliver({ type: "shell:open-link", url: "http://localhost:5173/preview" }, inner);
-    deliver({ type: "shell:open-link", url: "mailto:someone@example.com" }, inner);
-    deliver({ type: "shell:open-link", url: "tel:+15551234567" }, inner);
-    deliver({ type: "shell:open-link", url: "file:///home/user/plan.md" }, inner);
-    const parent = framed();
-    deliver({ type: "shell:open-link", url: "http://localhost:5173/other" }, inner);
+    handHandshakeDown(page as unknown as Window, handshake);
 
-    expect(opened.mock.calls).toEqual([
-      ["http://localhost:5173/preview", "_blank", "noopener"],
-      ["mailto:someone@example.com", "_blank", "noopener"],
-      ["tel:+15551234567", "_blank", "noopener"],
-    ]);
-    expect(parent.postMessage.mock.calls).toEqual([
-      [{ type: "shell:open-link", url: "http://localhost:5173/other" }, "*"],
-    ]);
+    expect(page.postMessage.mock.calls).toEqual([[{ type: SHELL_HANDSHAKE, ...handshake }, "*"]]);
   });
 });
 

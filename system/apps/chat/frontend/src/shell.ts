@@ -15,7 +15,7 @@ import type { ModelIdentity } from "./models/ModelSettings";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { currentPresenceState, reportFocusChange, reportPresence, startPresenceReporting } from "./presence";
-import { CHAT_ROOT_FRAME_CLASS, type ChatPageEmbedApi } from "./embedApi";
+import type { ChatPageEmbedApi } from "./embedApi";
 import { setCompactFromRoot } from "./compactLayout";
 import { rootPathFor } from "./root/selection";
 import { prependToComposer } from "./views/MessageInput";
@@ -48,18 +48,6 @@ let isShown = true;
  */
 export function isFrameRendered(): boolean {
   return document.documentElement.getBoundingClientRect().height > 0;
-}
-
-/**
- * Whether a shell stands above ``view``, the page's window: it frames the page, or it frames the chat root that
- * frames the page. A root opened on its own frames its chats with nothing above it, so a page there has no shell to
- * draft through.
- */
-export function isShellAbove(view: Window): boolean {
-  if (view.parent === view) return false;
-  // Null across origins: a frame the shell created.
-  const isInChatRoot = view.frameElement?.classList.contains(CHAT_ROOT_FRAME_CLASS) ?? false;
-  return !isInChatRoot || view.parent.parent !== view.parent;
 }
 
 export interface ChatShellOptions {
@@ -102,10 +90,9 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
   connection = connectToShell({ onHandshake, onShown, onHidden });
   if (connection.isFramed) {
     // The chat root frames chat pages from this same origin and drives them by calling in
-    // rather than by messaging (it never sends the shell's messages); the shell's own frames
-    // ignore this, since a cross-origin parent cannot reach it.
+    // rather than by messaging (only the shell's handshake comes down as a message); the
+    // shell's own frames ignore this, since a cross-origin parent cannot reach it.
     const embedApi: ChatPageEmbedApi = {
-      handshake: onHandshake,
       shown: onShown,
       hidden: onHidden,
       prependDraft: (text) => prependToComposer(chatId, text),

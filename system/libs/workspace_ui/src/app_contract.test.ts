@@ -47,6 +47,14 @@ function deliver(data: unknown, source: unknown): void {
   window.dispatchEvent(new MessageEvent("message", { data, source: source as Window }));
 }
 
+/** Connect this window under a spy parent that has handed it a shell's handshake. */
+function shellFramed(): { postMessage: ReturnType<typeof vi.fn> } {
+  const parent = framed();
+  connection = connectToShell({});
+  deliver(HANDSHAKE, parent);
+  return parent;
+}
+
 /** The messages a spy parent received after the capabilities announcement every connect sends first. */
 function sentAfterConnect(parent: { postMessage: ReturnType<typeof vi.fn> }): unknown[][] {
   return parent.postMessage.mock.calls.slice(1);
@@ -189,6 +197,22 @@ describe("connectToShell", () => {
     ]);
   });
 
+  it("has a shell once a handshake with a client id arrives from the parent, and none on a top-level page", () => {
+    const parent = framed();
+    const live = connectToShell({});
+    expect(live.hasShell()).toBe(false);
+    deliver({ ...HANDSHAKE, clientId: "" }, parent);
+    deliver(HANDSHAKE, {});
+    expect(live.hasShell()).toBe(false);
+    deliver(HANDSHAKE, parent);
+    expect(live.hasShell()).toBe(true);
+    live.disconnect();
+    Object.defineProperty(window, "parent", { value: window, configurable: true });
+    connection = connectToShell({});
+    deliver(HANDSHAKE, window);
+    expect(connection.hasShell()).toBe(false);
+  });
+
   it("is inert on a top-level page", () => {
     const onShown = vi.fn();
     connection = connectToShell({ onShown });
@@ -220,8 +244,7 @@ describe("a framed page's link clicks", () => {
   let opened: ReturnType<typeof vi.spyOn>;
 
   function connect(): { postMessage: ReturnType<typeof vi.fn> } {
-    const parent = framed();
-    connection = connectToShell({});
+    const parent = shellFramed();
     window.addEventListener("click", observeClick);
     window.addEventListener("auxclick", observeClick);
     return parent;
@@ -321,6 +344,21 @@ describe("a framed page's link clicks", () => {
     expect(cancelled).toEqual([false, false, true]);
   });
 
+  it("leaves every link click to the browser until a shell's handshake arrives", () => {
+    const parent = framed();
+    connection = connectToShell({});
+    window.addEventListener("click", observeClick);
+    click('<a href="http://localhost:5173/">local</a>');
+    click('<a href="https://example.com/" target="_blank">out</a>');
+    click('<a href="/docs/intro" target="_blank">intro</a>');
+    expect(sentAfterConnect(parent)).toEqual([]);
+    expect(cancelled).toEqual([false, false, false]);
+    deliver(HANDSHAKE, parent);
+    click('<a href="https://example.com/" target="_blank">out</a>');
+    expect(sentAfterConnect(parent)).toEqual([[{ type: SHELL_OPEN_LINK, url: "https://example.com/" }, "*"]]);
+    expect(cancelled).toEqual([false, false, false, true]);
+  });
+
   it("leaves every link click alone on a top-level page, and once disconnected", () => {
     connection = connectToShell({});
     window.addEventListener("click", observeClick);
@@ -359,16 +397,14 @@ describe("a framed page's scripted popups", () => {
     ["another app's address", "http://files-ab12cd34.host-0123.localhost:8421/home/user/?view"],
     ["a file URL", "file:///home/user/workspace/plan.md"],
   ])("hands %s to the shell, opens no window, and answers null", (_what, url) => {
-    const parent = framed();
-    connection = connectToShell({});
+    const parent = shellFramed();
     expect(window.open(url, "_blank", "noopener")).toBeNull();
     expect(sentAfterConnect(parent)).toEqual([[{ type: SHELL_OPEN_LINK, url: new URL(url).href }, "*"]]);
     expect(nativeOpen).not.toHaveBeenCalled();
   });
 
   it("opens a page of its own app as a window of the app, its path and query kept", () => {
-    const parent = framed();
-    connection = connectToShell({});
+    const parent = shellFramed();
     expect(window.open("/docs/intro?tab=2#part")).toBeNull();
     expect(sentAfterConnect(parent)).toEqual([
       [{ type: SHELL_OPEN, path: "/docs/intro?tab=2", ifPresent: "focus" }, "*"],
@@ -377,8 +413,7 @@ describe("a framed page's scripted popups", () => {
   });
 
   it("leaves another site, a blank window, a call with no URL, and other schemes to the browser's own window.open", () => {
-    const parent = framed();
-    connection = connectToShell({});
+    const parent = shellFramed();
     const calls: unknown[][] = [
       ["https://example.com/sign-in", "signin", "popup"],
       ["mailto:someone@example.com"],
@@ -395,8 +430,7 @@ describe("a framed page's scripted popups", () => {
   });
 
   it("follows a call naming _self as a plain click, and leaves one naming a frame of the page to the browser", () => {
-    const parent = framed();
-    connection = connectToShell({});
+    const parent = shellFramed();
     document.body.innerHTML = '<iframe name="preview"></iframe>';
     const open = window.open as (...a: unknown[]) => Window | null;
     expect(open("/docs/intro", "_self")).toEqual({ closed: false });
@@ -414,6 +448,15 @@ describe("a framed page's scripted popups", () => {
       [{ type: SHELL_OPEN_LINK, url: "https://example.com/docs" }, "*"],
     ]);
     document.body.innerHTML = "";
+  });
+
+  it("leaves every popup to the browser's own window.open until a shell's handshake arrives", () => {
+    const parent = framed();
+    connection = connectToShell({});
+    expect(window.open("http://localhost:5173/preview")).toEqual({ closed: false });
+    expect(window.open("/docs/intro")).toEqual({ closed: false });
+    expect(nativeOpen.mock.calls).toEqual([["http://localhost:5173/preview"], ["/docs/intro"]]);
+    expect(sentAfterConnect(parent)).toEqual([]);
   });
 
   it("leaves window.open alone on a top-level page, and puts it back once disconnected", () => {

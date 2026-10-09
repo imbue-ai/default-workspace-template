@@ -18,8 +18,8 @@ const HANDSHAKE = { clientId: "client-1", windowId: "win-1", desktopId: "home", 
 
 let connection: ContextMenuConnection & { draftText: ReturnType<typeof vi.fn<(text: string) => void>> };
 
-function fakeConnection(isFramed: boolean): typeof connection {
-  return { isFramed, draftText: vi.fn<(text: string) => void>() };
+function fakeConnection(hasShell: boolean): typeof connection {
+  return { hasShell: () => hasShell, draftText: vi.fn<(text: string) => void>() };
 }
 let uninstall: (() => void) | null = null;
 

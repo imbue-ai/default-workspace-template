@@ -25,8 +25,8 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   (contracts.md section 10 of the workspace app model, extended by section 7
   of the desktop interface's contracts.md), which the shell's frontend also
   builds into the module every app serves at `/_static/app_contract.js` from
-  its own origin, and which follows a framed page's link clicks and script
-  popups by one rule (desktop-interface contracts.md section 7, "Link rule"),
+  its own origin, and which follows the link clicks and script popups of a
+  page a shell frames (its handshake has arrived) by one rule (desktop-interface contracts.md section 7, "Link rule"),
   so no app carries link code of its own; `src/element_reference.ts`, `src/context_menu_rows.ts`, and
   `src/context_menu.ts`: the element context menu
   (`docs/system/blueprint/element-reference-menu/`): the JSON description of

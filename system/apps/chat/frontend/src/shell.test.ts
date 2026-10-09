@@ -24,7 +24,6 @@ vi.mock("./presence", () => ({
 import { SHELL_HANDSHAKE, SHELL_HIDDEN, SHELL_LOCATION, SHELL_SHOWN } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection } from "@imbue/workspace-ui/src/app_contract";
 import { chatSnapshotFixture } from "./models/chatSnapshotFixture";
-import { CHAT_ROOT_FRAME_CLASS } from "./embedApi";
 
 const HANDSHAKE = {
   type: SHELL_HANDSHAKE,
@@ -200,20 +199,14 @@ describe("the chat page's location report", () => {
 
 describe("the embed API", () => {
   it("drives a framed page's presence the way the shell's messages do", async () => {
-    framed();
+    const parent = framed();
     const { connectChatToShell, presence } = await loadShell();
     connection = connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
     const embed = window.chatPageEmbed;
     expect(embed).toBeDefined();
     if (embed === undefined) throw new Error("no embed API on a framed page");
 
-    embed.handshake({
-      clientId: "client-2",
-      windowId: "",
-      desktopId: "",
-      app: "",
-      path: "",
-    });
+    deliver({ type: SHELL_HANDSHAKE, clientId: "client-2" }, parent);
     embed.shown();
     embed.hidden();
 
@@ -316,33 +309,5 @@ describe("openSubagentView", () => {
       { type: "shell:open", path: "/agent-1.agent-1.sess-3", ifPresent: "focus" },
       "*",
     );
-  });
-});
-
-describe("isShellAbove", () => {
-  /** A frame in ``host``'s document, one the chat root holds a chat page in when ``isRootFrame``. */
-  function frameIn(host: Window, isRootFrame: boolean): Window {
-    const frame = host.document.createElement("iframe");
-    if (isRootFrame) frame.className = CHAT_ROOT_FRAME_CLASS;
-    host.document.body.append(frame);
-    return frame.contentWindow as Window;
-  }
-
-  afterEach(() => {
-    document.body.innerHTML = "";
-  });
-
-  it("sees the shell that frames the page or the root around it, and nothing over a root opened on its own", async () => {
-    const { isShellAbove } = await import("./shell");
-    const inShell = frameIn(window, false);
-    const inRootOnItsOwn = frameIn(window, true);
-    const inRootInShell = frameIn(frameIn(window, false), true);
-
-    expect([
-      isShellAbove(window),
-      isShellAbove(inShell),
-      isShellAbove(inRootOnItsOwn),
-      isShellAbove(inRootInShell),
-    ]).toEqual([false, true, false, true]);
   });
 });

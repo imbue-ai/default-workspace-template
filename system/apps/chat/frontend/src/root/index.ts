@@ -7,10 +7,10 @@
  * title as its location, handles ``shell:navigate`` by changing the selection, applies the
  * pending intake an ``intake=<token>`` in its URL names (a draft into a composer, a choice of
  * chat through the picker, or a first message that launches a chat) exactly once and then reports the selection alone, and drives its inner pages
- * directly (they share an origin) with the shell's handshake and its shown and hidden states,
- * so each page's presence reports key on the chat it shows. The inner pages' messages for the
- * shell and the minds chrome go up through ``relay.ts``, which says which kinds; a page asking
- * for a sibling chat is answered here, by selecting it.
+ * directly (they share an origin) with its shown and hidden states, so each page's presence
+ * reports key on the chat it shows. The shell's handshake goes down to the inner pages, and their
+ * messages for the shell and the minds chrome go up, through ``relay.ts``, which says which
+ * kinds; a page asking for a sibling chat is answered here, by selecting it.
  */
 
 import m from "mithril";
@@ -256,7 +256,7 @@ function draftReference(text: string): void {
 
 /** Whether a reference drafted from the root has somewhere to go: a selected chat, or a shell to ask. */
 function isReferenceDraftAvailable(): boolean {
-  return selectedChatId !== null || (connection?.isFramed ?? false);
+  return selectedChatId !== null || (connection?.hasShell() ?? false);
 }
 
 /** What an applied intake asks of the root (post-launch-paths plan section 3.6.1): the chat is selected, a draft

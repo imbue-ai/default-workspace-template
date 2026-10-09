@@ -25,7 +25,7 @@ import {
 
 /** The connection the page holds to the shell: what the installer drafts through. */
 export interface ContextMenuConnection {
-  readonly isFramed: boolean;
+  hasShell(): boolean;
   draftText(text: string): void;
 }
 
@@ -54,7 +54,7 @@ interface ConnectedContextMenuOptions extends ContextMenuBaseOptions {
   connection: ContextMenuConnection;
   /** Where a draft goes; the connection's ``draftText`` when unset (section 3.4). */
   draft?: (text: string) => void;
-  /** Whether Explain and Modify can run; ``connection.isFramed`` when unset (section 4.7). */
+  /** Whether Explain and Modify can run; ``connection.hasShell()`` when unset (section 4.7). */
   isDraftAvailable?: () => boolean;
 }
 
@@ -81,7 +81,7 @@ function routesOf(options: ContextMenuOptions): {
   const { connection } = options;
   return {
     draft: options.draft ?? ((text: string) => connection.draftText(text)),
-    isDraftAvailable: options.isDraftAvailable ?? (() => connection.isFramed),
+    isDraftAvailable: options.isDraftAvailable ?? (() => connection.hasShell()),
     openLink: (anchor) => anchor.click(),
   };
 }

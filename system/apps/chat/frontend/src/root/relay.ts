@@ -16,13 +16,14 @@
  * that chat in place, exactly as its own New chat button does, rather than asking the shell for
  * a second root window. Everything else a page posts -- its capabilities, its location -- is the
  * root's to know and stops here; the root reports its own. A root opened on its own has no shell
- * to forward to, so it opens a page's web, ``mailto:`` or ``tel:`` ``shell:open-link`` itself, as
- * a page with no shell around it does; a ``file:`` link has nowhere to open there.
+ * to forward to, and drops them.
  *
- * One kind goes the other way. The minds chrome answers some of an inner page's asks, and its
- * answer reaches the root, which the shell frames, not the page that asked: those answers
- * (``minds:provider-sign-in-ack``) are passed down to the root's inner frames. Everything else
- * the chrome sends is the root's own to handle.
+ * Two kinds go the other way. The shell's handshake to the root is handed to each inner page
+ * (``handHandshakeDown``), so a page's app contract knows a shell stands above it; a page under a
+ * root opened on its own gets none, and leaves its links to the browser. And the minds chrome
+ * answers some of an inner page's asks, and its answer reaches the root, which the shell frames,
+ * not the page that asked: those answers (``minds:provider-sign-in-ack``) are passed down to the
+ * root's inner frames. Everything else the chrome sends is the root's own to handle.
  *
  * Trust: a message going up counts only when its source is one of the root's own inner frames,
  * and is forwarded only to ``window.parent``; a message going down counts only when its source is
@@ -32,10 +33,12 @@
 import {
   SHELL_DRAFT_TEXT,
   SHELL_FOCUSED,
+  SHELL_HANDSHAKE,
   SHELL_MESSAGE,
   SHELL_OPEN,
   SHELL_OPEN_LINK,
 } from "@imbue/workspace-ui/src/app_contract";
+import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { PROVIDER_SIGN_IN_ACK } from "@imbue/workspace-ui/src/embed";
 import { selectionFromSearch } from "./selection";
 
@@ -107,20 +110,12 @@ export function startInnerFrameRelay(
       selectChat(decision.chatId);
       return;
     }
-    if (window.parent === window) {
-      const url = linkToOpenItself(event.data);
-      if (url !== null) window.open(url, "_blank", "noopener");
-      return;
-    }
-    if (!isForwardedToShell(event.data)) return;
+    if (window.parent === window || !isForwardedToShell(event.data)) return;
     window.parent.postMessage(event.data, "*");
   });
 }
 
-/** The http(s), ``mailto:`` or ``tel:`` URL of a ``shell:open-link``, or null for any other message or URL. */
-function linkToOpenItself(data: unknown): string | null {
-  if (data === null || typeof data !== "object") return null;
-  const message = data as { type?: unknown; url?: unknown };
-  if (message.type !== SHELL_OPEN_LINK || typeof message.url !== "string") return null;
-  return /^(?:https?:\/\/|mailto:|tel:)/i.test(message.url) ? message.url : null;
+/** Hand the shell's handshake to the root to ``inner``, one of its inner pages, as the shell hands it to the root. */
+export function handHandshakeDown(inner: Window, handshake: ShellHandshake): void {
+  inner.postMessage({ type: SHELL_HANDSHAKE, ...handshake }, "*");
 }

@@ -8,4 +8,4 @@ Links in chat open inside the workspace instead of downloading or doing nothing.
 
 - The chat has no link code of its own: clicks follow the app contract's link rule, as in every app. It only renders an absolute path as the file's `file:` URL.
 
-- Opened on its own outside the workspace, the chat opens a web, mail, or phone link itself; a file link there does nothing (it no longer downloads the file).
+- Opened on its own outside the workspace, the chat leaves its links to the browser: a web, mail, or phone link opens in a new tab, and a file link does nothing (it no longer downloads the file).

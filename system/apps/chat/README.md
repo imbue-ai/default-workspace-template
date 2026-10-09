@@ -53,10 +53,10 @@ observe`, its own supervised service) writes, and serves:
   awaiting its first message is launched through the provider chooser; the root
   then reports the selection alone, so a reload applies nothing again. The root
   drives its inner frames through the page's same-origin embed API
-  (`frontend/src/embedApi.ts`) and forwards their `minds:`, `shell:focused`,
-  `shell:open`, `shell:draft-text`, `shell:message`, and `shell:open-link`
-  messages through `frontend/src/root/relay.ts`, the one module the embed
-  ratchet allows.
+  (`frontend/src/embedApi.ts`), and through `frontend/src/root/relay.ts`, the
+  one module the embed ratchet allows, hands them the shell's handshake and
+  forwards their `minds:`, `shell:focused`, `shell:open`, `shell:draft-text`,
+  `shell:message`, and `shell:open-link` messages.
 - `GET /<chat-id>` (and `/<chat-id>.<agent-id>.<session-id>` for a subagent view): the
   chat document, the built `chat.html` with the chat's ids, the workspace
   hostname, and the origin label of the terminal's pty (the terminal app's while
@@ -122,11 +122,11 @@ browser; an address on the workspace's share domain it opens as that app's
 window; an external web, mail, or phone link it hands to the app of the
 workspace registered for it, or else opens in the user's own browser or mail or
 phone app; and a relative path, a fragment, or another
-scheme is unwrapped to its text. A chat opened on its own opens a web, mail, or
-phone link itself, and does nothing for a file link: a browser does not follow
-a `file:` link from a web page. The chat root relays its chat page's
-`shell:open-link` to the shell, and opened on its own
-(`frontend/src/root/relay.ts`) opens a web, `mailto:`, or `tel:` one itself.
+scheme is unwrapped to its text. A chat with no shell above it (opened on its
+own, or in a chat root opened on its own, which hands its pages no handshake)
+leaves its links to the browser, which opens a web, mail, or phone link in a new
+tab and does nothing for a file link: a browser does not follow a `file:` link
+from a web page.
 Sends are reported to the shell's client-activity route so agents can
 attribute a request to a client, and the app asks the shell for windows,
 through one client of the `workspace_layout` library that asks as the chat app

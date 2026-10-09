@@ -19,13 +19,17 @@
  * Unknown types are ignored and shipped types never change meaning; the contract evolves by
  * adding types.
  *
- * A framed page's link clicks follow one rule, so no app carries link code of its own
+ * A page knows a shell frames it once a handshake arrives from its parent (``hasShell``); a page
+ * framed by anything else, such as the chat root opened on its own, has no shell to ask, so its
+ * links and popups stay the browser's.
+ *
+ * Once a shell frames a page, its link clicks follow one rule, so no app carries link code of its own
  * (``followLinkClick``): a link to the page's own origin navigates the page, or opens a window
  * of its app for a new-window click; any other link (a local URL, another app's address, a
  * ``file:`` URL, an external web, ``mailto:`` or ``tel:`` link) goes to the shell, which opens it
  * where it belongs: an external one in the app registered for it, else outside the workspace.
  *
- * A framed page's script popups (``window.open``) follow the same rule for what the workspace
+ * Its script popups (``window.open``) follow the same rule for what the workspace
  * opens itself (``popupHandedOn``): a page of its own app opens a window of the app, and a local
  * URL, another app's address (on the page's own share domain too) or a ``file:`` URL goes to the
  * shell; the call answers null, as a blocked popup does. A popup to any other site, a blank window,
@@ -146,8 +150,10 @@ export interface ShellConnectionHandlers {
 }
 
 export interface ShellConnection {
-  /** Whether a shell frames this page at all; a top-level visit has no shell to talk to. */
+  /** Whether anything frames this page; a top-level visit has no shell to talk to. */
   readonly isFramed: boolean;
+  /** Whether a shell frames this page: its handshake has arrived. */
+  hasShell(): boolean;
   /** Tell the shell this page received focus. */
   focused(): void;
   /** Report where this page is now (a path under the app's origin) and what it is called. */
@@ -305,13 +311,15 @@ function popupHandedOn(
 
 /**
  * Connect this page to the shell that frames it. Safe to call on a top-level page: nothing
- * arrives, and every send is a no-op, so an app behaves the same visited directly. A framed
- * page's link clicks and script popups follow the contract's rule from here on (see the module docs).
+ * arrives, and every send is a no-op, so an app behaves the same visited directly. Once a
+ * shell's handshake arrives, the page's link clicks and script popups follow the contract's rule
+ * (see the module docs).
  */
 export function connectToShell(handlers: ShellConnectionHandlers): ShellConnection {
   const capabilities = checkedCapabilities(handlers);
   const boundWindow = window;
   const isFramed = boundWindow.parent !== boundWindow;
+  let hasShell = false;
 
   function onMessage(event: MessageEvent): void {
     if (!isFramed || event.source !== boundWindow.parent) return;
@@ -321,7 +329,9 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     switch (message.type) {
       case SHELL_HANDSHAKE: {
         const handshake = readHandshake(message);
-        if (handshake !== null) handlers.onHandshake?.(handshake);
+        if (handshake === null) return;
+        hasShell = true;
+        handlers.onHandshake?.(handshake);
         return;
       }
       case SHELL_SHOWN:
@@ -349,11 +359,13 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
   }
 
   // On the window, the last stop of a click's bubbling, so the page's own handlers see it first.
-  const onLinkClick = (event: MouseEvent): void => followLinkClick(event, boundWindow, send);
+  const onLinkClick = (event: MouseEvent): void => {
+    if (hasShell) followLinkClick(event, boundWindow, send);
+  };
   const nativeOpen = boundWindow.open;
   const routedOpen: typeof boundWindow.open = new Proxy(nativeOpen, {
     apply(target, thisArg, args: unknown[]) {
-      const handedOn = popupHandedOn(args[0], args[1], boundWindow);
+      const handedOn = hasShell ? popupHandedOn(args[0], args[1], boundWindow) : null;
       if (handedOn === null) return Reflect.apply(target, thisArg, args);
       send(handedOn.type, handedOn.payload);
       return null;
@@ -369,6 +381,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
   send(SHELL_CAPABILITIES, { navigation: capabilities.navigation, closeChord: capabilities.closeChord });
   return {
     isFramed,
+    hasShell: () => hasShell,
     focused: () => send(SHELL_FOCUSED, {}),
     location: (path: string, title: string) => send(SHELL_LOCATION, { path, title }),
     openPath: (path: string, ifPresent: OpenIfPresent) => send(SHELL_OPEN, { path, ifPresent }),
