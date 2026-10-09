@@ -249,6 +249,22 @@ def _is_same_worktree(recorded: Path, worktree: Path) -> bool:
     return recorded.resolve() == worktree.resolve()
 
 
+def _refuse_another_passs_preview(
+    repo_root: Path, app_name: str, worktree: Path
+) -> bool:
+    """Write the refusal and return True when another worktree's preview of the app is up."""
+    other = live_preview_worktree(repo_root, app_name)
+    if other is None or _is_same_worktree(other, worktree):
+        return False
+    sys.stderr.write(
+        f"preview: another pass's preview of {app_name!r} is already up, serving {other}; the "
+        f"'{instance_name(app_name)}' app can only be one at a time, so booting this one would "
+        "hijack it. Surface this to the user and coordinate with that pass -- or, if it is "
+        f"abandoned, tear it down first with 'down --app {app_name}'.\n"
+    )
+    return True
+
+
 def write_registry_copy(
     live_registry: Path,
     destination: Path,
@@ -419,19 +435,14 @@ def _up(
     dump_registry: Callable[[list[dict[str, object]]], str] | None,
     worktree_synced: bool,
 ) -> int:
-    other = live_preview_worktree(repo_root, app_name)
-    if other is not None and not _is_same_worktree(other, worktree):
-        sys.stderr.write(
-            f"preview: another pass's preview of {app_name!r} is already up, serving {other}; the "
-            f"'{instance_name(app_name)}' app can only be one at a time, so booting this one would "
-            "hijack it. Surface this to the user and coordinate with that pass -- or, if it is "
-            f"abandoned, tear it down first with 'down --app {app_name}'.\n"
-        )
+    if _refuse_another_passs_preview(repo_root, app_name, worktree):
         return 1
     manifest_path, manifest = find_manifest(worktree, app_name)
     inner_path = resolve_open_path(manifest, instance_key)
     if not worktree_synced:
         for sibling in with_apps:
+            if _refuse_another_passs_preview(repo_root, sibling, worktree):
+                return 1
             resolve_open_path(find_manifest(worktree, sibling)[1], instance_key)
         sync_worktree(worktree, runner)
     dump = (
