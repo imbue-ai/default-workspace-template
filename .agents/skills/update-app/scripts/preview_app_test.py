@@ -566,7 +566,7 @@ def test_a_failed_boot_keeps_the_record_of_the_siblings_it_booted(
     assert downs == ["system_interface-preview", "chat-preview"]
 
 
-def test_a_failed_sync_of_the_worktree_stops_the_boot_and_the_refresh(
+def test_up_and_refresh_sync_the_worktree_first_and_a_failed_sync_stops_them(
     tmp_path: Path,
 ) -> None:
     """An unsynced worktree's environment lacks the app's console script, so the boot would
@@ -578,6 +578,10 @@ def test_a_failed_sync_of_the_worktree_stops_the_boot_and_the_refresh(
         == 0
     )
     assert runner.synced == [worktree]
+    runner.calls.clear()
+    assert mod.refresh("notes", tmp_path, runner=runner) == 0
+    assert runner.synced == [worktree, worktree]
+    assert [call[2] for call in runner.calls] == ["refresh"]
     runner.calls.clear()
     runner.sync_code = 2
 
