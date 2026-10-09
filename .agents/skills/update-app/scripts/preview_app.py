@@ -92,6 +92,7 @@ LAUNCHER = ("uv", "run")
 # A bare ``uv run`` installs only the root project's closure, which leaves out user-built
 # apps, so the worktree's environment would lack the app's own console script.
 SYNC_COMMAND = ("uv", "sync", "--all-packages")
+SYNC_COMMAND_TEXT = " ".join(SYNC_COMMAND)
 # A first sync of a fresh worktree installs the whole workspace; past the first threshold
 # it is suspicious, past the second it is hung and must not hang the preview.
 SYNC_SLOW_SECONDS = 120
@@ -150,13 +151,13 @@ class Runner:
             )
         except subprocess.TimeoutExpired as e:
             raise PreviewError(
-                f"'{' '.join(SYNC_COMMAND)}' in {worktree} did not finish within "
+                f"'{SYNC_COMMAND_TEXT}' in {worktree} did not finish within "
                 f"{SYNC_TIMEOUT_SECONDS}s"
             ) from e
         elapsed = time.monotonic() - started_at
         if completed.returncode == 0 and elapsed > SYNC_SLOW_SECONDS:
             sys.stderr.write(
-                f"preview: '{' '.join(SYNC_COMMAND)}' in {worktree} took {elapsed:.0f}s, "
+                f"preview: '{SYNC_COMMAND_TEXT}' in {worktree} took {elapsed:.0f}s, "
                 f"slow for a sync that times out at {SYNC_TIMEOUT_SECONDS}s.\n"
             )
         return int(completed.returncode)
@@ -168,7 +169,7 @@ def sync_worktree(worktree: Path, runner: Runner) -> None:
     code = runner.sync(worktree)
     if code != 0:
         raise PreviewError(
-            f"'{' '.join(SYNC_COMMAND)}' failed in {worktree} (exit {code}), so its "
+            f"'{SYNC_COMMAND_TEXT}' failed in {worktree} (exit {code}), so its "
             "environment cannot run the worktree's code; fix that and retry"
         )
 
