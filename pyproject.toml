@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Template repo for a persistent Claude agent"
 requires-python = ">=3.11"
 dependencies = [
-    # Built-in services that supervisord runs via `uv run <name>` must be listed
+    # Built-in services that supervisord runs from `.venv/bin/<name>` must be listed
     # here: a `uv sync` without --all-packages prunes members outside the root
     # closure, deleting their console scripts, and the next spawn fails.
     # Scaffolded creations are deliberately absent so adding one touches no
@@ -44,7 +44,7 @@ dev = [
     "imbue-mngr",
     # imbue-mngr-claude isn't imported by any /home/user/workspace/ python -- it's here so
     # `uv sync --all-packages` registers it in /home/user/workspace/.venv. Without it,
-    # `uv run mngr ...` (e.g. from the bootstrap window) resolves to
+    # `uv run --no-sync mngr ...` resolves to
     # /home/user/workspace/.venv/bin/mngr but pluggy can't discover the claude plugin via
     # entry points, so settings.toml fields like `isolate_local_config_dir`,
     # `auto_allow_permissions`, etc. fail to parse as "Unknown fields".
@@ -53,11 +53,11 @@ dev = [
     # avoids a cwd-dependent divergence.
     "imbue-mngr-claude",
     # imbue-mngr-codex: same rationale as imbue-mngr-claude above -- registers the
-    # codex plugin in the workspace root .venv so `uv run mngr` parses agent_types.codex
+    # codex plugin in the workspace root .venv so `uv run --no-sync mngr` parses agent_types.codex
     # config fields instead of rejecting them as "Unknown fields".
     "imbue-mngr-codex",
     # imbue-mngr-pi-coding: same rationale -- register the pi-coding plugin in the
-    # root .venv so `uv run mngr` parses its agent_types fields instead of
+    # root .venv so `uv run --no-sync mngr` parses its agent_types fields instead of
     # rejecting them as "Unknown fields".
     "imbue-mngr-pi-coding",
     # imbue-mngr-opencode / imbue-mngr-antigravity: same rationale as the three
@@ -87,8 +87,8 @@ package = false
 # this list. An app with an app.toml manifest does not RUN from this
 # workspace's venv: it is installed as its own uv tool from its own pyproject
 # (see system/scripts/build_workspace.sh), and its supervisord program runs the
-# tool's entry point. An app with no app.toml runs `uv run <name>` from this
-# venv. Both kinds are members: one lockfile keeps every environment on the
+# tool's entry point. An app with no app.toml runs `.venv/bin/<name>` from
+# this venv. Both kinds are members: one lockfile keeps every environment on the
 # same versions, and a user-built app never has to edit this file; an app's own
 # tool environment keeps it running while this venv is rewritten or broken.
 members = ["system/libs/*", "system/services/*", "system/apps/*"]
@@ -136,7 +136,7 @@ norecursedirs = [
     # Runtime scratch, never part of the suite. Flow-internal state under
     # data/.tasks/ can stage copies of skill test files (update-self stages
     # update_self_test.py under data/.tasks/update-self/skill-at-target/), and
-    # collecting one alongside the in-tree copy kills a bare `uv run pytest`
+    # collecting one alongside the in-tree copy kills a bare `uv run --no-sync pytest`
     # with an import-file basename collision.
     "data",
     # Test scratch, never part of the suite, and the same collision as above when

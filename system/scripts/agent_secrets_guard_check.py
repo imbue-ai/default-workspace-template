@@ -70,6 +70,10 @@ _PYTHON_PROGRAMS = frozenset({"python", "python3"})
 _PYTHON_PASSTHROUGH_FLAGS = frozenset(
     {"-u", "-B", "-E", "-s", "-S", "-I", "-O", "-OO", "-q"}
 )
+# uv's own options that change neither the program ``uv run`` starts nor what it
+# sees; any other option (``--env-file``, ``--with``, ...) leaves the call
+# unrecognised.
+_UV_RUN_PASSTHROUGH_FLAGS = frozenset({"--no-sync", "--frozen", "--quiet"})
 _SHELL_PROGRAMS = frozenset({"bash", "sh", "zsh", "dash"})
 _ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_]\w*=")
 
@@ -140,11 +144,14 @@ def _allowed_script(words: Sequence[str]) -> str | None:
     """The wrapper or request script ``words`` invoke as their program, or None.
 
     Accepts the script run directly, through ``python3`` (with python's own
-    passthrough flags, never ``-c`` or ``-m``), or through ``uv run [python3]``.
+    passthrough flags, never ``-c`` or ``-m``), or through ``uv run [python3]``
+    (with ``--no-sync`` / ``--frozen`` / ``--quiet`` only).
     """
     remaining = list(words)
     if remaining[:2] == ["uv", "run"]:
         remaining = remaining[2:]
+        while remaining and remaining[0] in _UV_RUN_PASSTHROUGH_FLAGS:
+            remaining = remaining[1:]
     if remaining and _basename(remaining[0]) in _PYTHON_PROGRAMS:
         remaining = remaining[1:]
         while remaining and remaining[0] in _PYTHON_PASSTHROUGH_FLAGS:

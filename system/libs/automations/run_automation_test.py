@@ -17,9 +17,9 @@ from pathlib import Path
 _SCRIPT = Path(__file__).parent / "run_automation.sh"
 
 _FAKE_UV = """#!/bin/sh
-# `uv run mngr <verb> ...`: record a create, answer a list with the scripted ids.
-shift
-shift
+# `uv run --no-sync mngr <verb> ...`: record a create, answer a list with the scripted ids.
+[ "$1 $2 $3" = "run --no-sync mngr" ] || { echo "unexpected uv call: $*" >&2; exit 2; }
+shift 3
 case "$1" in
   create) printf '%s\\n' "$@" >> "$RECORDED_CREATE" ;;
   list) [ -n "${LISTED_IDS:-}" ] && printf '%s\\n' "$LISTED_IDS" ;;

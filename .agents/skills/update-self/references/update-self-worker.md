@@ -357,7 +357,7 @@ in your report.
   Commit your own edits first: the `git diff` line reads commits.
   `--diff-base` here only names what a merged `uv.lock` is compared against,
   so a lock that upgraded a package selects the suites that depend on it. Run
-  every printed line, in order, plus `uv run ruff check` when a Python file is
+  every printed line, in order, plus `uv run --no-sync ruff check` when a Python file is
   in the list, and handle a failing test and a shed command the way
   `.agents/shared/worker/references/harden-creation.md` ("The test gate")
   says, naming a flaky test under your report's Validation. mngr's own suite

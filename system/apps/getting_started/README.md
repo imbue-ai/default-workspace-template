@@ -45,11 +45,11 @@ into `src/getting_started/static/` by `npm run build`; its tests run with `vites
 
 ```bash
 # Backend, from the repo root
-uv run getting-started
+uv run --no-sync getting-started
 
 # Frontend
 cd system/apps/getting_started/frontend && npm run dev
 
 # Tests
-cd system/apps/getting_started && uv run pytest
+cd system/apps/getting_started && uv run --no-sync pytest
 ```

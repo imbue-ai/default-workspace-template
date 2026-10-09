@@ -239,7 +239,7 @@ A path in no package, skill or npm package, that is not npm root
 configuration, a supervisord block, `uv.lock`, a guard, a collected test file,
 markdown under `.agents/` (agent prose, which only the always-run prose checks
 and the apps referencing it read), or other markdown those checks read, runs
-the full root suite (`uv run pytest` from the repo root), which replaces the
+the full root suite (`uv run --no-sync pytest` from the repo root), which replaces the
 other root-collected commands; so does a change to the root `pyproject.toml` or
 `conftest.py`, and a `uv.lock` change that cannot be compared. A `system/*.py`
 that is not a test file (a `system/conftest.py`, say) is no guard, so it runs

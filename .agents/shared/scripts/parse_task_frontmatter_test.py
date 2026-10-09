@@ -1,6 +1,6 @@
 """Tests for ``parse_task_frontmatter.py``.
 
-Run via: ``uv run pytest
+Run via: ``uv run --no-sync pytest
 .agents/shared/scripts/parse_task_frontmatter_test.py``
 """
 

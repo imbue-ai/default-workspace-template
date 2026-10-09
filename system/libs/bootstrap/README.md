@@ -12,7 +12,7 @@ service.
 
 ## What it does
 
-`uv run bootstrap` runs, in order:
+`bootstrap` runs, in order:
 
 1. **Global git config** - rewrites `git@`/`ssh://` GitHub remotes to `https://`.
    (`core.hooksPath` is deliberately NOT set here: the post-commit auto-push

@@ -796,7 +796,7 @@ def _pytest_commands(
             )
             if targets:
                 root_commands.append(
-                    _command(SuiteKind.PYTEST, root, ("uv", "run", "pytest", *targets), reasons)
+                    _command(SuiteKind.PYTEST, root, ("uv", "run", "--no-sync", "pytest", *targets), reasons)
                 )
             continue
         own_root_commands.extend(
@@ -823,7 +823,7 @@ def _own_root_commands(
     tests when just a frontend it builds changed, and any files named on their own, all markers
     included; then its split-out type check when a run includes the test it replaces."""
     commands: list[SuiteCommand] = []
-    partial_run = ("uv", "run", "pytest", *((_NO_COVERAGE_FLAG,) if is_coverage_measured else ()))
+    partial_run = ("uv", "run", "--no-sync", "pytest", *((_NO_COVERAGE_FLAG,) if is_coverage_measured else ()))
     scopes = {request.marker_scope for request in whole}
     split_type_check = _SPLIT_TYPE_CHECKS.get(root)
     relative_files = [_relative_to_root(root, file) for file in files]
@@ -841,11 +841,11 @@ def _own_root_commands(
         else ()
     )
     if MarkerScope.EVERYTHING in scopes:
-        argv = ("uv", "run", "pytest", "-m", _ALL_MARKERS_EXPRESSION, *deselect)
+        argv = ("uv", "run", "--no-sync", "pytest", "-m", _ALL_MARKERS_EXPRESSION, *deselect)
         commands.append(_command(SuiteKind.PYTEST, root, argv, reasons))
         return [*commands, *_split_type_check_commands(root, deselect, reasons)]
     if MarkerScope.DEFAULT in scopes:
-        commands.append(_command(SuiteKind.PYTEST, root, ("uv", "run", "pytest", *deselect), reasons))
+        commands.append(_command(SuiteKind.PYTEST, root, ("uv", "run", "--no-sync", "pytest", *deselect), reasons))
         if MarkerScope.FRONTEND in scopes:
             # The default run already holds the frontend-marked tests, not the browser ones.
             argv = (*partial_run, "-m", _BROWSER_MARKER, *ignored_files)
@@ -865,7 +865,7 @@ def _split_type_check_commands(
 ) -> list[SuiteCommand]:
     if not deselect:
         return []
-    return [_command(SuiteKind.TYPE_CHECK, root, ("uv", "run", "ty", "check"), reasons)]
+    return [_command(SuiteKind.TYPE_CHECK, root, ("uv", "run", "--no-sync", "ty", "check"), reasons)]
 
 
 def _frontend_commands(
@@ -1009,7 +1009,7 @@ def select_tests(
     if is_full_root:
         commands.append(
             _command(
-                SuiteKind.FULL_ROOT, ROOT_DIRECTORY, ("uv", "run", "pytest"), tuple(full_root_reasons)
+                SuiteKind.FULL_ROOT, ROOT_DIRECTORY, ("uv", "run", "--no-sync", "pytest"), tuple(full_root_reasons)
             )
         )
     else:
@@ -1022,7 +1022,7 @@ def select_tests(
         )
         commands.append(
             _command(
-                SuiteKind.ALWAYS_RUN, ROOT_DIRECTORY, ("uv", "run", "pytest", *always_run), root_reasons
+                SuiteKind.ALWAYS_RUN, ROOT_DIRECTORY, ("uv", "run", "--no-sync", "pytest", *always_run), root_reasons
             )
         )
     commands.extend(_pytest_commands(layout, pytest_requests, set(always_run), is_full_root))

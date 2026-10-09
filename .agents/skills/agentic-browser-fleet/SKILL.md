@@ -14,7 +14,7 @@ Two commands, and the split matters:
 - **`playwright-cli`** *drives* them -- look at the page, click, type, scroll.
 
 ```bash
-uv run agentic-browser-fleet new
+uv run --no-sync agentic-browser-fleet new
   -> started browser browser-1
      drive it:  playwright-cli -s=browser-1 attach --cdp=http://127.0.0.1:8083/browser-1/<token>
      then:      playwright-cli -s=browser-1 <command>
@@ -63,14 +63,14 @@ rather than erroring.
 ## Fleet commands
 
 ```bash
-uv run agentic-browser-fleet ls                      # the whole fleet: names, owners, tabs
-uv run agentic-browser-fleet ls --include-tabs       # every tab of every browser
-uv run agentic-browser-fleet new                     # the browser (started if stopped); prints its name + attach line
-uv run agentic-browser-fleet close <name>            # rarely: end it AND DELETE its profile (logins); closing the window stops it instead
-uv run agentic-browser-fleet acquire <name>          # reserve it (reprints the attach line)
-uv run agentic-browser-fleet acquire <name> --reclaim   # take back from a human -- only if they said so
-uv run agentic-browser-fleet release <name>          # hand it back (alias: unlock)
-uv run agentic-browser-fleet handoff <name> "reason" # give it to the human (alias: request-human)
+uv run --no-sync agentic-browser-fleet ls                      # the whole fleet: names, owners, tabs
+uv run --no-sync agentic-browser-fleet ls --include-tabs       # every tab of every browser
+uv run --no-sync agentic-browser-fleet new                     # the browser (started if stopped); prints its name + attach line
+uv run --no-sync agentic-browser-fleet close <name>            # rarely: end it AND DELETE its profile (logins); closing the window stops it instead
+uv run --no-sync agentic-browser-fleet acquire <name>          # reserve it (reprints the attach line)
+uv run --no-sync agentic-browser-fleet acquire <name> --reclaim   # take back from a human -- only if they said so
+uv run --no-sync agentic-browser-fleet release <name>          # hand it back (alias: unlock)
+uv run --no-sync agentic-browser-fleet handoff <name> "reason" # give it to the human (alias: request-human)
 ```
 
 `ls` shows who controls each browser (`you`, `agent <name>`, `human (took control)`, or `free`),
@@ -108,7 +108,7 @@ crashed browser and a stale ref all look identical; a refused command may report
 `Execution context was destroyed` or simply time out after 30s. None of that is diagnostic.
 
 ```bash
-uv run agentic-browser-fleet ls
+uv run --no-sync agentic-browser-fleet ls
 ```
 
 That is the only thing that distinguishes "the human took control" from "the browser crashed"
@@ -186,7 +186,7 @@ CAPTCHA, "verify you're human", an SMS/2FA code you don't have, or a login needi
 credentials: **do not try to solve it yourself** -- you will fail and may get the account flagged.
 
 ```bash
-uv run agentic-browser-fleet handoff browser-1 "solve the CAPTCHA on the sign-in page"
+uv run --no-sync agentic-browser-fleet handoff browser-1 "solve the CAPTCHA on the sign-in page"
 ```
 
 `handoff` puts you at the **front** of the resume queue, hands control to the human (pinned, so
@@ -246,7 +246,7 @@ These are the **fleet's** exit codes. `playwright-cli` has its own and they are 
 
 ```bash
 # Make a browser and start driving.
-uv run agentic-browser-fleet new                       # prints the attach line -- run it once
+uv run --no-sync agentic-browser-fleet new                       # prints the attach line -- run it once
 playwright-cli -s=browser-1 goto https://example.com
 playwright-cli -s=browser-1 find "More information"    # cheaper than a full snapshot
 playwright-cli -s=browser-1 click e14
@@ -261,7 +261,7 @@ playwright-cli -s=browser-1 mousewheel 0 800
 playwright-cli -s=browser-1 find "the thing you want"  # repeat until rows stop advancing
 
 # Hit a CAPTCHA -- hand it over, then STOP.
-uv run agentic-browser-fleet handoff browser-1 "solve the CAPTCHA on the sign-in page"
+uv run --no-sync agentic-browser-fleet handoff browser-1 "solve the CAPTCHA on the sign-in page"
 ```
 
 ## Don'ts

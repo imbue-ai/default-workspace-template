@@ -58,7 +58,7 @@ build_inputs = [
 
 [framework]
 type = "pytest"
-command = "uv run pytest"
+command = "uv run --no-sync pytest"
 # Inside the image every workspace-only test can run, so a skip is a missing install (pytest-workspace-env).
 env = { DWT_REQUIRE_WORKSPACE_ENV = "1" }
 

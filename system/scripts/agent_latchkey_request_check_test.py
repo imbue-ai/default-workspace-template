@@ -58,6 +58,7 @@ _ALLOWED = [
     _MULTILINE_REQUEST,
     _SECRET_REQUEST,
     f"uv run {_SECRET_REQUEST.removeprefix('python3 ')}",
+    f"uv run --no-sync {_SECRET_REQUEST.removeprefix('python3 ')}",
     # A rationale that mentions operators, or the script's own name, stays one token.
     f"{_SECRET_REQUEST_UNCLOSED} && run request_secret.py again'",
     "git commit -m 'document request_secret.py usage' && git push",
@@ -98,6 +99,7 @@ _BLOCKED = [
     f"{_REQUEST} && {_REQUEST}",  # two requests batched into one call
     # A secret request is held to the same rule, alone or alongside a permission request.
     f"{_SECRET_REQUEST} && {_SECRET_REQUEST}",
+    f"uv run --no-sync {_SECRET_REQUEST.removeprefix('python3 ')} && {_SECRET_REQUEST}",
     f"{_SECRET_REQUEST} && {_REQUEST}",
     f"{_SECRET_REQUEST} > /tmp/filed.json",
     f"{_SECRET_REQUEST} | jq .request_id",

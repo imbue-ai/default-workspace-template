@@ -1,6 +1,6 @@
 """Tests for ``validate_skill.py``.
 
-Run via: ``uv run pytest
+Run via: ``uv run --no-sync pytest
 .agents/shared/scripts/validate_skill_test.py``
 """
 

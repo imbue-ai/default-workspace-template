@@ -1,6 +1,6 @@
 """Tests for ``serve_isolated_instance.py``.
 
-Run via: ``uv run pytest .agents/shared/scripts/serve_isolated_instance_test.py``
+Run via: ``uv run --no-sync pytest .agents/shared/scripts/serve_isolated_instance_test.py``
 
 Like the ``preview_app.py`` tests, these inject a recording
 ``Runner`` (so no real ``uv``/``forward_port`` runs), a programmable

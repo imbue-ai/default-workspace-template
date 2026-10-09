@@ -1395,7 +1395,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     up_parser.add_argument(
         "launch",
         nargs=argparse.REMAINDER,
-        help="The launch argv, after `--` (e.g. `-- uv run my-service`).",
+        help="The launch argv, after `--` (e.g. `-- .venv/bin/my-service`).",
     )
 
     down_parser = subparsers.add_parser(

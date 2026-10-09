@@ -78,9 +78,9 @@ or a provisional milestone merge:
    BASE=$(git merge-base HEAD "$WORKER_BRANCH")
    SCOPE=$(mktemp)
    # an app with a manifest:
-   uv run app-manifest footprint system/apps/<package>/app.toml --out "$SCOPE" || exit 1
+   uv run --no-sync app-manifest footprint system/apps/<package>/app.toml --out "$SCOPE" || exit 1
    # a skill:
-   uv run app-manifest footprint --for-path .agents/skills/<name> --out "$SCOPE" || exit 1
+   uv run --no-sync app-manifest footprint --for-path .agents/skills/<name> --out "$SCOPE" || exit 1
 
    PATHS=$(jq -r '[.primary[], .wiring[].path, .references[].path] | unique | .[]' "$SCOPE")
    [ -n "$PATHS" ] || exit 1

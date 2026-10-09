@@ -369,7 +369,7 @@ def test_refresh_environment_record_emits_success_event(tmp_path: Path) -> None:
 
     _refresh_environment_record(state=state, run_fn=fake_run)
 
-    assert calls == [["uv", "run", "env-converge", "capture"]]
+    assert calls == [["uv", "run", "--no-sync", "env-converge", "capture"]]
     events = _read_events(state.events_dir)
     capture_events = [e for e in events if e["type"] == "ENV_RECORD_CAPTURE_COMPLETED"]
     assert len(capture_events) == 1

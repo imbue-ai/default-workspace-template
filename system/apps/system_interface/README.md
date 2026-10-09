@@ -372,7 +372,7 @@ policy).
 # Backend, from the repo root (the registry path and the state directory
 # default are relative to it; run elsewhere, the shell finds no registry and
 # lists no apps)
-uv run system-interface
+uv run --no-sync system-interface
 
 # Frontend (with hot reload)
 cd system/apps/system_interface/frontend

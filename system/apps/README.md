@@ -74,7 +74,7 @@ build, by the build-app scaffold for a new app, and by the update-self apply
 when an app's directory changes), so its program line runs the tool's entry
 point rather than `uv run`. The root venv is for the background services,
 agents, skills, and scripts. The manifest is the discriminator: an app with
-no `app.toml` runs `uv run <name>` from the root venv, and both forms are
+no `app.toml` runs `.venv/bin/<name>` from the root venv, and both forms are
 supported (nothing converts an app from one form to the other without the
 user). Python packages here are picked up by the workspace's `system/apps/*`
 uv member glob, so one lockfile covers the whole tree and nothing in the root

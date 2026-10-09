@@ -57,11 +57,11 @@ since the command refuses a path that is not there:
 mkdir -p "$(dirname "$SCOPE_FILE")"
 
 # TYPE app (an app with an app.toml) -- from the manifest:
-uv run app-manifest footprint system/apps/<package>/app.toml \
+uv run --no-sync app-manifest footprint system/apps/<package>/app.toml \
     --diff-base "$DIFF_BASE" --out "$SCOPE_FILE"
 
 # TYPE skill -- by path:
-uv run app-manifest footprint --for-path .agents/skills/<name> \
+uv run --no-sync app-manifest footprint --for-path .agents/skills/<name> \
     --diff-base "$DIFF_BASE" --out "$SCOPE_FILE"
 ```
 
@@ -290,7 +290,7 @@ scope file, and refuses to run while the working tree holds an uncommitted or
 untracked change, naming it):
 
 ```bash
-uv run app-manifest select-tests --diff-base "$DIFF_BASE"
+uv run --no-sync app-manifest select-tests --diff-base "$DIFF_BASE"
 ```
 
 It prints shell lines, each under a comment naming the changed paths behind
@@ -343,7 +343,7 @@ or the one you add), check whether the selector picks that test for the
 earlier change:
 
 ```bash
-uv run app-manifest select-tests --diff-base <breaking commit>^ --diff-ref <breaking commit>
+uv run --no-sync app-manifest select-tests --diff-base <breaking commit>^ --diff-ref <breaking commit>
 ```
 
 If the test's suite is not among the lines, declare the coupling that would
