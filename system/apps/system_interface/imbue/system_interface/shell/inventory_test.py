@@ -316,3 +316,5 @@ def test_a_share_domain_file_that_names_no_domain_gives_no_app_a_share_address(
     for text in ("", "evil.example/path", "two words.example", "https://evil.example"):
         share_domain_path.write_text(text)
         assert [view.share_url for view in inventory.views()] == [None], text
+    share_domain_path.write_bytes(b"\xff\xfe.example")
+    assert [view.share_url for view in inventory.views()] == [None]

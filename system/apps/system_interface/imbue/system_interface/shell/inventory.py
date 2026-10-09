@@ -55,7 +55,10 @@ def read_share_domain(path: Path | None) -> str | None:
         return None
     try:
         text = path.read_text().strip().lower()
-    except OSError:
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError) as e:
+        logger.warning("Could not read the share domain at {}: {}", path, e)
         return None
     return text if _DNS_NAME.fullmatch(text) is not None else None
 
