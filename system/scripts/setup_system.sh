@@ -10,7 +10,7 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 # Pin $HOME to the image-build home. Several installers below follow $HOME (the
-# claude.ai installer, the uv installer, `uv python install` / `uv tool install`),
+# claude.ai installer, the uv installer, `uv tool install`),
 # while the checks and PATH entries in this script are fixed to /root/.local. A
 # live re-provision (the update apply, or an agent running this by hand) runs
 # under HOME=/home/user -- root's passwd home at runtime -- so without this pin
