@@ -312,6 +312,7 @@ Following rule: after every `desktops_updated`, for every live page of a window 
 A page's own report never navigates it.
 
 Nested frames: an app page that frames another page of its own origin (the chat root) forwards `minds:` messages from that frame to `window.parent` unchanged, re-posts the inner page's `shell:focused` as its own, and forwards the inner page's `shell:open` of a sub-agent view, its `shell:draft-text`, its `shell:message`, and its `shell:open-link`, from one module named in `test_embed_ratchets.py`'s allowlist.
+From the same module it posts the shell's `shell:handshake` down to each inner page as the page loads, and again when the shell sends a new one, so the inner page's app contract has a shell (`hasShell()`) and follows the link rule; a root no shell frames has no handshake to post down, and drops what its inner pages post for the shell.
 A `shell:open` whose path is the root's own (`/` or `/?chat=<id>`) it answers itself, by selecting that chat in place, rather than asking the shell for a second root window.
 The shell and the minds chrome accept messages only from frames they created, so nothing else reaches them from an inner frame.
 
