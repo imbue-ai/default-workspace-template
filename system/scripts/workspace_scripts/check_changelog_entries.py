@@ -42,8 +42,9 @@ AGENTS_PROJECT = "agents"
 AGENTS_DIR = ".agents"
 
 # The directories whose immediate children are workspace projects (each child
-# with a pyproject.toml is a project). Mirrors the root pyproject's uv member
-# globs.
+# with a pyproject.toml is a project). Mirrors the root pyproject's system/*
+# member globs; its other members (system/scripts and the .agents projects) fall
+# into the dev and agents buckets.
 PROJECT_PARENT_DIRS = ("system/libs", "system/services", "system/apps")
 
 
