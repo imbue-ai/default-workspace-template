@@ -1468,8 +1468,8 @@ def test_desktop_create_settings_switch_and_delete_through_the_tray(e2e_server: 
 # second at most, so a client whose windows and shell were still answering each other's desktop news would send
 # reports and redraw its windows several times in this.
 _SETTLED_WATCH_MS = 3000
-# How many tenths of a second the pages get to hear the move of every switch.
-_HEARD_EVERY_SWITCH_POLLS = 150
+# How many tenths of a second ``_pump_until`` gives its condition to come true.
+_PUMP_POLLS = 150
 
 # Records, in the page, every change of whether a window is drawn and how its taskbar entry reads.
 _WINDOW_STATE_RECORDER = """(id) => {
@@ -1527,7 +1527,7 @@ def _create_desktop_shown_on(server: E2EServer, pages: list[Page]) -> str:
 
 def _pump_until(page: Page, condition: Callable[[], bool], what: str) -> None:
     """Wait through the sync API, which hands the pages' socket events over only while it is called."""
-    for _ in range(_HEARD_EVERY_SWITCH_POLLS):
+    for _ in range(_PUMP_POLLS):
         if condition():
             return
         page.wait_for_timeout(100)
