@@ -52,7 +52,7 @@ export interface BackgroundTask {
   id: string;
   // Who recorded it: "run_in_background" (the workspace's runner) or "claude" (Claude's own task list).
   source: string;
-  // Claude's task type ("shell", "monitor", "workflow", "subagent"); empty for the runner's.
+  // Claude's task type; empty for the runner's.
   kind: string;
   description: string;
   // When it started (ISO 8601, UTC); for Claude's, when its Stop hook first recorded it, at the end of the
@@ -115,8 +115,7 @@ export interface ChatSnapshot {
   // The mngr ``project`` label: the project this chat was created in, which mngr propagates to
   // the agent's own children. Null when the agent carries no label.
   project: string | null;
-  // The chat's status: the `ChatStatus` value the `chats_updated` snapshot carries (working,
-  // background, idle, attention, stopped, error).
+  // The chat's status: the `ChatStatus` value the `chats_updated` snapshot carries.
   status: string;
   // The active agent's mngr labels.
   labels: Record<string, string>;

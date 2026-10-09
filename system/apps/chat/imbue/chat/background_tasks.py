@@ -46,7 +46,7 @@ class BackgroundTask(FrozenModel):
         "it, at the end of the turn that started it"
     )
     pid: int = Field(description="The process whose exit makes the marker stale")
-    kind: str = Field(default="", description="Claude's task type (shell, monitor, workflow, subagent); '' otherwise")
+    kind: str = Field(default="", description="Claude's task type; '' otherwise")
     command: str = Field(default="", description="The command a Claude task runs, when it has one")
     pid_start: str = Field(
         default="", description="The pid's process start time, so a recycled pid cannot keep the marker live"

@@ -4189,8 +4189,7 @@ class AgentManager:
 
         The chat is the one a record names the agent in, else its ``chat_id`` label, else the
         agent itself. Only the agent a chat runs on carries the chat's tasks; any agent with a
-        turn in flight is busy. That half is this app's alone to know: ``background_tasks.py``,
-        reading the marker files when this app cannot answer, sees only the tasks.
+        turn in flight is busy.
         """
         with self._lock:
             agent = self._agents.get(agent_id)
@@ -4389,12 +4388,10 @@ class AgentManager:
         # state below. Runs regardless of ``broadcast_on_change`` (it is a state
         # mutation); only the broadcast itself is gated.
         handled_snapshot = queue_handler() if queue_handler is not None else None
-        # A turn that just ended may have ended to wait on a background task. Its writers put the
-        # markers down before the turn reads as ended (mngr's Stop hook clears the ``active``
-        # marker only after the sibling hooks that write them), and that end was read above, so
-        # reading the chat's markers now, rather than on the poller's next pass, means the turn's
-        # end is published with its wait: the chat never reads idle in between, which would
-        # mark it done.
+        # A turn that just ended may have ended to wait on a background task, whose markers are
+        # down before the turn reads as ended (mngr's Stop hook clears the ``active`` marker only
+        # after the sibling hooks that write them). Reading them now, not on the poller's next
+        # pass, publishes the end with its wait, so the chat never reads idle (done) in between.
         if is_turn_in_flight(old_state) and not is_turn_in_flight(new_state):
             with self._lock:
                 ended_chat_id = self._chat_id_of_agent_if_active_locked(agent_id)

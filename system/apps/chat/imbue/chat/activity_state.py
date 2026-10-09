@@ -19,10 +19,7 @@ TOOL_RUNNING (a turn in flight), or the chat has a pending background task, a li
 marker in its directory (``background_tasks.py``) whose completion starts a turn.
 mngr reads such a parked agent as WAITING; a pending permission request is not
 busy, and neither is a process that will never wake the agent. A busy chat with no
-turn in flight reads ``background`` (``agent_manager.chat_status_for_agent``). The
-turn in flight is the chat app's alone to know: ``system/scripts/background_tasks.py``
-asks this app (``is_busy`` on ``GET /api/agents``) and, when it cannot answer, reads
-the marker files, which show only the tasks.
+turn in flight reads ``background`` (``agent_manager.chat_status_for_agent``).
 """
 
 from datetime import datetime

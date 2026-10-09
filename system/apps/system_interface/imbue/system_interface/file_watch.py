@@ -1,7 +1,6 @@
 """Changes watched with watchdog: one file's, by a handler that fires on the mutating events naming the file, shared
 by the app inventory (the registry) and the avatar status reader (mngr's agents event file); and a whole tree's, by
-a handler that fires on every mutating event under it, which the avatar status reader watches the chats' background
-task markers with."""
+a handler that fires on every mutating event under it."""
 
 import os
 from collections.abc import Callable

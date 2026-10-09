@@ -85,9 +85,7 @@ class AgentListItem(FrozenModel):
     is_busy: bool = Field(
         description=(
             "Whether the agent will resume on its own: it has a turn in flight, or it is its chat's active "
-            "agent and the chat has a pending background task. The turn in flight is the chat app's alone to "
-            "know: background_tasks.py's fallback to the marker files, when this app cannot answer, sees "
-            "only the tasks"
+            "agent and the chat has a pending background task"
         )
     )
     background_tasks: tuple[BackgroundTask, ...] = Field(
@@ -531,7 +529,7 @@ class BackgroundTaskSnapshot(FrozenModel):
 
     id: str = Field(description="The task's id within its source")
     source: str = Field(description="Who wrote the task's marker: run_in_background, or claude")
-    kind: str = Field(description="Claude's task type (shell, monitor, workflow, subagent); '' otherwise")
+    kind: str = Field(description="Claude's task type; '' otherwise")
     description: str = Field(description="What the task is, as its writer described it")
     started_at: str = Field(
         description="When the task started (ISO 8601, UTC); for a Claude task, when its Stop hook first recorded "
@@ -572,9 +570,7 @@ class ChatSnapshot(FrozenModel):
     title: str = Field(description="The name the user sees (the ``display_name`` label, else the mngr name)")
     name: str = Field(description="The chat's canonical mngr name")
     project: str | None = Field(description="The project the chat was created in, or None")
-    status: ChatStatus = Field(
-        description="The chat's status: working, background, idle, attention, stopped, or error"
-    )
+    status: ChatStatus = Field(description="The chat's status")
     labels: dict[str, str] = Field(description="The active agent's mngr labels")
     agent_ids: tuple[str, ...] = Field(description="Every agent of the chat, in order; the last is the active one")
     handoff: HandoffState | None = Field(
