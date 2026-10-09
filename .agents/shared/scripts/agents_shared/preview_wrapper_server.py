@@ -20,10 +20,11 @@ in the page's JavaScript from ``location.host`` by swapping the wrapper's own
 leading label for the inner service's name.
 
 Standard library only; ``serve_isolated_instance.py`` launches it under its own
-interpreter. To run it by hand:
+interpreter. It is a long-running server, so to run it by hand start it from the root
+venv directly rather than under ``uv run``:
 
-    uv run --no-sync preview_wrapper_server.py --port 8200 --inner-service chat-preview-app \\
-        --title "my-change"
+    .venv/bin/python .agents/shared/scripts/preview_wrapper_server.py --port 8200 \\
+        --inner-service chat-preview-app --title "my-change"
 """
 
 import argparse
