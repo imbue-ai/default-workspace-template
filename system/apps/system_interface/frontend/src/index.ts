@@ -143,7 +143,8 @@ function bootstrap(): void {
     if (typeof windowId !== "string" || windowId === "") return;
     void desktopStore.reattachWindow(windowId, frameFromMessage(message.frame));
   });
-  // A popup a page of this workspace opened, which Imbue Studio turned away from a window of its own: it opens here.
+  // A popup (or an external page replacing a frame) a page of this workspace asked for, which Imbue Studio turned
+  // away: the store opens it where it belongs.
   // A preview shell sees it only as the live shell's rebroadcast, and the live shell opens it.
   setEmbedderMessageHandler(OPEN_LINK, (message) => {
     if (isPreviewShell()) return;
