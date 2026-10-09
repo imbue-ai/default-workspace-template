@@ -288,7 +288,9 @@ The module listens for `click` and middle-button `auxclick` on the window, the l
 - A link to the page's own origin navigates the page as usual; a new-window click on one (a middle or modified click, or a `target` other than `_self`, `_top` and `_parent` included) opens a window of the page's app there instead (`shell:open` with `ifPresent: "focus"`).
 - Any other link (a local URL, an address of another app or another workspace, a share address, a `file:` URL, or an external link: the Imbue Studio desktop app's `isExternalUrl`, `mailto:`, `tel:`, or an http(s) URL off this machine) goes to the shell with `shell:open-link`. A `file:` link works only this way: a browser refuses a web page's navigation to a `file:` URL, popup or not, before anything else sees it.
 
-An unframed page's clicks are left to the browser.
+A framed page's script popups follow the rule too, for what the workspace opens itself: while connected, the module replaces `window.open`, and a call to a page of the page's own origin sends `shell:open` (`ifPresent: "focus"`), and one to a local URL, an address of another app (on the page's own share domain too), or a `file:` URL sends `shell:open-link`; either answers `null`, as a blocked popup does. A call to any other site, to `about:blank` or another scheme, or with no URL goes to the browser's own `window.open` unchanged, so a script that needs the window it opened (a sign-in popup it watches) still gets it. Disconnecting puts `window.open` back.
+
+An unframed page's clicks and popups are left to the browser.
 `capabilities` is `{navigation: boolean, closeChord: boolean}` and must agree with the handlers: giving `onNavigate` without `navigation: true`, or `navigation: true` without `onNavigate`, is an error the module throws at connect, and so is `closeChord: true` without `onCloseRequest`. A page that declares `closeChord` owns the close chord: the shell sends `shell:close-request` and leaves the window open (the browser closes its current tab that way).
 
 | Direction | Type | Payload |

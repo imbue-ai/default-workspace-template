@@ -34,32 +34,9 @@
  * render time, so a desktop stays portable across hosts and shares.
  */
 
-/** A label that starts a workspace coordinate: ``host-<hex>`` (``agent-`` is
- *  the legacy spelling of the same coordinate), or a bare 32-hex label -- the
- *  share label leading a workspace-keyed share domain
- *  (``<share-label>.<user-hash>.<region>.<domain>``). App labels can never
- *  match either form: ``host-``/``agent-`` prefixes are reserved in
- *  forward_port.py, and a minted label is always ``<name>-<rand>`` (the hyphen
- *  plus non-hex name keeps it out of the bare 32-hex shape). */
-const WORKSPACE_COORDINATE_LABEL = /^(?:(?:host|agent)-[a-f0-9]+|[a-f0-9]{32})$/i;
+import { workspaceHostCoordinate } from "./app_contract";
 
-/** The workspace coordinate within ``host``: the first coordinate label and
- *  everything after it (``host-<hex>.localhost:8421`` locally,
- *  ``host-<hex>.<user>.<region>.<domain>`` on a legacy share,
- *  ``<share-label>.<user-hash>.<region>.<domain>`` on a workspace-keyed
- *  share), with any leading app label(s) stripped. Returns ``host``
- *  unchanged when it carries no coordinate label (a non-workspace host), so
- *  the derivation degrades safely. */
-export function workspaceHostCoordinate(host: string): string {
-  const labels = host.split(".");
-  const coordinateIndex = labels.findIndex((label) => WORKSPACE_COORDINATE_LABEL.test(label));
-  return coordinateIndex < 0 ? host : labels.slice(coordinateIndex).join(".");
-}
-
-/** Whether ``host`` is a workspace's: some hostname label of it starts a workspace coordinate. */
-export function hasWorkspaceCoordinate(host: string): boolean {
-  return host.split(".").some((label) => WORKSPACE_COORDINATE_LABEL.test(label));
-}
+export { hasWorkspaceCoordinate, workspaceHostCoordinate } from "./app_contract";
 
 /** Derive the origin URL (with trailing slash) whose first hostname label is
  *  ``hostLabel`` (an app's ``<name>-<rand>`` origin label). ``host`` and

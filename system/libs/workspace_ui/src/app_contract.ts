@@ -24,6 +24,12 @@
  * of its app for a new-window click; any other link (a local URL, another app's address, a
  * ``file:`` URL, an external web, ``mailto:`` or ``tel:`` link) goes to the shell, which opens it
  * where it belongs: an external one in the app registered for it, else outside the workspace.
+ *
+ * A framed page's script popups (``window.open``) follow the same rule for what the workspace
+ * opens itself (``popupHandedOn``): a page of its own app opens a window of the app, and a local
+ * URL, another app's address (on the page's own share domain too) or a ``file:`` URL goes to the
+ * shell; the call answers null, as a blocked popup does. A popup to any other site, a blank window,
+ * and other schemes stay the browser's, since a script that opened one may need the window back.
  */
 
 /** Shell to app: sent after every `load` of the frame; says which window, desktop, path, and client this page is in. */
@@ -70,6 +76,33 @@ export function isExternalUrl(url: URL): boolean {
   if (url.protocol !== "http:" && url.protocol !== "https:") return false;
   const host = url.hostname.toLowerCase();
   return !LOCAL_HOSTNAMES.has(host) && !host.endsWith(".localhost");
+}
+
+/** A label that starts a workspace coordinate: ``host-<hex>`` (``agent-`` is
+ *  the legacy spelling of the same coordinate), or a bare 32-hex label -- the
+ *  share label leading a workspace-keyed share domain
+ *  (``<share-label>.<user-hash>.<region>.<domain>``). App labels can never
+ *  match either form: ``host-``/``agent-`` prefixes are reserved in
+ *  forward_port.py, and a minted label is always ``<name>-<rand>`` (the hyphen
+ *  plus non-hex name keeps it out of the bare 32-hex shape). */
+const WORKSPACE_COORDINATE_LABEL = /^(?:(?:host|agent)-[a-f0-9]+|[a-f0-9]{32})$/i;
+
+/** The workspace coordinate within ``host``: the first coordinate label and
+ *  everything after it (``host-<hex>.localhost:8421`` locally,
+ *  ``host-<hex>.<user>.<region>.<domain>`` on a legacy share,
+ *  ``<share-label>.<user-hash>.<region>.<domain>`` on a workspace-keyed
+ *  share), with any leading app label(s) stripped. Returns ``host``
+ *  unchanged when it carries no coordinate label (a non-workspace host), so
+ *  the derivation degrades safely. */
+export function workspaceHostCoordinate(host: string): string {
+  const labels = host.split(".");
+  const coordinateIndex = labels.findIndex((label) => WORKSPACE_COORDINATE_LABEL.test(label));
+  return coordinateIndex < 0 ? host : labels.slice(coordinateIndex).join(".");
+}
+
+/** Whether ``host`` is a workspace's: some hostname label of it starts a workspace coordinate. */
+export function hasWorkspaceCoordinate(host: string): boolean {
+  return host.split(".").some((label) => WORKSPACE_COORDINATE_LABEL.test(label));
 }
 
 /**
@@ -234,10 +267,37 @@ function followLinkClick(
   send(SHELL_OPEN_LINK, { url: url.href });
 }
 
+/** What the shell is sent for a popup a framed page's script opens to ``url`` (see the module docs), or null for one
+ *  the browser's own ``window.open`` opens. */
+function popupHandedOn(
+  url: unknown,
+  view: Window,
+): { readonly type: string; readonly payload: Record<string, unknown> } | null {
+  if (url === undefined || url === null || String(url) === "") return null;
+  let target: URL;
+  try {
+    target = new URL(String(url), view.location.href);
+  } catch {
+    return null;
+  }
+  if (target.protocol === "file:") return { type: SHELL_OPEN_LINK, payload: { url: target.href } };
+  if (target.protocol !== "http:" && target.protocol !== "https:") return null;
+  if (target.origin === view.location.origin) {
+    return { type: SHELL_OPEN, payload: { path: `${target.pathname}${target.search}`, ifPresent: "focus" } };
+  }
+  const host = target.host.toLowerCase();
+  const isOnPageCoordinate =
+    hasWorkspaceCoordinate(host) &&
+    workspaceHostCoordinate(host) === workspaceHostCoordinate(view.location.host.toLowerCase());
+  return !isExternalUrl(target) || isOnPageCoordinate
+    ? { type: SHELL_OPEN_LINK, payload: { url: target.href } }
+    : null;
+}
+
 /**
  * Connect this page to the shell that frames it. Safe to call on a top-level page: nothing
  * arrives, and every send is a no-op, so an app behaves the same visited directly. A framed
- * page's link clicks follow the contract's rule from here on (see the module docs).
+ * page's link clicks and script popups follow the contract's rule from here on (see the module docs).
  */
 export function connectToShell(handlers: ShellConnectionHandlers): ShellConnection {
   const capabilities = checkedCapabilities(handlers);
@@ -281,11 +341,21 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
 
   // On the window, the last stop of a click's bubbling, so the page's own handlers see it first.
   const onLinkClick = (event: MouseEvent): void => followLinkClick(event, boundWindow, send);
+  const nativeOpen = boundWindow.open;
+  const routedOpen: typeof boundWindow.open = new Proxy(nativeOpen, {
+    apply(target, thisArg, args: unknown[]) {
+      const handedOn = popupHandedOn(args[0], boundWindow);
+      if (handedOn === null) return Reflect.apply(target, thisArg, args);
+      send(handedOn.type, handedOn.payload);
+      return null;
+    },
+  });
 
   boundWindow.addEventListener("message", onMessage);
   if (isFramed) {
     boundWindow.addEventListener("click", onLinkClick);
     boundWindow.addEventListener("auxclick", onLinkClick);
+    boundWindow.open = routedOpen;
   }
   send(SHELL_CAPABILITIES, { navigation: capabilities.navigation, closeChord: capabilities.closeChord });
   return {
@@ -302,6 +372,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
       boundWindow.removeEventListener("message", onMessage);
       boundWindow.removeEventListener("click", onLinkClick);
       boundWindow.removeEventListener("auxclick", onLinkClick);
+      if (boundWindow.open === routedOpen) boundWindow.open = nativeOpen;
     },
   };
 }

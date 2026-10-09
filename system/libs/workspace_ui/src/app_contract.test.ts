@@ -337,3 +337,72 @@ describe("a framed page's link clicks", () => {
     expect(cancelled).toEqual([false, false, false]);
   });
 });
+
+describe("a framed page's scripted popups", () => {
+  let nativeOpen: ReturnType<typeof vi.fn>;
+  let savedOpen: typeof window.open;
+
+  beforeEach(() => {
+    savedOpen = window.open;
+    nativeOpen = vi.fn(() => ({ closed: false }) as unknown as Window);
+    window.open = nativeOpen as unknown as typeof window.open;
+  });
+
+  afterEach(() => {
+    connection?.disconnect();
+    connection = null;
+    window.open = savedOpen;
+  });
+
+  it.each([
+    ["a local URL", "http://localhost:5173/preview?x=1"],
+    ["another app's address", "http://files-ab12cd34.host-0123.localhost:8421/home/user/?view"],
+    ["a file URL", "file:///home/user/workspace/plan.md"],
+  ])("hands %s to the shell, opens no window, and answers null", (_what, url) => {
+    const parent = framed();
+    connection = connectToShell({});
+    expect(window.open(url, "_blank", "noopener")).toBeNull();
+    expect(sentAfterConnect(parent)).toEqual([[{ type: SHELL_OPEN_LINK, url: new URL(url).href }, "*"]]);
+    expect(nativeOpen).not.toHaveBeenCalled();
+  });
+
+  it("opens a page of its own app as a window of the app, its path and query kept", () => {
+    const parent = framed();
+    connection = connectToShell({});
+    expect(window.open("/docs/intro?tab=2#part")).toBeNull();
+    expect(sentAfterConnect(parent)).toEqual([
+      [{ type: SHELL_OPEN, path: "/docs/intro?tab=2", ifPresent: "focus" }, "*"],
+    ]);
+    expect(nativeOpen).not.toHaveBeenCalled();
+  });
+
+  it("leaves another site, a blank window, a call with no URL, and other schemes to the browser's own window.open", () => {
+    const parent = framed();
+    connection = connectToShell({});
+    const calls: unknown[][] = [
+      ["https://example.com/sign-in", "signin", "popup"],
+      ["mailto:someone@example.com"],
+      ["about:blank"],
+      [],
+      [""],
+      ["javascript:void(0)"],
+    ];
+    for (const args of calls) {
+      expect((window.open as (...a: unknown[]) => Window | null)(...args)).toEqual({ closed: false });
+    }
+    expect(nativeOpen.mock.calls).toEqual(calls);
+    expect(sentAfterConnect(parent)).toEqual([]);
+  });
+
+  it("leaves window.open alone on a top-level page, and puts it back once disconnected", () => {
+    connection = connectToShell({});
+    expect(window.open).toBe(nativeOpen);
+    connection.disconnect();
+    framed();
+    connection = connectToShell({});
+    expect(window.open).not.toBe(nativeOpen);
+    connection.disconnect();
+    connection = null;
+    expect(window.open).toBe(nativeOpen);
+  });
+});

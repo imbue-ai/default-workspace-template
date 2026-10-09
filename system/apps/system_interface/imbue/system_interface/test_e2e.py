@@ -2468,6 +2468,50 @@ def test_an_apps_links_open_by_the_app_contract_with_no_link_code_of_its_own(tmp
     assert page.context.pages == [page]
 
 
+@pytest.mark.timeout(90, func_only=False)
+def test_an_apps_script_popups_open_where_its_links_would(tmp_path: Path, page: Page) -> None:
+    """A page that only connects to the shell has its ``window.open`` calls routed by the app contract, in a plain
+    browser as in Imbue Studio: a local URL reaches the app registered for ``open:url`` with the client, a page of its
+    own app opens as a second window of the app, and the calls answer null. No browser tab opens."""
+    opened_urls: list[dict[str, Any]] = []
+    with serve_app(message_handling_app(opened_urls, _OPEN_URL_HANDLER_PATH, 200)) as url_opener:
+        rows = (
+            registry_row_toml(
+                "browser",
+                url_opener.http_url,
+                display_name="Browser",
+                message_handlers=[("open:url", _OPEN_URL_HANDLER_PATH)],
+            ),
+        )
+        with _running_e2e_server(tmp_path, extra_rows=rows) as server:
+            _land(page, server)
+            client_id = _client_id(page)
+            window_id = _broadcast_op(
+                server.base_url, "open", {"app": _STUB_APP_NAME, "path": "/", "client": client_id}
+            )["window_id"]
+            frame = _page_frame(page, window_id)
+
+            answer = frame.evaluate("() => window.open('http://localhost:3999/scripted?x=1', '_blank')")
+            wait_for(
+                lambda: len(opened_urls) == 1,
+                timeout=15.0,
+                poll_interval=0.1,
+                error_message="the app registered for open:url was never posted the scripted popup",
+            )
+            frame.evaluate("() => window.open('/scripted-own')")
+            wait_for(
+                lambda: len(_windows(server.base_url)) == 2,
+                timeout=15.0,
+                poll_interval=0.1,
+                error_message="the scripted popup to the app's own page never opened a window of the app",
+            )
+            other = next(window for window in _windows(server.base_url) if window["id"] != window_id)
+    assert answer is None
+    assert opened_urls == [{"type": "open:url", "client_id": client_id, "url": "http://localhost:3999/scripted?x=1"}]
+    assert (other["app"], other["path"]) == (_STUB_APP_NAME, "/scripted-own")
+    assert page.context.pages == [page]
+
+
 # The File Viewer (``system/apps/files``): dufs over a folder of the test's own, with the workspace's vendored and
 # patched frontend, registered as the ``files`` app. The workspace image installs dufs; elsewhere these tests skip.
 _FILES_APP_NAME = "files"
