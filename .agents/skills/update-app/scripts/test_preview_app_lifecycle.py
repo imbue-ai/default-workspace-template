@@ -304,8 +304,9 @@ def test_a_preview_from_a_fresh_worktree_runs_the_worktrees_code_not_the_live_in
         assert url is not None
         served = _get(url)
     finally:
-        assert mod.main(["down", "--app", "fixture", *repo_args]) == 0
+        down_code = mod.main(["down", "--app", "fixture", *repo_args])
 
+    assert down_code == 0
     assert served["build"] == "worktree build"
     served_path = [
         Path(entry).resolve()
