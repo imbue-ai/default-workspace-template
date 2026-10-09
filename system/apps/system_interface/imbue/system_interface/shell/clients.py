@@ -143,11 +143,9 @@ def _is_superseded(report: ClientStateReport, stored: _StoredClient) -> bool:
     the revision the report was made at, and not by the page's own reports, which it makes faster than it hears them
     back. Only the latest move's page is kept: a page's report is accepted only past moves it heard or made itself,
     so a page that made the latest move made every move since the revision it reports."""
-    # CLEANUP: a report with no revision is from a page loaded before pages reported one; once every open page
-    # reports it (a reload after this release), a moving report without one can be refused instead.
     if report.revision is None or report.revision >= stored.desktop_revision:
         return False
-    return report.page_id is None or report.page_id != stored.desktop_moved_by
+    return report.page_id != stored.desktop_moved_by
 
 
 @pure

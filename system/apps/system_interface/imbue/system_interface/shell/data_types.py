@@ -133,15 +133,19 @@ class ClientStateReport(FrozenModel):
         description="Whether the window only followed the client's stored desktop (pushed, or read on a reconnect): "
         "the connection is registered on it and the record is not moved",
     )
-    page_id: PageId | None = Field(
-        default=None, description="The reporting page's id, which tells its own desktop moves from the others'"
-    )
+    page_id: PageId = Field(description="The reporting page's id, which tells its own desktop moves from the others'")
     revision: int | None = Field(
         default=None,
         ge=0,
         description="For a report that moves the client, the newest desktop revision the page had heard when it made "
         "the report; None for a following report",
     )
+
+    @model_validator(mode="after")
+    def _check_revision_named_for_a_move(self) -> "ClientStateReport":
+        if self.is_following != (self.revision is None):
+            raise InvalidShellValueError("a client_state report names a revision exactly when it moves the client")
+        return self
 
 
 class PopOutStateReport(FrozenModel):

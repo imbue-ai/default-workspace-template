@@ -34,7 +34,6 @@ from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
 from imbue.system_interface.shell.app_lifecycle import WAKE_WAIT_SECONDS
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.close_hints import WindowClosedHintPost
-from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILENAME
@@ -56,6 +55,7 @@ from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import builtin_chat_row_toml
 from imbue.system_interface.shell.testing import builtin_registry_rows
 from imbue.system_interface.shell.testing import builtin_rows_toml_before_chat
+from imbue.system_interface.shell.testing import client_report
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import placement_record
 from imbue.system_interface.shell.testing import read_default_shortcuts_offered
@@ -83,7 +83,7 @@ def test_start_prunes_stale_clients_and_their_layouts_now_and_on_the_interval(
     (home,) = shell.list_desktops()
     window_id = WindowId("win-0000000000000001")
     shell.clients.record_report(
-        ClientStateReport(client_id=ClientId("old"), active_desktop=DesktopId("home")),
+        client_report("old", "home"),
         stale_at,
         is_redirected=False,
     )
@@ -102,7 +102,7 @@ def test_start_prunes_stale_clients_and_their_layouts_now_and_on_the_interval(
         assert shell.window_paths.read_paths(ClientId("old"), {window_id}) == {}
         # A client that goes stale while the shell runs is taken by the periodic prune.
         shell.clients.record_report(
-            ClientStateReport(client_id=ClientId("later"), active_desktop=DesktopId("home")),
+            client_report("later", "home"),
             stale_at,
             is_redirected=False,
         )

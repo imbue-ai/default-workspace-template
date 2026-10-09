@@ -17,7 +17,6 @@ from workspace_layout.primitives import UserId
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
-from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.errors import LaunchUnavailableError
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
@@ -29,6 +28,7 @@ from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.testing import FakeLivenessProber
 from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import build_inventory
+from imbue.system_interface.shell.testing import client_report
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.shell.testing import message_handling_app
@@ -52,22 +52,24 @@ def _shell(app: Flask) -> ShellState:
     return state_of(app).shell
 
 
+def _heard_revision(app: Flask, client_id: str) -> int:
+    """The desktop revision a window of the client has heard once it read the client's record."""
+    record = _shell(app).clients.get_client(client_id)
+    return record.desktop_revision if record is not None else 0
+
+
 def _register_client(app: Flask, client_id: str, desktop_id: str = "home") -> "queue.Queue[str | None]":
     """A connected window of ``client_id`` on ``desktop_id``, recorded the way its ``client_state`` report records it."""
     client_queue = _shell(app).broadcaster.register()
     _shell(app).broadcaster.set_client_info(client_queue, client_id, desktop_id)
-    _shell(app).record_client_report(
-        ClientStateReport(client_id=ClientId(client_id), active_desktop=DesktopId(desktop_id))
-    )
+    _shell(app).record_client_report(client_report(client_id, desktop_id, _heard_revision(app, client_id)))
     return client_queue
 
 
 def _record_client(app: Flask, client_id: str, desktop_id: str = "home") -> None:
     """A client the shell has a record of but that is not connected."""
     _shell(app).clients.record_report(
-        ClientStateReport(client_id=ClientId(client_id), active_desktop=DesktopId(desktop_id)),
-        TEST_NOW,
-        is_redirected=False,
+        client_report(client_id, desktop_id, _heard_revision(app, client_id)), TEST_NOW, is_redirected=False
     )
 
 

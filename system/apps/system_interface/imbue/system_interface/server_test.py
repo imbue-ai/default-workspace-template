@@ -32,6 +32,7 @@ from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import create_application
 from imbue.system_interface.server import render_frontend_not_built_page
 from imbue.system_interface.shell.identity import RequestIdentity
+from imbue.system_interface.shell.testing import TEST_PAGE_ID
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.testing import build_test_state
@@ -61,6 +62,17 @@ def app(config: Config) -> Flask:
 @pytest.fixture
 def client(app: Flask) -> FlaskClient:
     return app.test_client()
+
+
+def _moving_report(client_id: str, desktop_id: str) -> dict[str, Any]:
+    """A window's ``client_state`` message moving its client, as the page sends it."""
+    return {
+        "type": "client_state",
+        "client_id": client_id,
+        "active_desktop": desktop_id,
+        "page_id": TEST_PAGE_ID,
+        "revision": 0,
+    }
 
 
 def test_index_returns_html_when_static_exists(client: FlaskClient, tmp_path: Path) -> None:
@@ -712,7 +724,13 @@ def test_a_client_state_report_survives_an_unwritable_state_file(app: Flask) -> 
     (shell.activity.events_path).mkdir(parents=True)
     client_queue = shell.broadcaster.register()
     try:
-        report = {"type": "client_state", "client_id": "c1", "active_desktop": "home"}
+        report = {
+            "type": "client_state",
+            "client_id": "c1",
+            "active_desktop": "home",
+            "page_id": TEST_PAGE_ID,
+            "revision": 0,
+        }
         assert _handle_client_state_message(json.dumps(report), client_queue, shell, is_first_report=True) is True
         switched = {**report, "active_desktop": "alpha", "previous_desktop": "home"}
         assert _handle_client_state_message(json.dumps(switched), client_queue, shell, is_first_report=False) is True
@@ -729,7 +747,7 @@ def test_client_state_reports_register_the_client_and_log_only_real_desktop_swit
     shell = state_of(app).shell
     client_queue = shell.broadcaster.register()
     try:
-        first = json.dumps({"type": "client_state", "client_id": "c1", "active_desktop": "home"})
+        first = json.dumps(_moving_report("c1", "home"))
         assert _handle_client_state_message(first, client_queue, shell, is_first_report=True) is True
         assert shell.broadcaster.get_client_info(client_queue) == ConnectionRegistration(
             client_id="c1", active_desktop="home", is_pop_out=False
@@ -739,20 +757,23 @@ def test_client_state_reports_register_the_client_and_log_only_real_desktop_swit
         assert recorded.active_desktop == "home"
         assert shell.activity.read_events() == []
 
-        switched = json.dumps(
-            {"type": "client_state", "client_id": "c1", "active_desktop": "home", "previous_desktop": "research"}
-        )
+        switched = json.dumps({**_moving_report("c1", "home"), "previous_desktop": "research"})
         assert _handle_client_state_message(switched, client_queue, shell, is_first_report=False) is True
-        unchanged = json.dumps(
-            {"type": "client_state", "client_id": "c1", "active_desktop": "home", "previous_desktop": "home"}
-        )
+        unchanged = json.dumps({**_moving_report("c1", "home"), "previous_desktop": "home"})
         assert _handle_client_state_message(unchanged, client_queue, shell, is_first_report=False) is True
         events = shell.activity.read_events()
         assert [(event["type"], event["from_desktop_id"], event["to_desktop_id"]) for event in events] == [
             ("desktop_switch", "research", "home")
         ]
 
-        for malformed in ("{", json.dumps({"type": "other"}), json.dumps({"type": "client_state", "client_id": "c1"})):
+        unordered = {key: value for key, value in _moving_report("c1", "home").items() if key != "revision"}
+        for malformed in (
+            "{",
+            json.dumps({"type": "other"}),
+            json.dumps({"type": "client_state", "client_id": "c1"}),
+            json.dumps(unordered),
+            json.dumps({**unordered, "is_following": True, "revision": 0}),
+        ):
             assert _handle_client_state_message(malformed, client_queue, shell, is_first_report=False) is False
         assert shell.broadcaster.get_client_info(client_queue) == ConnectionRegistration(
             client_id="c1", active_desktop="home", is_pop_out=False
@@ -768,7 +789,7 @@ def test_a_pop_out_report_registers_its_connection_and_touches_neither_the_recor
     main_queue = shell.broadcaster.register()
     pop_out_queue = shell.broadcaster.register()
     try:
-        main_report = json.dumps({"type": "client_state", "client_id": "c1", "active_desktop": "home"})
+        main_report = json.dumps(_moving_report("c1", "home"))
         assert _handle_client_state_message(main_report, main_queue, shell, is_first_report=True) is True
         pop_out_report = json.dumps({"type": "client_state", "client_id": "c1", "is_pop_out": True})
         assert _handle_client_state_message(pop_out_report, pop_out_queue, shell, is_first_report=True) is True
@@ -846,13 +867,11 @@ def test_a_report_of_a_deleted_desktop_lands_the_client_on_the_first_one_and_say
     shell.list_desktops()
     client_queue = shell.broadcaster.register()
     try:
-        first = json.dumps({"type": "client_state", "client_id": "c1", "active_desktop": "home"})
+        first = json.dumps(_moving_report("c1", "home"))
         assert _handle_client_state_message(first, client_queue, shell, is_first_report=True) is True
         assert [message["type"] for message in drain_messages(client_queue)] == ["active_desktop_changed"]
 
-        stale = json.dumps(
-            {"type": "client_state", "client_id": "c1", "active_desktop": "gone", "previous_desktop": "home"}
-        )
+        stale = json.dumps({**_moving_report("c1", "gone"), "previous_desktop": "home"})
         assert _handle_client_state_message(stale, client_queue, shell, is_first_report=False) is True
         landed = shell.clients.get_client("c1")
         assert landed is not None and landed.active_desktop == "home"
@@ -865,7 +884,7 @@ def test_a_report_of_a_deleted_desktop_lands_the_client_on_the_first_one_and_say
             for message in drain_messages(client_queue)
             if message["type"] == "active_desktop_changed"
         ] == [("home", 2)]
-        settled = json.dumps({"type": "client_state", "client_id": "c1", "active_desktop": "home"})
+        settled = json.dumps(_moving_report("c1", "home"))
         assert _handle_client_state_message(settled, client_queue, shell, is_first_report=False) is True
         assert drain_messages(client_queue) == []
     finally:
@@ -882,7 +901,7 @@ def test_a_move_is_echoed_with_its_report_and_revision_and_a_following_report_mo
     work = shell.create_desktop("Work", "#123456", 1)
     client_queue = shell.broadcaster.register()
     try:
-        first = json.dumps({"type": "client_state", "client_id": "c1", "active_desktop": "home"})
+        first = json.dumps(_moving_report("c1", "home"))
         assert _handle_client_state_message(first, client_queue, shell, is_first_report=True) is True
         drain_messages(client_queue)
         move_body = {
@@ -891,6 +910,8 @@ def test_a_move_is_echoed_with_its_report_and_revision_and_a_following_report_mo
             "active_desktop": str(work.id),
             "previous_desktop": "home",
             "report_id": "report-0123456789abcdef",
+            "page_id": TEST_PAGE_ID,
+            "revision": 0,
         }
         unminted = json.dumps({**move_body, "report_id": "not-a-report-id"})
         assert _handle_client_state_message(unminted, client_queue, shell, is_first_report=False) is False
@@ -917,6 +938,7 @@ def test_a_move_is_echoed_with_its_report_and_revision_and_a_following_report_mo
                 "active_desktop": "home",
                 "previous_desktop": str(work.id),
                 "is_following": True,
+                "page_id": TEST_PAGE_ID,
             }
         )
         assert _handle_client_state_message(following, client_queue, shell, is_first_report=False) is True
@@ -929,7 +951,13 @@ def test_a_move_is_echoed_with_its_report_and_revision_and_a_following_report_mo
 
         # A client the shell has no record of (pruned or reset under an open page) still registers its connection.
         unrecorded = json.dumps(
-            {"type": "client_state", "client_id": "c2", "active_desktop": "home", "is_following": True}
+            {
+                "type": "client_state",
+                "client_id": "c2",
+                "active_desktop": "home",
+                "is_following": True,
+                "page_id": TEST_PAGE_ID,
+            }
         )
         assert _handle_client_state_message(unrecorded, client_queue, shell, is_first_report=False) is True
         registered = shell.broadcaster.get_client_info(client_queue)

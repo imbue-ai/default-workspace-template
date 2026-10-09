@@ -30,6 +30,7 @@ from workspace_layout.records import Window
 from workspace_layout.records import WindowPlacement
 
 from imbue.system_interface.server import create_application
+from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import DesktopsDocument
 from imbue.system_interface.shell.desktop_document import DESKTOPS_FILE_VERSION
 from imbue.system_interface.shell.desktop_document import cascade_frame
@@ -39,6 +40,7 @@ from imbue.system_interface.shell.identity import IDENTITY_HEADER
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPoster
+from imbue.system_interface.shell.primitives import PageId
 from imbue.system_interface.shell.state_files import write_json_atomic
 from imbue.system_interface.shell.update_notice import LAST_GOOD_RECORD_REL
 from imbue.system_interface.shell.update_notice import UPDATE_SELF_SCRIPT_REL
@@ -48,6 +50,8 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 # The one clock the shell tests stamp records with.
 TEST_NOW: Final[datetime] = datetime(2026, 9, 4, tzinfo=timezone.utc)
 # The URL of the supervised ``terminal`` row of ``write_two_app_registry``, which declares a launch path.
+TEST_PAGE_ID: Final[str] = "page-00000000000000ff"
+
 TEST_TERMINAL_URL: Final[str] = "http://localhost:7681"
 # The URL of the ``files`` row of ``write_two_app_registry``, which declares none.
 TEST_FILES_URL: Final[str] = "http://localhost:7000"
@@ -495,4 +499,13 @@ def message_report(client_id: str, desktop_id: str, app: str, key: str, text: st
         app=app,
         key=key,
         text=text,
+    )
+
+
+def client_report(
+    client_id: str, desktop_id: str, revision: int = 0, page_id: str = TEST_PAGE_ID
+) -> ClientStateReport:
+    """A window's ``client_state`` report moving ``client_id`` onto ``desktop_id``, made at ``revision``."""
+    return ClientStateReport(
+        client_id=ClientId(client_id), active_desktop=DesktopId(desktop_id), page_id=PageId(page_id), revision=revision
     )
