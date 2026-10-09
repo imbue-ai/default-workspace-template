@@ -2531,11 +2531,17 @@ def _running_e2e_server_with_file_viewer(tmp_path: Path, root: Path) -> Generato
 
 
 def _file_viewer_frame(page: Page, window_id: str) -> Frame:
-    """The frame of a File Viewer window; its pages act on no handshake, so there is none to await."""
+    """The frame of a File Viewer window."""
     handle = page.locator(f'iframe[data-live-page="{window_id}"]').element_handle(timeout=15000)
     frame = handle.content_frame()
     assert frame is not None
     return frame
+
+
+def _await_file_viewer_shell(frame: Frame) -> None:
+    """Wait until the File Viewer page in ``frame`` has the shell's handshake, before which a click on a file's name
+    is dufs's own (a browser tab) rather than a window of the workspace."""
+    frame.wait_for_function("() => window.mindsShell?.hasShell() === true", timeout=15000)
 
 
 def _raise_window(page: Page, server: E2EServer, client_id: str, window_id: str) -> None:
@@ -2583,6 +2589,7 @@ def test_the_file_viewer_opens_files_in_workspace_windows_and_raises_one_already
         listing.get_by_role("link", name="notes", exact=True).click()
         _wait_for_window_at(server.base_url, listing_id, "/notes/")
         assert [window["id"] for window in _windows(server.base_url)] == [listing_id]
+        _await_file_viewer_shell(listing)
 
         listing.get_by_role("link", name="plan 1.txt", exact=True).click()
         (viewer,) = [window for window in _wait_for_window_count(server.base_url, 2) if window["id"] != listing_id]
