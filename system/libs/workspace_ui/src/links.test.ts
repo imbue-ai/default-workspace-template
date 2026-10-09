@@ -62,21 +62,7 @@ describe("classifyLink", () => {
       { kind: "other-workspace", url: `http://files-ab12cd34.${OTHER_COORDINATE}/` },
     ],
     ["this workspace's bare address", `http://${COORDINATE}/`, { kind: "unroutable" }],
-    [
-      "an absolute path",
-      "/home/user/workspace/data/q4.pdf",
-      { kind: "file", path: "/home/user/workspace/data/q4.pdf" },
-    ],
-    [
-      "an encoded path with the chat's cache key",
-      "/home/user/my%20notes/plan%23.md?requested_at=2026-09-29",
-      { kind: "file", path: "/home/user/my notes/plan#.md" },
-    ],
-    ["a folder with a trailing slash", "/home/user/data/", { kind: "file", path: "/home/user/data" }],
-    ["the root", "/", { kind: "file", path: "/" }],
-    ["a protocol-relative host", "//evil.example/x", { kind: "unroutable" }],
-    ["a backslashed host", "/\\evil.example/x", { kind: "unroutable" }],
-    ["a path that does not decode", "/home/user/%zz", { kind: "unroutable" }],
+    ["an absolute path", "/home/user/workspace/data/q4.pdf", { kind: "unroutable" }],
     ["a relative path", "data/q4.pdf", { kind: "unroutable" }],
     ["a fragment", "#top", { kind: "unroutable" }],
     ["javascript", "javascript:alert(1)", { kind: "unroutable" }],
@@ -87,6 +73,8 @@ describe("classifyLink", () => {
       { kind: "file", path: "/home/user/my notes" },
     ],
     ["a file URL on localhost", "file://localhost/home/user/a.md", { kind: "file", path: "/home/user/a.md" }],
+    ["a file URL to the root", "file:///", { kind: "file", path: "/" }],
+    ["a file URL that does not decode", "file:///home/user/%zz", { kind: "unroutable" }],
     ["a file URL naming another machine", "file://server.example/share/a.md", { kind: "unroutable" }],
   ])("classifies %s", (_what, href, expected) => {
     expect(classifyLink(href, CHAT_HOST)).toEqual(expected);

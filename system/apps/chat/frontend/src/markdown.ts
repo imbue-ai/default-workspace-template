@@ -39,7 +39,7 @@ export function renderMarkdown(source: string): string {
  */
 function rewritePathLinks(root: DocumentFragment): void {
   for (const anchor of Array.from(root.querySelectorAll("a"))) {
-    const target = classifyLink(anchor.getAttribute("href") ?? "", window.location.host);
+    const target = classifyLink(messageLinkUrl(anchor.getAttribute("href") ?? ""), window.location.host);
     anchor.removeAttribute("download");
     if (target.kind === "unroutable") {
       anchor.replaceWith(...Array.from(anchor.childNodes));
@@ -51,6 +51,17 @@ function rewritePathLinks(root: DocumentFragment): void {
       anchor.setAttribute("rel", "noopener noreferrer");
     }
   }
+}
+
+/** A message link's target as a URL: an absolute path becomes its ``file:`` URL, without the query or fragment (the
+ *  chat's own cache key among them), and ``//host`` or ``/\host`` a ``file:`` URL on that host, which names no file
+ *  of this machine; anything else is the URL it already is. */
+function messageLinkUrl(href: string): string {
+  if (!href.startsWith("/")) return href;
+  const url = new URL(href, "file:///");
+  url.search = "";
+  url.hash = "";
+  return url.href;
 }
 
 /**

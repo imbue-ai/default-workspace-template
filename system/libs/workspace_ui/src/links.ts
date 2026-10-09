@@ -5,8 +5,7 @@
  * - A web link off this machine (and ``mailto:``, ``tel:``) is **external**, by the app contract's ``isExternalUrl``,
  *   which a shared fixture holds to the Imbue Studio desktop app's rule: an app registered for its message
  *   (``open:web``, ``open:mailto``, ``open:tel``) opens it, else the user's own browser or mail or phone app.
- * - A ``file:`` URL on this machine, or an absolute path as written in a chat message, is a **file** of the
- *   workspace, opened in the File Viewer (``open:file``).
+ * - A ``file:`` URL on this machine is a **file** of the workspace, opened in the File Viewer (``open:file``).
  * - A URL on a local host (``localhost``, ``127.0.0.1``, ``[::1]``, ``*.localhost``) is a **local URL**: on an app's
  *   ``<label>.localhost`` host, or on a bare host name at the port the app registered, that app's window, else the
  *   workspace's browser (``open:url``). That is unless it is the address of an app of a workspace: one of this
@@ -14,7 +13,7 @@
  *   refuses).
  * - An address on this workspace's share domain is an **app address** too, from any client, though its host is not
  *   local; another workspace's share address cannot be told from any other site, so it is external.
- * - Anything else (a relative path, a fragment, another scheme) is **unroutable**.
+ * - Anything else (a path or other relative URL, a fragment, another scheme) is **unroutable**.
  */
 
 import { LOCAL_HOSTNAMES, hasWorkspaceCoordinate, isExternalUrl, workspaceHostCoordinate } from "./app_contract";
@@ -100,17 +99,11 @@ function shareAddressOf(url: URL, workspaceHost: string, shareDomain: string | n
   return isThisWorkspace ? appAddressOn(url, host, coordinate) : null;
 }
 
-/** What ``href`` (a URL, or a link's attribute as written in a chat message, where an absolute path names a file) is,
- *  for a page served under ``workspaceHost`` (a host of this workspace, such as the page's own ``location.host``).
+/** What ``href`` (a URL) is, for a page served under ``workspaceHost`` (a host of this workspace, such as the page's
+ *  own ``location.host``).
  *  ``shareDomain`` is the domain this workspace was last shared under, if it ever was: an address on it is one of
  *  this workspace's apps, from any client. */
 export function classifyLink(href: string, workspaceHost: string, shareDomain: string | null = null): LinkTarget {
-  if (href.startsWith("/")) {
-    // ``//host`` and ``/\host`` are other hosts to a browser, not paths.
-    if (/^\/[/\\]/.test(href)) return { kind: "unroutable" };
-    const path = filePathOf(href.split(/[?#]/, 1)[0]);
-    return path === null ? { kind: "unroutable" } : { kind: "file", path };
-  }
   let url: URL;
   try {
     url = new URL(href);

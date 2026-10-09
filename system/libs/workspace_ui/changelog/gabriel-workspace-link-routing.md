@@ -6,7 +6,7 @@ Links clicked inside the workspace open inside the workspace, in every app, with
 
 - `connectToShell` also gains `sendMessage(type, fields)`, which sends the shell `shell:message`, `openLink(url)`, which sends `shell:open-link`, and `hasShell()`, which says whether a shell's handshake has arrived. The element menu's Explain and Modify default to `hasShell()` rather than to whether the page is framed.
 
-- New `links.ts`: one classifier (`classifyLink`) says whether a link is external, a file (a `file:` URL, or an absolute path as a chat message writes it), a local URL, one of this workspace's app addresses, another workspace's, or unroutable. An address on the workspace's share domain (the page's own, or one it is told) is one of its app addresses. The shell and the chat use it, and a test holds it to calling external exactly the URLs the Imbue Studio desktop app does. `externalLinkMessageType` names the message an external link becomes: `open:web`, `open:mailto`, or `open:tel`.
+- New `links.ts`: one classifier (`classifyLink`) says whether a link is external, a file (a `file:` URL on this machine), a local URL, one of this workspace's app addresses, another workspace's, or unroutable. An address on the workspace's share domain (the page's own, or one it is told) is one of its app addresses. The shell and the chat use it, and a test holds it to calling external exactly the URLs the Imbue Studio desktop app does. `externalLinkMessageType` names the message an external link becomes: `open:web`, `open:mailto`, or `open:tel`.
 
 - The element menu's "Open link in new window" is now "Open link", and opens the link by clicking it.
 

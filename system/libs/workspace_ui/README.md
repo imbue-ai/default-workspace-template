@@ -41,8 +41,7 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   the shell sends a framed page.
 - `src/links.ts`: what a link means in the workspace
   (`blueprint/workspace-link-routing/` in the mngr repo): `classifyLink` calls a
-  link external, a file (a `file:` URL on this machine, or an absolute path as a
-  chat message writes it), a local URL, one of this workspace's app addresses
+  link external, a file (a `file:` URL on this machine), a local URL, one of this workspace's app addresses
   (an address on its share domain included), another workspace's, or
   unroutable, and `externalLinkMessageType` names the message an external link
   becomes (`open:web`, `open:mailto`, `open:tel`). The shell classifies every

@@ -58,15 +58,17 @@ describe("renderMarkdown links", () => {
 
   it("names a file by its file URL, whether written as an absolute path or as a file URL", () => {
     const anchors = render(
-      "[Q4 report](/home/user/workspace/data/my%20docs/q4.pdf), [folder](/home/user/workspace/data/) and [notes](file:///home/user/workspace/notes.md)",
+      "[Q4 report](/home/user/workspace/data/my%20docs/q4.pdf), [folder](/home/user/workspace/data/), [plan](/home/user/my%20notes/plan%23.md?requested_at=2026-09-29#top), [root](/) and [notes](file:///home/user/workspace/notes.md)",
     ).querySelectorAll("a");
     expect(Array.from(anchors, (a) => a.getAttribute("href"))).toEqual([
       "file:///home/user/workspace/data/my%20docs/q4.pdf",
       "file:///home/user/workspace/data",
+      "file:///home/user/my%20notes/plan%23.md",
+      "file:///",
       "file:///home/user/workspace/notes.md",
     ]);
     expect(Array.from(anchors, (a) => [a.hasAttribute("target"), a.hasAttribute("download")])).toEqual(
-      Array(3).fill([false, false]),
+      Array(5).fill([false, false]),
     );
   });
 
@@ -78,11 +80,21 @@ describe("renderMarkdown links", () => {
     "[remote file](file://server.example/share/notes.md)",
     "[text me](sms:+15551234)",
     "[cdn](//cdn.example.com/lib.js)",
+    "[broken](/home/user/%zz)",
   ])("renders %s as its label text with no link", (source) => {
     const container = render(source);
     expect(container.querySelector("a")).toBeNull();
     expect(container.textContent!.trim()).toBe(source.slice(1, source.indexOf("]")));
   });
+
+  it.each(['<a href="//evil.example/x">other host</a>', '<a href="/\\evil.example/x">other host</a>'])(
+    "renders the raw link %s, which a browser takes to another host, as its text",
+    (source) => {
+      const container = render(source);
+      expect(container.querySelector("a")).toBeNull();
+      expect(container.textContent!.trim()).toBe("other host");
+    },
+  );
 
   it("keeps the markup and image inside an unwrapped link", () => {
     const container = render("[**bold** ![Chart](/home/user/workspace/data/images/chart.png)](data/images/chart.png)");
