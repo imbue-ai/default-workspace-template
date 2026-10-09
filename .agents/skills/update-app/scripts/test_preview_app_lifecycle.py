@@ -34,8 +34,9 @@ mod = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = mod
 _spec.loader.exec_module(mod)
 
-# The shared script gives each health wait up to 60 one-second attempts, and this test
-# waits three times: the instance and its wrapper page at ``up``, the instance at ``refresh``.
+# The shared script gives each health wait up to 60 one-second attempts, and a test here
+# waits at most three times: the instance and its wrapper page at ``up``, the instance at
+# ``refresh``.
 _LIFECYCLE_TIMEOUT_SECONDS = 180
 
 # The preview's --copy refuses a copy that would leave the disk under its reserve, and
