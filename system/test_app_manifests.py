@@ -385,6 +385,20 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "browser": False,
         "getting-started": True,
     }
+    # Where the minds Share tab lists each built-in: never for an internal one, under its System group for the
+    # interfaces the workspace is built out of, and up front for the rest.
+    assert {
+        name: "internal" if manifest.internal else "system" if manifest.system else "app"
+        for name, manifest in by_name.items()
+    } == {
+        "system_interface": "internal",
+        "chat": "system",
+        "terminal": "system",
+        "terminal-pty": "internal",
+        "files": "app",
+        "browser": "system",
+        "getting-started": "system",
+    }
     # Getting Started (launcher-and-getting-started plan section 3.6): one window is what it is for, so its shortcut
     # focuses it like the browser's; it declares no launch path, so the desktop synthesizes ``open`` at its root.
     assert by_name["getting-started"].critical is False

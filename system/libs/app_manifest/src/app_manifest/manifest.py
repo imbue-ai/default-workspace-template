@@ -353,6 +353,11 @@ class AppManifest(FrozenModel):
     priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
     program: ProgramName = Field(description="The supervisord program that runs the app (defaults to the name)")
     internal: bool = Field(default=False, description="Hidden from every open surface")
+    system: bool = Field(
+        default=False,
+        description="Part of the workspace itself rather than an app built on it: the minds Share tab lists it under "
+        "its System group instead of offering it up front",
+    )
     default_shortcut: DefaultShortcut | None = Field(default=None, description="The shortcut a new desktop is seeded with")
     launch_paths: tuple[LaunchPath, ...] = Field(
         default=(), description="The paths the desktop interface opens windows at, with their labels and params"

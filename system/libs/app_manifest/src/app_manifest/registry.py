@@ -94,6 +94,11 @@ class RegistryRow(FrozenModel):
     label: str = Field(default="", description="The unguessable origin label; never an identifier")
     icon: str | None = Field(default=None, description="The registered SVG markup, verbatim")
     internal: bool = Field(default=False, description="Hidden from every open surface")
+    system: bool = Field(
+        default=False,
+        description="Part of the workspace itself rather than an app built on it: the minds Share tab lists it under "
+        "its System group instead of offering it up front",
+    )
     program: str | None = Field(default=None, description="The supervisord program that runs the app, when supervised")
     display_name: DisplayName | None = Field(default=None, description="What users see; absent on manifest-less rows")
     critical: bool = Field(

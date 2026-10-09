@@ -210,9 +210,11 @@ reported (under gVisor and on lima, a change made outside the sandbox raises no
 inotify event in it).
 
 Every registry read is also announced to the minds desktop (`app_announcements.py`):
-one `service_registered` event per app whose URL, label, icon, or display name
-differs from the last announced, and one `service_deregistered` per app that left, appended
-to `$MNGR_AGENT_STATE_DIR/events/services/events.jsonl` in the `imbue_common`
+one `service_registered` event per app whose URL, label, icon, display name, or
+`system` or `internal` declaration (which tell the minds Share tab to list the
+app under its System group, or not at all) differs from the last announced, and
+one `service_deregistered` per app that left, appended to
+`$MNGR_AGENT_STATE_DIR/events/services/events.jsonl` in the `imbue_common`
 event envelope; the first read after the shell starts announces every app. The
 stream is what `mngr forward` and the desktop resolve app origins from, and
 they replay it whole each time they attach, so a stream over 5 MiB at that
@@ -225,14 +227,15 @@ rewrite. A preview shell announces nothing, since its registry is a copy.
 The shell also owns each stoppable app's process (`shell/app_lifecycle.py`,
 the stop-when-no-windows spec): an app whose manifest declares
 `stop_when_no_windows` is stopped once no window on any desktop has shown it
-for a minute (only once someone has visited the workspace, and never while a
-per-app share grant names it, since such a visitor reaches the app without the
-shell: `shell/share_grants.py` reads `data/.secrets/share_grants.toml`), and while any
-stoppable app is stopped the shell holds its port (`shell/port_parking.py`), so
-the first request for the app starts it again and is answered with a loading
-page that reloads into the app. "Quit <app>" on the window menu
-(`frontend/src/views/WindowMenu.ts`) closes every window of the app and stops
-it at once; critical apps offer nothing there and are never stopped or parked.
+for a minute (only once someone has visited the workspace, and never, unless it
+is internal, while a per-app share grant names it, since such a visitor reaches
+the app without the shell: `shell/share_grants.py` reads
+`data/.secrets/share_grants.toml`), and while any stoppable app is stopped the
+shell holds its port (`shell/port_parking.py`), so the first request for the
+app starts it again and is answered with a loading page that reloads into the
+app. "Quit <app>" on the window menu (`frontend/src/views/WindowMenu.ts`)
+closes every window of the app and stops it at once; critical apps offer
+nothing there and are never stopped or parked.
 The stop and start routes remain for agents. A framed page reaches the shell only
 through the contract module (`shell:open`, `shell:focused`, `shell:location`,
 `shell:capabilities`, `shell:start-with-text`); a page that reports the path it is showing gets it

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from share_gateway.caddyfile import build_frame_ancestors_policy
+from share_gateway.caddyfile import build_grantable_service_names
 from share_gateway.caddyfile import build_label_to_name
 from share_gateway.caddyfile import parse_registered_apps
 from share_gateway.caddyfile import render_caddyfile
@@ -82,6 +83,36 @@ label = "orphan-99999999"
         ("good", "good-12345678", "localhost", 5001)
     ]
     assert parse_registered_apps("not toml [[") == []
+
+
+def test_every_registered_row_but_an_internal_one_is_grantable() -> None:
+    apps = parse_registered_apps(
+        """
+[[apps]]
+name = "notes"
+url = "http://localhost:5001"
+label = "notes-11111111"
+
+[[apps]]
+name = "chat"
+url = "http://localhost:5002"
+label = "chat-22222222"
+system = true
+
+[[apps]]
+name = "terminal-pty"
+url = "http://localhost:5003"
+label = "terminal-pty-33333333"
+internal = true
+
+[[apps]]
+name = "odd"
+url = "http://localhost:5004"
+label = "odd-44444444"
+internal = "no"
+"""
+    )
+    assert build_grantable_service_names(apps) == frozenset({"notes", "chat"})
 
 
 def test_build_label_to_name_maps_labels_back_to_names() -> None:

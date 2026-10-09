@@ -32,62 +32,73 @@ email_domains = []
 """
 
 _NOBODY = "user-nobody-0000"
+# The registered services a per-service grant may admit to.
+_GRANTABLE = frozenset({"web", "terminal"})
 
 
 def test_workspace_grant_admits_every_service_and_the_shell() -> None:
     grants = parse_grants(_FULL_GRANTS)
-    assert grants.allows(_NOBODY, "bob@example.com", None) is True
-    assert grants.allows(_NOBODY, "bob@example.com", "web") is True
-    assert grants.allows(_NOBODY, "bob@example.com", "terminal") is True
+    assert grants.allows(_NOBODY, "bob@example.com", None, _GRANTABLE) is True
+    assert grants.allows(_NOBODY, "bob@example.com", "web", _GRANTABLE) is True
+    assert grants.allows(_NOBODY, "bob@example.com", "terminal", _GRANTABLE) is True
 
 
 def test_user_id_grant_matches_regardless_of_email() -> None:
     grants = parse_grants(_FULL_GRANTS)
-    assert grants.allows("user-erin-0001", "renamed@elsewhere.dev", None) is True
-    assert grants.allows("user-erin-0001", "renamed@elsewhere.dev", "terminal") is True
-    assert grants.allows("user-other-0002", "renamed@elsewhere.dev", None) is False
+    assert grants.allows("user-erin-0001", "renamed@elsewhere.dev", None, _GRANTABLE) is True
+    assert grants.allows("user-erin-0001", "renamed@elsewhere.dev", "terminal", _GRANTABLE) is True
+    assert grants.allows("user-other-0002", "renamed@elsewhere.dev", None, _GRANTABLE) is False
 
 
 def test_workspace_email_domain_grant_matches_by_domain() -> None:
     grants = parse_grants(_FULL_GRANTS)
-    assert grants.allows(_NOBODY, "anyone@imbue.com", None) is True
-    assert grants.allows(_NOBODY, "anyone@not-imbue.com", None) is False
-    assert grants.allows(_NOBODY, "imbue.com", None) is False
+    assert grants.allows(_NOBODY, "anyone@imbue.com", None, _GRANTABLE) is True
+    assert grants.allows(_NOBODY, "anyone@not-imbue.com", None, _GRANTABLE) is False
+    assert grants.allows(_NOBODY, "imbue.com", None, _GRANTABLE) is False
 
 
 def test_per_service_grant_admits_only_that_service() -> None:
     grants = parse_grants(_FULL_GRANTS)
-    assert grants.allows(_NOBODY, "carol@example.com", "web") is True
-    assert grants.allows(_NOBODY, "carol@example.com", None) is False
-    assert grants.allows(_NOBODY, "carol@example.com", "terminal") is False
-    assert grants.allows(_NOBODY, "dave@partner.org", "web") is True
-    assert grants.allows(_NOBODY, "dave@partner.org", "terminal") is False
+    assert grants.allows(_NOBODY, "carol@example.com", "web", _GRANTABLE) is True
+    assert grants.allows(_NOBODY, "carol@example.com", None, _GRANTABLE) is False
+    assert grants.allows(_NOBODY, "carol@example.com", "terminal", _GRANTABLE) is False
+    assert grants.allows(_NOBODY, "dave@partner.org", "web", _GRANTABLE) is True
+    assert grants.allows(_NOBODY, "dave@partner.org", "terminal", _GRANTABLE) is False
+
+
+def test_a_per_service_grant_on_a_service_that_is_not_grantable_admits_nobody() -> None:
+    grants = parse_grants(_FULL_GRANTS)
+    grantable_without_web = frozenset({"terminal"})
+    assert grants.allows(_NOBODY, "carol@example.com", "web", grantable_without_web) is False
+    assert grants.allows_any(_NOBODY, "carol@example.com", grantable_without_web) is False
+    # A workspace-level grant still reaches it.
+    assert grants.allows(_NOBODY, "bob@example.com", "web", grantable_without_web) is True
 
 
 def test_grant_matching_is_case_insensitive() -> None:
     grants = parse_grants(_FULL_GRANTS)
-    assert grants.allows(_NOBODY, "BOB@EXAMPLE.COM", None) is True
-    assert grants.allows(_NOBODY, "Anyone@IMBUE.com", None) is True
+    assert grants.allows(_NOBODY, "BOB@EXAMPLE.COM", None, _GRANTABLE) is True
+    assert grants.allows(_NOBODY, "Anyone@IMBUE.com", None, _GRANTABLE) is True
 
 
 def test_allows_any_covers_workspace_and_service_grants() -> None:
     grants = parse_grants(_FULL_GRANTS)
-    assert grants.allows_any(_NOBODY, "bob@example.com") is True
-    assert grants.allows_any(_NOBODY, "carol@example.com") is True
-    assert grants.allows_any("user-erin-0001", "stranger@nowhere.dev") is True
-    assert grants.allows_any(_NOBODY, "stranger@nowhere.dev") is False
+    assert grants.allows_any(_NOBODY, "bob@example.com", _GRANTABLE) is True
+    assert grants.allows_any(_NOBODY, "carol@example.com", _GRANTABLE) is True
+    assert grants.allows_any("user-erin-0001", "stranger@nowhere.dev", _GRANTABLE) is True
+    assert grants.allows_any(_NOBODY, "stranger@nowhere.dev", _GRANTABLE) is False
 
 
 def test_a_document_without_users_lists_still_parses() -> None:
     grants = parse_grants(_LEGACY_GRANTS)
-    assert grants.allows(_NOBODY, "bob@example.com", None) is True
+    assert grants.allows(_NOBODY, "bob@example.com", None, _GRANTABLE) is True
     assert grants.workspace.users == set()
 
 
 def test_empty_grants_admit_nobody() -> None:
     grants = parse_grants("")
-    assert grants.allows(_NOBODY, "anyone@example.com", None) is False
-    assert grants.allows_any(_NOBODY, "anyone@example.com") is False
+    assert grants.allows(_NOBODY, "anyone@example.com", None, _GRANTABLE) is False
+    assert grants.allows_any(_NOBODY, "anyone@example.com", _GRANTABLE) is False
 
 
 def test_has_email_invite_is_exact_and_ignores_domain_grants() -> None:
@@ -214,4 +225,4 @@ def test_load_grants_reads_file(tmp_path: Path) -> None:
     grants_path = tmp_path / "share_grants.toml"
     grants_path.write_text(_FULL_GRANTS)
     grants = load_grants(grants_path)
-    assert grants.allows(_NOBODY, "bob@example.com", None) is True
+    assert grants.allows(_NOBODY, "bob@example.com", None, _GRANTABLE) is True
