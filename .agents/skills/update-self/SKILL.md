@@ -504,8 +504,10 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
     bash -c 'for i in $(seq 1 360); do if [ -z "$(git status --porcelain)" ] && ! tk ready 2>/dev/null | grep -q -- "- editing \(service\|critical app\) "; then echo settled; exit 0; fi; sleep 10; done; echo "still busy after an hour"; git status --porcelain; exit 1'
 ```
 
-Take this pass's own `editing critical app` leases only after it settles, so
-the wait does not find them. If it is still busy after the hour, tell the user
+Take this pass's own `editing critical app` leases only once it has settled
+and the branch fast-forwards (below), right before the apply, and release
+them before any catch-up, so no round of this wait finds them. If it is still
+busy after the hour, tell the user
 which chat's edit is holding the update and that nothing has been applied;
 a lease is broken only on their call. Once it settles, check whether those
 chats committed since the worker branched:
@@ -584,8 +586,9 @@ Exit codes:
 - **`1` -- precondition; nothing changed** (dirty tree, `HEAD` moved under the
   pass, another apply in flight, this merge already landed and rolled back, or
   a merge that does not first revert an earlier update's rollback commit).
-  A dirty tree or a moved `HEAD` is the settle-and-catch-up case above: wait,
-  catch the worker up, and apply again. A merge that leaves a rollback in
+  A dirty tree or a moved `HEAD` is the settle-and-catch-up case above:
+  release this pass's critical-app leases, wait, catch the worker up, and
+  apply again. A merge that leaves a rollback in
   place, or one already landed and rolled back, needs a fresh worker pass off
   the current `HEAD` (`references/apply-outcomes.md`); the refusal names the
   commits to revert.
