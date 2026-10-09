@@ -3,7 +3,6 @@ reported."""
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import socket
 import threading
@@ -13,11 +12,9 @@ from pathlib import Path
 
 import pytest
 
-_SCRIPT = Path(__file__).parent / "notify_user.py"
-_spec = importlib.util.spec_from_file_location("notify_user", _SCRIPT)
-assert _spec is not None and _spec.loader is not None
-notify_user = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(notify_user)
+from notify_user_skill import notify_user
+
+_SCRIPT = Path(__file__).resolve().parents[1] / "notify_user.py"
 
 _GATEWAY_ENV = {
     "LATCHKEY_GATEWAY": "http://gateway.invalid:1234/",
