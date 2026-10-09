@@ -32,19 +32,28 @@ const CLIENT = "client-1";
 const NO_LINK = { desktopId: null, open: null, launch: null };
 const PLAIN_BAR = { mode: "bar", style: "plain", position: null } as const;
 
-/** A report that moves the client, as the store sends one: with an id minted for it. */
-function moveReport(activeDesktop: string, previousDesktop: string): ClientStateReport {
+const PAGE_ID = expect.stringMatching(/^page-[0-9a-f]{16}$/);
+
+/** A report that moves the client, as the store sends one: with an id minted for it, made at the newest revision
+ *  the window heard (any, unless the test says). */
+function moveReport(
+  activeDesktop: string,
+  previousDesktop: string,
+  revision: number = expect.any(Number),
+): ClientStateReport {
   return {
     activeDesktop,
     previousDesktop,
     reportId: expect.stringMatching(/^report-[0-9a-f]{16}$/),
     isFollowing: false,
+    pageId: PAGE_ID,
+    revision,
   };
 }
 
 /** The report of a window that followed the client's stored desktop, which moves nothing. */
 function followingReport(activeDesktop: string): ClientStateReport {
-  return { activeDesktop, previousDesktop: "", reportId: null, isFollowing: true };
+  return { activeDesktop, previousDesktop: "", reportId: null, isFollowing: true, pageId: PAGE_ID, revision: null };
 }
 
 /** Deliver the news that a client's stored desktop moved to ``desktopId`` at ``revision``, by the window report
@@ -804,6 +813,28 @@ describe("desktop news", () => {
     expect(store.getState().activeDesktopId).toBe("home");
     expect(socket.reports).toHaveLength(reportsSent);
     expect(api.calls.filter((call) => call === "fetchPlacements:work")).toHaveLength(1);
+  });
+
+  it("reports each move at the newest revision it heard, from one page", async () => {
+    api.clients = [clientRecord(CLIENT, { active_desktop: "home", desktop_revision: 4 })];
+    const store = await startedStore();
+    socket.deliver().onConnected();
+    // The landing and the connect are made at the record's revision, and switches made before their own news
+    // returns stay there.
+    await store.switchDesktop("work");
+    await store.switchDesktop("home");
+    deliverDesktopNews("work", 7);
+    await settle();
+    await store.switchDesktop("home");
+    expect(socket.reports).toEqual([
+      moveReport("home", "", 4),
+      moveReport("home", "", 4),
+      moveReport("work", "home", 4),
+      moveReport("home", "work", 4),
+      followingReport("work"),
+      moveReport("home", "work", 7),
+    ]);
+    expect(new Set(socket.reports.map((report) => report.pageId)).size).toBe(1);
   });
 
   it("ends on its latest switch when a move written before it reaches the window after it", async () => {

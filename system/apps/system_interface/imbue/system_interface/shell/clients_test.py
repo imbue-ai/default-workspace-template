@@ -20,6 +20,7 @@ from imbue.system_interface.shell.clients import SHOWN_HISTORY_LIMIT
 from imbue.system_interface.shell.clients import client_view
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.errors import ClientNotFoundError
+from imbue.system_interface.shell.primitives import PageId
 from imbue.system_interface.shell.testing import TEST_NOW
 
 
@@ -64,6 +65,45 @@ def test_set_active_desktop_moves_a_recorded_client_and_refuses_an_unknown_one(t
     assert (moved.record.desktop_revision, unmoved.record.desktop_revision) == (2, 2)
     with pytest.raises(ClientNotFoundError):
         store.set_active_desktop(ClientId("nobody"), DesktopId("research"), TEST_NOW)
+
+
+def _page_report(desktop: str, page: str, revision: int) -> ClientStateReport:
+    return ClientStateReport(
+        client_id=ClientId("c1"), active_desktop=DesktopId(desktop), page_id=PageId(page), revision=revision
+    )
+
+
+def test_a_report_made_before_a_move_its_page_had_not_heard_of_is_superseded(tmp_path: Path) -> None:
+    store = ClientStore(state_directory=tmp_path)
+    page = "page-00000000000000aa"
+    store.record_report(_page_report("home", page, 0), TEST_NOW, is_redirected=False)
+    # An op moves the client while the page's next report, made at revision 1, is on its way.
+    store.set_active_desktop(ClientId("c1"), DesktopId("research"), TEST_NOW)
+    stale = store.record_report(_page_report("home", page, 1), TEST_NOW + timedelta(minutes=1), is_redirected=False)
+    assert (stale.is_superseded, stale.is_active_desktop_changed) == (True, False)
+    recorded = store.get_client("c1")
+    assert recorded is not None
+    assert (recorded.active_desktop, recorded.desktop_revision, recorded.last_seen) == ("research", 2, TEST_NOW)
+    # Once the page has heard the op's move, its report moves the client again.
+    heard = store.record_report(_page_report("home", page, 2), TEST_NOW, is_redirected=False)
+    assert (heard.is_superseded, heard.is_active_desktop_changed, heard.record.desktop_revision) == (False, True, 3)
+
+
+def test_a_page_reports_past_its_own_moves_but_not_past_another_pages(tmp_path: Path) -> None:
+    store = ClientStore(state_directory=tmp_path)
+    page, other_page = "page-00000000000000aa", "page-00000000000000bb"
+    store.record_report(_page_report("home", page, 0), TEST_NOW, is_redirected=False)
+    # Rapid switches: every report is made at revision 1, before the page has heard its own moves.
+    for desktop, revision in (("research", 2), ("home", 3), ("research", 4)):
+        outcome = store.record_report(_page_report(desktop, page, 1), TEST_NOW, is_redirected=False)
+        assert (outcome.is_superseded, outcome.record.desktop_revision) == (False, revision)
+    # A second window of the client that has not heard them is superseded, and so is the first once it has moved.
+    assert store.record_report(_page_report("home", other_page, 1), TEST_NOW, is_redirected=False).is_superseded
+    store.record_report(_page_report("home", other_page, 4), TEST_NOW, is_redirected=False)
+    assert store.record_report(_page_report("research", page, 1), TEST_NOW, is_redirected=False).is_superseded
+    # A report that orders itself against nothing (a page from before revisions were reported) is never superseded.
+    unordered = store.record_report(_report("c1", "research"), TEST_NOW, is_redirected=False)
+    assert (unordered.is_superseded, unordered.is_active_desktop_changed) == (False, True)
 
 
 def test_an_entry_presentation_is_kept_on_the_client_across_its_reports_and_refused_for_an_unknown_client(
@@ -135,6 +175,7 @@ def test_a_version_one_file_is_read_with_the_view_as_the_desktop_and_rewritten_a
         "entries",
         "shown_history",
         "desktop_revision",
+        "desktop_moved_by",
     }
 
 

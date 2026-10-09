@@ -39,6 +39,7 @@ from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.primitives import LaunchTargetKind
+from imbue.system_interface.shell.primitives import PageId
 from imbue.system_interface.shell.primitives import ReportId
 from imbue.system_interface.shell.primitives import SaveId
 
@@ -134,6 +135,15 @@ class ClientStateReport(FrozenModel):
         description="Whether the window only followed the client's stored desktop (pushed, or read on a reconnect): "
         "the connection is registered on it and the record is not moved",
     )
+    page_id: PageId | None = Field(
+        default=None, description="The reporting page's id, which tells its own desktop moves from the others'"
+    )
+    revision: int | None = Field(
+        default=None,
+        ge=0,
+        description="For a report that moves the client, the newest desktop revision the page had heard when it made "
+        "the report; None for a following report",
+    )
 
 
 class PopOutStateReport(FrozenModel):
@@ -150,6 +160,10 @@ class ClientReportOutcome(FrozenModel):
     record: ClientRecord = Field(description="The client record as written")
     is_active_desktop_changed: bool = Field(
         description="Whether the stored active desktop differs from before the report"
+    )
+    is_superseded: bool = Field(
+        default=False,
+        description="Whether the report was made before a move its page had not heard of, and so recorded nothing",
     )
 
 

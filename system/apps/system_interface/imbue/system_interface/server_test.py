@@ -938,3 +938,57 @@ def test_a_move_is_echoed_with_its_report_and_revision_and_a_following_report_mo
         assert drain_messages(client_queue) == []
     finally:
         shell.broadcaster.unregister(client_queue)
+
+
+def test_a_move_reported_before_its_page_heard_an_ops_move_is_neither_recorded_nor_broadcast(app: Flask) -> None:
+    """An op moves the client while a page's report, made at the revision before the op's, is still on its way: the
+    report is not recorded, broadcast, or logged as a switch, so the op's move stands and the page follows it. A report
+    made at the op's revision moves the client as usual."""
+    shell = state_of(app).shell
+    shell.inventory.reload_registry()
+    shell.list_desktops()
+    work = shell.create_desktop("Work", "#123456", 1)
+    client_queue = shell.broadcaster.register()
+    try:
+        landing = {
+            "type": "client_state",
+            "client_id": "c1",
+            "active_desktop": "home",
+            "report_id": "report-0000000000000001",
+            "page_id": "page-00000000000000aa",
+            "revision": 0,
+        }
+        assert _handle_client_state_message(json.dumps(landing), client_queue, shell, is_first_report=True) is True
+        assert shell.set_client_active_desktop(ClientId("c1"), work.id) is True
+        drain_messages(client_queue)
+        switches_logged = len(shell.activity.read_events())
+
+        made_before_the_op = {
+            **landing,
+            "active_desktop": "home",
+            "previous_desktop": str(work.id),
+            "report_id": "report-0000000000000002",
+            "revision": 1,
+        }
+        assert (
+            _handle_client_state_message(json.dumps(made_before_the_op), client_queue, shell, is_first_report=False)
+            is True
+        )
+        recorded = shell.clients.get_client("c1")
+        assert recorded is not None and (recorded.active_desktop, recorded.desktop_revision) == (work.id, 2)
+        assert drain_messages(client_queue) == []
+        assert len(shell.activity.read_events()) == switches_logged
+
+        made_after_the_op = {**made_before_the_op, "report_id": "report-0000000000000003", "revision": 2}
+        assert (
+            _handle_client_state_message(json.dumps(made_after_the_op), client_queue, shell, is_first_report=False)
+            is True
+        )
+        assert [
+            (message["desktop_id"], message["revision"], message["report_id"])
+            for message in drain_messages(client_queue)
+            if message["type"] == "active_desktop_changed"
+        ] == [("home", 3, "report-0000000000000003")]
+        assert len(shell.activity.read_events()) == switches_logged + 1
+    finally:
+        shell.broadcaster.unregister(client_queue)

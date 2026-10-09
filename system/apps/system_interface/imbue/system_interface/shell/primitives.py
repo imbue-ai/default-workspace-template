@@ -16,6 +16,7 @@ from imbue.system_interface.shell.errors import InvalidShellValueError
 
 _SAVE_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^save-[0-9a-f]{16}$")
 _REPORT_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^report-[0-9a-f]{16}$")
+_PAGE_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^page-[0-9a-f]{16}$")
 _MINTED_ID_BYTES: Final[int] = 8
 
 # A desktop's ``glyph`` indexes the frontend's squiggle table.
@@ -45,6 +46,20 @@ class ReportId(NonEmptyStr):
     def __new__(cls, value: str) -> Self:
         if not _REPORT_ID_PATTERN.fullmatch(value):
             raise InvalidShellValueError(f"invalid report id {value!r}")
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return _string_schema(cls, handler)
+
+
+class PageId(NonEmptyStr):
+    """A shell page's id: ``page-<16 hex>``, minted once by each window as its page loads, so the shell can tell a
+    page's own desktop moves from the others'."""
+
+    def __new__(cls, value: str) -> Self:
+        if not _PAGE_ID_PATTERN.fullmatch(value):
+            raise InvalidShellValueError(f"invalid page id {value!r}")
         return super().__new__(cls, value)
 
     @classmethod
