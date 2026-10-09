@@ -27,11 +27,11 @@ Every outcome is reported on stderr and the exit code is always 0. The change
 has already landed on disk; failing a reveal because the user had the window
 shut would be worse than a stale tab.
 
-Run via bare ``python3`` (standard library only), like ``forward_port.py`` -- it
-runs from restart paths that must not depend on a synced venv.
+Run with ``uv run --no-sync``: it is venv tier, and its callers (update-app, and
+update-self's apply) run it right after a sync.
 
 Usage:
-    python3 system/scripts/refresh_workspace_view.py
+    uv run --no-sync system/scripts/refresh_workspace_view.py
 
 Environment:
     MINDS_WORKSPACE_SERVER_URL  Base URL of the live workspace server
