@@ -1797,14 +1797,14 @@ extra_window__extend = ["reviewer_settings='system/scripts/create_reviewer_setti
 env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=0", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
 # Converge the venv for worker agents, ahead of the plugin install so deps are ready
 # first. A fresh git worktree (transfer = "git-worktree" above) carries no .venv
-# (gitignored), so a worker's first `uv run` would otherwise cold-build one mid-task --
-# lazily, with root-closure scope rather than --all-packages, racing whatever the agent
-# is doing (intermittent ModuleNotFoundError, e.g. imbue_common). Scoped to the worker
+# (gitignored), and the worker's one-offs run `uv run --no-sync`, which never builds one.
+# --frozen, so a lock that drifted from pyproject.toml is left for the worker's
+# SessionStart hook, which regenerates it and tells the agent to commit it. Scoped to the worker
 # role: a `-t worker` create resolves to type `claude` and applies THIS template, so the
 # sync belongs here, not on the `[agent_types.worker]` legacy shim (which only re-resolves
 # agents whose persisted type is already worker). Chat/main agents share the services
 # agent's boot-time converge. uv's warm cache makes this hardlink-fast when up to date.
-extra_provision_command__extend = ["uv sync --all-packages", "bash system/scripts/claude_update_plugin.sh"]
+extra_provision_command__extend = ["uv sync --all-packages --frozen", "bash system/scripts/claude_update_plugin.sh"]
 append_system_prompt__extend = ["You were launched by another agent. List any questions at the end of your final response, along with the assumptions you made."]
 
 # Shims for agents created before roles moved to create templates: their persisted
