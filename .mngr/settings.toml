@@ -153,7 +153,7 @@ auto_dismiss_dialogs_at_startup = true
 sensibly_deal_with_dialogs = ["ALL_KNOWN_AND_UNKNOWN_DIALOGS"]
 auto_allow_permissions = true
 auto_disable_questions = true
-cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,TodoWrite,TaskCreate,TaskList,TaskUpdate"""
+cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode"""
 # fastMode defaults OFF here so every NON-interactive agent runs at standard
 # speed -- every claude role (caretaker, automation, worker) resolves to this
 # type, so they all inherit it. Fast mode buys latency at a higher per-token
@@ -224,13 +224,11 @@ isolate_local_config_dir = false
 # Claude-only instructions, appended to every claude agent's system prompt.
 append_system_prompt__extend = ["""# Claude-specific instructions
 
-Your built-in `TodoWrite` tool is disabled. Use `tk` instead -- step records (`tk create --step "..."`) are the replacement for `TodoWrite`. Do not use any other built-in memory or task-planning tools; `tk` is the only task tracker in this workspace.
-
 `.claude/skills` does not exist; it is symlinked to `.agents/skills/`.
 
 Use your built-in memory system. Your memory directory is `data/memories/` (configured via `autoMemoryDirectory` in `.claude/settings.json`).
 
-Give every Bash call a `description`, `tk` calls included: a few plain words saying what the command does. The chat shows the user that description instead of the raw command."""]
+Give every Bash call a `description`: a few plain words saying what the command does. The chat shows the user that description instead of the raw command."""]
 
 # The "main" (services) agent type -- a plain `command` agent, NOT a claude
 # agent. No claude ever runs as this agent: window 0 only sleeps while the
@@ -1698,19 +1696,10 @@ post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-s
 # directory (`transfer = none`) rather than taking a worktree of its own -- one
 # workspace, one work_dir, all chats in it.
 #
-# The output style is what makes chat agents talk like a subordinate while
-# workers and automations stay unstyled. `output_style` names the `name:`
-# frontmatter of a file in .agents/output-styles/ (mngr validates it at create
-# and fails loudly on a miss). It is harness-neutral: claude takes it as its
-# native `outputStyle` setting, codex -- which has no output-style concept --
-# gets the same file's body as developer instructions.
-#
 # `MNGR_AGENT_ROLE=chat` marks the agent as a chat (as opposed to a worker or
-# a bare `mngr create` agent) for any tooling that wants to tell them apart;
-# AGENTS.md's finish-notification rule is addressed to chats and is prose-only.
+# a bare `mngr create` agent) for any tooling that wants to tell them apart.
 [create_templates.chat]
 transfer = "none"
-output_style = "Engineering Subordinate"
 env__extend = ["MNGR_AGENT_ROLE=chat"]
 
 # Fast: launches the fast-capable harnesses in fast mode so a new conversation

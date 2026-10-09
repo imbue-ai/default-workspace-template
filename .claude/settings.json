@@ -47,39 +47,7 @@
           },
           {
             "type": "command",
-            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_tk_standalone.sh"
-          },
-          {
-            "type": "command",
-            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_require_steps_pretool.sh"
-          },
-          {
-            "type": "command",
             "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_rewrite_bash_command.py 2>/dev/null || true"
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_open_tickets_reminder.sh"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "[ -n \"$MNGR_CLAUDE_SUBAGENT_PROXY_CHILD\" ] && exit 0; [ -e .git ] || { echo \"Be sure to return to the repo root when you finish! Otherwise the other stop hooks cannot run correctly.\" >&2; exit 2; }"
-          },
-          {
-            "type": "command",
-            "command": "[ -n \"$MNGR_CLAUDE_SUBAGENT_PROXY_CHILD\" ] && exit 0; ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_open_tickets_stop_nudge.sh"
           }
         ]
       }

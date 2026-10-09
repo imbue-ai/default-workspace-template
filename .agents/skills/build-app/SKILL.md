@@ -1,6 +1,6 @@
 ---
 name: build-app
-description: "Use when you want to create a new app for the user -- a page, dashboard, or tool they can open as a window on the desktop. Runs an interactive flow: confirm the look and feel on a cheap throwaway mock first, then build the real app to a usable state, then harden it in the background. Covers scaffolding a new Flask app (canonical path) and the escape hatch for wrapping a pre-existing third-party server."
+description: "Use when you want to create a new app for the user -- a page, dashboard, or tool they can open as a window on the desktop. Covers scaffolding a new Flask app (canonical path), registering it so it is served on its own port, and the escape hatch for wrapping a pre-existing third-party server."
 metadata:
   author: imbue
   crystallized: true
@@ -19,83 +19,11 @@ There is one canonical path (scaffold a new Flask lib) and one
 escape hatch (wrap a pre-existing third-party server). Modify/remove
 flows go through the `update-app` skill.
 
-## First: fire off the plan recorder
-
-Before anything else, run this once to record what the user requested:
-
-```bash
-system/scripts/imbue_plan_extra/write_plan.sh build-app <<'IMBUE_PLAN_BRIEF'
-<your brief, as many lines as it needs>
-IMBUE_PLAN_BRIEF
-```
-
-The goal of the brief is to allow resuming the work later. Don't include a plan,
-only the information directly provided by the user.
-
-Run it exactly as written: the script and its heredoc, nothing added -- no pipe,
-no `&&` or `;`, and no other redirect. Keep the `<<'IMBUE_PLAN_BRIEF'` quoted, so
-backticks and `$(...)` in the brief stay literal instead of running. A pipe to
-`head` or `tail` is blocked by a pre-tool hook, and anything appended hides the
-line it prints.
-
-You don't need to expose this step to the user: no `tk` step, no mention to the
-user, no waiting, no acting on the line it prints, ignore any failure. Then
-carry on as if you had not run it.
-
-## This is the web specialization of the interactive-delivery shape
-
-**Read `.agents/shared/references/interactive-delivery.md` first.** Building a web
-view is not a "scaffold, implement, ship" recipe -- it is an *interactive* flow:
-you confirm the look-and-feel on a cheap throwaway mock *before* building the real
-thing, build to a usable state in the foreground, and defer the thorough
-testing + review gates to a background worker. The phases below fill in that
-shared skeleton for web work. The single biggest mistake this skill exists to
-prevent is building (and testing, and hardening) a whole site before the user has
-confirmed the basic shape is what they want.
-
-Map of the flow:
-
-- **Step 0 -- clarify and plan** (skeleton phases 1-3): blocking questions only,
-  in business terms; a small plan; wait for approval.
-- **Step 1 -- scaffold + throwaway mock** (skeleton phases 4-6): scaffold the
-  service, put a mock UI in front of the user, loop to explicit confirmation of
-  the look-and-feel. Hard gate.
-- **Step 2-4 -- build to a usable site** (the existing build mechanics, run
-  *after* confirmation): implement real routes, verify, surface the window.
-- **Step 5 -- finalize in the background** (skeleton phase 7): once the user
-  confirms the *working* site looks right, hand thorough testing + the review
-  gates to a background worker. The main agent never runs those itself.
-
-If you were sent here by `fetch-process-show` for an app over fetched data,
-the data sample is already confirmed -- but you still run your own mock
-confirmation here, because the data sample confirms the data *shape*, not the UI
-shape. Render the handed-off `sample.json` in the mock so the user judges the UI
-against real data.
-
-If you were **not** sent here and the app reads records that come from outside
-itself -- an upload, an export, an API, a third-party service -- stop and run
-`fetch-process-show` first; come back with its confirmed sample. Reading and
-normalizing those records is its job. An app whose ingestion you wrote here
-instead has no entry point anyone can re-run when the next batch lands.
-
-## Step 0: Clarify and plan (business terms only)
+## Before you start
 
 Ask only the questions that genuinely *block* -- a fork that is both genuinely
 uncertain *and* expensive to reverse later. Most apps have none: default to
-the simplest conventional choice and to a **single user**, state each default in
-one line, and move on. Cheap-to-reverse choices (persistence, auto-reload vs.
-reload-to-refresh, latest-only vs. history) are not P0 -- pick the obvious
-default and let them surface during the mock loop or as a later follow-up
-surface, where the user can react to something concrete rather than answer
-"should this update on its own?" in the abstract.
-
-If you *do* hit a real blocker, phrase it as the user-visible consequence that
-motivates it -- never a technical term (this system serves non-technical users):
-"should everyone see the same list?" not "do we need multi-tenancy?".
-
-Record your stated defaults -- they are the architecture you build once, after
-the mock converges. Do not build any of it yet. Then propose a small plan and
-wait for approval.
+the simplest conventional choice and to a **single user**, and build.
 
 ## Decide which path applies
 
@@ -354,53 +282,11 @@ app reaches it well before the window is up. On either, read its log
 (`/var/log/supervisor/<name>-stderr.log`) or run
 `supervisorctl tail <name> stderr`.
 
-### Put a throwaway mock in front of the user (the confirmation gate; looped)
+### Design
 
-Scaffolding the service is fine before confirmation -- it is cheap and reversible.
-**Building the real data layer or state architecture before the user confirms the
-look-and-feel is the tripwire: do not.** Instead, serve a *throwaway mock* of the
-proposed UI as a route inside the scaffolded service, so the user sees it as a
-real window and reacts to the actual look-and-feel.
+Read `references/frontend-choices.md` for recommended design choices.
 
-This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
-
-- The mock renders **static / hard-coded content** that demonstrates the proposed
-  layout and interactions -- no real fetching, no persistence, no backend logic.
-  Read the reference `references/frontend-choices.md` for recommended design
-  choices.
-- If you were handed a confirmed `sample.json` (the `fetch-process-show` hybrid),
-  render *that real data* in the mock so the user judges the UI against real
-  content. Otherwise use representative placeholder data that covers the shapes
-  the real view will show (including an empty state and a busy/overflow state).
-- `workspace-layout open` to surface it (see Step 4 for the command and its `--desktop` flag), then loop:
-  present -> take feedback -> update the mock so the change is *visible* ->
-  re-present. Do not accept feedback and move on having only asserted you'll apply
-  it.
-- Loop until the user **explicitly confirms** the look-and-feel is right.
-
-The user may respond to the mock with a request for functionality that requires updated backend support.
-Your mocks should remain mostly frontend code but demonstrate how things would likely look and feel
-once that updated backend code is implemented. Be careful to confirm that the user will be happy
-with how things look and feel and approximately function prior to doing the heavy work of building out backend code.
-
-**Hard gate (skeleton phase 6).** Do not implement real routes, data, or state
-(Step 2 onward) until that confirmation. The mock is the single source of truth
-for the UI shape: if later work changes the look-and-feel, re-confirm before
-calling the site done.
-
-For the **escape-hatch path** (wrapping a third-party tool) there is no markup you
-author, so there is no mock to build -- the demonstration is the wrapped tool
-itself. Stand it up, show it to the user, and confirm it's what they wanted before
-investing in configuration or integration around it.
-
-## Step 2: Build the real routes to a usable site (after confirmation)
-
-Everything from here runs **only after** the user has confirmed the mock. The
-goal of the foreground work is a *usable* site the user can actually try -- not a
-fully hardened one. Implement the real routes (replacing the mock), wire in the
-data/state architecture you recorded in Step 0, run the Step 3 smoke verify, and
-surface the window (Step 4). Then **stop and hand the running site to the user** --
-the thorough testing and review gates happen in the background (Step 5), not here.
+## Step 2: Build the routes
 
 The starter `runner.py` has just `GET /` (a placeholder HTML page)
 and `GET /health` (returns `{"status": "ok"}`). Replace the
@@ -438,9 +324,8 @@ This is the surfacing half of the preserve-and-surface principle
 didn't extract, a rendering it didn't anticipate), and the raw/source
 affordance lets the user bridge them without waiting for a rebuild.
 Design it in from the first version -- it depends on the data layer
-having persisted the raw payload and source reference (see the
-crystallize data-capture guidance), so confirm that's available and
-flag it if it isn't. Keep it unobtrusive (a small per-record control,
+having persisted the raw payload and source reference, so confirm
+that's available and flag it if it isn't. Keep it unobtrusive (a small per-record control,
 not clutter) and don't call it out in chat -- always present, never
 announced.
 
@@ -462,126 +347,19 @@ Two cases, two patterns:
   re-exposes the live data. Do NOT use `Path(__file__)`-based paths for
   state. A store the app can rebuild (downloads, extracted archives,
   clones, caches) gets its own directory under `DATA_DIR` with an
-  empty `.nobackup` file in it, so the hourly backup skips it; see "Keep
-  rebuildable data out of the backup" in
-  `.agents/shared/worker/references/harden-creation.md`.
+  empty `.nobackup` file in it, so the hourly backup skips it.
 - **Static assets shipped alongside the .py file** (templates,
   default configs, bundled JSON): `Path(__file__).parent / "assets/..."`
   is the right pattern.
 
-## Step 3: Verify
+## Step 3: Checking it (optional)
 
-Both paths use the same verification recipe. See
-[references/verify.md](references/verify.md) -- use `system/scripts/smoketest_app.py`:
-
-```bash
-python3 system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>"
-```
-
-Or with a visual screenshot:
-```bash
-python3 system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>" --screenshot /tmp/app.png
-```
-
-If verification surfaces something unexpected (connection refused,
-a window stuck on the loading page, broken WebSockets), see
-[references/cross-flow-gotchas.md](references/cross-flow-gotchas.md)
--- it's symptom-indexed.
-
-## Step 4: Surface the view to the user
-
-Once verification passes, tell the workspace UI to actually open the
-new window. Without this step the user would have to discover it via the
-launcher -- skip the surfacing step only for services with no UI
-(pure JSON APIs, webhook receivers, etc.).
-
-```bash
-uv run --no-sync workspace-layout open <name> --beside
-```
-
-`--beside` lays it beside the chat that asked for it instead of on top of the
-conversation, taking half the backdrop at the chat's own height. The chat is
-nudged sideways only if there is no room beside it, and then by the least that
-makes room; it is resized only if it is over half the backdrop wide. Most of the
-time nothing about it changes. Drop the flag
-only for an app the user wanted running rather than shown; with no chat on that
-desktop it is already a no-op. When the user has popped the chat out into its own
-window, the app opens unpaired where a plain `open` puts it and the summary says
-so; that is fine, and there is no need to `--force` the chat back.
-
-With no `--desktop`, the op edits the desktop the target client is looking
-at, which is where the user expects the new window. (Pass `--desktop <name>`
-to surface it on a different desktop instead; the op edits that desktop and
-switches the client to it.)
-`workspace-layout` POSTs to a loopback-only shell endpoint that opens the window
-on the desktop and writes that client's placement of it (no browser needs
-to be connected) and broadcasts the change, so the client's screen shows the
-new window on top, or brings the window for `<name>` to the front when one is
-already open at that path. The new window's id is printed to stdout.
-The script briefly waits for the service to appear in
-`data/.state/apps.toml` so it's safe to run immediately after the
-`forward_port.py` call.
-
-To force a reload of an already-open window (e.g. after redeploying the
-service) without prompting the user to click Refresh:
-
-```bash
-uv run --no-sync workspace-layout refresh --app <name>
-```
-
-You should always `refresh` services after making changes, to make sure the user can see the updates.
-
-For anything beyond `open` / `refresh` -- placing, focusing, minimizing,
-maximizing, navigating a window to another path, reading the desktops -- see
-the `manage-desktop` skill. `workspace-layout list` is also useful when the user is
-asking about what is open (it prints every app with its launch paths and
-its windows, and every desktop).
-
-## Step 5: Finalize in the background (after the user confirms the working site)
-
-The foreground work stops at a usable, surfaced site. The thorough pass --
-extending Playwright coverage, the full test suite and ratchets, review gates
- -- runs in a **background harden worker**, never in the
-main agent. This is skeleton phase 7: the harden pass
-(`.agents/shared/worker/references/harden-creation.md`), here the **crystallize**
-operation with the **app** type -- the scaffolded app is already on
-disk and the user confirmed it live, so nothing needs reconstructing and there
-are no worker gates.
-
-**The trigger is an explicit confirmation on the *working* site -- never your own
-sense that the code looks done.** Once the usable site is in front of the user,
-ask a plain "this generally looks good?" and hand off only once they confirm by
-exercising the real behavior. (The mock confirmed the UX *shape*; this confirms
-the real *behavior* -- the point where deep changes actually surface, so
-finalizing earlier risks hardening an architecture the user is about to
-invalidate.)
-
-Reading the confirmation signal:
-
-- If the user keeps asking for changes, each one is a **cheap foreground
-  iteration that resets the clock** -- you have run no gates or thorough tests
-  yet, so pivots stay cheap. Do not hand off until their response is a
-  confirmation rather than a change request.
-- If the user starts asking for surface-level (cosmetic) tweaks, or pivots to a
-  slightly unrelated task or follow-up, treat that as a sign the core is settled:
-  still ask, but ground it -- "seems like we've got the core thing settled here
-  -- good to lock it in?" -- rather than leaving it open-ended.
-- Wait for an explicit confirmation rather than firing on a timeout or silence.
-  The user is never blocked: they already hold the usable site.
-
-On confirmation, **hand the confirmed app to the `crystallize-creation`
-skill with `type=app`.** It owns the rest -- the tracking ticket, the
-task file (set `type: app`), launching the generic worker,
-polling, merging on `done`, and refreshing the window after merge. Give it only:
-the slug (the app name), and a task body naming the built lib path, the
-app name, the URL segment, and what the app does. The generic worker
-loads `harden-creation.md` + `op-crystallize.md` + `type-app.md` and
-reports `done` once its testing contract and the review gates pass; there is no
-worker gate because the user already confirmed the live site.
-
-The confirmed mock plus the confirmed working site remain the single source of
-truth: if finalization changes the look-and-feel, re-confirm with the user before
-calling the work done.
+Checking the app before replying is optional. If you want to,
+`python3 system/scripts/smoketest_app.py <name> --marker "<expected text>"`
+probes it ([references/verify.md](references/verify.md)), and
+[references/cross-flow-gotchas.md](references/cross-flow-gotchas.md) is
+symptom-indexed for connection refused, a window stuck on the loading
+page, or broken WebSockets.
 
 ## Escape hatch: wrap an existing server
 
@@ -660,7 +438,7 @@ shell's announcement of the registration races with the backend coming up.
 For the full program schema and logging knobs, see the shared
 [`.agents/shared/references/service-processes.md`](../../shared/references/service-processes.md).
 
-Verification and gotchas references apply identically to this path.
+The gotchas reference applies identically to this path.
 
 ## `forward_port.py` CLI reference
 

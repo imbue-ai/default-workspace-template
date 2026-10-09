@@ -12,62 +12,13 @@ IF YOU FAIL TO FOLLOW ONE, YOU MUST EXPLICITLY CALL THAT OUT IN YOUR RESPONSE.
 - NEVER amend commits or rebase--always create new commits.
 - If you ever need to work with another *git* repo that is *outside* of this monorepo as a read-only dependency, you should do so by adding a git subtree under `system/vendor/`.
 - If you need to *actively develop* against an external repo, check out a standalone clone of it under `.external_worktrees/<repo-name>/`. This directory is gitignored so the external clones don't pollute the monorepo. The branch in the external clone should mirror the branch you're on in this monorepo. mngr is not one of them: it is installed here as packages from the commit `pyproject.toml` pins (`[tool.uv.sources]`; the public mirror for every release, or the private mngr-internal repo while a branch iterates on a paired change), so a change to it is described and submitted per `.agents/skills/submit-upstream-changes/references/mngr-changes.md` rather than developed from this workspace.
-- This project uses a CLI ticket system (`tk`) for task management. Run `tk help` when you need to use it. Tickets live under `data/.tickets/` (the path is set via the `TICKETS_DIR` env var so tickets sit with the rest of the workspace's data).
 - All relative paths in this repo assume cwd = repo root (`/home/user/workspace`). Supervisord runs the services from there; any process started elsewhere (manual launch, subprocess from a different cwd) must either set cwd to the repo root or use absolute paths. User-facing workspace data lives under `data/` (visible folders are the user's to organize; e.g. `data/.apps/<name>/` holds an app's stored data, including its instance records at `data/.apps/<name>/instances.json`, and `data/.skills/<name>/` a skill's own state); flow-internal scratch lives under `data/.tasks/<flow>/` and machine state (what a program keeps about this machine and can rebuild: the registry, dispatch scripts, pty records, the shell's client layouts) under `data/.state/`. The rule is `docs/system/blueprint/workspace-app-model/contracts.md` section 17.
 - When adding a new app, use the `build-app` skill, which sets up a new package under `system/apps/` + a supervisord program entry + `forward_port.py` registration on its own port. Every app icon -- a new one or an edit to an existing one -- is built to `docs/system/app-icons.md`: a 216x216 two-layer tile, one fill-only glyph in a centred 144x144 box, coloured from the pair palette that doc carries. Do NOT edit `system/apps/system_interface/` for this -- that's the top-level workspace UI, not a template for new apps.
 - A user can right-click anything on their screen and attach a description of it to a message as a `REF-<id>.json` file ("Explain what I attached in REF-..."). `.agents/shared/references/element-references.md` says what the file holds and how to find the element it names.
-- **`uv run --no-sync workspace-layout open` puts a window on the user's screen the moment it returns.** It is not setup -- it is the act of showing them something, and it applies to the live workspace they are looking at right now. So open a window only when you are ready for the user to see what's in it; do everything you want to check privately *before* that call, not after; and never tell the user to open a window you opened yourself. The same goes for every other mutating `workspace-layout` op (`close`, `focus`, `place`, `refresh`, ...) -- they all change the user's view live. See the `manage-desktop` skill.
 
 # Continuing a chat that moved to you
 
 - When `MINDS_CHAT_ID` is set and differs from `MNGR_AGENT_ID`, this chat ran on another agent before you, and your first message says what to do. If it does not, `mngr list --include 'labels.chat_id == "$MINDS_CHAT_ID"'` lists your predecessors and `mngr transcript <agent-id>` reads their transcripts. Never touch a predecessor, and do not mention the switch to the user unless they ask.
-
-# Task management (CRITICAL — read this before doing real work)
-
-You manage your work using `tk`, the vendored ticket tracker at `system/vendor/tk/`. It is the **only** task tracker available — Claude Code's built-in `TodoWrite` is disabled. `tk` stores two kinds of records, distinguished by the `--step` flag at creation:
-
-- **Step records** (`tk create --step "<user facing title>"`) are the replacement for `TodoWrite`: turn-bound, creator-private progress markers that render as nodes on the user-facing chat progress view (a vertical timeline with a status icon and a one-line summary per step). Most turns use only these. (`tk close <id> "<user facing summary>") closes the step.
-- **Regular tickets** (`tk create "..."`, no flag) are substantive, cross-agent work units other agents can see and pick up. They do **not** render in the chat progress view. They matter only when work spans turns or is handed between agents.
-
-Because step titles and close-summaries populate the progress view, **every one is user-facing copy**: plain English for a non-technical reader, no file names, no tool names, no jargon. Use casual terms "login's rebuilt - faster and more secure" instead of technical precision "I refactored AuthProvider, swapped the JWT library for Jose and updated 14 call sites." The vocabulary for all user-facing text (titles, summaries, and your prose alike) is `.agents/shared/references/user-facing-language.md`.
-
-When you are following a skill, mirror its rough sequence in the progress view, not its exact one. A skill's steps are written for you and are usually finer than the user's mental model: collapse several into one title when the user would see them as one thing ("Connect to GitHub" covers requesting the permission, verifying it, and wiring it up), and never lift an internal step name into a title.
-
-## Declaring and running steps
-
-The first thing you do on any prompt that warrants real work is decompose it into steps and create them all up front, BEFORE doing any of the work — the step sequence is the user-visible plan. Concretely:
-
-1. (Optional) one short prose acknowledgement, e.g. "Sure, looking into that now." Keep it to one line; don't narrate the plan here.
-2. `tk create --step "<user facing title>"` for every step you currently expect, in order. You may batch them into one tool call, but each step must be its **own separate `tk create` command** (on its own line or joined with `;`) — each `tk create` makes exactly one step, so never pass multiple `--step`s to a single `tk create` (tk rejects that). **Never redirect the output of a `tk create`/`start`/`close`** (`>`, `>>`, `2>`, `&>`, `| tee`, …): the progress view reads each step from the command's visible output (`Created <id>: <title>`), so a redirect makes the step drop out of the plan. Note the ids. Do NOT `tk start` any yet.
-3. `tk start <id>` the first step, do its work, then `tk close <id> "user facing summary"`. Move to the next. Only one step is `in_progress` at a time.
-
-**`tk start` and `tk close` must each be the only command in their tool call** — no `cd` prefix, no chaining (`&&`, `;`, `|`, `&`, newline), no redirection; otherwise the progress view can't place the step. (You can still batch several `tk create` commands into one tool call — as separate commands, one `--step` each, with no redirection.)
-
-Add steps mid-turn (`tk create --step`) as sub-problems surface; drop ones that turn out unneeded (`tk close <id> "No longer needed — covered by the previous step."`). Granularity follows the user's mental model of the work — "first X, then Y, then Z" is three steps — not one-per-tool-call and not one-for-the-whole-turn. Typically 2–5 per substantive turn.
-
-Titles describe the goal as the user understands it. Summaries (required on close) are ONE plain-English line describing **the work you did** in that step — not the result or finding (that goes in your final message below the timeline), and not a list of tool calls or file names.
-
-## When you don't need records
-
-Skip records for: chitchat, single-line acknowledgements, and trivial answers; pure clarifying-question turns where you can't act until the user replies; or a reply that's a single quick file read. If unsure, default to creating steps.
-
-## Steps and prose
-
-- After all steps are closed, write your final user-facing message — *this* is where results, findings, and recommendations go.
-- **Close your final step *before* writing that wrap-up reply** — the view promotes a final run of prose with no open step to your top-level reply below the timeline. (Best-effort; the view renders sensibly either way.)
-- **Never name the machinery to the user — describe the work instead.** The `tk` calls and the words for them are invisible plumbing: the user sees only the progress timeline and your prose, so a sentence like "Let me close this step" refers to something they cannot see and reads as a non-sequitur. This is the single most common leak, so treat it as a hard rule. When talking to the user, NEVER use these words in their `tk` sense: **step, ticket, `tk`, close/closing, open/reopen, start/starting, mark, check off, in progress, record, todo, task list, progress view**. There is nothing to announce before or after a `tk` call — just make the call silently and let the timeline update itself. The same hard rule covers git (see "Git" below): **commit, branch, push, merge, PR, rebase, checkout, diff, repo** are plumbing words too.
-  - Instead, speak only about the actual work, using natural transitions. These are good: "Moving on to the API wiring." / "Finishing up with the tests." / "Next I'll check the config." / "That's the migration done — now the cleanup." Say nothing at all if there's no substantive work to describe.
-  - Concrete rewrites: "Let me close this step" / "Closing this out" / "Marking this done" → just say what you finished, e.g. "The parser changes are in." (or say nothing). "Starting the next step" → "Now I'll wire up the endpoint." "Let me add a step for that" → "I'll also need to update the schema." If a sentence's subject is the record rather than the work, delete or rewrite it.
-- Steps may stay open across turns. At the start of each new user message you'll get a system reminder listing your still-open steps; for each, decide before doing anything else whether to keep working on it (`tk start` if needed), replace it (close with a status summary, then create new steps for the new direction), or close it honestly if you're moving on. Don't silently abandon one.
-- There is no "failed" status — every record terminates as `closed`. If a step didn't pan out, still close it; the summary describes the work you did, and your final message reports the result honestly.
-
-## Regular tickets and delegation
-
-Regular tickets are managed cross-agent: `tk ls` / `tk ready` / `tk blocked` list them (step records hidden unless `--include-steps`/`--only-steps`), `tk show <id>` displays one, `tk create "..."` files one (unassigned until picked up), `tk start <id>` picks it up (auto-self-assigns), `tk close <id> [user facing summary]` closes it (summary optional for tickets, required for steps). They can stay `in_progress` across turns.
-
-When you delegate via the `launch-task` skill, the whole delegation is **one step** in your progress — the sub-agent uses its own `tk` internally and that work doesn't surface in your chat. Represent it as a single step named for the outcome, not the delegation (e.g. "Rebuild the login flow (in the background)"; "background agent" is the user's word for the worker if it must come up, never "sub-agent"), and close it with the outcome.
-
-Run `tk help` if you forget a command. Avoid `deps`, `links`, `types`, and `priorities` — they're backlog features the chat progress view doesn't use.
 
 # Important commands and conventions:
 
@@ -79,9 +30,9 @@ Run `tk help` if you forget a command. Avoid `deps`, `links`, `types`, and `prio
 
 - When the user is actively interacting with you, prioritize delivering a result they care about over technical polish. Technical refinement can happen in the background.
 - Never misrepresent your progress. It is far better to say "I made some progress but didn't finish" than to say "I finished" when you did not.
-- Before finishing your response, reflect on your work and identify any potential issues. Tell the user only the ones that affect them, in plain language ("the report skips entries with no date; want me to include those?"); the rest stay in your own thinking or go into a regular ticket for later.
+- Before finishing your response, reflect on your work and identify any potential issues. Tell the user only the ones that affect them, in plain language ("the report skips entries with no date; want me to include those?"); the rest stay in your own thinking.
 - If I ask for something that seems misguided, flag that immediately. Then attempt to do whatever makes the most sense given the request, and in your final message, be sure to flag that you had to diverge from the request and explain why.
-- During your final reflection, if you see a potentially better way to do something (e.g. by using an existing library or reusing existing code), offer it as a one-line follow-up in the user's terms, or file a regular ticket if the user would not care.
+- During your final reflection, if you see a potentially better way to do something (e.g. by using an existing library or reusing existing code), offer it as a one-line follow-up in the user's terms.
 - Never use emojis. Remove any emojis you see in the code or docs whenever you are modifying that code or those docs.
 - Be concise in your communications. Don't hype up your results, say "perfect!", or use emojis. Be serious and professional.
 - **Default UI is web view.** When exposing a tool to the user, default to a web page. Don't enumerate options (CLI / status line / web) -- just propose the web view and only deviate when there's a specific reason (e.g. CLI for batch jobs).
@@ -89,15 +40,9 @@ Run `tk help` if you forget a command. Avoid `deps`, `links`, `types`, and `prio
 - **Naming is informative, not cheeky.** Service names, app names, skill names, command names: prefer something that explains what the thing does (`slack-inbox-checker`) over something clever (`nothing-new`). Cute names tax every later mention.
 - **Platform-internal APIs are valid.** Don't restrict yourself to officially documented public APIs. If a platform's own client (web app, mobile app) uses internal or undocumented endpoints to do something, those endpoints are fair game -- inspect what the official client actually calls and use the same endpoints with the same user-session auth. This is often cleaner than designing brute-force workarounds on top of a limited public API.
 
-# Manual verification and testing
+# Checking your work
 
-Before declaring any feature complete, manually verify it: exercise the feature exactly as a real user would, with real inputs, and critically evaluate whether it *actually does the right thing*. 
-Do not confuse "no errors" with "correct behavior" -- a command that exits 0 but produces wrong output is not working.
-
-Then crystallize the verified behavior into formal tests. 
-Assert on things that are true if and only if the feature worked correctly -- this ensures tests are both reliable and meaningful.
-
-To find which tests a change calls for, commit it, then run `uv run app-manifest select-tests --diff-base <the commit before the change>` from the repo root (it reads commits, and refuses to run while an edit is uncommitted): it prints the commands to run, in order. The chat app's and the shell's suites (`system/apps/chat`, `system/apps/system_interface`, each run from its own directory) skip their `browser` tests by default, and the chat app also its `real_claude` tests (the ones that run the real claude binary). Pass `-m ''` to run everything, or `-m browser` for only the browser tests. Both suites fail any run under their coverage floor, so a run of only some of their tests (`-m browser`, or named files) needs `--no-cov`. Naming a browser test file without `-m ''` or `-m browser` deselects it, so nothing runs and the run fails on the coverage floor. Mark every test by what it is: `browser` for one that drives a browser, `frontend` for one that reads an app's frontend source, `real_claude` for one that runs the real claude binary; when only the chat app's or the shell's frontend changed, the test gate runs just its `browser` and `frontend` tests.
+Checking what you built before replying (a `curl` of its port, `python3 system/scripts/smoketest_app.py <name>`, a Playwright pass) is optional; use your judgment.
 
 # Communication
 
@@ -106,32 +51,6 @@ If the user talks to you about files or directories on disk, assume (unless cont
 When a chat reply mentions a workspace file, write its path in code formatting (`data/reports/q4.md`), not as a markdown link. The chat renders only web links and absolute-path download links (the `show-files-in-chat` skill); any other path link shows as plain text. If the user should look at a file under `data/`, suggest they open it in the File Viewer (it opens at the workspace folder and can browse the whole container).
 
 If the user asks you to read or act on anything outside this workspace on their behalf -- a third-party tool they have an account with, a link they paste (a Notion page, Google Doc, or Slack thread), a site to sign in to, or a browser they want to watch -- load the `connect-external-service` skill before running any command against it. The skill decides how to reach the service and what to ask the user for; do not pick a method yourself first. The one exception is reading a public page that needs no account, which your web tools can do directly.
-
-## Telling the user you finished
-
-**If you are a chat agent, send a notification when a turn ends with something the user will want to know about or act on:** a finished deliverable, a result they were waiting for, or a question only they can answer. The user may have walked away the moment they sent the message; the notification (bell, badge, toast card, and a system banner when they are looking elsewhere) is what brings them back, and clicking it lands them in this chat.
-
-```
-python3 .agents/skills/notify-user/scripts/notify_user.py "<one plain sentence saying what is ready or what you need from them>"
-```
-
-Read the exit code -- when it is non-zero the notification did not go out, and your reply should say so. The `notify-user` skill has the full guidance on what to write.
-
-The amount of work or time is not the test; what matters is whether the user cares about the outcome. Skip it when the turn produced nothing of that kind: chitchat, an acknowledgement, progress with no result yet, or the answer to a trivial question. A question you cannot go on without is a reason to send one. Never more than one per turn.
-
-Nothing reminds you of this at the end of a turn; decide it yourself as you finish, and do not narrate the decision -- the user never asked, so a sentence about it is a non-sequitur, the same way naming your `tk` calls is.
-
-**This is for chats only.** If you were launched by another agent -- a `launch-task` worker, or any other sub-agent -- never send one: your result reaches the user through the chat that launched you, and only chats appear in the app's feed.
-
-# Work delegation
-
-You can delegate larger tasks to sub-agents using the `launch-task` skill.
-Sub-agents work on separate git branches and are labeled with `workspace=$MINDS_WORKSPACE_NAME` so you can track them.
-
-Use your judgment on when to do work directly vs delegating. Delegation is useful for:
-- Tasks large enough to warrant a separate context
-- Multi-file changes that benefit from verification before merging
-- Long-running operations you don't want to block on
 
 # Finding past work
 
@@ -149,8 +68,6 @@ You can (and should) modify your own configuration to improve yourself:
 - **system/supervisord.conf.d/**: Add, modify, or remove background services -- one file per program. See the `update-app` skill.
 - **system/scripts/**: Add utility scripts that help you accomplish your purpose.
 
-Commit your changes to git after making modifications, silently (see "Git" below).
-
 Users make "creations": apps (opened as windows), skills (a skill run automatically on a schedule is an "automation" -- run via the machinery in `system/libs/automations/`, see the manage-scheduled-tasks skill), data (documents, images, notes), and customizations of any of them. Templates are a publishable, reusable, bootable snapshot of the creations an agent has built (one repo can accumulate several); another agent can adapt one into itself.
 
 # Updates
@@ -163,7 +80,7 @@ The upstream is defined in `system/config/parent.toml`.
 - A diagnosis, no fix: report it, using the POST in `.agents/shared/references/report-built-in-issues.md`. It pops a modal for the user to review and send, so the human still gates it. One report per pass, covering everything you found -- not one per issue.
 - A fix you can stand behind: `submit-upstream-changes`, which opens a PR against the parent template repo. Not for mngr: a fix there is its own PR on the mngr repo, not a template one, so an mngr defect goes in a report.
 
-Fixing it locally is *not* an alternative: a fix to a file that is byte-identical to the release only manufactures divergence the next update has to reconcile. "Recorded in `tk`" is not a valid end state for a built-in defect -- either escalate it, or tell the user plainly that you found one and are not escalating it, and why.
+Fixing it locally is *not* an alternative: a fix to a file that is byte-identical to the release only manufactures divergence the next update has to reconcile. Either escalate it, or tell the user plainly that you found one and are not escalating it, and why.
 
 # Using crystallized skills
 
@@ -173,34 +90,20 @@ Fixing it locally is *not* an alternative: a fix to a file that is byte-identica
 
 - **Run the creation, don't redo its job.** When a creation already does what's being asked -- an app that ingests this kind of data, a skill that runs this process -- run it, or extend it and run it. Producing the same result by hand beside it leaves the creation untested against the real case and the user with two sources of truth.
 
-- **Run a skill's steps one at a time in chat.** When a skill exposes per-step subcommands (plus a `run all`), drive the subcommands individually and surface their results, so the user gets a live progress view, pausing only at the skill's declared `[prose]` steps. Reserve `run all` for headless or scheduled runs where there's no chat to show progress in. The progress view mirrors the skill's rough shape, not its exact step list: collapse subcommands the user would see as one thing into one plain-English title, and never use a subcommand's name as a title (see "Task management").
-
-- **Live first, ratify at turn-end.** Handle the user's immediate request *live* in the current chat to keep it interactive; at turn-end, formalize the work through the relevant lifecycle skill, which runs its hardening pass in a background worker (never inline in the main agent). Route by situation:
-  - Net-new task needing research or experimentation -> `do-something-new` (it routes to `fetch-process-show` for data or `build-app` for a web view).
-  - Just-finished work that's cohesive, likely to recur, and mostly deterministic -> `crystallize-creation` to promote it into a committed, tested skill.
-  - A skill errored or gave a wrong result -> work around it live, then `heal-creation` at turn-end. Never patch the skill inline.
-  - You changed an existing skill, or a skill ran but needed manual post-processing -> `update-creation` at turn-end so the change is verified and the skill swallows the gap.
-
-  For non-skill contract-bearing files (hook scripts, this file) there is no worker pipeline -- apply the live change carefully and add manual rigor at turn-end (real fixtures, end-to-end exercise of new code paths).
-
-- **A change to hardened code carries its tests.** When you change code a harden pass already covered, extend that code's tests in the same commit. Code a change leaves untested is a regression even when it works.
-
 # Apps and services
 
-**Before editing any code that belongs to a supervisord program -- an app (a window the user can open) or a background service -- load the `update-app` skill first.** It owns the live change loop (apply, refresh, verify) and the turn-end hardening flow; do not hand-edit an app's or service's code or its `system/supervisord.conf.d/<name>.conf` without it. It reads the app's `app.toml` first: a critical app (the shell, the chat, the terminal, or any app that declares `critical = true`) and the shared `system/libs/workspace_ui/` and `system/libs/workspace_layout/` libraries take its careful flow, which never edits the served tree.
+**Before editing any code that belongs to a supervisord program -- an app (a window the user can open) or a background service -- load the `update-app` skill first.** It owns the change mechanics (apply, restart); do not hand-edit an app's or service's code or its `system/supervisord.conf.d/<name>.conf` without it. It reads the app's `app.toml` first: a critical app (the shell, the chat, the terminal, or any app that declares `critical = true`) and the shared `system/libs/workspace_ui/` and `system/libs/workspace_layout/` libraries take its careful flow, which never edits the served tree.
 
 Apps and background services both run as supervisord programs, each declared in its own `system/supervisord.conf.d/<name>.conf` (pulled in by an `[include]` glob in `system/supervisord.conf`, which holds only the daemon's own config).
 Supervisord (launched by `bootstrap` after first-boot setup) supervises them; each program writes its own rotated logs under `/var/log/supervisor/<name>-stdout.log` and `/var/log/supervisor/<name>-stderr.log`.
 To add, change, or remove a service, add/edit/delete its own `system/supervisord.conf.d/<name>.conf` and run `supervisorctl reread && supervisorctl update` (and `supervisorctl restart <name>` to bounce one). Inspect with `supervisorctl status` / `supervisorctl tail -f <name> stderr`.
 See the `update-app` skill for details.
 
-For routine jobs that run on a cadence and then exit (backups, health checks, the weekly Caretaker -- off by default, see the enable-caretaker skill), use cron via the **`manage-scheduled-tasks`** skill rather than a supervisord program; and after building or editing any service, use the `check-app-errors` skill to scan `/var/log/supervisor/` for errors (a clean exit code does not mean the service is healthy).
+For routine jobs that run on a cadence and then exit (backups, health checks, the weekly Caretaker -- off by default, see the enable-caretaker skill), use cron via the **`manage-scheduled-tasks`** skill rather than a supervisord program. The `check-app-errors` skill scans `/var/log/supervisor/` for errors when a service misbehaves (a clean exit code does not mean the service is healthy).
 
 # Git
 
-Commit all your changes locally. Do not wait for user confirmation for anything before committing; there's no cost to having more commits in the history. Users may not care about git state in general and will oftentimes never instruct you to commit, so you should just commit every logical unit of work. It's okay if you make a commit whose changes you must later revert after feedback.
-
-**Git is invisible plumbing, like `tk`.** The user cares about exactly one property of it: their work is kept, and any change can be undone. They never need to hear how. So commit silently, and keep git vocabulary out of everything the user reads (chat, progress-view titles and summaries): no "committed", "branch", "pushed", "merged", "PR", "rebase", "checkout", "diff", "repo", "revert". If the record itself is the news ("did you save that?"), say "it's saved and I can undo it". If you must undo something, say "I'll put it back the way it was", not "I'll revert the commit". Full vocabulary and rewrites: `.agents/shared/references/user-facing-language.md`. Use git words only when the user used them first or asked how the saving works.
+Keep git vocabulary (commit, branch, push, merge, PR, rebase, diff, repo) out of what the user reads unless they used it first; if they ask whether something is saved, say "it's saved and I can undo it".
 
 `data/` is gitignored (it holds all workspace data: `data/memories/` for Claude memory, `data/.tickets/`, per-app data, uploads, and machine state).
 
@@ -224,7 +127,7 @@ If you get a failure when trying to commit the first time, just try committing a
 
 If something unexpected happens -- errors, confusing state, things not working as documented -- use the `dealing-with-the-unexpected` skill for guidance.
 
-A background OOM-prevention daemon (earlyoom) kills ("sheds") memory-heavy processes under sustained memory pressure -- most-expendable first (an agent's build/test/browser subprocesses before the agent itself). If a command of yours dies with exit 137 (or SIGKILL/SIGTERM) and you did not kill it, confirm by checking the shed ledger at `/home/user/workspace/data/.state/oom_priority/events/shed.jsonl` for a record naming it (matched by pid or process name). If it was shed, do NOT blindly re-run a memory-heavy command -- it will likely be shed again; find a lower-memory approach (smaller batches, streaming, releasing data you no longer need) and only retry if you can. That advice is for your own ad-hoc commands. A shed command of a harden worker's test gate follows the gate's own shed handling (`.agents/shared/worker/references/harden-creation.md`, "The test gate"), and memory pressure is never a reason to skip one. When an agent reports a shed to you, free memory with the user per `.agents/shared/references/freeing-memory.md`.
+A background OOM-prevention daemon (earlyoom) kills ("sheds") memory-heavy processes under sustained memory pressure -- most-expendable first (an agent's build/test/browser subprocesses before the agent itself). If a command of yours dies with exit 137 (or SIGKILL/SIGTERM) and you did not kill it, confirm by checking the shed ledger at `/home/user/workspace/data/.state/oom_priority/events/shed.jsonl` for a record naming it (matched by pid or process name). If it was shed, do NOT blindly re-run a memory-heavy command -- it will likely be shed again; find a lower-memory approach (smaller batches, streaming, releasing data you no longer need) and only retry if you can. When an agent reports a shed to you, free memory with the user per `.agents/shared/references/freeing-memory.md`.
 
 A backup that takes minutes (a slow `host-backup-now`, or a `BACKUP_SLOW` event in the backup events log) is caused by how many files the home tree holds, not how big they are. Follow "Slow backups" in `system/services/host_backup/README.md`, which uses `uv run host-backup-heavy-dirs` to find the directories responsible.
 
