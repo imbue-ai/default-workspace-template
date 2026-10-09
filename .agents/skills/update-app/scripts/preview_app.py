@@ -51,6 +51,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -91,8 +92,9 @@ LAUNCHER = ("uv", "run")
 # A bare ``uv run`` installs only the root project's closure, which leaves out user-built
 # apps, so the worktree's environment would lack the app's own console script.
 SYNC_COMMAND = ("uv", "sync", "--all-packages")
-# A first sync of a fresh worktree installs the whole workspace; a hung one must not hang
-# the preview.
+# A first sync of a fresh worktree installs the whole workspace; past the first threshold
+# it is suspicious, past the second it is hung and must not hang the preview.
+SYNC_SLOW_SECONDS = 120
 SYNC_TIMEOUT_SECONDS = 600
 
 # The live repo's environment, which the ``uv run`` that runs this script activates. Left on
@@ -136,6 +138,7 @@ class Runner:
         env = {
             key: value for key, value in os.environ.items() if key != ACTIVE_VENV_ENV
         }
+        started_at = time.monotonic()
         try:
             completed = subprocess.run(
                 list(SYNC_COMMAND),
@@ -150,6 +153,12 @@ class Runner:
                 f"'{' '.join(SYNC_COMMAND)}' in {worktree} did not finish within "
                 f"{SYNC_TIMEOUT_SECONDS}s"
             ) from e
+        elapsed = time.monotonic() - started_at
+        if completed.returncode == 0 and elapsed > SYNC_SLOW_SECONDS:
+            sys.stderr.write(
+                f"preview: '{' '.join(SYNC_COMMAND)}' in {worktree} took {elapsed:.0f}s, "
+                f"slow for a sync that times out at {SYNC_TIMEOUT_SECONDS}s.\n"
+            )
         return int(completed.returncode)
 
 
