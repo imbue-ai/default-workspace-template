@@ -11,6 +11,7 @@ runtime is an ``unresolved-import`` here, at the workspace's floor Python versio
 
 from __future__ import annotations
 
+import ast
 import subprocess
 import sys
 from pathlib import Path
@@ -47,6 +48,26 @@ _BARE_SEARCH_PATHS = (
     _TK_COMMAND_PARSING_SRC,
     _OOM_PRIORITY_SRC,
 )
+
+
+# The stdlib-only libraries the bare stubs and update-self put on sys.path.
+_BARE_LIBRARIES = frozenset({"tk_command_parsing", "oom_priority"})
+
+
+def _imports_outside_the_bare_tier(path: Path) -> list[str]:
+    """Top-level modules ``path`` imports (anywhere, lazily included) that the bare tier cannot.
+
+    ty alone does not catch a first-party one: it resolves a sibling package such as the
+    venv-tier ``workspace_scripts`` relative to the importing file, so it never reports it.
+    """
+    imported: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            imported.add(node.module.split(".")[0])
+    allowed = sys.stdlib_module_names | BARE_PACKAGES | _BARE_LIBRARIES
+    return sorted(imported - allowed)
 
 
 def _is_test_support(path: Path) -> bool:
@@ -164,3 +185,25 @@ def test_the_bare_check_rejects_a_third_party_import_and_accepts_the_floor_synta
     assert "unresolved-import" in result.stdout
     assert "leaky.py" in result.stdout
     assert "modern.py" not in result.stdout
+
+
+def test_the_bare_tier_imports_only_the_stdlib_and_bare_code() -> None:
+    offenders = {
+        str(path.relative_to(REPO_ROOT)): outside
+        for path in _bare_files()
+        if (outside := _imports_outside_the_bare_tier(path))
+    }
+    assert offenders == {}, (
+        "Bare-tier files import modules the system python3 cannot load with no venv: "
+        f"{offenders}"
+    )
+
+
+def test_the_bare_import_rule_rejects_a_lazy_venv_tier_import(tmp_path: Path) -> None:
+    module = tmp_path / "lazy.py"
+    module.write_text(
+        "import json\n\n\ndef render() -> str:\n"
+        "    from workspace_scripts import docs_viewer\n\n    return json.dumps(str(docs_viewer))\n"
+    )
+
+    assert _imports_outside_the_bare_tier(module) == ["workspace_scripts"]
