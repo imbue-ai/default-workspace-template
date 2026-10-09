@@ -64,6 +64,11 @@ class _StoredClient(FrozenModel):
     shown_history: tuple[str, ...] = Field(
         default=(), description="What the client has shown on the phone layout, most recent last"
     )
+    desktop_revision: int = Field(
+        default=0,
+        ge=0,
+        description="Counts the moves of the stored active desktop and the reports redirected off a deleted desktop",
+    )
 
 
 class ClientsDocument(FrozenModel):
@@ -94,6 +99,7 @@ def _record_of(client_id: ClientId, stored: _StoredClient) -> ClientRecord:
         user_id=stored.user_id,
         entries=stored.entries,
         shown_history=stored.shown_history,
+        desktop_revision=stored.desktop_revision,
     )
 
 
@@ -173,9 +179,10 @@ class ClientStore(MutableModel):
                 return record
         return None
 
-    def record_report(self, report: ClientStateReport, now: datetime) -> ClientReportOutcome:
+    def record_report(self, report: ClientStateReport, now: datetime, is_redirected: bool) -> ClientReportOutcome:
         """Record a ``client_state`` report: the client's last-seen stamp and the desktop it names; the user it last
-        arrived as stays."""
+        arrived as stays. A report the shell redirected off a deleted desktop (``is_redirected``) bumps the desktop
+        revision even when the stored desktop stays, so the window that made it takes the news of where it landed."""
         stamped = now.astimezone(timezone.utc)
         return self._store_client(
             report.client_id,
@@ -186,13 +193,26 @@ class ClientStore(MutableModel):
                 entries=previous.entries if previous is not None else {},
                 shown_history=previous.shown_history if previous is not None else (),
             ),
+            is_revised_regardless=is_redirected,
+        )
+
+    def record_seen(self, client_id: ClientId, now: datetime) -> ClientRecord:
+        """Stamp a recorded client's last-seen time, leaving its desktop where it is (a following report); raises
+        ClientNotFoundError."""
+        stamped = now.astimezone(timezone.utc)
+        return self._update_recorded_client(
+            client_id, lambda previous: previous.model_copy_update(to_update(previous.field_ref().last_seen, stamped))
         )
 
     def set_active_desktop(self, client_id: ClientId, desktop_id: DesktopId, now: datetime) -> ClientReportOutcome:
         """Move a recorded client onto a desktop (a ``load`` op, an op's ``--desktop``, or a deleted desktop's
         fallback); raises ClientNotFoundError."""
         stamped = now.astimezone(timezone.utc)
-        return self._store_client(client_id, lambda previous: _moved_client(client_id, previous, desktop_id, stamped))
+        return self._store_client(
+            client_id,
+            lambda previous: _moved_client(client_id, previous, desktop_id, stamped),
+            is_revised_regardless=False,
+        )
 
     def record_arrival(
         self, client_id: ClientId, user_id: UserId | None, desktop_id: DesktopId, now: datetime
@@ -208,23 +228,31 @@ class ClientStore(MutableModel):
                 entries=previous.entries if previous is not None else {},
                 shown_history=previous.shown_history if previous is not None else (),
             ),
+            is_revised_regardless=False,
         )
 
     def _store_client(
-        self, client_id: ClientId, build: Callable[[_StoredClient | None], _StoredClient]
+        self,
+        client_id: ClientId,
+        build: Callable[[_StoredClient | None], _StoredClient],
+        is_revised_regardless: bool,
     ) -> ClientReportOutcome:
         """Replace one client's entry with what ``build`` makes of the previous one (None for a new client), and
-        answer whether the stored desktop moved."""
+        answer whether the stored desktop moved. A move (or any write when ``is_revised_regardless``) bumps the
+        desktop revision under the same lock as the write, so the revisions order the moves as they were written,
+        whatever order their broadcasts go out in."""
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
             previous = document.clients.get(str(client_id))
-            stored = build(previous)
+            built = build(previous)
+            previous_desktop = previous.active_desktop if previous is not None else None
+            previous_revision = previous.desktop_revision if previous is not None else 0
+            is_moved = previous_desktop != built.active_desktop
+            revision = previous_revision + 1 if is_moved or is_revised_regardless else previous_revision
+            stored = built.model_copy_update(to_update(built.field_ref().desktop_revision, revision))
             clients = {**document.clients, str(client_id): stored}
             self._write_unlocked(document.model_copy_update(to_update(document.field_ref().clients, clients)))
-        previous_desktop = previous.active_desktop if previous is not None else None
-        return ClientReportOutcome(
-            record=_record_of(client_id, stored), is_active_desktop_changed=previous_desktop != stored.active_desktop
-        )
+        return ClientReportOutcome(record=_record_of(client_id, stored), is_active_desktop_changed=is_moved)
 
     def _update_recorded_client(
         self, client_id: ClientId, update: Callable[[_StoredClient], _StoredClient]

@@ -39,6 +39,7 @@ from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.primitives import LaunchTargetKind
+from imbue.system_interface.shell.primitives import ReportId
 from imbue.system_interface.shell.primitives import SaveId
 
 
@@ -118,7 +119,21 @@ class ClientStateReport(FrozenModel):
 
     client_id: ClientId = Field(description="The reporting client")
     active_desktop: DesktopId = Field(description="The desktop the client is on now")
-    previous_desktop: str = Field(default="", description="The desktop it was on before, empty on connect")
+    previous_desktop: str = Field(
+        default="",
+        description="The desktop the window left, empty when the report names none (a connect, a landing, or a "
+        "following report)",
+    )
+    report_id: ReportId | None = Field(
+        default=None,
+        description="The window's id for a report that moves the client, echoed on the broadcast it causes; None for a "
+        "following report",
+    )
+    is_following: bool = Field(
+        default=False,
+        description="Whether the window only followed the client's stored desktop (pushed, or read on a reconnect): "
+        "the connection is registered on it and the record is not moved",
+    )
 
 
 class PopOutStateReport(FrozenModel):

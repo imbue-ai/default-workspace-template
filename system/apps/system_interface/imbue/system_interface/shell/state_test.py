@@ -83,7 +83,9 @@ def test_start_prunes_stale_clients_and_their_layouts_now_and_on_the_interval(
     (home,) = shell.list_desktops()
     window_id = WindowId("win-0000000000000001")
     shell.clients.record_report(
-        ClientStateReport(client_id=ClientId("old"), active_desktop=DesktopId("home")), stale_at
+        ClientStateReport(client_id=ClientId("old"), active_desktop=DesktopId("home")),
+        stale_at,
+        is_redirected=False,
     )
     shell.placements.save_browser_layout("home", "old", (placement_record(window_id),), None, {window_id}, stale_at)
     shell.window_paths.set_path(
@@ -100,7 +102,9 @@ def test_start_prunes_stale_clients_and_their_layouts_now_and_on_the_interval(
         assert shell.window_paths.read_paths(ClientId("old"), {window_id}) == {}
         # A client that goes stale while the shell runs is taken by the periodic prune.
         shell.clients.record_report(
-            ClientStateReport(client_id=ClientId("later"), active_desktop=DesktopId("home")), stale_at
+            ClientStateReport(client_id=ClientId("later"), active_desktop=DesktopId("home")),
+            stale_at,
+            is_redirected=False,
         )
         wait_for(
             lambda: shell.clients.get_client("later") is None,

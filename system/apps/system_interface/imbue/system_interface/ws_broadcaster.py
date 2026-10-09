@@ -229,9 +229,21 @@ class WebSocketBroadcaster(MutableModel):
             {"type": "client_entries_changed", "client_id": client_id, "entries": entries}, client_id
         )
 
-    def broadcast_active_desktop_changed(self, client_id: str, desktop_id: str) -> None:
-        """A client's stored active desktop moved; its other windows switch to it."""
-        self.broadcast({"type": "active_desktop_changed", "client_id": client_id, "desktop_id": desktop_id})
+    def broadcast_active_desktop_changed(
+        self, client_id: str, desktop_id: str, revision: int, report_id: str | None
+    ) -> None:
+        """A client's stored active desktop moved to ``desktop_id`` at ``revision``; its windows follow it unless they
+        have heard a later revision. ``report_id`` names the window report that moved it (None for any other cause),
+        so the reporting window can tell its own echo."""
+        self.broadcast(
+            {
+                "type": "active_desktop_changed",
+                "client_id": client_id,
+                "desktop_id": desktop_id,
+                "revision": revision,
+                "report_id": report_id,
+            }
+        )
 
     def broadcast_update_notice_changed(self, notice: Mapping[str, Any] | None) -> None:
         """The kept rollback point changed (raised, progressing, settled, or cleared); every window re-renders its notice."""

@@ -15,6 +15,7 @@ from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.system_interface.shell.errors import InvalidShellValueError
 
 _SAVE_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^save-[0-9a-f]{16}$")
+_REPORT_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^report-[0-9a-f]{16}$")
 _MINTED_ID_BYTES: Final[int] = 8
 
 # A desktop's ``glyph`` indexes the frontend's squiggle table.
@@ -31,6 +32,19 @@ class SaveId(NonEmptyStr):
     def __new__(cls, value: str) -> Self:
         if not _SAVE_ID_PATTERN.fullmatch(value):
             raise InvalidShellValueError(f"invalid save id {value!r}")
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return _string_schema(cls, handler)
+
+
+class ReportId(NonEmptyStr):
+    """A ``client_state`` report's id: ``report-<16 hex>``, minted by the window whose report moves its client."""
+
+    def __new__(cls, value: str) -> Self:
+        if not _REPORT_ID_PATTERN.fullmatch(value):
+            raise InvalidShellValueError(f"invalid report id {value!r}")
         return super().__new__(cls, value)
 
     @classmethod

@@ -65,7 +65,9 @@ def _register_client(app: Flask, client_id: str, desktop_id: str = "home") -> "q
 def _record_client(app: Flask, client_id: str, desktop_id: str = "home") -> None:
     """A client the shell has a record of but that is not connected."""
     _shell(app).clients.record_report(
-        ClientStateReport(client_id=ClientId(client_id), active_desktop=DesktopId(desktop_id)), TEST_NOW
+        ClientStateReport(client_id=ClientId(client_id), active_desktop=DesktopId(desktop_id)),
+        TEST_NOW,
+        is_redirected=False,
     )
 
 
@@ -366,7 +368,16 @@ def test_a_client_records_what_its_phone_layout_shows_and_the_inventory_carries_
 
     assert answer.status_code == 200
     record = answer.get_json()
-    assert set(record) == {"id", "active_desktop", "last_seen", "is_connected", "user_id", "entries", "shown_history"}
+    assert set(record) == {
+        "id",
+        "active_desktop",
+        "last_seen",
+        "is_connected",
+        "user_id",
+        "entries",
+        "shown_history",
+        "desktop_revision",
+    }
     assert (record["id"], record["is_connected"], record["shown_history"]) == ("c1", True, [first, "home", second])
     document = client.get("/api/inventory").get_json()
     assert document["workspace_name"] == "Workspace"
@@ -1289,12 +1300,20 @@ def test_an_op_targets_the_named_desktop_and_load_switches_the_client(client: Fl
     requester = _TERMINAL_REQUESTER
     client.post("/api/desktops", json={"name": "Research", "color": "#12B5A5", "glyph": 4})
     drain_messages(client_queue)
+    registered = shell.clients.get_client("c1")
+    assert registered is not None
 
     on_research = _op(client, "open", {"app": "files", "desktop": "Research"}, requester)
     assert on_research.status_code == 200 and on_research.get_json()["desktop_id"] == "research"
     recorded = shell.clients.get_client("c1")
     assert recorded is not None and recorded.active_desktop == "research"
-    assert "active_desktop_changed" in [message["type"] for message in drain_messages(client_queue)]
+    # The op's move is announced at a newer revision, so the client's windows take it, and names no report.
+    assert recorded.desktop_revision == registered.desktop_revision + 1
+    assert [
+        (message["desktop_id"], message["revision"], message["report_id"])
+        for message in drain_messages(client_queue)
+        if message["type"] == "active_desktop_changed"
+    ] == [("research", recorded.desktop_revision, None)]
     loaded = _op(client, "load", {"desktop": "home"}, requester)
     assert loaded.status_code == 200 and loaded.get_json()["desktop_id"] == "home"
     assert _op(client, "load", {"desktop": "Nowhere"}, requester).status_code == 404
