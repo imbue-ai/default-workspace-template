@@ -16,8 +16,7 @@
  * - Anything else (a relative path, a fragment, another scheme) is **unroutable**.
  */
 
-import { LOCAL_HOSTNAMES, isExternalUrl } from "./app_contract";
-import { hasWorkspaceCoordinate, workspaceHostCoordinate } from "./origin";
+import { LOCAL_HOSTNAMES, hasWorkspaceCoordinate, isExternalUrl, workspaceHostCoordinate } from "./app_contract";
 
 /** What a link is, as the workspace routes it. */
 export type LinkTarget =
