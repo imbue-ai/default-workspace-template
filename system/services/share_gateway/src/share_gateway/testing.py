@@ -2,7 +2,7 @@
 
 import json
 import threading
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 
 from werkzeug.serving import make_server
@@ -16,7 +16,7 @@ def set_cookies_by_name(response: Response) -> dict[str, str]:
 
 
 @contextmanager
-def serve_json(body: object) -> Iterator[str]:
+def serve_json(body: object) -> Generator[str, None, None]:
     """Serve ``body`` as JSON at every path of a loopback server; yields the server's URL."""
 
     @Request.application

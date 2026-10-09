@@ -300,7 +300,9 @@ def _nearness_key(cell: GridCell, target: GridCell) -> tuple[float, int, int]:
 @pure
 def _nearest_of(candidates: Sequence[GridCell], target: GridCell) -> GridCell | None:
     """The candidate at the least Euclidean distance from the target, ties by lower column then lower row."""
-    return min(candidates, key=lambda cell: _nearness_key(cell, target), default=None)
+    if not candidates:
+        return None
+    return min(candidates, key=lambda cell: _nearness_key(cell, target))
 
 
 @pure

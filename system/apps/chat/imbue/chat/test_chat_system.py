@@ -8,7 +8,7 @@ the real writer, the real event file, and the chat's real follower of it.
 import os
 import shutil
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -30,7 +30,9 @@ def _agent_events(client: FlaskClient) -> dict[str, Any]:
 
 
 @contextmanager
-def _running_observer(host_dir: Path, work_dir: Path, log_path: Path) -> Iterator[subprocess.Popen[bytes]]:
+def _running_observer(
+    host_dir: Path, work_dir: Path, log_path: Path
+) -> Generator[subprocess.Popen[bytes], None, None]:
     """Run ``mngr observe --quiet`` over ``host_dir`` from an empty work dir until the block ends.
 
     The work dir carries no project-local mngr settings, so the observer reads only the

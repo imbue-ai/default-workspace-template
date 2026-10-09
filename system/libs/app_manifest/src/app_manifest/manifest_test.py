@@ -24,6 +24,20 @@ from app_manifest.testing import write_app_manifest
 from app_manifest.testing import write_repo_file
 
 
+def _launch_path_params() -> list[dict[str, object]]:
+    return [{"name": "path", "label": "Path", "required": False}]
+
+
+def _launch_path_data() -> dict[str, object]:
+    return {
+        "id": "new",
+        "label": "New File Viewer",
+        "path": "/",
+        "params": _launch_path_params(),
+        "text_param": "path",
+    }
+
+
 def _full_manifest_data() -> dict[str, object]:
     return {
         "name": "files",
@@ -35,15 +49,7 @@ def _full_manifest_data() -> dict[str, object]:
         "program": "files",
         "internal": False,
         "default_shortcut": {"launch": "new", "mode": "focus"},
-        "launch_paths": [
-            {
-                "id": "new",
-                "label": "New File Viewer",
-                "path": "/",
-                "params": [{"name": "path", "label": "Path", "required": False}],
-                "text_param": "path",
-            }
-        ],
+        "launch_paths": [_launch_path_data()],
         "launcher_rank": 20,
         "pin": {"path": "/", "style": "avatar", "scope": "independent", "default_mode": "floating"},
         "window_closed_path": "/api/window-closed",
@@ -168,7 +174,7 @@ def test_duplicate_message_handler_types_are_rejected() -> None:
 
 def test_text_param_must_name_a_declared_param_and_defaults_to_none() -> None:
     data = _full_manifest_data()
-    launch_path = dict(data["launch_paths"][0])  # type: ignore[index]
+    launch_path = _launch_path_data()
     del launch_path["text_param"]
     assert AppManifest.model_validate({**data, "launch_paths": [launch_path]}).launch_paths[0].text_param is None
 
@@ -188,7 +194,7 @@ def test_a_launch_path_is_a_get_with_no_presets_and_no_draft_param_unless_it_say
 def test_a_post_launch_path_carries_its_method_presets_and_draft_param() -> None:
     data = _full_manifest_data()
     launch_path = {
-        **dict(data["launch_paths"][0]),  # type: ignore[index]
+        **_launch_path_data(),
         "path": "/api/intake",
         "method": "POST",
         "presets": {"target": "current_chat", "is_draft": "true"},
@@ -205,14 +211,14 @@ def test_a_post_launch_path_carries_its_method_presets_and_draft_param() -> None
 @pytest.mark.parametrize("method", ["get", "post", "PUT", ""])
 def test_a_launch_path_method_is_get_or_post_spelled_in_upper_case(method: str) -> None:
     data = _full_manifest_data()
-    launch_path = {**dict(data["launch_paths"][0]), "method": method}  # type: ignore[index]
+    launch_path = {**_launch_path_data(), "method": method}
     with pytest.raises(ValidationError):
         AppManifest.model_validate({**data, "launch_paths": [launch_path]})
 
 
 def test_a_launch_path_declares_at_most_one_of_text_param_and_draft_param() -> None:
     data = _full_manifest_data()
-    launch_path = {**dict(data["launch_paths"][0]), "draft_param": "path"}  # type: ignore[index]
+    launch_path = {**_launch_path_data(), "draft_param": "path"}
     with pytest.raises(ValidationError, match="at most one of text_param and draft_param"):
         AppManifest.model_validate({**data, "launch_paths": [launch_path]})
     with pytest.raises(ValidationError, match="draft_param 'message' is not one of the launch path's params"):
@@ -223,7 +229,7 @@ def test_a_launch_path_declares_at_most_one_of_text_param_and_draft_param() -> N
 
 def test_a_preset_may_not_shadow_a_param() -> None:
     data = _full_manifest_data()
-    launch_path = {**dict(data["launch_paths"][0]), "presets": {"path": "/notes/"}}  # type: ignore[index]
+    launch_path = {**_launch_path_data(), "presets": {"path": "/notes/"}}
     with pytest.raises(ValidationError, match="preset 'path' is also one of the launch path's params"):
         AppManifest.model_validate({**data, "launch_paths": [launch_path]})
 
@@ -231,7 +237,7 @@ def test_a_preset_may_not_shadow_a_param() -> None:
 @pytest.mark.parametrize("reserved", sorted(RESERVED_LAUNCH_PARAM_NAMES))
 def test_the_launch_envelopes_names_are_reserved_for_params_and_presets(reserved: str) -> None:
     data = _full_manifest_data()
-    launch_path = dict(data["launch_paths"][0])  # type: ignore[index]
+    launch_path = _launch_path_data()
     with pytest.raises(ValidationError, match=f"{reserved!r} is reserved for the shell's launch envelope"):
         AppManifest.model_validate({**data, "launch_paths": [{**launch_path, "presets": {reserved: "x"}}]})
     with pytest.raises(ValidationError, match=f"{reserved!r} is reserved for the shell's launch envelope"):
@@ -239,7 +245,7 @@ def test_the_launch_envelopes_names_are_reserved_for_params_and_presets(reserved
             {
                 **data,
                 "launch_paths": [
-                    {**launch_path, "params": [*launch_path["params"], {"name": reserved, "label": "Reserved"}]}
+                    {**launch_path, "params": [*_launch_path_params(), {"name": reserved, "label": "Reserved"}]}
                 ],
             }
         )

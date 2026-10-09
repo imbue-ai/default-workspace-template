@@ -3536,7 +3536,7 @@ def test_a_pick_for_a_harness_whose_model_the_chat_cannot_switch_is_rejected_for
 def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> list[tuple[int, int]]:
     """Swap in an OOM prioritizer that captures its band writes, and return the log.
 
-    Wired to the manager's own ``get_chat_ids`` / ``_read_process_started_at``
+    Wired to the manager's own ``get_chat_ids`` / ``_read_active_process_started_at``
     (the collaborators under test) but to a fake pid resolver and a capturing
     ``set_adj``, so the manager's real seeding and lifecycle paths are exercised
     without touching ``/proc``.
@@ -3546,7 +3546,7 @@ def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> 
         list_chat_ids=manager.get_chat_ids,
         resolve_pid=lambda cid: pids.get(cid),
         set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
-        resolve_process_started_at=manager._read_agent_process_started_at,
+        resolve_process_started_at=manager._read_active_process_started_at,
     )
     return writes
 

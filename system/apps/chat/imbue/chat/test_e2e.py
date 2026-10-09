@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from playwright.sync_api import Dialog
 from playwright.sync_api import Frame
 from playwright.sync_api import FrameLocator
 from playwright.sync_api import Locator
@@ -957,7 +958,12 @@ def test_a_first_message_sent_with_nothing_signed_in_waits_in_the_chat_composer(
     """A message sent from the launcher with nothing signed in raises no dialog: it waits in the new chat's disabled
     composer while the chat asks for a provider, ready to send once one is signed in."""
     dialogs: list[str] = []
-    page.on("dialog", lambda dialog: (dialogs.append(dialog.message), dialog.dismiss()))
+
+    def record_and_dismiss(dialog: Dialog) -> None:
+        dialogs.append(dialog.message)
+        dialog.dismiss()
+
+    page.on("dialog", record_and_dismiss)
     with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
         _land(page, server)
         page.locator("[data-launcher-field] textarea").fill("Plan my week")

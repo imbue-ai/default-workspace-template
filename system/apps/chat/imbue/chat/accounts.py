@@ -30,7 +30,7 @@ import os
 import shutil
 import threading
 import uuid
-from collections.abc import Iterator
+from collections.abc import Generator
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
@@ -66,7 +66,7 @@ _LOCK_FILENAME: Final = "index.lock"
 
 
 @contextlib.contextmanager
-def _index_lock(home: Path | None = None) -> Iterator[None]:
+def _index_lock(home: Path | None = None) -> Generator[None, None, None]:
     """Hold the index across the whole read-modify-write, against every writer.
 
     A thread lock alone is not enough: the server is not the only process that mints

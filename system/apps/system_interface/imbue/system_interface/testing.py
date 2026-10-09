@@ -18,7 +18,7 @@ import time
 import urllib.error
 import urllib.request
 import xmlrpc.client
-from collections.abc import Iterator
+from collections.abc import Generator
 from collections.abc import Mapping
 from contextlib import closing
 from contextlib import contextmanager
@@ -355,7 +355,7 @@ class ServedApp:
 
 
 @contextmanager
-def serve_app(app: Flask) -> Iterator[ServedApp]:
+def serve_app(app: Flask) -> Generator[ServedApp, None, None]:
     """Serve ``app`` on an ephemeral loopback port via a real threaded Werkzeug server.
 
     Used by the WebSocket tests, which the Flask test client cannot drive

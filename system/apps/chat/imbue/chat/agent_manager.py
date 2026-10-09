@@ -3,7 +3,7 @@ import shlex
 import threading
 import time
 from collections.abc import Callable
-from collections.abc import Iterator
+from collections.abc import Generator
 from collections.abc import Mapping
 from collections.abc import Sequence
 from contextlib import contextmanager
@@ -1051,9 +1051,7 @@ class AgentManager:
             # A secondary's presence is its own windows', not the workspace's, and the scores it
             # would write are the live chat's, so it keeps an inert prioritizer.
             set_adj=None if is_secondary else set_oom_score_adj,
-            resolve_process_started_at=lambda chat_id: manager._read_agent_process_started_at(
-                manager._active_agent_id_of_chat(chat_id)
-            ),
+            resolve_process_started_at=manager._read_active_process_started_at,
             presence=manager._presence,
         )
         manager._autocompactor = (
@@ -1070,6 +1068,11 @@ class AgentManager:
         """The pid of the process a chat runs on, for the OOM prioritizer; None for a chat with no active agent."""
         active_agent_id = self._active_agent_id_of_chat(chat_id)
         return None if active_agent_id is None else lookup_pid_by_agent_id(active_agent_id)
+
+    def _read_active_process_started_at(self, chat_id: ChatId) -> float | None:
+        """When the process a chat runs on started, for the OOM prioritizer; None for a chat with no active agent."""
+        active_agent_id = self._active_agent_id_of_chat(chat_id)
+        return None if active_agent_id is None else self._read_agent_process_started_at(active_agent_id)
 
     def _active_agent_id_of_chat(self, chat_id: ChatId) -> str | None:
         """The agent a chat runs on, from its record, else the chat's own id under the own-chat rule.
@@ -2516,7 +2519,7 @@ class AgentManager:
         self._broadcast_chats_updated()
 
     @contextmanager
-    def track_connecting_send(self, agent_id: str, message_id: str) -> Iterator[Callable[[], None]]:
+    def track_connecting_send(self, agent_id: str, message_id: str) -> Generator[Callable[[], None], None, None]:
         """Scope one send's delivery. The yielded callable marks the send as waiting for the agent to
         come up (the snapshot's ``is_connecting``); leaving the scope clears the mark."""
         try:
@@ -4143,7 +4146,8 @@ class AgentManager:
     def _read_agent_process_started_at(self, agent_id: str) -> float | None:
         """Return the agent's process-start mtime, resolving its marker by harness.
 
-        The OOM prioritizer knows only an agent id, but the marker filename is
+        The OOM prioritizer reaches this with a chat's active agent id (through
+        ``_read_active_process_started_at``), but the marker filename is
         harness-specific (see ``_read_process_started_at``), so it comes from the
         agent's ``HarnessSpec`` -- harness identity, known as soon as the agent is
         known. This deliberately does NOT ask the agent's activity tracker: a
@@ -4154,8 +4158,8 @@ class AgentManager:
         agent itself is unknown.
         """
         # Lock-free ``dict.get`` (atomic under the GIL), matching what this method did
-        # before: it is injected as a callback into the OOM prioritizer and so can be
-        # invoked from a thread that already holds ``_lock``, which is not reentrant.
+        # before: the OOM prioritizer's callback calls it and so it can be invoked
+        # from a thread that already holds ``_lock``, which is not reentrant.
         agent_state = self._agents.get(agent_id)
         if agent_state is None:
             return None

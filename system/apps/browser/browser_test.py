@@ -393,7 +393,7 @@ def test_devtools_active_port_is_cleared_with_the_other_singletons(tmp_path: Pat
     assert "DevToolsActivePort" in chrome_launcher.SINGLETON_NAMES
 
 
-def test_sandbox_retry_falls_back_once_then_gives_up(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sandbox_retry_falls_back_once_then_gives_up(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # A non-root runtime keeps the sandbox, but if that launch fails we retry once with it
     # off (the only thing the retry changes). As root the sandbox is off from the start, so
     # the doomed sandboxed attempt never happens.
@@ -405,12 +405,17 @@ def test_sandbox_retry_falls_back_once_then_gives_up(monkeypatch: pytest.MonkeyP
             raise chrome_launcher.ChromeStartupError("Running as root without --no-sandbox is not supported.")
         return "chrome"
 
+    def launch_with_retry(*, no_sandbox: bool) -> chrome_launcher.ChromeProcess:
+        return chrome_launcher.launch_with_sandbox_retry(
+            no_sandbox=no_sandbox, executable="x", profile_dir=tmp_path, start_url="about:blank", window_size=(800, 600)
+        )
+
     monkeypatch.setattr(chrome_launcher, "launch", fake_launch)
-    assert chrome_launcher.launch_with_sandbox_retry(no_sandbox=False, executable="x") == "chrome"
+    assert launch_with_retry(no_sandbox=False) == "chrome"
     assert attempts == [False, True]  # sandbox on (fails) -> retried off (succeeds)
 
     attempts.clear()
-    assert chrome_launcher.launch_with_sandbox_retry(no_sandbox=True, executable="x") == "chrome"
+    assert launch_with_retry(no_sandbox=True) == "chrome"
     assert attempts == [True]  # already off: one attempt, no doomed try
 
 
@@ -798,17 +803,19 @@ def test_failed_launch_memory_is_bounded(monkeypatch: pytest.MonkeyPatch) -> Non
     assert mgr.recently_failed_launch("c") is True
 
 
-class _KillableChrome:
+class _KillableChrome(chrome_launcher.ChromeProcess):
     """Stand-in for a launched Chromium that records whether it was killed, so a test can
     assert no process handle is leaked when a launch is aborted."""
 
     def __init__(self) -> None:
         self.killed = False
-        self.alive = True
+
+    @property
+    def alive(self) -> bool:
+        return not self.killed
 
     def kill(self) -> None:
         self.killed = True
-        self.alive = False
 
 
 def test_close_during_launch_does_not_resurrect_or_leak(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -829,8 +836,9 @@ def test_close_during_launch_does_not_resurrect_or_leak(monkeypatch: pytest.Monk
         # Bring up a killable Chromium (as real start() does early), then suspend at an
         # await -- modelling start() parked mid-launch while close() runs. On resume, run
         # the SAME guard production uses before the flip.
-        self._chrome = _KillableChrome()  # type: ignore[assignment]
-        launched.append(self._chrome)  # type: ignore[arg-type]
+        chrome = _KillableChrome()
+        self._chrome = chrome
+        launched.append(chrome)
         started_bu.set()
         await resume.wait()
         if await self._abort_start_if_torn_down():

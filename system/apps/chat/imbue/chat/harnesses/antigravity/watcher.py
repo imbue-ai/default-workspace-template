@@ -132,16 +132,16 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
         self._state_dir = agent_info.agent_state_dir
         self._on_events = on_events
         self._lock = threading.Lock()
-        self._events: list[dict[str, Any]] = []
-        self._index_by_id: dict[str, int] = {}
-        self._emitted_ids: set[str] = set()
+        self._events = []
+        self._index_by_id = {}
+        self._emitted_ids = set()
         # Per-conversation cursor: the lowest idx not yet known-terminal (re-read until it is).
-        self._scan_from: dict[str, int] = {}
+        self._scan_from = {}
         self._wake = threading.Event()
         self._stopping = threading.Event()
         self._emit_embargo_until = 0.0
         self._delivery_witness_seconds = _DELIVERY_WITNESS_SECONDS
-        self._thread: threading.Thread | None = None
+        self._thread = None
         # The session's identity: the marker mngr stamps on every launch/resume. A journal
         # written under a different token belongs to a session that has since restarted, and
         # the contract says such a queue is gone -- never replayed, never delivered.
@@ -152,8 +152,8 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
         self._flush_is_alive = None
         self._flush_wake = threading.Event()
         self._flush_thread = None
-        self._observer: Any = None
-        self._connections: dict[Path, sqlite3.Connection] = {}
+        self._observer = None
+        self._connections = {}
         return self
 
     @classmethod

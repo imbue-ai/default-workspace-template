@@ -24,8 +24,9 @@ from typing import Any
 
 import Xlib.error
 from loguru import logger
-from Xlib import X, Xatom, protocol
+from Xlib import X, Xatom
 from Xlib.display import Display
+from Xlib.protocol.event import ClientMessage
 
 # One check a second: cheap (a query_tree + a few property reads), snaps a dragged window back
 # within a second and closes a stray window promptly without busy-spinning the X connection.
@@ -137,7 +138,7 @@ class WindowGuardian(threading.Thread):
     def _close(window: Any, atoms: dict) -> None:
         """Ask Chromium to close this window gracefully (WM_DELETE_WINDOW), which shuts just
         this window -- never XKillClient, which would drop the whole browser's X connection."""
-        event = protocol.event.ClientMessage(
+        event = ClientMessage(
             window=window, client_type=atoms["wm_protocols"], data=(32, [atoms["wm_delete"], X.CurrentTime, 0, 0, 0])
         )
         with contextlib.suppress(Exception):
