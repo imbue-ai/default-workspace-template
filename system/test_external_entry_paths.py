@@ -43,6 +43,10 @@ _VENV_CALLS: tuple[tuple[Path, tuple[str, ...]], ...] = (
 )
 
 
+def _call_id(value: Path | tuple[str, ...]) -> str:
+    return str(value.relative_to(REPO_ROOT)) if isinstance(value, Path) else " ".join(value)
+
+
 def _bare_environment() -> dict[str, str]:
     return {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "")}
 
@@ -53,7 +57,7 @@ def _run(argv: list[str], cwd: Path, env: dict[str, str]) -> subprocess.Complete
 
 @pytest.mark.timeout(60)
 @pytest.mark.parametrize(
-    ("script", "arguments"), _BARE_CALLS, ids=lambda value: str(value).rsplit("/", 2)[-1]
+    ("script", "arguments"), _BARE_CALLS, ids=_call_id
 )
 def test_a_bare_external_path_runs_without_the_venv(script: Path, arguments: tuple[str, ...]) -> None:
     result = _run([sys.executable, "-S", "-s", str(script), *arguments], REPO_ROOT, _bare_environment())
@@ -98,7 +102,7 @@ def test_the_secrets_wrapper_runs_a_command_without_the_venv(tmp_path: Path) -> 
 
 
 @pytest.mark.timeout(60)
-@pytest.mark.parametrize(("script", "arguments"), _VENV_CALLS, ids=lambda value: str(value).rsplit("/", 2)[-1])
+@pytest.mark.parametrize(("script", "arguments"), _VENV_CALLS, ids=_call_id)
 def test_a_venv_external_path_runs_from_the_root_venv(script: Path, arguments: tuple[str, ...]) -> None:
     result = _run([sys.executable, str(script), *arguments], REPO_ROOT, dict(os.environ))
 
