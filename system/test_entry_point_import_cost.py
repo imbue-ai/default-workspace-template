@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 from entry_points_testing import (
+    IMPORT_PROBE,
+    REPO_ROOT,
     STANDALONE_BARE_DIRS,
     STANDALONE_BARE_SCRIPTS,
     declared_heavy_imports,
@@ -27,22 +29,9 @@ from entry_points_testing import (
     scripts_dirs,
 )
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-
 _HEAVY_VENV_MODULES = frozenset({"pydantic", "loguru", "click", "tenacity", "httpx"})
 _HEAVY_STDLIB_MODULES = frozenset({"asyncio"})
 
-# Imports the entry the way running it would (its directory first on sys.path) without
-# running its __main__ block, then reports every module left loaded.
-_PROBE = """
-import importlib.util, json, sys
-path = sys.argv[1]
-sys.path.insert(0, path.rsplit("/", 1)[0])
-spec = importlib.util.spec_from_file_location("_entry_point_probe", path)
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-print(json.dumps(sorted({name.split(".")[0] for name in sys.modules})))
-"""
 
 
 def _all_entry_points() -> list[Path]:
@@ -55,8 +44,8 @@ def _all_entry_points() -> list[Path]:
 def _loaded_modules(entry: Path, *, bare: bool) -> frozenset[str]:
     flags = ["-S", "-s"] if bare else []
     result = subprocess.run(
-        [sys.executable, *flags, "-c", _PROBE, str(entry)],
-        cwd=_REPO_ROOT,
+        [sys.executable, *flags, "-c", IMPORT_PROBE, str(entry)],
+        cwd=REPO_ROOT,
         # As a real run sees it: some libraries change behaviour when they detect pytest.
         env={name: value for name, value in os.environ.items() if not name.startswith("PYTEST_")},
         capture_output=True,
@@ -75,13 +64,13 @@ def _undeclared_heavy_imports(entry: Path, *, bare: bool) -> set[str]:
 
 @pytest.mark.timeout(60)
 @pytest.mark.parametrize(
-    "entry", _all_entry_points(), ids=lambda path: str(path.relative_to(_REPO_ROOT))
+    "entry", _all_entry_points(), ids=lambda path: str(path.relative_to(REPO_ROOT))
 )
 def test_an_entry_point_loads_no_undeclared_heavy_module(entry: Path) -> None:
     bare = is_bare_entry(entry)
     offenders = _undeclared_heavy_imports(entry, bare=bare)
     assert not offenders, (
-        f"importing {entry.relative_to(_REPO_ROOT)} loads {sorted(offenders)}. Import them inside "
+        f"importing {entry.relative_to(REPO_ROOT)} loads {sorted(offenders)}. Import them inside "
         "the function that uses them"
         + ("" if bare else ', or declare them under [tool.workspace-template.entry-points."<entry>.py"]')
     )

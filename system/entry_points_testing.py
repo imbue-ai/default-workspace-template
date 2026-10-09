@@ -25,6 +25,19 @@ BARE_PACKAGES = frozenset({"workspace_bare_scripts", "update_self_skill"})
 STANDALONE_BARE_DIRS = (REPO_ROOT / "system" / "services" / "oom_priority" / "bin",)
 STANDALONE_BARE_SCRIPTS = (REPO_ROOT / "catalog" / "build_catalog_from_export.py",)
 
+# ``python -c`` source taking an entry's path: imports the entry the way running it would (its
+# directory first on sys.path) without running its __main__ block, then prints every top-level
+# module left loaded, as JSON.
+IMPORT_PROBE = """
+import importlib.util, json, sys
+path = sys.argv[1]
+sys.path.insert(0, path.rsplit("/", 1)[0])
+spec = importlib.util.spec_from_file_location("_entry_point_probe", path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+print(json.dumps(sorted({name.split(".")[0] for name in sys.modules})))
+"""
+
 # Where an entry point's project declares the heavy modules the entry may load at import.
 ENTRY_POINTS_TABLE = ("workspace-template", "entry-points")
 

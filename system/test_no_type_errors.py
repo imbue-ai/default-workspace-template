@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 from entry_points_testing import (
     BARE_PACKAGES,
+    REPO_ROOT,
     STANDALONE_BARE_DIRS,
     STANDALONE_BARE_SCRIPTS,
     entry_files,
@@ -28,15 +29,14 @@ from entry_points_testing import (
     scripts_dirs,
 )
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
 _TY = Path(sys.executable).parent / "ty"
 _FLOOR_PYTHON_VERSION = "3.12"
 
-_SYSTEM_SCRIPTS = _REPO_ROOT / "system" / "scripts"
-_UPDATE_SELF_SCRIPTS = _REPO_ROOT / ".agents" / "skills" / "update-self" / "scripts"
-_UPDATE_SELF_PYTHON = _REPO_ROOT / ".agents" / "skills" / "update-self" / "python"
-_TK_COMMAND_PARSING_SRC = _REPO_ROOT / "system" / "libs" / "tk_command_parsing" / "src"
-_OOM_PRIORITY_SRC = _REPO_ROOT / "system" / "services" / "oom_priority" / "src"
+_SYSTEM_SCRIPTS = REPO_ROOT / "system" / "scripts"
+_UPDATE_SELF_SCRIPTS = REPO_ROOT / ".agents" / "skills" / "update-self" / "scripts"
+_UPDATE_SELF_PYTHON = REPO_ROOT / ".agents" / "skills" / "update-self" / "python"
+_TK_COMMAND_PARSING_SRC = REPO_ROOT / "system" / "libs" / "tk_command_parsing" / "src"
+_OOM_PRIORITY_SRC = REPO_ROOT / "system" / "services" / "oom_priority" / "src"
 
 # Where the bare tier's imports resolve from at runtime: system/scripts (the stubs' own
 # directory), update-self's python/ and the stdlib-only library trees, which the stubs and
@@ -66,7 +66,7 @@ def _bare_files() -> list[Path]:
 def _run_ty(arguments: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(_TY), "check", "--output-format", "concise", *arguments],
-        cwd=_REPO_ROOT,
+        cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         timeout=600,

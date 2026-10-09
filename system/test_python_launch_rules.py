@@ -22,10 +22,14 @@ import shlex
 import subprocess
 from pathlib import Path, PurePosixPath
 
-from entry_points_testing import STANDALONE_BARE_DIRS, is_bare_entry, is_test_file
+from entry_points_testing import (
+    REPO_ROOT,
+    STANDALONE_BARE_DIRS,
+    is_bare_entry,
+    is_test_file,
+)
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-_SUPERVISORD_DIR = _REPO_ROOT / "system"
+_SUPERVISORD_DIR = REPO_ROOT / "system"
 
 _SHELL_PROGRAMS = frozenset({"bash", "sh", "zsh", "dash"})
 
@@ -136,22 +140,22 @@ def _plain_uv_runs(text: str) -> list[tuple[int, str]]:
 
 def _agent_facing_files(suffixes: tuple[str, ...] = _AGENT_FACING_SUFFIXES) -> list[Path]:
     tracked = subprocess.run(
-        ["git", "ls-files", "-z"], cwd=_REPO_ROOT, capture_output=True, text=True, check=True
+        ["git", "ls-files", "-z"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
     ).stdout.split("\0")
     return [
-        _REPO_ROOT / relative
+        REPO_ROOT / relative
         for relative in tracked
         if relative.endswith(suffixes)
         and not _EXEMPT_PARTS.intersection(PurePosixPath(relative).parts)
         and not relative.startswith(_EXEMPT_PREFIXES)
         and PurePosixPath(relative).name not in _EXEMPT_NAMES
-        and (_REPO_ROOT / relative).is_file()
+        and (REPO_ROOT / relative).is_file()
     ]
 
 
 def _plain_uv_run_violations() -> list[tuple[str, str]]:
     return [
-        (str(path.relative_to(_REPO_ROOT)), line)
+        (str(path.relative_to(REPO_ROOT)), line)
         for path in _agent_facing_files()
         for _, line in _plain_uv_runs(path.read_text(errors="replace"))
     ]
@@ -226,7 +230,7 @@ def test_the_plain_uv_run_scan_catches_a_planted_command_and_skips_mentions() ->
 
 
 def test_changelogs_and_fixtures_are_not_scanned() -> None:
-    scanned = {str(path.relative_to(_REPO_ROOT)) for path in _agent_facing_files()}
+    scanned = {str(path.relative_to(REPO_ROOT)) for path in _agent_facing_files()}
 
     assert not any("/changelog/" in path or path.endswith("CHANGELOG.md") for path in scanned)
     assert "AGENTS.md" in scanned
@@ -237,7 +241,7 @@ _PYTHON3_SCRIPT_RE = re.compile(r"(?<![\w./-])python3((?:\s+-[A-Za-z]+)*)\s+\\?[
 # A ``python3`` that ``uv run`` starts runs from the venv, so it is not this rule's concern.
 _UNDER_UV_RUN_RE = re.compile(r"\buv run(?:\s+--[\w-]+)*\s+$")
 # Spellings of the repo root (and of update-self's staged copy of it) in commands.
-_REPO_ROOT_PREFIXES = (
+REPO_ROOT_PREFIXES = (
     "${MNGR_AGENT_WORK_DIR:-.}/",
     "${MNGR_AGENT_WORK_DIR}/",
     "$MNGR_AGENT_WORK_DIR/",
@@ -263,7 +267,7 @@ def _named_python3_scripts(text: str, file_dir: Path, repo_root: Path) -> list[t
                 continue
             path = written
             base = repo_root
-            for prefix in _REPO_ROOT_PREFIXES:
+            for prefix in REPO_ROOT_PREFIXES:
                 if path.startswith(prefix):
                     path = path.removeprefix(prefix)
                     break
@@ -284,7 +288,7 @@ def _python3_violations(files: list[Path], repo_root: Path) -> list[str]:
 
 
 def test_python3_invocations_name_bare_entry_points() -> None:
-    offenders = _python3_violations(_agent_facing_files(_PYTHON3_SCANNED_SUFFIXES), _REPO_ROOT)
+    offenders = _python3_violations(_agent_facing_files(_PYTHON3_SCANNED_SUFFIXES), REPO_ROOT)
     assert not offenders, (
         "These run a script with the system python3, but it is not a bare entry point (or does not exist): "
         "the system python3 has no venv. Run it with `uv run --no-sync <path>` instead "
@@ -308,7 +312,7 @@ def test_the_python3_scan_catches_a_venv_script_and_a_stale_path(tmp_path: Path)
 
     offenders = [
         written
-        for written, resolved in _named_python3_scripts(doc.read_text(), doc.parent, _REPO_ROOT)
+        for written, resolved in _named_python3_scripts(doc.read_text(), doc.parent, REPO_ROOT)
         if resolved is None or not is_bare_entry(resolved)
     ]
 
@@ -368,7 +372,7 @@ def _sys_path_editors(repo_root: Path) -> list[str]:
 
 
 def test_only_the_declared_bare_stubs_edit_sys_path() -> None:
-    offenders = _sys_path_editors(_REPO_ROOT)
+    offenders = _sys_path_editors(REPO_ROOT)
     assert not offenders, (
         "These edit sys.path. Import the package instead: a skill's modules live in its python/ "
         "project and a system script's beside it, all importable from the root venv:\n"
