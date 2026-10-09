@@ -459,6 +459,16 @@ def test_only_the_declared_bare_stubs_edit_sys_path() -> None:
     )
 
 
+def test_every_allowed_sys_path_editor_still_edits_it() -> None:
+    stale = sorted(
+        relative
+        for relative in _ALLOWED_SYS_PATH_EDITS
+        if not (REPO_ROOT / relative).is_file()
+        or not _edits_sys_path((REPO_ROOT / relative).read_text())
+    )
+    assert not stale, f"These sys.path exceptions no longer edit sys.path: {stale}"
+
+
 def test_the_sys_path_scan_sees_each_form_of_edit() -> None:
     assert _edits_sys_path("import sys\nsys.path.insert(0, 'x')\n")
     assert _edits_sys_path("import sys\nsys.path.append('x')\n")
