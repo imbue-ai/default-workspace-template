@@ -249,8 +249,11 @@ What gets generated:
   follows the page's link clicks: a link to a page of the app navigates as
   usual, a link to a local service, another app, or a `file:///` path opens
   where the workspace opens it (the app's window, the workspace's browser, the
-  File Viewer), and an external link opens in the user's own browser -- so
-  write plain `<a href>` links and no link handling of your own. Keep the
+  File Viewer), and an external link opens in the app of the workspace
+  registered for it, else in the user's own browser -- so write plain
+  `<a href>` links and no link handling of your own. A `window.open` to any
+  of the workspace's own addresses is routed the same way and returns `null`;
+  one to another site still opens a browser window. Keep the
   script on every page the app serves. An app that drops it always reopens at
   its origin, gets the browser's own menu, and has its links navigate its own
   window. The runner serves the two modules
