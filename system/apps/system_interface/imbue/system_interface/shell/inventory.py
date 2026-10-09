@@ -2,7 +2,9 @@
 
 The registry (``data/.state/apps.toml``) is watched for changes, and its mtime is compared on every sweep
 as the backstop for a write no watch event reported (under gVisor and on lima, a change made outside the
-sandbox raises no inotify event in it); liveness is re-derived on the sweep and after a stop or start. Every
+sandbox raises no inotify event in it); liveness is re-derived on the sweep and after a stop or start. Each app's address on the domain the workspace
+was last shared under (``data/.state/share_domain``, which the share gateway keeps past an unshare) is read with
+every view, so a first share reaches the clients on the next sweep. Every
 change of the inventory is broadcast as one ``apps_updated`` message, diffed against the last one sent
 (desktop contracts.md section 6), every read of the registry is handed to ``on_registry_read`` (the
 production shell's services event writer), and every read that changed the rows is announced to each registry change
@@ -10,6 +12,7 @@ listener (the shell's desktop reconcile).
 """
 
 import json
+import re
 import threading
 from collections.abc import Callable
 from collections.abc import Sequence
@@ -38,10 +41,26 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 # How often liveness is re-derived.
 LIVENESS_SWEEP_INTERVAL_SECONDS: Final[float] = 10.0
 
+# Where the share gateway keeps the domain the workspace was last shared under.
+DEFAULT_SHARE_DOMAIN_PATH: Final[Path] = Path("data/.state/share_domain")
+
+_DNS_NAME: Final[re.Pattern[str]] = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def read_share_domain(path: Path | None) -> str | None:
+    """The domain ``path`` names, lowercased; None for no file, an unreadable one, or one that names no domain."""
+    if path is None:
+        return None
+    try:
+        text = path.read_text().strip().lower()
+    except OSError:
+        return None
+    return text if _DNS_NAME.fullmatch(text) is not None else None
+
 
 @pure
-def app_views(entries: Sequence[AppInventoryEntry]) -> list[InventoryApp]:
-    return [app_view(entry) for entry in entries]
+def app_views(entries: Sequence[AppInventoryEntry], share_domain: str | None) -> list[InventoryApp]:
+    return [app_view(entry, share_domain) for entry in entries]
 
 
 class AppInventory(MutableModel):
@@ -56,6 +75,11 @@ class AppInventory(MutableModel):
     )
     sweep_interval_seconds: float = Field(
         default=LIVENESS_SWEEP_INTERVAL_SECONDS, frozen=True, description="How often the sweep runs"
+    )
+    share_domain_path: Path | None = Field(
+        default=None,
+        frozen=True,
+        description="The file naming the domain the workspace was last shared under; None for a shell with no share",
     )
     on_registry_read: Callable[[Sequence[RegistryRow]], None] | None = Field(
         default=None,
@@ -114,7 +138,7 @@ class AppInventory(MutableModel):
             return self._entry_by_name.get(app_name)
 
     def views(self) -> list[InventoryApp]:
-        return app_views(self.entries())
+        return app_views(self.entries(), read_share_domain(self.share_domain_path))
 
     @property
     def is_registry_read(self) -> bool:

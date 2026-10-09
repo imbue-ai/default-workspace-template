@@ -321,12 +321,14 @@ def build_inventory(
     registry_path: Path,
     broadcaster: WebSocketBroadcaster,
     prober: Callable[[Sequence[tuple[str, str, str]]], dict[str, bool]] | None = None,
+    share_domain_path: Path | None = None,
 ) -> AppInventory:
     """An inventory that has read the registry and probed liveness once, with no watcher or sweep running."""
     inventory = AppInventory(
         registry_path=registry_path,
         broadcaster=broadcaster,
         liveness_prober=prober if prober is not None else FakeLivenessProber(),
+        share_domain_path=share_domain_path,
     )
     inventory.reload_registry()
     inventory.refresh_liveness()

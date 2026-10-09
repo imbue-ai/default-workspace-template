@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 from app_manifest.manifest import DefaultShortcut
 from app_manifest.manifest import ShortcutMode
+from app_manifest.primitives import AppUrl
 from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
 from app_manifest.registry import RegistryLaunchPath
@@ -579,6 +580,27 @@ def test_desktops_and_list_read_the_inventory_document(
         }
     ]
     assert [desktop["id"] for desktop in listing["desktops"]] == ["home"]
+
+
+def test_list_gives_each_app_the_link_to_write_for_it(
+    loopback_shell: LoopbackShell, layout_context: LayoutCliContext, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An app's address on the domain the workspace was last shared under is its link, so any client the workspace
+    is shared with can open it; with none, the registered backend URL is."""
+    shared = fake_app("files").model_copy(update={"share_url": "https://files-ab12cd34.0123.us1.example.com/"})
+    unshared = fake_app("notes").model_copy(update={"url": AppUrl("http://localhost:8095")})
+    inventory = InventoryDocument(
+        is_preview=False, workspace_name="workspace", desktops=(), apps=(shared, unshared), clients=()
+    )
+    loopback_shell.get_answers[INVENTORY_ROUTE] = (200, inventory.model_dump(mode="json"))
+
+    assert run_layout_cli(["list", "--json"], layout_context) == 0
+
+    listing = json.loads(capsys.readouterr().out)
+    assert [(app["name"], app["link"]) for app in listing["apps"]] == [
+        ("files", "https://files-ab12cd34.0123.us1.example.com/"),
+        ("notes", "http://localhost:8095/"),
+    ]
 
 
 def test_desktops_lists_no_popped_out_windows_for_a_shell_older_than_the_popped_out_rules(

@@ -71,6 +71,7 @@ def test_the_registry_read_lists_every_app_with_its_launch_paths(
         "pin",
         "message_handlers",
         "is_running",
+        "share_url",
     }
     assert serialized[1]["pin"] is None
     # One broadcast for the read; the liveness probe that found everything running adds none.
@@ -276,3 +277,42 @@ def test_a_registry_that_cannot_be_stat_ed_is_warned_about_and_does_not_end_the_
     absent = build_inventory(tmp_path / "absent" / "apps.toml", broadcaster)
     absent.sweep_once()
     assert len([record for record in loguru_records if record.startswith("WARNING")]) == len(warnings)
+
+
+_SHARE_DOMAIN = "0123456789abcdef0123456789abcdef.fedcba9876543210fedcba9876543210.us1.personal-imbue.com"
+
+
+def test_each_labelled_app_lists_its_address_on_the_domain_the_workspace_was_last_shared_under(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    registry_path = write_registry(
+        tmp_path / "apps.toml",
+        registry_row_toml("files", TEST_FILES_URL, program="files", label="files-ab12cd34"),
+        registry_row_toml("terminal", TEST_TERMINAL_URL, program="terminal"),
+    )
+    share_domain_path = tmp_path / "share_domain"
+    inventory = build_inventory(registry_path, broadcaster, share_domain_path=share_domain_path)
+    client_queue = broadcaster.register()
+    assert [view.share_url for view in inventory.views()] == [None, None]
+
+    share_domain_path.write_text(f"{_SHARE_DOMAIN.upper()}\n")
+    inventory.sweep_once()
+
+    assert [view.share_url for view in inventory.views()] == [f"https://files-ab12cd34.{_SHARE_DOMAIN}/", None]
+    assert [[app["share_url"] for app in message["apps"]] for message in drain_messages(client_queue)] == [
+        [f"https://files-ab12cd34.{_SHARE_DOMAIN}/", None]
+    ]
+
+
+def test_a_share_domain_file_that_names_no_domain_gives_no_app_a_share_address(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    registry_path = write_registry(
+        tmp_path / "apps.toml", registry_row_toml("files", TEST_FILES_URL, program="files", label="files-ab12cd34")
+    )
+    share_domain_path = tmp_path / "share_domain"
+    inventory = build_inventory(registry_path, broadcaster, share_domain_path=share_domain_path)
+
+    for text in ("", "evil.example/path", "two words.example", "https://evil.example"):
+        share_domain_path.write_text(text)
+        assert [view.share_url for view in inventory.views()] == [None], text

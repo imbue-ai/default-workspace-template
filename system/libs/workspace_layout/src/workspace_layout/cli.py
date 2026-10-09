@@ -599,9 +599,20 @@ def _listed_clients(inventory: _Answer) -> list[dict[str, Any]]:
     return [_listed({"popped_out": [], **client}, _LISTED_CLIENT_FIELDS) for client in inventory["clients"]]
 
 
+# CLEANUP: drop the ``share_url`` default once every workspace's shell runs a release whose inventory lists it.
+@pure
+def _app_link(app: Mapping[str, Any]) -> str:
+    """The link to write for an app: its address on the domain the workspace was last shared under, which opens it
+    from any client the workspace is shared with, else its backend URL, which opens it only from inside."""
+    share_url = app.get("share_url")
+    if isinstance(share_url, str) and share_url != "":
+        return share_url
+    return f"{str(app['url']).rstrip('/')}/"
+
+
 @pure
 def _listed_apps(inventory: _Answer) -> list[dict[str, Any]]:
-    """Every app a user can open, with where its windows are."""
+    """Every app a user can open, with the link to write for it and where its windows are."""
     windows_by_app: dict[str, list[dict[str, Any]]] = {}
     for desktop in inventory["desktops"]:
         for window in desktop["windows"]:
@@ -609,7 +620,7 @@ def _listed_apps(inventory: _Answer) -> list[dict[str, Any]]:
                 {**_listed(window, _LISTED_WINDOW_FIELDS), "desktop": desktop["id"]}
             )
     return [
-        {**_listed(app, _LISTED_APP_FIELDS), "windows": windows_by_app.get(app["name"], [])}
+        {**_listed(app, _LISTED_APP_FIELDS), "link": _app_link(app), "windows": windows_by_app.get(app["name"], [])}
         for app in inventory["apps"]
         if not app["internal"]
     ]
