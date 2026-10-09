@@ -170,6 +170,11 @@ instruction for agentic work, so overwrite it only when you have a good reason.
 Cost is dominated by per-call overhead, so **batch** items into fewer, larger
 calls rather than one call per item.
 
+To wait on a nested `claude -p` you start yourself and end your turn, start it
+through `python3 system/scripts/run_in_background.py`, never your harness's own
+background tool: the runner's report wakes you, and the marker that keeps your
+chat busy meanwhile is out of reach of the nested Claude's own hooks.
+
 ## Scenario 3 -- full agent
 
 Reach for this over scenario 2 when the work needs its **own git worktree**:

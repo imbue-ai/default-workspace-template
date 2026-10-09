@@ -34,7 +34,12 @@ Provisioning and utility scripts:
   caller's own chat as a message that starts the agent's next turn, on any
   harness; how a lead waits for a worker's report; vendored byte-identically into
   `.agents/skills/update-self/scripts/`, whose staged copy update-self waits
-  through), `with_secrets.py` (run a
+  through), `background_tasks.py` (the background tasks each chat is waiting
+  on, one marker file per task under `data/.apps/chat/background_tasks/<chat-id>/`,
+  written by `run_in_background.py` and by Claude's Stop hook; `list` and
+  `is-busy` ask the chat app and fall back to the files, and the chat app, the
+  avatar, the memory-candidate scan and the worker idle check import it),
+  `with_secrets.py` (run a
   command with one `data/.secrets/<name>.env` file's variables in its
   environment; the one sanctioned reader of that directory, which
   `agent_secrets_guard.sh` enforces -- see the `connect-external-service`

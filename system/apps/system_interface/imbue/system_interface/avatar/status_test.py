@@ -1,6 +1,8 @@
-"""Tests for the mood fold over mngr's agents event file and the reader that watches it."""
+"""Tests for the mood fold over mngr's agents event file and the chats' background task markers, and the reader that
+watches both."""
 
 import json
+import os
 import queue
 from datetime import datetime
 from datetime import timedelta
@@ -19,6 +21,9 @@ from imbue.system_interface.avatar.status import fold_agent_events
 from imbue.system_interface.avatar.status import parse_event_timestamp
 from imbue.system_interface.avatar.status import read_avatar_status
 from imbue.system_interface.avatar.status import read_tail_lines_back_to_snapshot
+from imbue.system_interface.avatar.testing import exited_process_pid
+from imbue.system_interface.avatar.testing import remove_background_task_marker
+from imbue.system_interface.avatar.testing import write_background_task_marker
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
@@ -108,7 +113,9 @@ def test_the_tail_read_stops_at_the_last_snapshot_even_when_a_block_boundary_cut
     assert first not in tail
     assert all(json.loads(line) for line in tail if line.strip())
     assert [line.strip() for line in tail[tail.index(snapshot) + 1 :] if line.strip()] == [filler] * len(trailing)
-    assert read_avatar_status(path, _NOW) == AvatarStatus(mood=AvatarMood.WORKING, is_stale=False)
+    assert read_avatar_status(path, tmp_path / "background-tasks", _NOW) == AvatarStatus(
+        mood=AvatarMood.WORKING, is_stale=False
+    )
     # A file with no snapshot is read whole.
     path.write_text("\n".join([filler] * 3) + "\n")
     assert read_tail_lines_back_to_snapshot(path)[:3] == [filler] * 3
@@ -130,11 +137,31 @@ def test_the_tail_read_finds_a_snapshot_marker_that_a_block_boundary_splits(tmp_
     tail = read_tail_lines_back_to_snapshot(path)
     assert snapshot in tail
     assert old_snapshot not in tail
-    assert read_avatar_status(path, _NOW) == AvatarStatus(mood=AvatarMood.WORKING, is_stale=False)
+    assert read_avatar_status(path, tmp_path / "background-tasks", _NOW) == AvatarStatus(
+        mood=AvatarMood.WORKING, is_stale=False
+    )
 
 
 def test_an_absent_file_reads_stale_and_idle(tmp_path: Path) -> None:
-    assert read_avatar_status(tmp_path / "missing.jsonl", _NOW) == AvatarStatus(mood=AvatarMood.IDLE, is_stale=True)
+    assert read_avatar_status(tmp_path / "missing.jsonl", tmp_path / "background-tasks", _NOW) == AvatarStatus(
+        mood=AvatarMood.IDLE, is_stale=True
+    )
+
+
+def test_a_busy_chat_keeps_the_mood_working_with_no_running_agent(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    path.write_text(_event("AGENTS_FULL_STATE", agents=[_agent("lead", "WAITING")]) + "\n")
+    root = tmp_path / "background-tasks"
+    assert read_avatar_status(path, root, _NOW) == AvatarStatus(mood=AvatarMood.IDLE, is_stale=False)
+    # A marker whose process has exited will never wake its agent.
+    write_background_task_marker(root, "agent-lead", "gone", exited_process_pid())
+    assert read_avatar_status(path, root, _NOW).mood is AvatarMood.IDLE
+    write_background_task_marker(root, "agent-lead", "poll", os.getpid())
+    assert read_avatar_status(path, root, _NOW) == AvatarStatus(mood=AvatarMood.WORKING, is_stale=False)
+    # The staleness is the events file's alone.
+    assert read_avatar_status(path, root, _NOW + STALE_AFTER + timedelta(seconds=1)) == AvatarStatus(
+        mood=AvatarMood.WORKING, is_stale=True
+    )
 
 
 def test_the_events_path_follows_the_host_directory_variable(tmp_path: Path) -> None:
@@ -155,7 +182,11 @@ def test_the_reader_refolds_a_write_through_the_file_watch(tmp_path: Path) -> No
     window: queue.Queue[str | None] = broadcaster.register()
     # The periodic re-check is far off: only the watch can wake the loop for the writes below.
     reader = AvatarStatusReader(
-        events_path=path, broadcaster=broadcaster, debounce_seconds=0.02, stale_check_interval_seconds=60.0
+        events_path=path,
+        background_tasks_root=tmp_path / "background-tasks",
+        broadcaster=broadcaster,
+        debounce_seconds=0.02,
+        stale_check_interval_seconds=60.0,
     )
     reader.start()
     try:
@@ -187,7 +218,11 @@ def test_the_reader_refolds_a_write_through_the_file_watch(tmp_path: Path) -> No
 def test_the_reader_starts_watching_once_the_events_directory_appears(tmp_path: Path) -> None:
     path = tmp_path / "mngr" / "agents" / "events.jsonl"
     reader = AvatarStatusReader(
-        events_path=path, broadcaster=WebSocketBroadcaster(), debounce_seconds=0.02, stale_check_interval_seconds=0.05
+        events_path=path,
+        background_tasks_root=tmp_path / "background-tasks",
+        broadcaster=WebSocketBroadcaster(),
+        debounce_seconds=0.02,
+        stale_check_interval_seconds=0.05,
     )
     reader.start()
     try:
@@ -209,7 +244,9 @@ def test_the_reader_broadcasts_only_when_the_status_changes(tmp_path: Path) -> N
     path = tmp_path / "events.jsonl"
     broadcaster = WebSocketBroadcaster()
     window: queue.Queue[str | None] = broadcaster.register()
-    reader = AvatarStatusReader(events_path=path, broadcaster=broadcaster)
+    reader = AvatarStatusReader(
+        events_path=path, background_tasks_root=tmp_path / "background-tasks", broadcaster=broadcaster
+    )
     reader.refresh()
     assert drain_messages(window) == []
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -218,3 +255,62 @@ def test_the_reader_broadcasts_only_when_the_status_changes(tmp_path: Path) -> N
     reader.refresh()
     assert drain_messages(window) == [{"type": "avatar_status", "mood": "working", "is_stale": False}]
     assert reader.current() == AvatarStatus(mood=AvatarMood.WORKING, is_stale=False)
+
+
+def test_the_reader_refolds_a_marker_write_and_removal_through_the_tree_watch(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    path.write_text(_live_event("lead", "WAITING"))
+    root = tmp_path / "background-tasks"
+    # The chat's own directory under the root is made by its first marker, after the watch started.
+    root.mkdir()
+    # The periodic re-check is far off: only the watch can wake the loop for the writes below.
+    reader = AvatarStatusReader(
+        events_path=path,
+        background_tasks_root=root,
+        broadcaster=WebSocketBroadcaster(),
+        debounce_seconds=0.02,
+        stale_check_interval_seconds=60.0,
+    )
+    reader.start()
+    try:
+        assert reader.current().mood is AvatarMood.IDLE
+        write_background_task_marker(root, "agent-lead", "poll", os.getpid())
+        wait_for(
+            lambda: reader.current().mood is AvatarMood.WORKING,
+            timeout=5.0,
+            poll_interval=0.02,
+            error_message="the watch never woke the reader for the marker",
+        )
+        remove_background_task_marker(root, "agent-lead", "poll")
+        wait_for(
+            lambda: reader.current().mood is AvatarMood.IDLE,
+            timeout=5.0,
+            poll_interval=0.02,
+            error_message="the watch never woke the reader for the marker's removal",
+        )
+    finally:
+        reader.stop()
+
+
+def test_the_reader_reads_a_marker_root_that_appears_after_its_start(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    path.write_text(_live_event("lead", "WAITING"))
+    root = tmp_path / "background-tasks"
+    reader = AvatarStatusReader(
+        events_path=path,
+        background_tasks_root=root,
+        broadcaster=WebSocketBroadcaster(),
+        debounce_seconds=0.02,
+        stale_check_interval_seconds=0.05,
+    )
+    reader.start()
+    try:
+        write_background_task_marker(root, "agent-lead", "poll", os.getpid())
+        wait_for(
+            lambda: reader.current().mood is AvatarMood.WORKING,
+            timeout=5.0,
+            poll_interval=0.02,
+            error_message="the reader never read the marker root that appeared after its start",
+        )
+    finally:
+        reader.stop()

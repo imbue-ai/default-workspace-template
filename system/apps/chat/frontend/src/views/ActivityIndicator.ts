@@ -21,12 +21,17 @@
  * genuinely IDLE and the strip would show nothing, so the user sees their
  * decision land and then apparent silence. Through that gap the strip says
  * `WAKE_LABEL`, bounded by `WAKE_SPINNER_MS`.
+ *
+ * Below the activity line, whatever it says, sits the wait line (`BackgroundTasksLine`) while
+ * the chat has background tasks pending: the agent may be between turns, but one of them will
+ * start the next.
  */
 
 import m from "mithril";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
 import type { ToolCall, TranscriptEvent } from "../models/Response";
 import { getChatById } from "../models/Chats";
+import { BackgroundTasksLine } from "./BackgroundTasksLine";
 import { handoffPhaseText } from "./handoff-phase";
 import { resolutionRequestIdOf } from "./message-classification";
 import { hasShellResolutionSince, shellResolutionArrivalFor } from "./permission-card";
@@ -99,7 +104,10 @@ const WAKE_LABEL = "Confirming permission changes…";
 // server's activity states -- the server has no signal for this beat.
 const WAKE_STATE = "WAKING";
 
-function renderStrip(label: string, state: string | null | undefined): m.Vnode {
+// The centred column the strip and the wait line share, above the centred input.
+const STRIP_COLUMN_CLASS = "mx-auto mb-2 w-full max-w-(--width-message-column)";
+
+function renderStrip(label: string, state: string | null | undefined, columnClass: string): m.Vnode {
   // `flex` (not inline-flex) so the auto side-margins can horizontally center
   // the strip within the footer above the centered input. The dot's pulse
   // keyframes (agent-activity-pulse) live in the library's base.css.
@@ -107,7 +115,7 @@ function renderStrip(label: string, state: string | null | undefined): m.Vnode {
     "div",
     {
       class:
-        "agent-activity-indicator mx-auto mb-2 flex w-full max-w-(--width-message-column) items-center gap-2 px-1 " +
+        `agent-activity-indicator ${columnClass} flex items-center gap-2 px-1 ` +
         "text-(length:--font-size-helper) text-secondary",
       "data-state": state,
       role: "status",
@@ -215,68 +223,82 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
     }
   };
 
+  /** The activity line: the switch's phase, the turn's caption, or the wake-up caption; null when there is none. */
+  const activityStrip = (attrs: ActivityIndicatorAttrs, columnClass: string): m.Vnode | null => {
+    const { chatId, events } = attrs;
+    const chat = getChatById(chatId);
+    // A chat switching harness reports the switch, not the retiring agent's turn: that
+    // agent is busy with the summary it was asked for, which is the switch's own business.
+    // The failed phase has its own notice over the composer and shows nothing here.
+    if (chat !== undefined && chat.handoff !== null && chat.handoff.phase !== "failed") {
+      cancelRelease();
+      cancelWake();
+      heldToolCaption = null;
+      return renderStrip(
+        handoffPhaseText(chat.handoff, chat.active_agent.harness),
+        `HANDOFF_${chat.handoff.phase}`,
+        columnClass,
+      );
+    }
+    const state = chat?.active_agent.activity_state ?? null;
+    const label = labelForActivityState(state, events);
+
+    const now = Date.now();
+    if (state === "TOOL_RUNNING" && label !== null) {
+      // Active tool -> (re)start the hold window; cancel any pending release.
+      cancelRelease();
+      heldToolCaption = label;
+      heldUntil = now + TOOL_CAPTION_MIN_MS;
+    } else if (state === "THINKING" && heldToolCaption !== null && now < heldUntil) {
+      // Still working, but the tool cleared fast -- keep the caption up briefly so
+      // it doesn't flash, then release. Schedule a redraw at the release point.
+      if (releaseTimer === null) {
+        releaseTimer = window.setTimeout(() => {
+          releaseTimer = null;
+          heldToolCaption = null;
+          m.redraw();
+        }, heldUntil - now);
+      }
+      cancelWake();
+      return renderStrip(heldToolCaption, "TOOL_RUNNING", columnClass);
+    } else {
+      // IDLE / null (turn ended), window expired, or nothing held -> release now.
+      cancelRelease();
+      heldToolCaption = null;
+    }
+
+    if (label === null) {
+      // Nothing else is going on, so this is the only moment the wake-up
+      // caption may take the strip -- a real turn always outranks it.
+      const wakeDeadline = wakeUpSpinnerDeadline(events, now);
+      if (wakeDeadline !== null) {
+        if (wakeTimer === null) {
+          wakeTimer = window.setTimeout(() => {
+            wakeTimer = null;
+            m.redraw();
+          }, wakeDeadline - now);
+        }
+        return renderStrip(WAKE_LABEL, WAKE_STATE, columnClass);
+      }
+      cancelWake();
+      return null;
+    }
+    cancelWake();
+    return renderStrip(label, state, columnClass);
+  };
+
   return {
     onremove() {
       cancelRelease();
       cancelWake();
     },
     view(vnode) {
-      const { chatId, events } = vnode.attrs;
-      const chat = getChatById(chatId);
-      // A chat switching harness reports the switch, not the retiring agent's turn: that
-      // agent is busy with the summary it was asked for, which is the switch's own business.
-      // The failed phase has its own notice over the composer and shows nothing here.
-      if (chat !== undefined && chat.handoff !== null && chat.handoff.phase !== "failed") {
-        cancelRelease();
-        cancelWake();
-        heldToolCaption = null;
-        return renderStrip(handoffPhaseText(chat.handoff, chat.active_agent.harness), `HANDOFF_${chat.handoff.phase}`);
-      }
-      const state = chat?.active_agent.activity_state ?? null;
-      const label = labelForActivityState(state, events);
-
-      const now = Date.now();
-      if (state === "TOOL_RUNNING" && label !== null) {
-        // Active tool -> (re)start the hold window; cancel any pending release.
-        cancelRelease();
-        heldToolCaption = label;
-        heldUntil = now + TOOL_CAPTION_MIN_MS;
-      } else if (state === "THINKING" && heldToolCaption !== null && now < heldUntil) {
-        // Still working, but the tool cleared fast -- keep the caption up briefly so
-        // it doesn't flash, then release. Schedule a redraw at the release point.
-        if (releaseTimer === null) {
-          releaseTimer = window.setTimeout(() => {
-            releaseTimer = null;
-            heldToolCaption = null;
-            m.redraw();
-          }, heldUntil - now);
-        }
-        cancelWake();
-        return renderStrip(heldToolCaption, "TOOL_RUNNING");
-      } else {
-        // IDLE / null (turn ended), window expired, or nothing held -> release now.
-        cancelRelease();
-        heldToolCaption = null;
-      }
-
-      if (label === null) {
-        // Nothing else is going on, so this is the only moment the wake-up
-        // caption may take the strip -- a real turn always outranks it.
-        const wakeDeadline = wakeUpSpinnerDeadline(events, now);
-        if (wakeDeadline !== null) {
-          if (wakeTimer === null) {
-            wakeTimer = window.setTimeout(() => {
-              wakeTimer = null;
-              m.redraw();
-            }, wakeDeadline - now);
-          }
-          return renderStrip(WAKE_LABEL, WAKE_STATE);
-        }
-        cancelWake();
-        return null;
-      }
-      cancelWake();
-      return renderStrip(label, state);
+      const tasks = getChatById(vnode.attrs.chatId)?.active_agent.background_tasks ?? [];
+      if (tasks.length === 0) return activityStrip(vnode.attrs, STRIP_COLUMN_CLASS);
+      return m("div", { class: `agent-activity-stack ${STRIP_COLUMN_CLASS} flex flex-col gap-1` }, [
+        activityStrip(vnode.attrs, ""),
+        m(BackgroundTasksLine, { tasks }),
+      ]);
     },
   };
 }

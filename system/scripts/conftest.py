@@ -1,5 +1,6 @@
 """Fixtures for the scripts' tests: a fake chat app and a fake ``mngr`` for message_chat.py and
-run_in_background.py."""
+run_in_background.py, a marker root of its own for every test, so no test marks a chat busy
+in the real checkout, and the exited pid and worktree the marker tests build on."""
 
 from __future__ import annotations
 
@@ -7,13 +8,15 @@ import json
 import os
 import socket
 import stat
+import subprocess
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
 import pytest
-from script_modules_testing import message_chat
+from script_modules_testing import background_tasks, message_chat
 
 
 @pytest.fixture(autouse=True)
@@ -28,6 +31,48 @@ def _isolate_agent_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.delenv("MINDS_CHAT_ID", raising=False)
     monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def background_task_markers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The background-task marker root every script (and every subprocess a test starts) writes
+    and reads, in place of the checkout's ``data/.apps/chat/background_tasks``."""
+    root = tmp_path / "background_tasks"
+    monkeypatch.setenv(background_tasks.MARKER_ROOT_ENV, str(root))
+    return root
+
+
+@pytest.fixture
+def exited_pid() -> int:
+    """The pid of a process that has already exited, which a marker naming it is stale by."""
+    process = subprocess.Popen([sys.executable, "-c", "pass"])
+    process.wait()
+    return process.pid
+
+
+@pytest.fixture
+def main_checkout_and_worktree(tmp_path: Path) -> tuple[Path, Path]:
+    """A git main checkout with one commit, and a worker's worktree of it, as ``(main, worktree)``."""
+    main = tmp_path / "workspace"
+    main.mkdir()
+    worktree = tmp_path / "worktrees" / "worker"
+    for args in (
+        ("init", "-q", "-b", "main"),
+        (
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "root",
+        ),
+        ("worktree", "add", "-q", "-b", "worker", str(worktree)),
+    ):
+        subprocess.run(["git", *args], cwd=main, check=True, capture_output=True)
+    return main, worktree
 
 
 @pytest.fixture(autouse=True)
@@ -59,10 +104,23 @@ def _clear_github_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class _FakeChatAppHandler(BaseHTTPRequestHandler):
-    """The chat app's send route, answering a scripted sequence of verdicts."""
+    """The chat app's send route, answering a scripted sequence of verdicts, and its GET routes,
+    answering what ``server.get_answers`` holds per path (404 for any other)."""
 
     def log_message(self, format: str, *args: Any) -> None:
         return
+
+    def do_GET(self) -> None:
+        server: Any = self.server
+        status, answer_body = server.get_answers.get(
+            self.path, (404, {"detail": "not found"})
+        )
+        payload = json.dumps(answer_body).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
 
     def do_POST(self) -> None:
         server: Any = self.server
@@ -91,11 +149,13 @@ def fake_chat_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     """A chat app over loopback, registered under the ``chat`` row of a registry the script reads.
 
     ``server.answers`` is the sequence of ``(status, body)`` the send route gives, the last one
-    repeating; ``server.posted`` is every ``(path, body)`` it received; ``server.drop_connections``
+    repeating; ``server.get_answers`` maps a GET path to its ``(status, body)``; ``server.posted``
+    is every ``(path, body)`` it received; ``server.drop_connections``
     makes it read each request and then close the connection without answering.
     """
     server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeChatAppHandler)
     server.answers = [(200, {"status": "ok"})]
+    server.get_answers = {}
     server.posted = []
     server.drop_connections = False
     thread = threading.Thread(target=server.serve_forever, daemon=True)

@@ -3,13 +3,18 @@
  * mark the list shows, so a chat that answered while the user was elsewhere stands out from
  * one merely sitting idle.
  *
- * Read off the chat list: a chat whose status goes from working to anything else while the
- * root is not showing it on screen is marked, and the mark goes when the root shows it, or
- * when it starts working again (a new turn makes the old reply old news). Kept per browser,
- * in storage, so it survives a reload and every root of this browser agrees.
+ * Read off the chat list: a chat whose status goes from working or background to anything but
+ * those two while the root is not showing it on screen is marked, and the mark goes when the
+ * root shows it, or when it is working or waiting on a background task again (a new turn makes
+ * the old reply old news). A turn that ends to wait on a background task (working to
+ * background) is not done: the task's report starts the next turn. Kept per browser, in
+ * storage, so it survives a reload and every root of this browser agrees.
  */
 
 const STORAGE_KEY = "chat-root-unread";
+
+// The statuses of a chat that will go on by itself: a turn in flight, or one a pending task will start.
+const BUSY_STATUSES: ReadonlySet<string> = new Set(["working", "background"]);
 
 let unreadChatIds = new Set<string>();
 let lastStatusByChatId = new Map<string, string>();
@@ -45,9 +50,9 @@ export function noteStatuses(statusByChatId: ReadonlyMap<string, string>, shownC
   let isChanged = false;
   for (const [chatId, status] of statusByChatId) {
     const previous = lastStatusByChatId.get(chatId);
-    if (status === "working") {
+    if (BUSY_STATUSES.has(status)) {
       if (unreadChatIds.delete(chatId)) isChanged = true;
-    } else if (previous === "working" && chatId !== shownChatId) {
+    } else if (previous !== undefined && BUSY_STATUSES.has(previous) && chatId !== shownChatId) {
       unreadChatIds.add(chatId);
       isChanged = true;
     }

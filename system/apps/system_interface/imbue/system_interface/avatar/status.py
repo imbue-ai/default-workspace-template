@@ -1,5 +1,6 @@
 """The avatar's mood (pinned-taskbar-entries plan section 4.6): whether any agent on the machine is working, read
-from the agents event file the mngr observer writes, with plain JSON parsing and no mngr import.
+from the agents event file the mngr observer writes, with plain JSON parsing and no mngr import, or any chat is busy
+on a background task that will wake its agent, read from the chats' task markers.
 
 The file is append-only JSONL under the standard event envelope: a full snapshot of every agent every five
 minutes, one agent's state whenever its host shows activity, and a removal when an agent is destroyed. The fold
@@ -7,8 +8,14 @@ reads from the end of the file back to the most recent snapshot, applies every l
 drops the workspace's own services agent (labelled primary), and asks whether any remaining agent is running.
 Every convention relied on is a constant below; a change to one shows up as a stale or idle avatar, never as an
 error. Past ten minutes (twice the snapshot interval) the status is stale; a missing file is stale from the start.
+
+An agent that ends its turn to wait on a background task reads WAITING to mngr, but the task's completion will start
+its next turn, so its chat is busy and the avatar keeps working. The markers are read through
+``system/scripts/background_tasks.py``, loaded by path so the scripts directory's generic module names stay off
+``sys.path``; a marker whose process has died is skipped, which the periodic re-check picks up.
 """
 
+import importlib.util
 import json
 import os
 import re
@@ -20,6 +27,7 @@ from datetime import timedelta
 from datetime import timezone
 from enum import auto
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 from typing import Final
 
@@ -34,7 +42,9 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.avatar.designs import AvatarMood
 from imbue.system_interface.file_watch import start_file_watch
+from imbue.system_interface.file_watch import start_tree_watch
 from imbue.system_interface.file_watch import stop_file_watch
+from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # mngr's conventions, duplicated rather than imported: the host directory's environment variable and fallback,
@@ -46,6 +56,7 @@ DEFAULT_MNGR_HOST_DIRNAME: Final[str] = ".mngr"
 AGENT_EVENTS_RELATIVE_PATH: Final[Path] = Path("events") / "mngr" / "agents" / "events.jsonl"
 PRIMARY_LABEL_KEY: Final[str] = "is_primary"
 WORKING_AGENT_STATES: Final[frozenset[str]] = frozenset({"RUNNING", "RUNNING_UNKNOWN_AGENT_TYPE"})
+BACKGROUND_TASKS_SCRIPT: Final[Path] = WORKSPACE_ROOT_DIRECTORY / "system" / "scripts" / "background_tasks.py"
 # Twice the observer's snapshot interval.
 STALE_AFTER: Final[timedelta] = timedelta(minutes=10)
 
@@ -62,6 +73,17 @@ _TIMESTAMP_PATTERN: Final[re.Pattern[str]] = re.compile(
 )
 
 
+def _load_background_tasks() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("background_tasks_for_avatar", BACKGROUND_TASKS_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_background_tasks: Final[ModuleType] = _load_background_tasks()
+
+
 class AgentEventType(UpperCaseStrEnum):
     """The observer's event types the fold reads, under mngr's names."""
 
@@ -73,7 +95,9 @@ class AgentEventType(UpperCaseStrEnum):
 class AvatarStatus(FrozenModel):
     """What the avatar wears: the mood, and whether the file it came from may be out of date."""
 
-    mood: AvatarMood = Field(description="Working when any agent but the services agent is running")
+    mood: AvatarMood = Field(
+        description="Working when any agent but the services agent is running, or any chat is busy on a background task"
+    )
     is_stale: bool = Field(description="Whether the newest event is older than the stale threshold, or absent")
 
 
@@ -97,6 +121,16 @@ def agent_events_path(environ: Mapping[str, str]) -> Path:
 def agent_events_path_from_environment() -> Path:
     """The agents event file for this process, by its own environment."""
     return agent_events_path(os.environ)
+
+
+def background_tasks_root_from_environment() -> Path:
+    """The directory the chats' background task markers live under, by this process's environment."""
+    return _background_tasks.marker_root(os.environ)
+
+
+def is_any_chat_busy(background_tasks_root: Path) -> bool:
+    """Whether any chat has a live background task marker, one whose process is still alive."""
+    return bool(_background_tasks.live_tasks_by_chat(background_tasks_root))
 
 
 @pure
@@ -249,17 +283,23 @@ def read_tail_lines_back_to_snapshot(path: Path) -> list[str]:
     return lines if is_whole else lines[1:]
 
 
-def read_avatar_status(path: Path, now: datetime) -> AvatarStatus:
-    return fold_agent_events(read_tail_lines_back_to_snapshot(path), now)
+def read_avatar_status(path: Path, background_tasks_root: Path, now: datetime) -> AvatarStatus:
+    """The events file's fold, working as well when a chat is busy; the staleness is the events file's alone."""
+    status = fold_agent_events(read_tail_lines_back_to_snapshot(path), now)
+    if status.mood is AvatarMood.WORKING or not is_any_chat_busy(background_tasks_root):
+        return status
+    return AvatarStatus(mood=AvatarMood.WORKING, is_stale=status.is_stale)
 
 
 class AvatarStatusReader(MutableModel):
-    """Keeps the avatar's status current: watches the events file, refolds after a settled burst of writes and on
-    a timer for staleness, and pushes ``avatar_status`` to every window when the mood or the staleness changes."""
+    """Keeps the avatar's status current: watches the events file and the background task markers, refolds after a
+    settled burst of writes and on a timer (for staleness, and for a marker whose process died without a write), and
+    pushes ``avatar_status`` to every window when the mood or the staleness changes."""
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
     events_path: Path = Field(frozen=True, description="The observer's agents event file")
+    background_tasks_root: Path = Field(frozen=True, description="The directory the chats' task markers live under")
     broadcaster: WebSocketBroadcaster = Field(frozen=True, description="Where ``avatar_status`` goes")
     debounce_seconds: float = Field(default=DEBOUNCE_SECONDS, frozen=True, description="How long a burst settles")
     stale_check_interval_seconds: float = Field(
@@ -269,6 +309,7 @@ class AvatarStatusReader(MutableModel):
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _status: AvatarStatus = PrivateAttr(default=STALE_IDLE_STATUS)
     _observer: BaseObserver | None = PrivateAttr(default=None)
+    _tasks_observer: BaseObserver | None = PrivateAttr(default=None)
     _stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _wake: threading.Event = PrivateAttr(default_factory=threading.Event)
     _thread: threading.Thread | None = PrivateAttr(default=None)
@@ -278,7 +319,7 @@ class AvatarStatusReader(MutableModel):
             return self._status
 
     def start(self) -> None:
-        """Fold once now, then watch the file and re-check on the interval."""
+        """Fold once now, then watch the file and the markers and re-check on the interval."""
         self.refresh()
         self._ensure_watching()
         thread = threading.Thread(target=self._run, daemon=True, name="avatar-status")
@@ -291,14 +332,16 @@ class AvatarStatusReader(MutableModel):
         if self._thread is not None:
             self._thread.join(timeout=5)
             self._thread = None
-        if self._observer is not None:
-            stop_file_watch(self._observer)
-            self._observer = None
+        for observer in (self._observer, self._tasks_observer):
+            if observer is not None:
+                stop_file_watch(observer)
+        self._observer = None
+        self._tasks_observer = None
 
     def refresh(self) -> None:
-        """Refold the file; a change of mood or staleness is pushed to every window."""
+        """Refold the file and reread the markers; a change of mood or staleness is pushed to every window."""
         try:
-            status = read_avatar_status(self.events_path, datetime.now(timezone.utc))
+            status = read_avatar_status(self.events_path, self.background_tasks_root, datetime.now(timezone.utc))
         except OSError as e:
             logger.opt(exception=e).warning("Could not read the agents event file at {}", self.events_path)
             status = STALE_IDLE_STATUS
@@ -309,10 +352,12 @@ class AvatarStatusReader(MutableModel):
             self.broadcaster.broadcast_avatar_status(avatar_status_wire_json(status))
 
     def _ensure_watching(self) -> None:
-        """Watch the events directory once it exists; the shell creates nothing under an mngr directory."""
-        if self._observer is not None or not self.events_path.parent.is_dir():
-            return
-        self._observer = start_file_watch(self.events_path, self._wake.set)
+        """Watch the events directory and the marker root once each exists; the shell creates nothing under an mngr
+        directory, nor in the chat app's data."""
+        if self._observer is None and self.events_path.parent.is_dir():
+            self._observer = start_file_watch(self.events_path, self._wake.set)
+        if self._tasks_observer is None and self.background_tasks_root.is_dir():
+            self._tasks_observer = start_tree_watch(self.background_tasks_root, self._wake.set)
 
     def _run(self) -> None:
         while not self._stop.is_set():

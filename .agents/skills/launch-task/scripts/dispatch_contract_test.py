@@ -7,7 +7,9 @@ A worker dispatch crosses three hands: a lead skill's prose writes a task file
 and invokes ``create_worker.py``; ``create_worker.py`` provisions the worker and
 polls for the report named in that task file; the worker reads the task file
 back with ``parse_task_frontmatter.py`` and pushes its report to the path it
-names. Each hand has its own unit tests; nothing else checks that they agree.
+names. Meanwhile the lead's poll reads the worker's busy marker, which the
+worker's own ``run_in_background.py`` writes when it parks on a command. Each
+hand has its own unit tests; nothing else checks that they agree.
 These tests take the prose literally -- they execute the real fenced ``bash``
 blocks that write task files and parse the real ``create_worker.py`` argvs the
 prose contains -- so a drift in any hand (a renamed flag, a moved runtime dir,
@@ -28,6 +30,7 @@ dispatcher.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import re
 import shlex
@@ -60,6 +63,9 @@ def _load_script_module(path: Path) -> Any:
 create_worker = _load_script_module(_SCRIPTS_DIR / "create_worker.py")
 parse_task_frontmatter = _load_script_module(
     _SHARED_SCRIPTS_DIR / "parse_task_frontmatter.py"
+)
+run_in_background = _load_script_module(
+    _REPO_ROOT / "system" / "scripts" / "run_in_background.py"
 )
 
 # A fenced block opened by three or more backticks and closed by the same
@@ -141,6 +147,19 @@ class _RecordingRunner(create_worker.Runner):
         if list(argv)[:2] == ["mngr", "create"]:
             return _CleanResult(stdout=_CREATED_EVENT)
         return _CleanResult()
+
+
+class _WaitingWorkerRunner(create_worker.Runner):
+    """Answers ``mngr list`` with the worker ``launch`` created, its turn ended."""
+
+    def run(self, argv: Sequence[str], **kwargs):
+        record = {
+            "resource_type": "agent",
+            "id": _WORKER_ID,
+            "name": "demo",
+            "state": "WAITING",
+        }
+        return _CleanResult(stdout=json.dumps(record) + "\n")
 
 
 def _fenced_blocks(text: str) -> list[str]:
@@ -458,3 +477,33 @@ def test_launch_on_the_real_task_file_syncs_runtime_dir_and_addresses_the_worker
     # The runtime dir the prose synced is the one the worker's record names,
     # repo-relative, so a later destroy can pull it out of the lead's tree.
     assert labels["runtime_dir"] == runtime_dir.rstrip("/")
+
+
+def test_a_worker_parked_on_its_own_background_command_does_not_read_idle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker that starts a command through ``run_in_background.py`` and ends
+    its turn reads WAITING, which the idle check behind exit 76 would take for
+    a stalled worker. The runner marks the worker's chat busy under the chat
+    id it derives from the worker's own environment -- a worker ``launch``
+    created carries no ``MINDS_CHAT_ID``, so that is its agent id -- and the
+    lead's idle check reads that same chat's markers, so the parked worker is
+    not idle until its runner is done."""
+    root = tmp_path / "background_tasks"
+    monkeypatch.setenv(run_in_background.MARKER_ROOT_ENV, str(root))
+    worker_environ = {
+        "MNGR_AGENT_ID": _WORKER_ID,
+        run_in_background.MARKER_ROOT_ENV: str(root),
+    }
+    chat_id = run_in_background.own_chat_id(worker_environ)
+    marker = run_in_background.marker_path(worker_environ, chat_id, "run-tests")
+    run_in_background.write_marker(marker, "run-tests", "Run the tests", os.getpid())
+
+    def _is_idle() -> bool:
+        return create_worker._worker_is_idle(
+            "demo", _WaitingWorkerRunner(), pending_shed_check=lambda _name: False
+        )
+
+    assert _is_idle() is False
+    marker.unlink()
+    assert _is_idle() is True

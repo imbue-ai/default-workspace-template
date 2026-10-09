@@ -4,6 +4,7 @@ import json
 import os
 import queue
 import signal
+import subprocess
 import threading
 import time
 import tomllib
@@ -45,6 +46,7 @@ from imbue.chat.agent_manager import launch_role_templates
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.autocompact import ChatAutoCompactor
+from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_fast_mode import read_fast_mode_state
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
@@ -72,6 +74,7 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReader
+from imbue.chat.harnesses.model_state_poll import WatchedPathPurpose
 from imbue.chat.harnesses.registry import get_model_state_path
 from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
@@ -103,6 +106,7 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
 from imbue.chat.testing import RecordingMngrMessenger
+from imbue.chat.testing import build_background_task_reader
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import drain_is_connecting_pushes
 from imbue.chat.testing import is_chat_connecting
@@ -115,6 +119,7 @@ from imbue.chat.testing import read_create_defaults_type
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import seed_failed_chat
 from imbue.chat.testing import wait_until_true
+from imbue.chat.testing import write_background_task_marker
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.testing import write_summary_for_request
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -1395,7 +1400,7 @@ def test_a_created_agent_the_observe_stream_never_reports_is_let_go(
         assert created_id in agent_manager._activity_tracked_agents
     # Model tracking follows ``_agents`` membership: the shared poller lists its paths
     # from it, so a held created agent is polled...
-    assert created_id in agent_manager._list_model_state_paths()
+    assert created_id in agent_manager._list_watched_paths()
 
     for _ in range(FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO):
         agent_manager._handle_observe_event(make_full_agent_state_event([_agent_details("older-chat")]))
@@ -1404,7 +1409,7 @@ def test_a_created_agent_the_observe_stream_never_reports_is_let_go(
     with agent_manager._lock:
         assert created_id not in agent_manager._activity_tracked_agents
     # ...and a let-go one is not.
-    assert created_id not in agent_manager._list_model_state_paths()
+    assert created_id not in agent_manager._list_watched_paths()
 
 
 def test_the_observe_stream_owns_a_created_agent_once_it_reports_it(
@@ -3424,7 +3429,7 @@ def test_offline_codex_chip_matches_the_persisted_selection_from_the_sidecar(age
     assert choice.matched.id == "gpt-5.6-terra"
 
 
-# The shared model-state poller.
+# The shared agent-state poller.
 
 
 def test_model_state_poller_recomputes_and_broadcasts_when_the_state_file_changes(
@@ -3443,11 +3448,11 @@ def test_model_state_poller_recomputes_and_broadcasts_when_the_state_file_change
 
     # Settle the poller's stamps on the pre-write world, so the broadcast below is
     # attributable to the write alone (not to first-sighting derivation).
-    agent_manager._model_state_poller.poll_once()
+    agent_manager._agent_state_poller.poll_once()
     client_queue = broadcaster.register()
 
     state_path.write_text(json.dumps({"model": "gpt-5.6-terra", "effort": "high", "fast": False}))
-    agent_manager._model_state_poller.poll_once()
+    agent_manager._agent_state_poller.poll_once()
 
     choice = agent_manager._agents[agent_id].model_choice
     assert choice is not None
@@ -3457,8 +3462,181 @@ def test_model_state_poller_recomputes_and_broadcasts_when_the_state_file_change
     assert msg["chats"][0]["active_agent"]["model_choice"] is not None
 
     # An unchanged file stays quiet: no further broadcast on the next pass.
-    agent_manager._model_state_poller.poll_once()
+    agent_manager._agent_state_poller.poll_once()
     assert _last_chats_updated(_drain(client_queue)) is None
+
+
+# Background tasks: the chat is busy while a live marker waits in its directory.
+
+
+def _manager_reading_tasks(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, store: InMemoryChatRecordStore | None = None
+) -> tuple[AgentManager, BackgroundTaskReader]:
+    reader = build_background_task_reader(tmp_path / "background_tasks")
+    manager = AgentManager.build(
+        broadcaster,
+        chat_files_root=tmp_path / "chats",
+        chat_record_store=store if store is not None else InMemoryChatRecordStore(),
+        background_tasks=reader,
+    )
+    return manager, reader
+
+
+def test_a_marker_makes_an_idle_chat_background_on_the_next_poll_and_its_removal_idle_again(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    manager, reader = _manager_reading_tasks(broadcaster, tmp_path)
+    try:
+        seed_agent_state(manager, "agent-1", name="Chat-1", state="WAITING", activity_state=ActivityState.IDLE)
+        manager._agent_state_poller.poll_once()
+        client_queue = broadcaster.register()
+
+        write_background_task_marker(reader, "agent-1", "task-1", os.getpid())
+        manager._agent_state_poller.poll_once()
+
+        (snapshot,) = manager.get_chat_snapshots()
+        assert snapshot.status is ChatStatus.BACKGROUND
+        assert snapshot.active_agent.is_busy
+        assert [(task.id, task.description) for task in snapshot.active_agent.background_tasks] == [
+            ("task-1", "Rebuild the worker image")
+        ]
+        pushed = _last_chats_updated(_drain(client_queue))
+        assert pushed is not None and pushed["chats"][0]["status"] == "background"
+        # The memory shedder's prioritizer treats the waiting chat as mid-turn.
+        assert ChatId("agent-1") in manager._oom_prioritizer._running
+
+        reader.script.remove_marker(reader.root, "agent-1", reader.script.SOURCE_RUN_IN_BACKGROUND, "task-1")
+        manager._agent_state_poller.poll_once()
+
+        (snapshot,) = manager.get_chat_snapshots()
+        assert snapshot.status is ChatStatus.IDLE
+        assert not snapshot.active_agent.is_busy
+        assert snapshot.active_agent.background_tasks == ()
+        assert ChatId("agent-1") not in manager._oom_prioritizer._running
+    finally:
+        manager.stop()
+
+
+def test_a_chat_whose_runner_is_killed_reads_idle_on_the_next_poll(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A killed runner leaves its marker behind and changes no file; the busy chat's pid recheck after every pass
+    is what notices."""
+    manager, reader = _manager_reading_tasks(broadcaster, tmp_path)
+    runner = subprocess.Popen(["sleep", "60"])
+    try:
+        seed_agent_state(manager, "agent-1", name="Chat-1", state="WAITING", activity_state=ActivityState.IDLE)
+        write_background_task_marker(reader, "agent-1", "task-1", runner.pid)
+        manager._agent_state_poller.poll_once()
+        assert [snapshot.status for snapshot in manager.get_chat_snapshots()] == [ChatStatus.BACKGROUND]
+
+        runner.kill()
+        runner.wait()
+        client_queue = broadcaster.register()
+        manager._agent_state_poller.poll_once()
+
+        assert [snapshot.status for snapshot in manager.get_chat_snapshots()] == [ChatStatus.IDLE]
+        pushed = _last_chats_updated(_drain(client_queue))
+        assert pushed is not None and pushed["chats"][0]["active_agent"]["is_busy"] is False
+        # The marker is the runner's to remove; the reader only stops counting it.
+        assert (reader.chat_dir(ChatId("agent-1")) / "run_in_background-task-1.json").exists()
+    finally:
+        runner.kill()
+        runner.wait()
+        manager.stop()
+
+
+def test_a_turn_that_ends_to_wait_is_published_with_its_wait_never_idle_in_between(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Claude's Stop hook writes the task markers before mngr clears the ``active`` marker. The recompute that reads
+    the turn's end reads the chat's markers too, so the end goes out as ``background`` without waiting for the
+    poller: an ``idle`` push in between would mark the chat done."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    manager, reader = _manager_reading_tasks(broadcaster, tmp_path)
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    try:
+        seed_agent_state(manager, "agent-1", name="Chat-1", state="WAITING")
+        manager._ensure_activity_tracking("agent-1")
+        manager.update_session_events(
+            "agent-1", [{"type": "user_message", "timestamp": "2026-07-28T00:00:00Z", "content": "go"}]
+        )
+        (state_dir / "active").touch()
+        manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+        manager._agent_state_poller.poll_once()
+        assert [snapshot.status for snapshot in manager.get_chat_snapshots()] == [ChatStatus.WORKING]
+        client_queue = broadcaster.register()
+
+        write_background_task_marker(reader, "agent-1", "task-1", os.getpid())
+        (state_dir / "active").unlink()
+        manager._recompute_activity_state("agent-1", broadcast_on_change=True)
+
+        pushed = [message for message in _drain(client_queue) if message.get("type") == "chats_updated"]
+        assert [message["chats"][0]["status"] for message in pushed] == ["background"]
+    finally:
+        manager.stop()
+
+
+def test_a_turn_in_flight_reads_working_with_its_pending_tasks_listed(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    manager, reader = _manager_reading_tasks(broadcaster, tmp_path)
+    try:
+        seed_agent_state(manager, "agent-1", name="Chat-1", activity_state=ActivityState.TOOL_RUNNING)
+        write_background_task_marker(reader, "agent-1", "task-1", os.getpid())
+        manager._agent_state_poller.poll_once()
+
+        snapshot = manager.get_chat_snapshot("agent-1")
+        assert snapshot is not None
+        assert snapshot.status is ChatStatus.WORKING
+        assert snapshot.active_agent.is_busy
+        assert len(snapshot.active_agent.background_tasks) == 1
+    finally:
+        manager.stop()
+
+
+def test_a_chats_successor_carries_the_wait_its_predecessor_started(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The markers are the chat's, under its id: after a handoff nothing moves, and the successor reads them."""
+    store = InMemoryChatRecordStore()
+    manager, reader = _manager_reading_tasks(broadcaster, tmp_path, store)
+    first, second = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
+    try:
+        seed_agent_state(manager, first, name="archived-1-Chat-1", state="STOPPED")
+        seed_agent_state(
+            manager,
+            second,
+            name="Chat-1",
+            state="WAITING",
+            labels={"chat_id": first, "chat_seq": "2"},
+            activity_state=ActivityState.IDLE,
+        )
+        store.write(make_two_member_chat_record(first, second))
+        manager.refresh_chat_records()
+        write_background_task_marker(reader, first, "task-1", os.getpid())
+
+        watched = manager._list_watched_paths()
+        assert watched[second][WatchedPathPurpose.BACKGROUND_TASKS] == reader.chat_dir(ChatId(first))
+        assert WatchedPathPurpose.BACKGROUND_TASKS not in watched[first]
+        manager._agent_state_poller.poll_once()
+
+        (snapshot,) = manager.get_chat_snapshots()
+        assert (snapshot.chat_id, snapshot.active_agent.agent_id) == (first, second)
+        assert snapshot.status is ChatStatus.BACKGROUND
+        successor = manager.busy_state_of_agent(second, {"chat_id": first})
+        assert (successor.chat_id, successor.is_busy, len(successor.background_tasks)) == (first, True, 1)
+        archived = manager.busy_state_of_agent(first, {})
+        assert (archived.chat_id, archived.is_busy, archived.background_tasks) == (first, False, ())
+    finally:
+        manager.stop()
+
+
+def test_a_manager_without_a_reader_watches_no_marker_directory(agent_manager: AgentManager) -> None:
+    _seed_agent(agent_manager, "agent-1")
+    assert set(agent_manager._list_watched_paths()["agent-1"]) == {WatchedPathPurpose.MODEL_STATE}
+    assert not agent_manager.busy_state_of_agent("agent-1", {}).is_busy
 
 
 def test_tracking_many_agents_spawns_no_per_agent_threads(
@@ -3484,17 +3662,21 @@ def test_tracking_many_agents_spawns_no_per_agent_threads(
     assert new_threads == set(), f"Tracking agents spawned threads: {[t.name for t in new_threads]}"
 
 
-def test_list_model_state_paths_follows_a_harness_heal(agent_manager: AgentManager) -> None:
+def test_list_watched_paths_follows_a_harness_heal(agent_manager: AgentManager) -> None:
     """The poller's path set is re-resolved from ground truth, so an agent first tracked
     under the default-harness guess is polled at its REAL state path once observe reports
     the true harness -- the per-agent watcher used to bake the guessed path in forever."""
     agent_id = "agent-1"
     _seed_agent(agent_manager, agent_id, harness=HarnessType.CLAUDE)
     state_dir = agent_manager._get_agent_state_dir(agent_id)
-    assert agent_manager._list_model_state_paths() == {agent_id: get_model_state_path(HarnessType.CLAUDE, state_dir)}
+    assert agent_manager._list_watched_paths() == {
+        agent_id: {WatchedPathPurpose.MODEL_STATE: get_model_state_path(HarnessType.CLAUDE, state_dir)}
+    }
 
     _seed_agent(agent_manager, agent_id, harness=HarnessType.CODEX)
-    assert agent_manager._list_model_state_paths() == {agent_id: get_model_state_path(HarnessType.CODEX, state_dir)}
+    assert agent_manager._list_watched_paths() == {
+        agent_id: {WatchedPathPurpose.MODEL_STATE: get_model_state_path(HarnessType.CODEX, state_dir)}
+    }
 
 
 def test_a_codex_pick_checked_only_against_the_set_its_agent_last_had_is_not_rejected_for_good(
@@ -4985,22 +5167,28 @@ def test_the_rebind_runners_record_callbacks_raise_its_own_cancelled_error(
 
 
 @pytest.mark.parametrize(
-    ("lifecycle", "activity", "is_permission_pending", "expected"),
+    ("lifecycle", "activity", "is_permission_pending", "is_busy", "expected"),
     [
-        ("RUNNING", ActivityState.THINKING, False, ChatStatus.WORKING),
-        ("RUNNING", ActivityState.TOOL_RUNNING, False, ChatStatus.WORKING),
-        ("RUNNING", ActivityState.IDLE, False, ChatStatus.IDLE),
-        ("WAITING", None, False, ChatStatus.IDLE),
-        ("UNKNOWN", ActivityState.THINKING, False, ChatStatus.WORKING),
-        ("RUNNING", ActivityState.THINKING, True, ChatStatus.ATTENTION),
-        ("STOPPED", ActivityState.THINKING, True, ChatStatus.STOPPED),
-        ("DONE", None, False, ChatStatus.STOPPED),
+        ("RUNNING", ActivityState.THINKING, False, True, ChatStatus.WORKING),
+        ("RUNNING", ActivityState.TOOL_RUNNING, False, True, ChatStatus.WORKING),
+        ("RUNNING", ActivityState.IDLE, False, False, ChatStatus.IDLE),
+        ("WAITING", None, False, False, ChatStatus.IDLE),
+        ("UNKNOWN", ActivityState.THINKING, False, True, ChatStatus.WORKING),
+        ("RUNNING", ActivityState.THINKING, True, True, ChatStatus.ATTENTION),
+        ("STOPPED", ActivityState.THINKING, True, True, ChatStatus.STOPPED),
+        ("DONE", None, False, False, ChatStatus.STOPPED),
+        # A pending background task: busy with no turn in flight.
+        ("WAITING", ActivityState.IDLE, False, True, ChatStatus.BACKGROUND),
+        ("WAITING", None, False, True, ChatStatus.BACKGROUND),
+        # A permission prompt outranks the wait, and a dead agent outranks everything.
+        ("WAITING", ActivityState.IDLE, True, True, ChatStatus.ATTENTION),
+        ("STOPPED", None, False, True, ChatStatus.STOPPED),
     ],
 )
 def test_status_mapping_follows_the_chat_row(
-    lifecycle: str, activity: ActivityState | None, is_permission_pending: bool, expected: ChatStatus
+    lifecycle: str, activity: ActivityState | None, is_permission_pending: bool, is_busy: bool, expected: ChatStatus
 ) -> None:
-    assert chat_status_for_agent(lifecycle, activity, is_permission_pending) is expected
+    assert chat_status_for_agent(lifecycle, activity, is_permission_pending, is_busy) is expected
 
 
 # Unseeded chats awaiting their first send (post-launch-paths plan section 3.7)

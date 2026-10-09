@@ -113,10 +113,38 @@ attribute a request to a client, and the app asks the shell for windows,
 through one client of the `workspace_layout` library that asks as the chat app
 (`shell_client.py`), which the send routes, the auto-open reactor, and the
 focus-chat route share. A chat's status (`ChatStatus` in
-`primitives.py`: working, idle, attention, stopped, or error) comes from its
-active agent's activity state, a pending permission request, and the lifecycle,
-and rides the `chats_updated` snapshots the chat root's list draws its status
-dots from.
+`primitives.py`: working, background, idle, attention, stopped, or error) comes
+from its active agent's activity state, a pending permission request, the
+lifecycle, and the chat's pending background tasks, and rides the
+`chats_updated` snapshots the chat root's list draws its status dots from. The
+first that holds wins: stopped, attention, working, background, idle; a chat
+switching agents is working, or error once the switch failed.
+
+A chat is busy when its agent will resume on its own: a turn is in flight, or a
+background task is pending whose completion starts one. The pending tasks are
+one marker file each under `data/.apps/chat/background_tasks/<chat-id>/`,
+written by `system/scripts/run_in_background.py` and by Claude's Stop hook, and
+read through `system/scripts/background_tasks.py` (`background_tasks.py` here
+loads it by path). The state poller reads each chat's directory beside its
+agent's model-state file, re-reads it when its mtime moves, and rechecks the
+pids of every chat with markers on each pass, so a killed runner returns its
+chat to idle within a second. A busy chat with no turn in flight is
+`background`: the rail draws a dashed ring that turns slowly, and the strip
+above the composer adds a line, "Waiting on N background tasks", that opens
+into one row per task. Each snapshot's `active_agent` carries `is_busy` and
+`background_tasks`; `GET /api/agents` carries each agent's `chat_id`,
+`is_busy` and its chat's `background_tasks` (the active agent's only), which is
+what `background_tasks.py list` and `is-busy` ask first. `is_busy` counts a turn
+in flight, which only this app knows: the script's fallback to the marker files
+sees the tasks alone. The listing is a fresh discovery by default;
+`?tracked=true` answers from the agent list this app already follows, with no
+discovery, and 503 until it has read it once. The poller is not the only reader:
+the recompute that sees a turn end reads its chat's markers before it publishes
+the end (the Stop hook writes them before mngr clears the `active` marker), so a
+turn that ends to wait reads `background` at once, never `idle` first. The tasks
+are the chat's, so a handoff moves nothing: the successor reads the same
+directory. The switch dialog says a busy agent wraps up what it is doing, and
+the memory prioritizer treats a busy chat as mid-turn.
 
 A chat is a sequence of agent transcripts run by one agent at a time
 (`docs/system/blueprint/chat-agent-split/`); its id is its first agent's id, a

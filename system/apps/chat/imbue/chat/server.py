@@ -1773,10 +1773,36 @@ def _discover_with_filters() -> list[AgentInfo]:
 
 
 def _list_agents_endpoint() -> Response:
-    """List all mngr-managed agents (the loopback callers' listing: the evals bridge, the deployment tests)."""
-    agents = _discover_with_filters()
-    items = [AgentListItem(id=agent.id, name=agent.name, state=agent.state) for agent in agents]
-    return json_response(AgentListResponse(agents=items).model_dump())
+    """List all mngr-managed agents, each with its chat, whether it is busy, and its chat's pending background tasks.
+
+    By default a fresh discovery, under the app's agent filters: the loopback callers that wait on an
+    agent's lifecycle (the evals bridge, the deployment tests) read its state from mngr itself, and see an
+    agent before this app tracks it. ``?tracked=true`` answers from the agent list this app already folds from
+    the observe stream instead (every agent, workers included, unfiltered), with no discovery: what
+    ``system/scripts/background_tasks.py`` asks, from inside a probe that has just run ``mngr list`` itself.
+    It answers 503 until that list has been read once.
+    """
+    agent_manager: AgentManager = get_state().agent_manager
+    if request.args.get("tracked") == "true":
+        if not agent_manager.is_agent_list_known():
+            return _agent_list_not_known_response()
+        listed = [(agent.id, agent.name, agent.state, agent.labels) for agent in agent_manager.get_agents()]
+    else:
+        listed = [(agent.id, agent.name, agent.state, agent.labels) for agent in _discover_with_filters()]
+    items: list[AgentListItem] = []
+    for agent_id, name, state, labels in listed:
+        busy = agent_manager.busy_state_of_agent(agent_id, labels)
+        items.append(
+            AgentListItem(
+                id=agent_id,
+                name=name,
+                state=state,
+                chat_id=busy.chat_id,
+                is_busy=busy.is_busy,
+                background_tasks=busy.background_tasks,
+            )
+        )
+    return json_response(AgentListResponse(agents=items).model_dump(mode="json"))
 
 
 def _list_chats_endpoint() -> Response:

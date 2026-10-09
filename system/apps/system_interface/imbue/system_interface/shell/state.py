@@ -44,6 +44,7 @@ from imbue.system_interface.avatar.catalog import DEFAULT_AVATAR_CATALOG_DIRECTO
 from imbue.system_interface.avatar.selection import AvatarSelectionStore
 from imbue.system_interface.avatar.status import AvatarStatusReader
 from imbue.system_interface.avatar.status import agent_events_path_from_environment
+from imbue.system_interface.avatar.status import background_tasks_root_from_environment
 from imbue.system_interface.profiles import DEFAULT_SHARE_ENV_PATH
 from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.profiles import UserProfile
@@ -793,6 +794,7 @@ def build_shell_state(
     wallpaper_files_directory: Path = DEFAULT_WALLPAPER_FILES_DIRECTORY,
     avatar_catalog_directory: Path = DEFAULT_AVATAR_CATALOG_DIRECTORY,
     agent_events_path: Path | None = None,
+    background_tasks_root: Path | None = None,
     repo_root: Path = WORKSPACE_ROOT_DIRECTORY,
     profiles: ProfileResolver | None = None,
     launch_poster: LaunchPoster | None = None,
@@ -804,7 +806,8 @@ def build_shell_state(
     """Wire the shell's collaborators over ``state_directory``; ``inventory`` is injectable for tests (and
     ``on_registry_read``, what the built inventory tells every registry read, is the production shell's services
     event writer), and either way the shell's desktop reconcile listens to its registry changes;
-    ``agent_events_path`` (the mngr observer's file the avatar's mood is read from) defaults to the one the
+    ``agent_events_path`` (the mngr observer's file the avatar's mood is read from) and ``background_tasks_root``
+    (the chats' background task markers, which keep the mood working while a chat is busy) default to the ones the
     environment names; ``repo_root`` (the workspace the update notice's record and script, and the
     share materials the lifecycle manager reads the per-app grants from, live under) is the served tree by
     default; ``profiles`` (the resolver the composition root shares with presence) defaults to one that can reach
@@ -851,6 +854,9 @@ def build_shell_state(
         avatar_selection=AvatarSelectionStore(state_directory=state_directory),
         avatar_status=AvatarStatusReader(
             events_path=agent_events_path if agent_events_path is not None else agent_events_path_from_environment(),
+            background_tasks_root=background_tasks_root
+            if background_tasks_root is not None
+            else background_tasks_root_from_environment(),
             broadcaster=broadcaster,
         ),
         update_notice=UpdateNoticeWatch(repo_root=repo_root, broadcaster=broadcaster),

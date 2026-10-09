@@ -24,6 +24,15 @@
             "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/claude_shed_notice_hook.py 2>/dev/null || true"
           }
         ]
+      },
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/background_tasks.py clear-claude || true"
+          }
+        ]
       }
     ],
     "PreToolUse": [
@@ -80,6 +89,10 @@
           {
             "type": "command",
             "command": "[ -n \"$MNGR_CLAUDE_SUBAGENT_PROXY_CHILD\" ] && exit 0; ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_open_tickets_stop_nudge.sh"
+          },
+          {
+            "type": "command",
+            "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/background_tasks.py record-claude-stop || true"
           }
         ]
       }
