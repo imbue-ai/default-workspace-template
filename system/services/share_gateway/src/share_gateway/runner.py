@@ -440,7 +440,11 @@ def main() -> None:
         if materials is not None and materials != retried_materials:
             retry_state.reset()
             retried_materials = materials
-            record_share_domain(materials_module.SHARE_DOMAIN_FILE, materials.workspace_domain)
+            # Only the shell's share links depend on the record, so the share comes up without it.
+            try:
+                record_share_domain(materials_module.SHARE_DOMAIN_FILE, materials.workspace_domain)
+            except OSError as exc:
+                _log(f"Could not record the share domain in {materials_module.SHARE_DOMAIN_FILE}: {exc}")
 
         if materials is None and stack is not None:
             _log("Share materials removed; tearing the stack down")

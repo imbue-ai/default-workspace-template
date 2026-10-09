@@ -143,3 +143,7 @@ def test_the_share_domain_is_recorded_once_and_replaced_only_by_another_share(tm
 
     record_share_domain(path, "bbbb.us1.example.com")
     assert path.read_text() == "bbbb.us1.example.com\n"
+
+    path.write_bytes(b"\xff\xfe.example")
+    record_share_domain(path, "bbbb.us1.example.com")
+    assert path.read_text() == "bbbb.us1.example.com\n"

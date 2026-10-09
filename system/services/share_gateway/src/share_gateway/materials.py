@@ -199,12 +199,13 @@ def load_or_create_auth_label(path: Path) -> str:
 
 
 def record_share_domain(path: Path, workspace_domain: str) -> None:
-    """Record the domain the workspace is shared under, rewriting the file only when it names another one."""
+    """Record the domain the workspace is shared under, rewriting the file only when it names another one (an
+    undecodable file names none)."""
     text = f"{workspace_domain}\n"
     try:
         if path.read_text() == text:
             return
-    except FileNotFoundError:
+    except (FileNotFoundError, UnicodeDecodeError):
         pass
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f"{path.name}.tmp")
