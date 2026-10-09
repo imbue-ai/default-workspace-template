@@ -3879,8 +3879,9 @@ def _recorded_chat(
     broadcaster: WebSocketBroadcaster,
     mngr_binary: str | None = None,
     store: InMemoryChatRecordStore | None = None,
+    archived_state: str = "STOPPED",
 ) -> tuple[AgentManager, InMemoryChatRecordStore, str, str]:
-    """A manager tracking a chat that moved from ``first`` (archived, stopped) to ``second`` (running)."""
+    """A manager tracking a chat that moved from ``first`` (archived, ``archived_state``) to ``second`` (running)."""
     store = store if store is not None else InMemoryChatRecordStore()
     manager = AgentManager.build(
         broadcaster, chat_record_store=store, mngr_binary=mngr_binary if mngr_binary is not None else "mngr"
@@ -3890,7 +3891,7 @@ def _recorded_chat(
         manager,
         first,
         name=f"archived-1-Chat-1-{first}",
-        state="STOPPED",
+        state=archived_state,
         labels={
             "account": "acct-1",
             "archived_at": "2026-09-01T13:01:00+00:00",
@@ -3970,31 +3971,60 @@ def test_a_recorded_chats_segments_follow_the_record_and_skip_an_agent_mngr_no_l
         manager.stop()
 
 
+def test_a_sign_in_restarts_only_the_live_agents_on_the_account(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    # A stopped agent picks up the new credentials when it next starts, so only live ones restart;
+    # an unobserved one is not known to be stopped, so it counts as live.
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    account = f"acct-{uuid4().hex}"
+    agent_state_by_name = {
+        "Running-Chat": "RUNNING",
+        "Waiting-Chat": "WAITING",
+        "Stopped-Chat": "STOPPED",
+        "Done-Chat": "DONE",
+        "Unobserved-Chat": "UNKNOWN",
+    }
+    for name, state in agent_state_by_name.items():
+        seed_agent_state(manager, f"agent-{uuid4().hex}", name=name, state=state, labels={"account": account})
+    seed_agent_state(manager, f"agent-{uuid4().hex}", name="Other-Account-Chat", labels={"account": "acct-other"})
+    try:
+        assert manager.restart_agents_on_account(account) == 3
+        assert sorted(argv_log.read_text().splitlines()) == [
+            "start Running-Chat --restart --no-resume",
+            "start Unobserved-Chat --restart --no-resume",
+            "start Waiting-Chat --restart --no-resume",
+        ]
+    finally:
+        manager.stop()
+
+
 def test_the_verbs_of_a_recorded_chat_act_on_the_right_agents(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
-    manager, store, first, second = _recorded_chat(broadcaster, mngr_binary)
+    manager, store, first, second = _recorded_chat(broadcaster, mngr_binary, archived_state="WAITING")
     try:
-        manager.stop_chat(ChatId(first))
         manager.rename_chat(first, "New Name")
         with manager._lock:
             manager._pending_permission_ids_by_agent[second] = {"req-1"}
         assert manager.has_pending_permission(ChatId(first))
         assert not manager.has_pending_permission(ChatId(second))
         # A sign-in restarts the chat's active agent and never its archived member, though
-        # both carry an ``account`` label.
+        # both carry an ``account`` label and both are live.
         assert manager.restart_agents_on_account("acct-1") == 0
         assert manager.restart_agents_on_account("acct-2") == 1
+        manager.stop_chat(ChatId(first))
 
         manager.destroy_chat(ChatId(first))
 
         argv_lines = argv_log.read_text().splitlines()
-        # The rename is reflected in the tracked name at once, so the restart names the new one.
+        # The rename is reflected in the tracked name at once, so the restart and the stop name the new one.
         assert argv_lines == [
-            "stop Chat-1",
             f"rename {second} New-Name --label display_name=New Name",
             "start New-Name --restart --no-resume",
+            "stop New-Name",
             f"destroy {first} {second} --force",
         ]
         assert store.read(ChatId(first)) is None

@@ -70,6 +70,10 @@ host_env__extend = [
     # catches stragglers that hardcode ~/.cache.
     "XDG_CACHE_HOME=/var/cache/user",
     "npm_config_cache=/var/cache/user/npm",
+    # Stop pytest's tmp_path directories piling up on the tmpfs /tmp: a passing
+    # test's is deleted at once, and only the latest session's leftovers are kept.
+    # Mirrors the ENV in system/Dockerfile, which says why.
+    "PYTEST_ADDOPTS=-o tmp_path_retention_policy=failed -o tmp_path_retention_count=1",
     # Workaround for an Apple M5 lima-VZ guest CPU mismatch: the Debian 12
     # guest kernel advertises SVE / SVE2 in /proc/cpuinfo, but lima-VZ on M5
     # traps the `cntb` SVE instruction emitted by OpenSSL's

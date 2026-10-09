@@ -172,8 +172,8 @@ def build_production_state(
             build_one_shot_completion=build_one_shot_completion,
         ),
         # One long-lived service per app: it holds the in-flight sign-in PTY between the
-        # start call and the polls that advance it. A successful re-auth restarts the agents
-        # bound to that account -- they do not pick up a swapped credential on their own.
+        # start call and the polls that advance it. A successful re-auth restarts the live agents
+        # bound to that account -- they do not pick up a swapped credential until they next start.
         auth_flows=AuthFlowService.create(restart_bound_agents=agent_manager.restart_agents_on_account_in_background),
         # Read-only: it reports claude's auth state and writes and restarts nothing, so it
         # needs no collaborators.
