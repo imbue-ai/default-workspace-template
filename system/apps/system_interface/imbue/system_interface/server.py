@@ -46,7 +46,6 @@ from imbue.system_interface.presence import utc_now
 from imbue.system_interface.request_helpers import error_response
 from imbue.system_interface.request_helpers import handle_unhandled_exception
 from imbue.system_interface.request_helpers import json_response
-from imbue.system_interface.shell.data_types import ClientReportOutcome
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import PopOutStateReport
 from imbue.system_interface.shell.errors import ClientNotFoundError
@@ -616,8 +615,7 @@ def _handle_client_state_message(
     # would move the client back and set its windows following again. So it only stamps the client as seen.
     # A state file the shell cannot write is a warning, not a dropped socket: the live
     # registration above is what the layout ops need, and the next report retries the write.
-    # A report made before a move its page had not heard of is not recorded: the page follows that move instead.
-    superseded: ClientReportOutcome | None = None
+    is_superseded = False
     if report.is_following:
         try:
             shell.record_client_seen(report.client_id)
@@ -626,28 +624,7 @@ def _handle_client_state_message(
         except ShellStateError as e:
             _loguru_logger.opt(exception=e).warning("Could not stamp the client {} as seen", report.client_id)
     else:
-        try:
-            outcome = shell.record_client_report(report)
-        except ShellStateError as e:
-            _loguru_logger.opt(exception=e).warning("Could not record the client report for {}", report.client_id)
-        else:
-            superseded = outcome if outcome.is_superseded else None
-    # The move that superseded a report may have been announced before this connection could hear it (an op landing
-    # as the page loads), so the window is told the record again; one that heard it already ignores it.
-    if superseded is not None:
-        _loguru_logger.info(
-            "WS client {} reported desktop {} at revision {}, before a later move: not recorded (conn {})",
-            report.client_id,
-            report.active_desktop,
-            report.revision,
-            id(client_queue),
-        )
-        shell.broadcaster.send_active_desktop_changed_to(
-            client_queue,
-            str(report.client_id),
-            str(superseded.record.active_desktop),
-            superseded.record.desktop_revision,
-        )
+        is_superseded = _record_moving_report(report, client_queue, shell)
     if is_first_report:
         _loguru_logger.info(
             "WS client registered: client_id={} desktop={} (conn {})",
@@ -656,8 +633,35 @@ def _handle_client_state_message(
             id(client_queue),
         )
         return True
-    if superseded is None:
+    if not is_superseded:
         _log_client_switches(report, client_queue, shell)
+    return True
+
+
+def _record_moving_report(
+    report: ClientStateReport, client_queue: "queue.Queue[str | None]", shell: ShellState
+) -> bool:
+    """Record a report that moves the client; answers whether it was superseded, made before a move its page had not
+    heard of. A superseded report is not recorded: the page follows that move instead, and since the move may have been
+    announced before this connection could hear it (an op landing as the page loads), the connection is told the
+    client's record again; a window that heard it already ignores it."""
+    try:
+        outcome = shell.record_client_report(report)
+    except ShellStateError as e:
+        _loguru_logger.opt(exception=e).warning("Could not record the client report for {}", report.client_id)
+        return False
+    if not outcome.is_superseded:
+        return False
+    _loguru_logger.info(
+        "WS client {} reported desktop {} at revision {}, before a later move: not recorded (conn {})",
+        report.client_id,
+        report.active_desktop,
+        report.revision,
+        id(client_queue),
+    )
+    shell.broadcaster.send_active_desktop_changed_to(
+        client_queue, str(report.client_id), str(outcome.record.active_desktop), outcome.record.desktop_revision
+    )
     return True
 
 
