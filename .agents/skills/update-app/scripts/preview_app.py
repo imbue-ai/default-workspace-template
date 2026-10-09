@@ -144,17 +144,15 @@ class Runner:
         )
 
 
-def sync_worktree(worktree: Path, runner: Runner) -> bool:
+def sync_worktree(worktree: Path, runner: Runner) -> None:
     if not worktree.is_dir():
-        sys.stderr.write(f"preview: the worktree {worktree} no longer exists.\n")
-        return False
+        raise PreviewError(f"the worktree {worktree} no longer exists")
     code = runner.sync(worktree)
     if code != 0:
-        sys.stderr.write(
-            f"preview: '{' '.join(SYNC_COMMAND)}' failed in {worktree} (exit {code}), so its "
-            "environment cannot run the worktree's code; fix that and retry.\n"
+        raise PreviewError(
+            f"'{' '.join(SYNC_COMMAND)}' failed in {worktree} (exit {code}), so its "
+            "environment cannot run the worktree's code; fix that and retry"
         )
-    return code == 0
 
 
 def live_venv_isolation_args(repo_root: Path) -> list[str]:
@@ -409,8 +407,7 @@ def up(
         )
         return 1
     manifest_path, manifest = find_manifest(worktree, app_name)
-    if not sync_worktree(worktree, runner):
-        return 1
+    sync_worktree(worktree, runner)
     dump = (
         dump_registry
         if dump_registry is not None
@@ -531,8 +528,8 @@ def _uses_placeholder(manifest: AppManifest, placeholder: str) -> bool:
 def refresh(app_name: str, repo_root: Path, *, runner: Runner) -> int:
     """Re-boot the preview's inner process in place, after a rebuild in its worktree."""
     worktree = live_preview_worktree(repo_root, app_name)
-    if worktree is not None and not sync_worktree(worktree, runner):
-        return 1
+    if worktree is not None:
+        sync_worktree(worktree, runner)
     return runner.run(
         [
             sys.executable,

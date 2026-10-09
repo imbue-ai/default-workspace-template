@@ -522,11 +522,10 @@ def test_a_failed_sync_of_the_worktree_stops_the_boot_and_the_refresh(
     runner.calls.clear()
     runner.sync_code = 2
 
-    assert (
+    with pytest.raises(mod.PreviewError, match="exit 2"):
         mod.up("notes", worktree, tmp_path, runner=runner, dump_registry=_dump_registry)
-        == 1
-    )
-    assert mod.refresh("notes", tmp_path, runner=runner) == 1
+    with pytest.raises(mod.PreviewError, match="exit 2"):
+        mod.refresh("notes", tmp_path, runner=runner)
 
     assert runner.calls == []
 
