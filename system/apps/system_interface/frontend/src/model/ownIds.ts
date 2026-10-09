@@ -8,6 +8,8 @@
 
 export const SAVE_ID_PREFIX = "save-";
 export const REPORT_ID_PREFIX = "report-";
+/** A page's id, minted once as it loads, so the shell can tell the page's own desktop moves from the others'. */
+export const PAGE_ID_PREFIX = "page-";
 const MINTED_ID_HEX_LENGTH = 16;
 // How many of this window's own ids are remembered; a write's broadcast arrives within a round trip, so a
 // short memory is plenty.

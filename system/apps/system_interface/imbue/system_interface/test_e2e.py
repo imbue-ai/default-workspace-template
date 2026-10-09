@@ -39,6 +39,7 @@ from playwright.sync_api import Frame
 from playwright.sync_api import Locator
 from playwright.sync_api import Page
 from playwright.sync_api import WebSocket
+from playwright.sync_api import WebSocketRoute
 from playwright.sync_api import expect
 from pydantic import Field
 
@@ -1592,6 +1593,94 @@ def test_two_windows_of_one_client_settle_together_after_rapid_switches(e2e_serv
     _watch_settled([page, second], window_id, traffics)
     clients = _get_json(f"{e2e_server.base_url}/api/clients")["clients"]
     assert [client["active_desktop"] for client in clients] == [_HOME_DESKTOP_ID]
+
+
+class _HeldSocket(MutableModel):
+    """A page's shell socket with what the page sends held back from the shell until released."""
+
+    is_holding: bool = Field(description="Whether what the page sends is held rather than passed on")
+    held: list[str] = Field(description="What the page sent while held, oldest first")
+    reports: list[dict[str, Any]] = Field(description="Every ``client_state`` the page sent")
+    moves: list[dict[str, Any]] = Field(description="Every ``active_desktop_changed`` the page received")
+
+
+def _hold_page_socket(page: Page) -> tuple[_HeldSocket, Callable[[], None]]:
+    """Route the page's shell socket through the test, holding what the page sends; call before the page loads.
+    Answers the socket's record and the release, which passes the held messages on in order and stops holding."""
+    socket = _HeldSocket(is_holding=True, held=[], reports=[], moves=[])
+    shell_sides: list[WebSocketRoute] = []
+
+    def _route(page_side: WebSocketRoute) -> None:
+        shell_side = page_side.connect_to_server()
+        shell_sides.append(shell_side)
+
+        def _from_page(payload: str | bytes) -> None:
+            message = json.loads(payload)
+            if message.get("type") == "client_state":
+                socket.reports.append(message)
+            if socket.is_holding:
+                socket.held.append(str(payload))
+            else:
+                shell_side.send(payload)
+
+        def _from_shell(payload: str | bytes) -> None:
+            message = json.loads(payload)
+            if message.get("type") == "active_desktop_changed":
+                socket.moves.append(message)
+            page_side.send(payload)
+
+        page_side.on_message(_from_page)
+        shell_side.on_message(_from_shell)
+
+    def _release() -> None:
+        socket.is_holding = False
+        for payload in socket.held:
+            shell_sides[-1].send(payload)
+        socket.held.clear()
+
+    page.route_web_socket("**/api/ws", _route)
+    return socket, _release
+
+
+def _pump_until(page: Page, condition: Callable[[], bool], what: str) -> None:
+    """Wait through the sync API, which hands the routed socket's messages over only while it is called."""
+    for _ in range(_HEARD_EVERY_SWITCH_POLLS):
+        if condition():
+            return
+        page.wait_for_timeout(100)
+    raise AssertionError(f"never saw {what}")
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_an_op_move_wins_over_a_report_the_page_made_before_hearing_it(e2e_server: E2EServer, page: Page) -> None:
+    """An agent's op moves the client while the page's own report of where it landed is still on its way to the
+    shell (held here; a socket read late or a slow network in real use). The report was made before the page heard
+    of the op's move, so the shell does not record it: the client and the page end on the op's desktop, and no
+    further move is announced."""
+    socket, release = _hold_page_socket(page)
+    _land(page, e2e_server)
+    _pump_until(page, lambda: any(not report["is_following"] for report in socket.reports), "the landing's report")
+    client_id = _client_id(page)
+    other = _create_desktop_shown_on(e2e_server, [page])
+
+    _broadcast_op(e2e_server.base_url, "load", {"desktop": other, "client": client_id})
+    other_switch = page.locator(f'[data-desktop-switch="{other}"]')
+    expect(other_switch).to_have_attribute("data-active", "true", timeout=15000)
+    _pump_until(page, lambda: any(report["is_following"] for report in socket.reports), "the page follow the op")
+    assert [move["desktop_id"] for move in socket.moves] == [other]
+
+    release()
+
+    def _is_registered() -> bool:
+        clients = _get_json(f"{e2e_server.base_url}/api/clients")["clients"]
+        return any(client["id"] == client_id and client["is_connected"] for client in clients)
+
+    _pump_until(page, _is_registered, "the shell register the page's reports")
+    page.wait_for_timeout(_SETTLED_WATCH_MS)
+    assert [move["desktop_id"] for move in socket.moves] == [other]
+    expect(other_switch).to_have_attribute("data-active", "true")
+    clients = _get_json(f"{e2e_server.base_url}/api/clients")["clients"]
+    assert [client["active_desktop"] for client in clients if client["id"] == client_id] == [other]
 
 
 # Pinned windows (pinned-taskbar-entries plan sections 3.2, 4.1, 4.3, 4.4)

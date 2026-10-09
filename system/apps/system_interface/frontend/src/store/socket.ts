@@ -69,6 +69,11 @@ export interface ClientStateReport {
   /** Whether the window only followed the client's stored desktop (pushed, or read on a reconnect): the shell
    *  registers the connection on it and moves nothing, since the record may already have moved on. */
   readonly isFollowing: boolean;
+  /** This page's id (``PAGE_ID_PREFIX``), which tells the shell its own moves from the others'. */
+  readonly pageId: string;
+  /** For a move, the newest desktop revision the window had heard: the shell records no move made before a move
+   *  the window had not heard of yet. Null when following. */
+  readonly revision: number | null;
 }
 
 export interface ClientEntriesChangedEvent {
@@ -145,6 +150,8 @@ export class ShellSocket implements DesktopSocket {
         previous_desktop: report.previousDesktop,
         report_id: report.reportId,
         is_following: report.isFollowing,
+        page_id: report.pageId,
+        revision: report.revision,
       }),
     );
   }

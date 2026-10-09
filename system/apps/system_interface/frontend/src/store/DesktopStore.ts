@@ -57,7 +57,7 @@ import type {
 } from "../model/records";
 import { isSameCell, isSameWindowPaths, shortcutKey } from "../model/records";
 import { ToastQueue } from "../model/Toasts";
-import { OwnIdMinter, REPORT_ID_PREFIX, SAVE_ID_PREFIX } from "../model/ownIds";
+import { OwnIdMinter, PAGE_ID_PREFIX, REPORT_ID_PREFIX, SAVE_ID_PREFIX, mintHex } from "../model/ownIds";
 import { isPreviewShell } from "../model/PreviewShell";
 import { noticeFromWire } from "../model/UpdateNotice";
 import type { DeepLink } from "../model/deepLinks";
@@ -351,6 +351,7 @@ export class DesktopStore {
   private readonly listeners = new Set<Listener>();
   private readonly saveIds = new OwnIdMinter(SAVE_ID_PREFIX);
   private readonly reportIds = new OwnIdMinter(REPORT_ID_PREFIX);
+  private readonly pageId = `${PAGE_ID_PREFIX}${mintHex()}`;
   // The newest revision of the client's stored desktop this window has heard of, pushed or read: news of an older
   // one was overtaken by a later move on its way here.
   private desktopRevisionHeard = 0;
@@ -935,7 +936,8 @@ export class DesktopStore {
   }
 
   /** Tell the shell this window moved the client onto the desktop it is on, leaving ``previousDesktop`` ("" when it
-   *  left none). */
+   *  left none). The report names the newest revision the window heard: a move written since by anything but this
+   *  page wins over the report, and the window follows that move's news when it arrives. */
   private reportMove(previousDesktop: string): void {
     const active = this.reportedDesktopId();
     if (active === null) return;
@@ -944,6 +946,8 @@ export class DesktopStore {
       previousDesktop,
       reportId: this.reportIds.mint(),
       isFollowing: false,
+      pageId: this.pageId,
+      revision: this.desktopRevisionHeard,
     });
   }
 
@@ -956,6 +960,8 @@ export class DesktopStore {
       previousDesktop: "",
       reportId: null,
       isFollowing: true,
+      pageId: this.pageId,
+      revision: null,
     });
   }
 

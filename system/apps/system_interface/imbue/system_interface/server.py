@@ -614,6 +614,8 @@ def _handle_client_state_message(
     # would move the client back and set its windows following again. So it only stamps the client as seen.
     # A state file the shell cannot write is a warning, not a dropped socket: the live
     # registration above is what the layout ops need, and the next report retries the write.
+    # A report made before a move its page had not heard of is not recorded: the page follows that move instead.
+    is_superseded = False
     if report.is_following:
         try:
             shell.record_client_seen(report.client_id)
@@ -623,9 +625,17 @@ def _handle_client_state_message(
             _loguru_logger.opt(exception=e).warning("Could not stamp the client {} as seen", report.client_id)
     else:
         try:
-            shell.record_client_report(report)
+            is_superseded = shell.record_client_report(report).is_superseded
         except ShellStateError as e:
             _loguru_logger.opt(exception=e).warning("Could not record the client report for {}", report.client_id)
+    if is_superseded:
+        _loguru_logger.info(
+            "WS client {} reported desktop {} at revision {}, before a later move: not recorded (conn {})",
+            report.client_id,
+            report.active_desktop,
+            report.revision,
+            id(client_queue),
+        )
     if is_first_report:
         _loguru_logger.info(
             "WS client registered: client_id={} desktop={} (conn {})",
@@ -634,7 +644,8 @@ def _handle_client_state_message(
             id(client_queue),
         )
         return True
-    _log_client_switches(report, client_queue, shell)
+    if not is_superseded:
+        _log_client_switches(report, client_queue, shell)
     return True
 
 

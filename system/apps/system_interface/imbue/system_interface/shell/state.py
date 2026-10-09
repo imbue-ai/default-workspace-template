@@ -760,7 +760,8 @@ class ShellState(MutableModel):
 
     def record_client_report(self, report: ClientStateReport) -> ClientReportOutcome:
         """Record a ``client_state`` report and announce what moved; a report naming a desktop that no longer exists
-        lands the client on the first desktop instead (desktop plan section 3.5)."""
+        lands the client on the first desktop instead (desktop plan section 3.5), and a superseded report (made before
+        a move its page had not heard of) is neither recorded nor announced."""
         desktops = self.list_desktops()
         resolved = report
         if desktops and report.active_desktop not in {desktop.id for desktop in desktops}:
@@ -769,7 +770,7 @@ class ShellState(MutableModel):
         outcome = self.clients.record_report(resolved, datetime.now(timezone.utc), is_redirected=is_redirected)
         # Only a report that moved the stored desktop, or that was redirected off a desktop that no longer exists,
         # is broadcast.
-        if outcome.is_active_desktop_changed or is_redirected:
+        if outcome.is_active_desktop_changed or (is_redirected and not outcome.is_superseded):
             self.broadcaster.broadcast_active_desktop_changed(
                 str(report.client_id),
                 str(outcome.record.active_desktop),

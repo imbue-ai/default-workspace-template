@@ -84,7 +84,14 @@ afterEach(() => {
 describe("ShellSocket", () => {
   it("opens the shell's socket, says so once open, and reports the client state only while open", () => {
     expect(current().url).toMatch(/^ws:\/\/.+\/api\/ws$/);
-    socket.reportClientState({ activeDesktop: "home", previousDesktop: "", reportId: "report-1", isFollowing: false });
+    socket.reportClientState({
+      activeDesktop: "home",
+      previousDesktop: "",
+      reportId: "report-1",
+      isFollowing: false,
+      pageId: "page-00000000000000aa",
+      revision: 0,
+    });
     expect(current().sent).toEqual([]);
     current().open();
     expect(handlers.onConnected).toHaveBeenCalledTimes(1);
@@ -93,8 +100,17 @@ describe("ShellSocket", () => {
       previousDesktop: "work",
       reportId: "report-2",
       isFollowing: false,
+      pageId: "page-00000000000000aa",
+      revision: 3,
     });
-    socket.reportClientState({ activeDesktop: "work", previousDesktop: "", reportId: null, isFollowing: true });
+    socket.reportClientState({
+      activeDesktop: "work",
+      previousDesktop: "",
+      reportId: null,
+      isFollowing: true,
+      pageId: "page-00000000000000aa",
+      revision: null,
+    });
     expect(current().sent.map((raw) => JSON.parse(raw) as unknown)).toEqual([
       {
         type: "client_state",
@@ -103,6 +119,8 @@ describe("ShellSocket", () => {
         previous_desktop: "work",
         report_id: "report-2",
         is_following: false,
+        page_id: "page-00000000000000aa",
+        revision: 3,
       },
       {
         type: "client_state",
@@ -111,6 +129,8 @@ describe("ShellSocket", () => {
         previous_desktop: "",
         report_id: null,
         is_following: true,
+        page_id: "page-00000000000000aa",
+        revision: null,
       },
     ]);
   });
