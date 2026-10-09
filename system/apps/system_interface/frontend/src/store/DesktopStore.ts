@@ -1077,9 +1077,9 @@ export class DesktopStore {
         return;
       case "local-url": {
         const apps = openableApps(this.state);
-        const backendWindow = windowAtLocalAppHost(apps, target.url) ?? windowAtBackendUrl(apps, target.url);
-        if (backendWindow !== null) {
-          await this.focusOrOpenWindowAt(backendWindow.app.name, backendWindow.path);
+        const appWindow = windowAtLocalAppHost(apps, target.url) ?? windowAtBackendUrl(apps, target.url);
+        if (appWindow !== null) {
+          await this.focusOrOpenWindowAt(appWindow.app.name, appWindow.path);
           return;
         }
         await this.deliverMessage({ type: OPEN_URL_MESSAGE, url: target.url }, senderApp ?? EMBEDDER_SENDER);
