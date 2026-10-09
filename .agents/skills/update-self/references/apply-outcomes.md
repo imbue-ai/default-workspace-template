@@ -102,8 +102,7 @@ apply in flight; an interrupted apply of a *different* merge that needs
 A dirty tree means another chat is mid-edit, and a refused fast-forward means
 one committed while the worker ran. Neither makes the worker's validation
 worthless: wait for the edit to settle, then catch the worker up to the new
-`HEAD` (SKILL.md 5b, and `.agents/shared/references/harden-contention.md`,
-"Catching up a stale pass") and apply its new `done`. Never destroy the worker
+`HEAD` as SKILL.md 5b does and apply its new `done`. Never destroy the worker
 to re-dispatch, and never build the catch-up merge yourself: the worker's
 merge is the one its validation covers. A merge already landed and rolled
 back, or one that leaves an earlier update's rollback in place, needs a fresh
