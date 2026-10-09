@@ -46,6 +46,7 @@ from imbue.chat import latchkey_endpoints
 from imbue.chat import secret_requests_endpoints
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import account_exists
+from imbue.chat.activity_state import CompactionCause
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
@@ -58,14 +59,17 @@ from imbue.chat.attachments import delete_upload
 from imbue.chat.attachments import get_uploads_directory
 from imbue.chat.attachments import resolve_upload_path
 from imbue.chat.attachments import store_uploaded_file
+from imbue.chat.chat_autocompact import ChatAutocompactState
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_handoffs import converging_detail
+from imbue.chat.chat_handoffs import is_genuine_user_turn
 from imbue.chat.chat_intakes import chat_id_selected_by_window_path
 from imbue.chat.chat_intakes import intake_path
 from imbue.chat.chat_intakes import most_recently_messaged_chat_id
 from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.chat_transcript import ChatTranscript
 from imbue.chat.chat_transcript import TranscriptSegment
+from imbue.chat.compaction_status import is_compact_command
 from imbue.chat.config import Config
 from imbue.chat.documents import document_response
 from imbue.chat.documents import inject_base_path_meta_tag
@@ -105,6 +109,7 @@ from imbue.chat.models import AgentRestartError
 from imbue.chat.models import AgentStopError
 from imbue.chat.models import AttachmentError
 from imbue.chat.models import AttachmentUploadResponse
+from imbue.chat.models import AutocompactStateResponse
 from imbue.chat.models import ChatConvergingError
 from imbue.chat.models import ChatListResponse
 from imbue.chat.models import ChatSegmentInfo
@@ -474,10 +479,28 @@ def _revive_and_retry_send(
     return outcome
 
 
+# What a composer ``/compact`` is refused with before the agent has an exchange to compact.
+NOTHING_TO_COMPACT_DETAIL: Final[str] = "Nothing to compact yet."
+NOTHING_TO_COMPACT_SEND_FAILURE_KIND: Final[str] = "nothing_to_compact"
+
+
+@pure
+def _has_compactable_exchange(events: list[dict[str, Any]]) -> bool:
+    """Whether a transcript holds a user turn and an assistant reply, the least Claude Code agrees to compact.
+
+    Claude Code refuses a smaller one ("Not enough messages to compact.") only after its
+    ``PreCompact`` hook has fired, and no ``PostCompact`` follows to clear the status that hook set.
+    """
+    return any(is_genuine_user_turn(event) for event in events) and any(
+        event.get("type") == "assistant_message" for event in events
+    )
+
+
 def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
     """Deliver one message to an agent the way the message route does, revival included.
 
-    Raises ``SendFailedError`` with the harness's own words when it refused, and can raise
+    Raises ``SendFailedError`` with the harness's own words when it refused, or with
+    ``NOTHING_TO_COMPACT_DETAIL`` for a forwarded ``/compact`` that would be refused, and can raise
     mngr's ``AgentNotFoundError`` when mngr no longer lists the agent. Shared with the
     handoff (its summary request and the sends it held), so every message a chat's agent
     receives takes one path.
@@ -487,7 +510,11 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
     # can ever deliver it -- so a send arriving here first (a headless client, or the first
     # request after a restart) would otherwise enqueue a message with nothing running to drain
     # it, and decide "is a turn open?" from an unpublished reading.
-    state.get_or_create_watcher(agent_info)
+    watcher = state.get_or_create_watcher(agent_info)
+    spec = get_harness_spec(agent_info.harness)
+    is_forwarded_compact = spec.is_composer_compact_forwarded and is_compact_command(text)
+    if is_forwarded_compact and not _has_compactable_exchange(watcher.get_all_events()):
+        raise SendFailedError(NOTHING_TO_COMPACT_DETAIL, NOTHING_TO_COMPACT_SEND_FAILURE_KIND)
 
     # The agent's session owns the whole send lifecycle (contract A1/A2): the file session
     # records the message as *Sending* around mngr's blocking delivery (greying the tap button
@@ -495,6 +522,9 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
     # only as the correlation token the committed item echoes back.
     agent_manager = state.agent_manager
     session = agent_manager.get_or_create_session(agent_info)
+    # Taken before the send, which can wait out mngr's confirmation window while the compaction
+    # it starts is already running.
+    requested_at = time.monotonic()
     # A send that has to wait for the agent to come up -- a stopped agent the send starts, or a
     # harness still starting -- reads as Connecting on the chat until it resolves.
     with agent_manager.track_connecting_send(agent_info.id, message_id) as mark_connecting:
@@ -515,6 +545,8 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
         # which would let the stopped-chat release drop the watcher of the chat it revived.
         if outcome is SendOutcome.OK:
             agent_manager.note_agent_alive(agent_info.id)
+    if outcome is SendOutcome.OK and is_forwarded_compact:
+        agent_manager.note_compaction_requested(agent_info.id, CompactionCause.MANUAL, requested_at)
     return outcome
 
 
@@ -627,7 +659,9 @@ def _send_to_chat(
             # than the generic failure below -- it is the only thing here the user can act on.
             # The kind travels beside the detail so the chat can decide what to offer: trying again
             # can clear a blocked input and cannot help when there is nothing left to talk to.
-            return json_response({"detail": send_failure.detail, "kind": send_failure.kind}, status_code=500)
+            # A /compact with nothing to compact yet is the chat's own refusal, not a failure.
+            status_code = 409 if send_failure.kind == NOTHING_TO_COMPACT_SEND_FAILURE_KIND else 500
+            return json_response({"detail": send_failure.detail, "kind": send_failure.kind}, status_code=status_code)
         if outcome is SendOutcome.NOT_READY:
             failure = ErrorResponse(
                 detail=f"Agent '{agent_info.name}' is not ready to receive messages yet (its daemon is starting)."
@@ -725,9 +759,8 @@ def record_client_message_activity(
 def _get_harnesses_endpoint() -> Response:
     """The static per-harness model catalogs -- the model bar's compile-time half.
 
-    One response covers every harness (each catalog dumped verbatim: options,
-    switch mode, picker mode, powered-by label, shoulder-tap capability, plus the
-    harness's popups and user-facing name); the frontend keys in by an agent's harness.
+    One response covers every harness (each catalog dumped verbatim, plus the harness's
+    spec-level declarations); the frontend keys in by an agent's harness.
 
     Every harness is always included, deliberately: what the user has signed in to
     decides what they can LAUNCH, not what the app can render. A codex or pi agent that
@@ -744,11 +777,13 @@ def _get_harnesses_endpoint() -> Response:
         except (OSError, ValueError) as e:
             logger.warning("Skipping model catalog for harness {}: {}", harness.value, e)
             continue
-        # The catalog model is the wire shape for the model bar; the popup declarations
+        # The catalog model is the wire shape for the model bar; the other declarations
         # live on the HarnessSpec and are merged in here so one response carries
         # everything the frontend keys by harness.
         spec = get_harness_spec(harness)
         catalog["popups"] = [popup.model_dump() for popup in spec.popups]
+        catalog["supports_compaction"] = spec.supports_compaction
+        catalog["can_interrupt_compaction"] = spec.can_interrupt_compaction
         # The harness's user-facing name, from the same table the account labels and the
         # handoff prompt use, so the page names a harness the way the backend does.
         catalog["label"] = HARNESS_LABEL[harness]
@@ -862,7 +897,7 @@ def _get_powered_by_endpoint(chat_id: str) -> Response:
 
 
 def _get_settings_endpoint() -> Response:
-    """``GET /api/settings``: the workspace-wide chat settings (the fast mode a new chat starts in, its turn limit, the notice flag)."""
+    """``GET /api/settings``: the workspace-wide chat settings."""
     return json_response(ChatSettingsResponse(settings=get_state().chat_settings.read()).model_dump(mode="json"))
 
 
@@ -899,11 +934,36 @@ def _put_fast_mode_endpoint(chat_id: str) -> Response:
     return json_response(FastModeStateResponse(state=state).model_dump(mode="json"))
 
 
+def _get_autocompact_endpoint(chat_id: str) -> Response:
+    """``GET /api/chats/<chat_id>/autocompact``: the chat's idle compaction setting (its own, else the workspace default)."""
+    parsed = _known_chat_or_not_found(chat_id)
+    if isinstance(parsed, Response):
+        return parsed
+    state = get_state().agent_manager.get_autocompact_state(parsed)
+    return json_response(AutocompactStateResponse(state=state).model_dump(mode="json"))
+
+
+def _put_autocompact_endpoint(chat_id: str) -> Response:
+    """``PUT /api/chats/<chat_id>/autocompact``: record the chat's idle compaction setting whole; 400 for a body that is not one."""
+    parsed = _known_chat_or_not_found(chat_id)
+    if isinstance(parsed, Response):
+        return parsed
+    body = parse_json_object_body()
+    if isinstance(body, Response):
+        return body
+    try:
+        state = ChatAutocompactState.model_validate(body)
+    except ValueError as e:
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+    get_state().agent_manager.set_autocompact_state(parsed, state)
+    return json_response(AutocompactStateResponse(state=state).model_dump(mode="json"))
+
+
 def _put_settings_endpoint() -> Response:
     """``PUT /api/settings``: replace the workspace-wide chat settings whole.
 
     The body is the settings object; a field left out takes its default, and an out-of-range
-    value (a turn limit below one, an unknown fast mode) answers 400.
+    value answers 400.
     """
     body = parse_json_object_body()
     if isinstance(body, Response):
@@ -1001,8 +1061,10 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
     # The restart abandons the session transcript mid-turn, so the
     # transcript-derived activity state would stay pinned at THINKING /
     # TOOL_RUNNING until the user sends another message. Reset it to IDLE
-    # now so the activity indicator clears immediately after the stop.
+    # now so the activity indicator clears immediately after the stop. The
+    # restart also ended any compaction, which reports no completion.
     get_state().agent_manager.reset_activity_state(agent_info.id)
+    get_state().agent_manager.clear_compaction_after_interrupt(agent_info)
 
     return json_response(InterruptAgentResponse(status="ok").model_dump())
 
@@ -2168,6 +2230,13 @@ def create_application(state: ChatAppState) -> Flask:
         view_func=_put_fast_mode_endpoint,
         methods=["PUT"],
         endpoint="_put_fast_mode_endpoint",
+    )
+    application.add_url_rule("/api/chats/<chat_id>/autocompact", view_func=_get_autocompact_endpoint, methods=["GET"])
+    application.add_url_rule(
+        "/api/chats/<chat_id>/autocompact",
+        view_func=_put_autocompact_endpoint,
+        methods=["PUT"],
+        endpoint="_put_autocompact_endpoint",
     )
     application.add_url_rule("/api/settings", view_func=_get_settings_endpoint, methods=["GET"])
     application.add_url_rule(

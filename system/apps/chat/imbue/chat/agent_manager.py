@@ -29,8 +29,11 @@ from imbue.chat.accounts import harness_for
 from imbue.chat.accounts import resolve_account
 from imbue.chat.accounts import set_mru
 from imbue.chat.activity_state import ActivityState
+from imbue.chat.activity_state import CompactionCause
 from imbue.chat.activity_state import RUNNING_LIFECYCLE_STATES
 from imbue.chat.activity_state import is_lifecycle_dead
+from imbue.chat.activity_state import is_working_activity_state
+from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.agent_discovery import SendFailure
@@ -42,6 +45,9 @@ from imbue.chat.agent_discovery import read_claude_config_dir_from_env_file
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.autocompact import ChatAutoCompactor
+from imbue.chat.chat_autocompact import ChatAutocompactState
+from imbue.chat.chat_autocompact import read_autocompact_state
+from imbue.chat.chat_autocompact import write_autocompact_state
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_fast_mode import read_fast_mode_state
 from imbue.chat.chat_fast_mode import write_fast_mode_state
@@ -53,13 +59,16 @@ from imbue.chat.chat_handoffs import HandoffRunner
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
 from imbue.chat.chat_handoffs import cancel_refused_detail
 from imbue.chat.chat_handoffs import converging_detail
+from imbue.chat.chat_handoffs import created_chat_agent_labels
 from imbue.chat.chat_handoffs import deliver_held_send
 from imbue.chat.chat_handoffs import failure_notice
 from imbue.chat.chat_handoffs import has_user_turn
+from imbue.chat.chat_handoffs import mngr_failure_reason
 from imbue.chat.chat_rebinds import RebindCancelledError
 from imbue.chat.chat_rebinds import RebindDeps
 from imbue.chat.chat_rebinds import RebindRunner
 from imbue.chat.chat_rebinds import rebind_cancel_refused_detail
+from imbue.chat.chat_rebinds import relabel_autocompact_command
 from imbue.chat.chat_records import ChatAgentEntry
 from imbue.chat.chat_records import ChatHandoffRecord
 from imbue.chat.chat_records import ChatRebindRecord
@@ -75,8 +84,19 @@ from imbue.chat.chat_seed import seed_context_message
 from imbue.chat.chat_seed import seed_events
 from imbue.chat.chat_seed import write_seed_file
 from imbue.chat.chat_settings import ChatSettingsStore
+from imbue.chat.compaction_status import COMPACTION_CAUSE_FIELD
+from imbue.chat.compaction_status import COMPACTION_REQUEST_FILENAME
+from imbue.chat.compaction_status import CompactionSignal
+from imbue.chat.compaction_status import cause_of_compacting_marker
+from imbue.chat.compaction_status import cause_of_last_compaction
+from imbue.chat.compaction_status import is_context_compacted_event
+from imbue.chat.compaction_status import read_compaction_request
+from imbue.chat.compaction_status import read_compaction_signal
+from imbue.chat.compaction_status import shown_compaction_cause
+from imbue.chat.compaction_status import write_compaction_request
 from imbue.chat.harnesses.account_binding import BindingError
 from imbue.chat.harnesses.activity import HarnessActivityTracker
+from imbue.chat.harnesses.agent_file_poll import AgentFilePoller
 from imbue.chat.harnesses.binding import is_rebind_supported
 from imbue.chat.harnesses.binding import resolve_binding
 from imbue.chat.harnesses.codex.live_user_turns import drop_live_user_turns
@@ -97,7 +117,6 @@ from imbue.chat.harnesses.model import SwitchMode
 from imbue.chat.harnesses.model import read_model_identity
 from imbue.chat.harnesses.model import resolve_model_choice
 from imbue.chat.harnesses.model import validate_model_pick
-from imbue.chat.harnesses.model_state_poll import ModelStatePoller
 from imbue.chat.harnesses.registry import build_account_binding
 from imbue.chat.harnesses.registry import build_interrupt_to_composer
 from imbue.chat.harnesses.registry import build_resolver
@@ -161,6 +180,7 @@ from imbue.concurrency_group.subprocess_utils import run_local_command_modern_ve
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
+from imbue.mngr.agents.tui_utils import RELAXED_CONFIRMATION_TIMEOUT_SECONDS
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.observe import AgentRemovedEvent
 from imbue.mngr.api.observe import AgentStateEvent
@@ -185,7 +205,7 @@ SKIP_CLAUDE_INSTALLATION_CHECK_SETTING: Final[str] = "agent_types.claude.check_i
 # The labels a chat create sets from what it knows (``_build_chat_create_command`` and the
 # handoff's successor labels); a caller's extra labels may not restate them.
 APP_OWNED_LABEL_KEYS: Final[frozenset[str]] = frozenset(
-    {"user_created", "display_name", "account", "project", "chat_id", "chat_seq"}
+    {"user_created", "display_name", "account", "project", "chat_id", "chat_seq", "autocompact"}
 )
 
 # How long a create the caller waits on may run before the wait answers on its own. A
@@ -221,6 +241,19 @@ DESTROY_TIMEOUT_SECONDS: Final[float] = 120.0
 # is let go. A create lands seconds before the stream reports it, so one snapshot can legitimately
 # predate the agent; two say it is not there at all (it died before the stream ever saw it).
 FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO: Final[int] = 2
+
+
+# How long a pending request or a ``compacting`` marker may show as in progress: one still
+# running after this never got its completion (a cancelled compaction, a failed summarization, a crash).
+PENDING_COMPACTION_TIMEOUT_SECONDS: Final[float] = 600.0
+
+# The same timeout for a request on an agent no session watcher reads, since no compacted event can end it.
+UNWATCHED_PENDING_COMPACTION_TIMEOUT_SECONDS: Final[float] = 180.0
+
+# How recent a ``last_compaction.json`` must be to name the cause of a compacted event the chat
+# holds no record for: the event lands seconds after the hook writes the file, so an older file
+# belongs to an earlier compaction.
+LAST_COMPACTION_RECORD_MAX_AGE_SECONDS: Final[float] = 300.0
 
 
 # The create template a chat's launch stacks on ``chat`` (``.mngr/settings.toml``) when the chat's
@@ -352,10 +385,8 @@ def _build_chat_create_command(
     # readiness and delivers the first message before returning, so a repoint afterwards
     # lands after the first turn has already run on the wrong credential.
     cmd.extend(account_args)
-    # What this create carries beyond what the builder knows: a successor agent's membership
-    # (``chat_id``, ``chat_seq``), which the first agent of a chat only gets at its first
-    # handoff, and an outside caller's own labels (``auto_open``, to have the shell surface the
-    # chat's window), which ``create_chat`` screens against ``APP_OWNED_LABEL_KEYS`` first.
+    # What this create carries beyond what the builder knows; ``create_chat`` screens an outside
+    # caller's own labels against ``APP_OWNED_LABEL_KEYS`` first.
     for label in extra_labels:
         cmd.extend(["--label", label])
     for setting in settings:
@@ -512,14 +543,63 @@ def _build_agent_match(agent: AgentDetails) -> AgentMatch:
 def chat_status_for_agent(
     lifecycle_state: str, activity_state: ActivityState | None, is_permission_pending: bool
 ) -> ChatStatus:
-    """The chat row's status rule: a dead lifecycle wins, then a pending permission, then a live turn."""
+    """The chat row's status rule: a dead lifecycle wins, then a pending permission, then a live turn or compaction."""
     if is_lifecycle_dead(lifecycle_state):
         return ChatStatus.STOPPED
     if is_permission_pending:
         return ChatStatus.ATTENTION
-    if activity_state in (ActivityState.THINKING, ActivityState.TOOL_RUNNING):
+    if activity_state is not None and is_working_activity_state(activity_state):
         return ChatStatus.WORKING
     return ChatStatus.IDLE
+
+
+def _monotonic_to_epoch(monotonic_at: float, now: float) -> float:
+    """The epoch time of a past ``time.monotonic()`` reading, given the epoch time now."""
+    return now - (time.monotonic() - monotonic_at)
+
+
+@pure
+def _is_current_compaction_event(event: dict[str, Any], now: float, pending_requested_at: float | None) -> bool:
+    """Whether a compacted event can be the end of the compaction in progress.
+
+    An event without a readable timestamp counts: it was just parsed, so it is new.
+    """
+    event_at = parse_iso_timestamp_to_epoch(event.get("timestamp"))
+    if event_at is None:
+        return True
+    if now - event_at > PENDING_COMPACTION_TIMEOUT_SECONDS:
+        return False
+    return pending_requested_at is None or event_at >= pending_requested_at
+
+
+@pure
+def _latest_event_epoch(events: list[dict[str, Any]], now: float) -> float:
+    event_times = [parse_iso_timestamp_to_epoch(event.get("timestamp")) for event in events]
+    return max((event_at for event_at in event_times if event_at is not None), default=now)
+
+
+class _LiveCompaction(FrozenModel):
+    """The compaction signals live for an agent at one read."""
+
+    marker_cause: CompactionCause | None = Field(description="The cause behind a fresh compacting marker, else None")
+    pending_cause: CompactionCause | None = Field(description="The cause of the chat's live request, else None")
+
+
+def _read_last_compaction_cause(state_dir: Path, record_filename: str | None, now: float) -> CompactionCause | None:
+    """The cause the harness's completion record names, or None when it writes none, is old, or does not say."""
+    if record_filename is None:
+        return None
+    record = read_compaction_signal(state_dir / record_filename, now)
+    if record is None or now - record.written_at > LAST_COMPACTION_RECORD_MAX_AGE_SECONDS:
+        return None
+    return cause_of_last_compaction(record.trigger)
+
+
+def _read_mtime(path: Path) -> float | None:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
 
 
 class _ResolvedChat(FrozenModel):
@@ -686,6 +766,7 @@ def chat_snapshot_for_active_agent(
     shoulder_tap_available: bool,
     is_connecting: bool,
     last_messaged_at: float | None,
+    compaction_cause: CompactionCause | None,
 ) -> ChatSnapshot:
     """The snapshot of a chat from the agent it runs on.
 
@@ -716,6 +797,9 @@ def chat_snapshot_for_active_agent(
             account_id=agent.labels.get("account"),
             state=agent.state,
             activity_state=agent.activity_state,
+            # The manager keeps a cause until the compaction's event arrives, which can be after
+            # the agent has left COMPACTING.
+            compaction_cause=compaction_cause if agent.activity_state == ActivityState.COMPACTING else None,
             model_choice=agent.model_choice,
             queued_messages=agent.queued_messages,
             shoulder_tap_available=shoulder_tap_available,
@@ -798,6 +882,9 @@ class AgentManager:
     _broadcaster: WebSocketBroadcaster
     _messenger: MngrMessenger
     _lock: threading.Lock
+    # Held across an idle compaction toggle's file write and its ``mngr label``, so two quick
+    # toggles cannot finish their relabels out of order and leave the label contradicting the file.
+    _autocompact_toggle_lock: threading.Lock
     # The live view of observed agents keyed by id, folded from the observe
     # stream: an AGENTS_FULL_STATE snapshot rebuilds it wholesale, an AGENT_STATE
     # upserts one agent, and an AGENT_REMOVED drops one. ``_agents`` /
@@ -885,10 +972,21 @@ class AgentManager:
     # recorded no model yet -> the bar renders no slots.
     _model_choice_by_agent: dict[str, ModelChoice | None]
     # The ONE model-state poller for every tracked agent: re-derives an agent's choice
-    # whenever its ``model_state.json`` stamp changes. One thread total -- per-agent
-    # watchers cost four OS threads per agent and grew without bound with the host's
-    # agent count (see :mod:`imbue.chat.harnesses.model_state_poll`).
-    _model_state_poller: ModelStatePoller
+    # whenever its ``model_state.json`` stamp changes (see :mod:`imbue.chat.harnesses.agent_file_poll`).
+    _model_state_poller: AgentFilePoller
+    # The same poller over every tracked agent's ``compacting`` marker (for the harnesses whose
+    # tracker declares one): re-derives the agent's activity when the marker appears or goes.
+    _compacting_marker_poller: AgentFilePoller
+    # Per agent, the compaction this chat asked for and has not seen finish: when it asked
+    # (monotonic) and why. Counts as COMPACTING for at most ``PENDING_COMPACTION_TIMEOUT_SECONDS``.
+    _compaction_pending_by_agent: dict[str, tuple[float, CompactionCause]]
+    # Per agent, the cause of the compaction last seen in progress, kept until its compacted
+    # event arrives (which is stamped with it), its request expires, or the next compaction
+    # replaces it.
+    _compaction_cause_by_agent: dict[str, CompactionCause]
+    # Per agent, the recorded time of the stale ``compacting`` marker already logged, so a
+    # stale marker is logged once rather than on every recompute.
+    _logged_stale_compacting_marker_by_agent: dict[str, float]
     # When each chat was last messaged from the UI, kept on disk so a restart seeds the OOM
     # prioritizer's recency ranking from real history.
     _message_stamps: MessageStampStore
@@ -906,7 +1004,7 @@ class AgentManager:
     # Tells the Imbue Studio app a chat was read when it goes from unwatched to watched. Reaches the
     # app only when ``build`` was given the gateway; the default drops every call.
     _imbue_studio_notifications: ImbueStudioNotificationsClient
-    # Runs periodic context compaction checks (mngr autocompact run) for active chats.
+    # Runs periodic idle compaction (mngr's autocompact plugin, in process) for the opted-in chats.
     _autocompactor: ChatAutoCompactor
     # Surfaces the window of a chat created from outside with an auto-open label (the Imbue
     # Studio app's update and help chats): fed the agents that appear and go, seeded once with the
@@ -941,6 +1039,10 @@ class AgentManager:
     # Set once at composition (``set_unviewed_transcript_release``); the app state knows who
     # is streaming. ``None`` (tests) = no release.
     _unviewed_transcript_release: Callable[[], None] | None
+    # Whether a session watcher reads the agent's transcript (so a compacted event can end its
+    # compaction). Set once at composition (``set_session_watcher_check``); the app state holds
+    # the watchers. ``None`` (tests) = no agent is watched.
+    _session_watcher_check: Callable[[str], bool] | None
 
     @classmethod
     def build(
@@ -986,6 +1088,7 @@ class AgentManager:
         manager._broadcaster = broadcaster
         manager._messenger = messenger
         manager._lock = threading.Lock()
+        manager._autocompact_toggle_lock = threading.Lock()
         manager._session_sweep_stop = threading.Event()
         manager._session_sweep_thread = None
         manager._agent_details_by_id = {}
@@ -1019,14 +1122,24 @@ class AgentManager:
         manager._queue_busy_handler_by_agent = {}
         manager._session_by_agent = {}
         manager._model_choice_by_agent = {}
-        manager._model_state_poller = ModelStatePoller.build(
-            list_model_state_paths=manager._list_model_state_paths,
-            on_model_state_changed=manager._on_model_state_changed,
+        manager._model_state_poller = AgentFilePoller.build(
+            list_paths=manager._list_model_state_paths,
+            on_file_changed=manager._on_model_state_changed,
+            thread_name="model-state-poll",
         )
+        manager._compacting_marker_poller = AgentFilePoller.build(
+            list_paths=manager._list_compacting_marker_paths,
+            on_file_changed=manager._on_compacting_marker_changed,
+            thread_name="compacting-marker-poll",
+        )
+        manager._compaction_pending_by_agent = {}
+        manager._compaction_cause_by_agent = {}
+        manager._logged_stale_compacting_marker_by_agent = {}
         manager._message_stamps = message_stamps if message_stamps is not None else MessageStampStore(path=None)
         manager._transcript_broadcaster = None
         manager._watcher_eviction_callback = None
         manager._unviewed_transcript_release = None
+        manager._session_watcher_check = None
         manager._auto_open = (
             auto_open
             if auto_open is not None
@@ -1060,8 +1173,9 @@ class AgentManager:
             autocompactor
             if autocompactor is not None
             else ChatAutoCompactor.build(
-                list_running_chat_agent_names=manager.get_running_chat_agent_names,
-                mngr_binary=mngr_binary,
+                list_opted_in_chat_agent_names=manager.get_opted_in_running_chat_agent_names,
+                on_compaction_requested=manager.note_sweep_compaction_requested,
+                harness_of_agent=manager.get_harness_of_agent_named,
             )
         )
         return manager
@@ -1096,6 +1210,7 @@ class AgentManager:
         self._seed_oom_prioritizer()
         self._oom_prioritizer.start()
         self._model_state_poller.start()
+        self._compacting_marker_poller.start()
         if not self._is_secondary:
             self._autocompactor.start()
         self._start_session_sweep()
@@ -1115,6 +1230,7 @@ class AgentManager:
         self._autocompactor.stop()
         self._auto_open.stop()
         self._model_state_poller.stop()
+        self._compacting_marker_poller.stop()
 
         self._session_sweep_stop.set()
         if self._session_sweep_thread is not None:
@@ -1139,6 +1255,9 @@ class AgentManager:
             self._queue_idle_handler_by_agent.clear()
             self._queue_busy_handler_by_agent.clear()
             self._model_choice_by_agent.clear()
+            self._compaction_pending_by_agent.clear()
+            self._compaction_cause_by_agent.clear()
+            self._logged_stale_compacting_marker_by_agent.clear()
         for session in sessions:
             session.close()
 
@@ -1309,6 +1428,9 @@ class AgentManager:
             connecting_by_agent = {
                 agent.id: bool(self._connecting_message_ids_by_agent.get(agent.id)) for agent, _chat in listed
             }
+            compaction_cause_by_agent = {
+                agent.id: self._compaction_cause_by_agent.get(agent.id) for agent, _chat in listed
+            }
         last_messaged = self._message_stamps.read()
         return [
             self._snapshot_as_shown(
@@ -1319,6 +1441,7 @@ class AgentManager:
                     self._shoulder_tap_available(agent),
                     connecting_by_agent[agent.id],
                     last_messaged.get(chat.chat_id),
+                    compaction_cause_by_agent[agent.id],
                 )
             )
             for agent, chat in listed
@@ -1339,6 +1462,7 @@ class AgentManager:
             agent = self._agents.get(chat.active_agent_id) if chat is not None and chat.active_agent_id else None
             is_pending = agent is not None and bool(self._pending_permission_ids_by_agent.get(agent.id))
             is_connecting = agent is not None and bool(self._connecting_message_ids_by_agent.get(agent.id))
+            compaction_cause = None if agent is None else self._compaction_cause_by_agent.get(agent.id)
         if chat is None or agent is None or is_primary_agent(agent):
             return None
         return chat_snapshot_for_active_agent(
@@ -1348,6 +1472,7 @@ class AgentManager:
             self._shoulder_tap_available(agent),
             is_connecting,
             self._message_stamps.read().get(chat.chat_id),
+            compaction_cause,
         )
 
     def get_active_agent_info(self, chat_id: ChatId) -> AgentInfo | None:
@@ -1543,20 +1668,34 @@ class AgentManager:
                 return False
             return bool(self._pending_permission_ids_by_agent.get(chat.active_agent_id))
 
-    def get_running_chat_agent_names(self) -> list[str]:
-        """Names of chat agents that currently have a running agent process.
+    def get_opted_in_running_chat_agent_names(self) -> list[str]:
+        """Names of the running chat agents whose chat has idle compaction on (``chat_autocompact.py``).
 
-        Excludes workers (``agent_created=true``), the primary services agent
-        (``is_primary=true``), and dead/stopped agent processes.
+        A chat with no setting of its own reads the workspace default.
         """
         with self._lock:
-            return [
-                agent.name
+            chat_id_by_agent_name = {
+                agent.name: self._chat_id_of_agent_locked(agent.id)
                 for agent in self._agents.values()
                 if agent.labels.get("agent_created") != "true"
                 and agent.labels.get("is_primary") != "true"
                 and not is_lifecycle_dead(agent.state)
-            ]
+            }
+        if not chat_id_by_agent_name:
+            return []
+        default_state = self._default_autocompact_state()
+        opted_in_names: list[str] = []
+        for name, chat_id in chat_id_by_agent_name.items():
+            state = read_autocompact_state(self._chat_files_root / chat_id)
+            if (default_state if state is None else state).is_enabled:
+                opted_in_names.append(name)
+        return opted_in_names
+
+    def get_harness_of_agent_named(self, agent_name: str) -> str | None:
+        """The harness a tracked agent runs, by its name; None for a name no tracked agent has."""
+        with self._lock:
+            agent = next((agent for agent in self._agents.values() if agent.name == agent_name), None)
+        return None if agent is None else agent.harness.value
 
     # Chat-level: switches (moving a chat to another harness or account; ``chat_handoffs.py`` and
     # ``chat_rebinds.py`` run the steps).
@@ -2069,6 +2208,7 @@ class AgentManager:
             note_agent_renamed=self._note_agent_renamed,
             note_agent_created=self._note_agent_created,
             build_create_command=self._build_successor_create_command,
+            get_autocompact_state=self.get_autocompact_state,
             broadcast_transcript_events=self._broadcast_chat_events,
             now=lambda: datetime.now(timezone.utc),
             monotonic=time.monotonic,
@@ -2742,8 +2882,31 @@ class AgentManager:
 
     def _run_session_sweep(self) -> None:
         while not self._session_sweep_stop.is_set():
-            self._reconnect_pending_sessions()
+            self._sweep_sessions_once()
             self._session_sweep_stop.wait(timeout=_SESSION_SWEEP_INTERVAL_SECONDS)
+
+    def _sweep_sessions_once(self) -> None:
+        # The thread boundary: an escaping error would end the sweep thread for good.
+        try:
+            self._reconnect_pending_sessions()
+            self._recompute_compacting_agents()
+        except Exception as e:
+            _loguru_logger.opt(exception=e).error("The agent session sweep failed; retrying on its next pass")
+
+    def _recompute_compacting_agents(self) -> None:
+        """Re-derive every agent shown as COMPACTING, so one whose compaction outlived the timeout settles.
+
+        A compaction that never finishes changes no file and emits no event, so nothing else would
+        wake the recompute that applies ``PENDING_COMPACTION_TIMEOUT_SECONDS``.
+        """
+        with self._lock:
+            compacting_agent_ids = [
+                agent_id
+                for agent_id, activity_state in self._activity_state_by_agent.items()
+                if activity_state == ActivityState.COMPACTING
+            ]
+        for agent_id in compacting_agent_ids:
+            self._recompute_activity_state(agent_id, broadcast_on_change=True)
 
     def _reconnect_pending_sessions(self) -> None:
         """Retry the live backend for tracked agents that do not have one yet.
@@ -2954,6 +3117,50 @@ class AgentManager:
         """Record the chat's fast mode; the page applies the speed itself through the model switch."""
         write_fast_mode_state(self._chat_files_root / chat_id, state)
 
+    def get_autocompact_state(self, chat_id: ChatId) -> ChatAutocompactState:
+        """The chat's idle compaction setting (``chat_autocompact.py``): what it chose, else the workspace's default."""
+        state = read_autocompact_state(self._chat_files_root / chat_id)
+        if state is not None:
+            return state
+        return self._default_autocompact_state()
+
+    def _default_autocompact_state(self) -> ChatAutocompactState:
+        """What a chat with no setting of its own reads: the workspace's ``autocompact_default``."""
+        return ChatAutocompactState(is_enabled=self._chat_settings.read().autocompact_default)
+
+    def set_autocompact_state(self, chat_id: ChatId, state: ChatAutocompactState) -> None:
+        """Record the chat's idle compaction setting, and relabel the chat's agent to match.
+
+        The file is what the sweep reads; the ``autocompact`` label only shows the setting in
+        ``mngr list``, so a failed relabel is only logged.
+        """
+        with self._autocompact_toggle_lock:
+            write_autocompact_state(self._chat_files_root / chat_id, state)
+            _loguru_logger.info("autocompact: toggle chat={} enabled={}", chat_id, state.is_enabled)
+            with self._lock:
+                chat = self._resolve_chat_locked(chat_id)
+                agent_id = chat.active_agent_id if chat is not None and chat.active_agent_id in self._agents else None
+            if agent_id is not None:
+                self._relabel_autocompact(chat_id, agent_id, state)
+
+    def _relabel_autocompact(self, chat_id: ChatId, agent_id: str, state: ChatAutocompactState) -> None:
+        try:
+            result = run_local_command_modern_version(
+                command=relabel_autocompact_command(self._mngr_binary, agent_id, state),
+                cwd=None,
+                is_checked=False,
+                timeout=_RENAME_TIMEOUT_SECONDS,
+            )
+        except (OSError, ConcurrencyGroupError) as e:
+            _loguru_logger.warning("autocompact: could not relabel agent {} of chat {}: {}", agent_id, chat_id, e)
+            return
+        if result.returncode != 0:
+            reason = mngr_failure_reason("label", result, _RENAME_TIMEOUT_SECONDS)
+            _loguru_logger.warning("autocompact: could not relabel agent {} of chat {}: {}", agent_id, chat_id, reason)
+            return
+        key, _separator, value = state.label.partition("=")
+        self._note_agent_relabeled(agent_id, {key: value})
+
     def knows_chat(self, chat_id: ChatId) -> bool:
         """Whether the id names a chat this manager lists: a running one, a recorded one, or a provisional one."""
         with self._lock:
@@ -2968,6 +3175,14 @@ class AgentManager:
         if state is None:
             state = ChatFastModeState(mode=self._chat_settings.read().fast_mode_default)
             write_fast_mode_state(self._chat_files_root / chat_id, state)
+        return state
+
+    def _autocompact_for_launch_locked(self, chat_id: ChatId) -> ChatAutocompactState:
+        """The idle compaction setting a launch labels the agent with, written to the chat's folder at first. Lock held."""
+        state = read_autocompact_state(self._chat_files_root / chat_id)
+        if state is None:
+            state = self._default_autocompact_state()
+            write_autocompact_state(self._chat_files_root / chat_id, state)
         return state
 
     def discard_provisional_chat(self, chat_id: str) -> bool:
@@ -3142,6 +3357,7 @@ class AgentManager:
             )
             self._provisional_chats[launched_chat_id] = provisional
             fast_mode = self._fast_mode_for_launch_locked(launched_chat_id)
+            autocompact = self._autocompact_for_launch_locked(launched_chat_id)
         agent_id = str(launched_chat_id) if record_entry is None else record_entry.agent_id
         membership_labels = (
             () if record_entry is None else (f"chat_id={launched_chat_id}", f"chat_seq={record_entry.seq}")
@@ -3172,6 +3388,11 @@ class AgentManager:
         # With a pick the message follows the create rather than riding it: the model has to be
         # set before the first turn, and ``mngr create --message`` starts that turn itself.
         deferred_message = launch_message if model_pick is not None else ""
+        create_labels = [
+            *membership_labels,
+            autocompact.label,
+            *(f"{key}={value}" for key, value in extra_labels.items()),
+        ]
         cmd = _build_chat_create_command(
             self._mngr_binary,
             display_name,
@@ -3183,7 +3404,7 @@ class AgentManager:
             project_id,
             account_args,
             initial_message="" if deferred_message else launch_message,
-            extra_labels=[*membership_labels, *(f"{key}={value}" for key, value in extra_labels.items())],
+            extra_labels=create_labels,
             settings=[SKIP_CLAUDE_INSTALLATION_CHECK_SETTING] if is_installation_check_skipped else [],
         )
 
@@ -3192,14 +3413,9 @@ class AgentManager:
         # Mirror the labels the created mngr agent will carry (see
         # ``_build_chat_create_command``), so the pre-observe AgentStateItem below
         # renders exactly like the observed agent will.
-        labels: dict[str, str] = {"user_created": "true", "display_name": display_name, **extra_labels}
-        project_label = _chat_project_label(primary_labels, project_id)
-        if project_label:
-            labels["project"] = project_label
-        labels["account"] = account.id
-        for label in membership_labels:
-            key, _separator, value = label.partition("=")
-            labels[key] = value
+        labels = created_chat_agent_labels(
+            display_name, account.id, _chat_project_label(primary_labels, project_id), create_labels
+        )
         canonical_name = canonical_agent_name(display_name)
         with self._lock:
             self._creation_settled_by_chat[launched_chat_id] = threading.Event()
@@ -3819,6 +4035,9 @@ class AgentManager:
             self._queued_messages_by_agent.pop(agent_id, None)
             self._queue_idle_handler_by_agent.pop(agent_id, None)
             self._queue_busy_handler_by_agent.pop(agent_id, None)
+            self._compaction_pending_by_agent.pop(agent_id, None)
+            self._compaction_cause_by_agent.pop(agent_id, None)
+            self._logged_stale_compacting_marker_by_agent.pop(agent_id, None)
         # Reap the live backend outside the lock (codex's join blocks on its reader thread);
         # idempotent, and a re-track rebuilds it via ensure_live.
         if session is not None:
@@ -3933,6 +4152,14 @@ class AgentManager:
         rebuilds its transcript, and no further transition comes to evict it."""
         self._unviewed_transcript_release = callback
 
+    def set_session_watcher_check(self, callback: Callable[[str], bool]) -> None:
+        """Wire the check for whether an agent has a session watcher (the composition root calls this once)."""
+        self._session_watcher_check = callback
+
+    def _has_session_watcher(self, agent_id: str) -> bool:
+        callback = self._session_watcher_check
+        return callback is not None and callback(agent_id)
+
     def _evict_watcher(self, agent_id: str) -> None:
         callback = self._watcher_eviction_callback
         if callback is not None:
@@ -4035,7 +4262,7 @@ class AgentManager:
 
         The live read is harness-neutral -- the shared reader over the harness's
         registered ``model_state.json`` -- so there is nothing to build per agent.
-        Later recomputes are driven by the ONE shared :class:`ModelStatePoller`
+        Later recomputes are driven by the ONE shared model-state :class:`AgentFilePoller`
         (started in ``start``), which re-lists every agent's state-file path from
         ground truth each pass; nothing per-agent is installed here. Idempotent.
         """
@@ -4068,6 +4295,218 @@ class AgentManager:
         agents and suppresses unchanged broadcasts.
         """
         self._recompute_model_choice(agent_id, broadcast_on_change=True)
+
+    def _list_compacting_marker_paths(self) -> dict[str, Path]:
+        with self._lock:
+            filename_by_agent = {
+                agent_id: tracker.compacting_marker_filename
+                for agent_id, tracker in self._activity_tracker_by_agent.items()
+                if tracker.compacting_marker_filename is not None
+            }
+        return {
+            agent_id: self._get_agent_state_dir(agent_id) / filename
+            for agent_id, filename in filename_by_agent.items()
+        }
+
+    def _on_compacting_marker_changed(self, agent_id: str) -> None:
+        self._recompute_activity_state(agent_id, broadcast_on_change=True)
+
+    # Agent-level: compaction status (``compaction_status.py``).
+
+    def note_compaction_requested(self, agent_id: str, cause: CompactionCause, requested_at: float) -> None:
+        """Show the agent as COMPACTING from a compaction this chat asked for, until it finishes.
+
+        ``requested_at`` is a ``time.monotonic()`` reading. The request is also recorded in the
+        agent's ``compaction_request.json``, so its cause outlives this process's memory of it.
+        """
+        with self._lock:
+            self._compaction_pending_by_agent[agent_id] = (requested_at, cause)
+        _loguru_logger.info("autocompact: compaction pending agent={} cause={}", agent_id, cause.value)
+        self._record_compaction_request(agent_id, cause, _monotonic_to_epoch(requested_at, time.time()))
+        self._recompute_activity_state(agent_id, broadcast_on_change=True)
+
+    def _record_compaction_request(self, agent_id: str, cause: CompactionCause, requested_at: float) -> None:
+        state_dir = self._get_agent_state_dir(agent_id)
+        # An agent on another host has no local state dir, and nothing local would read the record.
+        if not state_dir.is_dir():
+            return
+        try:
+            write_compaction_request(state_dir / COMPACTION_REQUEST_FILENAME, cause, requested_at)
+        except OSError as e:
+            _loguru_logger.warning("Failed to record the compaction request of agent {}: {}", agent_id, e)
+
+    def note_sweep_compaction_requested(self, agent_name: str) -> None:
+        """The idle sweep asked mngr to compact the agent with this name: show it as COMPACTING.
+
+        The sweep reports a request only once mngr's send has returned, which can wait out
+        mngr's slash-command confirmation window, so the request is dated that much earlier:
+        a compaction finishing inside the window still clears it.
+        """
+        with self._lock:
+            agent_id = next((agent.id for agent in self._agents.values() if agent.name == agent_name), None)
+        if agent_id is None:
+            _loguru_logger.debug("Skipped the compaction status of agent {}, which is no longer tracked", agent_name)
+            return
+        self.note_compaction_requested(
+            agent_id, CompactionCause.IDLE, time.monotonic() - RELAXED_CONFIRMATION_TIMEOUT_SECONDS
+        )
+
+    def is_compaction_in_flight(self, agent_info: AgentInfo) -> bool:
+        """Whether the agent is compacting by a fresh ``compacting`` marker or a live request of this chat."""
+        with self._lock:
+            pending = self._compaction_pending_by_agent.get(agent_info.id)
+        live = self._resolve_live_compaction(
+            agent_info.id, agent_info.agent_state_dir, get_harness_spec(agent_info.harness).tracker_class, pending
+        )
+        return live.marker_cause is not None or live.pending_cause is not None
+
+    def clear_compaction_after_interrupt(self, agent_info: AgentInfo) -> None:
+        """Forget the agent's compaction after an interrupt actually ran (a cancel chord or a restart).
+
+        A cancelled compaction fires no completion (no ``PostCompact``, no compacted event), so
+        the harness's ``compacting`` marker and this chat's pending request are dropped here. The
+        remembered cause stays: a compaction the interrupt came too late for still ends with its
+        compacted event, which consumes it.
+        """
+        with self._lock:
+            is_pending_cleared = self._compaction_pending_by_agent.pop(agent_info.id, None) is not None
+        is_marker_cleared = False
+        marker_filename = get_harness_spec(agent_info.harness).tracker_class.compacting_marker_filename
+        if marker_filename is not None:
+            try:
+                (agent_info.agent_state_dir / marker_filename).unlink()
+                is_marker_cleared = True
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                _loguru_logger.warning("Failed to remove the compacting marker of agent {}: {}", agent_info.id, e)
+        if is_pending_cleared or is_marker_cleared:
+            _loguru_logger.info("autocompact: compaction cleared by interrupt agent={}", agent_info.id)
+        self._recompute_activity_state(agent_info.id, broadcast_on_change=True)
+
+    def stamp_compaction_events(self, agent_info: AgentInfo, events: list[dict[str, Any]]) -> None:
+        """Stamp the agent's newly parsed compacted events with ``compaction_cause`` and end the compaction.
+
+        The events are the stored ones, so a reload sees the same cause. Only events of the
+        current compaction count: a re-broadcast of an earlier compaction must not end this one.
+        """
+        compacted_events = [event for event in events if is_context_compacted_event(event)]
+        if not compacted_events:
+            return
+        agent_id = agent_info.id
+        now = time.time()
+        with self._lock:
+            pending = self._compaction_pending_by_agent.get(agent_id)
+            remembered_cause = self._compaction_cause_by_agent.get(agent_id)
+        pending_requested_at = None if pending is None else _monotonic_to_epoch(pending[0], now)
+        current_events = [
+            event for event in compacted_events if _is_current_compaction_event(event, now, pending_requested_at)
+        ]
+        if not current_events:
+            return
+        cause = self._resolve_finished_compaction_cause(agent_info, remembered_cause, pending, current_events, now)
+        for event in current_events:
+            event[COMPACTION_CAUSE_FIELD] = None if cause is None else cause.value
+        with self._lock:
+            is_pending_cleared = self._compaction_pending_by_agent.pop(agent_id, None) is not None
+            is_cause_cleared = self._compaction_cause_by_agent.pop(agent_id, None) is not None
+        if is_pending_cleared or is_cause_cleared:
+            _loguru_logger.info(
+                "autocompact: compaction finished agent={} cause={}",
+                agent_id,
+                "unknown" if cause is None else cause.value,
+            )
+        if is_pending_cleared:
+            self._recompute_activity_state(agent_id, broadcast_on_change=True)
+
+    def _resolve_finished_compaction_cause(
+        self,
+        agent_info: AgentInfo,
+        remembered_cause: CompactionCause | None,
+        pending: tuple[float, CompactionCause] | None,
+        events: list[dict[str, Any]],
+        now: float,
+    ) -> CompactionCause | None:
+        """The cause a finished compaction's events carry, from the most to the least direct record of it."""
+        if remembered_cause is not None:
+            return remembered_cause
+        if pending is not None:
+            return pending[1]
+        state_dir = agent_info.agent_state_dir
+        request = read_compaction_request(state_dir / COMPACTION_REQUEST_FILENAME, now)
+        if request is not None:
+            seconds_since_request = _latest_event_epoch(events, now) - request.requested_at
+            if 0.0 <= seconds_since_request <= PENDING_COMPACTION_TIMEOUT_SECONDS:
+                return request.cause
+        record_filename = get_harness_spec(agent_info.harness).tracker_class.last_compaction_filename
+        return _read_last_compaction_cause(state_dir, record_filename, now)
+
+    def _resolve_live_compaction(
+        self,
+        agent_id: str,
+        state_dir: Path,
+        tracker_class: type[HarnessActivityTracker],
+        pending: tuple[float, CompactionCause] | None,
+    ) -> _LiveCompaction:
+        """The compaction signals live for the agent right now: a fresh marker's cause and a live request's.
+
+        The tracker class declares the harness's ``compacting`` marker and completion record (both
+        None for a harness whose mngr plugin writes neither). Also drops a pending request that
+        expired or that a later completion record shows finished. Runs outside the lock: it reads files.
+        """
+        now = time.time()
+        live_pending = self._expire_pending_compaction(agent_id, pending)
+        pending_cause = None if live_pending is None else live_pending[1]
+        marker_filename = tracker_class.compacting_marker_filename
+        if marker_filename is None:
+            return _LiveCompaction(marker_cause=None, pending_cause=pending_cause)
+        marker = read_compaction_signal(state_dir / marker_filename, now)
+        if marker is not None:
+            marker_age_seconds = now - marker.written_at
+            if marker_age_seconds < PENDING_COMPACTION_TIMEOUT_SECONDS:
+                return _LiveCompaction(
+                    marker_cause=cause_of_compacting_marker(marker.trigger, pending_cause), pending_cause=pending_cause
+                )
+            self._log_stale_compacting_marker_once(agent_id, marker, marker_age_seconds)
+            return _LiveCompaction(marker_cause=None, pending_cause=pending_cause)
+        record_filename = tracker_class.last_compaction_filename
+        if live_pending is None or record_filename is None:
+            return _LiveCompaction(marker_cause=None, pending_cause=pending_cause)
+        record_modified_at = _read_mtime(state_dir / record_filename)
+        if record_modified_at is not None and record_modified_at >= _monotonic_to_epoch(live_pending[0], now):
+            with self._lock:
+                if self._compaction_pending_by_agent.get(agent_id) == live_pending:
+                    del self._compaction_pending_by_agent[agent_id]
+            return _LiveCompaction(marker_cause=None, pending_cause=None)
+        return _LiveCompaction(marker_cause=None, pending_cause=pending_cause)
+
+    def _expire_pending_compaction(
+        self, agent_id: str, pending: tuple[float, CompactionCause] | None
+    ) -> tuple[float, CompactionCause] | None:
+        """The pending request if it is younger than its timeout; an older one is dropped (with its cause)."""
+        if pending is None:
+            return None
+        requested_at, cause = pending
+        timeout_seconds = (
+            PENDING_COMPACTION_TIMEOUT_SECONDS
+            if self._has_session_watcher(agent_id)
+            else UNWATCHED_PENDING_COMPACTION_TIMEOUT_SECONDS
+        )
+        if time.monotonic() - requested_at < timeout_seconds:
+            return pending
+        with self._lock:
+            if self._compaction_pending_by_agent.get(agent_id) == pending:
+                del self._compaction_pending_by_agent[agent_id]
+                self._compaction_cause_by_agent.pop(agent_id, None)
+        _loguru_logger.info("autocompact: compaction pending expired agent={} cause={}", agent_id, cause.value)
+        return None
+
+    def _log_stale_compacting_marker_once(self, agent_id: str, marker: CompactionSignal, age_seconds: float) -> None:
+        with self._lock:
+            if self._logged_stale_compacting_marker_by_agent.get(agent_id) == marker.written_at:
+                return
+            self._logged_stale_compacting_marker_by_agent[agent_id] = marker.written_at
+        _loguru_logger.info("autocompact: stale compacting marker ignored agent={} age={:.0f}", agent_id, age_seconds)
 
     def _recompute_model_choice(self, agent_id: str, *, broadcast_on_change: bool, force: bool = False) -> None:
         """Recompute an agent's model choice from its live state file, then cache/broadcast it.
@@ -4177,6 +4616,7 @@ class AgentManager:
         with self._lock:
             tracker = self._activity_tracker_by_agent.get(agent_id)
             recompute_agent_state = self._agents.get(agent_id)
+            pending_compaction = self._compaction_pending_by_agent.get(agent_id)
         # A positively-dead lifecycle is the one signal a live backend cannot self-observe (an
         # abrupt daemon kill emits no idle sweep), so tell the session -- level-triggered on
         # every recompute and idempotent (codex reaps its connection + ephemeral queue chips;
@@ -4202,6 +4642,9 @@ class AgentManager:
             active_marker_filename is not None
             and (self._get_agent_state_dir(agent_id) / active_marker_filename).exists()
         )
+        live_compaction = self._resolve_live_compaction(
+            agent_id, self._get_agent_state_dir(agent_id), type(tracker), pending_compaction
+        )
         with self._lock:
             if agent_id not in self._activity_tracked_agents:
                 return
@@ -4216,6 +4659,15 @@ class AgentManager:
                 is_active_marker_present=is_active_marker_present,
                 process_started_at=process_started_at,
             )
+            # Never over a dead lifecycle: a dead process compacts nothing.
+            compaction_cause = shown_compaction_cause(
+                live_compaction.marker_cause, live_compaction.pending_cause, new_state
+            )
+            is_cause_changed = False
+            if compaction_cause is not None and not is_lifecycle_dead(agent_state.state):
+                new_state = ActivityState.COMPACTING
+                is_cause_changed = self._compaction_cause_by_agent.get(agent_id) is not compaction_cause
+                self._compaction_cause_by_agent[agent_id] = compaction_cause
             old_state = self._activity_state_by_agent.get(agent_id)
             # The queued-message backstop is LEVEL-triggered, not edge-triggered: an
             # IDLE agent's harness queue is about to drain, so a queued survivor while
@@ -4230,7 +4682,12 @@ class AgentManager:
             # stranded on an idle agent forever.
             is_idle = new_state == ActivityState.IDLE
             has_idle_queue = is_idle and bool(self._queued_messages_by_agent.get(agent_id))
-            if old_state == new_state and agent_state.activity_state == new_state.value and not has_idle_queue:
+            if (
+                old_state == new_state
+                and agent_state.activity_state == new_state.value
+                and not has_idle_queue
+                and not is_cause_changed
+            ):
                 return
             self._activity_state_by_agent[agent_id] = new_state
             # Update just this slot so any cached ``model_choice`` stays intact --

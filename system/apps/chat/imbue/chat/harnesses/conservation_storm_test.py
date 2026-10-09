@@ -233,11 +233,6 @@ class _StormWatcherBase(AgentSessionWatcher):
         return True
 
 
-# =============================================================================
-# pi: the flush/retract inbox writers against the real pi_inbox + real lock
-# =============================================================================
-
-
 class _PiWorld:
     """Ground truth for the pi storm: the REAL ``pi_inbox`` file plus a simulated extension.
 
@@ -390,7 +385,9 @@ def _run_pi_stop(world: _PiWorld, watcher: _PiStormWatcher, agent_info: AgentInf
     block_before = world.peek_parked()
     sender = _stage_pi_send(world, send_mode)
     interrupter = PiInterruptToComposer.build(agent_info)
-    block = interrupter.drain_to_composer(watcher, world.restart_process, lambda: None, lambda: True, lambda: "")
+    block = interrupter.drain_to_composer(
+        watcher, world.restart_process, lambda: None, lambda: True, lambda: "", lambda: False
+    )
     if sender is not None:
         sender.join()
     returned = _block_texts(block)
@@ -481,11 +478,6 @@ def test_pi_conservation_storm_flush_and_retract_writers(tmp_path: Path) -> None
                 pytest.fail(f"unknown pi op {op}")
         world.settle_turn_end()
         ledger.verify()
-
-
-# =============================================================================
-# claude: the tap + stop executors over a REAL ClaudeSessionWatcher and real session JSONL
-# =============================================================================
 
 
 class _ClaudeWorld:
@@ -836,10 +828,6 @@ def test_claude_conservation_storm_tap_and_stop_executors(tmp_path: Path) -> Non
         )
 
 
-# =============================================================================
-# antigravity: the stop + tap executors over the REAL held-queue tracker
-# =============================================================================
-#
 # agy is the only harness whose queue is OURS: it parks mid-turn input invisibly inside its
 # TUI, so we never let it park anything and hold the messages backend-side instead (contract
 # Part C). That inverts what the storm has to simulate. The other storms replay the real bytes
@@ -1084,7 +1072,7 @@ def _run_agy_stop(world: _AgyWorld, watcher: _AgyStormWatcher, agent_info: Agent
         return True
 
     executor = AntigravityInterruptToComposer.build(agent_info)
-    block = executor.drain_to_composer(watcher, restart_process, lambda: None, press_chord, lambda: "")
+    block = executor.drain_to_composer(watcher, restart_process, lambda: None, press_chord, lambda: "", lambda: False)
     for text in _block_texts(block):
         world.ledger.returned.append(text)
 
@@ -1253,7 +1241,9 @@ def test_antigravity_interrupt_during_a_flush_conserves_every_message(tmp_path: 
         return True
 
     executor = AntigravityInterruptToComposer.build(agent_info)
-    returned = executor.drain_to_composer(watcher, restart_process, lambda: None, press_chord, lambda: "")
+    returned = executor.drain_to_composer(
+        watcher, restart_process, lambda: None, press_chord, lambda: "", lambda: False
+    )
     for text in _block_texts(returned):
         ledger.returned.append(text)
     in_flight.join()

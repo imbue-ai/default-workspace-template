@@ -21,6 +21,7 @@ than creating another.
 import shlex
 import string
 from collections.abc import Callable
+from collections.abc import Iterable
 from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
@@ -35,10 +36,12 @@ from imbue.chat.accounts import Account
 from imbue.chat.accounts import AccountError
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import is_lifecycle_dead
+from imbue.chat.activity_state import is_working_activity_state
 from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_discovery import agent_state_dir
+from imbue.chat.chat_autocompact import ChatAutocompactState
 from imbue.chat.chat_records import ChatAgentEntry
 from imbue.chat.chat_records import ChatHandoffRecord
 from imbue.chat.chat_records import ChatRecord
@@ -327,7 +330,9 @@ class SuccessorCreateSpec(FrozenModel):
     harness: HarnessType = Field(description="The harness the successor runs")
     project_id: str = Field(description="The project label to carry, '' for none")
     account_id: str = Field(description="The account the successor is bound to")
-    extra_labels: tuple[str, ...] = Field(description="Further ``KEY=VALUE`` labels: the chat membership")
+    extra_labels: tuple[str, ...] = Field(
+        description="Further ``KEY=VALUE`` labels: the chat membership and its idle compaction setting"
+    )
 
 
 class HandoffDeps(FrozenModel):
@@ -368,6 +373,7 @@ class HandoffDeps(FrozenModel):
     note_agent_renamed: Callable[[str, str, Mapping[str, str]], None]
     note_agent_created: Callable[[AgentStateItem], None]
     build_create_command: Callable[[SuccessorCreateSpec], list[str]]
+    get_autocompact_state: Callable[[ChatId], ChatAutocompactState]
     broadcast_transcript_events: Callable[[ChatId, list[dict[str, Any]]], None]
     now: Callable[[], datetime]
     monotonic: Callable[[], float]
@@ -569,6 +575,7 @@ class HandoffRunner:
         accepted_at = self._deps.monotonic()
         deadline = accepted_at + self._deps.summary_timeout_seconds
         is_busy_seen = False
+        idle_grace_started_at = accepted_at
         outcome: SummaryOutcome | None = None
         while outcome is None:
             self._current(chat_id, handoff_id)
@@ -576,9 +583,15 @@ class HandoffRunner:
             activity = agent_state.activity_state if agent_state is not None else None
             is_dead = agent_state is None or is_lifecycle_dead(agent_state.state)
             now = self._deps.monotonic()
+            is_busy = activity is not None and is_working_activity_state(activity)
+            # Only a turn proves the summary request was taken up. A compaction queued ahead of it
+            # blocks the wait without counting, and the idle grace starts over once it ends, so
+            # the compaction's end is not mistaken for the summary turn's.
             is_busy_seen = is_busy_seen or activity in (ActivityState.THINKING, ActivityState.TOOL_RUNNING)
-            is_turn_over = activity not in (ActivityState.THINKING, ActivityState.TOOL_RUNNING) and (
-                is_dead or is_busy_seen or now - accepted_at >= self._deps.summary_idle_grace_seconds
+            if activity == ActivityState.COMPACTING:
+                idle_grace_started_at = now
+            is_turn_over = not is_busy and (
+                is_dead or is_busy_seen or now - idle_grace_started_at >= self._deps.summary_idle_grace_seconds
             )
             if is_summary_written(_non_empty_mtime(path), stale_mtime):
                 outcome = SummaryOutcome.WRITTEN
@@ -747,7 +760,11 @@ class HandoffRunner:
             harness=handoff.target_harness,
             project_id=handoff.project_label,
             account_id=account.id,
-            extra_labels=(f"chat_id={chat_id}", f"chat_seq={handoff.next_seq}"),
+            extra_labels=(
+                f"chat_id={chat_id}",
+                f"chat_seq={handoff.next_seq}",
+                self._deps.get_autocompact_state(chat_id).label,
+            ),
         )
         command = self._deps.build_create_command(spec)
         first_error = self._run_create(chat_id, command)
@@ -759,7 +776,7 @@ class HandoffRunner:
         if error is not None:
             self._fail(chat_id, handoff_id, error, HandoffFailedStep.START)
             return None
-        return _successor_state(chat_id, handoff, account.id, self._deps.work_dir)
+        return _successor_state(handoff, spec, self._deps.work_dir)
 
     def _apply_model_pick(self, chat_id: ChatId, handoff_id: str, handoff: ChatHandoffRecord) -> bool:
         """Put the successor on the model the user picked, or fail the switch at that step. True when it is set.
@@ -978,21 +995,27 @@ def deliver_held_send(
 
 
 @pure
-def _successor_state(chat_id: ChatId, handoff: ChatHandoffRecord, account_id: str, work_dir: Path) -> AgentStateItem:
+def created_chat_agent_labels(
+    display_name: str, account_id: str, project_label: str, extra_labels: Iterable[str]
+) -> dict[str, str]:
+    """The labels a chat agent's ``mngr create`` gives it, for its tracked state before the observe stream lists it."""
+    labels = {"user_created": "true", "display_name": display_name, "account": account_id}
+    if project_label:
+        labels["project"] = project_label
+    for label in extra_labels:
+        key, _separator, value = label.partition("=")
+        labels[key] = value
+    return labels
+
+
+@pure
+def _successor_state(handoff: ChatHandoffRecord, spec: SuccessorCreateSpec, work_dir: Path) -> AgentStateItem:
     """The tracked state a freshly created successor gets, with the labels its create gave it."""
-    labels = {
-        "user_created": "true",
-        "display_name": handoff.chat_title,
-        "account": account_id,
-        "chat_id": str(chat_id),
-        "chat_seq": str(handoff.next_seq),
-        **({"project": handoff.project_label} if handoff.project_label else {}),
-    }
     return AgentStateItem(
         id=handoff.next_agent_id,
         name=handoff.chat_name,
         state="RUNNING",
-        labels=labels,
+        labels=created_chat_agent_labels(spec.name, spec.account_id, spec.project_id, spec.extra_labels),
         work_dir=str(work_dir),
         harness=handoff.target_harness,
     )

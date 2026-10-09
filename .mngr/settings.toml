@@ -128,6 +128,17 @@ create = ["[ -z \"$MNGR_AGENT_ID\" ] || python3 system/scripts/require_create_ac
 ".mngr/settings.local.toml" = "SHARE"
 "system/vendor/mngr-assets" = "COPY"
 
+# Plugins
+
+# Idle compaction: the chat app's sweep (system/apps/chat/imbue/chat/autocompact.py)
+# compacts an opted-in chat's context just before its prompt cache expires, and does
+# nothing unless this mode is set. Only the mode is set here; every other key stays at
+# the plugin's default. See "Compaction" in system/apps/chat/README.md.
+# Kill switch for one workspace (the local layer overrides this line, and the sweep
+# re-reads it every tick): `mngr config set --scope local plugins.autocompact.mode disabled`.
+[plugins.autocompact]
+mode = "proactive_timer"
+
 # Agent types
 
 # Agent type defaults -- apply to all claude agents created from this repo

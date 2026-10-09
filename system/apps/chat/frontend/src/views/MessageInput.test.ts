@@ -150,10 +150,15 @@ vi.mock("../models/HarnessCatalog", async () => {
   const { harnessCatalogFixture } = await import("../models/harnessCatalogFixture");
   const catalogs: Record<
     string,
-    { label: string; popups: { trigger: string; commands: string[]; action: string }[] }
+    {
+      label: string;
+      can_interrupt_compaction: boolean;
+      popups: { trigger: string; commands: string[]; action: string }[];
+    }
   > = {
     claude: {
       label: harnessCatalogFixture("claude")!.label,
+      can_interrupt_compaction: harnessCatalogFixture("claude")!.can_interrupt_compaction,
       popups: [
         { trigger: "composer_command", commands: ["/login", "/logout"], action: "open_auth" },
         { trigger: "composer_command", commands: ["/status", "/exit"], action: "notice" },
@@ -161,6 +166,7 @@ vi.mock("../models/HarnessCatalog", async () => {
     },
     codex: {
       label: harnessCatalogFixture("codex")!.label,
+      can_interrupt_compaction: harnessCatalogFixture("codex")!.can_interrupt_compaction,
       popups: [
         { trigger: "composer_command", commands: ["/login", "/logout"], action: "open_auth" },
         { trigger: "composer_command", commands: ["/new", "/fast"], action: "notice" },
@@ -472,6 +478,39 @@ describe("MessageInput placeholder", () => {
     const textarea = findByTag(MessageInput().view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
     expect(textarea?.attrs?.placeholder).toBe("Type to queue more messages...");
   });
+
+  it("teaches queueing while the agent compacts its context", () => {
+    mocks.agent.activity_state = "COMPACTING";
+    const textarea = findByTag(MessageInput().view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
+    expect(textarea?.attrs?.placeholder).toBe("Type to queue more messages...");
+  });
+});
+
+describe("MessageInput stop button during a compaction", () => {
+  beforeEach(() => {
+    mocks.agent.activity_state = "COMPACTING";
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    mocks.agent.harness = "claude";
+    mocks.agent.activity_state = undefined;
+  });
+
+  it("shows for a harness whose interrupt cancels a compaction", () => {
+    mocks.agent.harness = "claude";
+    const rendered = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(findByAttr(rendered, "aria-label", "Interrupt agent")).toBeDefined();
+  });
+
+  it("is hidden for a harness whose interrupt does not, and back once its turn runs", () => {
+    mocks.agent.harness = "codex";
+    const component = MessageInput();
+    const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(findByAttr(render(), "aria-label", "Interrupt agent")).toBeUndefined();
+    mocks.agent.activity_state = "THINKING";
+    expect(findByAttr(render(), "aria-label", "Interrupt agent")).toBeDefined();
+  });
 });
 
 /** The element tags and child positions from ``node`` down to the first ``tag``: what mithril matches an
@@ -773,6 +812,33 @@ describe("MessageInput send failure notice", () => {
     expect(text).toContain("Force");
   });
 
+  it("shows a /compact with nothing to compact yet as a declined command, keeping the typed text", async () => {
+    mocks.sendMessage.mockRejectedValueOnce({
+      response: { detail: "Nothing to compact yet.", kind: "nothing_to_compact" },
+      toString: () => "Nothing to compact yet.",
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const component = MessageInput();
+
+    const after = await typeAndSend(component, "agent-1", "/compact");
+
+    const text = renderedText(after);
+    expect(text).toContain("/compact wasn't sent");
+    expect(text).toContain("Nothing to compact yet.");
+    expect(text).not.toContain("Couldn't send your message");
+    expect(text).not.toContain("Retry");
+    expect(text).not.toContain("Force");
+    expect(text).not.toContain("terminal");
+    expect(findByTag(after, "textarea")?.attrs?.value).toBe("/compact");
+    expect(error).not.toHaveBeenCalled();
+    error.mockRestore();
+
+    (findByClass(after, "notice-dismiss")!.attrs!.onclick as () => void)();
+    expect(renderedText(component.view!({ attrs: { chatId: "agent-1" } } as never))).not.toContain(
+      "/compact wasn't sent",
+    );
+  });
+
   it("removes the delivered message even when Force drained a queue block above it", async () => {
     // Force prepends the rescued queue block BEFORE sending, so the delivered message is no
     // longer at the front of the composer -- a prefix-only strip would leave it there, sent and
@@ -826,10 +892,6 @@ describe("MessageInput send failure notice", () => {
     expect(restored).toContain("newer draft");
     expect(restored.indexOf("failed message")).toBeLessThan(restored.indexOf("newer draft"));
   });
-
-  // Escape-dismisses-as-Cancel is not covered here: these tests render vnodes with no DOM, so
-  // there is no document to dispatch a keydown at. The handler delegates to the same function
-  // the Cancel button calls, which is the whole of the fix.
 
   it("retries the same message through the ordinary send", async () => {
     mocks.sendMessage.mockRejectedValueOnce("nope");

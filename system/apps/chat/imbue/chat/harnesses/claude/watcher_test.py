@@ -1323,6 +1323,63 @@ def test_queued_to_delivered_emits_chip_removal_before_the_transcript_turn(tmp_p
     assert order_log == ["queue:[]", "turn:1"]
 
 
+def test_a_message_sent_during_a_compact_arrives_once_after_the_compacts_own_arrival(tmp_path: Path) -> None:
+    """Replays a live /compact-then-"hello" session (Claude Code 2.1.292). The page retires its
+    "Sending..." bubbles oldest-first, one per user-message arrival or new queued entry, so the
+    /compact must arrive on the transcript before "hello" is queued: otherwise the queued "hello"
+    retires the /compact's bubble and "hello" shows as a queued chip and a bubble at once. The typed /compact
+    is the user's own bubble from then on."""
+    agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
+    order_log: list[str] = []
+    watcher = ClaudeSessionWatcher(
+        agent_id="test-agent",
+        agent_state_dir=agent_state_dir,
+        claude_config_dir=claude_config_dir,
+        work_dir=None,
+        on_events=lambda _aid, evts: order_log.extend(
+            f"turn:{evt['content']}:{evt.get('display', 'shown')}" for evt in evts if evt["type"] == "user_message"
+        ),
+    )
+    watcher.set_queue_snapshot_callback(
+        lambda snapshot: order_log.append(f"queue:{[entry['content'] for entry in snapshot]}")
+    )
+
+    def append(*records: dict[str, Any]) -> None:
+        with open(session_file, "ab") as f:
+            for record in records:
+                f.write((json.dumps(record) + "\n").encode("utf-8"))
+        watcher._emit_cycle()
+
+    append(
+        {
+            "type": "user",
+            "uuid": "uuid-compact",
+            "timestamp": "2026-10-07T19:53:39.804Z",
+            "message": {"role": "user", "content": "/compact"},
+        }
+    )
+    append(_queue_enqueue_record("hello", "test-session", "2026-10-07T19:53:42.615Z"))
+    assert order_log == ["turn:/compact:shown", "queue:['hello']"]
+    assert _queued_contents(watcher) == ["hello"]
+
+    order_log.clear()
+    append(
+        _queue_dequeue_record("test-session"),
+        {
+            "type": "user",
+            "uuid": "uuid-command",
+            "timestamp": "2026-10-07T19:53:39.807Z",
+            "message": {
+                "role": "user",
+                "content": "<command-name>/compact</command-name>\n<command-message>compact</command-message>",
+            },
+        },
+        _user_event(1, "hello") | {"timestamp": "2026-10-07T19:54:00.077Z"},
+    )
+    # The command's expansion, written once the compaction ends, repeats the typed /compact and renders nowhere.
+    assert order_log == ["queue:[]", "turn:/compact:hidden", "turn:hello:shown"]
+
+
 def test_a_message_queued_through_the_reply_stays_shown_until_its_turn(tmp_path: Path) -> None:
     """The agent reads as IDLE the moment its reply lands, before claude dequeues what was
     queued behind it. The idle backstop keeps that message (as being sent) instead of blanking

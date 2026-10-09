@@ -124,7 +124,13 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
   // traffic, framework injections). Read by the backend's own activity derivation;
   // carried on the wire for completeness.
   non_turn_tail?: boolean;
+  // status (a compaction) only: who started it -- the chat's idle sweep, the user's /compact, or
+  // the harness itself. Null or absent when the chat app could not tell.
+  compaction_cause?: CompactionCause | null;
 }
+
+/** Who started a compaction (the backend's ``CompactionCause``). */
+export type CompactionCause = "idle" | "manual" | "native";
 
 /**
  * A model turn: prose text and/or tool calls. Every field below is always

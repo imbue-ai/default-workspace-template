@@ -1,0 +1,465 @@
+"""End-to-end tests for the compaction UX in the chat page: the Auto-compact toggle, the COMPACTING status, and the
+compaction's chips.
+
+The chat app is served over fakes (``running_workspace``) and its page is opened at the chat app's own URL, so the
+chat root's rail and the chat's page are both in reach without the shell. The compaction signals are the files and
+transcript records a real agent produces. The manager is never started in these tests, so the poller that watches the
+``compacting`` marker is started here on its own.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import time
+from collections.abc import Generator
+from collections.abc import Iterator
+from collections.abc import Mapping
+from collections.abc import Sequence
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any
+from typing import Final
+
+import pytest
+from playwright.sync_api import FrameLocator
+from playwright.sync_api import Locator
+from playwright.sync_api import Page
+from playwright.sync_api import expect
+
+from imbue.chat.activity_state import CompactionCause
+from imbue.chat.auto_open import chat_root_path
+from imbue.chat.chat_autocompact import AUTOCOMPACT_FILENAME
+from imbue.chat.compaction_status import COMPACTION_REQUEST_FILENAME
+from imbue.chat.compaction_status import write_compaction_request
+from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.primitives import ChatId
+from imbue.chat.testing import FIXTURE_AGENT_ID
+from imbue.chat.testing import FIXTURE_AGENT_NAME
+from imbue.chat.testing import RunningWorkspace
+from imbue.chat.testing import compact_summary_record
+from imbue.chat.testing import get_json
+from imbue.chat.testing import is_chat_frontend_built
+from imbue.chat.testing import is_e2e_browser_installed
+from imbue.chat.testing import running_workspace
+from imbue.chat.testing import seed_agent_state
+from imbue.chat.testing import utc_iso_seconds_ago
+from imbue.chat.testing import write_compacting_marker
+from imbue.chat.testing import write_last_compaction_record
+from imbue.mngr.utils.polling import wait_for
+from imbue.system_interface.testing import find_free_port
+
+pytestmark = [
+    pytest.mark.browser,
+    pytest.mark.skipif(not is_e2e_browser_installed(), reason="Playwright browsers not installed"),
+    pytest.mark.skipif(
+        not is_chat_frontend_built(),
+        reason="The chat frontend is not built (run `npm run build` in system/); skipping e2e.",
+    ),
+]
+
+_SUMMARY_TEXT = "The conversation so far, summarized."
+
+_STARTED_LABEL_BY_CAUSE: Mapping[str | None, str] = {
+    "idle": "Compacting while idle…",
+    "manual": "Compacting as requested…",
+    "native": "Compacting to free up context…",
+    None: "Compacting…",
+}
+
+_FINISHED_LABEL: Final[str] = "Compacted"
+
+# The first part of a compaction chip's panel for each cause as the page renders it: the markdown
+# ``compactionExplanation`` in ``compaction-chips.ts`` returns, with its inline code read as plain text.
+_EXPLANATION_BY_CAUSE: Mapping[str | None, str] = {
+    "idle": "Compacted while idle to keep replies fast and cheap. Change this under Auto-compact in the model menu.",
+    "manual": "Compacted because you asked (/compact).",
+    "native": "Your agent triggered compaction. You can ask it about its current setting, or tell it to change it.",
+    None: "Compacted to keep replies fast and cheap. Idle compaction is under Auto-compact in the model menu.",
+}
+
+_AUTOCOMPACT_NOTICE_TEXT = (
+    "Idle chats now compact automatically to keep replies fast and cheap. Turn this off per chat, or for new chats, "
+    "under Auto-compact in the model menu."
+)
+
+# A conversation whose last turn is still running with one message queued behind it, so the chat's snapshot carries
+# a queued message.
+_QUEUED_SESSION_EVENTS: list[dict[str, Any]] = [
+    {
+        "type": "user",
+        "uuid": "uuid-q-1",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "message": {"role": "user", "content": "Kick off the big refactor"},
+    },
+    {
+        "type": "assistant",
+        "uuid": "uuid-q-2",
+        "timestamp": "2026-01-01T00:00:01Z",
+        "message": {
+            "role": "assistant",
+            "model": "claude-opus-4-6",
+            "content": [{"type": "text", "text": "On it -- starting now."}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 5, "output_tokens": 4},
+        },
+    },
+    {
+        "type": "user",
+        "uuid": "uuid-q-3",
+        "timestamp": "2026-01-01T00:00:03Z",
+        "message": {"role": "user", "content": "Now run the tests"},
+    },
+    {
+        "type": "queue-operation",
+        "operation": "enqueue",
+        "timestamp": "2026-01-01T00:00:05Z",
+        "sessionId": "e2e-session-001",
+        "content": "actually also update the changelog",
+    },
+]
+
+
+@contextmanager
+def _compaction_workspace(
+    tmp_path: Path, session_events: Sequence[Mapping[str, Any]] | None = None
+) -> Iterator[RunningWorkspace]:
+    with running_workspace(tmp_path, find_free_port(), find_free_port(), session_events=session_events) as server:
+        poller = server.chat_state.agent_manager._compacting_marker_poller
+        poller.start()
+        try:
+            yield server
+        finally:
+            poller.stop()
+
+
+@pytest.fixture
+def compaction_server(tmp_path: Path) -> Generator[RunningWorkspace, None, None]:
+    with _compaction_workspace(tmp_path) as server:
+        yield server
+
+
+def _settings(server: RunningWorkspace) -> dict[str, Any]:
+    return dict(get_json(f"{server.chat_url}/api/settings")["settings"])
+
+
+def _set_fixture_harness(server: RunningWorkspace, harness: HarnessType) -> None:
+    manager = server.chat_state.agent_manager
+    seed_agent_state(
+        manager, FIXTURE_AGENT_ID, name=FIXTURE_AGENT_NAME, labels={"account": server.account_ids[0]}, harness=harness
+    )
+    # Rebuilds the agent's activity tracker and session for the new harness.
+    manager._ensure_activity_tracking(FIXTURE_AGENT_ID)
+
+
+def _open_chat(page: Page, server: RunningWorkspace) -> FrameLocator:
+    page.goto(f"{server.chat_url}{chat_root_path(ChatId(FIXTURE_AGENT_ID))}")
+    expect(page.locator(".chat-root")).to_be_visible(timeout=15000)
+    chat = page.frame_locator(f'iframe.chat-root-frame[data-chat-id="{FIXTURE_AGENT_ID}"]')
+    expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
+    return chat
+
+
+def _rail_row(page: Page) -> Locator:
+    return page.locator(f'.chat-rail-row[data-chat-id="{FIXTURE_AGENT_ID}"]')
+
+
+def _strip(chat: FrameLocator) -> Locator:
+    return chat.locator('.agent-activity-indicator[data-state="COMPACTING"]')
+
+
+def _stop_button(chat: FrameLocator) -> Locator:
+    return chat.locator(".message-input-stop-button")
+
+
+def _append_compact_summary(server: RunningWorkspace, uuid: str) -> None:
+    with open(server.session_file, "a") as handle:
+        handle.write(json.dumps(compact_summary_record(uuid, utc_iso_seconds_ago())) + "\n")
+
+
+def _append_typed_compact(server: RunningWorkspace) -> None:
+    """The record Claude Code writes as a ``/compact`` is submitted, which the page shows as the user's bubble."""
+    record = {
+        "type": "user",
+        "uuid": "uuid-typed-compact",
+        "timestamp": utc_iso_seconds_ago(),
+        "message": {"role": "user", "content": "/compact"},
+    }
+    with open(server.session_file, "a") as handle:
+        handle.write(json.dumps(record) + "\n")
+
+
+def _started_chip(chat: FrameLocator) -> Locator:
+    return chat.locator(".tool-chip.compaction-chip--started")
+
+
+def _finished_chip(chat: FrameLocator) -> Locator:
+    return chat.locator(".tool-chip.compaction-chip--finished")
+
+
+def _compaction_panel(chat: FrameLocator) -> Locator:
+    return chat.locator(".tool-chip-detail.compaction-detail")
+
+
+def _open_autocompact_submenu(chat: FrameLocator) -> Locator:
+    chat.locator(".model-selector-trigger").click()
+    row = chat.locator('[data-menu-row="autocompact"]')
+    expect(row).to_contain_text("Auto-compact")
+    row.click()
+    submenu = chat.locator('[data-menu-part="submenu"]')
+    expect(submenu.locator(".autocompact-options")).to_be_visible()
+    return submenu
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_turning_auto_compact_off_writes_the_chats_setting_and_the_default_control_makes_off_the_default(
+    compaction_server: RunningWorkspace, page: Page
+) -> None:
+    server = compaction_server
+    autocompact_path = server.chat_state.agent_manager._chat_files_root / FIXTURE_AGENT_ID / AUTOCOMPACT_FILENAME
+    assert not autocompact_path.exists()
+    assert _settings(server)["autocompact_default"] is True
+    chat = _open_chat(page, server)
+
+    submenu = _open_autocompact_submenu(chat)
+    expect(submenu.locator('[data-autocompact="on"]')).to_have_attribute("aria-checked", "true")
+    submenu.locator('[data-autocompact="off"]').click()
+
+    wait_for(
+        lambda: autocompact_path.is_file() and json.loads(autocompact_path.read_text()) == {"is_enabled": False},
+        timeout=10.0,
+        error_message="the chat's autocompact.json never recorded Off",
+    )
+    expect(submenu.locator('[data-autocompact="off"]')).to_have_attribute("aria-checked", "true")
+    default_off_segment = submenu.locator('[data-autocompact-default="off"]')
+    expect(default_off_segment).to_have_text("Off")
+    expect(default_off_segment).to_have_attribute("aria-checked", "false")
+    expect(submenu.locator('[data-autocompact-default="on"]')).to_have_attribute("aria-checked", "true")
+    assert _settings(server)["autocompact_default"] is True
+
+    default_off_segment.click()
+    wait_for(
+        lambda: _settings(server)["autocompact_default"] is False,
+        timeout=10.0,
+        error_message="the workspace's autocompact_default never turned off",
+    )
+    expect(default_off_segment).to_have_attribute("aria-checked", "true")
+    assert json.loads(autocompact_path.read_text()) == {"is_enabled": False}
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_harness_that_cannot_be_compacted_has_no_auto_compact_row(
+    compaction_server: RunningWorkspace, page: Page
+) -> None:
+    _set_fixture_harness(compaction_server, HarnessType.ANTIGRAVITY)
+    with page.expect_response(lambda response: response.url.endswith("/api/harnesses")) as catalogs:
+        chat = _open_chat(page, compaction_server)
+    assert catalogs.value.ok
+
+    chat.locator(".model-selector-trigger").click()
+    expect(chat.locator('[data-menu-row="providers"]')).to_be_visible()
+    expect(chat.locator('[data-menu-row="autocompact"]')).to_have_count(0)
+
+
+@pytest.mark.parametrize(
+    ("trigger", "label"), [("manual", "Compacting as requested…"), ("auto", "Compacting to free up context…")]
+)
+@pytest.mark.timeout(60, func_only=False)
+def test_a_compacting_marker_shows_the_status_on_the_strip_until_it_goes(
+    compaction_server: RunningWorkspace, page: Page, trigger: str, label: str
+) -> None:
+    """The stop button stays because Claude's interrupt cancels a compaction."""
+    server = compaction_server
+    chat = _open_chat(page, server)
+    expect(_rail_row(page)).not_to_have_attribute("data-status", "working")
+    expect(_stop_button(chat)).to_have_count(0)
+
+    marker = write_compacting_marker(server.agent_info.agent_state_dir, trigger)
+
+    expect(_rail_row(page)).to_have_attribute("data-status", "working", timeout=15000)
+    expect(_stop_button(chat)).to_be_visible()
+    expect(_strip(chat).locator(".agent-activity-indicator__label")).to_have_text(label)
+
+    marker.unlink()
+
+    expect(_strip(chat)).to_have_count(0, timeout=15000)
+    expect(_stop_button(chat)).to_have_count(0)
+    expect(_rail_row(page)).not_to_have_attribute("data-status", "working")
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_message_queued_behind_a_compaction_changes_the_label(tmp_path: Path, page: Page) -> None:
+    with _compaction_workspace(tmp_path, session_events=_QUEUED_SESSION_EVENTS) as server:
+        write_compacting_marker(server.agent_info.agent_state_dir)
+        chat = _open_chat(page, server)
+
+        expect(chat.locator(".queued-group")).to_be_visible(timeout=15000)
+        expect(_strip(chat).locator(".agent-activity-indicator__label")).to_have_text(
+            "Compacting as requested, then replying…", timeout=15000
+        )
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_sweep_compaction_reads_compacting_while_idle(compaction_server: RunningWorkspace, page: Page) -> None:
+    server = compaction_server
+    chat = _open_chat(page, server)
+
+    server.chat_state.agent_manager.note_compaction_requested(FIXTURE_AGENT_ID, CompactionCause.IDLE, time.monotonic())
+
+    expect(_strip(chat).locator(".agent-activity-indicator__label")).to_have_text(
+        "Compacting while idle…", timeout=15000
+    )
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_the_stop_button_is_hidden_while_a_harness_that_cannot_interrupt_a_compaction_compacts(
+    compaction_server: RunningWorkspace, page: Page
+) -> None:
+    """Codex writes no ``compacting`` marker, so its compaction comes from the chat's own request."""
+    server = compaction_server
+    _set_fixture_harness(server, HarnessType.CODEX)
+    chat = _open_chat(page, server)
+
+    server.chat_state.agent_manager.note_compaction_requested(
+        FIXTURE_AGENT_ID, CompactionCause.MANUAL, time.monotonic()
+    )
+
+    expect(_strip(chat).locator(".agent-activity-indicator__label")).to_have_text(
+        "Compacting as requested…", timeout=15000
+    )
+    expect(_rail_row(page)).to_have_attribute("data-status", "working")
+    expect(_stop_button(chat)).to_have_count(0)
+
+
+def _record_compaction_cause(server: RunningWorkspace, cause: str | None) -> None:
+    """Leave the record each cause is read from: the chat's own request for an idle compaction, mngr's
+    ``last_compaction.json`` (manual, or Claude Code's own ``auto``) for the others, and nothing for an unknown one."""
+    state_dir = server.agent_info.agent_state_dir
+    if cause == "idle":
+        write_compaction_request(state_dir / COMPACTION_REQUEST_FILENAME, CompactionCause.IDLE, time.time() - 5.0)
+    elif cause in ("manual", "native"):
+        write_last_compaction_record(state_dir, "manual" if cause == "manual" else "auto")
+    else:
+        assert cause is None
+
+
+@pytest.mark.parametrize("cause", ["idle", "manual", "native", None])
+@pytest.mark.timeout(60, func_only=False)
+def test_a_compaction_is_two_chips_with_the_start_named_for_its_cause_that_open_on_why_then_the_summary(
+    compaction_server: RunningWorkspace, page: Page, cause: str | None
+) -> None:
+    server = compaction_server
+    chat = _open_chat(page, server)
+    expect(chat.locator(".message-user").first).to_contain_text("Hello agent!")
+
+    _record_compaction_cause(server, cause)
+    _append_compact_summary(server, "uuid-compact-1")
+
+    started = _started_chip(chat)
+    finished = _finished_chip(chat)
+    expect(finished.locator(".tool-chip-label")).to_have_text(_FINISHED_LABEL, timeout=15000)
+    expect(started.locator(".tool-chip-label")).to_have_text(_STARTED_LABEL_BY_CAUSE[cause])
+    # One chip row of the two, on the agent's rail.
+    row = chat.locator(".tool-chip-row", has=finished)
+    expect(row.locator(".tool-chip")).to_have_count(2)
+    expect(chat.locator(".message-assistant", has=row)).to_have_count(1)
+    panel = _compaction_panel(chat)
+    expect(panel).to_have_count(0)
+
+    finished.click()
+
+    expect(panel).to_be_visible()
+    expect(panel.locator(".tool-chip-detail-title")).to_have_text(_FINISHED_LABEL)
+    body = panel.locator(":scope > :not(.tool-chip-detail-header)")
+    expect(body).to_have_count(2)
+    expect(body.nth(0)).to_have_class(re.compile(r"\bcompaction-explanation\b"))
+    expect(body.nth(0)).to_have_text(_EXPLANATION_BY_CAUSE[cause])
+    expect(body.nth(1)).to_have_class(re.compile(r"\bborder-dashed\b"))
+    expect(body.nth(1).locator(".compaction-summary")).to_have_text(_SUMMARY_TEXT)
+
+    # The start chip opens the same panel under its own title, and one panel is open at a time.
+    started.click()
+    expect(panel).to_have_count(1)
+    expect(panel.locator(".tool-chip-detail-title")).to_have_text(_STARTED_LABEL_BY_CAUSE[cause])
+    expect(panel.locator(".compaction-summary")).to_have_text(_SUMMARY_TEXT)
+    # The explanation is the page's own: what the agent and the events API read is the summary alone.
+    events = get_json(f"{server.chat_url}/api/chats/{FIXTURE_AGENT_ID}/events")["events"]
+    assert _EXPLANATION_BY_CAUSE[cause] not in json.dumps(events)
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_typed_compact_shows_as_a_bubble_with_the_start_chip_under_it_until_the_pair_lands(
+    compaction_server: RunningWorkspace, page: Page
+) -> None:
+    server = compaction_server
+    chat = _open_chat(page, server)
+    expect(chat.locator(".message-user").first).to_contain_text("Hello agent!")
+
+    _append_typed_compact(server)
+    marker = write_compacting_marker(server.agent_info.agent_state_dir, "manual")
+
+    bubble = chat.locator(".message-user", has_text="/compact")
+    expect(bubble).to_be_visible(timeout=15000)
+    started = _started_chip(chat)
+    expect(started.locator(".tool-chip-label")).to_have_text(_STARTED_LABEL_BY_CAUSE["manual"], timeout=15000)
+    expect(_finished_chip(chat)).to_have_count(0)
+    # The chip row stands right under the bubble.
+    expect(bubble.locator("xpath=following-sibling::*[1]").locator(".compaction-chip--started")).to_have_count(1)
+    started.click()
+    expect(_compaction_panel(chat).locator(".compaction-explanation")).to_have_text(_EXPLANATION_BY_CAUSE["manual"])
+    expect(_compaction_panel(chat).locator(".compaction-summary")).to_have_count(0)
+
+    write_last_compaction_record(server.agent_info.agent_state_dir, "manual")
+    _append_compact_summary(server, "uuid-compact-1")
+    marker.unlink()
+
+    expect(_finished_chip(chat).locator(".tool-chip-label")).to_have_text(_FINISHED_LABEL, timeout=15000)
+    expect(_strip(chat)).to_have_count(0, timeout=15000)
+    expect(started).to_have_count(1)
+    expect(chat.locator(".message-user", has_text="/compact")).to_have_count(1)
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_the_start_chip_follows_the_last_reply_while_an_idle_compaction_runs(
+    compaction_server: RunningWorkspace, page: Page
+) -> None:
+    server = compaction_server
+    chat = _open_chat(page, server)
+    reply = chat.locator(".message-assistant", has_text="Hello! How can I help you?")
+    expect(reply).to_be_visible(timeout=15000)
+
+    server.chat_state.agent_manager.note_compaction_requested(FIXTURE_AGENT_ID, CompactionCause.IDLE, time.monotonic())
+
+    started = _started_chip(chat)
+    expect(started.locator(".tool-chip-label")).to_have_text(_STARTED_LABEL_BY_CAUSE["idle"], timeout=15000)
+    expect(reply.locator("xpath=following-sibling::*[1]").locator(".compaction-chip--started")).to_have_count(1)
+    expect(_strip(chat).locator(".agent-activity-indicator__label")).to_have_text("Compacting while idle…")
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_the_auto_compact_notice_shows_under_the_compactions_chip_row_until_it_is_dismissed(
+    compaction_server: RunningWorkspace, page: Page
+) -> None:
+    server = compaction_server
+    assert _settings(server)["is_autocompact_notice_shown"] is False
+    chat = _open_chat(page, server)
+
+    _record_compaction_cause(server, "idle")
+    _append_compact_summary(server, "uuid-compact-1")
+
+    chip_group = chat.locator(".tool-chip-group", has=_finished_chip(chat))
+    notice = chip_group.locator("xpath=following-sibling::*[1]")
+    expect(notice).to_have_class(re.compile(r"\bautocompact-notice\b"), timeout=15000)
+    expect(notice).to_have_text(_AUTOCOMPACT_NOTICE_TEXT)
+    notice.locator(".autocompact-notice-dismiss").click()
+    expect(chat.locator(".autocompact-notice")).to_have_count(0)
+    wait_for(
+        lambda: _settings(server)["is_autocompact_notice_shown"] is True,
+        timeout=10.0,
+        error_message="the dismissal never reached the workspace's settings",
+    )
+
+    page.reload()
+    chat = page.frame_locator(f'iframe.chat-root-frame[data-chat-id="{FIXTURE_AGENT_ID}"]')
+    expect(_finished_chip(chat)).to_be_visible(timeout=15000)
+    expect(chat.locator(".autocompact-notice")).to_have_count(0)

@@ -7,8 +7,10 @@ import pytest
 
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.agent_discovery import _first_failure
+from imbue.chat.agent_discovery import compact_stale_agents_if_enabled
 from imbue.chat.agent_discovery import discover_agents
 from imbue.chat.agent_discovery import read_claude_config_dir_from_env_file
+from imbue.chat.testing import use_mngr_settings
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.message import AgentSendFailure
 from imbue.mngr.api.message import MessageResult
@@ -19,6 +21,7 @@ from imbue.mngr.primitives import AgentName
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostName
 from imbue.mngr.primitives import ProviderInstanceName
+from imbue.mngr_autocompact.manager import compact_stale_agents_by_name
 
 
 def test_reads_claude_config_dir_from_env_file(tmp_path: Path) -> None:
@@ -312,3 +315,41 @@ def test_unknown_config_field_degrades_to_a_warning_not_a_failure(
     # the unknown field was reported rather than swallowed silently.
     assert agents == []
     assert any("field_from_a_newer_mngr" in record for record in loguru_records)
+
+
+def test_compacting_agents_that_no_longer_exist_compacts_nothing_and_raises_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The sweep lists its chats a moment before this call, so a name may already be gone."""
+    use_mngr_settings('[plugins.autocompact]\nmode = "proactive_timer"\n', tmp_path, monkeypatch)
+
+    assert compact_stale_agents_if_enabled(["chat-that-was-destroyed"], compact_stale_agents_by_name) == []
+
+
+@pytest.mark.parametrize(
+    ("settings", "expected_batches", "expected_compacted"),
+    [
+        ("", [], []),
+        ('[plugins.autocompact]\nmode = "on_next_prompt"\n', [], []),
+        ('[plugins.autocompact]\nmode = "proactive_timer"\n', [["chat-alpha", "chat-beta"]], ["chat-alpha"]),
+    ],
+)
+def test_the_plugin_is_called_only_when_the_workspace_mngr_config_has_proactive_compaction_on(
+    settings: str,
+    expected_batches: list[list[str]],
+    expected_compacted: list[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The mode is loaded through mngr's own loader, so the sweep acts exactly when the plugin would."""
+    use_mngr_settings(settings, tmp_path, monkeypatch)
+    recorded_batches: list[list[str]] = []
+
+    def compact_by_name(mngr_ctx: MngrContext, names: Sequence[AgentName]) -> Sequence[AgentName]:
+        recorded_batches.append([str(name) for name in names])
+        return names[:1]
+
+    compacted = compact_stale_agents_if_enabled(["chat-alpha", "chat-beta"], compact_by_name)
+
+    assert recorded_batches == expected_batches
+    assert compacted == expected_compacted

@@ -20,6 +20,8 @@ from imbue.chat.config import Config
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
+from imbue.chat.harnesses.interrupt import PressChord
+from imbue.chat.harnesses.interrupt import RestartProcess
 from imbue.chat.harnesses.registry import build_loader
 from imbue.chat.harnesses.registry import build_watcher
 from imbue.chat.harnesses.registry import get_harness_spec
@@ -42,6 +44,24 @@ class ChatAppStateError(RuntimeError):
 
 # The frontend build's output, inside the package: what the chat routes serve in production.
 DEFAULT_STATIC_DIRECTORY = Path(__file__).parent / "static"
+
+
+class _SentInterrupts(MutableModel):
+    """Wraps a stop's restart and cancel-chord capabilities, noting whether either actually went out."""
+
+    restart: RestartProcess = Field(frozen=True, description="The restart the caller supplied")
+    press_chord: PressChord = Field(frozen=True, description="The native cancel chord, bound to the agent")
+    is_any_sent: bool = Field(default=False, description="Whether a restart or a chord actually went out")
+
+    def restart_process(self) -> tuple[bool, str]:
+        is_restarted, output = self.restart()
+        self.is_any_sent = self.is_any_sent or is_restarted
+        return is_restarted, output
+
+    def press_cancel_chord(self) -> bool:
+        is_pressed = self.press_chord()
+        self.is_any_sent = self.is_any_sent or is_pressed
+        return is_pressed
 
 
 class ChatAppState(MutableModel):
@@ -135,6 +155,7 @@ class ChatAppState(MutableModel):
                 return existing
 
             def on_events(agent_id: str, events: list[dict[str, Any]]) -> None:
+                self.agent_manager.stamp_compaction_events(agent_info, events)
                 # Deliver-live-only: session events are persisted in JSONL and recoverable
                 # via the REST /events endpoint, so nothing is buffered for replay. The
                 # fan-out is keyed by chat, so a page's stream follows the chat across a
@@ -182,7 +203,10 @@ class ChatAppState(MutableModel):
         # connect. Done outside the watchers lock to avoid holding it across the
         # agent manager's own lock.
         try:
-            self.agent_manager.update_session_events(agent_info.id, watcher.get_all_events())
+            backlog = watcher.get_all_events()
+            # A compaction that finished while no watcher ran (a chat nobody had open) ends here.
+            self.agent_manager.stamp_compaction_events(agent_info, backlog)
+            self.agent_manager.update_session_events(agent_info.id, backlog)
             watcher.start()
         finally:
             with self._watchers_lock:
@@ -191,6 +215,14 @@ class ChatAppState(MutableModel):
             if is_evicted:
                 watcher.stop()
         return watcher
+
+    def has_watcher(self, agent_id: str) -> bool:
+        """Whether a session watcher is resident for the agent.
+
+        Reads without the watchers lock (a dict membership test is atomic): the agent manager
+        asks this from recomputes that can run while ``get_or_create_watcher`` holds it.
+        """
+        return agent_id in self.watchers
 
     def get_or_create_loader(self, agent_info: AgentInfo) -> TranscriptLoader:
         """The loader over one archived agent's transcript, built on the first read that needs it.
@@ -234,18 +266,27 @@ class ChatAppState(MutableModel):
         Dispatches through the agent's session to the harness's registered interrupt (the
         base restart-drain, or a native override), binding the watcher, the restart the caller
         supplies, the activity settle, and the native cancel chord. Shared by the route and
-        the handoff's draining step. Raises ``AgentRestartError`` when the restart fails.
+        the handoff's draining step. The agent's compaction status is cleared when a cancel chord
+        or a restart actually ran. Raises ``AgentRestartError`` when the restart fails.
         """
         watcher = self.get_or_create_watcher(agent_info)
-        return self.agent_manager.get_or_create_session(agent_info).interrupt_to_composer(
-            agent_info,
-            watcher,
-            restart_process,
-            lambda: self.agent_manager.reset_activity_state(agent_info.id),
-            lambda: self.agent_manager.press_key_chord_on_agent(
+        interrupts = _SentInterrupts(
+            restart=restart_process,
+            press_chord=lambda: self.agent_manager.press_key_chord_on_agent(
                 AgentId(agent_info.id), get_harness_spec(agent_info.harness).cancel_chord
             ),
         )
+        block = self.agent_manager.get_or_create_session(agent_info).interrupt_to_composer(
+            agent_info,
+            watcher,
+            interrupts.restart_process,
+            lambda: self.agent_manager.reset_activity_state(agent_info.id),
+            interrupts.press_cancel_chord,
+            lambda: self.agent_manager.is_compaction_in_flight(agent_info),
+        )
+        if interrupts.is_any_sent:
+            self.agent_manager.clear_compaction_after_interrupt(agent_info)
+        return block
 
     def stop_and_remove_watcher(self, agent_id: str) -> None:
         """Evict everything resident for one agent: its watcher (the resident transcript, thread,

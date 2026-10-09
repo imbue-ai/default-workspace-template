@@ -113,7 +113,7 @@ export function isPromptWithContext(event: ClassifiableUserMessage): boolean {
   return event.display === "prompt_with_context";
 }
 
-/** True when the message is a subtle inline status message. */
+/** True when the message is a compaction's status event ("Context was compacted"). */
 export function isStatusUserMessage(event: ClassifiableUserMessage): boolean {
   return classifyUserMessage(event).kind === UserMessageKind.StatusMessage;
 }

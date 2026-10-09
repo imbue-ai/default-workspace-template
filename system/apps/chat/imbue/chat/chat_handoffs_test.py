@@ -18,6 +18,7 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_manager import _account_binding_args
 from imbue.chat.agent_manager import _build_chat_create_command
+from imbue.chat.chat_autocompact import ChatAutocompactState
 from imbue.chat.chat_handoffs import HandoffCancelledError
 from imbue.chat.chat_handoffs import HandoffDeps
 from imbue.chat.chat_handoffs import HandoffRunner
@@ -349,6 +350,7 @@ def _runner(workspace: _FakeWorkspace, **overrides: Any) -> HandoffRunner:
         note_agent_renamed=workspace.note_agent_renamed,
         note_agent_created=workspace.note_agent_created,
         build_create_command=workspace.build_create_command,
+        get_autocompact_state=lambda chat_id: ChatAutocompactState(is_enabled=False),
         broadcast_transcript_events=workspace.broadcast,
         now=lambda: _NOW,
         monotonic=workspace.monotonic,
@@ -470,7 +472,7 @@ def test_a_handoff_runs_every_phase_and_the_successor_takes_over(tmp_path: Path)
     create = argv[1].split(" ")
     assert create[:3] == ["create", "Chat-1", "--id"] and create[3] == successor
     assert "--type codex" in argv[1]
-    assert f"--label chat_id={chat_id} --label chat_seq=2" in argv[1]
+    assert f"--label chat_id={chat_id} --label chat_seq=2 --label autocompact=off" in argv[1]
     assert f"--label account={_OPENAI_ACCOUNT.id}" in argv[1]
     assert "--label project=inbox" in argv[1]
     assert "--message" not in argv[1]
@@ -479,7 +481,15 @@ def test_a_handoff_runs_every_phase_and_the_successor_takes_over(tmp_path: Path)
     assert f"also on disk at {summary}" in prompt
     assert "<predecessor-summary>\n# Summary\n\nThe user wants the tests green.\n</predecessor-summary>" in prompt
     assert "${" not in prompt
-    assert successor in workspace.agents and workspace.agents[successor].labels["chat_seq"] == "2"
+    assert successor in workspace.agents and workspace.agents[successor].labels == {
+        "user_created": "true",
+        "display_name": "Chat 1",
+        "account": _OPENAI_ACCOUNT.id,
+        "project": "inbox",
+        "chat_id": str(chat_id),
+        "chat_seq": "2",
+        "autocompact": "off",
+    }
     # The chip went out on the chat's stream, and the held send followed the prompt to the successor.
     assert [(chat, [event["type"] for event in events]) for chat, events in workspace.broadcasts] == [
         (str(chat_id), [AGENT_SWITCH_EVENT_TYPE])
@@ -723,6 +733,36 @@ def test_a_busy_agent_is_waited_for_until_it_goes_idle(tmp_path: Path) -> None:
 
     assert workspace.record().handoff is None
     assert workspace.clock == pytest.approx(2.0)
+
+
+def test_a_compaction_ahead_of_the_summary_turn_is_waited_out_without_ending_the_wait(tmp_path: Path) -> None:
+    workspace, first, _successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
+    workspace.is_summary_written_on_request = False
+    # A compaction longer than the idle grace, a moment idle before the summary turn starts, then
+    # the turn: the idle reading right after the compaction must not end the wait.
+    readings = iter(
+        [
+            ActivityState.COMPACTING,
+            ActivityState.COMPACTING,
+            ActivityState.COMPACTING,
+            ActivityState.COMPACTING,
+            ActivityState.IDLE,
+            ActivityState.THINKING,
+            ActivityState.IDLE,
+        ]
+    )
+
+    def get_agent_state(agent_id: str) -> AgentStateItem | None:
+        state = workspace.get_agent_state(agent_id)
+        if state is None or agent_id != first:
+            return state
+        return state.model_copy_update(to_update(state.field_ref().activity_state, next(readings, ActivityState.IDLE)))
+
+    runner = _runner(workspace, get_agent_state=get_agent_state)
+    runner.run(workspace.chat_id, "h-1")
+
+    assert workspace.record().handoff is None
+    assert workspace.clock == pytest.approx(6.0)
 
 
 def test_a_refused_summary_request_is_a_missing_summary_not_a_stuck_handoff(tmp_path: Path) -> None:

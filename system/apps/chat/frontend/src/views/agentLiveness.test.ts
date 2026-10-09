@@ -33,6 +33,7 @@ describe("effectiveLifecycleState", () => {
     // resolve to RUNNING (green) immediately rather than staying yellow.
     expect(effectiveLifecycleState("WAITING", "THINKING")).toBe("RUNNING");
     expect(effectiveLifecycleState("WAITING", "TOOL_RUNNING")).toBe("RUNNING");
+    expect(effectiveLifecycleState("WAITING", "COMPACTING")).toBe("RUNNING");
     // A finished agent whose lifecycle still says RUNNING resolves to WAITING.
     expect(effectiveLifecycleState("RUNNING", "IDLE")).toBe("WAITING");
   });

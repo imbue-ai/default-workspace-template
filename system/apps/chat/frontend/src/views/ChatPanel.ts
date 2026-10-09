@@ -76,7 +76,8 @@ import { renderHeldSends } from "./HeldSendView";
 import { HandoffFailedNotice } from "./HandoffFailedNotice";
 import { renderHandoffTailNode } from "./handoff-node";
 import { SwitchDialog } from "./SwitchDialog";
-import { hasOpenHandoffRequest } from "./turn-grouping";
+import { hasOpenHandoffRequest, isTailTurnSettled, liveCompactionOf } from "./turn-grouping";
+import { closeRunningCompactionChips } from "./compaction-chips";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 
 // The terminal output a page shows in place of a transcript: what mngr printed when a create
@@ -598,7 +599,10 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     }
 
     const chat = getChatById(chatId);
-    const agentIsIdle = chat?.active_agent.activity_state === "IDLE";
+    const activityState = chat?.active_agent.activity_state;
+    const agentIsIdle = activityState === "IDLE";
+    const tailTurnSettled = isTailTurnSettled(activityState);
+    const liveCompaction = liveCompactionOf(activityState, chat?.active_agent.compaction_cause);
 
     // A new chat starts on fast mode; once it has run the workspace's turn limit,
     // switch it to standard speed. Checked here because this is where the loaded
@@ -608,17 +612,18 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     // Memoize the turn-grouping -> rows pipeline. buildSections walks the entire
     // held transcript, so recomputing it on every scroll-driven redraw is the
     // dominant scroll cost on a long conversation. Its output depends only on the
-    // held events and the idle flag -- captured by the render version (bumped on
-    // any data mutation) plus the idle flag -- so a scroll-only redraw reuses the
-    // cached rows. The grouping (steps, decoration, skill expansions, auth-error
-    // hiding) is produced by the same functions on the same inputs, so the
-    // rendered structure is identical to recomputing.
-    const renderKey = `${chatId}|${getRenderVersion(chatId)}|${agentIsIdle ? 1 : 0}`;
+    // held events, the settled flag and the running compaction -- captured by the
+    // render version (bumped on any data mutation) plus those two -- so a
+    // scroll-only redraw reuses the cached rows.
+    const renderKey =
+      `${chatId}|${getRenderVersion(chatId)}|${tailTurnSettled ? 1 : 0}|` +
+      `${liveCompaction === null ? "-" : (liveCompaction.cause ?? "unknown")}`;
     if (renderKey !== rowsCacheKey) {
       // Both structure and decoration come from the transcript walk; there is no
       // side-channel enrichment. The same pipeline feeds the subagent view, so a
       // subagent's "View conversation" renders an identical progress timeline.
-      cachedRows = buildConversationRows(chatId, events, agentIsIdle);
+      if (liveCompaction === null) closeRunningCompactionChips();
+      cachedRows = buildConversationRows(chatId, events, tailTurnSettled, liveCompaction);
       rowsCacheKey = renderKey;
     }
     const rows = cachedRows;

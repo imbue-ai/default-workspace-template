@@ -8,7 +8,7 @@
  *   - "dormant" -> the process isn't running                 (grey)
  *
  * This is distinct from the chat's activity indicator (THINKING / TOOL_RUNNING /
- * IDLE), which only describes work *within* a running process. The liveness dot
+ * COMPACTING / IDLE), which only describes work *within* a running process. The liveness dot
  * describes the process itself.
  *
  * In this all-local deployment every non-running state is equally recoverable --
@@ -16,6 +16,8 @@
  * UNKNOWN -- because sending the agent a message revives it. So they all read as
  * "dormant" rather than as an error; the dot has no "dead"/red category.
  */
+import { isWorkingActivityState } from "../models/activityState";
+
 export type AgentLivenessCategory = "active" | "waiting" | "dormant";
 
 // Lifecycle states in which the claude process is up and actively working.
@@ -26,9 +28,6 @@ const ACTIVE_STATES: ReadonlySet<string> = new Set(["RUNNING", "RUNNING_UNKNOWN_
 // Lifecycle states in which the claude process is alive, whether working
 // (RUNNING) or idle (WAITING). Outside this set the process is not running.
 const ALIVE_STATES: ReadonlySet<string> = new Set(["RUNNING", "RUNNING_UNKNOWN_AGENT_TYPE", "WAITING"]);
-
-// Activity states that mean the agent is mid-turn (see ActivityIndicator).
-const WORKING_ACTIVITY_STATES: ReadonlySet<string> = new Set(["THINKING", "TOOL_RUNNING"]);
 
 /** True iff ``state`` POSITIVELY says the agent process is dead.
 
@@ -75,5 +74,5 @@ export function effectiveLifecycleState(state: string, activity: string | null):
   if (activity === null) {
     return state;
   }
-  return WORKING_ACTIVITY_STATES.has(activity) ? "RUNNING" : "WAITING";
+  return isWorkingActivityState(activity) ? "RUNNING" : "WAITING";
 }

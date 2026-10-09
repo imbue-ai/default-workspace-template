@@ -6,7 +6,9 @@ from pydantic import Field
 from pydantic import SecretStr
 
 from imbue.chat.activity_state import ActivityState
+from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.chat_autocompact import ChatAutocompactState
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_settings import ChatSettings
@@ -168,6 +170,12 @@ class FastModeStateResponse(FrozenModel):
     state: ChatFastModeState = Field(description="The chat's fast mode")
 
 
+class AutocompactStateResponse(FrozenModel):
+    """Response from GET and PUT /api/chats/<chat_id>/autocompact: the chat's idle compaction setting."""
+
+    state: ChatAutocompactState = Field(description="The chat's idle compaction setting")
+
+
 class AttachmentUploadResponse(FrozenModel):
     """Response from the chat attachment upload endpoint."""
 
@@ -311,8 +319,8 @@ class AgentStateItem(FrozenModel):
         default=None,
         description=(
             "Per-agent chat activity state value (THINKING / TOOL_RUNNING / "
-            "IDLE), or None when no activity tracking is available for this "
-            "agent."
+            "COMPACTING / IDLE), or None when no activity tracking is available "
+            "for this agent."
         ),
     )
     model_choice: ModelChoice | None = Field(
@@ -519,7 +527,12 @@ class ActiveAgentSnapshot(FrozenModel):
     harness: HarnessType = Field(description="The harness the active agent runs")
     account_id: str | None = Field(description="The account the active agent is bound to (its ``account`` label)")
     state: str = Field(description="The active agent's mngr lifecycle state")
-    activity_state: ActivityState | None = Field(description="THINKING / TOOL_RUNNING / IDLE, or None when untracked")
+    activity_state: ActivityState | None = Field(
+        description="THINKING / TOOL_RUNNING / COMPACTING / IDLE, or None when untracked; COMPACTING wins over a turn"
+    )
+    compaction_cause: CompactionCause | None = Field(
+        description="Why the agent is compacting while ``activity_state`` is COMPACTING; None otherwise or when unknown"
+    )
     model_choice: ModelChoice | None = Field(description="The live model/effort/fast selection, or None")
     queued_messages: tuple[QueuedMessageState, ...] = Field(description="The harness queue, in enqueue order")
     shoulder_tap_available: bool = Field(description="Whether something is queued and no send is in flight")
@@ -601,7 +614,7 @@ class CreateChatRequest(FrozenModel):
         default_factory=dict,
         description="Extra labels for the chat's agent (an ``auto_open`` that surfaces its window, say); "
         "the labels the app sets itself (``APP_OWNED_LABEL_KEYS``: ``user_created``, ``display_name``, "
-        "``account``, ``project``, ``chat_id``, ``chat_seq``) are refused, and a chat minted "
+        "``account``, ``project``, ``chat_id``, ``chat_seq``, ``autocompact``) are refused, and a chat minted "
         "earlier keeps the ones it was minted with",
     )
     is_installation_check_skipped: bool = Field(

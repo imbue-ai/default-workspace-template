@@ -372,6 +372,206 @@ restart neither renames a named chat nor retries past the limit. A harness with
 no `OneShotCompletion` (Pi, Antigravity, OpenCode) keeps the minted name, and a
 secondary chat names nothing.
 
+## Compaction
+
+Compaction replaces a chat's conversation context with a summary the agent
+carries on from. The chat app compacts idle chats on its own, shows a compaction
+while it runs, and shows each one in the transcript as two chips that say why it
+happened.
+
+**Idle compaction.** A provider caches the prompt a chat sends, so a message sent
+while the cache is warm pays a fraction of the price for the context it repeats.
+The cache expires after a fixed idle time (60 minutes for Claude, 30 for Codex,
+and for Pi 30 on an OpenAI model and 60 otherwise), and the next message pays to
+cache the whole context again. Idle compaction compacts a long chat just before
+that happens, while reading its context is still cheap, so the next message
+caches a short summary instead; the Auto-compact submenu sums it up as "Saves
+~50% by compacting right before the cache expires." The chat app's sweep
+(`autocompact.py`) runs every 60 seconds and hands the running chats that have
+Auto-compact on to mngr's autocompact plugin, in process
+(`compact_stale_agents_by_name`). The plugin compacts a chat that has been idle
+for its cache TTL minus 3 minutes and holds more than 200,000 context tokens,
+once per idle period: a compacted chat is not compacted again until it finishes
+another turn. Workers (`agent_created=true`) and the primary agent are never
+passed to it, a secondary chat app runs no sweep, and with no chat opted in the
+sweep does no work at all. The plugin's rules are in its README in the mngr repo
+(`libs/mngr_autocompact/README.md`); the cron-driven `mngr autocompact run` it
+describes is not used here, since the sweep is the timer.
+
+Idle compaction applies to the harnesses mngr can compact: Claude, Codex and Pi
+(`supports_compaction` in `harnesses/registry.py`, shipped on `/api/harnesses`).
+Antigravity and OpenCode chats are never compacted, and their model menu has no
+Auto-compact row.
+
+**The Auto-compact setting.** Each chat is On or Off, chosen in the model menu's
+Auto-compact submenu, which ends with a "New chats start with" row whose On /
+Off segments show and set the workspace default, independent of the chat's own
+choice; a read-only menu shows the value alone. The setting is kept in the
+chat's folder as `autocompact.json` (`chat_autocompact.py`,
+`GET`/`PUT /api/chats/<chat-id>/autocompact` with `{"is_enabled": true}`). A
+new chat copies the workspace default (`autocompact_default` in
+`GET`/`PUT /api/settings`, stored at `data/.apps/chat/settings.json`; on unless
+changed) into that file at its first launch, so a later change of the default
+leaves existing chats alone, and the setting travels across handoffs and
+rebinds as fast mode does. A chat created before the setting existed has no
+file and follows the default until its toggle is changed. The chat's agent
+carries the setting as the label `autocompact=on|off`, stamped at create and
+handoff and rewritten by `mngr label` when the toggle changes (a stopped agent
+included), so `mngr list` shows it. The label is for display: the sweep reads
+the file, and a create request may not set the label.
+
+The setting controls idle compaction only. A chat with Auto-compact off is still
+compacted when its harness reaches its own context limit (Claude's
+auto-compaction, for one) and when the user types `/compact`. A `/compact` sent
+from a Claude chat's composer reaches Claude as its own command; a Codex chat
+sends it to the model as an ordinary message, and Pi's composer declines it with
+a notice pointing at the terminal. In a Claude chat the typed `/compact` shows
+as the user's own bubble: Claude Code records it as it is submitted, and records
+it again, as the command's expansion, once the compaction ends; the session
+parser emits the first as an ordinary user message and the second hidden, both
+marked `non_turn_tail`. The first one's arrival is what retires the composer's
+"Sending…" bubble for it, so a message queued behind the compaction shows once.
+
+**The "Compacting…" status.** While a chat's context is being compacted its
+activity state is `COMPACTING` (`compaction_status.py`, applied in
+`agent_manager.py`). Claude's marker (below) wins over a turn in progress,
+since Claude's own compaction runs mid-turn; a compaction the chat asked for
+shows only once the agent is idle, so a `/compact` queued behind a running turn
+leaves the turn's label up until the turn ends. A stopped agent still reads
+idle. It counts as working: the chat list shows the chat as working, and the
+composer stays open, with a message sent meanwhile queued behind the
+compaction. The activity strip above the composer names who started it, from
+the snapshot's `active_agent.compaction_cause` (set only while the state is
+`COMPACTING`; the cause rules are under "Why a chat was compacted"): "Compacting
+as requested…" (`manual`), "Compacting while idle…" (`idle`), "Compacting to
+free up context…" (`native`), or "Compacting…" when the cause is unknown. Once a
+message is queued, ", then replying…" takes the place of the ellipsis
+("Compacting while idle, then replying…"). The transcript shows the compaction's
+start chip (below) where its chips will land, named as the strip names it
+without the queued suffix, until the "Context was compacted" event arrives and
+the pair replaces it. The state comes from two signals:
+
+- mngr's Claude hooks: `PreCompact` writes a `compacting` marker in the agent's
+  state dir, and `PostCompact` removes it and writes `last_compaction.json`. The
+  chat app polls the marker every second. This covers every compaction of a
+  Claude chat: the sweep's, a `/compact` typed in the composer or the terminal,
+  and Claude's own. mngr writes hooks only when it creates an agent, so only
+  Claude agents created after the workspace's mngr gained these hooks have them
+  (a handoff's successor is a new agent; a rebind keeps the old one).
+- The chat app's own requests: the sweep's, on every harness, and a `/compact`
+  from a Claude chat's composer.
+
+So the status does not show for a Codex or Pi chat's own compaction, or for an
+older Claude agent's own compaction or a `/compact` typed in its terminal. It
+clears when the compaction finishes: the "Context was compacted" event arrives,
+or for Claude the marker goes or `last_compaction.json` records a finish after
+the request. One that never reports completion (cancelled, failed, or crashed)
+stops showing after 10 minutes (`PENDING_COMPACTION_TIMEOUT_SECONDS`), and a
+marker older than that is ignored. A request on a chat nobody has open, which no
+"Context was compacted" event can end, stops after 3 minutes instead
+(`UNWATCHED_PENDING_COMPACTION_TIMEOUT_SECONDS`) unless Claude's
+`last_compaction.json` ends it first. In a Claude chat the stop button stays up
+during a compaction: with no turn in flight it presses Claude's cancel chord
+(`M-q`, bound to `chat:cancel`, the action Escape takes), which cancels the
+compaction. When a chord or a restart was actually sent, the app drops the
+marker and its own pending request, since a cancelled compaction reports no
+completion; a stop that found nothing to interrupt leaves them alone. Codex and Pi interrupts do not
+cancel a compaction (`can_interrupt_compaction`), so their stop button is hidden
+while they compact. A `/compact` typed in a Claude chat's composer before the
+agent's first reply is declined with "Nothing to compact yet." (a 409 with
+`kind: nothing_to_compact`, which the composer shows as a declined-command
+notice, keeping the typed text) and never reaches Claude, which would refuse it
+only after its `PreCompact` hook had written the marker; a `/compact` Claude
+Code refuses for any other reason leaves the status up until the 10-minute
+timeout or the stop button clears it.
+
+**The compaction chips.** Each "Context was compacted" event shows as two chips
+in the same chip rows the agent's tool calls use (`compaction-chips.ts`): one for
+the start (lucide `package-open`), named as the activity strip names the running
+compaction, and one for the finish (lucide `package`), reading "Compacted".
+Where they land depends on who started it:
+
+- `native` (Claude's own compaction, mid-turn): at the event's position in the
+  turn, appended to the chip run beside it, or as a chip row of their own when
+  nothing chips beside them.
+- `manual` (a `/compact`): directly below the `/compact` bubble.
+- `idle` (the sweep): after the last turn, below its reply, or appended to its
+  last chip run when it ended with no reply.
+
+The event never opens a turn of its own. Either chip opens the tool chips'
+detail panel, titled with that chip's label and glyph: first a sentence saying
+why it ran, then, under a dashed rule, the summary in an output pane, clamped
+like a long tool output.
+
+**Why a chat was compacted.** The start chip is named for the event's
+`compaction_cause`, and the panel's sentence says why:
+
+- `idle` (the sweep): "Compacting while idle…"; "Compacted while idle to keep
+  replies fast and cheap. Change this under Auto-compact in the model menu."
+- `manual` (a `/compact`): "Compacting as requested…"; "Compacted because you
+  asked (`/compact`).", with `/compact` in the chat's inline-code style
+- `native` (Claude's own compaction, from the hook's recorded trigger):
+  "Compacting to free up context…"; "Your agent triggered compaction. You can
+  ask it about its current setting, or tell it to change it."
+- unknown: "Compacting…"; "Compacted to keep replies fast and cheap. Idle
+  compaction is under Auto-compact in the model menu."
+
+The finish chip reads "Compacted" whatever the cause, since the start chip
+beside it already names it.
+
+The sentence is composed by the page from the cause. It is not part of the
+event, so the transcript, the events API, and the agent never see it. A
+compaction whose event carries no summary, or one still running, opens on the
+sentence alone.
+
+The cause is what the app saw while the compaction ran, else what it asked for,
+else the request it recorded in the agent's `compaction_request.json` within the
+10 minutes before the compaction finished, else what a `last_compaction.json`
+written in the last five minutes says. The request file is what keeps a sweep's
+compaction reading `idle` after the app restarts, since the sweep's `/compact`
+leaves `last_compaction.json` saying manual. The cause is attached in memory as
+the event is stored and streamed, so a page reload keeps it, but a compaction
+older than 10 minutes when the app first reads it has no cause and shows the
+unknown text.
+
+Under the chip row holding the latest idle compaction of whichever chat is open,
+a notice says "Idle chats now compact automatically to keep replies fast and
+cheap. Turn this off per chat, or for new chats, under Auto-compact in the model
+menu." It shows until dismissed once, which records `is_autocompact_notice_shown`
+in the workspace settings.
+
+**Operating it.** The template turns idle compaction on with one line in
+`.mngr/settings.toml`, leaving every other plugin key at its default:
+
+```toml
+[plugins.autocompact]
+mode = "proactive_timer"
+```
+
+The sweep reads the mode on every tick, so one workspace switches idle
+compaction off, without a restart, by overriding that line in its local layer
+(`.mngr/settings.local.toml`); changing the template line switches it off for
+every workspace built from the template. The Auto-compact rows, the notice, and
+the status for other compactions do not know the mode and stay as they are.
+
+```bash
+mngr config set --scope local plugins.autocompact.mode disabled
+```
+
+To see the sweep compact a chat without a long conversation and an hour's wait,
+lower the plugin's thresholds the same way. `epsilon_offset_minutes` is how long
+before the cache expires the plugin compacts, so 60 makes any idle chat stale at
+the next tick after it finishes a turn. Remove the keys from
+`.mngr/settings.local.toml` afterwards.
+
+```bash
+mngr config set --scope local plugins.autocompact.min_context_tokens 0
+mngr config set --scope local plugins.autocompact.epsilon_offset_minutes 60
+```
+
+Each request, toggle change, and status change writes an `autocompact: ...` line
+to the chat service log (`/var/log/supervisor/chat-stderr.log`).
+
 ## Provider accounts
 
 Accounts live under `~/.minds/accounts` (`accounts.py`): one folder per
