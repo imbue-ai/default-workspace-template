@@ -39,6 +39,8 @@
 > * The inline-import ratchet in mngr's `imbue_common` stays as is. Library CLIs under `system/` follow #759's thin-client approach (stdlib only at the entry point); lazy imports are allowed only in skill and script packages, which that ratchet doesn't cover.
 > * The launch and packaging principles live in one new reference, `.agents/shared/references/running-python.md`, which the existing docs link to.
 > * The root `AGENTS.md` gets a one-line rule (one-offs use `uv run --no-sync`; never run a long-running process under `uv run`) linking to `running-python.md`.
+> * An agent never needs to know a script's tier: the rule (stated in `running-python.md` and the `AGENTS.md` line) is to run any script with `uv run --no-sync` unless the instruction being followed says `python3`. A bare script also runs fine under uv, while `python3` on a venv-tier script fails loudly with `ModuleNotFoundError`.
+> * A root check in PR 2 requires every `python3 <path>.py` in a tracked doc, prompt, config or script to name a bare entry point, so a missed rewrite of a script that moved to the venv tier is caught.
 > * The update worker gets the changelog entries plus one general migration reference inside the update-self skill, covering all of these Python-running changes (user skills, user services, `uv run` invocations). It has no mechanism for choosing which notes apply; MIND-486 (Backlog) is the later migration-doc system that will reshape it.
 > * Before/after timings of each changed entry point's `--help` (median of 15) are taken on the scratch workspace (before at the latest release, after once updated to the stack); workspace-1 is left alone.
 > * PR 2's manual checks include a real update-self run on a dev-tier imbue-cloud scratch workspace, started from the latest `minds-v*` release tag, with a planted user skill (PEP 723 scripts, plain `uv run` invocations) and a user service under `uv run`. It passes when the worker migrates both, everything starts, and the checks pass.
@@ -76,7 +78,11 @@
 - One-off commands in docs, skills and prompts read `uv run --no-sync ...`. None of them can trigger a relock or sync, so a drifted lock no longer gets silently rewritten mid-task.
 - Skill scripts keep their paths: `.agents/skills/launch-task/scripts/create_worker.py` still exists and still works.
   - Venv-tier skills run as `uv run --no-sync <path>`.
-  - Bare scripts still run as `python3 <path>`.
+  - Bare scripts still run as `python3 <path>` where config or docs call them.
+- An agent facing an arbitrary script doesn't need to know its tier. It runs `uv run --no-sync <path>` unless the instruction it follows says `python3`:
+  - a bare script also runs under uv (stdlib only), at about 40 ms more;
+  - `python3` on a venv-tier script fails loudly at its first third-party import;
+  - the contexts where bareness matters (hooks, pre-sync build steps, program lines, minds/CI/owner-exec calls, update-self's own flow) are wired in config, not typed by agents.
 - At session start:
   - If `uv.lock` has drifted from `pyproject.toml`, it is regenerated, and the agent is told (as context, not an instruction to act now) to include it in its next commit.
   - The venv is then synced `--frozen`.
@@ -151,8 +157,9 @@
   - long-running vs one-off;
   - `--no-sync` and why (measurements, the lock-rewrite hazard);
   - the import-cost rule;
+  - the agent rule: run any script with `uv run --no-sync` unless the instruction says `python3`;
   - PR 2 adds the tier rule.
-- **`AGENTS.md`**: one line ("run one-offs with `uv run --no-sync`; never run a long-running process under `uv run`") linking to `running-python.md`.
+- **`AGENTS.md`**: one line ("run scripts and other one-offs with `uv run --no-sync` unless the instruction says `python3`; never run a long-running process under `uv run`") linking to `running-python.md`.
 - **Changelog** entries per touched project (`system/changelog/`, `.agents/changelog/`, and app dirs if touched), checked with `system/scripts/check_changelog_entries.py` with `CHANGELOG_BASE_REF` set to the stack base.
 - **This plan file**, `docs/system/blueprint/scripts-as-packages/plan-scripts-as-packages.md`, lives on this branch.
 
@@ -205,6 +212,10 @@
     - imports each in a fresh interpreter (venv tier through the root venv; bare tier through system `python3 -S -s`);
     - fails if a listed heavy module (venv: pydantic, loguru, click, tenacity, httpx; bare: a short list of expensive stdlib modules such as `asyncio`) is in `sys.modules` and not declared.
   - `system/test_external_entry_paths.py`: each externally called stub path runs under `python3 -S -s ... --help` (or a harmless subcommand) and exits 0.
+  - `test_python3_invocations_name_bare_entry_points` (in `system/test_python_launch_rules.py`):
+    - every `python3 <path>.py` in tracked `.md`/`.toml`/`.sh`/`.conf`/`.json` files must name a file in the declared bare entry-point list;
+    - skips the same changelog and fixture paths as the plain-`uv run` check;
+    - catches docs still telling agents to run `notify_user.py`, `request_secret.py`, `preview_app.py`, `serve_isolated_instance.py` or `refresh_workspace_view.py` with `python3` after they move to the venv tier.
 - **`running-python.md`**: add the tier rule and the package layout. `type-skill.md` / `spec-summary.md` / `service-processes.md` link to it.
 - **Migration reference** `.agents/skills/update-self/references/python-packaging-migration.md`, covering:
   - how to convert a user skill (pyproject, package, dispatcher, `--no-sync` calls, bash-only dirs);
@@ -304,6 +315,10 @@
 - **External entry paths**:
   - each stub runs under `python3 -S -s ... --help` and exits 0;
   - a planted third-party import in a bare module makes it fail.
+- **`python3` invocations**:
+  - a planted `python3 .agents/skills/notify-user/scripts/notify_user.py` in a tmp doc fails the check;
+  - `python3 system/scripts/forward_port.py` passes;
+  - a planted `python3` call to a nonexistent path fails, so stale paths are caught too.
 - **Bare ty check**: a planted `import yaml` in a bare module gives `unresolved-import`, and 3.12-only syntax is accepted (the floor is 3.12).
 - **update-self guard**:
   - the stub run with a faked `sys.version_info < (3, 12)` (e.g. via `-c` with a patched `sys`, or a 3.11 interpreter if available) exits with the dedicated code and the message naming `migrate-workspace`;
