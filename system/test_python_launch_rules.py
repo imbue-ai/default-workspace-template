@@ -281,6 +281,11 @@ def test_changelogs_and_fixtures_are_not_scanned() -> None:
     assert not any(
         "/changelog/" in path or path.endswith("CHANGELOG.md") for path in scanned
     )
+    assert (
+        "system/apps/chat/imbue/chat/harnesses/antigravity/fixtures/README.md"
+        not in scanned
+    )
+    assert not any("fixtures" in Path(path).parts for path in scanned)
     assert "AGENTS.md" in scanned
 
 
