@@ -1,7 +1,7 @@
 """A pipe into tail/head is blocked unless the output reaching it can be read again."""
 
 import pytest
-from guard_testing import run_guard
+from workspace_scripts.guard_testing import run_guard
 
 
 def _run(command: str) -> int:

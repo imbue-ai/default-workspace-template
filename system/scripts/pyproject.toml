@@ -1,0 +1,24 @@
+[project]
+name = "workspace-scripts"
+version = "0.1.0"
+description = "The workspace's own scripts: a stdlib-only package the system python3 runs, and one that runs from the root venv"
+requires-python = ">=3.11"
+dependencies = [
+    # migrate_claude_auth reads the chat app's auth helpers and mngr's env-file parser.
+    "chat",
+    "imbue-mngr",
+    # docs_viewer renders the shell's docs.
+    "markdown>=3",
+    # smoketest_app drives the app it checks.
+    "playwright==1.58.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# workspace_bare_scripts runs under the system python3 with no venv, so it imports
+# only the standard library (and the stdlib-only libraries its entry scripts put
+# on sys.path); workspace_scripts runs from the root venv.
+packages = ["workspace_bare_scripts", "workspace_scripts"]

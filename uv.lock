@@ -24,27 +24,49 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "agents-shared",
     "app-manifest",
     "automations",
     "bootstrap",
     "browser",
+    "build-app-skill",
     "caretaker",
     "chat",
+    "connect-external-service-skill",
     "default-workspace-template",
     "env-converge",
     "getting-started",
     "github-sync",
     "host-backup",
+    "launch-task-skill",
+    "migrate-workspace-skill",
     "mngr-cli-contract",
+    "notify-user-skill",
     "oom-priority",
+    "publish-template-skill",
     "pytest-executable-tmp",
     "pytest-workspace-env",
     "share-gateway",
     "system-interface",
     "terminal-app",
     "tk-command-parsing",
+    "update-app-skill",
+    "update-self-skill",
+    "use-ai-integration-skill",
     "workspace-layout",
+    "workspace-scripts",
 ]
+
+[[package]]
+name = "agents-shared"
+version = "0.1.0"
+source = { editable = ".agents/shared/scripts" }
+dependencies = [
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pyyaml", specifier = ">=6" }]
 
 [[package]]
 name = "aiohappyeyeballs"
@@ -479,6 +501,21 @@ requires-dist = [
 dev = [{ name = "ty", specifier = "==0.0.85" }]
 
 [[package]]
+name = "build-app-skill"
+version = "0.1.0"
+source = { editable = ".agents/skills/build-app/scripts" }
+dependencies = [
+    { name = "tomlkit" },
+    { name = "workspace-scripts" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "tomlkit", specifier = ">=0.12" },
+    { name = "workspace-scripts", editable = "system/scripts" },
+]
+
+[[package]]
 name = "caretaker"
 version = "0.1.0"
 source = { virtual = "system/services/caretaker" }
@@ -797,6 +834,17 @@ dependencies = [
     { name = "loguru" },
     { name = "pydantic" },
 ]
+
+[[package]]
+name = "connect-external-service-skill"
+version = "0.1.0"
+source = { editable = ".agents/skills/connect-external-service/scripts" }
+dependencies = [
+    { name = "workspace-scripts" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "workspace-scripts", editable = "system/scripts" }]
 
 [[package]]
 name = "coolname"
@@ -1978,6 +2026,17 @@ wheels = [
 ]
 
 [[package]]
+name = "launch-task-skill"
+version = "0.1.0"
+source = { editable = ".agents/skills/launch-task/scripts" }
+dependencies = [
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pyyaml", specifier = ">=6" }]
+
+[[package]]
 name = "litellm"
 version = "1.93.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2016,6 +2075,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/3a/05/a1dae3dffd1116099471c643b8924f5aa6524411dc6c63fdae648c4f1aca/loguru-0.7.3.tar.gz", hash = "sha256:19480589e77d47b8d85b2c827ad95d49bf31b0dcde16593892eb51dd18706eb6", size = 63559, upload-time = "2024-12-06T11:20:56.608Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0c/29/0348de65b8cc732daa3e33e67806420b2ae89bdce2b04af740289c5c6c8c/loguru-0.7.3-py3-none-any.whl", hash = "sha256:31a33c10c8e1e10422bfd431aeb5d351c7cf7fa671e3c4df004162264b28220c", size = 61595, upload-time = "2024-12-06T11:20:54.538Z" },
+]
+
+[[package]]
+name = "markdown"
+version = "3.11"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f8/4f/700155c8c20d9e655dd0732b5fc3c7614f291b9148da271d7388e50bf774/markdown-3.11.tar.gz", hash = "sha256:180224db6aed87ba9ce1f2781ebcd5826253de8ff637112090e24b84502bbf9f", size = 485623, upload-time = "2026-09-25T13:46:23.473Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ec/1e/32971905a7ab47f8b66866ed949fa48b104ba1c4a6fa57794c4f2c4b2cb8/markdown-3.11-py3-none-any.whl", hash = "sha256:cd6c89e7eb308c8b332ed673215a52d208a43f8bacc030b1419376129408719e", size = 111296, upload-time = "2026-09-25T13:46:22.163Z" },
 ]
 
 [[package]]
@@ -2101,6 +2169,17 @@ sdist = { url = "https://files.pythonhosted.org/packages/d6/54/cfe61301667036ec9
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8", size = 9979, upload-time = "2022-08-14T12:40:09.779Z" },
 ]
+
+[[package]]
+name = "migrate-workspace-skill"
+version = "0.1.0"
+source = { editable = ".agents/skills/migrate-workspace/scripts" }
+dependencies = [
+    { name = "agents-shared" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "agents-shared", editable = ".agents/shared/scripts" }]
 
 [[package]]
 name = "mngr-cli-contract"
@@ -2232,6 +2311,17 @@ sdist = { url = "https://files.pythonhosted.org/packages/24/bf/d1bda4f6168e0b2e9
 wheels = [
     { url = "https://files.pythonhosted.org/packages/88/b2/d0896bdcdc8d28a7fc5717c305f1a861c26e18c05047949fb371034d98bd/nodeenv-1.10.0-py2.py3-none-any.whl", hash = "sha256:5bb13e3eed2923615535339b3c620e76779af4cb4c6a90deccc9e36b274d3827", size = 23438, upload-time = "2025-12-20T14:08:52.782Z" },
 ]
+
+[[package]]
+name = "notify-user-skill"
+version = "0.1.0"
+source = { editable = ".agents/skills/notify-user/scripts" }
+dependencies = [
+    { name = "workspace-scripts" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "workspace-scripts", editable = "system/scripts" }]
 
 [[package]]
 name = "oom-priority"
@@ -2555,6 +2645,11 @@ sdist = { url = "https://files.pythonhosted.org/packages/20/e5/16ff212c1e452235a
 wheels = [
     { url = "https://files.pythonhosted.org/packages/22/a6/858897256d0deac81a172289110f31629fc4cee19b6f01283303e18c8db3/ptyprocess-0.7.0-py2.py3-none-any.whl", hash = "sha256:4b41f3967fce3af57cc7e94b888626c18bf37a083e3651ca8feeb66d492fef35", size = 13993, upload-time = "2020-12-28T15:15:28.35Z" },
 ]
+
+[[package]]
+name = "publish-template-skill"
+version = "0.1.0"
+source = { editable = ".agents/skills/publish-template/scripts" }
 
 [[package]]
 name = "pycparser"
@@ -3828,6 +3923,26 @@ wheels = [
 ]
 
 [[package]]
+name = "update-app-skill"
+version = "0.1.0"
+source = { editable = ".agents/skills/update-app/scripts" }
+dependencies = [
+    { name = "app-manifest" },
+    { name = "workspace-scripts" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "app-manifest", editable = "system/libs/app_manifest" },
+    { name = "workspace-scripts", editable = "system/scripts" },
+]
+
+[[package]]
+name = "update-self-skill"
+version = "0.1.0"
+source = { editable = ".agents/skills/update-self/scripts" }
+
+[[package]]
 name = "urllib3"
 version = "2.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3848,6 +3963,17 @@ sdist = { url = "https://files.pythonhosted.org/packages/d4/6a/229b3fca37e146bc4
 wheels = [
     { url = "https://files.pythonhosted.org/packages/14/b4/55e951958017b6c6fc5f703dea6d27ec1af4a9714171aadfd83547e001be/urwid-4.0.8-py3-none-any.whl", hash = "sha256:0941d6a4c3c470f7c2ace709e2d62f32f02218076fbe695afa2fb230b0b91441", size = 305959, upload-time = "2026-07-26T11:28:52.709Z" },
 ]
+
+[[package]]
+name = "use-ai-integration-skill"
+version = "0.1.0"
+source = { editable = ".agents/skills/use-ai-integration/scripts" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2" }]
 
 [[package]]
 name = "watchdog"
@@ -4006,6 +4132,25 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [{ name = "ty", specifier = "==0.0.85" }]
+
+[[package]]
+name = "workspace-scripts"
+version = "0.1.0"
+source = { editable = "system/scripts" }
+dependencies = [
+    { name = "chat" },
+    { name = "imbue-mngr" },
+    { name = "markdown" },
+    { name = "playwright" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "chat", editable = "system/apps/chat" },
+    { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=9c98e0a334df19a484352f135559c984925c20ec" },
+    { name = "markdown", specifier = ">=3" },
+    { name = "playwright", specifier = "==1.58.0" },
+]
 
 [[package]]
 name = "wsproto"

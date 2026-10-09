@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-_SCRIPTS_DIR = Path(__file__).parent
+_SCRIPTS_DIR = Path(__file__).parent / "workspace_bare_scripts"
 _UPDATE_SELF_SCRIPTS_DIR = (
     Path(__file__).parents[2] / ".agents" / "skills" / "update-self" / "scripts"
 )
