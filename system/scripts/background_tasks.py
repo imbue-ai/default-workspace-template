@@ -40,7 +40,7 @@ the worktree belongs to, whose ``data/`` is the one the chat app reads.
 ``$MINDS_BACKGROUND_TASKS_DIR`` overrides it.
 
 Standard library only: skills run it as ``python3 system/scripts/...``, the hooks run it before
-any venv exists, and the apps and services that read the markers import it by path.
+any venv exists, and the apps, services and skill scripts that read the markers import it by path.
 """
 
 import argparse
