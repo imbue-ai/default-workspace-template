@@ -202,7 +202,3 @@ def main() -> None:
         build_hook_output(tool_input, command, emit_allow_decision=emit_allow_decision),
         sys.stdout,
     )
-
-
-if __name__ == "__main__":
-    main()
