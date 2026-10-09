@@ -197,7 +197,9 @@ def check_runnable(skill_dir: Path, runner: CommandRunner = _run_via_uv) -> str 
             ["uv", "run", "--no-sync", str(entry), "--help"],
             scripts_dir,
             runner,
-            f"`uv run --no-sync {entry} --help` (its imports or dependencies may be broken)",
+            f"`uv run --no-sync {entry} --help` (its imports or dependencies may be broken; "
+            "a ModuleNotFoundError for the skill's own package means it is not installed yet: "
+            "run `uv sync --all-packages`)",
         )
         if error is not None:
             return error
