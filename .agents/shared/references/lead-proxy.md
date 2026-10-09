@@ -293,6 +293,16 @@ On `type: status`:
   Its branch, worktree, and transcript stay for inspection. A timeout is
   the same once the liveness diagnosis says the worker is dead or wedged.
 
+- `name: no-update-needed` (or other skill-specific benign no-op terminals) --
+  the worker decided there was nothing to do. Close any tracking ticket and
+  destroy the worker exactly as on `done`, with nothing to merge; do not
+  invoke the failure flow. Optionally surface the one-sentence reason to the
+  user.
+
+In every status case the report is already in `<REPORTS_DIR>/consumed/` -- the
+`await` that printed it archived it there -- so the reports dir is clean for the
+next run with nothing for you to move.
+
 ### Resuming after the user overrides a failure
 
 When the user answers a `stuck` report with a decision (apply it anyway, an
@@ -310,16 +320,6 @@ intact, and `reply` blanks the `archived_at` label the stop set, so a later
 crash of it is restarted like any other
 (`.agents/skills/launch-task/references/dead-worker-recovery.md`). Then re-arm
 the `await` poll and end your turn.
-
-- `name: no-update-needed` (or other skill-specific benign no-op terminals) --
-  the worker decided there was nothing to do. Close any tracking ticket and
-  destroy the worker exactly as on `done`, with nothing to merge; do not
-  invoke the failure flow. Optionally surface the one-sentence reason to the
-  user.
-
-In every status case the report is already in `<REPORTS_DIR>/consumed/` -- the
-`await` that printed it archived it there -- so the reports dir is clean for the
-next run with nothing for you to move.
 
 ## When you are a worker yourself
 
