@@ -603,7 +603,11 @@ def test_every_desktop_holds_one_pinned_window_per_pinned_app_and_a_new_desktop_
     assert born["app"] == "buddy" and born["is_pinned"] is True and born["id"] != pinned["id"]
     # An open at the home path with the default focus behaviour finds the pinned window.
     focused = _open_window(client, "buddy", "/")
-    assert focused.status_code == 200 and focused.get_json() == {"window": pinned, "is_new": False}
+    assert focused.status_code == 200 and focused.get_json() == {
+        "window": pinned,
+        "is_new": False,
+        "has_no_desktop_window": False,
+    }
 
 
 def test_a_pinned_window_is_refused_a_close_by_the_route_and_by_the_op(
@@ -1047,7 +1051,11 @@ def test_windows_open_focus_locate_and_close_across_clients(client: FlaskClient,
 
     # The same app at the same path is answered rather than opened, and raised in the requesting client's layout.
     focused = _open_window(client, "terminal", "/new?workdir=%2Ftmp", client_id="c2")
-    assert focused.status_code == 200 and focused.get_json() == {"window": window, "is_new": False}
+    assert focused.status_code == 200 and focused.get_json() == {
+        "window": window,
+        "is_new": False,
+        "has_no_desktop_window": False,
+    }
     (restored,) = _placements(client, "c2")
     assert restored["window_id"] == window["id"] and restored["is_minimized"] is False
     another = _open_window(client, "terminal", "/new?workdir=%2Ftmp", if_present="new")
@@ -1562,7 +1570,10 @@ def test_every_app_record_the_browser_reads_carries_the_message_handlers_its_row
     registry_path = write_two_app_registry(
         tmp_path,
         registry_row_toml(
-            "buddy", "http://localhost:7002", message_handlers=[("minds:focus-chat", "/api/focus-chat")]
+            "buddy",
+            "http://localhost:7002",
+            message_handlers=[("minds:focus-chat", "/api/focus-chat")],
+            shown_message_handlers=[("open:file", "{path}?view", ("{path}/",))],
         ),
     )
     client_queue = broadcaster.register()
@@ -1572,7 +1583,10 @@ def test_every_app_record_the_browser_reads_carries_the_message_handlers_its_row
     expected = {
         "terminal": [],
         "files": [],
-        "buddy": [{"type": "minds:focus-chat", "path": "/api/focus-chat"}],
+        "buddy": [
+            {"type": "minds:focus-chat", "path": "/api/focus-chat", "show": None, "showing": []},
+            {"type": "open:file", "path": None, "show": "{path}?view", "showing": ["{path}/"]},
+        ],
     }
     listed = client.get("/api/inventory").get_json()["apps"]
     assert {app["name"]: app["message_handlers"] for app in listed} == expected
@@ -2154,6 +2168,24 @@ def test_an_op_that_shows_a_desktop_window_to_a_client_with_only_pop_outs_open_s
     _register_client(app, "c1", "home")
     focused = _op(client, "focus", {"window": opened.get_json()["window_id"], "client": "c1"}, None)
     assert focused.get_json()["has_no_desktop_window"] is False
+
+
+def test_a_page_open_for_a_client_with_only_pop_outs_open_says_the_window_waits_for_a_desktop_window(
+    client: FlaskClient, app: Flask
+) -> None:
+    """A link opened from a pop-out with the main window closed: the window is placed on the desktop, and the answer
+    says no desktop window shows it, so the page can tell the user; a minimized open is out of sight anyway."""
+    _record_client(app, "c1", "home")
+    _shell(app).broadcaster.set_pop_out_info(_shell(app).broadcaster.register(), "c1")
+
+    alone = _open_window(client, "files", "/notes/")
+    minimized = _open_window(client, "files", "/later/", minimized=True)
+    _register_client(app, "c1", "home")
+    with_desktop = _open_window(client, "files", "/notes/")
+
+    assert (alone.status_code, alone.get_json()["has_no_desktop_window"]) == (201, True)
+    assert minimized.get_json()["has_no_desktop_window"] is False
+    assert (with_desktop.status_code, with_desktop.get_json()["has_no_desktop_window"]) == (200, False)
 
 
 def test_the_inventory_lists_every_clients_popped_out_windows_with_their_ghosts(

@@ -110,6 +110,13 @@ written to `data/.state/share_gateway/status.json`:
 `state` is `up`, `retrying`, or `halted`. The Imbue Studio desktop client reads this
 file to explain a share that is not live yet; it is removed at unshare.
 
+The runner also records the share's domain (`SHARE_WORKSPACE_DOMAIN`) in
+`data/.state/share_domain` whenever it reads new materials, and never removes it:
+the shell builds each app's share address from it (`share_url` in its inventory,
+the `link` of `workspace-layout list`), and an address an agent wrote under it
+should keep opening the app's window after an unshare. A re-share keeps the
+domain.
+
 ## Grants
 
 `data/.secrets/share_grants.toml`:

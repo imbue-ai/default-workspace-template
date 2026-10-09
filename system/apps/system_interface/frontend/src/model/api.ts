@@ -15,6 +15,7 @@ import {
   parseDesktop,
   parseInventory,
   parseLayout,
+  parseMessageRelay,
   parseWallpaperListings,
   parseWindow,
 } from "./records";
@@ -30,6 +31,7 @@ import type {
   IfPresent,
   Inventory,
   Layout,
+  MessageRelay,
   Placement,
   Wallpaper,
   WallpaperListing,
@@ -104,6 +106,8 @@ export interface WindowOpenOutcome {
   readonly window: WindowRecord;
   /** True for an open, false when an existing window was answered and raised instead. */
   readonly isNew: boolean;
+  /** The client has only pop-outs open, so the window waits on its desktop for a desktop window. */
+  readonly hasNoDesktopWindow: boolean;
 }
 
 export async function openWindow(desktopId: string, request: WindowOpenRequest): Promise<WindowOpenOutcome> {
@@ -114,8 +118,15 @@ export async function openWindow(desktopId: string, request: WindowOpenRequest):
     if_present: request.ifPresent,
     minimized: request.isMinimized,
   };
-  const data = await postJson<{ window: unknown; is_new: boolean }>(desktopUrl(desktopId, "/windows"), body);
-  return { window: parseWindow(data.window), isNew: data.is_new === true };
+  const data = await postJson<{ window: unknown; is_new: boolean; has_no_desktop_window?: boolean }>(
+    desktopUrl(desktopId, "/windows"),
+    body,
+  );
+  return {
+    window: parseWindow(data.window),
+    isNew: data.is_new === true,
+    hasNoDesktopWindow: data.has_no_desktop_window === true,
+  };
 }
 
 /** Where a launch's page goes (post-launch-paths plan section 3.3): a new window, a window already at the path (else
@@ -300,12 +311,16 @@ export async function quitApp(appName: string): Promise<void> {
   await postJson<void>(apiUrl(`/api/apps/${encodeURIComponent(appName)}/quit`), {});
 }
 
-/** Ask the shell to post a message the Imbue Studio chrome sent this client's page to the apps registered for its type
- *  (contracts.md section 5.6); throws with the shell's detail when an app did not take it. */
+/** Ask the shell to deliver a message this client's page received, from the Imbue Studio chrome or from an app's frame
+ *  (``sender`` says which: ``embedder`` or the app), to the apps registered for its type (contracts.md section 5.6);
+ *  answers what each app did with it, and throws with the shell's detail when an app did not take it. */
 export async function relayEmbedderMessage(
   type: string,
   clientId: string,
   payload: Readonly<Record<string, unknown>>,
-): Promise<void> {
-  await postJson<unknown>(apiUrl("/api/embedder-messages"), { type, client_id: clientId, payload });
+  sender: string,
+): Promise<MessageRelay> {
+  return parseMessageRelay(
+    await postJson<unknown>(apiUrl("/api/embedder-messages"), { type, client_id: clientId, payload, sender }),
+  );
 }

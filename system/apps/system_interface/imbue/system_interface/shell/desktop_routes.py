@@ -3,6 +3,7 @@ and the verbs of the op route."""
 
 from collections.abc import Callable
 from collections.abc import Sequence
+from collections.abc import Set as AbstractSet
 from typing import Any
 from typing import Literal
 from typing import assert_never
@@ -67,6 +68,7 @@ from workspace_layout.primitives import SpecialWindow
 from workspace_layout.primitives import WallpaperKind
 from workspace_layout.primitives import WallpaperName
 from workspace_layout.primitives import WindowId
+from workspace_layout.primitives import WindowPage
 from workspace_layout.primitives import WindowPath
 from workspace_layout.primitives import WindowState
 from workspace_layout.records import ClientRecord
@@ -272,9 +274,16 @@ def remove_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
 
 def open_window(desktop_id: str) -> ResponseReturnValue:
     body = parse_request_body(WindowOpenRequest)
-    outcome = _shell().open_window(desktop_id, body)
+    shell = _shell()
+    outcome = shell.open_window(desktop_id, body)
     return (
-        jsonify({"window": _shell().window_view(outcome.window).model_dump(mode="json"), "is_new": outcome.is_new}),
+        jsonify(
+            {
+                "window": shell.window_view(outcome.window).model_dump(mode="json"),
+                "is_new": outcome.is_new,
+                "has_no_desktop_window": not body.minimized and _has_no_desktop_window(shell, body.client_id),
+            }
+        ),
         HTTP_CREATED if outcome.is_new else HTTP_OK,
     )
 
@@ -952,16 +961,33 @@ def _client_desktop_view(shell: ShellState, desktop: Desktop, client_id: ClientI
     )
 
 
-def _show(
-    shell: ShellState, arguments: ShowArgs, target: _DesktopOpTarget, requester: OpRequester | None
-) -> ResponseReturnValue:
-    """The ``show`` op: put the path of the app on the target client's screen, choosing the window by the rule
-    ``choose_show_target`` spells, and answer which way it went."""
-    app = arguments.app
+class ShowResult(FrozenModel):
+    """What a ``show`` did: the client and desktop the page is on, the window showing it, and which way it went."""
+
+    shown_on: _DesktopOpTarget = Field(description="The client, and the desktop the page is shown on")
+    window_id: WindowId = Field(description="The window that shows the page")
+    outcome: ShowOutcome = Field(description="Raised, navigated, pinned, or opened")
+    is_raised_in_own_window: bool = Field(
+        description="The window was popped out, so its own window was raised and it stayed out"
+    )
+    has_no_desktop_window: bool = Field(
+        description="The client's only open windows are pop-outs, so the page shown on the desktop waits for a "
+        "desktop window to open"
+    )
+
+
+def _show_page(
+    shell: ShellState,
+    app: AppName,
+    path: WindowPath,
+    showing: AbstractSet[WindowPath],
+    repoint: AbstractSet[WindowPage],
+    target: _DesktopOpTarget,
+    requester: OpRequester | None,
+) -> ShowResult:
+    """Put the path of the app on the target client's screen, choosing the window by the rule ``choose_show_target``
+    spells."""
     shell.require_app_entry(str(app))
-    path = arguments.path
-    showing = set(arguments.showing)
-    repoint = set(arguments.repoint)
     client_id = target.client_id
     others = [
         _client_desktop_view(shell, desktop, client_id)
@@ -1001,15 +1027,50 @@ def _show(
         path,
         choice.outcome.value,
     )
-    shown_on = _DesktopOpTarget(client_id=client_id, desktop=desktop)
-    notes = _PopOutNotes(
+    return ShowResult(
+        shown_on=_DesktopOpTarget(client_id=client_id, desktop=desktop),
+        window_id=window_id,
+        outcome=choice.outcome,
         is_raised_in_own_window=is_raised_in_own_window,
         has_no_desktop_window=not is_raised_in_own_window and _has_no_desktop_window(shell, client_id),
     )
+
+
+def _show(
+    shell: ShellState, arguments: ShowArgs, target: _DesktopOpTarget, requester: OpRequester | None
+) -> ResponseReturnValue:
+    """The ``show`` op: put the path of the app on the target client's screen and answer which way it went."""
+    result = _show_page(
+        shell, arguments.app, arguments.path, set(arguments.showing), set(arguments.repoint), target, requester
+    )
+    notes = _PopOutNotes(
+        is_raised_in_own_window=result.is_raised_in_own_window, has_no_desktop_window=result.has_no_desktop_window
+    )
     answer = ShowAnswer.model_validate(
-        {**dict(_answer_document(shell, shown_on, window_id, notes)), "window_id": window_id, "shown": choice.outcome}
+        {
+            **dict(_answer_document(shell, result.shown_on, result.window_id, notes)),
+            "window_id": result.window_id,
+            "shown": result.outcome,
+        }
     )
     return jsonify(answer.model_dump(mode="json"))
+
+
+def show_page_for_client(
+    shell: ShellState,
+    app: AppName,
+    page: WindowPath,
+    showing: Sequence[WindowPath],
+    client_id: ClientId,
+    requester: OpRequester,
+) -> ShowResult:
+    """The ``show`` op as a message handler's delivery runs it (desktop contracts.md section 5.6): a page of the
+    declaring app, for the client whose page sent the message, on that client's active desktop, repointing nothing.
+
+    Raises the op's own errors (a ShellError) when the page cannot be shown.
+    """
+    target = _resolve_target(shell, OpTarget(client=client_id), requester)
+    return _show_page(shell, app, page, set(showing), set(), target, requester)
 
 
 def _beside_anchor(

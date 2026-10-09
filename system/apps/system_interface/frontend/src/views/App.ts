@@ -939,6 +939,8 @@ export function App(): m.Component<AppAttrs> {
     uninstallContextMenu = installElementContextMenu({
       draft: (text) => void current.draftText(text),
       isDraftAvailable: () => true,
+      // A link of the shell's own chrome opens where a forwarded popup would.
+      openLink: (anchor) => void current.openLink(anchor.href, window.location.host, SHELL_APP_NAME),
       scope: (target) => shellReferenceScope(current, target.element),
       open: (rows, point) => {
         openMenuAt({ kind: "element", rows }, anchorForPoint(point.x, point.y));

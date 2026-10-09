@@ -17,6 +17,12 @@ import type {
   WindowOpenOutcome,
   WindowOpenRequest,
 } from "../model/api";
+import {
+  OPEN_FILE_MESSAGE,
+  OPEN_URL_MESSAGE,
+  classifyLink,
+  externalLinkMessageType,
+} from "@imbue/workspace-ui/src/links";
 import { StalePlacementsSaveError } from "../model/api";
 import {
   NO_DRAFT_APP_REASON,
@@ -30,6 +36,7 @@ import {
   textRowDisabledReason,
 } from "../model/launch";
 import { applyPresence } from "../model/Presence";
+import { labelForApp, shareDomainOf, windowAtBackendUrl, windowAtLocalAppHost } from "../model/pageUrl";
 import type {
   AppRecord,
   AvatarCatalog,
@@ -47,6 +54,7 @@ import type {
   Inventory,
   LaunchPath,
   Layout,
+  MessageRelay,
   PinStyle,
   Placement,
   PresentUser,
@@ -170,11 +178,26 @@ export interface DesktopApi {
   setEntryPresentation(clientId: string, app: string, presentation: EntryPresentation): Promise<ClientRecord>;
   fetchAvatars(): Promise<AvatarCatalog>;
   selectAvatar(design: string): Promise<void>;
-  relayEmbedderMessage(type: string, clientId: string, payload: Readonly<Record<string, unknown>>): Promise<void>;
+  relayEmbedderMessage(
+    type: string,
+    clientId: string,
+    payload: Readonly<Record<string, unknown>>,
+    sender: string,
+  ): Promise<MessageRelay>;
 }
 
-/** A message the Imbue Studio chrome sent this page: its type and its own fields. */
+/** A message this page received, from the Imbue Studio chrome or from an app's frame: its type and its own fields. */
 export type EmbedderMessage = { readonly type: string } & Readonly<Record<string, unknown>>;
+
+/** The sender the relay names for a message the Imbue Studio chrome sent (contracts.md section 5.6). */
+export const EMBEDDER_SENDER = "embedder";
+
+/** What a link to another workspace's app gets, since only that workspace can open it. */
+export const OTHER_WORKSPACE_LINK_NOTICE = "That link belongs to another workspace, so it cannot open here.";
+
+/** What a page shown or a window opened on this client's desktop gets while the client has only pop-outs open. */
+export const SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE =
+  "It opened on your desktop. Reopen the main Imbue Studio window to see it.";
 
 /** What the live-page layer does for the store, registered by that layer (it sits above the store). */
 export interface PageDriver {
@@ -226,6 +249,18 @@ const NULL_POP_OUT_BRIDGE: PopOutBridge = {
   reportDetachedWindows: () => undefined,
 };
 
+/** Where an external link no app of the workspace takes opens: through the Imbue Studio chrome
+ *  (``minds:open-external``), or in the user's own browser when no chrome can. */
+export interface OutsideLinkOpener {
+  openInEmbedder(url: string): void;
+  openInBrowser(url: string): void;
+}
+
+const NULL_OUTSIDE_LINK_OPENER: OutsideLinkOpener = {
+  openInEmbedder: () => undefined,
+  openInBrowser: () => undefined,
+};
+
 // The layout verbs that edit a placement, which two shells never apply. A solo shell (the pull-out-window spec,
 // section 7.5) is a view of one window, and the desktop's arrangement belongs to the client's main window; its
 // two exceptions are its own window's detach (the first load's fallback, when no desktop shell wrote it) and
@@ -252,6 +287,8 @@ export interface StoreDependencies {
   readonly reloadInterface: () => void;
   /** The pull-out conversation with the embedder; absent means no embedder. */
   readonly popOut?: PopOutBridge;
+  /** Where external links open when no app takes them; absent opens none. */
+  readonly outsideLinks?: OutsideLinkOpener;
   /** The one window this shell shows edge to edge (a pulled-out window's own desktop window), else null. */
   readonly soloWindowId?: string | null;
   /** Whether the chrome reopened the solo window's desktop window (a session restore, a reopen of the app, a
@@ -370,9 +407,12 @@ export class DesktopStore {
   private readonly appsLoaded: Promise<void>;
   private markAppsLoaded: () => void = () => undefined;
   private readonly popOut: PopOutBridge;
+  private readonly outsideLinks: OutsideLinkOpener;
   private readonly soloWindowId: string | null;
   /** Whether the embedder can pull a window out; off until it says so (an older chrome, a plain browser). */
   private canPopOut = false;
+  /** Whether the embedder opens external links outside the workspace for it; off until it says so. */
+  private canOpenLinksOutside = false;
   /** The detached set as last reported to the embedder, serialized, so a redraw reports nothing new. */
   private lastReportedDetached: string | null = null;
   /** Solo mode's first layout load is still owed: the one load that may re-detach the solo window. */
@@ -394,6 +434,7 @@ export class DesktopStore {
     this.state = initialDesktopState(deps.clientId, deps.modes);
     this.metrics = deps.metrics;
     this.popOut = deps.popOut ?? NULL_POP_OUT_BRIDGE;
+    this.outsideLinks = deps.outsideLinks ?? NULL_OUTSIDE_LINK_OPENER;
     this.soloWindowId = deps.soloWindowId ?? null;
     this.isSoloFirstLayoutPending = this.soloWindowId !== null;
     this.appsLoaded = new Promise((resolve) => {
@@ -422,6 +463,11 @@ export class DesktopStore {
     if (this.canPopOut === canPopOut) return;
     this.canPopOut = canPopOut;
     this.notifyListeners();
+  }
+
+  /** The embedder said whether it opens external links for the workspace (``minds:embedder-capabilities``). */
+  setCanOpenLinksOutside(canOpenLinksOutside: boolean): void {
+    this.canOpenLinksOutside = canOpenLinksOutside;
   }
 
   /** Whether a window move in progress has pulled ``windowId`` out of the chrome's window (it is hidden meanwhile). */
@@ -977,23 +1023,119 @@ export class DesktopStore {
     return launched !== null;
   }
 
-  /** A message from the Imbue Studio chrome: when an app registered for its type, the shell is asked, once, to post it
-   *  there with this client's id (contracts.md section 5.6); the app decides what it means. False when no app
-   *  registered for the type, the shell could not pass it on, this is a preview shell (whose backend refuses
-   *  the relay: the apps it names are the live ones), or this is a solo shell (whose client is the main window's,
-   *  so what an app did with the message would land there). */
-  async relayEmbedderMessage(message: EmbedderMessage): Promise<boolean> {
-    if (isPreviewShell() || this.soloWindowId !== null || !isEmbedderMessageHandled(this.state, message.type)) {
+  /** A message this page received, from the Imbue Studio chrome (``senderApp`` null) or from the frame of an app's
+   *  page (``senderApp`` that app): the shell is asked, once, to deliver it with this client's id to the apps
+   *  registered for its type (contracts.md section 5.6); the apps decide what it means. When it did not reach
+   *  every app, the user is told why in the relay's words. Answers whether it was relayed and reached every app.
+   *
+   *  A chrome message is relayed only when an app registered for its type, and never from a preview shell (whose
+   *  backend refuses the relay: the apps it names are the live ones) or a solo shell (whose client is the main
+   *  window's, which relays the chrome's messages itself). An app's message is always relayed, from a solo shell
+   *  too: what it shows lands on this client's desktop, in the main window (or stays in its own window when it is
+   *  popped out), and when the main window is closed the user is told to reopen it. */
+  async relayEmbedderMessage(message: EmbedderMessage, senderApp: string | null): Promise<boolean> {
+    const isFromEmbedder = senderApp === null;
+    if (
+      isFromEmbedder &&
+      (isPreviewShell() || this.soloWindowId !== null || !isEmbedderMessageHandled(this.state, message.type))
+    ) {
       return false;
     }
+    return this.deliverMessage(message, senderApp ?? EMBEDDER_SENDER);
+  }
+
+  /** Ask the shell to deliver ``message`` to the apps registered for its type, telling the user why when it did not
+   *  reach every one, or when a page it showed waits for a desktop window; answers whether it reached every app. */
+  private async deliverMessage(message: EmbedderMessage, sender: string): Promise<boolean> {
     const { type, ...payload } = message;
+    let relay: MessageRelay;
     try {
-      await this.deps.api.relayEmbedderMessage(type, this.deps.clientId, payload);
+      relay = await this.deps.api.relayEmbedderMessage(type, this.deps.clientId, payload, sender);
     } catch (error) {
-      console.warn(`[si] could not relay ${type} from the embedder`, error);
+      this.toast((error as Error).message);
       return false;
+    }
+    if (relay.deliveries.some((delivery) => delivery.has_no_desktop_window)) {
+      this.toast(SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE);
     }
     return true;
+  }
+
+  /** Open a link where it belongs in this workspace: a file in the File Viewer (``open:file``), a local URL on an
+   *  app's ``<label>.localhost`` (or ``<name>.localhost``) host, or else at its registered backend port, as that app's
+   *  window at its path, any other local URL in the workspace's browser
+   *  (``open:url``), one of this workspace's app addresses (on its share domain too) as that app's window at its
+   *  path, an external link in the app registered for its kind (``open:web``, ``open:mailto``, ``open:tel``) or else
+   *  outside the workspace. Another workspace's address is refused with a notice.
+   *  ``workspaceHost`` is this page's own host, which says which workspace it is; ``senderApp`` is the app whose page
+   *  asked, or null for the Imbue Studio chrome, and names the message it sends. */
+  async openLink(url: string, workspaceHost: string, senderApp: string | null): Promise<void> {
+    const target = classifyLink(url, workspaceHost, shareDomainOf(this.state.apps));
+    switch (target.kind) {
+      case "file":
+        await this.deliverMessage({ type: OPEN_FILE_MESSAGE, path: target.path }, senderApp ?? EMBEDDER_SENDER);
+        return;
+      case "local-url": {
+        const apps = openableApps(this.state);
+        const appWindow = windowAtLocalAppHost(apps, target.url) ?? windowAtBackendUrl(apps, target.url);
+        if (appWindow !== null) {
+          await this.focusOrOpenWindowAt(appWindow.app.name, appWindow.path);
+          return;
+        }
+        await this.deliverMessage({ type: OPEN_URL_MESSAGE, url: target.url }, senderApp ?? EMBEDDER_SENDER);
+        return;
+      }
+      case "app-address": {
+        const app = openableApps(this.state).find((candidate) => labelForApp(candidate) === target.label);
+        if (app === undefined) {
+          this.toast(`Nothing in this workspace is at ${target.url}`);
+          return;
+        }
+        await this.focusOrOpenWindowAt(app.name, target.path);
+        return;
+      }
+      case "other-workspace":
+        this.toast(OTHER_WORKSPACE_LINK_NOTICE);
+        return;
+      case "unroutable":
+        this.toast(`Nothing in this workspace is at ${url}`);
+        return;
+      case "external":
+        await this.openExternalLink(target.url, senderApp);
+        return;
+    }
+  }
+
+  /** An external link goes to the app registered for its kind; with none, it opens outside the workspace at once,
+   *  still inside the click that asked for it (a browser opens a new tab only then). One the Imbue Studio chrome
+   *  handed over (``senderApp`` null) goes back to it however early: a chrome that hands external links over opens
+   *  them too, and opening it here as a popup would only send it back again. */
+  private async openExternalLink(url: string, senderApp: string | null): Promise<void> {
+    const type = externalLinkMessageType(url);
+    if (isEmbedderMessageHandled(this.state, type)) {
+      await this.deliverMessage({ type, url }, senderApp ?? EMBEDDER_SENDER);
+    } else if (this.canOpenLinksOutside || senderApp === null) {
+      this.outsideLinks.openInEmbedder(url);
+    } else {
+      this.outsideLinks.openInBrowser(url);
+    }
+  }
+
+  /** Open a window of ``app`` at ``path``, raising one already there. A window there that this client has popped out
+   *  is raised in its own window, as an agent's ``open`` raises it, rather than pulled back onto the desktop: the
+   *  windows route's raise would bring it back, and its own window would close. */
+  private async focusOrOpenWindowAt(app: string, path: string): Promise<void> {
+    const desktopId = this.openingDesktopId();
+    const found = this.isPhoneLayout()
+      ? undefined
+      : this.state.desktops
+          .find((desktop) => desktop.id === desktopId)
+          ?.windows.find((window) => window.app === app && window.path === path);
+    if (found !== undefined && placementOf(this.state.layout, found.id).is_detached) {
+      this.showDetachedWindow(found.id);
+      return;
+    }
+    await this.openWindowAt(app, path, "focus");
   }
 
   /** Point this client's view of a window at ``path``, the way an agent's ``navigate`` does: the location is
@@ -1406,8 +1548,9 @@ export class DesktopStore {
   }
 
   /** Every open goes through the shell's one route; the answer is applied at once and the layout
-   *  refetched for the stamp the shell wrote. A phone opens out of sight and shows the window itself. Answers the
-   *  window id, or null when the shell refused. */
+   *  refetched for the stamp the shell wrote. A phone opens out of sight and shows the window itself. A window that
+   *  waits on the desktop because this client has only pop-outs open gets a notice to reopen the main window.
+   *  Answers the window id, or null when the shell refused. */
   async openWindowAt(app: string, path: string, ifPresent: IfPresent): Promise<string | null> {
     const desktopId = this.openingDesktopId();
     if (desktopId === null) return null;
@@ -1429,6 +1572,7 @@ export class DesktopStore {
       return null;
     }
     this.takeOpened(desktopId, outcome.window, outcome.isNew, isMinimized);
+    if (outcome.hasNoDesktopWindow) this.toast(SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE);
     return outcome.window.id;
   }
 
@@ -1484,7 +1628,8 @@ export class DesktopStore {
     if (!this.isPhoneLayout() && found.desktop.id !== this.state.activeDesktopId) {
       await this.switchDesktop(found.desktop.id);
     }
-    await this.openWindowAt(found.window.app, path, ifPresent);
+    if (ifPresent === "focus") await this.focusOrOpenWindowAt(found.window.app, path);
+    else await this.openWindowAt(found.window.app, path, ifPresent);
   }
 
   async closeWindow(windowId: string): Promise<void> {

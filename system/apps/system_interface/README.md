@@ -170,12 +170,33 @@ modules it shares with the app pages live in `system/libs/workspace_ui`, and
 `src/relay.ts` is the shell's side of the embedder relay (it forwards the
 framed pages' `minds:` messages to the minds chrome unchanged).
 
-A message the Imbue Studio chrome sends the shell's page reaches an app another way
-too: an app whose manifest registers its type (`[[message_handlers]]`) has it
-posted, by the shell's page once (never by a solo page, whose client is the
-main window's) and then by the shell's backend
-(`POST /api/embedder-messages`, `shell/embedder_messages.py`), to the route it
-named, with the client whose page received it. The shell reads no payload. An
+A message the shell's page receives, from the Imbue Studio chrome or from an
+app's page (`shell:message`),
+reaches every app whose manifest registers its type (`[[message_handlers]]`):
+the shell's page hands it once to the shell's backend (`POST
+/api/embedder-messages`, `shell/embedder_messages.py`), with the client whose
+page received it. A solo page hands on its apps' messages but never the
+chrome's, which the main window's page already relays. A `path` handler has the
+message posted to the route it named; a `show` handler has the shell build the
+page its template names from the message's fields and show it through the op
+route's `show` below, in-process. A message some app did not take becomes a
+notice carrying that app's reason, and a page shown while the client has only
+pop-outs open becomes a notice to reopen the main window. The shell's page
+also opens links itself: it announces `opensLinks` to the chrome and opens a
+`minds:open-link` (a popup Imbue Studio turned back into the workspace) or a
+page's `shell:open-link` by the shared link classifier (`workspace_ui`'s
+`links.ts`): a `file:` URL as `open:file`, a local URL on an openable app's
+`<label>.localhost` (or `<name>.localhost`) host, or else at its registered
+backend port, as that app's window (`windowAtLocalAppHost` and
+`windowAtBackendUrl` in `frontend/src/model/pageUrl.ts`), any other local URL
+as `open:url`, one of this workspace's app addresses (its addresses on the
+domain the workspace was last shared under included, read off the apps'
+`share_url`) as that app's window, and an external web, `mailto:`, or `tel:`
+link as `open:web`, `open:mailto`, or `open:tel` to the app registered for it,
+or else outside the workspace: back to a chrome that says it opens external
+links (`minds:open-external`), else in a new browser tab. An app's window already
+there that the client has popped out is raised in its own window, and one a
+link opens while the client has only pop-outs open gets the same notice. An
 app that wants a window for what it was told asks the op route's `show`, which
 takes the app, a path, the other paths that count as already showing it, and
 the pages whose windows it may point at the path, and picks the window itself:

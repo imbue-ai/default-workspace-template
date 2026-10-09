@@ -25,6 +25,7 @@ from app_manifest.primitives import LaunchParamName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
 from app_manifest.primitives import MessageType
+from app_manifest.primitives import PageTemplate
 from app_manifest.primitives import PreviewName
 from app_manifest.primitives import PriorityName
 from app_manifest.primitives import ProgramName
@@ -183,11 +184,32 @@ class LaunchPath(FrozenModel):
 
 
 class MessageHandler(FrozenModel):
-    """A message an app takes, and the route under its own origin the shell posts each one to
-    (desktop-interface contracts.md section 2)."""
+    """A message an app takes, and how the shell delivers it (desktop-interface contracts.md section 2): posted to a
+    route under the app's origin (``path``), or as a page of the app the shell puts on screen (``show``)."""
 
     type: MessageType = Field(description="The message type the app handles")
-    path: LaunchPathValue = Field(description="The route under the app origin the shell POSTs the message to")
+    path: LaunchPathValue | None = Field(
+        default=None, description="The route under the app origin the shell POSTs the message to"
+    )
+    show: PageTemplate | None = Field(
+        default=None, description="The page of the app the shell shows for the message, built from its fields"
+    )
+    showing: tuple[PageTemplate, ...] = Field(
+        default=(), description="The app's other pages, built the same way, that count as already showing it"
+    )
+
+    @model_validator(mode="after")
+    def _check_one_delivery(self) -> Self:
+        if (self.path is None) == (self.show is None):
+            raise InvalidManifestValueError(
+                f"message handler {str(self.type)!r} gives exactly one of 'path' (a route to post to) or 'show' "
+                "(a page to show)"
+            )
+        if self.showing and self.show is None:
+            raise InvalidManifestValueError(
+                f"message handler {str(self.type)!r} gives 'showing' only beside 'show'"
+            )
+        return self
 
 
 class AppReference(FrozenModel):
@@ -385,7 +407,6 @@ class AppManifest(FrozenModel):
     secrets: tuple[SecretDeclaration, ...] = Field(
         default=(), description="The secret files the app runs under, for publish-template to aggregate"
     )
-    handles: dict[str, Any] = Field(default_factory=dict, description="Reserved; must be absent or empty")
     preview: PreviewSpec = Field(description="How a throwaway instance boots for a preview (the scaffold convention by default)")
 
     @model_validator(mode="before")
@@ -412,8 +433,6 @@ class AppManifest(FrozenModel):
             raise InvalidManifestValueError("icon is required unless internal = true")
         if self.critical and self.stop_when_no_windows:
             raise InvalidManifestValueError("a critical app cannot declare stop_when_no_windows = true")
-        if self.handles:
-            raise InvalidManifestValueError("handles must be absent or empty in this release")
         reference_paths = [reference.path for reference in self.references]
         if len(set(reference_paths)) != len(reference_paths):
             raise InvalidManifestValueError(

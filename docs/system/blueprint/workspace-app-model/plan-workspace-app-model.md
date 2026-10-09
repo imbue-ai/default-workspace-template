@@ -142,7 +142,6 @@ mode = "focus"
 id = "new"                     # the id shortcuts and layout.py refer to
 label = "New File Viewer"      # every action is a create: POST /_instances with the action id, then open the returned instance
 
-[handles]                      # reserved for protocol and intent handlers (deferred, section 11); must be absent or empty
 ```
 
 An app with `instances = false` declares no actions; the shell synthesizes its one action, `open`, which focuses the app's tab.
@@ -424,7 +423,7 @@ After phase 11, an existing workspace is upgraded through update-self and exerci
 ## 11. Deferred
 
 - Stable app ids and app renaming; the home for an id, if ever needed, is the manifest.
-- Protocol and intent handlers; only the reserved `handles` table exists.
+- Protocol handlers. Intent handlers arrived later as the manifest's `message_handlers` (the workspace link routing plan), which replaced the reserved `handles` table.
 - Follow mode between clients; the client-tagged layout broadcasts are its prerequisite.
 - The fast switcher in the minds chrome; the inventory endpoint and deep links (6.7) are its prerequisites, and so is the chrome forwarding a deep link's query string to the shell frame, which no phase of this arc does.
 - Minimum terminal size across viewers.

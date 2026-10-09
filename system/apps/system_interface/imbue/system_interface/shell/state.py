@@ -103,6 +103,7 @@ from imbue.system_interface.shell.errors import WindowNotFoundError
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.identity import visiting_user_id
 from imbue.system_interface.shell.inventory import AppInventory
+from imbue.system_interface.shell.inventory import DEFAULT_SHARE_DOMAIN_PATH
 from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.launches import post_launch
 from imbue.system_interface.shell.launches import resolve_launch_destination
@@ -816,7 +817,12 @@ def build_shell_state(
     resolved_inventory = (
         inventory
         if inventory is not None
-        else AppInventory(registry_path=registry_path, broadcaster=broadcaster, on_registry_read=on_registry_read)
+        else AppInventory(
+            registry_path=registry_path,
+            broadcaster=broadcaster,
+            on_registry_read=on_registry_read,
+            share_domain_path=_under_repo_root(DEFAULT_SHARE_DOMAIN_PATH, repo_root),
+        )
     )
     desktops = DesktopStore(state_directory=state_directory)
     share_grants = ShareGrantsReader(

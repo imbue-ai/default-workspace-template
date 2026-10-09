@@ -240,14 +240,14 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
   // no terminal registered to offer.
   var terminalLabel = __TERMINAL_LABEL__;
 
-  // Mirrors deriveAppOrigin/workspaceHostCoordinate in
-  // system/libs/workspace_ui/src/origin.ts, which is canonical: an app origin is its label
+  // Mirrors deriveAppOrigin in system/libs/workspace_ui/src/origin.ts and workspaceHostCoordinate
+  // in system/libs/workspace_ui/src/app_contract.ts, which are canonical: an app origin is its label
   // prefixed onto the workspace COORDINATE -- the first host-<hex> (or, on a
   // workspace-keyed share domain, bare 32-hex share) label and everything
   // after it -- and never onto this page's host verbatim, which
   // would nest the app under the shell's own label and route back here.
   //
-  // It differs from origin.ts in one way, deliberately: no coordinate label
+  // It differs from them in one way, deliberately: no coordinate label
   // means no origin, rather than falling back to the host unchanged. The shell
   // can assume it is running inside a workspace; this page cannot (a direct
   // hit on the loopback port has no coordinate), and a made-up origin would

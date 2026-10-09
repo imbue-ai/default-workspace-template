@@ -14,8 +14,6 @@ from __future__ import annotations
 import contextlib
 import json
 import re
-import shutil
-import subprocess
 import threading
 import urllib.error
 import urllib.parse
@@ -47,9 +45,12 @@ from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.config import Config
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.identity import RequestIdentity
+from imbue.system_interface.shell.testing import DUFS_BINARY
+from imbue.system_interface.shell.testing import file_viewer_registry_row
 from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.shell.testing import message_handling_app
 from imbue.system_interface.shell.testing import registry_row_toml
+from imbue.system_interface.shell.testing import running_file_viewer
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.shell.testing import write_rollback_point
 from imbue.system_interface.shell.testing import write_stub_update_self_script
@@ -2397,11 +2398,123 @@ def test_a_message_from_the_minds_chrome_reaches_the_app_that_registered_its_typ
     assert received == [{"type": _FOCUS_CHAT_TYPE, "client_id": client_id, "chatId": _FOCUSED_CHAT_ID}]
 
 
+_OPEN_URL_HANDLER_PATH = "/api/open-url"
+_OPEN_FILE_HANDLER_PATH = "/api/open-file"
+# Links an app's page holds, none of which the page does anything about itself: a service running in the workspace,
+# a file of the workspace, and a page of its own app.
+_APP_PAGE_LINKS = (
+    '<a id="local" href="http://localhost:3999/preview?x=1">preview</a>'
+    '<a id="file" href="file:///home/user/plan%201.md">plan</a>'
+    '<a id="own" href="/elsewhere">elsewhere</a>'
+)
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_an_apps_links_open_by_the_app_contract_with_no_link_code_of_its_own(tmp_path: Path, page: Page) -> None:
+    """A page that only connects to the shell has its link clicks followed by the app contract: a local URL reaches
+    the app registered for ``open:url`` and a ``file:`` URL the one registered for ``open:file``, each with the client,
+    while the page stays where it is; a plain click on a page of its own app moves its window there. No click opens a
+    window or a browser window of its own."""
+    opened_urls: list[dict[str, Any]] = []
+    opened_files: list[dict[str, Any]] = []
+    with (
+        serve_app(message_handling_app(opened_urls, _OPEN_URL_HANDLER_PATH, 200)) as url_opener,
+        serve_app(message_handling_app(opened_files, _OPEN_FILE_HANDLER_PATH, 200)) as file_opener,
+    ):
+        rows = (
+            registry_row_toml(
+                "browser",
+                url_opener.http_url,
+                display_name="Browser",
+                message_handlers=[("open:url", _OPEN_URL_HANDLER_PATH)],
+            ),
+            registry_row_toml(
+                "viewer",
+                file_opener.http_url,
+                display_name="Viewer",
+                message_handlers=[("open:file", _OPEN_FILE_HANDLER_PATH)],
+            ),
+        )
+        with _running_e2e_server(tmp_path, extra_rows=rows) as server:
+            _land(page, server)
+            client_id = _client_id(page)
+            window_id = _broadcast_op(
+                server.base_url, "open", {"app": _STUB_APP_NAME, "path": "/", "client": client_id}
+            )["window_id"]
+            frame = _page_frame(page, window_id)
+            frame.evaluate(f"() => document.body.insertAdjacentHTML('beforeend', {json.dumps(_APP_PAGE_LINKS)})")
+
+            frame.locator("#local").click()
+            wait_for(
+                lambda: len(opened_urls) == 1,
+                timeout=15.0,
+                poll_interval=0.1,
+                error_message="the app registered for open:url was never posted the local link",
+            )
+            frame.locator("#file").click()
+            wait_for(
+                lambda: len(opened_files) == 1,
+                timeout=15.0,
+                poll_interval=0.1,
+                error_message="the app registered for open:file was never posted the file link",
+            )
+            assert frame.evaluate("() => location.pathname") == "/"
+
+            frame.locator("#own").click()
+            _wait_for_window_at(server.base_url, window_id, "/elsewhere")
+            assert [window["id"] for window in _windows(server.base_url)] == [window_id]
+    assert opened_urls == [{"type": "open:url", "client_id": client_id, "url": "http://localhost:3999/preview?x=1"}]
+    assert opened_files == [{"type": "open:file", "client_id": client_id, "path": "/home/user/plan 1.md"}]
+    assert page.context.pages == [page]
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_an_apps_script_popups_open_where_its_links_would(tmp_path: Path, page: Page) -> None:
+    """A page that only connects to the shell has its ``window.open`` calls routed by the app contract, in a plain
+    browser as in Imbue Studio: a local URL reaches the app registered for ``open:url`` with the client, a page of its
+    own app opens as a second window of the app, and the calls answer null. No browser tab opens."""
+    opened_urls: list[dict[str, Any]] = []
+    with serve_app(message_handling_app(opened_urls, _OPEN_URL_HANDLER_PATH, 200)) as url_opener:
+        rows = (
+            registry_row_toml(
+                "browser",
+                url_opener.http_url,
+                display_name="Browser",
+                message_handlers=[("open:url", _OPEN_URL_HANDLER_PATH)],
+            ),
+        )
+        with _running_e2e_server(tmp_path, extra_rows=rows) as server:
+            _land(page, server)
+            client_id = _client_id(page)
+            window_id = _broadcast_op(
+                server.base_url, "open", {"app": _STUB_APP_NAME, "path": "/", "client": client_id}
+            )["window_id"]
+            frame = _page_frame(page, window_id)
+
+            answer = frame.evaluate("() => window.open('http://localhost:3999/scripted?x=1', '_blank')")
+            wait_for(
+                lambda: len(opened_urls) == 1,
+                timeout=15.0,
+                poll_interval=0.1,
+                error_message="the app registered for open:url was never posted the scripted popup",
+            )
+            frame.evaluate("() => window.open('/scripted-own')")
+            wait_for(
+                lambda: len(_windows(server.base_url)) == 2,
+                timeout=15.0,
+                poll_interval=0.1,
+                error_message="the scripted popup to the app's own page never opened a window of the app",
+            )
+            other = next(window for window in _windows(server.base_url) if window["id"] != window_id)
+    assert answer is None
+    assert opened_urls == [{"type": "open:url", "client_id": client_id, "url": "http://localhost:3999/scripted?x=1"}]
+    assert (other["app"], other["path"]) == (_STUB_APP_NAME, "/scripted-own")
+    assert page.context.pages == [page]
+
+
 # The File Viewer (``system/apps/files``): dufs over a folder of the test's own, with the workspace's vendored and
 # patched frontend, registered as the ``files`` app. The workspace image installs dufs; elsewhere these tests skip.
 _FILES_APP_NAME = "files"
-_FILES_ASSETS_DIRECTORY = Path(__file__).resolve().parents[3] / "files" / "assets"
-_DUFS_BINARY = shutil.which("dufs")
 # dufs answers a client it takes for a script (curl and the like) with a bare "Not Found" instead of the assets'
 # ``404.html``, so a direct request says it is a browser.
 _BROWSER_USER_AGENT = (
@@ -2410,47 +2523,25 @@ _BROWSER_USER_AGENT = (
 
 
 @contextlib.contextmanager
-def _running_file_viewer(root: Path) -> Generator[str, None, None]:
-    """Run dufs over ``root`` as the File Viewer's program line runs it over ``/``; yields its URL."""
-    assert _DUFS_BINARY is not None
-    port = find_free_port()
-    url = f"http://127.0.0.1:{port}"
-    command = [_DUFS_BINARY, "--allow-all", "--bind", "127.0.0.1", "--port", str(port)]
-    command += ["--assets", str(_FILES_ASSETS_DIRECTORY), str(root)]
-    process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    try:
-        wait_for(
-            lambda: is_server_answering(url),
-            timeout=10.0,
-            poll_interval=0.1,
-            error_message=f"dufs did not come up at {url}",
-        )
-        yield url
-    finally:
-        process.terminate()
-        process.wait(timeout=5.0)
-
-
-@contextlib.contextmanager
 def _running_e2e_server_with_file_viewer(tmp_path: Path, root: Path) -> Generator[tuple[E2EServer, str], None, None]:
     """The shell over the stub app and a File Viewer serving ``root``; yields the shell and the viewer's URL."""
-    with _running_file_viewer(root) as viewer_url:
-        row = registry_row_toml(
-            _FILES_APP_NAME,
-            viewer_url,
-            display_name="File Viewer",
-            launch_paths=(("new", "File Viewer", "/"),),
-        )
-        with _running_e2e_server(tmp_path, extra_rows=(row,)) as server:
+    with running_file_viewer(root) as viewer_url:
+        with _running_e2e_server(tmp_path, extra_rows=(file_viewer_registry_row(viewer_url),)) as server:
             yield server, viewer_url
 
 
 def _file_viewer_frame(page: Page, window_id: str) -> Frame:
-    """The frame of a File Viewer window; it speaks only its location beacon, so there is no handshake to await."""
+    """The frame of a File Viewer window."""
     handle = page.locator(f'iframe[data-live-page="{window_id}"]').element_handle(timeout=15000)
     frame = handle.content_frame()
     assert frame is not None
     return frame
+
+
+def _await_file_viewer_shell(frame: Frame) -> None:
+    """Wait until the File Viewer page in ``frame`` has the shell's handshake, before which a click on a file's name
+    is dufs's own (a browser tab) rather than a window of the workspace."""
+    frame.wait_for_function("() => window.mindsShell?.hasShell() === true", timeout=15000)
 
 
 def _raise_window(page: Page, server: E2EServer, client_id: str, window_id: str) -> None:
@@ -2473,7 +2564,7 @@ def _wait_for_window_at(base_url: str, window_id: str, path: str) -> dict[str, A
     return _window_record(base_url, window_id)
 
 
-@pytest.mark.skipif(_DUFS_BINARY is None, reason="dufs is not installed (the workspace image installs it)")
+@pytest.mark.skipif(DUFS_BINARY is None, reason="dufs is not installed (the workspace image installs it)")
 @pytest.mark.timeout(120, func_only=False)
 def test_the_file_viewer_opens_files_in_workspace_windows_and_raises_one_already_on_the_page(
     tmp_path: Path, page: Page
@@ -2498,6 +2589,7 @@ def test_the_file_viewer_opens_files_in_workspace_windows_and_raises_one_already
         listing.get_by_role("link", name="notes", exact=True).click()
         _wait_for_window_at(server.base_url, listing_id, "/notes/")
         assert [window["id"] for window in _windows(server.base_url)] == [listing_id]
+        _await_file_viewer_shell(listing)
 
         listing.get_by_role("link", name="plan 1.txt", exact=True).click()
         (viewer,) = [window for window in _wait_for_window_count(server.base_url, 2) if window["id"] != listing_id]
@@ -2536,7 +2628,7 @@ def test_the_file_viewer_opens_files_in_workspace_windows_and_raises_one_already
         assert page.context.pages == [page], "a File Viewer click opened a browser window of its own"
 
 
-@pytest.mark.skipif(_DUFS_BINARY is None, reason="dufs is not installed (the workspace image installs it)")
+@pytest.mark.skipif(DUFS_BINARY is None, reason="dufs is not installed (the workspace image installs it)")
 @pytest.mark.timeout(90, func_only=False)
 def test_the_file_viewer_answers_a_missing_path_with_its_own_page_naming_it_and_the_nearest_folder(
     tmp_path: Path, page: Page

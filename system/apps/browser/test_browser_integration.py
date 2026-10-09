@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import http.server
 import json
+import queue
 import socket
 import threading
 import time
@@ -722,6 +723,82 @@ def test_a_new_tab_after_a_handoff_does_not_freeze_the_page_real_chromium(monkey
                         raise AssertionError(f"a page stopped answering after the handoff: {e}") from e
 
         asyncio.run(go())
+
+
+@pytest.mark.browser
+@pytest.mark.timeout(120)
+def test_a_page_asked_for_while_an_agent_drives_waits_on_the_overlay_and_opens_on_take_control_real_chromium() -> None:
+    # A link the human clicks in the workspace while an agent drives the browser must not open over the agent's
+    # work: it waits, named to the viewer, until the human cancels it (the tabs stay as they were) or takes
+    # control (it opens as a tab in front).
+    pages = _PageServer({"/": "<title>start</title>", "/held": "<title>held</title>", "/dropped": "<title>dropped</title>"})
+    with pages:
+        async def go() -> None:
+            manager = bsession.BrowserSessionManager()
+            async with _running_browser(manager) as browser:
+                assert browser._cdp is not None
+                await _only_page_session(browser, f"{pages.origin}/")
+                assert await browser.acquire("agent-7", "Plan") == "acquired"
+                cast = await browser.register_cast_queue()
+                before = {t["targetId"] for t in await browser._cdp.page_targets()}
+
+                await manager.open_url_for_human(f"{pages.origin}/dropped")
+                assert browser.cancel_pending_url()
+                await manager.open_url_for_human(f"{pages.origin}/held")
+                shown = [json.loads(frame) for frame in _drain(cast)]
+                assert [m["pending_url"] for m in shown if m.get("type") == "control"][-1] == f"{pages.origin}/held"
+                assert {t["targetId"] for t in await browser._cdp.page_targets()} == before
+
+                assert await browser.take_control()
+                created = await _new_page_target(browser, before, f"{pages.origin}/held")
+                assert await _eventually(lambda: _is_active(browser, created["targetId"]))
+                assert browser._pending_url is None
+                assert all(t["url"] != f"{pages.origin}/dropped" for t in await browser._cdp.page_targets())
+
+        asyncio.run(go())
+
+
+@pytest.mark.browser
+@pytest.mark.timeout(120)
+def test_a_page_asked_for_while_the_browser_launches_opens_in_front_once_it_is_up_real_chromium() -> None:
+    # A link the human clicks while Chromium is still starting is kept rather than dropped, and opens as a tab in
+    # front once the launch finishes.
+    pages = _PageServer({"/": "<title>start</title>", "/early": "<title>early</title>"})
+    with pages:
+
+        async def go() -> None:
+            manager = bsession.BrowserSessionManager()
+            try:
+                browser = await manager.create(None, f"{pages.origin}/")
+                assert await manager.open_url_for_human(f"{pages.origin}/early") is browser
+                assert browser._pending_url == f"{pages.origin}/early"
+                try:
+                    for task in list(manager._launch_tasks):
+                        await task
+                except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
+                    pytest.skip(f"Chromium unavailable in this environment: {e}")
+                _require_running(browser)
+
+                opened = await _new_page_target(browser, set(), f"{pages.origin}/early")
+                assert await _eventually(lambda: _is_active(browser, opened["targetId"]))
+                assert browser._pending_url is None
+            finally:
+                await manager.shutdown()
+
+        asyncio.run(go())
+
+
+def _drain(cast: "queue.Queue[str | None]") -> list[str]:
+    frames: list[str] = []
+    while not cast.empty():
+        frame = cast.get_nowait()
+        if frame is not None:
+            frames.append(frame)
+    return frames
+
+
+async def _is_active(browser: "bsession.LiveBrowser", target_id: str) -> bool:
+    return browser._active_target_id == target_id
 
 
 @pytest.mark.browser

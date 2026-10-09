@@ -386,7 +386,7 @@ A page that nests a further frame of its own (the chat root, section 9.1) relays
 
 ## 8. The manifest
 
-`app.toml` keeps `name`, `display_name`, `icon`, `critical`, `priority`, `program`, `internal`, `default_shortcut`, `launcher_rank`, `references`, `scope`, `wiring`, and `handles`.
+`app.toml` keeps `name`, `display_name`, `icon`, `critical`, `priority`, `program`, `internal`, `default_shortcut`, `launcher_rank`, `references`, `scope`, `wiring`, and `handles` (the reserved `handles` table was later removed by the workspace link routing plan, which made `message_handlers` the intent handlers).
 It drops `instances` and `instances_url`.
 `actions` becomes `launch_paths`: `[[launch_paths]] id, label, path, params`, where `path` is a path under the app origin and `params` is the documented list of query parameter names the shell may append.
 `default_shortcut.action` becomes `default_shortcut.launch`, naming a declared launch path id or `open`.
@@ -406,7 +406,7 @@ The chat app serves three kinds of page on its origin:
 - `POST /api/chats/intake` is where a text enters a chat from outside a chat page (the `new`, `send`, and `draft` launch paths, all POST): it creates or picks the chat and answers the root's path with it selected, `/?chat=<id>`, or with a pending intake for the root to finish (`/?intake=<token>`; the post-launch-paths plan section 3).
 - `/<chat-id>` is one chat and nothing else, exactly today's chat page, for direct launches (an agent's `open chat /<id>`, minds deep links, the inner frame); `/<chat-id>.<agent-id>.<session-id>` is a sub-agent view, also as today.
 
-The root and the chat page share an origin, so the root drives the inner frame directly: it sets its `src`, reads its document title, and forwards `shell:shown` and `shell:hidden` into it by calling into its window rather than by messaging.
+The root and the chat page share an origin, so the root drives the inner frame directly: it sets its `src`, reads its document title, and forwards `shell:shown` and `shell:hidden` into it by calling into its window rather than by messaging. The shell's handshake alone it posts down as the shell's own message, so the page's app contract knows a shell stands above it.
 The root carries one declared relay module: `minds:` messages the inner page posts to its parent go up to the shell, and `shell:focused` from the inner page becomes the root's own `shell:focused`.
 The root handles `shell:navigate` by changing the selection, never by reloading.
 Presence reporting keys on the chat the inner page shows, as it does today for a chat page.

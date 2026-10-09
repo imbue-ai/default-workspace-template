@@ -82,8 +82,9 @@ def stoppable_program_of(entry: AppInventoryEntry, entries: Sequence[AppInventor
 
 
 @pure
-def app_view(entry: AppInventoryEntry) -> InventoryApp:
-    """The ``app`` object of desktop contracts.md section 5.5."""
+def app_view(entry: AppInventoryEntry, share_domain: str | None) -> InventoryApp:
+    """The ``app`` object of desktop contracts.md section 5.5; ``share_domain`` is the domain the workspace was last
+    shared under, if it ever was, on which an app with a label has an address."""
     row = entry.row
     return InventoryApp(
         name=row.name,
@@ -101,6 +102,7 @@ def app_view(entry: AppInventoryEntry) -> InventoryApp:
         pin=row.pin,
         message_handlers=row.message_handlers,
         is_running=entry.is_running,
+        share_url=f"https://{row.label}.{share_domain}/" if share_domain is not None and row.label else None,
     )
 
 

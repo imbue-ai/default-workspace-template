@@ -2,21 +2,29 @@
 
 import json
 import queue
+import shutil
+import subprocess
 from collections.abc import Callable
+from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
+from contextlib import contextmanager
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any
 from typing import Final
 
 from app_manifest.manifest import LocationScope
+from app_manifest.manifest import load_manifest
 from app_manifest.primitives import AppName
 from app_manifest.registry import RegistryRow
+from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import read_registry
 from flask import Flask
 from flask import request
+from loguru import logger
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.primitives import ClientActivityKind
 from workspace_layout.primitives import ClientId
@@ -29,6 +37,7 @@ from workspace_layout.records import Desktop
 from workspace_layout.records import Window
 from workspace_layout.records import WindowPlacement
 
+from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.data_types import DesktopsDocument
 from imbue.system_interface.shell.desktop_document import DESKTOPS_FILE_VERSION
@@ -43,6 +52,8 @@ from imbue.system_interface.shell.state_files import write_json_atomic
 from imbue.system_interface.shell.update_notice import LAST_GOOD_RECORD_REL
 from imbue.system_interface.shell.update_notice import UPDATE_SELF_SCRIPT_REL
 from imbue.system_interface.testing import build_test_state
+from imbue.system_interface.testing import find_free_port
+from imbue.system_interface.testing import is_server_answering
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # The one clock the shell tests stamp records with.
@@ -81,6 +92,8 @@ def registry_row_toml(
     stop_when_no_windows: bool = False,
     # Each message handler as ``(type, path)``.
     message_handlers: Sequence[tuple[str, str]] = (),
+    # Each ``show`` message handler as ``(type, show, showing)``.
+    shown_message_handlers: Sequence[tuple[str, str, Sequence[str]]] = (),
 ) -> str:
     """One ``[[apps]]`` row as ``forward_port.py`` writes it, with the manifest-derived keys the shell reads.
     ``default_shortcut`` is ``(launch, mode)``."""
@@ -107,9 +120,12 @@ def registry_row_toml(
         )
     if window_closed_path is not None:
         lines.append(f'window_closed_path = "{window_closed_path}"')
-    if message_handlers:
-        handlers = ", ".join(f'{{ type = "{kind}", path = "{path}" }}' for kind, path in message_handlers)
-        lines.append(f"message_handlers = [{handlers}]")
+    if message_handlers or shown_message_handlers:
+        handlers = [f'{{ type = "{kind}", path = "{path}" }}' for kind, path in message_handlers]
+        for kind, show, showing in shown_message_handlers:
+            pages = ", ".join(f'"{page}"' for page in showing)
+            handlers.append(f'{{ type = "{kind}", show = "{show}", showing = [{pages}] }}')
+        lines.append(f"message_handlers = [{', '.join(handlers)}]")
     for launch_id, launch_label, launch_path in launch_paths:
         lines.append("[[apps.launch_paths]]")
         lines.append(f'id = "{launch_id}"')
@@ -305,12 +321,14 @@ def build_inventory(
     registry_path: Path,
     broadcaster: WebSocketBroadcaster,
     prober: Callable[[Sequence[tuple[str, str, str]]], dict[str, bool]] | None = None,
+    share_domain_path: Path | None = None,
 ) -> AppInventory:
     """An inventory that has read the registry and probed liveness once, with no watcher or sweep running."""
     inventory = AppInventory(
         registry_path=registry_path,
         broadcaster=broadcaster,
         liveness_prober=prober if prober is not None else FakeLivenessProber(),
+        share_domain_path=share_domain_path,
     )
     inventory.reload_registry()
     inventory.refresh_liveness()
@@ -484,6 +502,66 @@ def read_stub_update_self_calls(repo_root: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text().splitlines() if line]
+
+
+# The File Viewer (``system/apps/files``): dufs, a binary the workspace image installs, serving the workspace's
+# vendored and patched frontend. Tests that run the real viewer skip where dufs is not installed.
+FILES_APP_DIRECTORY: Final[Path] = Path(__file__).resolve().parents[4] / "files"
+DUFS_BINARY: Final[str | None] = shutil.which("dufs")
+_REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[6]
+# The workspace's own path, where the viewer's pages import the shell's app contract module from
+# (``files/assets/shell.js``): dufs serves the filesystem root, so the module's path there is its URL.
+_WORKSPACE_ROOT: Final[PurePosixPath] = PurePosixPath("/home/user/workspace")
+
+
+@contextmanager
+def running_file_viewer(root: Path) -> Iterator[str]:
+    """Run dufs over ``root`` as the File Viewer's program line runs it over ``/``, with the shell's built app contract
+    module at its workspace path under ``root``, where the viewer's pages import it; yields its loopback URL."""
+    assert DUFS_BINARY is not None, "dufs is not installed"
+    served_contract = root / _WORKSPACE_ROOT.relative_to("/") / SHELL_APP_CONTRACT_PATH
+    served_contract.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(_REPO_ROOT / SHELL_APP_CONTRACT_PATH, served_contract)
+    port = find_free_port()
+    url = f"http://127.0.0.1:{port}"
+    command = [DUFS_BINARY, "--allow-all", "--bind", "127.0.0.1", "--port", str(port)]
+    command += ["--assets", str(FILES_APP_DIRECTORY / "assets"), str(root)]
+    process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        wait_for(
+            lambda: is_server_answering(url),
+            timeout=10.0,
+            poll_interval=0.1,
+            error_message=f"dufs did not come up at {url}",
+        )
+        yield url
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            logger.warning("dufs at {} did not stop on SIGTERM; killing it", url)
+            process.kill()
+            process.wait(timeout=5.0)
+
+
+def file_viewer_registry_row(url: str) -> str:
+    """The File Viewer's registry row at ``url``, with the message handlers its own manifest declares."""
+    manifest = load_manifest(FILES_APP_DIRECTORY / "app.toml")
+    return registry_row_toml(
+        str(manifest.name),
+        url,
+        display_name=str(manifest.display_name),
+        launch_paths=(("new", "File Viewer", "/"),),
+        message_handlers=[
+            (str(handler.type), str(handler.path)) for handler in manifest.message_handlers if handler.path is not None
+        ],
+        shown_message_handlers=[
+            (str(handler.type), str(handler.show), [str(page) for page in handler.showing])
+            for handler in manifest.message_handlers
+            if handler.show is not None
+        ],
+    )
 
 
 def message_report(client_id: str, desktop_id: str, app: str, key: str, text: str) -> ClientActivityReport:

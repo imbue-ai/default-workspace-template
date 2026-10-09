@@ -3411,8 +3411,7 @@ def test_serves_non_image_file_as_download(client: FlaskClient, tmp_path: Path) 
     assert "q4-report.pdf" in disposition
     # Downloaded, not sniffed into an inline-executable type.
     assert response.headers.get("X-Content-Type-Options") == "nosniff"
-    # Cached forever like inline images; per-message ``requested_at`` keeps a new
-    # message's link URL distinct so it still fetches the current file.
+    # Cached forever like inline images.
     assert response.headers["Cache-Control"] == "public, max-age=31536000, immutable"
 
 

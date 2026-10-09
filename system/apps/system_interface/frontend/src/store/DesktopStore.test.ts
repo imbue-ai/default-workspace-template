@@ -17,7 +17,12 @@ import {
   windowRecord,
 } from "../testing/records";
 import type { GridCell } from "../model/records";
-import { DesktopStore, chooseInitialDesktopId } from "./DesktopStore";
+import {
+  DesktopStore,
+  OTHER_WORKSPACE_LINK_NOTICE,
+  SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE,
+  chooseInitialDesktopId,
+} from "./DesktopStore";
 import type { PopOutBridge, StoreDependencies } from "./DesktopStore";
 
 const METRICS = themeMetricsRecord();
@@ -42,7 +47,7 @@ function notices(): string[] {
 
 function makeStore(
   redraw: () => void = () => undefined,
-  extra: Pick<StoreDependencies, "popOut" | "soloWindowId" | "isSoloReopened"> = {},
+  extra: Pick<StoreDependencies, "popOut" | "soloWindowId" | "isSoloReopened" | "outsideLinks"> = {},
 ): DesktopStore {
   const store = new DesktopStore({
     clientId: CLIENT,
@@ -1291,51 +1296,297 @@ describe("desktops and shortcuts", () => {
 describe("embedder messages", () => {
   /** An app registered for ``minds:focus-chat``, as its manifest's ``[[message_handlers]]`` declares. */
   const HANDLING_APP = appRecord("buddy", {
-    message_handlers: [{ type: "minds:focus-chat", path: "/api/focus-chat" }],
+    message_handlers: [{ type: "minds:focus-chat", path: "/api/focus-chat", show: null }],
   });
 
-  it("relays a message an app registered for once, with this client and the message's own fields", async () => {
+  it("relays a chrome message an app registered for once, with this client and the message's own fields", async () => {
     const store = await startedStore();
     socket.deliver().onAppsUpdated([appRecord("docs"), HANDLING_APP]);
 
-    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" })).toBe(true);
+    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" }, null)).toBe(true);
 
     expect(api.relayedMessages).toEqual([
-      { type: "minds:focus-chat", clientId: CLIENT, payload: { chatId: "agent-7" } },
+      { type: "minds:focus-chat", clientId: CLIENT, payload: { chatId: "agent-7" }, sender: "embedder" },
     ]);
   });
 
-  it("relays nothing from a solo shell, whose client is the main window's", async () => {
+  it("relays no chrome message from a solo shell, whose client is the main window's", async () => {
     api.apps = [appRecord("docs"), appRecord("notes"), HANDLING_APP];
     const store = makeStore(() => undefined, { soloWindowId: "win-1" });
     await store.start(NO_LINK);
 
-    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" })).toBe(false);
+    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" }, null)).toBe(false);
 
     expect(api.relayedMessages).toEqual([]);
   });
 
-  it("relays nothing for a type no app registered for", async () => {
+  it("relays an app's message from a solo shell too, with the app as its sender", async () => {
+    api.apps = [appRecord("docs"), appRecord("notes"), HANDLING_APP];
+    const store = makeStore(() => undefined, { soloWindowId: "win-1" });
+    await store.start(NO_LINK);
+
+    expect(await store.relayEmbedderMessage({ type: "open:file", path: "/home/user/plan.md" }, "chat")).toBe(true);
+
+    expect(api.relayedMessages).toEqual([
+      { type: "open:file", clientId: CLIENT, payload: { path: "/home/user/plan.md" }, sender: "chat" },
+    ]);
+  });
+
+  it("tells the user to reopen the main window when what an app's message showed waits on the desktop", async () => {
+    api.apps = [appRecord("docs"), appRecord("notes"), HANDLING_APP];
+    const store = makeStore(() => undefined, { soloWindowId: "win-1" });
+    await store.start(NO_LINK);
+    api.relayDeliveries = [{ app: "files", has_no_desktop_window: false }];
+    expect(await store.relayEmbedderMessage({ type: "open:file", path: "/home/user/a.md" }, "chat")).toBe(true);
+    expect(notices()).toEqual([]);
+
+    api.relayDeliveries = [{ app: "files", has_no_desktop_window: true }];
+    expect(await store.relayEmbedderMessage({ type: "open:file", path: "/home/user/b.md" }, "chat")).toBe(true);
+
+    expect(notices()).toEqual([SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE]);
+  });
+
+  it("relays no chrome message of a type no app registered for", async () => {
     const store = await startedStore();
     socket.deliver().onAppsUpdated([appRecord("docs"), HANDLING_APP]);
 
-    expect(await store.relayEmbedderMessage({ type: "minds:close-active-tab" })).toBe(false);
+    expect(await store.relayEmbedderMessage({ type: "minds:close-active-tab" }, null)).toBe(false);
 
     expect(api.relayedMessages).toEqual([]);
   });
 
-  it("answers false and says why when the shell could not pass the message on", async () => {
+  it("tells the user why, in the relay's words, when a message did not reach every app", async () => {
     const store = await startedStore();
     socket.deliver().onAppsUpdated([HANDLING_APP]);
-    api.refusal = "buddy did not take it";
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    api.refusal = "Nothing in this workspace handles 'open:url'";
 
-    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" })).toBe(false);
+    expect(await store.relayEmbedderMessage({ type: "open:url", url: "http://localhost:3000/" }, "chat")).toBe(false);
+    api.refusal = "buddy did not take it: could not be reached";
+    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" }, null)).toBe(false);
 
-    expect(warn.mock.calls.map((call) => String(call[0]))).toEqual([
-      "[si] could not relay minds:focus-chat from the embedder",
+    expect(notices()).toEqual([
+      "Nothing in this workspace handles 'open:url'",
+      "buddy did not take it: could not be reached",
     ]);
-    warn.mockRestore();
+  });
+});
+
+describe("links Imbue Studio hands over", () => {
+  const COORDINATE = "host-0123456789abcdef0123456789abcdef.localhost:8421";
+  const SHELL_HOST = `system-interface-aa11bb22.${COORDINATE}`;
+  const FILES_APP = appRecord("files", { label: "files-ab12cd34" });
+
+  it("opens a file URL in the File Viewer through open:file, with its path decoded and sent as the page's app", async () => {
+    const store = await startedStore();
+
+    await store.openLink("file:///home/user/my%20notes/plan.md", SHELL_HOST, "chat");
+    await store.openLink("file:///home/user/workspace/data/", SHELL_HOST, null);
+
+    expect(api.relayedMessages).toEqual([
+      { type: "open:file", clientId: CLIENT, payload: { path: "/home/user/my notes/plan.md" }, sender: "chat" },
+      { type: "open:file", clientId: CLIENT, payload: { path: "/home/user/workspace/data" }, sender: "embedder" },
+    ]);
+  });
+
+  it("opens a local URL in the workspace's browser through open:url, sent as the embedder's", async () => {
+    const store = await startedStore();
+
+    await store.openLink("http://localhost:3000/app?x=1", SHELL_HOST, null);
+
+    expect(api.relayedMessages).toEqual([
+      { type: "open:url", clientId: CLIENT, payload: { url: "http://localhost:3000/app?x=1" }, sender: "embedder" },
+    ]);
+  });
+
+  it("opens a local URL at an app's registered backend port as that app's window at its path, not in the browser", async () => {
+    const store = await startedStore();
+    socket.deliver().onAppsUpdated([appRecord("docs"), appRecord("news", { url: "http://127.0.0.1:8095" })]);
+
+    await store.openLink("http://localhost:8095/story/7?ref=chat", SHELL_HOST, "chat");
+
+    expect(api.calls).toContain("openWindow:home:news:/story/7?ref=chat:focus");
+    expect(api.relayedMessages).toEqual([]);
+  });
+
+  it("opens a port-less <label>.localhost or <name>.localhost link as that app's window at its path and query", async () => {
+    const store = await startedStore();
+    socket
+      .deliver()
+      .onAppsUpdated([appRecord("docs"), appRecord("news", { label: "news-ab12cd34", url: "http://127.0.0.1:8095" })]);
+
+    await store.openLink("http://news-ab12cd34.localhost/story/7?ref=chat", SHELL_HOST, "chat");
+    await store.openLink("http://news.localhost:4000/front", SHELL_HOST, "chat");
+
+    expect(api.calls).toContain("openWindow:home:news:/story/7?ref=chat:focus");
+    expect(api.calls).toContain("openWindow:home:news:/front:focus");
+    expect(api.relayedMessages).toEqual([]);
+  });
+
+  it("opens a <x>.localhost link no openable app answers to in the browser", async () => {
+    const store = await startedStore();
+    socket
+      .deliver()
+      .onAppsUpdated([appRecord("docs"), appRecord("hidden", { label: "hidden-zz11yy22", internal: true })]);
+
+    await store.openLink("http://vite.localhost:5173/", SHELL_HOST, "chat");
+    await store.openLink("http://hidden-zz11yy22.localhost/", SHELL_HOST, "chat");
+    await store.openLink("http://a.docs.localhost/", SHELL_HOST, "chat");
+
+    expect(api.relayedMessages.map((message) => message.payload)).toEqual([
+      { url: "http://vite.localhost:5173/" },
+      { url: "http://hidden-zz11yy22.localhost/" },
+      { url: "http://a.docs.localhost/" },
+    ]);
+  });
+
+  it("opens a local URL at an internal app's port in the browser, an internal app having no window to open", async () => {
+    const store = await startedStore();
+    socket
+      .deliver()
+      .onAppsUpdated([appRecord("docs"), appRecord("hidden", { url: "http://127.0.0.1:8001", internal: true })]);
+
+    await store.openLink("http://localhost:8001/", SHELL_HOST, "chat");
+
+    expect(api.relayedMessages).toEqual([
+      { type: "open:url", clientId: CLIENT, payload: { url: "http://localhost:8001/" }, sender: "chat" },
+    ]);
+  });
+
+  it("opens one of this workspace's app addresses as that app's window at its path, raising one already there", async () => {
+    const store = await startedStore();
+    socket.deliver().onAppsUpdated([appRecord("docs"), FILES_APP]);
+
+    await store.openLink(`http://files-ab12cd34.${COORDINATE}/home/user/?view`, SHELL_HOST, null);
+
+    expect(api.calls).toContain("openWindow:home:files:/home/user/?view:focus");
+    expect(api.relayedMessages).toEqual([]);
+  });
+
+  it("opens the address of an app whose row has no label, which its windows are framed at by its name", async () => {
+    const store = await startedStore();
+    socket.deliver().onAppsUpdated([appRecord("docs"), appRecord("news")]);
+
+    await store.openLink(`http://news.${COORDINATE}/story/7`, SHELL_HOST, null);
+
+    expect(api.calls).toContain("openWindow:home:news:/story/7:focus");
+    expect(notices()).toEqual([]);
+  });
+
+  it("tells the user to reopen the main window when an app's window a link opened waits on the desktop", async () => {
+    api.apps = [appRecord("docs"), FILES_APP];
+    const store = makeStore(() => undefined, { soloWindowId: "win-1" });
+    await store.start(NO_LINK);
+    await store.openLink(`http://files-ab12cd34.${COORDINATE}/a/`, SHELL_HOST, "chat");
+    expect(notices()).toEqual([]);
+
+    api.hasNoDesktopWindow = true;
+    await store.openLink(`http://files-ab12cd34.${COORDINATE}/b/`, SHELL_HOST, "chat");
+
+    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([
+      "openWindow:home:files:/a/:focus",
+      "openWindow:home:files:/b/:focus",
+    ]);
+    expect(notices()).toEqual([SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE]);
+  });
+
+  it("refuses another workspace's address, and an address no app of this workspace is at, with a notice", async () => {
+    const store = await startedStore();
+    const shellApp = appRecord("system_interface", { label: "system-interface-aa11bb22", internal: true });
+    socket.deliver().onAppsUpdated([appRecord("docs"), FILES_APP, shellApp]);
+
+    await store.openLink(
+      "http://files-ab12cd34.host-fedcba9876543210fedcba9876543210.localhost:8421/",
+      SHELL_HOST,
+      null,
+    );
+    await store.openLink(`http://gone-zz99yy88.${COORDINATE}/`, SHELL_HOST, null);
+    // The workspace's own bare address, which names no app; the desktop app forwards it like an app address.
+    await store.openLink(`http://${COORDINATE}/`, SHELL_HOST, null);
+    // An internal app's address (here the desktop's own) has no window to open.
+    await store.openLink(`http://${SHELL_HOST}/`, SHELL_HOST, null);
+
+    expect(notices()).toEqual([
+      OTHER_WORKSPACE_LINK_NOTICE,
+      `Nothing in this workspace is at http://gone-zz99yy88.${COORDINATE}/`,
+      `Nothing in this workspace is at http://${COORDINATE}/`,
+      `Nothing in this workspace is at http://${SHELL_HOST}/`,
+    ]);
+    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
+  });
+
+  it("tells the user why a local URL could not open, in the relay's words", async () => {
+    const store = await startedStore();
+    api.refusal = "browser did not take it: Chromium is not installed";
+
+    await store.openLink("http://localhost:3000/", SHELL_HOST, null);
+
+    expect(notices()).toEqual(["browser did not take it: Chromium is not installed"]);
+  });
+
+  /** A started store whose links opened outside the workspace are recorded, by where they went. */
+  async function outsideRecordingStore(): Promise<{ store: DesktopStore; outside: string[] }> {
+    const outside: string[] = [];
+    const store = makeStore(() => undefined, {
+      outsideLinks: {
+        openInEmbedder: (url) => outside.push(`embedder:${url}`),
+        openInBrowser: (url) => outside.push(`browser:${url}`),
+      },
+    });
+    await store.start(NO_LINK);
+    return { store, outside };
+  }
+
+  it("opens an external link no app takes in the user's browser, and through Imbue Studio once it says it can", async () => {
+    const { store, outside } = await outsideRecordingStore();
+
+    await store.openLink("https://example.com/a", SHELL_HOST, "chat");
+    await store.openLink("mailto:someone@example.com", SHELL_HOST, "chat");
+    // One Imbue Studio handed over goes back to it, before it said so too.
+    await store.openLink("https://example.com/b", SHELL_HOST, null);
+    store.setCanOpenLinksOutside(true);
+    await store.openLink("tel:+15551234567", SHELL_HOST, "chat");
+
+    expect(outside).toEqual([
+      "browser:https://example.com/a",
+      "browser:mailto:someone@example.com",
+      "embedder:https://example.com/b",
+      "embedder:tel:+15551234567",
+    ]);
+    expect(api.relayedMessages).toEqual([]);
+    expect(notices()).toEqual([]);
+  });
+
+  it("hands an external link to the app registered for its kind, and opens nothing outside", async () => {
+    const { store, outside } = await outsideRecordingStore();
+    const mailer = appRecord("mailer", {
+      message_handlers: [{ type: "open:mailto", path: "/api/compose", show: null }],
+    });
+    socket.deliver().onAppsUpdated([appRecord("docs"), mailer]);
+    store.setCanOpenLinksOutside(true);
+
+    await store.openLink("mailto:someone@example.com", SHELL_HOST, "chat");
+    await store.openLink("https://example.com/a", SHELL_HOST, "chat");
+
+    expect(api.relayedMessages).toEqual([
+      { type: "open:mailto", clientId: CLIENT, payload: { url: "mailto:someone@example.com" }, sender: "chat" },
+    ]);
+    expect(outside).toEqual(["embedder:https://example.com/a"]);
+  });
+
+  it("opens an address on the workspace's share domain as that app's window, from a desktop shell", async () => {
+    const shareDomain = "0123456789abcdef0123456789abcdef.fedcba9876543210fedcba9876543210.us1.personal-imbue.com";
+    const { store, outside } = await outsideRecordingStore();
+    socket
+      .deliver()
+      .onAppsUpdated([
+        appRecord("docs", { share_url: `https://docs-zz11yy22.${shareDomain}/` }),
+        appRecord("files", { label: "files-ab12cd34", share_url: `https://files-ab12cd34.${shareDomain}/` }),
+      ]);
+
+    await store.openLink(`https://files-ab12cd34.${shareDomain}/home/user/?view`, SHELL_HOST, "chat");
+
+    expect(api.calls).toContain("openWindow:home:files:/home/user/?view:focus");
+    expect(outside).toEqual([]);
   });
 });
 
@@ -1662,6 +1913,48 @@ describe("pulled-out windows", () => {
     expect(calls).toEqual([["request", expect.objectContaining({ windowId: "win-1", title: "Docs" })]]);
     expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(true);
     expect(savedCalls()).toHaveLength(0);
+  });
+
+  it("raises a link's app window in its own window when it is popped out, rather than pulling it back", async () => {
+    api.apps = [appRecord("docs", { url: "http://127.0.0.1:8095" }), appRecord("notes")];
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [
+          windowRecord("win-1", "docs", "/a"),
+          windowRecord("win-2", "notes", "/b"),
+          windowRecord("win-3", "notes", "/c"),
+        ],
+      }),
+    ];
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [
+        placementRecord("win-1", { is_detached: true }),
+        placementRecord("win-2", { is_detached: true }),
+        placementRecord("win-3", { is_detached: true }),
+      ],
+    });
+    // The link is clicked in another pop-out, so the main window may be closed.
+    const { store, calls } = makePopOutStore("win-2");
+    await store.start(NO_LINK);
+
+    await store.openLink("http://localhost:8095/a", "system-interface.localhost", "notes");
+    expect(calls).toEqual([["request", expect.objectContaining({ windowId: "win-1", title: "Docs" })]]);
+    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
+    expect(storedPlacement("win-1")).toMatchObject({ is_detached: true });
+
+    // A new-window click on a link to the page's own app (its shell:open) raises that page's pop-out the same way.
+    await store.openPathFromWindow("win-2", "/c", "focus");
+    expect(calls).toEqual([
+      ["request", expect.objectContaining({ windowId: "win-1" })],
+      ["request", expect.objectContaining({ windowId: "win-3" })],
+    ]);
+    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
+    expect(storedPlacement("win-3")).toMatchObject({ is_detached: true });
+
+    // A page of the app no window is at still opens as a window.
+    await store.openLink("http://localhost:8095/other", "system-interface.localhost", "notes");
+    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual(["openWindow:home:docs:/other:focus"]);
   });
 
   it("a solo shell the size of a phone stays solo when the agent ops aimed at its client reach it", async () => {

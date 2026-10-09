@@ -147,11 +147,12 @@ export interface AppPin {
   readonly default_mode: EntryMode;
 }
 
-/** A message an app takes from the Imbue Studio chrome, and the route under its origin the shell posts it to
- *  (contracts.md section 2). */
+/** One message an app registered for (contracts.md section 2): its type, and either the route the shell posts it to
+ *  or the page template the shell shows for it (``null`` for the form it does not use). */
 export interface MessageHandler {
   readonly type: string;
-  readonly path: string;
+  readonly path: string | null;
+  readonly show: string | null;
 }
 
 /** One registered app as the shell lists it (contracts.md section 5.5). */
@@ -173,9 +174,11 @@ export interface AppRecord {
   readonly default_shortcut: DefaultShortcut | null;
   readonly launcher_rank: number | null;
   readonly pin: AppPin | null;
-  /** The messages from the Imbue Studio chrome the app takes, which the shell relays to it. */
+  /** The messages the app takes, from the Imbue Studio chrome or from other apps' pages, which the shell relays. */
   readonly message_handlers: readonly MessageHandler[];
   readonly is_running: boolean;
+  /** The app's address on the domain the workspace was last shared under, or null when it never was. */
+  readonly share_url: string | null;
 }
 
 /** Where a client keeps a floating entry: the top-left corner of its box, in fractions of the backdrop. */
@@ -212,6 +215,19 @@ export interface ClientArrival {
   readonly desktop_id: string | null;
   readonly created_desktop: Desktop | null;
   readonly replaced_desktop_name: string | null;
+}
+
+/** One app's part of the answer to a message every app took (contracts.md section 5.6), as far as a page reads it:
+ *  for a page shown, whether the client has only pop-outs open, so the page waits on its desktop for a desktop
+ *  window (false for a posted message). */
+export interface MessageDelivery {
+  readonly app: string;
+  readonly has_no_desktop_window: boolean;
+}
+
+/** What the shell answers a message every app took. */
+export interface MessageRelay {
+  readonly deliveries: readonly MessageDelivery[];
 }
 
 export interface WallpaperListing {
@@ -470,7 +486,8 @@ function parseMessageHandler(raw: unknown): MessageHandler {
   const record = asObject(raw, "message handler");
   return {
     type: asString(record.type, "message_handler.type"),
-    path: asString(record.path, "message_handler.path"),
+    path: record.path == null ? null : asString(record.path, "message_handler.path"),
+    show: record.show == null ? null : asString(record.show, "message_handler.show"),
   };
 }
 
@@ -494,6 +511,7 @@ export function parseAppRecord(raw: unknown): AppRecord {
     pin: parsePin(record.pin),
     message_handlers: asArray(record.message_handlers ?? [], "app.message_handlers").map(parseMessageHandler),
     is_running: record.is_running === true,
+    share_url: typeof record.share_url === "string" && record.share_url !== "" ? record.share_url : null,
   };
 }
 
@@ -615,6 +633,19 @@ export function parseInventory(raw: unknown): Inventory {
     apps: parseAppRecords(record.apps),
     clients: parseClientRecords(record.clients),
     workspace_name: asString(record.workspace_name ?? "", "inventory.workspace_name"),
+  };
+}
+
+export function parseMessageRelay(raw: unknown): MessageRelay {
+  const record = asObject(raw, "message relay");
+  return { deliveries: asArray(record.deliveries, "message relay.deliveries").map(parseMessageDelivery) };
+}
+
+function parseMessageDelivery(raw: unknown): MessageDelivery {
+  const record = asObject(raw, "message delivery");
+  return {
+    app: asString(record.app, "message delivery.app"),
+    has_no_desktop_window: asBoolean(record.has_no_desktop_window ?? false, "message delivery.has_no_desktop_window"),
   };
 }
 

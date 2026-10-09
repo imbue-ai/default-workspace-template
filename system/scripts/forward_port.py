@@ -25,7 +25,7 @@ and copies its static fields onto the row: ``display_name``, ``critical``,
 ``default_shortcut`` (launch and mode), ``launch_paths`` (id, label, path,
 the names of the params, and ``method``, ``presets``, ``text_param``, and
 ``draft_param`` when given), ``pin`` (path, and style, scope, and
-default_mode when given), ``window_closed_path``, and ``message_handlers`` (type and path);
+default_mode when given), ``window_closed_path``, and ``message_handlers`` (type, and path or show and showing);
 the icon is read from the file the manifest names, relative to the manifest. Every manifest
 field is authoritative on every call, so a re-registration with a changed manifest updates the row.
 Only what is copied from files is checked here (the name rule, the icon markup,
@@ -720,18 +720,29 @@ def _copied_param_names(
 def _copied_message_handler(
     handler: Any, path: Path
 ) -> tuple[dict[str, object] | None, str | None]:
-    """One manifest message handler as the registry row carries it: ``type`` and ``path``. Returns
+    """One manifest message handler as the registry row carries it: ``type`` and either ``path`` (the route the
+    shell posts the message to) or ``show`` (the page it shows) with ``showing`` when the manifest gives it. Returns
     ``(copied, None)``, or ``(None, error)`` when the entry is not shaped as the manifest requires."""
-    if not (
-        isinstance(handler, dict)
-        and isinstance(handler.get("type"), str)
-        and isinstance(handler.get("path"), str)
-    ):
+    if not (isinstance(handler, dict) and isinstance(handler.get("type"), str)):
+        return None, f"manifest {str(path)!r}: every message handler needs a string 'type'"
+    is_path_given = isinstance(handler.get("path"), str)
+    is_show_given = isinstance(handler.get("show"), str)
+    if is_path_given == is_show_given:
         return (
             None,
-            f"manifest {str(path)!r}: every message handler needs a string 'type' and 'path'",
+            f"manifest {str(path)!r}: every message handler needs exactly one of a string 'path' or 'show'",
         )
-    return {"type": handler["type"], "path": handler["path"]}, None
+    showing = handler.get("showing")
+    if is_path_given:
+        if showing is not None:
+            return None, f"manifest {str(path)!r}: a message handler gives 'showing' only beside 'show'"
+        return {"type": handler["type"], "path": handler["path"]}, None
+    copied: dict[str, object] = {"type": handler["type"], "show": handler["show"]}
+    if showing is not None:
+        if not (isinstance(showing, list) and all(isinstance(page, str) for page in showing)):
+            return None, f"manifest {str(path)!r}: a message handler's showing must be an array of strings"
+        copied["showing"] = list(showing)
+    return copied, None
 
 
 # The manifest arrays of tables copied onto the row, each with the copier for its entries.

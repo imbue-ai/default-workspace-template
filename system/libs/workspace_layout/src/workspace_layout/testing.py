@@ -131,6 +131,7 @@ def fake_app(
         pin=None,
         message_handlers=(),
         is_running=True,
+        share_url=None,
     )
 
 

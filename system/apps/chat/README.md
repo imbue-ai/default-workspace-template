@@ -53,9 +53,10 @@ observe`, its own supervised service) writes, and serves:
   awaiting its first message is launched through the provider chooser; the root
   then reports the selection alone, so a reload applies nothing again. The root
   drives its inner frames through the page's same-origin embed API
-  (`frontend/src/embedApi.ts`) and forwards their `minds:`, `shell:focused`, and
-  `shell:open` messages through `frontend/src/root/relay.ts`, the one module the
-  embed ratchet allows.
+  (`frontend/src/embedApi.ts`), and through `frontend/src/root/relay.ts`, the
+  one module the embed ratchet allows, hands them the shell's handshake and
+  forwards their `minds:`, `shell:focused`, `shell:open`, `shell:draft-text`,
+  `shell:message`, and `shell:open-link` messages.
 - `GET /<chat-id>` (and `/<chat-id>.<agent-id>.<session-id>` for a subagent view): the
   chat document, the built `chat.html` with the chat's ids, the workspace
   hostname, and the origin label of the terminal's pty (the terminal app's while
@@ -106,8 +107,26 @@ serving its last known list and reports degraded; the returning observer's
 opening snapshot replaces the folded view and the health recovers.
 
 The chat page talks to the shell only through the browser-side contract
-(`shell:open`, `shell:focused`, the handshake); the shell calls the chat only to
-post the messages its manifest registers for (`minds:focus-chat`).
+(`shell:open`, `shell:focused`, the handshake, and a clicked link's
+`shell:open-link`); the shell calls the chat only to post the
+messages its manifest registers for (`minds:focus-chat`).
+
+The chat has no link code of its own: a click on a message's link follows the
+app contract's link rule, as a click in any app does. Rendering a message
+(`frontend/src/markdown.ts`) only says what each link names: an absolute path
+becomes the file's `file:` URL, which the shell opens in the File Viewer
+(`open:file`); a local address (`localhost`, `127.0.0.1`, `[::1]`,
+`*.localhost`) the shell opens as the window of the app on whose
+`<label>.localhost` host or registered port it is, or else in the workspace's
+browser; an address on the workspace's share domain it opens as that app's
+window; an external web, mail, or phone link it hands to the app of the
+workspace registered for it, or else opens in the user's own browser or mail or
+phone app; and a relative path, a fragment, or another
+scheme is unwrapped to its text. A chat with no shell above it (opened on its
+own, or in a chat root opened on its own, which hands its pages no handshake)
+leaves its links to the browser, which opens a web, mail, or phone link in a new
+tab and does nothing for a file link: a browser does not follow a `file:` link
+from a web page.
 Sends are reported to the shell's client-activity route so agents can
 attribute a request to a client, and the app asks the shell for windows,
 through one client of the `workspace_layout` library that asks as the chat app

@@ -26,19 +26,30 @@ takes the frame to the folder itself (see below) and then reports that folder as
 its location, so the window's stored path follows and a reload reopens the
 folder.
 
+## Opening a linked file or folder
+
+The manifest also registers the `open:file` message (`[[message_handlers]]`,
+desktop-interface contracts.md section 5.6), which the shell sends when a link to
+a file or folder is clicked in any app (a `file:` URL the app contract hands it,
+such as a chat's link to an absolute path). The shell shows the path's
+`?view` page in a file viewer window: dufs shows a file there (text as
+read-only source, PDFs and media embedded, anything else offered as a
+download) and ignores `?view` on a folder, which lists as usual. A window
+already on that file or folder, as `/a/b`, `/a/b/`, or `/a/b/?view` (where a
+click through the listing leaves it), is raised instead of opening another.
+
 ## The vendored frontend
 
 Beyond the manifest (`app.toml`) and its icon (`icon.svg`), this directory
 holds `assets/`: a vendored copy of dufs's own frontend (its `assets/`
-directory at the pinned release, served via `--assets`), carrying six
-workspace patches -- a toolbox toggle that hides "system files" (any path
+directory at the pinned release, served via `--assets`), carrying seven
+workspace patches -- the app contract (below); a toolbox toggle that hides "system files" (any path
 whose name, or any segment of a search result's path, starts with `.`) by
 default, with the choice kept in the browser's localStorage; the `?path=`
 redirect (a rooted path on this origin, honoured before anything renders); a
-location beacon that posts the path being viewed and the name of the folder or
-file shown one hop up
-(`window.parent.postMessage({type: "shell:location", path, title})`, the message
-of desktop-interface contracts.md section 7; the title is the last segment of the
+location beacon that reports the path being viewed and the name of the folder or
+file shown (the contract's `location`, desktop-interface contracts.md section 7;
+the title is the last segment of the
 path shown, or `Files` at the served root) on each page load, so the workspace
 shell can reopen a file-viewer window where it was looking and title it after
 what it shows; file links that open in workspace windows; an Edit button on a
@@ -46,7 +57,17 @@ file's view page; and a phone layout (below). Hiding is purely client-side: the
 server lists everything, so flipping the toggle needs no reload and direct
 navigation into dotted paths keeps working. The patched blocks are marked with
 `minds patch` comments in `assets/index.js` / the `.toggle-hidden-files` and
-`.edit-file` controls in `assets/index.html`.
+`.edit-file` controls and the `shell.js` script in `assets/index.html`.
+
+The viewer speaks the app contract every app speaks (desktop-interface
+contracts.md section 7), so its links follow the contract's link rule too:
+`assets/shell.js`, ours rather than dufs's, imports the contract module the
+shell builds and connects, and the patched scripts act through that connection
+(`window.mindsShell`). Every other app serves the module at
+`/_static/app_contract.js`; the viewer cannot add a route to dufs, but dufs
+serves the filesystem root, so the script imports the module from its path in
+the workspace, which dufs revalidates on every load like any file. The "not
+found" page below loads it the same way, for its beacon.
 
 The phone layout (`docs/system/blueprint/desktop-interface/plan-phone-interface.md`,
 "The file viewer") takes over under 700px of the frame's own width, live across a
@@ -65,8 +86,9 @@ controls' handlers, the breadcrumb and search bar dufs built) and wraps `ready()
 rather than editing it, so re-applying it after a dufs bump is those two lines;
 its test then checks that the names it leans on still behave.
 
-A folder in a listing opens in place, as dufs ships it. A file does not: framed by
-the shell, a click on a file's name in the table opens the file's `?view` page (dufs's
+A folder in a listing opens in place, as dufs ships it. A file does not: once the
+shell has handed the page its handshake, a click on a file's name in the table
+opens the file's `?view` page (dufs's
 read-only view: text as source, PDFs, images, audio and video embedded, anything
 else offered as a download) in a file-viewer window of its own, and the Edit
 button opens its `?edit` page, each through the app contract's `shell:open`
@@ -74,8 +96,9 @@ with `ifPresent: "focus"` (contracts.md section 7), so a window already on that
 page is raised instead of a second one opening. A modified or middle click does
 the same. dufs renders these anchors with `target="_blank"`, which inside the
 desktop would open a bare browser window; the patch cancels the click and asks
-the shell instead, and leaves the anchors as they are, so opened on its own in a
-browser tab the viewer behaves as dufs ships it. A file's view page offers Edit
+the shell instead, and leaves the anchors as they are, so with no shell above it
+(opened on its own in a browser tab) the viewer behaves as dufs ships it. A
+file's view page offers Edit
 wherever the listing would (uploads and deletes allowed), and it takes that same
 page, and so its window, to the edit page.
 

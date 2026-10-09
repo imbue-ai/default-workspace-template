@@ -125,7 +125,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       //
       // The trailing "See attachment here: <markdown>" block is delivered to the
       // agent and kept visible in the bubble, where it renders as markdown so its
-      // images show inline and other files as download links. The backend classifier
+      // images show inline and other files as links that open in the File Viewer. The backend classifier
       // strips the block before its detectors run (harnesses/message_display.py),
       // so an appended attachment never changes the kind here either, and puts it back on the
       // body it hands a prompt, so splitting it off here still finds it.
