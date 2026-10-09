@@ -1496,12 +1496,15 @@ describe("links Imbue Studio hands over", () => {
 
     await store.openLink("https://example.com/a", SHELL_HOST, "chat");
     await store.openLink("mailto:someone@example.com", SHELL_HOST, "chat");
+    // One Imbue Studio handed over goes back to it, before it said so too.
+    await store.openLink("https://example.com/b", SHELL_HOST, null);
     store.setCanOpenLinksOutside(true);
-    await store.openLink("tel:+15551234567", SHELL_HOST, null);
+    await store.openLink("tel:+15551234567", SHELL_HOST, "chat");
 
     expect(outside).toEqual([
       "browser:https://example.com/a",
       "browser:mailto:someone@example.com",
+      "embedder:https://example.com/b",
       "embedder:tel:+15551234567",
     ]);
     expect(api.relayedMessages).toEqual([]);
