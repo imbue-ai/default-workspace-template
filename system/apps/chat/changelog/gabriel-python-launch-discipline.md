@@ -1,0 +1,1 @@
+The tool-call reader treats `uv run --no-sync` / `--frozen` / `--quiet` in front of `tk` the same as a bare `uv run`, so a tk step command run that way is still recognised; the README and editor format command use `uv run --no-sync`.
