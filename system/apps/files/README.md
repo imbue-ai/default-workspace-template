@@ -86,8 +86,8 @@ controls' handlers, the breadcrumb and search bar dufs built) and wraps `ready()
 rather than editing it, so re-applying it after a dufs bump is those two lines;
 its test then checks that the names it leans on still behave.
 
-A folder in a listing opens in place, as dufs ships it. A file does not: framed by
-the shell, a click on a file's name in the table opens the file's `?view` page (dufs's
+A folder in a listing opens in place, as dufs ships it. A file does not: once the
+shell has handed the page its handshake, a click on a file's name in the table opens the file's `?view` page (dufs's
 read-only view: text as source, PDFs, images, audio and video embedded, anything
 else offered as a download) in a file-viewer window of its own, and the Edit
 button opens its `?edit` page, each through the app contract's `shell:open`
@@ -95,8 +95,8 @@ with `ifPresent: "focus"` (contracts.md section 7), so a window already on that
 page is raised instead of a second one opening. A modified or middle click does
 the same. dufs renders these anchors with `target="_blank"`, which inside the
 desktop would open a bare browser window; the patch cancels the click and asks
-the shell instead, and leaves the anchors as they are, so opened on its own in a
-browser tab the viewer behaves as dufs ships it. A file's view page offers Edit
+the shell instead, and leaves the anchors as they are, so with no shell above it
+(opened on its own in a browser tab) the viewer behaves as dufs ships it. A file's view page offers Edit
 wherever the listing would (uploads and deletes allowed), and it takes that same
 page, and so its window, to the edit page.
 

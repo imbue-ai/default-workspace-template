@@ -544,20 +544,17 @@ function setupHiddenFilesToggle() {
   syncToggle();
 }
 
-// minds patch: files open in workspace windows. Framed by the workspace shell, a click on a
-// file's name or its View button asks the shell for a file viewer window on the file's view
-// page, and the Edit button for one on its edit page, raising a window already on that page
-// (the app contract's ``openPath``, desktop-interface contracts.md section 7) rather than
-// letting ``target="_blank"`` open a bare browser window. A modified or middle click is taken
-// the same way. Unframed, the anchors keep dufs's own behaviour.
+// minds patch: files open in workspace windows. Once the workspace shell has handed the page
+// its handshake, a click on a file's name or its View button asks the shell for a file viewer
+// window on the file's view page, and the Edit button for one on its edit page, raising a window
+// already on that page (the app contract's ``openPath``, desktop-interface contracts.md section 7)
+// rather than letting ``target="_blank"`` open a bare browser window. A modified or middle click
+// is taken the same way. With no shell above the page, the anchors keep dufs's own behaviour.
 function setupWorkspaceWindowLinks() {
-  const shell = window.mindsShell;
-  if (shell === undefined || !shell.isFramed) {
-    return;
-  }
   const openInWorkspaceWindow = (event) => {
+    const shell = window.mindsShell;
     const $anchor = event.target.closest("a[data-minds-page]");
-    if ($anchor === null) {
+    if (shell === undefined || !shell.hasShell() || $anchor === null) {
       return;
     }
     event.preventDefault();
