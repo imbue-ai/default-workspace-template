@@ -13,8 +13,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
-import subprocess
 import sys
 import tomllib
 from collections.abc import Sequence
@@ -108,19 +106,8 @@ class _RecordingRunner(mod.Runner):
     ) -> None:
         self.repo_root = repo_root
         self.calls: list[list[str]] = []
-        self.synced: list[Path] = []
-        self.sync_code = 0
-        self.is_sync_hung = False
         self.next_port = next_port
         self.failing_names = set(failing_names)
-
-    def sync(self, worktree: Path) -> int:
-        self.synced.append(worktree)
-        if self.is_sync_hung:
-            raise subprocess.TimeoutExpired(
-                list(mod.SYNC_COMMAND), mod.SYNC_TIMEOUT_SECONDS
-            )
-        return self.sync_code
 
     def run(self, argv: Sequence[str], cwd: Path) -> int:
         argv_list = list(argv)
@@ -165,13 +152,6 @@ def _flag_values(argv: Sequence[str], flag: str) -> list[str]:
     return [argv[index + 1] for index, part in enumerate(argv) if part == flag]
 
 
-def _manifest_envs(argv: Sequence[str]) -> list[str]:
-    """The ``--env`` values other than the PATH this script sets to keep the live venv out."""
-    return [
-        value for value in _flag_values(argv, "--env") if not value.startswith("PATH=")
-    ]
-
-
 def _shell_registry_copy(tmp_path: Path) -> Path:
     return mod._registry_copy_path(tmp_path, "system_interface")
 
@@ -211,7 +191,7 @@ def test_up_hands_the_manifests_table_to_the_shared_script_with_its_own_placehol
     assert _flag_values(argv, "--preview-service-name") == ["chat-preview"]
     assert _flag_values(argv, "--inner-path") == ["/?chat=agent-1"]
     # The shared script's placeholders pass through untouched.
-    assert _manifest_envs(argv) == [
+    assert _flag_values(argv, "--env") == [
         "CHAT_PORT={port:main}",
         "CHAT_HOST={host}",
         "CHAT_DATA_DIR={copy:data}",
@@ -219,46 +199,16 @@ def test_up_hands_the_manifests_table_to_the_shared_script_with_its_own_placehol
     assert _launch(argv) == ["uv", "run", "chat-app", "--secondary"]
 
 
-def test_the_app_runs_with_neither_the_live_repos_venv_nor_the_active_one_on_its_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Either venv's bin left on PATH answers for a console script the worktree lacks."""
-    worktree = _write_worktree(tmp_path)
-    active_venv = tmp_path / "elsewhere" / ".venv"
-    monkeypatch.setenv("VIRTUAL_ENV", str(active_venv))
-    monkeypatch.setenv(
-        "PATH",
-        os.pathsep.join(
-            [str(tmp_path / ".venv" / "bin"), str(active_venv / "bin"), "/usr/bin"]
-        ),
-    )
-    runner = _RecordingRunner(tmp_path)
-
-    assert (
-        mod.up("notes", worktree, tmp_path, runner=runner, dump_registry=_dump_registry)
-        == 0
-    )
-
-    argv = runner.up_argv("notes-preview")
-    assert _flag_values(argv, "--unset-env") == ["VIRTUAL_ENV"]
-    assert [
-        value for value in _flag_values(argv, "--env") if value.startswith("PATH=")
-    ] == ["PATH=/usr/bin"]
-
-
 def test_a_preview_that_opens_on_an_instance_needs_its_key(tmp_path: Path) -> None:
-    """Refused before the worktree's sync, which a fresh worktree waits minutes for."""
     worktree = _write_worktree(tmp_path)
-    runner = _RecordingRunner(tmp_path)
     with pytest.raises(mod.PreviewError, match="--instance-key"):
         mod.up(
             "chat",
             worktree,
             tmp_path,
-            runner=runner,
+            runner=_RecordingRunner(tmp_path),
             dump_registry=_dump_registry,
         )
-    assert runner.synced == []
 
 
 def test_an_app_with_no_table_previews_by_the_scaffold_convention(
@@ -273,7 +223,7 @@ def test_an_app_with_no_table_previews_by_the_scaffold_convention(
     )
 
     argv = runner.up_argv("notes-preview")
-    assert _manifest_envs(argv) == [
+    assert _flag_values(argv, "--env") == [
         "NOTES_PORT={port:main}",
         "NOTES_HOST={host}",
         "NOTES_DATA_DIR={copy:data}",
@@ -366,7 +316,6 @@ def test_a_shell_preview_boots_its_siblings_first_and_frames_them_through_a_regi
 
     assert code == 0
     assert runner.ups() == ["chat-preview", "system_interface-preview"]
-    assert runner.synced == [worktree]
     shell_argv = runner.up_argv("system_interface-preview")
     assert f"MINDS_APPS_FILE={_shell_registry_copy(tmp_path)}" in _flag_values(
         shell_argv, "--env"
@@ -543,38 +492,6 @@ def test_a_failed_boot_keeps_the_record_of_the_siblings_it_booted(
         call[call.index("--name") + 1] for call in runner.calls if call[2] == "down"
     ]
     assert downs == ["system_interface-preview", "chat-preview"]
-
-
-def test_up_and_refresh_sync_the_worktree_first_and_a_failed_or_hung_sync_stops_them(
-    tmp_path: Path,
-) -> None:
-    """An unsynced worktree's environment lacks the app's console script, so the boot would
-    fall through to the live install; neither ``up`` nor ``refresh`` may go on without it."""
-    worktree = _write_worktree(tmp_path)
-    runner = _RecordingRunner(tmp_path)
-    assert (
-        mod.up("notes", worktree, tmp_path, runner=runner, dump_registry=_dump_registry)
-        == 0
-    )
-    assert runner.synced == [worktree]
-    runner.calls.clear()
-    assert mod.refresh("notes", tmp_path, runner=runner) == 0
-    assert runner.synced == [worktree, worktree]
-    assert [call[2] for call in runner.calls] == ["refresh"]
-    runner.calls.clear()
-    runner.sync_code = 2
-
-    with pytest.raises(mod.PreviewError, match="exit 2"):
-        mod.up("notes", worktree, tmp_path, runner=runner, dump_registry=_dump_registry)
-    with pytest.raises(mod.PreviewError, match="exit 2"):
-        mod.refresh("notes", tmp_path, runner=runner)
-    runner.is_sync_hung = True
-    with pytest.raises(mod.PreviewError, match="did not finish"):
-        mod.up("notes", worktree, tmp_path, runner=runner, dump_registry=_dump_registry)
-    with pytest.raises(mod.PreviewError, match="did not finish"):
-        mod.refresh("notes", tmp_path, runner=runner)
-
-    assert runner.calls == []
 
 
 def test_main_routes_the_verbs(tmp_path: Path) -> None:

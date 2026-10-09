@@ -31,16 +31,10 @@ re-boots the inner process in place after a rebuild, leaving the ports, the wrap
 the registrations, and the window untouched. ``down`` tears the preview down together
 with the siblings it booted, and verifies the processes died.
 
-``up`` and ``refresh`` first sync every workspace member into the worktree's own
-environment, which the app's ``uv run`` puts first on its PATH, so the app's command
-resolves to the worktree's install. The app also runs with the live repo's venv off its
-PATH, so that venv cannot answer for a command the worktree's environment lacks.
-
 Exit codes:
     0  Success.
-    1  The worktree's environment could not be synced, the manifest could not be
-       read, the table could not be resolved, another pass's preview is up, or the
-       shared script failed (which quotes the boot log).
+    1  The manifest could not be read, the table could not be resolved, another
+       pass's preview is up, or the shared script failed (which quotes the boot log).
 """
 
 from __future__ import annotations
@@ -48,10 +42,8 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-import os
 import subprocess
 import sys
-import time
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -89,21 +81,6 @@ SHELL_APP_NAME = "system_interface"
 # rather than the live tool's.
 LAUNCHER = ("uv", "run")
 
-# A bare ``uv run`` installs only the root project's closure, which leaves out user-built
-# apps, so the worktree's environment would lack the app's own console script.
-SYNC_COMMAND = ("uv", "sync", "--all-packages")
-SYNC_COMMAND_TEXT = " ".join(SYNC_COMMAND)
-# A first sync of a fresh worktree installs the whole workspace; past the first threshold
-# it is suspicious, past the second it is hung and must not hang the preview.
-SYNC_SLOW_SECONDS = 120
-SYNC_TIMEOUT_SECONDS = 600
-
-# The live repo's environment, which the ``uv run`` that runs this script activates. Left on
-# the app's PATH, it answers for any command the worktree's environment lacks, and the
-# preview silently serves the live install.
-ACTIVE_VENV_ENV = "VIRTUAL_ENV"
-LIVE_VENV_BIN = Path(".venv") / "bin"
-
 # An app that declares ``[[secrets]]`` runs under the wrapper, which is the only reader
 # of its secret files; the preview does the same. The worktree has no ``data/``, so the
 # wrapper reads the live repo's files.
@@ -126,68 +103,10 @@ class PreviewError(Exception):
 
 
 class Runner:
-    """Indirection over ``subprocess.run`` so tests can intercept the shared script and the sync."""
+    """Indirection over ``subprocess.run`` so tests can intercept the shared script."""
 
     def run(self, argv: Sequence[str], cwd: Path) -> int:
         return int(subprocess.run(list(argv), cwd=str(cwd), check=False).returncode)
-
-    def sync(self, worktree: Path) -> int:
-        """Install every workspace member into the worktree's own environment.
-
-        Its output goes to stderr, since ``up``'s stdout is the preview's app name. Raises
-        ``subprocess.TimeoutExpired`` once it has run ``SYNC_TIMEOUT_SECONDS``.
-        """
-        env = {
-            key: value for key, value in os.environ.items() if key != ACTIVE_VENV_ENV
-        }
-        return int(
-            subprocess.run(
-                list(SYNC_COMMAND),
-                cwd=str(worktree),
-                env=env,
-                stdout=sys.stderr,
-                check=False,
-                timeout=SYNC_TIMEOUT_SECONDS,
-            ).returncode
-        )
-
-
-def sync_worktree(worktree: Path, runner: Runner) -> None:
-    if not worktree.is_dir():
-        raise PreviewError(f"the worktree {worktree} no longer exists")
-    started_at = time.monotonic()
-    try:
-        code = runner.sync(worktree)
-    except subprocess.TimeoutExpired as e:
-        raise PreviewError(
-            f"'{SYNC_COMMAND_TEXT}' in {worktree} did not finish within "
-            f"{SYNC_TIMEOUT_SECONDS}s"
-        ) from e
-    if code != 0:
-        raise PreviewError(
-            f"'{SYNC_COMMAND_TEXT}' failed in {worktree} (exit {code}), so its "
-            "environment cannot run the worktree's code; fix that and retry"
-        )
-    elapsed = time.monotonic() - started_at
-    if elapsed > SYNC_SLOW_SECONDS:
-        sys.stderr.write(
-            f"preview: '{SYNC_COMMAND_TEXT}' in {worktree} took {elapsed:.0f}s, "
-            f"slow for a sync that times out at {SYNC_TIMEOUT_SECONDS}s.\n"
-        )
-
-
-def live_venv_isolation_args(repo_root: Path) -> list[str]:
-    """The shared script's flags that keep the live repo's environment away from the app."""
-    live_bins = {(repo_root / LIVE_VENV_BIN).resolve()}
-    active_venv = os.environ.get(ACTIVE_VENV_ENV)
-    if active_venv:
-        live_bins.add((Path(active_venv) / "bin").resolve())
-    path = os.pathsep.join(
-        entry
-        for entry in os.environ.get("PATH", "").split(os.pathsep)
-        if not entry or Path(entry).resolve() not in live_bins
-    )
-    return ["--unset-env", ACTIVE_VENV_ENV, "--env", f"PATH={path}"]
 
 
 def _load_forward_port_module():
@@ -378,7 +297,6 @@ def build_up_argv(
         title,
         "--inner-path",
         inner_path,
-        *live_venv_isolation_args(repo_root),
     ]
     for port_name in preview.ports:
         argv.extend(["--port", str(port_name)])
@@ -397,7 +315,10 @@ def build_up_argv(
     argv.extend(
         [
             *LAUNCHER,
-            *(resolve_own_placeholders(part, registry_copy) for part in launch),
+            *(
+                resolve_own_placeholders(part, registry_copy)
+                for part in launch
+            ),
         ]
     )
     return argv
@@ -415,31 +336,6 @@ def up(
     dump_registry: Callable[[list[dict[str, object]]], str] | None = None,
 ) -> int:
     """Boot the app's preview from ``worktree``, after the siblings named in ``with_apps``."""
-    return _up(
-        app_name,
-        worktree,
-        repo_root,
-        with_apps=with_apps,
-        instance_key=instance_key,
-        title=title,
-        runner=runner,
-        dump_registry=dump_registry,
-        is_worktree_synced=False,
-    )
-
-
-def _up(
-    app_name: str,
-    worktree: Path,
-    repo_root: Path,
-    *,
-    with_apps: Sequence[str],
-    instance_key: str | None,
-    title: str | None,
-    runner: Runner,
-    dump_registry: Callable[[list[dict[str, object]]], str] | None,
-    is_worktree_synced: bool,
-) -> int:
     other = live_preview_worktree(repo_root, app_name)
     if other is not None and not _is_same_worktree(other, worktree):
         sys.stderr.write(
@@ -450,9 +346,6 @@ def _up(
         )
         return 1
     manifest_path, manifest = find_manifest(worktree, app_name)
-    inner_path = resolve_open_path(manifest, instance_key)
-    if not is_worktree_synced:
-        sync_worktree(worktree, runner)
     dump = (
         dump_registry
         if dump_registry is not None
@@ -465,16 +358,13 @@ def _up(
         # A sibling opens on the same instance when its path takes one (the chat under a shell
         # preview opens on the user's conversation, like a chat preview of its own).
         if (
-            _up(
+            up(
                 sibling,
                 worktree,
                 repo_root,
-                with_apps=(),
                 instance_key=instance_key,
-                title=None,
                 runner=runner,
                 dump_registry=dump,
-                is_worktree_synced=True,
             )
             != 0
         ):
@@ -496,7 +386,7 @@ def _up(
         repo_root,
         title if title is not None else f"{manifest.display_name} ({worktree.name})",
         registry_copy,
-        inner_path,
+        resolve_open_path(manifest, instance_key),
     )
     # An earlier ``up --with`` of this preview may have booted siblings this call does not
     # name; they are still running, and ``down`` finds them only through this record.
@@ -575,9 +465,6 @@ def _uses_placeholder(manifest: AppManifest, placeholder: str) -> bool:
 
 def refresh(app_name: str, repo_root: Path, *, runner: Runner) -> int:
     """Re-boot the preview's inner process in place, after a rebuild in its worktree."""
-    worktree = live_preview_worktree(repo_root, app_name)
-    if worktree is not None:
-        sync_worktree(worktree, runner)
     return runner.run(
         [
             sys.executable,
@@ -658,8 +545,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     up_parser = subparsers.add_parser(
-        "up",
-        help="Boot the app's preview from a worktree and surface it as an app to open.",
+        "up", help="Boot the app's preview from a worktree and surface it as an app to open."
     )
     up_parser.add_argument(
         "--app", required=True, help="The app's registered name (its manifest's name)."
