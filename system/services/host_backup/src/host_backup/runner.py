@@ -64,7 +64,7 @@ LOG_FILE = Path("/tmp/host-backup.log")
 # durable alarm so a silent multi-day backup outage cannot go unnoticed.
 CONSECUTIVE_FAILURE_ALARM_THRESHOLD: Final[int] = 3
 
-# Where `uv run env-converge capture` resolves its venv from; matches the
+# Where `uv run --no-sync env-converge capture` resolves its venv from; matches the
 # host-backup program's `directory=` in system/supervisord.conf.d/host-backup.conf,
 # made explicit so the capture also works when the runner is launched from
 # another cwd.
@@ -79,8 +79,8 @@ SLOW_BACKUP_NOTICE_INTERVAL_SECONDS: Final[float] = 24 * 3600.0
 
 SLOW_BACKUP_HINT: Final[str] = (
     "Backup time follows how many files and directories the backup walks, not "
-    "their size. Run `uv run host-backup-heavy-dirs` to see which directories "
-    f"hold them, and read 'Slow backups' in {HOST_BACKUP_README_PATH}."
+    "their size. Run `uv run --no-sync host-backup-heavy-dirs` to see which "
+    f"directories hold them, and read 'Slow backups' in {HOST_BACKUP_README_PATH}."
 )
 
 # The restic-call signatures the backup and retention steps depend on, injected so
