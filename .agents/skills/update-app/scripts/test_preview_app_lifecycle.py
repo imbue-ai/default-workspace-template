@@ -178,27 +178,35 @@ def _registered_rows(registry: Path) -> dict[str, dict[str, object]]:
 
 
 @pytest.fixture
-def repo_root_on_disk() -> Iterator[Path]:
+def live_repo_root() -> Iterator[Path]:
+    """A live repo root on disk, holding the registration script the preview registers through."""
     with tempfile.TemporaryDirectory(
         prefix="preview-lifecycle-", dir=_DISK_TEMP_ROOT
     ) as directory:
-        yield Path(directory) / "live"
+        repo_root = Path(directory) / "live"
+        (repo_root / "system" / "scripts").mkdir(parents=True)
+        shutil.copy(
+            mod._FORWARD_PORT_SCRIPT,
+            repo_root / "system" / "scripts" / "forward_port.py",
+        )
+        yield repo_root
+
+
+@pytest.fixture
+def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    registry = tmp_path / "apps.toml"
+    monkeypatch.setenv("MINDS_APPS_FILE", str(registry))
+    return registry
 
 
 @pytest.mark.timeout(_LIFECYCLE_TIMEOUT_SECONDS)
 def test_a_preview_boots_from_its_manifest_refreshes_a_rebuild_in_place_and_tears_down(
-    tmp_path: Path, repo_root_on_disk: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, live_repo_root: Path, registry: Path
 ) -> None:
-    repo_root = repo_root_on_disk
-    (repo_root / "system" / "scripts").mkdir(parents=True)
-    shutil.copy(
-        mod._FORWARD_PORT_SCRIPT, repo_root / "system" / "scripts" / "forward_port.py"
-    )
+    repo_root = live_repo_root
     live_data = repo_root / "data" / ".apps" / "fixture"
     live_data.mkdir(parents=True)
     (live_data / "greeting.txt").write_text("from the live data")
-    registry = tmp_path / "apps.toml"
-    monkeypatch.setenv("MINDS_APPS_FILE", str(registry))
 
     worktree = tmp_path / "worktree"
     app_dir = worktree / "system" / "apps" / "fixture"
@@ -249,14 +257,15 @@ def test_a_preview_boots_from_its_manifest_refreshes_a_rebuild_in_place_and_tear
 
 
 @pytest.mark.timeout(_LIFECYCLE_TIMEOUT_SECONDS)
+@pytest.mark.usefixtures("registry")
 def test_a_preview_from_a_fresh_worktree_runs_the_worktrees_code_not_the_live_install(
-    tmp_path: Path, repo_root_on_disk: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, live_repo_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The live repo has the app installed in its venv, and ``preview_app.py`` runs under
     ``uv run`` from the live repo, which puts that venv on PATH. A fresh worktree's own venv
     has no ``fixture-serve`` until something installs every workspace member into it, and
     until then the live one answers for it and the preview serves the live code."""
-    repo_root = repo_root_on_disk
+    repo_root = live_repo_root
     app_dir = repo_root / "system" / "apps" / "fixture"
     (app_dir / "src" / "fixture_app").mkdir(parents=True)
     (repo_root / "pyproject.toml").write_text(_WORKSPACE_PYPROJECT)
@@ -273,10 +282,6 @@ def test_a_preview_from_a_fresh_worktree_runs_the_worktrees_code_not_the_live_in
         _PACKAGED_SERVER.replace('BUILD = "live build"', 'BUILD = "worktree build"')
     )
 
-    (repo_root / "system" / "scripts").mkdir(parents=True)
-    shutil.copy(
-        mod._FORWARD_PORT_SCRIPT, repo_root / "system" / "scripts" / "forward_port.py"
-    )
     live_env = {key: value for key, value in os.environ.items() if key != "VIRTUAL_ENV"}
     subprocess.run(
         ["uv", "sync", "--all-packages"], cwd=repo_root, env=live_env, check=True
@@ -285,7 +290,6 @@ def test_a_preview_from_a_fresh_worktree_runs_the_worktrees_code_not_the_live_in
     assert (live_bin / "fixture-serve").exists()
     monkeypatch.setenv("VIRTUAL_ENV", str(repo_root / ".venv"))
     monkeypatch.setenv("PATH", f"{live_bin}{os.pathsep}{os.environ['PATH']}")
-    monkeypatch.setenv("MINDS_APPS_FILE", str(tmp_path / "apps.toml"))
 
     repo_args = ["--repo-root", str(repo_root)]
     assert (
