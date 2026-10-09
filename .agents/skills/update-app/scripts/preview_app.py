@@ -91,6 +91,8 @@ LAUNCHER = ("uv", "run")
 # A bare ``uv run`` installs only the root project's closure, which leaves out user-built
 # apps, so the worktree's environment would lack the app's own console script.
 SYNC_COMMAND = ("uv", "sync", "--all-packages")
+# A first sync of a fresh worktree installs the whole workspace; a hung one must not hang the preview.
+SYNC_TIMEOUT_SECONDS = 600
 
 # The live repo's environment, which the ``uv run`` that runs this script activates. Left on
 # the app's PATH, it answers for any command the worktree's environment lacks, and the
@@ -133,15 +135,21 @@ class Runner:
         env = {
             key: value for key, value in os.environ.items() if key != ACTIVE_VENV_ENV
         }
-        return int(
-            subprocess.run(
+        try:
+            completed = subprocess.run(
                 list(SYNC_COMMAND),
                 cwd=str(worktree),
                 env=env,
                 stdout=sys.stderr,
                 check=False,
-            ).returncode
-        )
+                timeout=SYNC_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise PreviewError(
+                f"'{' '.join(SYNC_COMMAND)}' in {worktree} did not finish within "
+                f"{SYNC_TIMEOUT_SECONDS}s"
+            ) from e
+        return int(completed.returncode)
 
 
 def sync_worktree(worktree: Path, runner: Runner) -> None:
@@ -403,7 +411,7 @@ def up(
         title=title,
         runner=runner,
         dump_registry=dump_registry,
-        worktree_synced=False,
+        is_worktree_synced=False,
     )
 
 
@@ -417,7 +425,7 @@ def _up(
     title: str | None,
     runner: Runner,
     dump_registry: Callable[[list[dict[str, object]]], str] | None,
-    worktree_synced: bool,
+    is_worktree_synced: bool,
 ) -> int:
     other = live_preview_worktree(repo_root, app_name)
     if other is not None and not _is_same_worktree(other, worktree):
@@ -430,7 +438,7 @@ def _up(
         return 1
     manifest_path, manifest = find_manifest(worktree, app_name)
     inner_path = resolve_open_path(manifest, instance_key)
-    if not worktree_synced:
+    if not is_worktree_synced:
         sync_worktree(worktree, runner)
     dump = (
         dump_registry
@@ -453,7 +461,7 @@ def _up(
                 title=None,
                 runner=runner,
                 dump_registry=dump,
-                worktree_synced=True,
+                is_worktree_synced=True,
             )
             != 0
         ):
