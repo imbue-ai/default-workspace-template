@@ -519,7 +519,6 @@ stands: bring the workspace's new commits into your branch and validate only
 what they change.
 
 ```bash
-PRE=$(git rev-parse HEAD)
 rm -f data/.tasks/update-self/catchup-impacted.txt
 git merge --no-ff <the commit the lead named> -m "Catch up to the workspace's latest work (<its short sha>)"
 ```
@@ -535,7 +534,8 @@ keep both. Regenerate a lockfile, never merge it, and do so whenever both
 sides changed it even without a conflict.
 
 Then validate the delta, scoped by the same rules as 4b but over
-`$PRE..HEAD` only. Do not re-run 4b's recipe: its merged set re-selects the
+`$PRE..HEAD` only, where `$PRE` is your branch's tip before the catch-up
+merge (that merge's first parent). Do not re-run 4b's recipe: its merged set re-selects the
 whole pass, and its `git diff "$MERGE" HEAD` line would read the workspace's
 commits as your edits.
 
@@ -547,6 +547,8 @@ commits as your edits.
 - **Suites**: commit first, then run every printed line:
 
   ```bash
+  PRE=$(git rev-parse "$(git log --first-parent --merges -1 --format=%H --fixed-strings \
+      --grep "Catch up to the workspace's latest work")^1")
   { git diff --name-only --no-renames "$PRE" HEAD
     cat data/.tasks/update-self/catchup-impacted.txt 2>/dev/null; } \
       | sed '/^[[:space:]]*$/d' | sort -u > data/.tasks/update-self/catchup-paths.txt

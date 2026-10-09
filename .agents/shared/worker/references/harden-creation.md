@@ -393,11 +393,9 @@ merge you, and reply asking you to catch up to a named commit
 pass"). Your verified work stands; extend it to the new base rather than
 starting over.
 
-1. Commit anything outstanding, note where your branch is, and merge the
-   lead's commit into it:
+1. Commit anything outstanding and merge the lead's commit into your branch:
 
    ```bash
-   PRE=$(git rev-parse HEAD)
    git merge --no-ff <the commit the lead named> -m "Catch up to <its short sha>"
    ```
 
@@ -414,9 +412,12 @@ starting over.
    re-reported, `type-app.md`). Commits that touch nothing of the creation
    need nothing from you.
 4. **Re-run the test gate over exactly what the catch-up changed**, after
-   committing:
+   committing, from your branch's tip before the catch-up merge (that merge's
+   first parent):
 
    ```bash
+   PRE=$(git rev-parse "$(git log --first-parent --merges -1 --format=%H --fixed-strings \
+       --grep "Catch up to")^1")
    uv run app-manifest select-tests --diff-base "$PRE"
    ```
 
