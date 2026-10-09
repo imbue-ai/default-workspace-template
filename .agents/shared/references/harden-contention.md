@@ -181,7 +181,7 @@ poll exactly as for a gate (`lead-proxy.md`):
 
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py reply \
-    --task-file <TASK_FILE> -m "Catch up to $(git rev-parse HEAD) per harden-contention.md: merge it into your branch, resolve any conflict, harden and verify what it brings in, and report done again. What moved: <the \$BASE..HEAD commits touching the creation, a conflicted path, and any notes on the ticket>."
+    --task-file <TASK_FILE> -m "Catch up to $(git rev-parse HEAD) per 'Catching up to a moved base' in harden-creation.md: merge it into your branch, resolve any conflict, harden and verify what it brings in, and report done again. What moved: <the \$BASE..HEAD commits touching the creation, a conflicted path, and any notes on the ticket>."
 ```
 
 The worker's side is `.agents/shared/worker/references/harden-creation.md`
