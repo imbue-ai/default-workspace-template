@@ -1712,7 +1712,7 @@ def test_a_folder_link_raises_the_file_viewer_window_that_reached_the_folder_thr
     with running_file_viewer(root) as viewer_url:
         rows = (file_viewer_registry_row(viewer_url),)
         with _running_e2e_server(tmp_path, session_events=_FOLDER_LINK_SESSION_EVENTS, extra_rows=rows) as server:
-            _open_fixture_chat(page, server)
+            _open_fixture_chat_with_shell(page, server)
             client_id = _client_id(page)
             opened = {"op": "open", "args": {"app": "files", "path": "/", "client": client_id}, "requester": None}
             assert _post_op(server, opened) == 200
