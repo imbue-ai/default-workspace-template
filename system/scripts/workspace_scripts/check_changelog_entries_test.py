@@ -17,8 +17,6 @@ import pytest
 
 from workspace_scripts import check_changelog_entries as gate
 
-_SCRIPT = Path(__file__).resolve().parents[1] / "check_changelog_entries.py"
-
 
 def _git(repo: Path, *args: str) -> str:
     result = subprocess.run(

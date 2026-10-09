@@ -15,8 +15,6 @@ from imbue.chat.accounts import account_dir, read_index
 
 from workspace_scripts import migrate_claude_auth as migration
 
-_SCRIPT = Path(__file__).resolve().parents[1] / "migrate_claude_auth.py"
-
 
 @pytest.fixture
 def host_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:

@@ -8,12 +8,7 @@ non-tk commands that merely mention a tk verb are left alone.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from workspace_bare_scripts import agent_tk_standalone_check as checker
-
-_SCRIPT = Path(__file__).resolve().parents[1] / "agent_tk_standalone_check.py"
-
 
 # Commands that must be ALLOWED (classify returns None).
 _ALLOWED = [
