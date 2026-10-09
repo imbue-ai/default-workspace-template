@@ -501,15 +501,16 @@ background and end your turn; the result starts your next one:
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/run_in_background.py \
     --description "Wait for other chats to finish their edits" -- \
-    bash -c 'for i in $(seq 1 360); do if [ -z "$(git status --porcelain)" ] && ! tk ready 2>/dev/null | grep -q -- "- editing \(service\|critical app\) "; then echo settled; exit 0; fi; sleep 10; done; echo "still busy after an hour"; git status --porcelain; exit 1'
+    bash -c 'for i in $(seq 1 360); do leases=$(tk ready) || { echo "tk ready failed"; exit 1; }; if [ -z "$(git status --porcelain)" ] && ! printf "%s\n" "$leases" | grep -q -- "- editing \(service\|critical app\) "; then echo settled; exit 0; fi; sleep 10; done; echo "still busy after an hour"; git status --porcelain; exit 1'
 ```
 
 Take this pass's own `editing critical app` leases only once it has settled
 and the branch fast-forwards (below), right before the apply, and release
 them before any catch-up, so no round of this wait finds them. If it is still
-busy after the hour, tell the user
-which chat's edit is holding the update and that nothing has been applied;
-a lease is broken only on their call. Once it settles, check whether those
+busy after the hour, tell the user which chat's edit is holding the update and
+that nothing has been applied; a lease is broken only on their call. If it
+says `tk ready failed`, the leases could not be read: find out why and wait
+again. Once it settles, check whether those
 chats committed since the worker branched:
 
 ```bash
