@@ -645,9 +645,9 @@ export class LivePagesLayer implements PageDriver {
     void this.store.relayEmbedderMessage(message as EmbedderMessage, page.app);
   }
 
-  /** ``shell:open-link {url}`` from a page: a link that is neither the page's own nor external (a local URL, a
-   *  ``file:`` URL, another app's address or another workspace's), which the shell opens where ``openLink`` says, or
-   *  refuses with a notice. The frame has to be one the shell created. */
+  /** ``shell:open-link {url}`` from a page: a link that is not the page's own (a local URL, a ``file:`` URL, another
+   *  app's address or another workspace's, an external web, ``mailto:`` or ``tel:`` link), which the shell opens where
+   *  ``openLink`` says, or refuses with a notice. The frame has to be one the shell created. */
   private takeOpenLink(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
     const page = this.pageOfFrame(frame);
     if (page === undefined) return;

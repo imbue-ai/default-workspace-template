@@ -63,7 +63,7 @@ export const SHELL_OPEN_LINK = "shell:open-link";
 /** The bare host names of this machine (a ``*.localhost`` host is local too). */
 export const LOCAL_HOSTNAMES: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
-/** Whether ``url`` leaves this machine, so it opens in the user's own browser: exactly the rule Imbue Studio's
+/** Whether ``url`` leaves this machine (a ``mailto:`` or ``tel:`` link included): exactly the rule Imbue Studio's
  *  ``isExternalUrl`` applies to a popup (``link-externality-vectors.json`` keeps the two in step). */
 export function isExternalUrl(url: URL): boolean {
   if (url.protocol === "mailto:" || url.protocol === "tel:") return true;
