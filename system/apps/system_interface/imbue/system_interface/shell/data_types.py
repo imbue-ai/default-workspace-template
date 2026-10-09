@@ -157,7 +157,8 @@ class PopOutStateReport(FrozenModel):
 
 
 class ClientReportOutcome(FrozenModel):
-    """What recording a ``client_state`` report came to: the record, and whether its active desktop moved."""
+    """What recording a ``client_state`` report came to: the record, whether its active desktop moved, and whether
+    the report was superseded."""
 
     record: ClientRecord = Field(description="The client record as written")
     is_active_desktop_changed: bool = Field(

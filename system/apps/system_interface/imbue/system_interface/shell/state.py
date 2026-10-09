@@ -769,7 +769,7 @@ class ShellState(MutableModel):
         is_redirected = resolved is not report
         outcome = self.clients.record_report(resolved, datetime.now(timezone.utc), is_redirected=is_redirected)
         # Only a report that moved the stored desktop, or that was redirected off a desktop that no longer exists,
-        # is broadcast.
+        # is broadcast; a superseded one is not, even when redirected.
         if outcome.is_active_desktop_changed or (is_redirected and not outcome.is_superseded):
             self.broadcaster.broadcast_active_desktop_changed(
                 str(report.client_id),
