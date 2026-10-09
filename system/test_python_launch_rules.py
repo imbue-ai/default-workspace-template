@@ -34,7 +34,9 @@ _AGENT_FACING_SUFFIXES = (".md", ".toml", ".sh", ".conf")
 # Plus the hook configs, for the python3 rule.
 _PYTHON3_SCANNED_SUFFIXES = (*_AGENT_FACING_SUFFIXES, ".json")
 # Path parts whose files are records or test inputs, not instructions.
-_EXEMPT_PARTS = frozenset({"changelog", "blueprint", "specs", "vendor", "fixtures"})
+_EXEMPT_PARTS = frozenset({"changelog", "vendor", "fixtures"})
+# Plans and specs record decisions; they quote commands rather than instruct.
+_EXEMPT_PREFIXES = ("docs/system/blueprint/", "docs/system/specs/", "docs/specs/")
 _EXEMPT_NAMES = frozenset({"CHANGELOG.md", "UNABRIDGED_CHANGELOG.md"})
 
 _UV_RUN_RE = re.compile(r"\buv run\b")
@@ -141,6 +143,7 @@ def _agent_facing_files(suffixes: tuple[str, ...] = _AGENT_FACING_SUFFIXES) -> l
         for relative in tracked
         if relative.endswith(suffixes)
         and not _EXEMPT_PARTS.intersection(PurePosixPath(relative).parts)
+        and not relative.startswith(_EXEMPT_PREFIXES)
         and PurePosixPath(relative).name not in _EXEMPT_NAMES
         and (_REPO_ROOT / relative).is_file()
     ]
