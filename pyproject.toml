@@ -205,6 +205,11 @@ addopts = [
 [tool.ty.src]
 include = [".agents", "system/scripts", "system/*.py", "conftest.py"]
 
+# Workspaces run on Linux; without this ty would judge platform-specific stdlib calls
+# (os.waitid, ...) by whichever machine runs the check.
+[tool.ty.environment]
+python-platform = "linux"
+
 [tool.ruff]
 target-version = "py312"
 exclude = ["system/vendor/tk", "system/apps/system_interface", "system/apps/chat"]

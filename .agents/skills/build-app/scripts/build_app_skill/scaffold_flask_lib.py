@@ -92,6 +92,7 @@ def _read_and_validate_icon(path: Path) -> str:
     markup, error = forward_port.read_icon_file(path)
     if error is not None:
         sys.exit(f"error: {error}")
+    assert markup is not None
     return markup
 
 

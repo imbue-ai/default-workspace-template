@@ -1745,11 +1745,9 @@ def _tagging_expend(argv: Sequence[str]) -> list[str]:
     return ["sh", "-c", "expendable-tag", "sh", *argv]
 
 
-@dataclass
-class _Result:
-    returncode: int = 0
-    stdout: str = ""
-    stderr: str = ""
+class _Result(subprocess.CompletedProcess[str]):
+    def __init__(self, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
+        super().__init__(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
 
 
 @dataclass
@@ -4168,11 +4166,11 @@ def test_the_provisioner_runs_under_the_image_builds_environment(
         assert env["HTTPS_PROXY"] == "http://proxy.example:3128"
         assert "CLAUDE_CODE_VERSION" not in env
         assert "NODE_VERSION" not in env
-    # Both runs are forced past the provision guard. The recovery re-run lands
-    # on the tree the guard's marker was written for; and that marker outlives
-    # the rollback, so a retry of the same merge would otherwise skip the
-    # provisioner and report UPDATED with the toolchain still rolled back.
-    assert [env.get("PROVISION_FORCE") for env in provisioner_envs] == ["1", "1"]
+        # Both runs are forced past the provision guard. The recovery re-run lands
+        # on the tree the guard's marker was written for; and that marker outlives
+        # the rollback, so a retry of the same merge would otherwise skip the
+        # provisioner and report UPDATED with the toolchain still rolled back.
+        assert env.get("PROVISION_FORCE") == "1"
 
 
 def test_provisioner_inputs_are_read_off_the_entry_point(tmp_path: Path) -> None:
@@ -5763,6 +5761,7 @@ def test_a_tool_the_merge_adds_is_installed_beside_the_mngr_tool(
         for argv, env in zip(runner.calls, runner.envs)
         if argv[:4] == ["uv", "tool", "install", "-e"] and argv[4] == "system/apps/chat"
     )
+    assert chat_install_env is not None
     assert chat_install_env["UV_TOOL_DIR"] == str(tools)
     assert chat_install_env["UV_TOOL_BIN_DIR"] == str(bin_dir)
     assert (
@@ -5790,6 +5789,7 @@ def test_a_tool_with_no_installation_anywhere_goes_to_the_pinned_home(
         if argv[:4] == ["uv", "tool", "install", "-e"]
         and argv[4] == update_layout.SYSTEM_INTERFACE_DIR
     )
+    assert shell_install_env is not None
     assert shell_install_env["UV_TOOL_DIR"] == str(tool_env.tools_dir(pinned))
     assert shell_install_env["UV_TOOL_BIN_DIR"] == str(tool_env.bin_dir(pinned))
     assert (

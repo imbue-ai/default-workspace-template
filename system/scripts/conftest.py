@@ -86,6 +86,12 @@ class _FakeChatAppHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
 
+class _FakeChatAppServer(ThreadingHTTPServer):
+    answers: list[tuple[int, Any]]
+    posted: list[tuple[str, Any]]
+    drop_connections: bool
+
+
 @pytest.fixture
 def fake_chat_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     """A chat app over loopback, registered under the ``chat`` row of a registry the script reads.
@@ -94,7 +100,7 @@ def fake_chat_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     repeating; ``server.posted`` is every ``(path, body)`` it received; ``server.drop_connections``
     makes it read each request and then close the connection without answering.
     """
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeChatAppHandler)
+    server = _FakeChatAppServer(("127.0.0.1", 0), _FakeChatAppHandler)
     server.answers = [(200, {"status": "ok"})]
     server.posted = []
     server.drop_connections = False

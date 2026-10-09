@@ -17,6 +17,7 @@ import io
 import json
 import os
 import signal
+import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,11 +35,9 @@ _PORT_ENV = "MYSVC_PORT"
 _LAUNCH = ["uv", "run", "my-service"]
 
 
-@dataclass
-class _Result:
-    returncode: int = 0
-    stdout: str = ""
-    stderr: str = ""
+class _Result(subprocess.CompletedProcess[str]):
+    def __init__(self, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
+        super().__init__(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
 
 
 @dataclass

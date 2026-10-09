@@ -62,11 +62,13 @@ def _atif_stream_records() -> list[dict[str, object]]:
     and a step's ``source`` is the speaker -- the two properties the collector's
     reader has to survive and preserve.
     """
-    header = HeaderRecord(
-        type="header",
-        event_id="header-" + "0" * 32,
-        emitter="claude/common_transcript",
-        schema_version=PINNED_ATIF_SCHEMA_VERSION,
+    header = HeaderRecord.model_validate(
+        {
+            "type": "header",
+            "event_id": "header-" + "0" * 32,
+            "emitter": "claude/common_transcript",
+            "schema_version": PINNED_ATIF_SCHEMA_VERSION,
+        }
     )
     asked = StepRecord(
         type="step",
