@@ -256,6 +256,8 @@ def test_a_preview_boots_from_its_manifest_refreshes_a_rebuild_in_place_and_tear
     assert mod.live_preview_url(repo_root, "fixture") is None
 
 
+# The syncs build the fixture app with hatchling, which uv downloads on a cold cache.
+@pytest.mark.acceptance
 @pytest.mark.timeout(_LIFECYCLE_TIMEOUT_SECONDS)
 @pytest.mark.usefixtures("registry")
 def test_a_preview_from_a_fresh_worktree_runs_the_worktrees_code_not_the_live_install(
