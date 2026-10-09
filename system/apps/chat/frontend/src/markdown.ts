@@ -54,10 +54,10 @@ function rewritePathLinks(root: DocumentFragment): void {
 }
 
 /** A message link's target as a URL: an absolute path becomes its ``file:`` URL, without the query or fragment (the
- *  chat's own cache key among them), and ``//host`` or ``/\host`` a ``file:`` URL on that host, which names no file
- *  of this machine; anything else is the URL it already is. */
+ *  chat's own cache key among them); anything else, ``//host`` and ``/\host`` included (another host to a browser,
+ *  not a path), is left as written. */
 function messageLinkUrl(href: string): string {
-  if (!href.startsWith("/")) return href;
+  if (!/^\/(?![/\\])/.test(href)) return href;
   const url = new URL(href, "file:///");
   url.search = "";
   url.hash = "";

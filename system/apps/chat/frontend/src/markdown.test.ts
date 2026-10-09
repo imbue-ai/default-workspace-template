@@ -87,7 +87,12 @@ describe("renderMarkdown links", () => {
     expect(container.textContent!.trim()).toBe(source.slice(1, source.indexOf("]")));
   });
 
-  it.each(['<a href="//evil.example/x">other host</a>', '<a href="/\\evil.example/x">other host</a>'])(
+  it.each([
+    '<a href="//evil.example/x">other host</a>',
+    '<a href="/\\evil.example/x">other host</a>',
+    '<a href="//[bad/x">other host</a>',
+    '<a href="/\\a%20b/x">other host</a>',
+  ])(
     "renders the raw link %s, which a browser takes to another host, as its text",
     (source) => {
       const container = render(source);
