@@ -36,7 +36,7 @@ import {
   textRowDisabledReason,
 } from "../model/launch";
 import { applyPresence } from "../model/Presence";
-import { shareDomainOf, windowAtBackendUrl } from "../model/pageUrl";
+import { labelForApp, shareDomainOf, windowAtBackendUrl } from "../model/pageUrl";
 import type {
   AppRecord,
   AvatarCatalog,
@@ -1084,7 +1084,7 @@ export class DesktopStore {
         return;
       }
       case "app-address": {
-        const app = openableApps(this.state).find((candidate) => candidate.label === target.label);
+        const app = openableApps(this.state).find((candidate) => labelForApp(candidate) === target.label);
         if (app === undefined) {
           this.toast(`Nothing in this workspace is at ${target.url}`);
           return;

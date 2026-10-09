@@ -1431,6 +1431,16 @@ describe("links Imbue Studio hands over", () => {
     expect(api.relayedMessages).toEqual([]);
   });
 
+  it("opens the address of an app whose row has no label, which its windows are framed at by its name", async () => {
+    const store = await startedStore();
+    socket.deliver().onAppsUpdated([appRecord("docs"), appRecord("news")]);
+
+    await store.openLink(`http://news.${COORDINATE}/story/7`, SHELL_HOST, null);
+
+    expect(api.calls).toContain("openWindow:home:news:/story/7:focus");
+    expect(notices()).toEqual([]);
+  });
+
   it("tells the user to reopen the main window when an app's window a link opened waits on the desktop", async () => {
     api.apps = [appRecord("docs"), FILES_APP];
     const store = makeStore(() => undefined, { soloWindowId: "win-1" });
