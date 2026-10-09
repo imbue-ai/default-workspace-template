@@ -126,9 +126,7 @@ class InventoryApp(FrozenModel):
     message_handlers: tuple[MessageHandler, ...] = Field(description="The message types the app handles")
     is_running: bool = Field(description="Derived from supervisord or a TCP probe, never stored")
     share_url: str | None = Field(
-        default=None,
-        description="The app's address on the domain the workspace was last shared under; None when it never was "
-        "(or for an older shell, which does not list it)",
+        description="The app's address on the domain the workspace was last shared under; None when it never was"
     )
 
 

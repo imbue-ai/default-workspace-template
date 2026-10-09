@@ -599,14 +599,13 @@ def _listed_clients(inventory: _Answer) -> list[dict[str, Any]]:
     return [_listed({"popped_out": [], **client}, _LISTED_CLIENT_FIELDS) for client in inventory["clients"]]
 
 
-# CLEANUP: drop the ``share_url`` default once every workspace's shell runs a release whose inventory lists it.
 @pure
 def _app_link(app: Mapping[str, Any]) -> str:
     """The link to write for an app: its address on the domain the workspace was last shared under, which opens it
     from any client the workspace is shared with, else its port-less ``<label>.localhost`` address, which opens it
     only from inside and outlasts any change of its port."""
-    share_url = app.get("share_url")
-    if isinstance(share_url, str) and share_url != "":
+    share_url = app["share_url"]
+    if share_url is not None:
         return share_url
     return f"http://{app['label'] or app['name']}.localhost/"
 
