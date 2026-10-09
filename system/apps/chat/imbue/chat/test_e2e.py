@@ -1573,6 +1573,16 @@ def _app_windows(server: RunningWorkspace, app: str) -> list[dict[str, Any]]:
     return [window for window in desktop["windows"] if window["app"] == app]
 
 
+def _open_fixture_chat_with_shell(page: Page, server: RunningWorkspace) -> None:
+    """Open the fixture chat and wait until its page has the shell's handshake, before which a click on a link is the
+    browser's rather than the workspace's. The page's first presence report goes out as that handshake arrives."""
+    with page.expect_request(
+        lambda request: request.method == "POST" and request.url.endswith(f"/api/chats/{FIXTURE_AGENT_ID}/presence"),
+        timeout=15000,
+    ):
+        _open_fixture_chat(page, server)
+
+
 def _bring_the_chat_over(page: Page, server: RunningWorkspace, client_id: str, covering_window_id: str) -> None:
     """Raise the chat window over the one that opened on top of it, as an agent's ``focus`` op does, so its links can
     be clicked again."""
@@ -1605,7 +1615,7 @@ def test_a_replys_file_link_opens_in_the_file_viewer_and_its_local_link_goes_to_
             registry_row_toml("browser", url_opener.http_url, message_handlers=[("open:url", _OPEN_URL_HANDLER_PATH)]),
         )
         with _running_e2e_server(tmp_path, session_events=_LINKING_SESSION_EVENTS, extra_rows=rows) as server:
-            _open_fixture_chat(page, server)
+            _open_fixture_chat_with_shell(page, server)
             chat = _chat(page)
             file_link = chat.get_by_role("link", name="the plan file")
             expect(file_link).to_be_visible(timeout=15000)
@@ -1665,7 +1675,7 @@ def test_a_replys_link_to_a_registered_app_opens_that_apps_window_not_the_browse
             "uuid-app-link", "Where is the story?", f"It is in [the news app]({origin}/story/7?ref=chat)."
         )
         with _running_e2e_server(tmp_path, session_events=session_events, extra_rows=rows) as server:
-            _open_fixture_chat(page, server)
+            _open_fixture_chat_with_shell(page, server)
             chat = _chat(page)
             app_link = chat.get_by_role("link", name="the news app")
             expect(app_link).to_be_visible(timeout=15000)
