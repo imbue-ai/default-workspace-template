@@ -342,11 +342,14 @@
 
 ## Open questions
 
+- Decided during PR 2 review (2026-10-09), superseding the bullets above that put a skill's uv project in `scripts/`:
+  - A skill's uv project lives in `.agents/skills/<name>/python/` (pyproject + `<name>_skill/`), globbed as `.agents/skills/*/python`; `scripts/` keeps the entry files and shell scripts. A `scripts/` glob let any third-party skill's plain `scripts/` break every uv command in the workspace. Venv-tier stubs import through the editable install; update-self's and publish-template's no-venv stubs put `../python` on `sys.path`.
+  - `refresh_workspace_view` and `check_changelog_entries` stay venv tier: update-self runs the refresh through `uv run --no-sync` (every caller has just synced the venv), and CI's changelog job syncs `workspace-scripts` first.
 - Resolved in PR 2:
   - `system/scripts` packages are `workspace_bare_scripts` and `workspace_scripts`, in one hatchling project (`packages = [...]`). The editable install's `.pth` adds the whole `scripts/` dir to `sys.path`, which exposes both packages (and, as a side effect, the entry stubs as top-level module names).
   - The entry-point table is `[tool.workspace-template.entry-points."<entry>.py"]` with `heavy-imports = [...]`.
   - The test-filename-collision rule is dropped: pytest imports a test inside `<skill>_skill/` as `<skill>_skill.<test>`, and two same-named tests in two skill packages collect together (two flat `scripts/` dirs still collide).
-  - A venv-tier stub run through the `.claude/skills` symlink path is not recognised as a workspace member (uv builds an empty `scripts/.venv`), and listing the symlinked glob as a member is refused as a duplicate. `running-python.md` says to run skill scripts by their `.agents/skills/` path.
+  - With the project in `scripts/`, a stub run through the `.claude/skills` symlink was not recognised as a workspace member; with it in `python/`, uv walks up to the workspace root and the symlinked path works.
 - **Expensive-stdlib list for the bare tier**: start with `asyncio`, then measure on the scratch workspace before fixing the list.
 - **Does update-self's apply health probe cover every program?** If a bare wrapper broke after an apply, would the probes catch it? Relevant only to the safety margin. The 3.12 guard makes it moot for the version case.
 - **#831 is still open**: merge its tip into the stack as it moves. #759 (thin `workspace-layout` client and its `--no-sync` changes) and #814 are already merged, and PR 1 inherits them through #831's main merge; don't redo their conversions.
