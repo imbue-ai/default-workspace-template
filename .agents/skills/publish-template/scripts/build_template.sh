@@ -268,22 +268,23 @@ done
 # Same problem, same fix, for the manifest tooling: the reset would remove these
 # from the worktree (and takes .venv with it, which is why the validator runs
 # under `uv run --no-project` against a snapshotted copy of the schema module
-# rather than importing it from the workspace). The entry files import the
-# publish_template_skill package, so it is copied beside them: an entry's own
-# directory is first on sys.path, so the import finds the snapshot's copy.
+# rather than importing it from the workspace). The snapshot keeps the skill's
+# own layout -- the entry files in scripts/, the publish_template_skill package in
+# python/ beside it -- because each entry file puts its ../python on sys.path.
 TOOL_PACKAGE="publish_template_skill"
-for tool_file in write_template_manifest.py validate_template.py "$TOOL_PACKAGE/__init__.py"; do
-    if [ ! -f "$SCRIPT_DIR/$tool_file" ]; then
-        echo "build_template.sh: $SCRIPT_DIR/$tool_file is missing (required to generate and validate the manifest); aborting before touching the worktree" >&2
+PACKAGE_DIR="$SCRIPT_DIR/../python/$TOOL_PACKAGE"
+for tool_file in "$SCRIPT_DIR/write_template_manifest.py" "$SCRIPT_DIR/validate_template.py" "$PACKAGE_DIR/__init__.py"; do
+    if [ ! -f "$tool_file" ]; then
+        echo "build_template.sh: $tool_file is missing (required to generate and validate the manifest); aborting before touching the worktree" >&2
         exit 1
     fi
 done
-cp "$SCRIPT_DIR/write_template_manifest.py" "$SCRIPT_DIR/validate_template.py" "$SCAN_TOOLS_DIR/"
-mkdir "$SCAN_TOOLS_DIR/$TOOL_PACKAGE"
-for module in "$SCRIPT_DIR/$TOOL_PACKAGE"/*.py; do
+mkdir "$SCAN_TOOLS_DIR/scripts" "$SCAN_TOOLS_DIR/python" "$SCAN_TOOLS_DIR/python/$TOOL_PACKAGE"
+cp "$SCRIPT_DIR/write_template_manifest.py" "$SCRIPT_DIR/validate_template.py" "$SCAN_TOOLS_DIR/scripts/"
+for module in "$PACKAGE_DIR"/*.py; do
     case "$module" in
         *_test.py) ;;
-        *) cp "$module" "$SCAN_TOOLS_DIR/$TOOL_PACKAGE/" ;;
+        *) cp "$module" "$SCAN_TOOLS_DIR/python/$TOOL_PACKAGE/" ;;
     esac
 done
 SCHEMA_MODULE="$REPO/system/services/env_converge/src/env_converge/template_manifest.py"
@@ -291,7 +292,7 @@ if [ ! -f "$SCHEMA_MODULE" ]; then
     echo "build_template.sh: $SCHEMA_MODULE is missing (the manifest schema; no fallback exists); aborting before touching the worktree" >&2
     exit 1
 fi
-cp "$SCHEMA_MODULE" "$SCAN_TOOLS_DIR/"
+cp "$SCHEMA_MODULE" "$SCAN_TOOLS_DIR/python/"
 
 # Stage the manifest this publish will OVERRIDE, before the reset removes it.
 # Its identity plus [origin] become the newest lineage entry, and its own
@@ -494,7 +495,7 @@ manifest_toml_args+=(--repo-root "$REPO" --workspace-dir "$data_source" --secret
 # python3 is not guaranteed to be that new. uv supplies a managed interpreter,
 # which makes this work the same everywhere instead of failing only on older
 # machines.
-if ! uv run --no-project python "$SCAN_TOOLS_DIR/write_template_manifest.py" "${manifest_toml_args[@]}"; then
+if ! uv run --no-project python "$SCAN_TOOLS_DIR/scripts/write_template_manifest.py" "${manifest_toml_args[@]}"; then
     echo "build_template.sh: could not generate ${MANIFEST_TOML}" >&2
     exit 6
 fi
@@ -867,7 +868,7 @@ fi
 # cold base rather than a full environment build that can fail on something
 # unrelated.
 if ! uv run --no-project --with 'pydantic>=2' python \
-    "$SCAN_TOOLS_DIR/validate_template.py" "$REPO" \
+    "$SCAN_TOOLS_DIR/scripts/validate_template.py" "$REPO" \
     --skip-apt-check --allow-unfinished; then
     echo "build_template.sh: the generated ${MANIFEST_TOML} did not validate (see above)" >&2
     exit 6

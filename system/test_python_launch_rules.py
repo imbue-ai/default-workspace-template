@@ -315,8 +315,9 @@ def test_the_python3_scan_catches_a_venv_script_and_a_stale_path(tmp_path: Path)
     ]
 
 
-# Path edits are the bare stubs' way of reaching a stdlib-only library outside their own
-# scripts directory, and update-self's way of reaching the oom_priority of the tree it applies.
+# Path edits are how an entry file that runs with no venv reaches code outside its own
+# directory -- a stdlib-only library, or its skill's python/ package -- and update-self's way
+# of reaching the oom_priority of the tree it applies.
 _ALLOWED_SYS_PATH_EDITS = frozenset(
     {
         "system/scripts/agent_block_pipe_tail_head_check.py",
@@ -324,7 +325,12 @@ _ALLOWED_SYS_PATH_EDITS = frozenset(
         "system/scripts/agent_rewrite_bash_command.py",
         "system/scripts/agent_secrets_guard_check.py",
         "system/scripts/agent_tk_standalone_check.py",
-        ".agents/skills/update-self/scripts/update_self_skill/update_banding.py",
+        # Skill entry files that run with no workspace venv, reaching the package in python/.
+        ".agents/skills/update-self/scripts/update_self.py",
+        ".agents/skills/update-self/scripts/run_in_background.py",
+        ".agents/skills/publish-template/scripts/validate_template.py",
+        ".agents/skills/publish-template/scripts/write_template_manifest.py",
+        ".agents/skills/update-self/python/update_self_skill/update_banding.py",
     }
 )
 
@@ -361,8 +367,8 @@ def _sys_path_editors(repo_root: Path) -> list[str]:
 def test_only_the_declared_bare_stubs_edit_sys_path() -> None:
     offenders = _sys_path_editors(_REPO_ROOT)
     assert not offenders, (
-        "These edit sys.path. Import the package instead: a skill's or system script's modules live in "
-        "its scripts/<package>/, importable from the root venv or from the stub's own directory:\n"
+        "These edit sys.path. Import the package instead: a skill's modules live in its python/ "
+        "project and a system script's beside it, all importable from the root venv:\n"
         + "\n".join(offenders)
     )
 

@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-_STUB = Path(__file__).resolve().parents[1] / "update_self.py"
+_STUB = Path(__file__).resolve().parents[2] / "scripts" / "update_self.py"
 
 # Runs the stub as __main__ under a Python that reports itself as 3.11, then records which
 # of the skill's modules had been imported by the time it exited.

@@ -8,13 +8,13 @@ Static structural checks (in order, short-circuit on first failure per check):
 - Frontmatter has `name` matching the directory basename.
 - Frontmatter has `description`, 1-1024 characters.
 - SKILL.md body (after frontmatter) is at most 500 lines.
-- If the skill has a `scripts/` dir (optional even for crystallized skills -- a
-  skill may be pure SKILL.md prose), `scripts/pyproject.toml` exists and names
-  the project `<name>-skill` and its one package `<name_with_underscores>_skill`
-  (a directory beside it with an `__init__.py`), or, for a scripts dir with no
-  Python in it, sets `[tool.uv] package = false`.
+- If the skill has Python (entry files in `scripts/`, or a `python/` dir --
+  optional even for crystallized skills: a skill may be pure SKILL.md prose, and
+  a `scripts/` dir of shell scripts needs nothing), `python/pyproject.toml`
+  exists and names the project `<name>-skill` and its one package
+  `<name_with_underscores>_skill` (a directory beside it with an `__init__.py`).
 
-Runnability checks (only when the static checks pass and `scripts/` exists):
+Runnability checks (only when the static checks pass and the skill has Python):
 
 - `uv lock --check` passes: the workspace lock includes the skill's
   dependencies, so `uv sync --all-packages` installs them.
@@ -101,20 +101,21 @@ def _entry_files(scripts_dir: Path) -> list[Path]:
     )
 
 
-def _validate_scripts_project(skill_dir: Path, skill_name: str) -> str | None:
-    """If the skill has a ``scripts/`` dir, require its uv project to be named for the skill.
+def _validate_python_project(skill_dir: Path, skill_name: str) -> str | None:
+    """If the skill has Python, require its ``python/`` uv project to be named for the skill.
 
-    Absent ``scripts/`` is OK.
+    A skill with no entry files in ``scripts/`` and no ``python/`` dir is OK.
     """
-    scripts_dir = skill_dir / "scripts"
-    if not scripts_dir.is_dir():
+    project_dir = skill_dir / "python"
+    entries = _entry_files(skill_dir / "scripts") if (skill_dir / "scripts").is_dir() else []
+    if not entries and not project_dir.is_dir():
         return None
-    pyproject = scripts_dir / "pyproject.toml"
+    pyproject = project_dir / "pyproject.toml"
     if not pyproject.is_file():
         return (
-            f"{pyproject} is missing: every skill scripts/ dir is a uv workspace "
-            "member and needs one (see .agents/shared/references/spec-summary.md, "
-            "Packaging)"
+            f"{pyproject} is missing: a skill's Python lives in its python/ uv project, "
+            "a workspace member that needs one (see "
+            ".agents/shared/references/spec-summary.md, Packaging)"
         )
     try:
         config = tomllib.loads(pyproject.read_text(encoding="utf-8"))
@@ -124,13 +125,6 @@ def _validate_scripts_project(skill_dir: Path, skill_name: str) -> str | None:
     expected_project = f"{skill_name}-skill"
     if project_name != expected_project:
         return f"{pyproject} names the project {project_name!r}; it must be {expected_project!r}"
-    if config.get("tool", {}).get("uv", {}).get("package") is False:
-        if any(scripts_dir.glob("*.py")):
-            return (
-                f"{pyproject} sets `[tool.uv] package = false`, which is only for a "
-                "scripts/ dir with no Python in it; put the code in a package instead"
-            )
-        return None
     expected_package = _package_name(skill_name)
     packages = (
         config.get("tool", {})
@@ -145,8 +139,8 @@ def _validate_scripts_project(skill_dir: Path, skill_name: str) -> str | None:
             f"{pyproject} builds the packages {packages!r}; it must build exactly "
             f"[{expected_package!r}] (`[tool.hatch.build.targets.wheel] packages`)"
         )
-    if not (scripts_dir / expected_package / "__init__.py").is_file():
-        return f"{scripts_dir / expected_package / '__init__.py'} is missing"
+    if not (project_dir / expected_package / "__init__.py").is_file():
+        return f"{project_dir / expected_package / '__init__.py'} is missing"
     return None
 
 
@@ -181,25 +175,24 @@ def check_runnable(skill_dir: Path, runner: CommandRunner = _run_via_uv) -> str 
     """Confirm the skill's dependencies are locked and every entry imports and builds its CLI.
 
     Runs ``uv lock --check`` and then ``uv run --no-sync <entry> --help`` for each
-    entry file, via ``runner`` (injectable for testing). Paths are resolved first:
-    reached through the ``.claude/skills`` symlink, uv would not recognise the
-    scripts dir as a workspace member. Returns an error message on the first
-    failure, otherwise ``None``. A skill with no ``scripts/`` is trivially
-    runnable.
+    entry file in ``scripts/``, via ``runner`` (injectable for testing). Returns an
+    error message on the first failure, otherwise ``None``. A skill with no
+    ``python/`` project is trivially runnable.
     """
-    scripts_dir = (skill_dir / "scripts").resolve()
-    if not scripts_dir.is_dir():
+    project_dir = (skill_dir / "python").resolve()
+    if not project_dir.is_dir():
         return None
+    scripts_dir = (skill_dir / "scripts").resolve()
     error = _run_checked(
         ["uv", "lock", "--check"],
-        scripts_dir,
+        project_dir,
         runner,
         "`uv lock --check` (the workspace lock must include the skill's "
         "dependencies; run `uv lock`, then `uv sync --all-packages`)",
     )
     if error is not None:
         return error
-    for entry in _entry_files(scripts_dir):
+    for entry in _entry_files(scripts_dir) if scripts_dir.is_dir() else []:
         error = _run_checked(
             ["uv", "run", "--no-sync", str(entry), "--help"],
             scripts_dir,
@@ -261,7 +254,7 @@ def validate(skill_dir: Path) -> str | None:
             f"<= {_MAX_BODY_LINES} (use references/ for overflow)"
         )
 
-    return _validate_scripts_project(skill_dir, name)
+    return _validate_python_project(skill_dir, name)
 
 
 def main() -> int:

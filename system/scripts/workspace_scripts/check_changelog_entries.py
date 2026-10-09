@@ -18,10 +18,9 @@ bucket's in ``system/changelog/``); a PR that touches a project must add
 ``<project_dir>/changelog/<branch>.md`` (slashes in the branch name replaced
 with dashes).
 
-The gate is pure stdlib so it can run without ``uv sync``. Run it from the repo
-root::
+Run it from the repo root::
 
-    python system/scripts/check_changelog_entries.py
+    uv run --no-sync system/scripts/check_changelog_entries.py
 
 Exit codes:
     0  -- ok (entries present, or nothing to check: not a PR branch / no

@@ -503,7 +503,7 @@ dev = [{ name = "ty", specifier = "==0.0.85" }]
 [[package]]
 name = "build-app-skill"
 version = "0.1.0"
-source = { editable = ".agents/skills/build-app/scripts" }
+source = { editable = ".agents/skills/build-app/python" }
 dependencies = [
     { name = "tomlkit" },
     { name = "workspace-scripts" },
@@ -838,7 +838,7 @@ dependencies = [
 [[package]]
 name = "connect-external-service-skill"
 version = "0.1.0"
-source = { editable = ".agents/skills/connect-external-service/scripts" }
+source = { editable = ".agents/skills/connect-external-service/python" }
 dependencies = [
     { name = "workspace-scripts" },
 ]
@@ -2030,7 +2030,7 @@ wheels = [
 [[package]]
 name = "launch-task-skill"
 version = "0.1.0"
-source = { editable = ".agents/skills/launch-task/scripts" }
+source = { editable = ".agents/skills/launch-task/python" }
 dependencies = [
     { name = "oom-priority" },
     { name = "pyyaml" },
@@ -2179,7 +2179,7 @@ wheels = [
 [[package]]
 name = "migrate-workspace-skill"
 version = "0.1.0"
-source = { editable = ".agents/skills/migrate-workspace/scripts" }
+source = { editable = ".agents/skills/migrate-workspace/python" }
 dependencies = [
     { name = "agents-shared" },
 ]
@@ -2321,7 +2321,7 @@ wheels = [
 [[package]]
 name = "notify-user-skill"
 version = "0.1.0"
-source = { editable = ".agents/skills/notify-user/scripts" }
+source = { editable = ".agents/skills/notify-user/python" }
 dependencies = [
     { name = "workspace-scripts" },
 ]
@@ -2655,7 +2655,7 @@ wheels = [
 [[package]]
 name = "publish-template-skill"
 version = "0.1.0"
-source = { editable = ".agents/skills/publish-template/scripts" }
+source = { editable = ".agents/skills/publish-template/python" }
 dependencies = [
     { name = "pydantic" },
 ]
@@ -3937,7 +3937,7 @@ wheels = [
 [[package]]
 name = "update-app-skill"
 version = "0.1.0"
-source = { editable = ".agents/skills/update-app/scripts" }
+source = { editable = ".agents/skills/update-app/python" }
 dependencies = [
     { name = "app-manifest" },
     { name = "workspace-scripts" },
@@ -3952,7 +3952,7 @@ requires-dist = [
 [[package]]
 name = "update-self-skill"
 version = "0.1.0"
-source = { editable = ".agents/skills/update-self/scripts" }
+source = { editable = ".agents/skills/update-self/python" }
 
 [[package]]
 name = "urllib3"
@@ -3979,7 +3979,7 @@ wheels = [
 [[package]]
 name = "use-ai-integration-skill"
 version = "0.1.0"
-source = { editable = ".agents/skills/use-ai-integration/scripts" }
+source = { editable = ".agents/skills/use-ai-integration/python" }
 dependencies = [
     { name = "pydantic" },
 ]

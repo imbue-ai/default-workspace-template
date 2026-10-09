@@ -2,7 +2,8 @@
 
 An entry point is a top-level ``.py`` file in a scripts directory (``system/scripts``,
 ``.agents/shared/scripts``, ``.agents/skills/<name>/scripts``) -- a thin stub that imports its
-sibling package. Its tier is its package's: a stub into a bare package runs under the system
+package, which sits beside it (``system/scripts``, ``.agents/shared/scripts``) or in the skill's
+``python/`` project. Its tier is its package's: a stub into a bare package runs under the system
 ``python3`` with no venv (stdlib only), any other stub runs from the root venv
 (``uv run --no-sync``). A few standalone stdlib scripts outside the scripts directories are bare
 too. See .agents/shared/references/running-python.md.
@@ -44,12 +45,18 @@ def entry_files(scripts_dir: Path) -> list[Path]:
     return sorted(path for path in scripts_dir.glob("*.py") if not is_test_file(path))
 
 
+def project_dir(entry: Path) -> Path:
+    """The uv project an entry's package lives in: its own dir, or a skill's ``python/``."""
+    skill_project = entry.parent.parent / "python"
+    return skill_project if (skill_project / "pyproject.toml").is_file() else entry.parent
+
+
 def entry_package(entry: Path) -> str | None:
-    """The sibling package a stub imports from, or None for a file that imports none."""
+    """The package a stub imports from, or None for a file that imports none of its own."""
     for node in ast.walk(ast.parse(entry.read_text(), filename=str(entry))):
         if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
             package = node.module.split(".")[0]
-            if (entry.parent / package / "__init__.py").is_file():
+            if (project_dir(entry) / package / "__init__.py").is_file():
                 return package
     return None
 
@@ -61,8 +68,8 @@ def is_bare_entry(path: Path) -> bool:
 
 
 def declared_heavy_imports(entry: Path) -> frozenset[str]:
-    """The heavy modules the entry's scripts/pyproject.toml lets it load at import time."""
-    pyproject = entry.parent / "pyproject.toml"
+    """The heavy modules the entry's project's pyproject.toml lets it load at import time."""
+    pyproject = project_dir(entry) / "pyproject.toml"
     if not pyproject.is_file():
         return frozenset()
     table = tomllib.loads(pyproject.read_text()).get("tool", {})

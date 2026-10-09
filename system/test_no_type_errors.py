@@ -24,12 +24,14 @@ _FLOOR_PYTHON_VERSION = "3.12"
 
 _SYSTEM_SCRIPTS = _REPO_ROOT / "system" / "scripts"
 _UPDATE_SELF_SCRIPTS = _REPO_ROOT / ".agents" / "skills" / "update-self" / "scripts"
+_UPDATE_SELF_PYTHON = _REPO_ROOT / ".agents" / "skills" / "update-self" / "python"
 _TK_COMMAND_PARSING_SRC = _REPO_ROOT / "system" / "libs" / "tk_command_parsing" / "src"
 _OOM_PRIORITY_SRC = _REPO_ROOT / "system" / "services" / "oom_priority" / "src"
 
-# Where the bare tier's imports resolve from at runtime: each entry stub's own directory,
-# and the stdlib-only library trees the hook stubs and update-self put on sys.path.
-_BARE_SEARCH_PATHS = (_SYSTEM_SCRIPTS, _UPDATE_SELF_SCRIPTS, _TK_COMMAND_PARSING_SRC, _OOM_PRIORITY_SRC)
+# Where the bare tier's imports resolve from at runtime: system/scripts (the stubs' own
+# directory), update-self's python/ and the stdlib-only library trees, which the stubs and
+# update-self put on sys.path.
+_BARE_SEARCH_PATHS = (_SYSTEM_SCRIPTS, _UPDATE_SELF_PYTHON, _TK_COMMAND_PARSING_SRC, _OOM_PRIORITY_SRC)
 
 
 def _is_test_support(path: Path) -> bool:
@@ -42,7 +44,7 @@ def _bare_files() -> list[Path]:
     stubs += [entry for directory in STANDALONE_BARE_DIRS for entry in entry_files(directory)]
     packages = [
         _SYSTEM_SCRIPTS / "workspace_bare_scripts",
-        _UPDATE_SELF_SCRIPTS / "update_self_skill",
+        _UPDATE_SELF_PYTHON / "update_self_skill",
         _TK_COMMAND_PARSING_SRC,
         _OOM_PRIORITY_SRC,
     ]

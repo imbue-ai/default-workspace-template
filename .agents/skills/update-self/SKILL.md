@@ -298,7 +298,7 @@ stays reachable for bug reports). A worker of that name in state `STOPPED` or
 conflict, resolved per the lease check in Step 1, never forced past. Plain
 `mngr` and `git` commands on purpose: this prose runs from the target's copy
 but launches with the workspace's own, possibly older, `create_worker.py`
-(`scripts/update_self_skill/launcher_contract_test.py` pins what it may ask of it):
+(`python/update_self_skill/launcher_contract_test.py` pins what it may ask of it):
 
 ```bash
 mngr list --format "{name}	{state}" 2>/dev/null | grep -P "^update-self\t"

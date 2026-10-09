@@ -32,7 +32,7 @@ from app_manifest.registry import SHELL_APP_CONTRACT_PATH, SHELL_CONTEXT_MENU_PA
 
 from build_app_skill import scaffold_flask_lib
 
-_SCRIPT = Path(__file__).resolve().parents[1] / "scaffold_flask_lib.py"
+_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "scaffold_flask_lib.py"
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 

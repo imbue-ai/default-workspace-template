@@ -26,18 +26,18 @@ def test_the_sibling_snapshot_is_preferred_over_any_repo_copy() -> None:
     # The snapshot is taken before the worktree reset precisely so the gate
     # keeps working after the reset removes the in-repo copy; preferring the
     # repo would reintroduce the dependency the snapshot exists to remove.
-    deep = Path("/a/b/c/d/e/scripts/publish_template_skill/validate_template.py")
+    deep = Path("/a/b/c/d/e/python/publish_template_skill/validate_template.py")
 
     candidates = validate_template._schema_module_candidates(deep)
 
-    assert candidates[0] == Path("/a/b/c/d/e/scripts/template_manifest.py")
+    assert candidates[0] == Path("/a/b/c/d/e/python/template_manifest.py")
 
 
 def test_every_ancestor_is_offered_as_a_repo_root() -> None:
     # Walking ancestors rather than indexing a fixed depth is what makes the
     # in-repo fallback survive the script being moved or invoked from a
     # different nesting.
-    deep = Path("/a/b/c/d/e/scripts/publish_template_skill/validate_template.py")
+    deep = Path("/a/b/c/d/e/python/publish_template_skill/validate_template.py")
 
     candidates = validate_template._schema_module_candidates(deep)
 

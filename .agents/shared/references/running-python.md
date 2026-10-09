@@ -43,10 +43,11 @@ import.
 ## The two tiers, and how scripts are laid out
 
 Every Python script here is a thin entry file at a fixed path that imports a
-package beside it. A skill's `scripts/` dir is its own uv project
-(`scripts/pyproject.toml`, package `scripts/<skill_name>_skill/`), and so are
-`.agents/shared/scripts` (package `agents_shared`) and `system/scripts`. The
-code runs under one of two interpreters:
+package. A skill keeps its entry files (and any shell scripts) in `scripts/`
+and its code in its own uv project, `python/` (`python/pyproject.toml`, package
+`python/<skill_name>_skill/`). `.agents/shared/scripts` (package
+`agents_shared`) and `system/scripts` are a project each, with the packages
+beside the entry files. The code runs under one of two interpreters:
 
 - **Venv tier** (the default): runs from the root venv, through
   `uv run --no-sync <entry>`. It may use any dependency its `pyproject.toml`
@@ -60,10 +61,7 @@ code runs under one of two interpreters:
   (`forward_port.py`, `with_secrets.py`, `run_in_background.py`, ...).
 
 You never need to know which tier a script is in: follow the rule at the top
-(`uv run --no-sync`, unless the instruction says `python3`). Run a skill's
-scripts by their `.agents/skills/<name>/scripts/...` path, never through the
-`.claude/skills` link: reached through the link, uv does not recognise the
-directory as a workspace member and builds an empty environment for it.
+(`uv run --no-sync`, unless the instruction says `python3`).
 
 ## Long-running processes: sync, then `exec` the entry point
 
@@ -89,5 +87,5 @@ startup, against the 40 ms that uv adds. So in a script or CLI entry point,
 import only what every invocation needs at the top of the module, and import
 heavy libraries (pydantic, loguru, click, httpx, ...) inside the function or
 subcommand that uses them. A test holds every entry point to this; an entry that
-really needs one at import declares it in its `scripts/pyproject.toml` under
+really needs one at import declares it in its project's `pyproject.toml` under
 `[tool.workspace-template.entry-points."<entry>.py"]` as `heavy-imports`.

@@ -8,6 +8,11 @@ and exits with its own code instead of failing somewhere inside the update.
 """
 
 import sys
+from pathlib import Path
+
+# Run by the system python3 with no venv, in place and from update-self's staged copy, so
+# the package beside scripts/ is put on sys.path here.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 
 UPDATE_IMPOSSIBLE_EXIT_CODE = 75
 

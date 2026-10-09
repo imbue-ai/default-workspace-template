@@ -261,12 +261,12 @@ def test_help_is_shown_without_a_command_while_a_missing_command_is_named(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     with pytest.raises(SystemExit) as help_exit:
-        run_in_background.main(["--help"])
+        run_in_background.main(_SCRIPT, ["--help"])
     assert help_exit.value.code == 0
     assert "--description" in capsys.readouterr().out
 
     with pytest.raises(SystemExit) as usage_exit:
-        run_in_background.main(["--description", "Say hello", "echo", "hello"])
+        run_in_background.main(_SCRIPT, ["--description", "Say hello", "echo", "hello"])
     assert usage_exit.value.code == 2
     assert "put the command after a `--`" in capsys.readouterr().err
 

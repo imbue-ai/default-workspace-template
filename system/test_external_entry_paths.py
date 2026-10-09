@@ -41,12 +41,7 @@ _IMPORT_PROBE = (
     "spec = importlib.util.spec_from_file_location('_probe', path); "
     "spec.loader.exec_module(importlib.util.module_from_spec(spec))"
 )
-_BARE_IMPORTS = (
-    _SYSTEM_SCRIPTS / "collect_bug_report_diagnostics.py",
-    # A venv-tier script, but update-self's apply probes run it with the system python3 (the
-    # staged apply has no venv of its own to offer), so it has to import without one too.
-    _SYSTEM_SCRIPTS / "refresh_workspace_view.py",
-)
+_BARE_IMPORTS = (_SYSTEM_SCRIPTS / "collect_bug_report_diagnostics.py",)
 
 _VENV_CALLS: tuple[tuple[Path, tuple[str, ...]], ...] = (
     (_REPO_ROOT / ".agents" / "skills" / "launch-task" / "scripts" / "create_worker.py", ("--help",)),

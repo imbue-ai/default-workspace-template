@@ -73,8 +73,10 @@ A mixed flow of all three kinds is the norm for useful skills.
 .agents/skills/<name>/
   SKILL.md                  # required; body <= 500 lines (progressive disclosure)
   scripts/                  # optional; include when there are deterministic steps
-    pyproject.toml          # required whenever scripts/ exists (see Packaging)
     run.py                  # the entry point: a thin dispatcher into the package
+    *.sh                    # any shell scripts
+  python/                   # the skill's uv project, whenever it has Python (see Packaging)
+    pyproject.toml
     <name_with_underscores>_skill/
       __init__.py           # empty
       *.py                  # the implementation, one module per concern
@@ -84,8 +86,9 @@ A mixed flow of all three kinds is the norm for useful skills.
 ```
 
 A skill's scripts live in the skill's own `scripts/` directory, i.e.
-`.agents/skills/<name>/scripts/`. The repo-root `system/scripts/` is an
-unrelated place, for workspace provisioning and utility scripts.
+`.agents/skills/<name>/scripts/`, and the Python code behind them in its
+`python/` project. The repo-root `system/scripts/` is an unrelated place, for
+workspace provisioning and utility scripts.
 
 The `name` used in `.agents/skills/<name>/` must match the `name` field in
 SKILL.md frontmatter (1-64 chars, lowercase letters/digits + single hyphens,
@@ -150,11 +153,11 @@ chain runs end-to-end.
 
 ### Packaging
 
-A skill's `scripts/` dir is a uv project of its own, and a member of the root
-workspace (the `.agents/skills/*/scripts` glob), so its dependencies resolve in
-the one workspace lock and install into the root venv:
+A skill's Python lives in its own uv project, `python/`, a member of the root
+workspace (the `.agents/skills/*/python` glob), so its dependencies resolve in
+the one workspace lock and its package installs into the root venv:
 
-- `scripts/pyproject.toml` names the project `<name>-skill` and its package
+- `python/pyproject.toml` names the project `<name>-skill` and its package
   `<name_with_underscores>_skill`, built with hatchling:
   ```toml
   [project]
@@ -170,20 +173,21 @@ the one workspace lock and install into the root venv:
   [tool.hatch.build.targets.wheel]
   packages = ["<name_with_underscores>_skill"]
   ```
-  A `scripts/` dir that holds only shell scripts still needs a
-  `pyproject.toml` (a `[project]` table plus `[tool.uv] package = false`):
-  uv refuses a member directory without one, and that breaks every `uv`
-  command in the workspace.
+  Never leave a `python/` dir without its `pyproject.toml`: uv refuses a
+  member directory without one, and that breaks every `uv` command in the
+  workspace. A skill whose `scripts/` holds only shell scripts needs no
+  `python/` at all.
 - The code lives in the package; `run.py` (and any other entry file at the top
-  of `scripts/`) is a thin dispatcher that imports it. Tests sit in the package
-  beside their modules and import them normally
-  (`from <name>_skill.parse import parse_rows`).
+  of `scripts/`) is a thin dispatcher that imports it through the root venv,
+  so a new skill's package is importable once `uv sync --all-packages` has
+  installed it. Tests sit in the package beside their modules and import them
+  normally (`from <name>_skill.parse import parse_rows`).
 - Keep the entry cheap to start: it runs on every call, so its module imports
   only what every invocation needs at the top, and each subcommand imports its
   implementation (and any heavy library -- pydantic, loguru, click, httpx, ...)
   inside the function that runs it. A test fails an entry that loads one of
   those at import time; one that truly needs it at import declares it in
-  `scripts/pyproject.toml` under
+  `python/pyproject.toml` under
   `[tool.workspace-template.entry-points."run.py"]` as
   `heavy-imports = ["pydantic"]`.
 - A dependency must co-resolve with the rest of the workspace, the same as an
@@ -209,8 +213,9 @@ For [ai-script] steps, make sure to read and follow the instructions in the **`u
 
 `uv run --no-sync .agents/shared/scripts/validate_skill.py <skill_dir>` checks SKILL.md
 frontmatter, the kebab-case name rules, directory-name match, description
-length and the 500-line body limit. When the skill has a `scripts/` dir it
-also checks that `scripts/pyproject.toml` exists and names the project
+length and the 500-line body limit. When the skill has Python (entry files in
+`scripts/`, or a `python/` dir) it also checks that `python/pyproject.toml`
+exists and names the project
 `<name>-skill` and the package `<name_with_underscores>_skill`, that `uv lock
 --check` passes (the workspace lock includes the skill's dependencies), and
 that `uv run --no-sync <entry> --help` exits 0 for every entry file at the top
