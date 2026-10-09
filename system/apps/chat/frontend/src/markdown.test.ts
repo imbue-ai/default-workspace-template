@@ -92,14 +92,11 @@ describe("renderMarkdown links", () => {
     '<a href="/\\evil.example/x">other host</a>',
     '<a href="//[bad/x">other host</a>',
     '<a href="/\\a%20b/x">other host</a>',
-  ])(
-    "renders the raw link %s, which a browser takes to another host, as its text",
-    (source) => {
-      const container = render(source);
-      expect(container.querySelector("a")).toBeNull();
-      expect(container.textContent!.trim()).toBe("other host");
-    },
-  );
+  ])("renders the raw link %s, which a browser takes to another host, as its text", (source) => {
+    const container = render(source);
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.textContent!.trim()).toBe("other host");
+  });
 
   it("keeps the markup and image inside an unwrapped link", () => {
     const container = render("[**bold** ![Chart](/home/user/workspace/data/images/chart.png)](data/images/chart.png)");
