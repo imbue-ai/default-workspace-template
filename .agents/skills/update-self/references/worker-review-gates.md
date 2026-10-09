@@ -28,7 +28,9 @@ All three must hold:
    merge, each revert sha, and any revert conflict with how you resolved it
    in the report as this condition's evidence. A catch-up merge (the worker
    guide's §7) is not an edit of yours: what it brings in is the workspace's
-   own work. A conflict you resolved in it is.
+   own work, so after one the diff runs to the tip before it (`git diff
+   <merge-sha> "$PRE"`, `$PRE` as §7 derives it). A conflict you resolved in
+   it is an edit.
 
 Every changed file then arrives exactly as upstream shipped and tested it, and
 there is nothing local for a review to protect. Running `/autofix` here would
