@@ -2,7 +2,7 @@
 name = "workspace-scripts"
 version = "0.1.0"
 description = "The workspace's own scripts: a stdlib-only package the system python3 runs, and one that runs from the root venv"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     # migrate_claude_auth reads the chat app's auth helpers and mngr's env-file parser.
     "chat",

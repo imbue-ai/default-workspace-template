@@ -184,19 +184,16 @@ def _run_playwright_check(
     executable_path = str(DEFAULT_FORTRESS_PATH) if DEFAULT_FORTRESS_PATH.exists() else None
 
     with sync_playwright() as p:
-        launch_kwargs = {
-            "args": [
+        browser = p.chromium.launch(
+            executable_path=executable_path,
+            args=[
                 "--no-sandbox",
                 "--disable-gpu",
                 "--disable-dev-shm-usage",
                 "--single-process",
             ],
-            "headless": True,
-        }
-        if executable_path:
-            launch_kwargs["executable_path"] = executable_path
-
-        browser = p.chromium.launch(**launch_kwargs)
+            headless=True,
+        )
         page = browser.new_page()
         page.goto(url, wait_until="domcontentloaded", timeout=int(timeout * 1000))
 

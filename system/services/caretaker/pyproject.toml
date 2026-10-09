@@ -3,7 +3,7 @@ name = "caretaker"
 version = "0.1.0"
 description = "The weekly Caretaker's deterministic check: wakes the Caretaker automation agent only when it finds something worth telling the user about"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = []
 
 # No build-system: this is a bash-script package (a virtual uv workspace

@@ -2,7 +2,7 @@
 name = "agents-shared"
 version = "0.1.0"
 description = "Scripts the skills and the worker flow share"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "pyyaml>=6",
 ]

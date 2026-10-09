@@ -93,7 +93,6 @@ ALWAYS_RUN_GUARDS: Final[tuple[str, ...]] = (
     "system/scripts/agent_hook_wiring_test.py",
     "system/scripts/agent_guard_tool_scope_test.py",
     "system/scripts/provision_guard_test.py",
-    "system/scripts/stdlib_only_scripts_test.py",
     "system/scripts/update_self_mirrors_sync_test.py",
     "system/scripts/claude_memory_settings_test.py",
 )

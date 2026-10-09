@@ -2,7 +2,7 @@
 name = "update-app-skill"
 version = "0.1.0"
 description = "Previews an app's worktree beside the live one"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "app-manifest",
     "workspace-scripts",

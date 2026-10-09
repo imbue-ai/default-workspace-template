@@ -2,7 +2,7 @@
 name = "connect-external-service-skill"
 version = "0.1.0"
 description = "Files a secret request through the chat's secret card"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "workspace-scripts",
 ]

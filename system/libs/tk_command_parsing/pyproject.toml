@@ -3,7 +3,7 @@ name = "tk-command-parsing"
 version = "0.1.0"
 description = "Shell-aware (shlex-based) parser for tk/ticket command invocations, shared by the progress-view tooling. Stdlib-only so the PreToolUse gate hook can import it under a bare python3."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = []
 
 [build-system]
