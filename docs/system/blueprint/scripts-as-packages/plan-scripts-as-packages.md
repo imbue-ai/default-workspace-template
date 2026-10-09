@@ -22,7 +22,7 @@
 > * Type checking is one root `[tool.ty]` checked against the root venv (covering `.agents`, `system/scripts`, root-level `system/` tests, `conftest.py`) plus a second ty check of the bare tier against an environment with no third-party packages, replacing the static stdlib-only AST test.
 > * The Python floor is 3.12 everywhere: `requires-python >=3.12` for the root and the 16 projects at `>=3.11`; the bare ty check targets 3.12; the 3.12 install workaround in `setup_system.sh`/`build_workspace.sh` is removed once verified by a fresh Lima build; pre-2026-09-14 local Lima workspaces (Debian 12, system Python 3.11) are not supported for updates. This all lands in PR 3, together with the guard below.
 > * The bare `update_self.py` stub checks the interpreter version before importing its package. On anything older than 3.12 it exits with a distinct code and a message saying the update is impossible on this workspace and pointing to `migrate-workspace`. Update-self's Step 3a (the first staged-copy run) tells the lead to stop on that exit, report the update as impossible, and offer `migrate-workspace`. A test runs the stub with a faked older version and asserts the exit code and message.
-> * Launch principles (from 23f0b3f3's uv overhead analysis): long-running processes run directly without uv; one-offs may use `uv run --no-sync`, with imports optimized so startup overhead is small. On gVisor, `--no-sync` leaves ~40 ms of uv while a pydantic CLI's imports cost ~450-560 ms, so startup imports are the main lever. #759 turns the `workspace-layout` CLI into a stdlib-only thin client.
+> * Launch principles (from 23f0b3f3's uv overhead analysis): long-running processes run directly without uv; one-offs may use `uv run --no-sync`, with imports optimized so startup overhead is small. On gVisor, `--no-sync` leaves ~40 ms of uv while a pydantic CLI's imports cost ~450-560 ms, so startup imports are the main lever. #759 (merged 2026-10-08) made the `workspace-layout` CLI a stdlib-only thin client.
 > * Three stacked PRs on #831: (1) launch discipline (long-running processes run directly; agent-facing plain `uv run` becomes `--no-sync`, excluding skill/system script invocations), (2) scripts become packages with their invocations on `uv run --no-sync`, (3) type checking.
 > * The PR split exists only for testing and review: all three are expected to merge together or close together, so user workspaces migrate once and the one migration reference covers everything.
 > * A paired mngr PR on `gabriel/skill-scripts-as-packages` (matching PR 2's template branch name) converts minds_evals' and minds_admin's `uv run` invocations of template scripts to `--no-sync` and runs their tests against PR 2's branch.
@@ -47,7 +47,7 @@
 
 ## Overview
 
-- **Why.** Skill scripts and `system/scripts` were written as standalone files on the theory that each is an isolated unit. In practice that theory is worked around everywhere: 10 `sys.path` inserts (6 more in `oom_priority/bin`), about 33 test files loading scripts by path, 8 PEP 723 scripts with private environments, and nothing type-checks any of it (114 ty errors today). Packaging the scripts removes the workarounds and makes them checkable.
+- **Why.** Skill scripts and `system/scripts` were written as standalone files on the theory that each is an isolated unit. In practice that theory is worked around everywhere: 11 files with `sys.path` inserts (plus 6 in `oom_priority/bin`), about 33 test files loading scripts by path, 8 PEP 723 scripts with private environments, and nothing type-checks any of it (114 ty errors at #831's tip `1f5697934`, after its main merge). Packaging the scripts removes the workarounds and makes them checkable.
 - **The real constraint is the environment, not the layout.** Some code must run when the venv is missing or broken, or is called by path from another release, or sits in a long-running process's launch chain. That is the **bare tier**: system `python3`, stdlib only. Everything else is the **venv tier**. Both are packages; only the interpreter differs.
 - **uv overhead decides how things launch** (measured by 23f0b3f3 on workspace-1, gVisor):
   - `python3 layout.py`: 135 ms.
@@ -63,7 +63,7 @@
   - One root ty project, checked against the root venv.
   - One bare-tier check against an environment with no third-party packages, so ty's `unresolved-import` *is* the stdlib-only rule.
   - Floor raised to Python 3.12 everywhere.
-- **Delivery.** Three stacked template PRs on #831 plus a paired mngr PR. The split is for review only; they merge together, so user workspaces migrate once.
+- **Delivery.** Three stacked template PRs on #831 plus a paired mngr PR. #759 and #814 have merged, so the stack sits on #831 alone, and PR 1's base becomes `main` once #831 merges. The split is for review only; they merge together, so user workspaces migrate once.
 
 ## Expected behavior
 
@@ -221,7 +221,7 @@
   - root check: `check_no_type_errors` from the repo root;
   - bare check: create an empty venv (`python3.12 -m venv --without-pip` in tmp), then `ty check --python <empty venv> --python-version 3.12 --extra-search-path <bare roots>` over the bare package, update-self's package, `oom_priority/bin` and the `tk_command_parsing` / `oom_priority` `src/` trees. Bare roots: `system/scripts`, `.agents/skills/update-self/scripts`, `system/libs/tk_command_parsing/src`, `system/services/oom_priority/src`.
   - Delete `system/scripts/stdlib_only_scripts_test.py`.
-- **Fix the 114 errors** measured on 10-07, plus anything the restructure moved or exposed. No suppressions unless the code is correct and ty can't express it.
+- **Fix the 114 errors** measured at #831's tip (`1f5697934`: `.agents` 20 plus 1 warning, `system/scripts` 19, `system/*.py` 75, `conftest.py` 0), plus anything the restructure moved or exposed. No suppressions unless the code is correct and ty can't express it.
   - The main group is `system/test_app_manifests.py`'s `dict[AppName, ...]` indexed with string literals (about 70).
   - The rest are scattered `invalid-argument-type` / `unresolved-attribute` / `not-subscriptable` / `invalid-method-override` errors.
   - The 12 `unresolved-import`s disappear once the code is packaged.
@@ -329,5 +329,5 @@
 - **Codex `SessionStart` equivalent**: confirm whether `.codex/hooks.json` runs a sync, and give it the same script.
 - **Expensive-stdlib list for the bare tier**: start with `asyncio`, then measure on the scratch workspace before fixing the list.
 - **Does update-self's apply health probe cover every program?** If a bare wrapper broke after an apply, would the probes catch it? Relevant only to the safety margin. The 3.12 guard makes it moot for the version case.
-- **#759 is still moving**: its `workspace-layout` thin client and `--no-sync` changes land beneath this stack. Merge it up as it changes; don't redo its conversions.
+- **#831 is still open**: merge its tip into the stack as it moves. #759 (thin `workspace-layout` client and its `--no-sync` changes) and #814 are already merged, and PR 1 inherits them through #831's main merge; don't redo their conversions.
 - **Follow-ups outside this stack**: MIND-485 (guard dispatcher and the rewrite hook's `Bash` matcher, on main after this merges); MIND-486 (migration-doc system that reshapes the migration reference).
