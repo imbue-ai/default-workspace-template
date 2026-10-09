@@ -42,6 +42,7 @@ from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_transcript import agent_switch_event_id
 from imbue.chat.config import Config
+from imbue.chat.errors import ChatAppError
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.claude.tap import ClaudeInterruptToComposer
 from imbue.chat.harnesses.codex.ledger import ShoulderTapResult
@@ -72,7 +73,9 @@ from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.primitives import ChatId
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
 from imbue.chat.server import _agent_switch_options
+from imbue.chat.server import _open_chat_stream
 from imbue.chat.server import _revive_and_retry_send
+from imbue.chat.server import _stream_events
 from imbue.chat.server import _stream_filtered_events
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
@@ -470,9 +473,8 @@ def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -
 
 
 def test_a_stopped_chat_read_after_its_stop_is_released_once_nobody_streams_it(tmp_path: Path) -> None:
-    """Reading a stopped chat rebuilds its transcript after the stop's own eviction; the
-    release drops that rebuild, but not while a stream of the chat is open or a send is
-    reviving it, and never a running chat's."""
+    """Reading a stopped chat rebuilds its transcript; the release drops that rebuild, but not
+    while a stream of the chat is open or a send is reviving it, and never a running chat's."""
     state = build_test_state()
     seed_agent_state(state.agent_manager, "stopped-agent", name="stopped-agent", state="STOPPED")
     seed_agent_state(state.agent_manager, "running-agent", name="running-agent", state="RUNNING")
@@ -526,6 +528,136 @@ def test_a_watcher_released_before_it_starts_leaves_no_watch_thread_running(tmp_
         assert state.watchers == {}
         assert len(watcher.get_all_events()) == 1
         assert set(threading.enumerate()) - threads_before == set()
+    finally:
+        state.shutdown()
+
+
+def test_opening_a_stopped_chats_stream_keeps_the_watcher_through_a_release_while_it_is_built() -> None:
+    """The release spares only a chat with an open stream, so a release landing while the stream's watcher
+    is built must already count the stream, or the stream opens with nothing feeding it."""
+    manager = _ReleasingWhileSeedingAgentManager.build(WebSocketBroadcaster())
+    state = build_test_state(agent_manager=manager)
+    manager.note_agent_list_known()
+    seed_agent_state(manager, "stopped-agent", name="stopped-agent", state="STOPPED")
+    manager.release = state.release_unviewed_stopped_transcripts
+    try:
+        # Called in an app context rather than through the test client, which reads the first frame (the
+        # first keepalive, seconds away) before it returns.
+        with create_application(state).app_context():
+            response = _stream_events("stopped-agent")
+
+        assert response.status_code == 200
+        assert manager.release is None
+        assert set(state.watchers) == {"stopped-agent"}
+        response.close()
+    finally:
+        state.shutdown()
+
+
+def test_a_stopped_chat_is_released_as_soon_as_its_last_stream_closes() -> None:
+    """Waiting for the next observe event would keep a stopped chat nobody is viewing resident for minutes.
+
+    The release waits for the response's close: closing the generator alone is what a GC sweep does to an
+    abandoned one, on whatever thread it lands, so it unregisters the stream but releases nothing."""
+    state = build_test_state()
+    state.agent_manager.note_agent_list_known()
+    seed_agent_state(state.agent_manager, "stopped-agent", name="stopped-agent", state="STOPPED")
+    try:
+        with create_application(state).app_context():
+            response = _stream_events("stopped-agent")
+        frames = response.response
+        assert isinstance(frames, Generator)
+        state.event_queues.broadcast("stopped-agent", {"type": "probe"})
+        next(frames)
+        assert set(state.watchers) == {"stopped-agent"}
+
+        frames.close()
+        assert not state.event_queues.has_consumers("stopped-agent")
+        assert set(state.watchers) == {"stopped-agent"}
+
+        response.close()
+
+        assert state.watchers == {}
+    finally:
+        state.shutdown()
+
+
+def test_a_stream_response_closed_before_its_first_frame_releases_its_stopped_chat() -> None:
+    """A HEAD request runs the stream's view, which registers the stream, but sends no body, so the frame
+    generator is closed before it ever starts and its own cleanup never runs."""
+    state = build_test_state()
+    state.agent_manager.note_agent_list_known()
+    seed_agent_state(state.agent_manager, "stopped-agent", name="stopped-agent", state="STOPPED")
+    try:
+        # Buffered, so the client closes the body once it is read, as the server does after sending it.
+        response = create_application(state).test_client().head("/api/chats/stopped-agent/stream", buffered=True)
+
+        assert response.status_code == 200
+        assert not state.event_queues.has_consumers("stopped-agent")
+        assert state.watchers == {}
+    finally:
+        state.shutdown()
+
+
+def test_a_stream_whose_feed_fails_to_build_no_longer_counts_as_open() -> None:
+    """The release spares a chat with an open stream, so a stream left registered after its feed failed to
+    build would keep the chat's transcripts resident for good."""
+    state = build_test_state()
+
+    def failing_build() -> None:
+        raise ChatAppError("the transcript could not be read")
+
+    try:
+        with pytest.raises(ChatAppError):
+            _open_chat_stream(state, "stopped-agent", failing_build)
+        assert not state.event_queues.has_consumers("stopped-agent")
+
+        _open_chat_stream(state, "stopped-agent", lambda: None)
+        assert state.event_queues.has_consumers("stopped-agent")
+    finally:
+        state.shutdown()
+
+
+class _OpeningAStreamDuringTheCheckEventQueues(AgentEventQueues):
+    """On the first consumer check, opens a stream of the chat (register, then build its watcher) on another
+    thread, and lets it run before the check answers."""
+
+    def __init__(self, open_stream: Callable[[], None]) -> None:
+        super().__init__()
+        self._open_stream = open_stream
+        self.opener: threading.Thread | None = None
+
+    def has_consumers(self, chat_id: str) -> bool:
+        has_consumers = super().has_consumers(chat_id)
+        if self.opener is None:
+            self.opener = threading.Thread(target=self._open_stream)
+            self.opener.start()
+            # An unblocked opener finishes well within this; one waiting on the release's lock does not.
+            self.opener.join(timeout=0.5)
+        return has_consumers
+
+
+def test_a_stream_opening_while_the_release_checks_for_one_keeps_a_watcher(tmp_path: Path) -> None:
+    """The release's check for an open stream and its eviction have to be one step against the stream's
+    watcher build, or a stream opening in between takes the watcher the release then stops."""
+    state = build_test_state()
+    seed_agent_state(state.agent_manager, "stopped-agent", name="stopped-agent", state="STOPPED")
+    stopped_info = _claude_agent_info_with_one_message(tmp_path, "stopped-agent", "STOPPED")
+    state.get_or_create_watcher(stopped_info)
+
+    def open_stream() -> None:
+        state.event_queues.register("stopped-agent")
+        state.get_or_create_watcher(stopped_info)
+
+    event_queues = _OpeningAStreamDuringTheCheckEventQueues(open_stream)
+    state.event_queues = event_queues
+    try:
+        state.release_unviewed_stopped_transcripts()
+        assert event_queues.opener is not None
+        event_queues.opener.join(timeout=10)
+
+        assert event_queues.has_consumers("stopped-agent")
+        assert set(state.watchers) == {"stopped-agent"}
     finally:
         state.shutdown()
 

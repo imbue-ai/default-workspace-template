@@ -553,9 +553,11 @@ def build_test_state(
         secret_requests=secret_requests if secret_requests is not None else build_temporary_secret_request_store(),
         chat_namer=chat_namer,
     )
-    # Match production: eviction drops a destroyed/stopped agent's watcher.
+    # Match production: eviction drops a destroyed agent's transcripts, the release a stopped chat's
+    # that nobody is streaming, and removing a chat's active agent ends the chat's streams.
     manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)
     manager.set_unviewed_transcript_release(state.release_unviewed_stopped_transcripts)
+    manager.set_chat_stream_ender(state.event_queues.end_streams)
     return state
 
 

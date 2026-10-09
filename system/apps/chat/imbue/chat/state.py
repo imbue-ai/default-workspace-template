@@ -25,6 +25,7 @@ from imbue.chat.harnesses.registry import build_watcher
 from imbue.chat.harnesses.registry import get_harness_spec
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
+from imbue.chat.primitives import ChatId
 from imbue.chat.secret_requests import SecretRequestChatBridge
 from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -92,7 +93,8 @@ class ChatAppState(MutableModel):
     secret_request_bridge: SecretRequestChatBridge | None = None
     watchers: dict[str, AgentSessionWatcher] = {}
     # The archived segments read so far, by agent id: loaded on the first read that reaches
-    # one and dropped with the chat (``stop_and_remove_watcher``), so a chat that is not
+    # one and dropped with the chat (``stop_and_remove_watcher``, or
+    # ``release_unviewed_stopped_transcripts`` for a stopped one), so a chat that is not
     # being read holds none of its history resident.
     loaders: dict[str, TranscriptLoader] = {}
     latchkey_catalog_cache: dict[str, Any] = {}
@@ -197,7 +199,8 @@ class ChatAppState(MutableModel):
 
         The read side of the agent's watcher with nothing live: an archived segment of a chat
         is read through this (``chat_transcript.py``). Cached beside the watchers, under the
-        same lock, and dropped with the chat by ``stop_and_remove_watcher``.
+        same lock, and dropped with the chat by ``stop_and_remove_watcher`` or, for a stopped
+        chat, ``release_unviewed_stopped_transcripts``.
         """
         with self._watchers_lock:
             existing = self.loaders.get(agent_info.id)
@@ -251,18 +254,42 @@ class ChatAppState(MutableModel):
         """Evict everything resident for one agent: its watcher (the resident transcript, thread,
         and filesystem watches) and, for an archived member of a chat, its loader.
 
-        The memory half of the chat lifecycle: called when an agent is destroyed or its
-        chat's lifecycle transitions to positively dead (stopped from the UI, `mngr stop`, an
-        OOM shed, idle shutdown), so a chat that is not running holds no chat-backend memory.
-        Cheap no-op when nothing is resident. Rebuild-on-demand is `get_or_create_watcher`
-        and `get_or_create_loader`: viewing a stopped chat re-reads its transcript from disk
-        transparently.
+        The memory half of the chat lifecycle, so a chat that is not running and not being
+        viewed holds no chat-backend memory. Cheap no-op when nothing is resident.
+        Rebuild-on-demand is `get_or_create_watcher` and `get_or_create_loader`: viewing a
+        stopped chat re-reads its transcript from disk transparently.
+        """
+        self._evict_resident(agent_id, spared_if_streamed=None)
+
+    def release_unviewed_stopped_transcripts(self) -> None:
+        """Evict what each stopped chat holds resident, unless a stream of it is open.
+
+        Level-triggered, so it also catches a stopped chat that a read rebuilt after its stop. A
+        chat with an open stream keeps its transcript while its viewer reads it, since the stream
+        is fed only by the watcher and a reported death can be momentary; the first call after
+        the stream closes drops it.
+        """
+        with self._watchers_lock:
+            resident_agent_ids = set(self.watchers) | set(self.loaders)
+        for agent_id in resident_agent_ids:
+            chat_id = self.agent_manager.chat_id_of_agent(agent_id)
+            if self.agent_manager.is_chat_stopped(chat_id):
+                self._evict_resident(agent_id, spared_if_streamed=chat_id)
+
+    def _evict_resident(self, agent_id: str, spared_if_streamed: ChatId | None) -> None:
+        """Evict one agent's watcher and loader, unless ``spared_if_streamed`` names a chat with an open stream.
+
+        The stream is checked under the lock a watcher build takes, and a stream registers before
+        building its watcher, so a stream opening now is either counted here or builds a fresh
+        watcher after this pops.
 
         The watcher is popped under the lock but stopped outside it -- `stop` joins the
         watch thread, and holding the lock across that join would stall every other
         watcher creation for the duration.
         """
         with self._watchers_lock:
+            if spared_if_streamed is not None and self.event_queues.has_consumers(str(spared_if_streamed)):
+                return
             watcher = self.watchers.pop(agent_id, None)
             loader = self.loaders.pop(agent_id, None)
             is_watcher_starting = id(watcher) in self._starting_watchers
@@ -273,20 +300,6 @@ class ChatAppState(MutableModel):
         if loader is not None:
             logger.debug("Evicting the loaded transcript of agent {}", agent_id)
             loader.close()
-
-    def release_unviewed_stopped_transcripts(self) -> None:
-        """Evict what each stopped chat holds resident, unless a stream of it is open.
-
-        Reading a stopped chat rebuilds its transcript, which the manager's eviction (on the
-        chat's transition into stopped) never sees. A chat with an open stream keeps its
-        transcript while its viewer reads it; the first call after the stream closes drops it.
-        """
-        with self._watchers_lock:
-            resident_agent_ids = set(self.watchers) | set(self.loaders)
-        for agent_id in resident_agent_ids:
-            chat_id = self.agent_manager.chat_id_of_agent(agent_id)
-            if self.agent_manager.is_chat_stopped(chat_id) and not self.event_queues.has_consumers(str(chat_id)):
-                self.stop_and_remove_watcher(agent_id)
 
     def stop_all_watchers(self) -> None:
         with self._watchers_lock:
