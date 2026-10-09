@@ -558,9 +558,10 @@ commits as your edits.
           $(sed 's/^/--path /' data/.tasks/update-self/catchup-paths.txt)
   ```
 
-- **Isolated-service boots** for a service with a file you resolved a conflict
-  in. A service the workspace changed on its own is already live in that
-  state.
+- **Isolated-service boots** for a service with a file both sides of the
+  catch-up merge changed (your branch and the incoming commits, conflicted or
+  auto-merged), as 4b boots its merged set. A service only the workspace
+  changed is already live in that state.
 - **Playwright** for a web surface with a file you resolved a conflict in, as
   4b drives it.
 - **Bundles**: rebuild all three when you reported them and `$PRE..HEAD`
