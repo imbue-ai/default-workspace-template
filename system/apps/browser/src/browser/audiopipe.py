@@ -28,6 +28,7 @@ import importlib
 import os
 import threading
 from collections import deque
+from types import ModuleType
 from typing import Any
 
 from loguru import logger
@@ -89,9 +90,9 @@ class AudioPipe:
 
     def start(self) -> None:
         _attempt_pcmflux_import()
-        if _pcmflux["module"] is None:
+        pcmflux_module = _pcmflux["module"]
+        if not isinstance(pcmflux_module, ModuleType):
             raise AudioPipeError(f"pcmflux failed to import: {_pcmflux['error']}")
-        pcmflux_module: Any = _pcmflux["module"]
         settings = pcmflux_module.AudioCaptureSettings()
         settings.device_name = self._source.encode() if isinstance(self._source, str) else self._source
         settings.sample_rate = _SAMPLE_RATE

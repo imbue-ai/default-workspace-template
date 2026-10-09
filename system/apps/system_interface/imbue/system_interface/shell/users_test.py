@@ -2,10 +2,11 @@ import json
 from datetime import timedelta
 from pathlib import Path
 
+from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import UserId
+
 from imbue.imbue_common.model_update import to_update
 from imbue.system_interface.shell.data_types import UserRecord
-from imbue.system_interface.shell.primitives import DesktopId
-from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.users import USERS_FILENAME
 from imbue.system_interface.shell.users import UserStore

@@ -21,7 +21,7 @@ from uuid import uuid4
 
 from app_manifest.primitives import AppName
 from app_manifest.registry import read_origin_label
-from app_manifest.registry import registry_path
+from app_manifest.registry_location import registry_path
 from flask import Flask
 from flask import Response
 from flask import current_app
@@ -33,6 +33,12 @@ from loguru import logger as _loguru_logger
 from pydantic import Field
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
+from workspace_layout.errors import InvalidLayoutValueError
+from workspace_layout.interfaces import ShellLayoutInterface
+from workspace_layout.ops import ClientActivityReport
+from workspace_layout.primitives import ClientActivityKind
+from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import DesktopId
 
 from imbue.chat import accounts_endpoints
 from imbue.chat import focus_chat
@@ -157,8 +163,6 @@ from imbue.chat.request_helpers import require_loopback
 from imbue.chat.secret_requests import ChatLookup
 from imbue.chat.secret_requests import NoticeDeliveryError
 from imbue.chat.secret_requests import SecretRequestChatBridge
-from imbue.chat.shell_client import post_to_shell
-from imbue.chat.shell_client import shell_base_url
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import attach_state
 from imbue.chat.state import get_state
@@ -634,7 +638,7 @@ def _send_to_chat(
                 detail=f"Failed to send message to agent '{agent_info.name}' (0 successful agents)"
             )
             return json_response(failure.model_dump(), status_code=500)
-    _record_client_message_activity(chat_id, send_message_request, state.is_secondary)
+    record_client_message_activity(state.shell, chat_id, send_message_request, state.is_secondary)
     # Recorded after the delivery, once the revived process (if any) is up and its pid can be
     # found.
     agent_manager.record_message_sent(chat_id)
@@ -686,33 +690,35 @@ def _held_send_origin(send_message_request: SendMessageRequest) -> HeldSendOrigi
 
 
 @pure
-def client_activity_report(chat_id: ChatId, send_message_request: SendMessageRequest) -> dict[str, str]:
-    """The body of the shell's ``POST /api/client-activity`` for one send (desktop contracts.md section 5.1), keyed by chat."""
-    return {
-        "client_id": send_message_request.client_id,
-        "desktop_id": send_message_request.desktop_id,
-        "kind": "message",
-        "app": str(CHAT_APP_NAME),
-        "key": chat_id,
-        "text": send_message_request.message,
-    }
+def client_activity_report(chat_id: ChatId, send_message_request: SendMessageRequest) -> ClientActivityReport:
+    """The shell's client-activity report for one send (desktop contracts.md section 5.1), keyed by chat. Raises
+    InvalidLayoutValueError when the send's client or desktop is not an id the shell would take."""
+    return ClientActivityReport(
+        client_id=ClientId(send_message_request.client_id),
+        desktop_id=DesktopId(send_message_request.desktop_id),
+        kind=ClientActivityKind.MESSAGE,
+        app=str(CHAT_APP_NAME),
+        key=chat_id,
+        text=send_message_request.message,
+    )
 
 
-def _record_client_message_activity(
-    chat_id: ChatId, send_message_request: SendMessageRequest, is_secondary: bool = False
+def record_client_message_activity(
+    shell: ShellLayoutInterface, chat_id: ChatId, send_message_request: SendMessageRequest, is_secondary: bool
 ) -> None:
     """Tell the shell which client (and desktop) a message came from, so agents can attribute requests through
-    ``layout.py context``. Callers naming no client or no desktop are not recorded, and neither is anything a
-    secondary chat (a preview) hears: the shell's activity log is the live chat's. Posted on its own thread:
+    ``workspace-layout context``. Callers naming no client or no desktop are not recorded, and neither is anything a
+    secondary chat (a preview) hears: the shell's activity log is the live chat's. Reported on its own thread:
     the shell is a separate app, and a send must not wait on it."""
     if is_secondary or not is_client_activity_reportable(send_message_request):
         return
-    body = client_activity_report(chat_id, send_message_request)
+    try:
+        report = client_activity_report(chat_id, send_message_request)
+    except InvalidLayoutValueError as e:
+        logger.warning("Skipped reporting a send of chat {} to the shell: {}", chat_id, e)
+        return
     threading.Thread(
-        target=post_to_shell,
-        args=(f"{shell_base_url()}/api/client-activity", body),
-        name="client-activity-report",
-        daemon=True,
+        target=shell.record_client_activity, args=(report,), name="client-activity-report", daemon=True
     ).start()
 
 
@@ -1248,7 +1254,7 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
         return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
     except HandoffError as e:
         return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
-    _record_client_message_activity(ChatId(chat_id), switch_request, get_state().is_secondary)
+    record_client_message_activity(get_state().shell, ChatId(chat_id), switch_request, get_state().is_secondary)
     agent_manager.record_message_sent(ChatId(chat_id))
     response = SwitchChatResponse(status="converging", kind=kind, phase=phase, returned_block=returned_block)
     return json_response(response.model_dump(mode="json"), status_code=202)

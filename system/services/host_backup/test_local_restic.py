@@ -652,6 +652,7 @@ def test_forget_clears_a_dead_backups_lock_and_applies_retention(
         env_overrides=env,
     )
 
+    assert state.events_dir is not None
     events = [
         json.loads(line)
         for line in (state.events_dir / "events.jsonl").read_text().splitlines()

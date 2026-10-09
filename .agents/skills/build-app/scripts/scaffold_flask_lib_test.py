@@ -18,6 +18,7 @@ writes, asserting only what holds whatever this machine is listening on.
 
 from __future__ import annotations
 
+import ast
 import configparser
 import importlib.util
 import subprocess
@@ -31,6 +32,8 @@ from app_manifest.primitives import MAX_DISPLAY_NAME_LENGTH
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH, SHELL_CONTEXT_MENU_PATH
 
 _SCRIPT = Path(__file__).resolve().parent / "scaffold_flask_lib.py"
+
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 
 _ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
 
@@ -330,6 +333,39 @@ def test_write_lib_writes_a_manifest_the_library_accepts(tmp_path: Path) -> None
     assert manifest.priority == "user"
     assert manifest.program == "inbox-status"
     assert manifest.default_shortcut is None
+
+
+def _test_function_names(source: str) -> frozenset[str]:
+    return frozenset(
+        node.name
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
+    )
+
+
+def test_a_scaffolded_apps_ratchets_define_the_tests_every_project_defines() -> None:
+    """test_meta_ratchets holds every project's ratchets file to one set of tests, so an
+    app the scaffold writes must carry exactly that set or its first commit fails it."""
+    reference = _REPO_ROOT / "system/libs/app_manifest/test_app_manifest_ratchets.py"
+
+    assert _test_function_names(scaffold_flask_lib._lib_ratchets()) == _test_function_names(
+        reference.read_text()
+    )
+
+
+def test_a_scaffolded_app_passes_its_own_type_check(tmp_path: Path) -> None:
+    lib_dir = scaffold_flask_lib._write_lib(
+        tmp_path, "inbox-status", "inbox status dashboard", "Inbox status", 8081, [], _ICON
+    )
+
+    result = subprocess.run(
+        [str(Path(sys.executable).parent / "ty"), "check", "--python", sys.prefix],
+        cwd=lib_dir,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_display_name_falls_back_to_the_description() -> None:
