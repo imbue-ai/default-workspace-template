@@ -91,7 +91,8 @@ LAUNCHER = ("uv", "run")
 # A bare ``uv run`` installs only the root project's closure, which leaves out user-built
 # apps, so the worktree's environment would lack the app's own console script.
 SYNC_COMMAND = ("uv", "sync", "--all-packages")
-# A first sync of a fresh worktree installs the whole workspace; a hung one must not hang the preview.
+# A first sync of a fresh worktree installs the whole workspace; a hung one must not hang
+# the preview.
 SYNC_TIMEOUT_SECONDS = 600
 
 # The live repo's environment, which the ``uv run`` that runs this script activates. Left on
