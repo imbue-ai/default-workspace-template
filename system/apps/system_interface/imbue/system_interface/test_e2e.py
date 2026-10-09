@@ -1650,8 +1650,8 @@ def _hold_page_socket(page: Page) -> tuple[_HeldSocket, Callable[[], None]]:
 def test_an_op_move_wins_over_a_report_the_page_made_before_hearing_it(e2e_server: E2EServer, page: Page) -> None:
     """An agent's op moves the client while the page's own report of where it landed is still on its way to the
     shell (held here; a socket read late or a slow network in real use). The report was made before the page heard
-    of the op's move, so the shell does not record it: the client and the page end on the op's desktop, and no
-    further move is announced."""
+    of the op's move, so the shell does not record it but tells the page the op's move again: the client and the page
+    end on the op's desktop, and the page hears of no move but the op's."""
     socket, release = _hold_page_socket(page)
     _land(page, e2e_server)
     _pump_until(page, lambda: any(not report["is_following"] for report in socket.reports), "the landing's report")
@@ -1662,7 +1662,8 @@ def test_an_op_move_wins_over_a_report_the_page_made_before_hearing_it(e2e_serve
     other_switch = page.locator(f'[data-desktop-switch="{other}"]')
     expect(other_switch).to_have_attribute("data-active", "true", timeout=15000)
     _pump_until(page, lambda: any(report["is_following"] for report in socket.reports), "the page follow the op")
-    assert [move["desktop_id"] for move in socket.moves] == [other]
+    op_move = (other, socket.moves[0]["revision"])
+    assert [(move["desktop_id"], move["revision"]) for move in socket.moves] == [op_move]
 
     release()
 
@@ -1672,7 +1673,8 @@ def test_an_op_move_wins_over_a_report_the_page_made_before_hearing_it(e2e_serve
 
     _pump_until(page, _is_registered, "the shell register the page's reports")
     page.wait_for_timeout(_SETTLED_WATCH_MS)
-    assert [move["desktop_id"] for move in socket.moves] == [other]
+    heard = [(move["desktop_id"], move["revision"]) for move in socket.moves]
+    assert len(heard) > 1 and set(heard) == {op_move}
     expect(other_switch).to_have_attribute("data-active", "true")
     clients = _get_json(f"{e2e_server.base_url}/api/clients")["clients"]
     assert [client["active_desktop"] for client in clients if client["id"] == client_id] == [other]

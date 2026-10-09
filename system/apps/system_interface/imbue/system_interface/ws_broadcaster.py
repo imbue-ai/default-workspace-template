@@ -39,6 +39,16 @@ def _drain_queue(client_queue: queue.Queue[str | None]) -> None:
             is_drained = True
 
 
+def _active_desktop_changed(client_id: str, desktop_id: str, revision: int, report_id: str | None) -> dict[str, Any]:
+    return {
+        "type": "active_desktop_changed",
+        "client_id": client_id,
+        "desktop_id": desktop_id,
+        "revision": revision,
+        "report_id": report_id,
+    }
+
+
 class ConnectionRegistration(FrozenModel):
     """What one open WebSocket said about itself in its ``client_state`` report (desktop contracts.md section 6)."""
 
@@ -150,22 +160,30 @@ class WebSocketBroadcaster(MutableModel):
     def _broadcast_to_matching(self, message: dict[str, Any], target_client_id: str | None) -> None:
         text = json.dumps(message)
         with self._lock:
-            dead_queues: list[queue.Queue[str | None]] = []
+            matching: list[queue.Queue[str | None]] = []
             for client_queue in self._client_queues:
                 if target_client_id is not None:
                     info = self._client_info_by_queue_id.get(id(client_queue))
                     if info is None or info.client_id != target_client_id:
                         continue
-                try:
-                    client_queue.put_nowait(text)
-                    self._consecutive_queue_full_by_id[id(client_queue)] = 0
-                except queue.Full:
-                    new_count = self._consecutive_queue_full_by_id.get(id(client_queue), 0) + 1
-                    self._consecutive_queue_full_by_id[id(client_queue)] = new_count
-                    if new_count >= _MAX_CONSECUTIVE_QUEUE_FULL:
-                        dead_queues.append(client_queue)
-            for dead_queue in dead_queues:
-                self._disconnect_locked(dead_queue)
+                matching.append(client_queue)
+            self._put_locked(text, matching)
+
+    def _put_locked(self, text: str, client_queues: Sequence[queue.Queue[str | None]]) -> None:
+        """Put ``text`` on each of ``client_queues``, evicting a client whose queue has stayed full too long. Caller
+        must hold ``self._lock``."""
+        dead_queues: list[queue.Queue[str | None]] = []
+        for client_queue in client_queues:
+            try:
+                client_queue.put_nowait(text)
+                self._consecutive_queue_full_by_id[id(client_queue)] = 0
+            except queue.Full:
+                new_count = self._consecutive_queue_full_by_id.get(id(client_queue), 0) + 1
+                self._consecutive_queue_full_by_id[id(client_queue)] = new_count
+                if new_count >= _MAX_CONSECUTIVE_QUEUE_FULL:
+                    dead_queues.append(client_queue)
+        for dead_queue in dead_queues:
+            self._disconnect_locked(dead_queue)
 
     def _disconnect_locked(self, dead_queue: queue.Queue[str | None]) -> None:
         """Evict ``dead_queue`` and unblock its handler thread. Caller must hold ``self._lock``.
@@ -235,15 +253,18 @@ class WebSocketBroadcaster(MutableModel):
         """A client's stored active desktop moved to ``desktop_id`` at ``revision``; its windows follow it unless they
         have heard a later revision. ``report_id`` names the window report that moved it (None for any other cause),
         so the reporting window can tell its own echo."""
-        self.broadcast(
-            {
-                "type": "active_desktop_changed",
-                "client_id": client_id,
-                "desktop_id": desktop_id,
-                "revision": revision,
-                "report_id": report_id,
-            }
-        )
+        self.broadcast(_active_desktop_changed(client_id, desktop_id, revision, report_id))
+
+    def send_active_desktop_changed_to(
+        self, client_queue: queue.Queue[str | None], client_id: str, desktop_id: str, revision: int
+    ) -> None:
+        """Tell one connection, unless it has since gone, that its client's stored desktop is ``desktop_id`` at
+        ``revision``: the answer to a report a later move superseded, since that move may have been announced before
+        the connection was there to hear it."""
+        text = json.dumps(_active_desktop_changed(client_id, desktop_id, revision, None))
+        with self._lock:
+            if client_queue in self._client_queues:
+                self._put_locked(text, [client_queue])
 
     def broadcast_update_notice_changed(self, notice: Mapping[str, Any] | None) -> None:
         """The kept rollback point changed (raised, progressing, settled, or cleared); every window re-renders its notice."""

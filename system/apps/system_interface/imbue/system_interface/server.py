@@ -46,6 +46,7 @@ from imbue.system_interface.presence import utc_now
 from imbue.system_interface.request_helpers import error_response
 from imbue.system_interface.request_helpers import handle_unhandled_exception
 from imbue.system_interface.request_helpers import json_response
+from imbue.system_interface.shell.data_types import ClientReportOutcome
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import PopOutStateReport
 from imbue.system_interface.shell.errors import ClientNotFoundError
@@ -589,9 +590,10 @@ def _handle_client_state_message(
     desktop it is on, on connect and on every switch. Registration feeds the broadcaster's client registry
     (which targets layout ops), the client record, and the client-activity log (a ``desktop_switch`` when
     the report names a different previous desktop). A following report (a window that followed the client's stored
-    desktop, pushed or read on a reconnect) registers the connection and only stamps the client as seen. A pop-out's
-    report registers its connection under its client and nothing more: the client's record and active desktop are its
-    main window's.
+    desktop, pushed or read on a reconnect) registers the connection and only stamps the client as seen. A moving
+    report made before a move its page had not heard of is not recorded, and its connection is told the record. A
+    pop-out's report registers its connection under its client and nothing more: the client's record and active
+    desktop are its main window's.
     """
     try:
         parsed = json.loads(raw_message)
@@ -615,7 +617,7 @@ def _handle_client_state_message(
     # A state file the shell cannot write is a warning, not a dropped socket: the live
     # registration above is what the layout ops need, and the next report retries the write.
     # A report made before a move its page had not heard of is not recorded: the page follows that move instead.
-    is_superseded = False
+    superseded: ClientReportOutcome | None = None
     if report.is_following:
         try:
             shell.record_client_seen(report.client_id)
@@ -625,16 +627,26 @@ def _handle_client_state_message(
             _loguru_logger.opt(exception=e).warning("Could not stamp the client {} as seen", report.client_id)
     else:
         try:
-            is_superseded = shell.record_client_report(report).is_superseded
+            outcome = shell.record_client_report(report)
         except ShellStateError as e:
             _loguru_logger.opt(exception=e).warning("Could not record the client report for {}", report.client_id)
-    if is_superseded:
+        else:
+            superseded = outcome if outcome.is_superseded else None
+    # The move that superseded a report may have been announced before this connection could hear it (an op landing
+    # as the page loads), so the window is told the record again; one that heard it already ignores it.
+    if superseded is not None:
         _loguru_logger.info(
             "WS client {} reported desktop {} at revision {}, before a later move: not recorded (conn {})",
             report.client_id,
             report.active_desktop,
             report.revision,
             id(client_queue),
+        )
+        shell.broadcaster.send_active_desktop_changed_to(
+            client_queue,
+            str(report.client_id),
+            str(superseded.record.active_desktop),
+            superseded.record.desktop_revision,
         )
     if is_first_report:
         _loguru_logger.info(
@@ -644,7 +656,7 @@ def _handle_client_state_message(
             id(client_queue),
         )
         return True
-    if not is_superseded:
+    if superseded is None:
         _log_client_switches(report, client_queue, shell)
     return True
 
