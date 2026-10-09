@@ -2,7 +2,7 @@
 name = "default-workspace-template"
 version = "0.1.0"
 description = "Template repo for a persistent Claude agent"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     # Built-in services that supervisord runs from `.venv/bin/<name>` must be listed
     # here: a `uv sync` without --all-packages prunes members outside the root
@@ -75,6 +75,8 @@ dev = [
     # Fails a test that skips where the environment is meant to be complete
     # (the CI job that runs the suites inside the workspace image).
     "pytest-workspace-env",
+    # system/test_no_type_errors.py, pinned to the version every project's ratchet uses.
+    "ty==0.0.85",
 ]
 
 [tool.uv]
@@ -198,15 +200,26 @@ addopts = [
     "--ignore=skills",
 ]
 
+# The root project's type check (system/test_no_type_errors.py): the agent skills and
+# their shared scripts, system/scripts, and the root-level tests. Every other package
+# under system/ is its own ty project with its own test_no_type_errors.
+[tool.ty.src]
+include = [".agents", "system/scripts", "system/*.py", "conftest.py"]
+
+# Workspaces run on Linux; without this ty would judge platform-specific stdlib calls
+# (os.waitid, ...) by whichever machine runs the check.
+[tool.ty.environment]
+python-platform = "linux"
+
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 exclude = ["system/vendor/tk", "system/apps/system_interface", "system/apps/chat"]
 
 [tool.ruff.lint]
 select = ["F", "I", "UP006", "UP007"]
 
 [tool.pyright]
-pythonVersion = "3.11"
+pythonVersion = "3.12"
 # apps and skills are the top-level discoverability symlinks; excluding them
 # keeps pyright from analyzing the same files twice via the symlink paths.
 exclude = ["system/vendor/tk", "system/apps/system_interface", "system/apps/chat", "apps", "skills"]

@@ -1,6 +1,6 @@
 """Tests for ``preview_app.py``.
 
-Run via: ``uv run --no-sync pytest .agents/skills/update-app/scripts/preview_app_test.py``
+Run via: ``uv run --no-sync pytest .agents/skills/update-app/python/update_app_skill/preview_app_test.py``
 
 A recording runner stands in for the shared ``serve_isolated_instance.py``: it records
 each invocation and files the instance state the real script would, so the resolution
@@ -268,36 +268,36 @@ def test_a_shell_preview_boots_its_siblings_first_and_frames_them_through_a_regi
     worktree = _write_worktree(tmp_path)
     live_registry = tmp_path / "apps.toml"
     monkeypatch.setenv("MINDS_APPS_FILE", str(live_registry))
-    runner = _RecordingRunner(tmp_path)
 
     # The sibling's own registration lands in the live registry when it boots; stand in for it.
-    def run_and_register(argv: Sequence[str], cwd: Path) -> int:
-        code = _RecordingRunner.run(runner, argv, cwd)
-        if argv[2] == "up" and "chat-preview" in argv:
-            live_registry.write_text(
-                _dump_registry(
-                    [
-                        {
-                            "name": "chat",
-                            "url": "http://localhost:8010",
-                            "label": "chat-live",
-                        },
-                        {
-                            "name": "terminal",
-                            "url": "http://localhost:7681",
-                            "label": "terminal-live",
-                        },
-                        {
-                            "name": "chat-preview-app",
-                            "url": "http://localhost:40001",
-                            "label": "chat-preview-x1y2",
-                        },
-                    ]
+    class _RegisteringRunner(_RecordingRunner):
+        def run(self, argv: Sequence[str], cwd: Path) -> int:
+            code = super().run(argv, cwd)
+            if argv[2] == "up" and "chat-preview" in argv:
+                live_registry.write_text(
+                    _dump_registry(
+                        [
+                            {
+                                "name": "chat",
+                                "url": "http://localhost:8010",
+                                "label": "chat-live",
+                            },
+                            {
+                                "name": "terminal",
+                                "url": "http://localhost:7681",
+                                "label": "terminal-live",
+                            },
+                            {
+                                "name": "chat-preview-app",
+                                "url": "http://localhost:40001",
+                                "label": "chat-preview-x1y2",
+                            },
+                        ]
+                    )
                 )
-            )
-        return code
+            return code
 
-    runner.run = run_and_register  # type: ignore[method-assign]
+    runner = _RegisteringRunner(tmp_path)
     code = mod.up(
         "system_interface",
         worktree,

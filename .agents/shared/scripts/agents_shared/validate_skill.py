@@ -96,9 +96,7 @@ def _is_test_file(path: Path) -> bool:
 
 def _entry_files(scripts_dir: Path) -> list[Path]:
     """The entry points: every ``.py`` at the top of ``scripts/`` except tests."""
-    return sorted(
-        path for path in scripts_dir.glob("*.py") if not _is_test_file(path)
-    )
+    return sorted(path for path in scripts_dir.glob("*.py") if not _is_test_file(path))
 
 
 def _validate_python_project(skill_dir: Path, skill_name: str) -> str | None:
@@ -107,7 +105,9 @@ def _validate_python_project(skill_dir: Path, skill_name: str) -> str | None:
     A skill with no entry files in ``scripts/`` and no ``python/`` dir is OK.
     """
     project_dir = skill_dir / "python"
-    entries = _entry_files(skill_dir / "scripts") if (skill_dir / "scripts").is_dir() else []
+    entries = (
+        _entry_files(skill_dir / "scripts") if (skill_dir / "scripts").is_dir() else []
+    )
     if not entries and not project_dir.is_dir():
         return None
     pyproject = project_dir / "pyproject.toml"
@@ -197,7 +197,9 @@ def check_runnable(skill_dir: Path, runner: CommandRunner = _run_via_uv) -> str 
             ["uv", "run", "--no-sync", str(entry), "--help"],
             scripts_dir,
             runner,
-            f"`uv run --no-sync {entry} --help` (its imports or dependencies may be broken)",
+            f"`uv run --no-sync {entry} --help` (its imports or dependencies may be broken; "
+            "a ModuleNotFoundError for the skill's own package means it is not installed yet: "
+            "run `uv sync --all-packages`)",
         )
         if error is not None:
             return error

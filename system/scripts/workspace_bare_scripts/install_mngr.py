@@ -129,4 +129,3 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"install_mngr: {error}\n")
         return 1
     return 0
-

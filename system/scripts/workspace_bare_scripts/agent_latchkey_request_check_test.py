@@ -9,11 +9,7 @@ the queue -- is left alone.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from workspace_bare_scripts import agent_latchkey_request_check as checker
-
-_SCRIPT = Path(__file__).resolve().parents[1] / "agent_latchkey_request_check.py"
 
 _HOST = "http://latchkey-self.invalid/permission-requests"
 _BODY = (

@@ -168,7 +168,9 @@ def test_worker_template_installs_claude_plugins_before_the_agent_starts() -> No
         "system/scripts/claude_update_plugin.sh",
     ]
     sync_position = next(
-        idx for idx, cmd in enumerate(commands) if cmd == "uv sync --all-packages"
+        idx
+        for idx, cmd in enumerate(commands)
+        if cmd == "uv sync --all-packages --frozen"
     )
     assert commands.index(plugin_commands[0]) > sync_position
 
@@ -189,7 +191,7 @@ def test_worker_template_installs_no_worker_skill_and_keeps_venv_and_plugins() -
     assert not any("install_worker_skills.sh" in cmd for cmd in commands), (
         f"the worker template must no longer install a worker skill, got {commands!r}"
     )
-    sync_position = commands.index("uv sync --all-packages")
+    sync_position = commands.index("uv sync --all-packages --frozen")
     plugin_positions = [
         idx for idx, cmd in enumerate(commands) if "claude_update_plugin.sh" in cmd
     ]

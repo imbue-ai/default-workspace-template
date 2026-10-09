@@ -297,8 +297,3 @@ def main() -> int:
         return 0
     sys.stderr.write(_block_message(violation))
     return 2
-
-
-if __name__ == "__main__":
-    sys.exit(main())
-

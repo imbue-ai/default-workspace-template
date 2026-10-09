@@ -59,7 +59,7 @@ class SchemaModuleNotFoundError(ValidateTemplateError, FileNotFoundError):
         super().__init__(
             "Cannot find template_manifest.py (searched: "
             + ", ".join(str(path) for path in searched)
-            + "). It is snapshotted next to validate_template.py by build_template.sh; "
+            + "). build_template.sh snapshots it beside the publish_template_skill package; "
             "without it there is no validation and no fallback."
         )
 

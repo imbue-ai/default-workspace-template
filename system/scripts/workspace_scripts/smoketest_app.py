@@ -4,10 +4,10 @@ Performs active socket/HTTP readiness polling, reload verification, and
 optional headless Playwright browser screenshot capture with optimized flags.
 
 Usage:
-    python3 system/scripts/smoketest_app.py <name-or-port>
-    python3 system/scripts/smoketest_app.py <name-or-port> --marker "Add a task"
-    python3 system/scripts/smoketest_app.py <name-or-port> --screenshot /tmp/mock.png
-    python3 system/scripts/smoketest_app.py <name-or-port> --marker "Add a task" --screenshot /tmp/mock.png
+    uv run --no-sync system/scripts/smoketest_app.py <name-or-port>
+    uv run --no-sync system/scripts/smoketest_app.py <name-or-port> --marker "Add a task"
+    uv run --no-sync system/scripts/smoketest_app.py <name-or-port> --screenshot /tmp/mock.png
+    uv run --no-sync system/scripts/smoketest_app.py <name-or-port> --marker "Add a task" --screenshot /tmp/mock.png
 """
 
 import argparse
@@ -179,24 +179,21 @@ def _run_playwright_check(
         venv_py = repo_root / ".venv/bin/python"
         if venv_py.exists() and sys.executable != str(venv_py):
             os.execv(str(venv_py), [str(venv_py), *sys.argv])
-        sys.exit("error: playwright is not installed. Run with `uv run python ...` or activate workspace .venv.")
+        sys.exit("error: playwright is not installed. Run with `uv run --no-sync system/scripts/smoketest_app.py ...` or activate workspace .venv.")
 
     executable_path = str(DEFAULT_FORTRESS_PATH) if DEFAULT_FORTRESS_PATH.exists() else None
 
     with sync_playwright() as p:
-        launch_kwargs = {
-            "args": [
+        browser = p.chromium.launch(
+            executable_path=executable_path,
+            args=[
                 "--no-sandbox",
                 "--disable-gpu",
                 "--disable-dev-shm-usage",
                 "--single-process",
             ],
-            "headless": True,
-        }
-        if executable_path:
-            launch_kwargs["executable_path"] = executable_path
-
-        browser = p.chromium.launch(**launch_kwargs)
+            headless=True,
+        )
         page = browser.new_page()
         page.goto(url, wait_until="domcontentloaded", timeout=int(timeout * 1000))
 

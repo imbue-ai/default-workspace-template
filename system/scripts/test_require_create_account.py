@@ -1,7 +1,7 @@
 """The create gate as mngr runs it, end to end through the real `mngr create`.
 
-The unit tests beside this file (`require_create_account_test.py`) run the script directly
-and settle what it decides. What they cannot show is that mngr reaches it at all: the gate is
+The unit tests (`workspace_bare_scripts/require_create_account_test.py`) run the script
+directly and settle what it decides. What they cannot show is that mngr reaches it at all: the gate is
 a `pre_command_scripts.create` entry in the committed `.mngr/settings.toml`, and everything
 that matters about it -- the shell test that keeps `python3` out of a create run on the
 user's own machine, the project root mngr runs the entry from, and the script's stderr
@@ -43,8 +43,9 @@ def _mngr_create_in_a_gated_project(
 ) -> subprocess.CompletedProcess[str]:
     """Run the real `mngr create` in a temp project carrying the committed gate entry.
 
-    The entry names the script by its project-relative path, so the script is copied to that
-    path inside the project; mngr runs the entry from the project root, in this environment.
+    The entry names the script by its project-relative path, so the script (with the bare
+    package its stub imports) is copied to that path inside the project; mngr runs the entry
+    from the project root, in this environment.
     """
     if shutil.which("uv") is None:
         pytest.skip("uv is not on PATH")
@@ -54,6 +55,11 @@ def _mngr_create_in_a_gated_project(
     script_copy = project / _SCRIPT.relative_to(_SCRIPT.parents[2])
     script_copy.parent.mkdir(parents=True)
     shutil.copy(_SCRIPT, script_copy)
+    shutil.copytree(
+        _SCRIPT.with_name("workspace_bare_scripts"),
+        script_copy.with_name("workspace_bare_scripts"),
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
     (project / ".mngr" / "settings.toml").write_text(
         f"is_allowed_in_pytest = true\n\n[pre_command_scripts]\ncreate = [{_committed_pre_command_entry()!r}]\n"
     )

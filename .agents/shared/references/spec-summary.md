@@ -12,7 +12,8 @@ scripts, references, or assets. The SKILL.md reads like a recipe: "do X,
 then Y, then Z." Each step of that process is one of three kinds:
 
 - **`[script]`** -- deterministic. Runs the same code every time, only the
-  data varies. Lives in `.agents/skills/<name>/scripts/`.
+  data varies. Its entry file lives in `.agents/skills/<name>/scripts/` and
+  its code in the skill's `python/` package.
 - **`[ai-script]`** -- needs a model's judgement, but is a *fixed part of
   the flow* (the same prompt/criteria every run, only the data varies).
   Script it as an AI call following the `use-ai-integration` skill (see
@@ -130,8 +131,9 @@ only when every step is `[prose]` executor meta-work; if any flow step is
 deterministic or model-driven, it belongs in a script. Use scripts where
 they earn their keep; don't force a script for genuine executor meta-work.
 
-When you do include `run.py`, write the flow's logic as small helper
-functions (one per step) and expose them two ways:
+When you do include `run.py`, write the flow's logic in the skill's package
+(see Packaging below) as small helper functions (one per step) and expose
+them two ways:
 
 - **A subcommand per step**, whenever the step's inputs and outputs serialize
   cleanly -- data, not live handles. (A step that hands the next one an open
@@ -163,7 +165,7 @@ the one workspace lock and its package installs into the root venv:
   [project]
   name = "<name>-skill"
   version = "0.1.0"
-  requires-python = ">=3.11"
+  requires-python = ">=3.12"
   dependencies = ["rich>=13"]
 
   [build-system]
@@ -181,7 +183,7 @@ the one workspace lock and its package installs into the root venv:
   of `scripts/`) is a thin dispatcher that imports it through the root venv,
   so a new skill's package is importable once `uv sync --all-packages` has
   installed it. Tests sit in the package beside their modules and import them
-  normally (`from <name>_skill.parse import parse_rows`).
+  normally (`from <name_with_underscores>_skill.parse import parse_rows`).
 - Keep the entry cheap to start: it runs on every call, so its module imports
   only what every invocation needs at the top, and each subcommand imports its
   implementation (and any heavy library -- pydantic, loguru, click, httpx, ...)

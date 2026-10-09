@@ -10,7 +10,7 @@ metadata:
 Two commands, and the split matters:
 
 - **`agentic-browser-fleet`** *owns* browsers -- start one, list them, hand one to the human,
-  give it back. Run from the repo root via `uv run`.
+  give it back. Run from the repo root via `uv run --no-sync`.
 - **`playwright-cli`** *drives* them -- look at the page, click, type, scroll.
 
 ```bash

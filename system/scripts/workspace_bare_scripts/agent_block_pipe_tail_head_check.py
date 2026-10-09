@@ -149,8 +149,3 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     sys.stderr.write(_REFUSAL)
     return 2
-
-
-if __name__ == "__main__":
-    sys.exit(main())
-

@@ -2,7 +2,7 @@
 name = "publish-template-skill"
 version = "0.1.0"
 description = "Builds and validates a publishable template"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     # validate_template.py checks a template.toml against env_converge's pydantic schema.
     "pydantic>=2",

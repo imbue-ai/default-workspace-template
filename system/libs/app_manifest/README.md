@@ -97,7 +97,7 @@ The models behind a workspace app's two descriptions:
   `RepoRelativePath`, `ReferencePath`, `ExcludeGlob` (no leading `!`: a
   gitignore negation would re-include a built-in exclude), `ReferenceNote`) and
   the name rule shared with `forward_port.py` (a drift test in
-  `system/scripts/forward_port_test.py` keeps them identical), with
+  `system/scripts/workspace_bare_scripts/forward_port_test.py` keeps them identical), with
   `canonical_name_from_title(title)` (the name a user-facing title registers
   as) and `is_name_conflict(candidate_title, taken_names)` (whether a title
   would collide with a name already taken) for apps that mint names from titles.

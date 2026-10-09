@@ -2,7 +2,7 @@
 name = "use-ai-integration-skill"
 version = "0.1.0"
 description = "Calls Claude with the workspace's AI credentials"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2",
 ]

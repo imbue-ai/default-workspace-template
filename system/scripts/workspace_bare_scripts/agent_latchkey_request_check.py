@@ -233,8 +233,3 @@ def main(argv: list[str] | None = None) -> int:
         "tool call of its own.\n"
     )
     return 2
-
-
-if __name__ == "__main__":
-    sys.exit(main())
-

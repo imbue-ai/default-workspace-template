@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import subprocess
 from http.client import InvalidURL
-from pathlib import Path
 from typing import Any, Sequence
 
 import pytest
@@ -27,8 +26,6 @@ from workspace_layout.shell_url import LAYOUT_OP_ROUTE
 from workspace_layout.testing import describe_op_body_problem
 
 from workspace_scripts import refresh_workspace_view
-
-_SCRIPT = Path(__file__).resolve().parents[1] / "refresh_workspace_view.py"
 
 _PRIMARY_ID = "agent-primary"
 _OWN_ID = "agent-subagent"

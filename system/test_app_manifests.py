@@ -71,13 +71,15 @@ def _manifest_path_constant(module_file: Path) -> str | None:
     for node in ast.walk(ast.parse(module_file.read_text())):
         if isinstance(node, ast.AnnAssign) and node.value is not None:
             target: ast.expr = node.target
+            value: ast.expr = node.value
         elif isinstance(node, ast.Assign) and len(node.targets) == 1:
             target = node.targets[0]
+            value = node.value
         else:
             continue
         if not (isinstance(target, ast.Name) and target.id == "MANIFEST_PATH"):
             continue
-        for literal in ast.walk(node.value):
+        for literal in ast.walk(value):
             if isinstance(literal, ast.Constant) and isinstance(literal.value, str):
                 return literal.value
     return None
@@ -350,7 +352,7 @@ def test_every_critical_built_in_previews_from_its_own_entry_point(
 
 def test_built_in_manifests_agree_with_the_contract_table() -> None:
     by_name = {
-        manifest.name: manifest
+        str(manifest.name): manifest
         for manifest in map(load_manifest, _built_in_manifest_paths())
     }
 
@@ -403,8 +405,9 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     # Every seeded shortcut opens a new window of its app; the one browser is focused instead
     # (docs/system/specs/window-bound-resources.md section 3.1).
     for name, mode in (("chat", "new"), ("terminal", "new"), ("files", "new"), ("browser", "focus")):
-        assert by_name[name].default_shortcut is not None
-        assert by_name[name].default_shortcut.mode == mode, name
+        shortcut = by_name[name].default_shortcut
+        assert shortcut is not None
+        assert shortcut.mode == mode, name
     # The desktop interface's launch paths (desktop-interface contracts.md section 2; the POST ones are the
     # post-launch-paths plan's section 7 and 8).
     assert by_name["system_interface"].launch_paths == ()
@@ -420,8 +423,9 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         assert [(entry.id, entry.path, entry.method.value) for entry in by_name[name].launch_paths] == [
             ("new", launch_path, method)
         ], name
-        assert by_name[name].default_shortcut is not None
-        assert by_name[name].default_shortcut.launch == "new", name
+        shortcut = by_name[name].default_shortcut
+        assert shortcut is not None
+        assert shortcut.launch == "new", name
     assert [param.name for param in by_name["chat"].launch_paths[0].params] == []
     assert [param.name for param in by_name["chat"].launch_paths[1].params] == ["account_id", "message"]
     assert [param.name for param in by_name["chat"].launch_paths[2].params] == ["message"]

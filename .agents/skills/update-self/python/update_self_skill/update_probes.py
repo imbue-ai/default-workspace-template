@@ -13,7 +13,7 @@ import sys
 import tempfile
 import tomllib
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Sequence, TypeGuard
 
 from update_self_skill.update_banding import ExpendWrapper, as_expendable
 from update_self_skill.update_layout import (
@@ -328,7 +328,7 @@ def health_probe_url(repo_root: Path, app_name: str) -> str | None:
     return f"{base.rstrip('/')}{HEALTH_PATH}"
 
 
-def is_health_answer(page: FetchedPage | None) -> bool:
+def is_health_answer(page: FetchedPage | None) -> TypeGuard[FetchedPage]:
     """Whether a response is the app's health route answering: 200 with a JSON body.
 
     The body's type is what tells the app from a stale registry row: until the

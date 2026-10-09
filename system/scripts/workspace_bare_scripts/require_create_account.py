@@ -77,4 +77,3 @@ def main(environ: dict[str, str], cwd: Path) -> int:
         return 0
     print(NO_ACCOUNT_MESSAGE, file=sys.stderr)
     return 1
-

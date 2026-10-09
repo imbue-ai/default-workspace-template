@@ -152,4 +152,3 @@ def main(argv: list[str] | None = None) -> int:
     for line in lines:
         sys.stdout.write(f"{line}\n")
     return 0
-

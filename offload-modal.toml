@@ -44,10 +44,13 @@ build_inputs = [
     "system/scripts/build_workspace.sh",
     "system/scripts/_tool_env.sh",
     "system/scripts/install_mngr.py",
+    "system/scripts/workspace_bare_scripts/install_mngr.py",
     "system/scripts/list_mngr_plugins.py",
+    "system/scripts/workspace_bare_scripts/list_mngr_plugins.py",
     # Read by those two to pick each tool's mngr plugins.
     "system/config/mngr_plugins.toml",
     "system/scripts/tool_env.py",
+    "system/scripts/workspace_bare_scripts/tool_env.py",
     "system/scripts/default_workspace_template_seed.sh",
     "system/scripts/seed_home_skeleton.sh",
     # What the first-boot steps run on top of it.

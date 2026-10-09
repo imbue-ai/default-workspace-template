@@ -93,7 +93,6 @@ ALWAYS_RUN_GUARDS: Final[tuple[str, ...]] = (
     "system/scripts/agent_hook_wiring_test.py",
     "system/scripts/agent_guard_tool_scope_test.py",
     "system/scripts/provision_guard_test.py",
-    "system/scripts/stdlib_only_scripts_test.py",
     "system/scripts/update_self_mirrors_sync_test.py",
     "system/scripts/claude_memory_settings_test.py",
 )
@@ -431,12 +430,22 @@ def _file_request(
     )
 
 
+def _suite_directory(directory: str) -> str:
+    """A skill runs as one suite, so a directory inside one (its ``python/`` project) selects the
+    whole skill."""
+    unit = find_owning_unit(directory)
+    if unit is not None and unit.startswith(f"{_SKILLS_DIRECTORY}/"):
+        return unit
+    return directory
+
+
 def _whole_request(
     layout: RepoLayout,
     directory: str,
     marker_scope: MarkerScope,
     reason: SelectionReason,
 ) -> _PytestRequest | None:
+    directory = _suite_directory(directory)
     if not (layout.repo_root / directory).is_dir() or not _unit_has_tests(layout, directory):
         return None
     own_root = _own_root_for(layout, directory)

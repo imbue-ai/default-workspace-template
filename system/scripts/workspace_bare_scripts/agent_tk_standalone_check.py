@@ -81,8 +81,3 @@ def main(argv: list[str] | None = None) -> int:
         '  tk close <id> "<summary>"\n'
     )
     return 2
-
-
-if __name__ == "__main__":
-    sys.exit(main())
-

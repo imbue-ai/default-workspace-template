@@ -189,9 +189,24 @@ reasons, and what an edit must preserve, are in
 
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
-    resolve-target --local-tags --override "$REF" > /tmp/update-self-recheck.json || exit 1
+    resolve-target --local-tags --override "$REF" > /tmp/update-self-recheck.json || exit $?
 cat /tmp/update-self-recheck.json
 ```
+
+**If it exits with code 75**, this workspace's system Python is older than the
+one the target release needs (a local workspace created before 2026-09-14), and
+it cannot be updated in place. Stop here: apply nothing and dispatch no worker.
+Record the verdict with the workspace's own copy, the one Step 1 ran -- the
+staged copy exits 75 on every subcommand under this Python:
+
+```bash
+python3 .agents/skills/update-self/scripts/update_self.py \
+    run-status verdict NEEDS_RECREATION --detail "System Python too old to update in place."
+```
+
+Then tell the user as "Migration-required updates" below says, and release the
+`updating workspace` lease (`tk close "$UPDATE_LEASE_ID" "Update pass
+finished."`). There is no history bridge or tracking ticket to clean up yet.
 
 This is the only ceiling check that runs on a workspace updating *into* the
 ceiling for the first time (its local copy may predate the check). If

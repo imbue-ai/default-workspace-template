@@ -25,15 +25,16 @@ pipeline is part of this skill, not a separate creation:
   dependencies in `python/pyproject.toml` and `scripts/run.py` as its entry
   point (layout and rules: `spec-summary.md`, "Packaging").
 - Its tests go in the package too: where data-pipeline-builder says
-  `tests/test_parse.py`, write `.agents/skills/<name>/python/<name>_skill/test_parse.py`.
-  pytest imports it as `<name>_skill.test_parse`, so the name cannot collide
+  `tests/test_parse.py`, write `.agents/skills/<name>/python/<name_with_underscores>_skill/test_parse.py`.
+  pytest imports it as `<name_with_underscores>_skill.test_parse`, so the name cannot collide
   with another skill's.
 - Fixtures go in `.agents/skills/<name>/tests/fixtures/` as usual.
 
 ## Where a skill's behavior lives
 
-A skill's behavior is split between its scripts (`[script]` / `[ai-script]`, in
-`.agents/skills/<name>/scripts/`) and its SKILL.md prose, so a change -- or a
+A skill's behavior is split between its scripts (`[script]` / `[ai-script]`, entry
+files in `.agents/skills/<name>/scripts/` and their code in the skill's `python/`
+package) and its SKILL.md prose, so a change -- or a
 fix -- may touch either or both. When a wrong behavior traces to an ambiguous
 or incorrect prose instruction, the edit is a SKILL.md edit even if the skill
 has scripts; a pure-prose skill (no scripts) has all of its behavior in
@@ -94,7 +95,7 @@ belongs to the app itself is that app's own pass.
   walk the SKILL.md instructions as the executing agent.
 - The universal fixture-test rule (`harden-creation.md`), for a skill: save 1-3
   samples under `.agents/skills/<name>/tests/fixtures/` and add a
-  `.agents/skills/<name>/python/<name>_skill/<name>_test.py` that feeds each through the
+  `.agents/skills/<name>/python/<name_with_underscores>_skill/<name_with_underscores>_test.py` that feeds each through the
   parser and asserts the exact output shape.
 
 ## Data capture

@@ -35,7 +35,11 @@ from imbue.mngr.interfaces.data_types import CertifiedHostData
 from imbue.mngr.primitives import AgentId, HostId
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_COLLECTOR_PATH = Path(__file__).parent / "workspace_bare_scripts" / "collect_bug_report_diagnostics.py"
+_COLLECTOR_PATH = (
+    Path(__file__).parent
+    / "workspace_bare_scripts"
+    / "collect_bug_report_diagnostics.py"
+)
 
 
 def _load_collector(mngr_binary: str) -> ModuleType:
@@ -62,11 +66,13 @@ def _atif_stream_records() -> list[dict[str, object]]:
     and a step's ``source`` is the speaker -- the two properties the collector's
     reader has to survive and preserve.
     """
-    header = HeaderRecord(
-        type="header",
-        event_id="header-" + "0" * 32,
-        emitter="claude/common_transcript",
-        schema_version=PINNED_ATIF_SCHEMA_VERSION,
+    header = HeaderRecord.model_validate(
+        {
+            "type": "header",
+            "event_id": "header-" + "0" * 32,
+            "emitter": "claude/common_transcript",
+            "schema_version": PINNED_ATIF_SCHEMA_VERSION,
+        }
     )
     asked = StepRecord(
         type="step",

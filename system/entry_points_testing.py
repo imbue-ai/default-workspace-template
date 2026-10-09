@@ -25,7 +25,20 @@ BARE_PACKAGES = frozenset({"workspace_bare_scripts", "update_self_skill"})
 STANDALONE_BARE_DIRS = (REPO_ROOT / "system" / "services" / "oom_priority" / "bin",)
 STANDALONE_BARE_SCRIPTS = (REPO_ROOT / "catalog" / "build_catalog_from_export.py",)
 
-# Where a scripts directory declares the heavy modules an entry point may load at import.
+# ``python -c`` source taking an entry's path: imports the entry the way running it would (its
+# directory first on sys.path) without running its __main__ block, then prints every top-level
+# module left loaded, as JSON.
+IMPORT_PROBE = """
+import importlib.util, json, sys
+path = sys.argv[1]
+sys.path.insert(0, path.rsplit("/", 1)[0])
+spec = importlib.util.spec_from_file_location("_entry_point_probe", path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+print(json.dumps(sorted({name.split(".")[0] for name in sys.modules})))
+"""
+
+# Where an entry point's project declares the heavy modules the entry may load at import.
 ENTRY_POINTS_TABLE = ("workspace-template", "entry-points")
 
 
@@ -38,7 +51,11 @@ def scripts_dirs(repo_root: Path = REPO_ROOT) -> list[Path]:
 
 
 def is_test_file(path: Path) -> bool:
-    return path.name.endswith("_test.py") or path.name.startswith("test_") or path.name == "conftest.py"
+    return (
+        path.name.endswith("_test.py")
+        or path.name.startswith("test_")
+        or path.name == "conftest.py"
+    )
 
 
 def entry_files(scripts_dir: Path) -> list[Path]:
@@ -48,7 +65,9 @@ def entry_files(scripts_dir: Path) -> list[Path]:
 def project_dir(entry: Path) -> Path:
     """The uv project an entry's package lives in: its own dir, or a skill's ``python/``."""
     skill_project = entry.parent.parent / "python"
-    return skill_project if (skill_project / "pyproject.toml").is_file() else entry.parent
+    return (
+        skill_project if (skill_project / "pyproject.toml").is_file() else entry.parent
+    )
 
 
 def entry_package(entry: Path) -> str | None:

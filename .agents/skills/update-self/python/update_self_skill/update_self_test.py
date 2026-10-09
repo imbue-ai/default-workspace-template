@@ -1387,15 +1387,21 @@ def test_bootstrap_skill_reports_no_difference_when_local_matches_tag(
 
 
 def test_bootstrap_skill_ignores_untracked_build_artifacts(tmp_path, capsys) -> None:
-    # Importing the script drops __pycache__/*.pyc into the skill's scripts/. Those are
-    # untracked, so `git diff` ignores them and they must not register as a
+    # Importing the package drops __pycache__/*.pyc into the skill's python/update_self_skill/.
+    # Those are untracked, so `git diff` ignores them and they must not register as a
     # spurious difference -- otherwise the "identical -> stay on the local flow"
     # branch would be dead in every real checkout (where the module has been
     # imported at least once).
     repo = tmp_path / "repo"
     _init_repo_with_skill(repo, skill_body="STABLE FLOW\n")
-    pycache = repo / update_self.SKILL_DIR_REL / "scripts" / "__pycache__"
-    pycache.mkdir()
+    pycache = (
+        repo
+        / update_self.SKILL_DIR_REL
+        / "python"
+        / "update_self_skill"
+        / "__pycache__"
+    )
+    pycache.mkdir(parents=True)
     (pycache / "update_self.cpython-313.pyc").write_bytes(b"\x00compiled\x00")
 
     assert (
@@ -1592,7 +1598,8 @@ def test_skill_md_runs_its_scripts_from_the_staged_copy_below_step_3() -> None:
     copy may predate the subcommand entirely, so a local-path invocation fails
     exactly on the first update into the release that ships it -- the runs
     those records exist for. Only Step 1's ``run-status start`` runs before
-    anything is staged and stays local.
+    anything is staged and stays local, plus Step 3a's verdict for a system
+    Python too old to run the staged copy at all.
     """
     skill_dir = _SKILL_DIR
     skill_md = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
@@ -1614,7 +1621,11 @@ def test_skill_md_runs_its_scripts_from_the_staged_copy_below_step_3() -> None:
     assert any("run-status hold" in line for line in invocations)
     staged = "data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py"
     strays = [line for line in invocations if staged not in line]
-    assert strays == []
+    assert len(strays) == 1
+    assert strays[0].startswith(
+        "python3 .agents/skills/update-self/scripts/update_self.py "
+    )
+    assert "run-status verdict NEEDS_RECREATION" in strays[0]
 
 
 # The atomic apply
@@ -1745,11 +1756,9 @@ def _tagging_expend(argv: Sequence[str]) -> list[str]:
     return ["sh", "-c", "expendable-tag", "sh", *argv]
 
 
-@dataclass
-class _Result:
-    returncode: int = 0
-    stdout: str = ""
-    stderr: str = ""
+class _Result(subprocess.CompletedProcess[str]):
+    def __init__(self, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
+        super().__init__(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
 
 
 @dataclass
@@ -2089,7 +2098,10 @@ def _placeholder_after(runner: _RecordingRunner, *prefix: str):
 
 def _refreshed_the_view(runner: _RecordingRunner, repo_root: Path) -> bool:
     return runner.ran(
-        "uv", "run", "--no-sync", str(repo_root / "system/scripts/refresh_workspace_view.py")
+        "uv",
+        "run",
+        "--no-sync",
+        str(repo_root / "system/scripts/refresh_workspace_view.py"),
     )
 
 
@@ -2217,7 +2229,7 @@ def test_read_app_tools_lists_every_python_app_in_the_tree() -> None:
 def test_read_app_tools_leaves_a_pre_manifest_app_to_the_root_venv(
     tmp_path: Path, capsys
 ) -> None:
-    # An app with a pyproject but no app.toml runs `uv run <name>` from the
+    # An app with a pyproject but no app.toml runs `.venv/bin/<name>` from the
     # root venv, so the apply must neither install nor reinstall a tool for
     # it, and its absence is expected rather than a note.
     repo_root = _make_apply_repo(tmp_path)
@@ -4168,11 +4180,11 @@ def test_the_provisioner_runs_under_the_image_builds_environment(
         assert env["HTTPS_PROXY"] == "http://proxy.example:3128"
         assert "CLAUDE_CODE_VERSION" not in env
         assert "NODE_VERSION" not in env
-    # Both runs are forced past the provision guard. The recovery re-run lands
-    # on the tree the guard's marker was written for; and that marker outlives
-    # the rollback, so a retry of the same merge would otherwise skip the
-    # provisioner and report UPDATED with the toolchain still rolled back.
-    assert [env.get("PROVISION_FORCE") for env in provisioner_envs] == ["1", "1"]
+        # Both runs are forced past the provision guard. The recovery re-run lands
+        # on the tree the guard's marker was written for; and that marker outlives
+        # the rollback, so a retry of the same merge would otherwise skip the
+        # provisioner and report UPDATED with the toolchain still rolled back.
+        assert env.get("PROVISION_FORCE") == "1"
 
 
 def test_provisioner_inputs_are_read_off_the_entry_point(tmp_path: Path) -> None:
@@ -4944,7 +4956,8 @@ def test_marker_comes_down_before_the_view_refresh(apply_repo: Path) -> None:
     refresh_at = next(
         index
         for index, c in enumerate(runner.calls)
-        if c[:3] == ["uv", "run", "--no-sync"] and c[3].endswith("refresh_workspace_view.py")
+        if c[:3] == ["uv", "run", "--no-sync"]
+        and c[3].endswith("refresh_workspace_view.py")
     )
     assert restart_at < refresh_at
 
@@ -5763,6 +5776,7 @@ def test_a_tool_the_merge_adds_is_installed_beside_the_mngr_tool(
         for argv, env in zip(runner.calls, runner.envs)
         if argv[:4] == ["uv", "tool", "install", "-e"] and argv[4] == "system/apps/chat"
     )
+    assert chat_install_env is not None
     assert chat_install_env["UV_TOOL_DIR"] == str(tools)
     assert chat_install_env["UV_TOOL_BIN_DIR"] == str(bin_dir)
     assert (
@@ -5790,6 +5804,7 @@ def test_a_tool_with_no_installation_anywhere_goes_to_the_pinned_home(
         if argv[:4] == ["uv", "tool", "install", "-e"]
         and argv[4] == update_layout.SYSTEM_INTERFACE_DIR
     )
+    assert shell_install_env is not None
     assert shell_install_env["UV_TOOL_DIR"] == str(tool_env.tools_dir(pinned))
     assert shell_install_env["UV_TOOL_BIN_DIR"] == str(tool_env.bin_dir(pinned))
     assert (

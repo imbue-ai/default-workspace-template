@@ -11,8 +11,6 @@ import pytest
 
 from workspace_scripts import smoketest_app
 
-_SCRIPT = Path(__file__).resolve().parents[1] / "smoketest_app.py"
-
 
 def test_resolve_target_from_port(tmp_path: Path) -> None:
     port, name, runner = smoketest_app._resolve_target("8085", tmp_path)

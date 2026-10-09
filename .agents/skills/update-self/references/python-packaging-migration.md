@@ -18,23 +18,24 @@ How each shows up during the update:
 | `test_no_plain_uv_run_in_agent_facing_files` or `test_python3_invocations_name_bare_entry_points` names a user file | [Commands in the user's docs](#commands-in-the-users-docs) |
 | `system/test_entry_point_import_cost.py` names a user skill's entry | [A user skill with scripts](#a-user-skill-with-scripts), last step |
 | `test_only_the_declared_bare_stubs_edit_sys_path` names a user file | [A user skill with scripts](#a-user-skill-with-scripts) |
+| `system/test_no_type_errors.py` reports errors in a user skill or script | [Type errors in the user's scripts](#type-errors-in-the-users-scripts) |
 
 ## A user skill with scripts
 
 For a skill with Python in `.agents/skills/<name>/scripts/` (package name
-`<name>` with hyphens turned to underscores, plus `_skill`; a `scripts/` dir of
-shell scripts only needs nothing):
+`<name_with_underscores>_skill`, the skill name with hyphens turned to underscores; a skill whose
+`scripts/` holds only shell scripts needs none of this):
 
 1. Create `.agents/skills/<name>/python/pyproject.toml` in the shape
    `spec-summary.md` ("Packaging") shows: project `<name>-skill`, hatchling,
-   `packages = ["<name>_skill"]`. Its `dependencies` are the union of the
+   `packages = ["<name_with_underscores>_skill"]`. Its `dependencies` are the union of the
    scripts' PEP 723 `# /// script` headers; delete those headers.
-2. Move every module into `python/<name>_skill/` (with an empty
+2. Move every module into `python/<name_with_underscores>_skill/` (with an empty
    `__init__.py`), tests included. Leave a thin entry file in `scripts/` at each
    path the skill's SKILL.md, cron entries or program lines run, importing its
    module from the package and calling it under `if __name__ == "__main__":`.
    Change sibling imports (`import helpers`) to package imports
-   (`from <name>_skill import helpers`), and delete any `sys.path` edit that
+   (`from <name_with_underscores>_skill import helpers`), and delete any `sys.path` edit that
    existed to make them work. A path computed from `__file__` in a moved module
    is now one directory deeper.
 3. `uv lock`, then `uv sync --all-packages`. A dependency that cannot
@@ -68,3 +69,14 @@ In the user's own SKILL.md files, references, prompts and scripts:
 - `from claude_p import ...` run from the root venv becomes
   `from use_ai_integration_skill.claude_p import ...` (a copy of `claude_p.py`
   inside the user's own app is theirs and stays as it is).
+
+## Type errors in the user's scripts
+
+The root project now type-checks `.agents/`, `system/scripts/` and the root-level
+tests (`uv run --no-sync ty check` from the repo root), so a user skill's scripts are
+checked for the first time. Fix each error in the code: narrow an `X | None` with a
+check that fails loudly where `None` cannot happen, give a dict the key type its
+callers use, correct a wrong annotation. Don't silence a rule with an ignore
+comment unless the code is correct and ty cannot express it, and say so in the
+report when you do. A skill's own dependency that ty cannot resolve is missing from
+its `python/pyproject.toml` (see the first section).

@@ -2,7 +2,7 @@
 name = "build-app-skill"
 version = "0.1.0"
 description = "Scaffolds a new Flask app under system/apps/"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "tomlkit>=0.12",
     "workspace-scripts",

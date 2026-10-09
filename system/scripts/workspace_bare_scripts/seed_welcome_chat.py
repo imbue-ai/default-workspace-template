@@ -136,4 +136,3 @@ def main(
         return EXIT_FAILED
     print(json.dumps({"chat_id": chat_id}))
     return EXIT_SEEDED
-

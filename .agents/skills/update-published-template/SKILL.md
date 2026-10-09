@@ -224,8 +224,8 @@ v(n). NEVER diff the workspace against the published repo: the published tree ha
 had personal data stripped and modifications applied, so a workspace-vs-published
 diff would try to re-add exactly the things the recipe deliberately removed. Also
 note the **base delta**: compare the published base (`PUBLISHED_BASE` from 2b)
-against the current resolved base (`uv run
-.agents/shared/scripts/resolve_template_base.py`, as in `publish-template` §2).
+against the current resolved base
+(`uv run --no-sync .agents/shared/scripts/resolve_template_base.py`, as in `publish-template` §2).
 If `BASE_REF` moved, the template substrate advanced too -- report it, but an
 app-delta update re-publishes on the existing published base; re-cutting on a
 newer base is a separate, larger operation (surface it as an option, default to

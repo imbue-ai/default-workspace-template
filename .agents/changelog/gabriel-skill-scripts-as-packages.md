@@ -1,6 +1,6 @@
 Each skill's Python now lives in its own uv project, `.agents/skills/<name>/python/`: a `pyproject.toml` and a `<skill_name>_skill` package, with tests beside the modules. `scripts/` keeps only thin entry files at every existing path, plus shell scripts. `.agents/shared/scripts` is a project too (package `agents_shared`). Skill scripts run as `uv run --no-sync <path>`, and their dependencies resolve in the workspace lock. update-self stays on the system `python3` and still stages as one unit; its entry files put the skill's `python/` on `sys.path`.
 
-- **Third-party skills are unaffected:** a skill whose `scripts/` holds plain or PEP 723 scripts never touches the workspace's uv setup.
+- **Third-party skills don't break uv:** a skill whose `scripts/` holds plain or PEP 723 scripts is not a uv workspace member, so it can't break `uv` commands in the workspace. The root import-cost and type checks still cover its scripts.
 
 - **What existing workspaces need:** a workspace's own skills with Python need the same layout. The update worker converts them by following the new `update-self/references/python-packaging-migration.md`.
 
