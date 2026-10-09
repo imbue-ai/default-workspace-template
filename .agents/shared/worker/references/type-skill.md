@@ -32,8 +32,9 @@ pipeline is part of this skill, not a separate creation:
 
 ## Where a skill's behavior lives
 
-A skill's behavior is split between its scripts (`[script]` / `[ai-script]`, in
-`.agents/skills/<name>/scripts/`) and its SKILL.md prose, so a change -- or a
+A skill's behavior is split between its scripts (`[script]` / `[ai-script]`, entry
+files in `.agents/skills/<name>/scripts/` and their code in the skill's `python/`
+package) and its SKILL.md prose, so a change -- or a
 fix -- may touch either or both. When a wrong behavior traces to an ambiguous
 or incorrect prose instruction, the edit is a SKILL.md edit even if the skill
 has scripts; a pure-prose skill (no scripts) has all of its behavior in
@@ -94,7 +95,7 @@ belongs to the app itself is that app's own pass.
   walk the SKILL.md instructions as the executing agent.
 - The universal fixture-test rule (`harden-creation.md`), for a skill: save 1-3
   samples under `.agents/skills/<name>/tests/fixtures/` and add a
-  `.agents/skills/<name>/python/<name_with_underscores>_skill/<name>_test.py` that feeds each through the
+  `.agents/skills/<name>/python/<name_with_underscores>_skill/<name_with_underscores>_test.py` that feeds each through the
   parser and asserts the exact output shape.
 
 ## Data capture

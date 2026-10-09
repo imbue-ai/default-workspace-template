@@ -12,7 +12,8 @@ scripts, references, or assets. The SKILL.md reads like a recipe: "do X,
 then Y, then Z." Each step of that process is one of three kinds:
 
 - **`[script]`** -- deterministic. Runs the same code every time, only the
-  data varies. Lives in `.agents/skills/<name>/scripts/`.
+  data varies. Its entry file lives in `.agents/skills/<name>/scripts/` and
+  its code in the skill's `python/` package.
 - **`[ai-script]`** -- needs a model's judgement, but is a *fixed part of
   the flow* (the same prompt/criteria every run, only the data varies).
   Script it as an AI call following the `use-ai-integration` skill (see
