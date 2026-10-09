@@ -32,9 +32,9 @@ the registrations, and the window untouched. ``down`` tears the preview down tog
 with the siblings it booted, and verifies the processes died.
 
 ``up`` and ``refresh`` first sync every workspace member into the worktree's own
-environment, and the app runs with the live repo's environment off its PATH, so a
-preview can only run the worktree's code: a command the worktree lacks fails to boot
-rather than falling back to the live install.
+environment, which the app's ``uv run`` puts first on its PATH, so the app's command
+resolves to the worktree's install. The app also runs with the live repo's venv off its
+PATH, so that venv cannot answer for a command the worktree's environment lacks.
 
 Exit codes:
     0  Success.
