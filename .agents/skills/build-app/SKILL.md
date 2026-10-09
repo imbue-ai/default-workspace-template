@@ -777,10 +777,10 @@ Flags:
 
 ## The shared (public) URL
 
-If the workspace is shared, every registered service is also reachable at
-its own public origin -- the same prefix rule on the share hostname
-(`https://<name>.<workspace-share-host>/`) -- with caveats about where that
-hostname lives and why it isn't in `data/.state/apps.toml`. See
+Once the workspace has been shared, every registered service is also
+reachable at its own public origin -- the same prefix rule on the share
+domain (`https://<label>.<share-domain>/`) -- and
+`uv run --no-sync workspace-layout list` prints it as the app's `link`. See
 [references/public-url.md](references/public-url.md).
 
 ## Cleanup

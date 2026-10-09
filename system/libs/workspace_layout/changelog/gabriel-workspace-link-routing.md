@@ -1,0 +1,1 @@
+`workspace-layout list` prints each app's `link`: its share address once the workspace has been shared (`https://<label>.<share domain>/`), which opens for anyone the workspace is shared with, else its local backend URL. The inventory's app gains an optional `share_url`.

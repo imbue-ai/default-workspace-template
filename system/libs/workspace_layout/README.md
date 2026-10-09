@@ -117,7 +117,8 @@ costs every call tens of milliseconds, and when the lock and a `pyproject.toml` 
 relocks and syncs before the command runs. Every subcommand posts one op
 to the shell's op route under the calling agent's own chat as the requester
 (`MINDS_CHAT_ID`, else `MNGR_AGENT_ID`), except `desktops` and `list`, which
-read `GET /api/inventory`. Descriptions go to stderr; stdout carries only a
+read `GET /api/inventory`; `list` gives each app the `link` to write for it, its
+`share_url` once the workspace has been shared, else its backend URL. Descriptions go to stderr; stdout carries only a
 window id (`open`, `show`), the JSON of the read commands, and a desktop's
 shortcuts after a `shortcut` write. Exit codes are `0` (done), `1` (refused or
 unreachable), `3` (the shell or an app cannot act right now: retry), and `4`
