@@ -528,9 +528,11 @@ the apply and `footprint-ranges` find this pass's merge by that prefix, and
 your `update-self:` merge must stay on the branch's first-parent line, which
 merging the lead's commit into your branch (not the other way round) keeps.
 
-Resolve conflicts by Step 2's triage, with one difference: the commits coming
+Resolve conflicts by Step 2's triage, with two differences. The commits coming
 in are the workspace's own latest work, so where they and the update meet,
-keep both. Regenerate a lockfile, never merge it, and do so whenever both
+keep both. And the sides are swapped: `--ours` is your branch (the update)
+and `--theirs` the workspace, so Step 2's "keep local" is `git checkout
+--theirs` here. Regenerate a lockfile, never merge it, and do so whenever both
 sides changed it even without a conflict. Conclude a conflicted merge with
 `git commit --no-edit`, which keeps the subject the suites step finds it by.
 
