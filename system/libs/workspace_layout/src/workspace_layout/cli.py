@@ -1001,7 +1001,9 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_json_argument(p_desktops)
     p_desktops.set_defaults(func=_cmd_desktops)
 
-    p_list = subparsers.add_parser("list", help="List every app with its link, launch paths and windows, plus the desktops")
+    p_list = subparsers.add_parser(
+        "list", help="List every app with its link, launch paths and windows, plus the desktops"
+    )
     _add_json_argument(p_list)
     p_list.set_defaults(func=_cmd_list)
 
