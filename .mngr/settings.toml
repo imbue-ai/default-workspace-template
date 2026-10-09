@@ -638,8 +638,11 @@ type = "main"
 # bootstrap is the only extra_window. It runs first-boot setup (git config) and
 # then launches supervisord, which runs every background service (see
 # system/supervisord.conf; the opt-in github-sync service is added by its skill).
-# terminal is a supervisord service rather than its own window.
-extra_window = ["bootstrap='uv run bootstrap'"]
+# terminal is a supervisord service rather than its own window. A failed sync
+# (`;`, not `&&`) still boots on the existing venv, so the workspace stays
+# reachable for an agent to repair whatever broke it; bootstrap runs from
+# .venv/bin rather than under `uv run` so no uv process parents supervisord.
+extra_window = ["bootstrap='bash -c \"uv sync --all-packages --frozen; exec .venv/bin/bootstrap\"'"]
 # Write a sane default tmux config on every Imbue Studio host. tuple-typed
 # `extra_provision_command` stacks across templates (see
 # `apply_create_template` in mngr's cli/common_opts.py), so the

@@ -87,6 +87,10 @@ _TK_COMMAND_PREFIX_RE = re.compile(r"^\s*(?:tk|ticket)\s+(?:super\s+)?(?:create|
 # The tk lifecycle verbs, in one place. Previously redefined in all four harnesses.
 _TK_LIFECYCLE_VERBS: Final[frozenset[str]] = frozenset({"create", "start", "close"})
 
+# uv's options that leave ``uv run``'s program unchanged; the same set the workspace's
+# secrets guard accepts in front of a script.
+_UV_RUN_PASSTHROUGH_FLAGS: Final[frozenset[str]] = frozenset({"--no-sync", "--frozen", "--quiet"})
+
 
 def is_pure_tk_lifecycle_command(command: str) -> bool:
     """True when ``command`` is nothing but a tk lifecycle invocation (rendered as a
@@ -118,7 +122,10 @@ def is_tk_lifecycle_anywhere(command: str) -> bool:
         # Workspace instructions run commands through uv. The shell parser deliberately
         # knows only shell syntax; unwrap this runner before asking it about the command.
         if segment.words[:2] == ("uv", "run"):
-            wrapped = parse_command(shlex.join(segment.words[2:]))
+            program = list(segment.words[2:])
+            while program and program[0] in _UV_RUN_PASSTHROUGH_FLAGS:
+                program.pop(0)
+            wrapped = parse_command(shlex.join(program))
             if wrapped is not None and any(s.tk_verb in _TK_LIFECYCLE_VERBS for s in wrapped.segments):
                 return True
     return False

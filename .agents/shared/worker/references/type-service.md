@@ -21,15 +21,15 @@ solely to support one app lives in that app's folder under
   any `uv run`. If a fix needs a new dependency, `uv add ...` and commit the
   manifest changes (`pyproject.toml` / `uv.lock`).
 - There is no tab and no frontend: test the service's logic directly with unit
-  tests in its package, and exercise its entry point (`uv run <name>`) with a
+  tests in its package, and exercise its entry point (`uv run --no-sync <name>`) with a
   bounded invocation where feasible. Never start supervisord, and never
   `supervisorctl` against the served tree from a worktree.
 - While you iterate, run the package's tests by path, never a bare root `uv
   run pytest`:
 
   ```bash
-  uv run pytest system/services/<package>       # standalone
-  uv run pytest system/apps/<package>           # app-owned (<app>-<role>)
+  uv run --no-sync pytest system/services/<package>       # standalone
+  uv run --no-sync pytest system/apps/<package>           # app-owned (<app>-<role>)
   ```
 
   The gate is `harden-creation.md`'s "The test gate", which adds whatever

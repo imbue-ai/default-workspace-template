@@ -39,6 +39,10 @@ _ALLOWED_COMMANDS = [
     _WRAPPER,
     f"uv run {_WRAPPER.removeprefix('python3 ')}",
     f"uv run python3 {_WRAPPER.removeprefix('python3 ')}",
+    # uv's options that change neither the program nor its environment.
+    f"uv run --no-sync {_WRAPPER.removeprefix('python3 ')}",
+    f"uv run --frozen --quiet {_WRAPPER.removeprefix('python3 ')}",
+    f"uv run --no-sync {_REQUEST.removeprefix('python3 ')}",
     "system/scripts/with_secrets.py data/.secrets/svc.env -- svc",
     "cd /home/user/workspace && " + _WRAPPER,
     "FOO=bar " + _WRAPPER,
@@ -78,6 +82,10 @@ _BLOCKED_COMMANDS = [
     f"{_WRAPPER} && cat data/.secrets/svc.env",
     "python3 system/scripts/with_secrets.py data/.secrets/svc.env -- cat data/.secrets/svc.env",
     "python3 system/scripts/with_secrets.py data/.secrets/svc.env -- bash -c 'cat data/.secrets/svc.env'",
+    # Any other uv option can change what runs or what it sees, so it is not
+    # recognised.
+    f"uv run --env-file data/.secrets/svc.env {_WRAPPER.removeprefix('python3 ')}",
+    f"uv run --with pkg {_WRAPPER.removeprefix('python3 ')}",
     # A shell string is judged by the same rule as a top-level command.
     'bash -c "cat data/.secrets/svc.env"',
     "python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c 'cat data/.secrets/svc.env'",

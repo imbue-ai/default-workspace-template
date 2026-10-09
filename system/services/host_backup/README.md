@@ -26,7 +26,7 @@ downloads, extracted archives, clones.
    (`total_files_processed`, `files_new`, `files_changed`, `files_unmodified`).
    A long duration with nearly every file unmodified means the tree is too big,
    not that too much changed.
-2. Find the tree. `uv run host-backup-heavy-dirs` (from `/home/user/workspace`)
+2. Find the tree. `uv run --no-sync host-backup-heavy-dirs` (from `/home/user/workspace`)
    lists the latest snapshot and prints the directories holding at least 2% of
    its entries, nested under their parents. On a large snapshot it takes a
    minute or two, so run it in the background and read its output afterwards.
@@ -98,7 +98,7 @@ is rewritten out of history by its path pattern.
   set in `restic.env`. Backend credentials are not gated by host_backup --
   restic reports its own error if the chosen backend needs one that is
   missing.
-- Before the snapshot is taken, the tick runs `uv run env-converge capture`
+- Before the snapshot is taken, the tick runs `uv run --no-sync env-converge capture`
   (best-effort, bounded at 120s) so the environment record
   (`~/.mngr/plugin/env-converge/`) inside the backup describes the packages
   installed at backup time. apt is already event-fresh via its
@@ -200,7 +200,7 @@ during the run.
 
 ## Manual trigger
 
-`uv run host-backup-now` waits for any in-progress backup to finish (so
+`uv run --no-sync host-backup-now` waits for any in-progress backup to finish (so
 your latest changes are guaranteed to be captured), bumps `backup.toml`'s
 mtime, then tails `events/backup/events.jsonl` for the triggered tick's
 terminal event and prints it. Terminal means *any* event that ends a tick, not
@@ -289,7 +289,7 @@ library alone:
 
 - the `[program:host-backup]` block in `system/supervisord.conf.d/host-backup.conf`,
 - this package's registration in the root `pyproject.toml` uv workspace,
-- the `uv run host-backup` / `uv run host-backup-now` entry points.
+- the `host-backup` / `host-backup-now` entry points.
 
 Dependency changes are absorbed by regenerating `uv.lock` on the workspace
 with a plain `uv sync`. `host_backup/config.py` additionally keeps no-op

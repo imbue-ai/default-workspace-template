@@ -134,7 +134,7 @@ main create template writes.
 
 ## Tests
 
-`uv run pytest system/apps/terminal` from the repo root. The unit tests drive
+`uv run --no-sync pytest system/apps/terminal` from the repo root. The unit tests drive
 the real source and tmux client over a fake `tmux` on `PATH`
 (`testing.py`); `test_terminal_app.py` runs `terminal-app` and `terminal-pty`
 as processes, the latter around a fake `ttyd`; `test_phone_keys.py` (marked

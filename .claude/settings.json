@@ -9,7 +9,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv sync --all-packages"
+            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/session_start_sync.sh"
           },
           {
             "type": "command",

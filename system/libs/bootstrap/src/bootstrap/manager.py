@@ -1,6 +1,6 @@
 """Bootstrap: first-boot setup, then launch supervisord.
 
-`uv run bootstrap` runs once per container boot (from the `bootstrap`
+`bootstrap` runs once per container boot (from the `bootstrap`
 extra_window). It performs first-boot setup -- global git config and creating
 the initial chat agent -- and then `exec`s the system supervisord in the
 foreground. supervisord (configured by system/supervisord.conf) owns every
@@ -588,8 +588,7 @@ def _sync_workspace_venv() -> None:
     supervisord starts anything -- removes both the race window and the scope
     gap; every later implicit sync then no-ops. ``--frozen`` asserts the
     committed lockfile is canonical, matching build_workspace.sh. Best-effort:
-    a failure is logged loudly but never blocks boot (the per-``uv run``
-    implicit syncs remain the fallback).
+    a failure is logged loudly but never blocks boot.
     """
     try:
         result = subprocess.run(
@@ -637,7 +636,7 @@ def _run_env_converge_fast_phase() -> None:
     one-shot logs the environment's real problems).
     """
     result = subprocess.run(
-        ["uv", "run", "env-converge", "run", "--phase", "fast"],
+        ["uv", "run", "--no-sync", "env-converge", "run", "--phase", "fast"],
         capture_output=True,
         text=True,
         check=False,
@@ -870,7 +869,7 @@ def main() -> None:
     _initialize_workspace_main_branch()
 
     # Converge the workspace venv BEFORE the initial chat agent is created
-    # (below) and before supervisord's `uv run` services start, so nothing
+    # (below) and before supervisord's services start, so nothing
     # races the reconcile or runs against a bake-stale venv.
     _sync_workspace_venv()
 

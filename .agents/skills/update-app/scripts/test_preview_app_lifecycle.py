@@ -1,6 +1,6 @@
 """A preview's whole lifecycle through the real shared script and the real registration script.
 
-Run via: ``uv run pytest .agents/skills/update-app/scripts/test_preview_app_lifecycle.py``
+Run via: ``uv run --no-sync pytest .agents/skills/update-app/scripts/test_preview_app_lifecycle.py``
 
 ``preview_app_test.py`` pins the exact commands this script hands the shared
 ``serve_isolated_instance.py``; here nothing stands in for it. A fixture app is

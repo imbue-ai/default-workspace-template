@@ -354,7 +354,7 @@ def _refresh_environment_record(
     stderr = ""
     try:
         result = run_fn(
-            ["uv", "run", "env-converge", "capture"],
+            ["uv", "run", "--no-sync", "env-converge", "capture"],
             cwd=WORKSPACE_DIR,
             capture_output=True,
             text=True,

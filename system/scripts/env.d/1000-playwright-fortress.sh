@@ -100,7 +100,7 @@ _install_fortress() {
     # this unit runs against the relocated /docker_build_code tree during the
     # imbue_cloud slice bake. `python -m` resolves through the interpreter
     # symlink and works from either location.
-    if ! (cd "$REPO_ROOT" && uv run python -m playwright install-deps chromium); then
+    if ! (cd "$REPO_ROOT" && uv run --no-sync python -m playwright install-deps chromium); then
         _log "fortress: apt install FAILED; the next converge retries"
         return 1
     fi
@@ -141,7 +141,7 @@ _install_fortress() {
     # build. Chromium finds its resources via /proc/self/exe (the real Fortress dir),
     # so symlinking just the binary is enough.
     local pw_chrome
-    pw_chrome="$(cd "$REPO_ROOT" && uv run python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()' 2>/dev/null)"
+    pw_chrome="$(cd "$REPO_ROOT" && uv run --no-sync python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()' 2>/dev/null)"
     if [ -n "$pw_chrome" ]; then
         mkdir -p "$(dirname "$pw_chrome")"
         ln -sf "$_FORTRESS_INSTALL_DIR/tilion-fortress/tilion" "$pw_chrome"

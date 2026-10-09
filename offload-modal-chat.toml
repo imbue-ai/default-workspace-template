@@ -60,7 +60,7 @@ build_inputs = [
 [framework]
 type = "pytest"
 # Discovery starts at the repo root; execution starts in the app directory already.
-command = "bash -c '[ -d system/apps/chat ] && cd system/apps/chat; exec uv run pytest \"$@\"' --"
+command = "bash -c '[ -d system/apps/chat ] && cd system/apps/chat; exec uv run --no-sync pytest \"$@\"' --"
 # `-m ''` replaces the pyproject's default `-m "not browser and not real_claude"` for the
 # explicit test ids each batch runs, as CI's bare-runner step does; the coverage floor is
 # enforced once on the runner, over the combined data, not per batch.

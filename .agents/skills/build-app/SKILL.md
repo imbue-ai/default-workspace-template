@@ -214,7 +214,7 @@ What gets generated:
   drives with no window open. A stopped app runs nothing until its next
   request, and the wake serves that request, not the work that was in
   flight. `forward_port.py --manifest`
-  reads it on every start; the scaffold checks it with `uv run app-manifest
+  reads it on every start; the scaffold checks it with `uv run --no-sync app-manifest
   validate-manifest system/apps/<package>/app.toml` (run that yourself after
   editing it). Anything you build for this app outside `system/apps/<package>/`
   -- a skill that drives it, a script, a doc -- is registered in the same file
@@ -285,7 +285,7 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   FATAL rather than restarting a broken app several times a second for the life
   of the workspace. Built-in services deliberately retry forever instead.
 
-  The command ends in `exec` of the app's own name, not `uv run <name>`, so
+  The command ends in `exec` of the app's own name, not the name under `uv run`, so
   the app is the process supervisord tagged rather than a child of a wrapper;
   supervisord resolves that name on PATH. The copy it finds is the console script
   `uv sync --all-packages` writes into the workspace venv -- `uv tool install

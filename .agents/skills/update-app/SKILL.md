@@ -163,7 +163,7 @@ closes the window, or an API another agent drives with no window open --
 set it to `false` in `app.toml`, or that work is lost or interrupted at the
 stop. The reverse holds: an app that no longer does anything between
 requests can go back to `true`. The field is read at registration, so the
-restart in step 2 is what applies it; `uv run app-manifest validate-manifest
+restart in step 2 is what applies it; `uv run --no-sync app-manifest validate-manifest
 system/apps/<package>/app.toml` checks the file.
 
 ### 2. Apply it so it actually takes effect
@@ -324,7 +324,7 @@ where the data dies. Encode these, cheapest first:
       --copy data=data/.apps/<name> \
       --env '<PACKAGE_UPPER>_DATA_DIR={copy:data}' \
       --health-path /health \
-      -- uv run <name>)
+      -- .venv/bin/<name>)
   # ...exercise the change at "$URL" (curl / Playwright); it can write freely...
   python3 .agents/shared/scripts/serve_isolated_instance.py down --name <name>-test
   ```
