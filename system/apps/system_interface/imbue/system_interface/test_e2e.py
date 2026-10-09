@@ -1609,7 +1609,7 @@ class _HeldSocket(_DesktopTraffic):
     """A page's shell socket with what the page sends held back from the shell until released."""
 
     is_holding: bool = Field(description="Whether what the page sends is held rather than passed on")
-    held: list[str] = Field(description="What the page sent while held, oldest first")
+    held: list[str | bytes] = Field(description="What the page sent while held, oldest first")
 
 
 def _hold_page_socket(page: Page) -> tuple[_HeldSocket, Callable[[], None]]:
@@ -1625,7 +1625,7 @@ def _hold_page_socket(page: Page) -> tuple[_HeldSocket, Callable[[], None]]:
         def _from_page(payload: str | bytes) -> None:
             _take_sent(socket, payload)
             if socket.is_holding:
-                socket.held.append(str(payload))
+                socket.held.append(payload)
             else:
                 shell_side.send(payload)
 
