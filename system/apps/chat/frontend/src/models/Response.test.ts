@@ -38,6 +38,7 @@ import {
   isConversationNotFound,
   isMessageCarriedBySwitch,
   noteLoadedArrivals,
+  whenTranscriptLoadSettles,
   type AssistantMessageEvent,
   type ToolCall,
   type TranscriptEvent,
@@ -768,6 +769,41 @@ describe("snapshot load state", () => {
     expect(ids(agent)).toEqual(["a", "b", "c"]);
     expect(hasMoreAfter(agent)).toBe(false);
     expect(getConversationLoadState(agent)).toEqual({ phase: "idle", error: null });
+  });
+
+  it("lets a caller wait out the loads in flight, including one that supersedes the one it found", async () => {
+    // A new chat's first fetch 404s and the retry that follows the chat coming up may itself be
+    // superseded: the caller must learn what the transcript holds, not act on the empty window.
+    const agent = freshChat();
+    const first = deferredResponse();
+    mockRequest.mockReturnValueOnce(first.promise);
+    const firstLoad = fetchEvents(agent);
+    let settled: boolean | null = null;
+    void whenTranscriptLoadSettles(agent).then((isLoaded) => {
+      settled = isLoaded;
+    });
+
+    const second = deferredResponse();
+    mockRequest.mockReturnValueOnce(second.promise);
+    const secondLoad = fetchEvents(agent);
+    first.reject(Object.assign(new Error("{}"), { code: 404, response: { detail: "Chat not found" } }));
+    await expect(firstLoad).rejects.toThrow();
+    expect(settled).toBeNull();
+
+    second.resolve({ events: [makeEvent("a")] });
+    await secondLoad;
+    await vi.waitFor(() => expect(settled).toBe(true));
+    expect(ids(agent)).toEqual(["a"]);
+  });
+
+  it("tells a waiting caller when the load failed, and when none was ever made", async () => {
+    const agent = freshChat();
+    expect(await whenTranscriptLoadSettles(agent)).toBe(false);
+    mockRequest.mockRejectedValueOnce(proxyUnavailableError());
+    const failing = fetchEvents(agent);
+    const waited = whenTranscriptLoadSettles(agent);
+    await expect(failing).rejects.toThrow();
+    expect(await waited).toBe(false);
   });
 
   it("is not moved by a failed backfill page, which leaves the window readable", async () => {

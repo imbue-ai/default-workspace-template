@@ -12,10 +12,10 @@
  *
  * The provider row is the one that always renders. A provider is a property of the ACCOUNT,
  * not of the model, so it survives all three of the states in which there is no model to show.
- * While a switch is armed the menu describes the TARGET instead, since that is what the next
- * message runs on. A chat with no agent yet (awaiting its first send, or being created) has no
- * menu: the chip names the account the chat starts on, and with no provider signed in at all it
- * says so and opens the provider chooser.
+ * While a switch is armed, or being carried out, the menu describes the TARGET instead, since
+ * that is what the chat's messages run on. A chat with no agent yet (awaiting its first send, or
+ * being created) has no menu: the chip names the account the chat starts on, and with no
+ * provider signed in at all it says so and opens the provider chooser.
  *
  * How the menu opens, closes and grows its submenus is the workspace `Menu`'s
  * (`components/menu`), not this file's. What this file owns is the rows and the data behind
@@ -33,7 +33,7 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getChatById, getProvisionalChat } from "../models/Chats";
 import type { ChatSnapshot } from "../models/Chats";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
-import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
+import { effortInEffect, ensureHarnessCatalogs, getHarnessCatalog, startingEffort } from "../models/HarnessCatalog";
 import type { ChatFastModeState } from "../models/FastMode";
 import {
   FAST_MODES,
@@ -54,12 +54,12 @@ import { chooseFastMode } from "./fast-mode-limit";
 import { changedAxes, effectiveChoice, setModelChoice } from "../models/ModelSettings";
 import type { ModelIdentity } from "../models/ModelSettings";
 import {
-  getPendingAccountId,
   getPendingPick,
   isSwitchTarget,
+  nextSendSwitchTarget,
   pendingSwitchTarget,
-  setPendingAccount,
   switchKind,
+  underwaySwitchTarget,
 } from "../models/PendingLane";
 import {
   accountForAgent,
@@ -67,9 +67,10 @@ import {
   areAccountsLoaded,
   getAccounts,
   getDefaultAccountId,
+  isAccountSignedOut,
   openProviderChooser,
 } from "../models/Providers";
-import { beginSwitchTo, beginSwitchToAccountId, openSwitchDialog } from "./SwitchDialog";
+import { beginSwitchTo, beginSwitchToAccountId, openSwitchDialog, takeBackSwitch } from "./SwitchDialog";
 import type { ProviderAccount } from "../models/Providers";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
@@ -91,18 +92,13 @@ import { createSlidingMenuTrack } from "./slidingMenuTrack";
  *  scriptable form, so the menu cannot drive it -- and says where the user can. */
 const READ_ONLY_TOOLTIP = "To change the model or effort, run /model or /effort in the agent terminal.";
 
-/** The effort to carry when switching to `option`: keep the current one if the new
- *  model declares it, else the model's first shown (or first declared) effort. Null
- *  when the model has no effort axis. */
+/** The effort to carry when switching to `option`: keep the current one if the new model declares
+ *  it, else the effort the model starts at. */
 function clampEffort(option: CatalogModelOption, currentEffort: string | null): string | null {
-  if (option.efforts.length === 0) {
-    return null;
-  }
   if (currentEffort !== null && option.efforts.some((effort) => effort.level === currentEffort)) {
     return currentEffort;
   }
-  const shown = option.efforts.filter((effort) => effort.in_picker);
-  return (shown[0] ?? option.efforts[0]).level;
+  return startingEffort(option);
 }
 
 /** The model a switch in progress is taking the chat to, as the chip reads it; null when the chat
@@ -680,16 +676,16 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
    *
    * Pressing any account but the chat's own begins the switch to it (``beginSwitchTo``): the
    * dialog for a handoff, which takes the model and offers a new chat instead; armed at once for
-   * a rebind (an account on the chat's own harness and lane); run at once for a chat with no
-   * user turn yet. Pressing the armed account again, or the account the chat runs on, takes the
-   * choice back. Each row also carries the default toggle: the starred
-   * account is the one a new chat opens on when nothing names one (the New Tab tile, the rail
-   * shortcut, an agent's `layout.py open chat`).
+   * a rebind (an account on the chat's own harness and lane) and for a chat whose account was
+   * signed out; run at once for a chat with no user turn yet. Pressing the armed account again, or
+   * the account the chat runs on, takes the choice back. Each row also carries the default toggle:
+   * the starred account is the one a new chat opens on when nothing names one (the New Tab tile,
+   * the rail shortcut, an agent's `workspace-layout open chat`).
    */
   function providerSubmenu(chatId: string, current: ProviderAccount | null): m.Children {
     const rows = getAccounts();
     const defaultId = getDefaultAccountId();
-    const pendingId = getPendingAccountId(chatId);
+    const nextId = nextSendSwitchTarget(chatId)?.id ?? null;
     const chat = getChatById(chatId);
     return [
       // Built as one list rather than with a conditional hole beside it: mithril refuses a
@@ -701,17 +697,17 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
           ? [m("div", { class: css.SUBMENU_EMPTY }, "No providers yet.")]
           : rows.map((row) => {
               const isCurrent = current !== null && row.id === current.id;
-              const isPending = row.id === pendingId;
+              const isNext = row.id === nextId;
               return accountRow({
                 row,
                 isCurrent,
                 isDefault: row.id === defaultId,
                 rowClass: isCurrent ? css.ACCOUNT_ROW_SELECTED : css.ACCOUNT_ROW,
-                ...(isPending ? { badge: "next" } : {}),
+                ...(isNext ? { badge: "next" } : {}),
                 onSelect: () => {
-                  if (isCurrent || isPending || chat === undefined || !isSwitchTarget(chat, row)) {
+                  if (isCurrent || isNext || chat === undefined || !isSwitchTarget(chat, row)) {
                     closeSubmenu();
-                    setPendingAccount(chatId, null);
+                    takeBackSwitch(chatId);
                     return;
                   }
                   menu.close();
@@ -801,7 +797,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
                     onclick: () => {
                       const next: ModelIdentity = {
                         model_id: option.id,
-                        effort: clampEffort(option, currentIdentity.effort),
+                        effort: clampEffort(option, effortInEffect(currentIdentity.effort, matched)),
                         fast: option.supports_fast ? currentIdentity.fast : false,
                       };
                       setModelChoice(chatId, next, option, changedAxes(currentIdentity, next), optimistic);
@@ -849,6 +845,17 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       // before its first model read, and opencode never leaves it); or the live model may
       // match no catalog option. Only the Model/Effort/Fast rows are suppressed.
       if (chat === undefined) return provisionalChip(chatId);
+      // A chat whose account was signed out runs on nothing until a provider is chosen for it, and
+      // the composer's notice in its place says so and offers the choice: the model it last ran
+      // stays out of the row rather than reading as current. A phone keeps its settings button.
+      if (
+        !isCompact &&
+        chat.handoff === null &&
+        pendingSwitchTarget(chatId) === null &&
+        isAccountSignedOut(chat.active_agent.account_id)
+      ) {
+        return null;
+      }
       // No account to name and no model to show. With no provider signed in, say so; otherwise
       // the chip below stands in (its Provider row reads "No account") until the model arrives,
       // which for a chat whose agent is still connecting takes a while. A phone keeps its settings
@@ -868,7 +875,10 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       const readOnly = catalog === null || catalog.switch_mode === "read_only";
       const interactive = !readOnly && matched !== null;
       const optimistic = catalog?.switch_mode === "eager_then_reconcile";
-      const currentEffort = choice?.identity.effort ?? null;
+      // What the agent recorded, which a switch diffs against; null while it runs at the default.
+      const recordedEffort = choice?.identity.effort ?? null;
+      // What every effort display shows.
+      const currentEffort = effortInEffect(recordedEffort, matched);
       const currentFast = choice?.identity.fast ?? false;
       const shownEfforts = (matched?.efforts ?? []).filter((effort) => effort.in_picker);
       const readOnlyTooltip = interactive ? null : READ_ONLY_TOOLTIP;
@@ -877,23 +887,26 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       viewedChatId = chatId;
       viewedPickerIsFetched = searchable || dynamic;
 
-      // The account the next send switches the chat to, and the model it runs on there: while a
-      // switch is armed the menu reads as the target, since that is what the next message runs on.
-      // With nothing picked, a rebind keeps the agent's model and a handoff's successor starts on
-      // its harness's default, which the menu has no name for.
-      const pending = pendingSwitchTarget(chatId);
+      // The account the chat is moving to, and the model it runs on there: while a switch is armed
+      // for the next send, or being carried out, the menu reads as the target, since that is what
+      // the chat's messages run on. Only an armed one is marked "next". With nothing picked, a
+      // rebind keeps the agent's model and a handoff's successor starts on its harness's default,
+      // which the menu has no name for until the harness reports it.
+      const armed = nextSendSwitchTarget(chatId);
+      const pending = armed ?? underwaySwitchTarget(chatId);
       const pendingPick = getPendingPick(chatId);
       const isPendingRebind = pending !== null && switchKind(chat, pending) === "rebind";
       const pendingModelLabel = pendingPick?.label ?? (isPendingRebind ? (matched?.label ?? null) : null);
-      // A page with no armed switch of its own can still be watching one: reloaded mid-switch, it
-      // has only what the chat carries. Read the same way, so the chip does not fall back to a live
+      const pendingModelValue = pendingModelLabel ?? (isPendingRebind ? "Current model" : "Default model");
+      // A page with no switch of its own can still be watching one: reloaded mid-switch, it has
+      // only what the chat carries. Read the same way, so the chip does not fall back to a live
       // choice that cannot name the picked model until the harness has taken it.
       const convergingLabel = pending !== null ? null : convergingPickLabel(chat);
 
       // The chip states the WHOLE choice, from the same three values the menu's rows read --
       // one source, so the summary and the detail cannot disagree. Effort appears only when
-      // the model has one to state, and the bolt only when fast is actually on. An armed switch
-      // replaces all of it with the target's pick and a "next" mark.
+      // the model has one to state, and the bolt only when fast is actually on. A switch replaces
+      // all of it with the target's pick, marked "next" while the next send is what carries it out.
       const trigger = m(
         "button",
         {
@@ -906,7 +919,9 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
         pending !== null || convergingLabel !== null
           ? [
               m("span", convergingLabel ?? pendingModelLabel ?? pending?.harness_label ?? ""),
-              m("span", { class: `model-provider-menu-next-badge ${css.NEXT_BADGE} ml-1.5` }, "next"),
+              armed !== null
+                ? m("span", { class: `model-provider-menu-next-badge ${css.NEXT_BADGE} ml-1.5` }, "next")
+                : null,
             ]
           : [
               // A dot joins the text parts; the bolt stands on the row's gap alone, since a glyph
@@ -941,20 +956,20 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
 
       const currentIdentity: ModelIdentity =
         matched === null
-          ? { model_id: "", effort: currentEffort, fast: currentFast }
-          : { model_id: matched.id, effort: currentEffort, fast: currentFast };
+          ? { model_id: "", effort: recordedEffort, fast: currentFast }
+          : { model_id: matched.id, effort: recordedEffort, fast: currentFast };
       const sourceOptions: CatalogModelOption[] = dynamic ? (dynamicOptions ?? []) : (catalog?.options ?? []);
 
       const rows: MenuRow[] = [];
-      if (pending !== null) {
+      if (armed !== null) {
         // The target's own rows: the account the next send moves the chat to and the model it
         // runs on there, whose row opens the dialog again to change it.
         rows.push({
           kind: "submenu",
           key: "providers",
           label: "Provider",
-          value: pending.provider,
-          sub: `${pending.harness_label}, next message`,
+          value: armed.provider,
+          sub: `${armed.harness_label}, next message`,
           content: () => providerSubmenu(chatId, account),
         });
         rows.push({ kind: "divider" });
@@ -964,10 +979,28 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
           render: () =>
             pickerRow({
               label: "Model",
-              value: pendingModelLabel ?? (isPendingRebind ? "Current model" : "Default model"),
+              value: pendingModelValue,
               tooltip: "Change the model this chat switches to",
-              onOpen: () => openSwitchDialog(chatId, pending),
+              onOpen: () => openSwitchDialog(chatId, armed),
             }),
+        });
+      } else if (pending !== null) {
+        // The same rows while the switch is carried out, as values: the model it carries is fixed
+        // once it is sent.
+        rows.push({
+          kind: "value",
+          key: "providers",
+          label: "Provider",
+          value: pending.provider,
+          sub: `${pending.harness_label}, switching`,
+        });
+        rows.push({ kind: "divider" });
+        rows.push({
+          kind: "value",
+          key: "model",
+          label: "Model",
+          value: pendingModelValue,
+          truncateValue: "start",
         });
       } else {
         rows.push({

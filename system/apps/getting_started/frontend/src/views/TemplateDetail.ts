@@ -1,8 +1,8 @@
 /**
  * The detail page behind a template card: the drawing large, the full write-up (the card shows
  * none of it), what the template needs connected before it runs, a link to the repository it is
- * published from, and the two ways to take it on -- adopt it into this machine, or have a new
- * machine made from it. Both start a chat; the page owns what the chat is told. A back control
+ * published from, and the two ways to take it on -- adopt it into this workspace, or have a new
+ * workspace made from it. Both start a chat; the page owns what the chat is told. A back control
  * returns to the tiles and shelves; there is no dialog, since the page has nothing under it to
  * dim.
  */
@@ -51,15 +51,15 @@ export function templateRequirements(template: CatalogTemplate): TemplateRequire
   return requirements;
 }
 
-/** Adopt a template into this machine: the first message of the chat "Make it mine" starts. */
+/** Adopt a template into this workspace: the first message of the chat "Make it mine" starts. */
 export function adoptTemplateMessage(template: CatalogTemplate): string {
   return `/use-template ${template.repository_url}`;
 }
 
-/** Have a new machine made from a template: the first message of the chat that action starts. */
+/** Have a new workspace made from a template: the first message of the chat that action starts. */
 export function createMachineFromTemplateMessage(template: CatalogTemplate): string {
   return (
-    `Please create a new Imbue Studio machine for me from the template at ${template.repository_url} ` +
+    `Please create a new Imbue Studio workspace for me from the template at ${template.repository_url} ` +
     "(the minds-api skill can create one). Walk me through anything it needs from me, like permissions " +
     "or accounts, and tell me when it is ready."
   );
@@ -145,7 +145,7 @@ export function TemplateDetail(): m.Component<TemplateDetailAttrs> {
                   extra: "new-tab-template-create-machine",
                   onclick: () => onStartWithText(createMachineFromTemplateMessage(template)),
                 },
-                "Create a new machine from this",
+                "Create a new workspace from this",
               ),
             ]),
           ]),

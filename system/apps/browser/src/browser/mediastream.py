@@ -30,6 +30,7 @@ from collections.abc import Coroutine
 from typing import Any, Callable
 
 from flask import Response, jsonify, request
+from flask.typing import ResponseReturnValue
 from loguru import logger
 from simple_websocket import ConnectionClosed
 
@@ -233,7 +234,7 @@ def clipboard_paste(
     # Runs a coroutine on the daemon's event loop from this request thread and returns
     # its result (the runner's bridge).
     run_on_loop: Callable[[Coroutine[Any, Any, bool]], bool],
-) -> Response:
+) -> ResponseReturnValue:
     """Paste-in: set the browser's X CLIPBOARD from the POST body, then press Ctrl+V in the tab.
 
     GATED on ``session.input_allowed`` -- only the controlling human may write into the

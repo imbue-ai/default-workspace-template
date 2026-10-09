@@ -63,6 +63,9 @@ const mocks = vi.hoisted(() => {
     getComposerAttachments: vi.fn(() => [] as unknown[]),
     clearComposerAttachments: vi.fn(),
     uploadDescribedFileToComposer: vi.fn(),
+    // Resolved at once by default: no upload in flight. A test of a send waiting on one swaps in a
+    // deferred promise.
+    waitForComposerUploads: vi.fn(async (_chatId: string) => {}),
     interruptAgent: vi.fn(async () => {}),
     openProviderChooser: vi.fn(),
     // Resolved at once by default: the agent exists. A test of a chat still being created
@@ -74,6 +77,8 @@ const mocks = vi.hoisted(() => {
     launchChat: vi.fn(async (_chatId: string, _accountId: string, _message?: string) => ({})),
     chooseFastMode: vi.fn(),
     selectedAccount: null as { id: string } | null,
+    // Whether this page has read the account list; until it has, no account reads as missing.
+    accountsLoaded: true,
     listeners,
     agent,
   };
@@ -87,12 +92,19 @@ vi.mock("../models/Response", () => ({
   mintMessageId: () => `m-${Math.random().toString(36).slice(2)}`,
 }));
 vi.mock("../models/Handoffs", () => ({ switchChat: mocks.switchChat, cancelHandoff: mocks.cancelHandoff }));
-vi.mock("../models/PendingLane", () => ({
-  pendingSwitchTarget: () => mocks.switching.target,
-  getPendingPick: () => mocks.switching.pick,
-  setPendingAccount: mocks.setPendingAccount,
-  switchKind: () => mocks.switching.kind,
-}));
+// The armed choice is served from here; whether a switch request is out is the real module's.
+vi.mock("../models/PendingLane", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../models/PendingLane")>();
+  return {
+    isSwitchSending: actual.isSwitchSending,
+    setSwitchSending: actual.setSwitchSending,
+    nextSendSwitchTarget: (chatId: string) =>
+      mocks.switching.handoff !== null || actual.isSwitchSending(chatId) ? null : mocks.switching.target,
+    getPendingPick: () => mocks.switching.pick,
+    setPendingAccount: mocks.setPendingAccount,
+    switchKind: () => mocks.switching.kind,
+  };
+});
 vi.mock("./SwitchDialog", () => ({
   openSwitchDialog: mocks.openSwitchDialog,
   beginSwitchToAccountId: mocks.beginSwitchToAccountId,
@@ -113,7 +125,7 @@ vi.mock("../models/ComposerAttachments", () => ({
   restoreComposerAttachments: vi.fn(),
   uploadDescribedFileToComposer: mocks.uploadDescribedFileToComposer,
   uploadFilesToComposer: vi.fn(),
-  waitForComposerUploads: vi.fn(async () => {}),
+  waitForComposerUploads: (chatId: string) => mocks.waitForComposerUploads(chatId),
 }));
 vi.mock("../models/attachments", () => ({
   buildMessageWithAttachments: (text: string, paths: readonly string[]) =>
@@ -184,6 +196,7 @@ vi.mock("../models/Providers", () => ({
   openProviderChooser: mocks.openProviderChooser,
   // The seeded chats these tests launch name no account of their own, so the selected one decides.
   accountForFirstSend: () => mocks.selectedAccount,
+  areAccountsLoaded: () => mocks.accountsLoaded,
   isAccountSignedOut: (accountId: string | null | undefined) =>
     !!accountId && mocks.signedOutAccountIds.has(accountId),
   loadAccounts: () => mocks.loadAccounts(),
@@ -296,6 +309,17 @@ function findByTag(node: unknown, tag: string): AnyVnode | undefined {
 /** Find a vnode by an exact attribute value (e.g. a stable aria-label). */
 function findByAttr(node: unknown, attr: string, value: string): AnyVnode | undefined {
   return flatten(node).find((vnode) => (vnode.attrs ?? {})[attr] === value);
+}
+
+/** Hold the next send's upload wait open; the returned function lets it finish. */
+function holdComposerUploads(): () => void {
+  let uploaded: () => void = () => undefined;
+  mocks.waitForComposerUploads.mockReturnValueOnce(
+    new Promise<void>((resolve) => {
+      uploaded = resolve;
+    }),
+  );
+  return () => uploaded();
 }
 
 /** Render the composer for one agent, type `text`, then press the send button. */
@@ -606,6 +630,7 @@ describe("MessageInput first send of a seeded chat", () => {
     mocks.isChatRegistered = true;
     mocks.provisional = undefined;
     mocks.selectedAccount = null;
+    mocks.accountsLoaded = true;
     mocks.whenChatRegistered.mockImplementation(async (_chatId: string) => {});
   });
 
@@ -619,6 +644,8 @@ describe("MessageInput first send of a seeded chat", () => {
   });
 
   it("asks the chooser for an account when none is signed in, and launches on the one it produces", async () => {
+    // Sent before the account list loaded: the composer was there, and the send finds no account.
+    mocks.accountsLoaded = false;
     mocks.selectedAccount = null;
 
     const sending = typeAndSend(MessageInput(), "agent-1", "Let's build something");
@@ -632,6 +659,7 @@ describe("MessageInput first send of a seeded chat", () => {
   });
 
   it("puts the message back when the chooser is dismissed, launching nothing", async () => {
+    mocks.accountsLoaded = false;
     mocks.selectedAccount = null;
 
     const sending = typeAndSend(MessageInput(), "agent-1", "Let's build something");
@@ -979,6 +1007,92 @@ describe("MessageInput switching harness", () => {
     expect(pick).toEqual({ model_id: "haiku", effort: "low", fast: false });
   });
 
+  it("says nothing more about the switch once its message has gone, and holds a second send until it is answered", async () => {
+    mocks.switching.target = TARGET;
+    let answer: (value: { kind: string; phase: string; returned_block: string }) => void = () => undefined;
+    mocks.switchChat.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    const component = MessageInput();
+    press(findByAttr(typeDraft(component, "agent-1", "Carry on in Codex"), "aria-label", "Switch and send"));
+    await flushAsync();
+    expect(mocks.switchChat).toHaveBeenCalledTimes(1);
+
+    // The message is on its way: "your next message switches" would now be about the one after it.
+    const sending = typeDraft(component, "agent-1", "And one more thing");
+    expect(findByClass(sending, "message-input-switch-strip")).toBeUndefined();
+    expect(findByAttr(sending, "aria-label", "Switch and send")).toBeUndefined();
+    const heldSend = findByAttr(sending, "aria-label", "Send message");
+    expect(heldSend?.attrs?.["aria-disabled"]).toBe("true");
+    press(heldSend);
+    await flushAsync();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(mocks.switchChat).toHaveBeenCalledTimes(1);
+    expect(findByTag(component.view!({ attrs: { chatId: "agent-1" } } as never), "textarea")?.attrs?.value).toBe(
+      "And one more thing",
+    );
+
+    answer({ kind: "handoff", phase: "summarizing", returned_block: "" });
+    await flushAsync();
+    mocks.switching.handoff = handoffStateFixture({ phase: "summarizing" });
+    const running = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(findByClass(running, "message-input-switch-strip")).toBeUndefined();
+  });
+
+  it("keeps the switch the next send's while its message waits on an upload", async () => {
+    mocks.switching.target = TARGET;
+    const release = holdComposerUploads();
+    const component = MessageInput();
+    press(findByAttr(typeDraft(component, "agent-1", "Carry on in Codex"), "aria-label", "Switch and send"));
+    await flushAsync();
+
+    // Nothing has gone yet: the draft is still the message that switches the chat.
+    const waiting = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(findByClass(waiting, "message-input-switch-strip")).toBeDefined();
+    press(findByAttr(waiting, "aria-label", "Switch and send"));
+    await flushAsync();
+    expect(mocks.switchChat).not.toHaveBeenCalled();
+
+    release();
+    await flushAsync();
+    expect(mocks.switchChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("carries out the choice as it stands once the message is ready, and none if it was taken back", async () => {
+    const component = MessageInput();
+
+    // Changed while the message waited: the account and its pick go out together.
+    mocks.switching.target = TARGET;
+    let release = holdComposerUploads();
+    press(findByAttr(typeDraft(component, "agent-1", "Carry on"), "aria-label", "Switch and send"));
+    await flushAsync();
+    const other = { id: "acct-anthropic-2", harness: "claude", label: "Anthropic 2 (Claude Code)" };
+    mocks.switching.target = other;
+    mocks.switching.pick = { identity: { model_id: "haiku", effort: "low", fast: false }, label: "Haiku 4.5 · Low" };
+    release();
+    await flushAsync();
+    const [, accountId, , , pick] = mocks.switchChat.mock.calls[0] as unknown as unknown[];
+    expect(accountId).toBe("acct-anthropic-2");
+    expect(pick).toEqual({ model_id: "haiku", effort: "low", fast: false });
+
+    // Taken back while the message waited: nothing goes, and the message is the user's again.
+    mocks.switchChat.mockClear();
+    mocks.switching.target = TARGET;
+    release = holdComposerUploads();
+    press(findByAttr(typeDraft(component, "agent-1", "Never mind"), "aria-label", "Switch and send"));
+    await flushAsync();
+    mocks.switching.target = null;
+    release();
+    await flushAsync();
+    expect(mocks.switchChat).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(findByTag(component.view!({ attrs: { chatId: "agent-1" } } as never), "textarea")?.attrs?.value).toBe(
+      "Never mind",
+    );
+  });
+
   it("shows no strip while the switch is already running", () => {
     mocks.switching.target = TARGET;
     mocks.switching.handoff = handoffStateFixture({ phase: "summarizing" });
@@ -1118,6 +1232,79 @@ describe("prependToComposer with an element reference", () => {
   });
 });
 
+describe("MessageInput on a chat awaiting its first send with nothing signed in", () => {
+  beforeEach(() => {
+    mocks.openProviderChooser.mockReset();
+    mocks.isChatRegistered = false;
+    mocks.provisional = {
+      chat_id: "agent-first-7731",
+      name: "Welcome",
+      account_id: "",
+      phase: "awaiting_first_send",
+      error: null,
+      is_seeded: true,
+    };
+    mocks.selectedAccount = null;
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    mocks.isChatRegistered = true;
+    mocks.provisional = undefined;
+    mocks.selectedAccount = null;
+    mocks.accountsLoaded = true;
+  });
+
+  it("disables the composer under a way to connect a provider", () => {
+    const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731" } } as never);
+
+    expect(renderedText(tree)).toContain("Connect an AI provider to start chatting.");
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
+    const chooseButton = findButton(tree, "Choose a provider");
+    expect(chooseButton).toBeDefined();
+    (chooseButton!.attrs!.onclick as () => void)();
+    expect(mocks.openProviderChooser).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the provider chooser as the notice appears", () => {
+    const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731" } } as never);
+
+    const notice = findByClass(tree, "message-input-no-provider");
+    (notice!.attrs!.oncreate as () => void)();
+
+    expect(mocks.openProviderChooser).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the phone's leading settings button beside the notice", () => {
+    const leading = m("button", { "aria-label": "Chat settings" });
+    const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731", leading } } as never);
+
+    expect(findByAttr(tree, "aria-label", "Chat settings")).toBeDefined();
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
+  });
+
+  it("gives the composer back once an account is signed in", () => {
+    const component = MessageInput();
+    expect(
+      findByTag(component.view!({ attrs: { chatId: "agent-first-7731" } } as never), "textarea")?.attrs?.disabled,
+    ).toBe(true);
+
+    mocks.selectedAccount = { id: "acct-7732" };
+    const tree = component.view!({ attrs: { chatId: "agent-first-7731" } } as never);
+
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(false);
+    expect(renderedText(tree)).not.toContain("Connect an AI provider");
+  });
+
+  it("shows the composer while the account list has not loaded yet", () => {
+    mocks.accountsLoaded = false;
+    const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731" } } as never);
+
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(false);
+    expect(renderedText(tree)).not.toContain("Connect an AI provider");
+  });
+});
+
 describe("MessageInput on a chat whose account was signed out", () => {
   beforeEach(() => {
     mocks.sendMessage.mockClear();
@@ -1139,12 +1326,12 @@ describe("MessageInput on a chat whose account was signed out", () => {
     mocks.signedOutAccountIds.clear();
   });
 
-  it("replaces the composer with the reason and a way to choose another provider", () => {
+  it("disables the composer under the reason and a way to choose another provider", () => {
     const component = MessageInput();
     const tree = component.view!({ attrs: { chatId: "agent-signed-out" } } as never);
 
     expect(renderedText(tree)).toContain("You signed out of the account this chat runs on.");
-    expect(findByTag(tree, "textarea")).toBeUndefined();
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
     const chooseButton = findButton(tree, "Choose a provider");
     expect(chooseButton).toBeDefined();
 
@@ -1161,7 +1348,7 @@ describe("MessageInput on a chat whose account was signed out", () => {
     const tree = component.view!({ attrs: { chatId: "agent-signed-out", leading } } as never);
 
     expect(findByAttr(tree, "aria-label", "Chat settings")).toBeDefined();
-    expect(findByTag(tree, "textarea")).toBeUndefined();
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
     expect(findButton(tree, "Choose a provider")).toBeDefined();
   });
 
@@ -1170,8 +1357,33 @@ describe("MessageInput on a chat whose account was signed out", () => {
     const component = MessageInput();
     const tree = component.view!({ attrs: { chatId: "agent-signed-out" } } as never);
 
-    expect(findByTag(tree, "textarea")).toBeDefined();
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(false);
     expect(renderedText(tree)).not.toContain("You signed out of the account this chat runs on.");
+  });
+
+  it("keeps the composer while the switch away from it is being sent", async () => {
+    mocks.switching.target = { id: "account-chosen-5522", harness: "claude", label: "Claude" };
+    let answer: (value: { kind: string; phase: string; returned_block: string }) => void = () => undefined;
+    mocks.switchChat.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    const component = MessageInput();
+    const render = () => component.view!({ attrs: { chatId: "agent-signed-out" } } as never);
+    const textarea = findByTag(render(), "textarea");
+    (textarea?.attrs?.oninput as (event: unknown) => void)({
+      target: { value: "Carry on in Claude", style: {}, scrollHeight: 10 },
+    });
+    (findByAttr(render(), "aria-label", "Switch and send")!.attrs!.onclick as () => void)();
+    await vi.waitFor(() => expect(mocks.switchChat).toHaveBeenCalledTimes(1));
+
+    const sending = render();
+    expect(findByTag(sending, "textarea")?.attrs?.disabled).toBe(false);
+    expect(renderedText(sending)).not.toContain("You signed out of the account this chat runs on.");
+
+    answer({ kind: "handoff", phase: "summarizing", returned_block: "" });
+    await flushAsync();
   });
 
   it("catches up with a sign-out made in another window when the send is refused for it", async () => {
@@ -1191,7 +1403,7 @@ describe("MessageInput on a chat whose account was signed out", () => {
     await vi.waitFor(() => expect(mocks.loadAccounts).toHaveBeenCalledTimes(1));
     const tree = component.view!({ attrs: { chatId: "agent-signed-out" } } as never);
     expect(findButton(tree, "Choose a provider")).toBeDefined();
-    expect(findByTag(tree, "textarea")).toBeUndefined();
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
   });
 
   it("leaves the account list alone when a send fails for any other reason", async () => {

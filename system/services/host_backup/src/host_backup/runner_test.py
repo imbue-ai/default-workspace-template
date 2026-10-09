@@ -996,6 +996,7 @@ def test_age_out_restore_markers_noop_when_all_recent(tmp_path: Path) -> None:
     )
 
     assert forget_calls == []
+    assert state.events_dir is not None
     assert not (state.events_dir / "events.jsonl").exists()
 
 

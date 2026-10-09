@@ -32,6 +32,7 @@ const OPUS: CatalogModelOption = {
   supports_fast: true,
   in_picker: true,
   harness_reported_model_id: "claude-opus-4-8",
+  default_effort: null,
 };
 const SONNET: CatalogModelOption = {
   id: "sonnet",
@@ -40,6 +41,7 @@ const SONNET: CatalogModelOption = {
   supports_fast: false,
   in_picker: true,
   harness_reported_model_id: "claude-sonnet-5",
+  default_effort: null,
 };
 
 // A pushed live choice: the identity carries the raw REPORTED id (as the backend sends
