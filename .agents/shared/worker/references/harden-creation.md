@@ -404,7 +404,8 @@ starting over.
    a side of it. For anything else, the commits you are bringing in are the
    user's latest word: keep what they do and fit your hardening around them.
    A conflict whose answer depends on intent you cannot see is a `question`
-   gate.
+   gate. Conclude the merge with `git commit --no-edit`, which keeps the
+   subject step 4 finds it by.
 3. **Harden what came in.** Commits that touch the creation are now part of
    the change you are hardening, under this whole contract: tests that cover
    their behavior, the invariants above, and anything your operation
