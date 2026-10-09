@@ -221,14 +221,6 @@ version = "2.1.293"
 # create), so auth and sessions live per account; nothing sets the variable in
 # the host env, and ~/.claude holds no credential.
 isolate_local_config_dir = false
-# Claude-only instructions, appended to every claude agent's system prompt.
-append_system_prompt__extend = ["""# Claude-specific instructions
-
-`.claude/skills` does not exist; it is symlinked to `.agents/skills/`.
-
-Use your built-in memory system. Your memory directory is `data/memories/` (configured via `autoMemoryDirectory` in `.claude/settings.json`).
-
-Give every Bash call a `description`: a few plain words saying what the command does. The chat shows the user that description instead of the raw command."""]
 
 # The "main" (services) agent type -- a plain `command` agent, NOT a claude
 # agent. No claude ever runs as this agent: window 0 only sleeps while the

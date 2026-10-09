@@ -13,10 +13,6 @@
           },
           {
             "type": "command",
-            "command": "./system/scripts/claude_update_plugin.sh"
-          },
-          {
-            "type": "command",
             "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/ensure_tk_on_path.sh"
           },
           {
@@ -31,22 +27,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_prevent_commit_rewrite.sh"
-          },
-          {
-            "type": "command",
-            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_block_pipe_tail_head.sh"
-          },
-          {
-            "type": "command",
-            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_latchkey_request_standalone.sh"
-          },
-          {
-            "type": "command",
-            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_secrets_guard.sh"
-          },
-          {
-            "type": "command",
             "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_rewrite_bash_command.py 2>/dev/null || true"
           }
         ]
@@ -57,24 +37,6 @@
     "type": "command",
     "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/claude_status_line.sh",
     "refreshInterval": 2
-  },
-  "enabledPlugins": {
-    "imbue-code-guardian@imbue-code-guardian": true,
-    "frontend-design@claude-code-plugins": true
-  },
-  "extraKnownMarketplaces": {
-    "imbue-code-guardian": {
-      "source": {
-        "source": "github",
-        "repo": "imbue-ai/code-guardian"
-      }
-    },
-    "claude-code-plugins": {
-      "source": {
-        "source": "github",
-        "repo": "anthropics/claude-code"
-      }
-    }
   },
   "autoMemoryDirectory": "~/workspace/data/memories"
 }
