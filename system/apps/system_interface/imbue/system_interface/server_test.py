@@ -976,14 +976,7 @@ def test_a_move_reported_before_its_page_heard_an_ops_move_is_not_recorded_and_i
     other_queue = shell.broadcaster.register()
     shell.broadcaster.set_client_info(other_queue, "c1", "home")
     try:
-        landing = {
-            "type": "client_state",
-            "client_id": "c1",
-            "active_desktop": "home",
-            "report_id": "report-0000000000000001",
-            "page_id": "page-00000000000000aa",
-            "revision": 0,
-        }
+        landing = {**_moving_report("c1", "home"), "report_id": "report-0000000000000001"}
         assert _handle_client_state_message(json.dumps(landing), client_queue, shell, is_first_report=True) is True
         assert shell.set_client_active_desktop(ClientId("c1"), work.id) is True
         drain_messages(client_queue)
