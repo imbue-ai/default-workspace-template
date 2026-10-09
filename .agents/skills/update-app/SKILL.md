@@ -369,17 +369,21 @@ where the data dies. Encode these, cheapest first:
   uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
   ```
 
+  The worktree needs its own environment before the first `up`. A fresh
+  `git worktree add` has no `.venv`, and without one the app's command
+  resolves to the live install, so the preview silently serves the live code.
+  Run `uv sync --all-packages` in the worktree first, and again before
+  `refresh` after changing a dependency or entry point. If the app has a
+  frontend, build it there too.
+
   `--with <sibling>` boots a sibling app's preview from the same worktree first
   and points the app's copied registry at it: a shell preview frames the
   previewed chat that way, and a terminal preview needs `--with terminal-pty`,
   since its pages frame the pty the registry names;
   `--instance-key <key>` names the instance the window opens on, for an app
-  whose `open_path` takes one (a chat opens on a conversation). `up` and
-  `refresh` run `uv sync --all-packages` in the worktree first, so a fresh
-  worktree needs no `uv sync` of its own (a frontend still needs its build
-  there); if that sync fails, nothing boots. The worktree is the app's code
-  isolation when the change is one the user must see before it lands; for a
-  contained change exercised against a data copy, the raw
+  whose `open_path` takes one (a chat opens on a conversation). The worktree is
+  the app's code isolation when the change is one the user must see before it
+  lands; for a contained change exercised against a data copy, the raw
   `serve_isolated_instance.py` call above, from the live tree, is still the
   cheaper shape, and the only shape for a service with no manifest. Either way
   the preview's window is the same labeled frame.
