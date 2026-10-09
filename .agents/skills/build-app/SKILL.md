@@ -246,17 +246,12 @@ What gets generated:
   `REF-<id>.json` attachment an agent can resolve
   (`.agents/shared/references/element-references.md`,
   `docs/system/blueprint/element-reference-menu/`). The connection also
-  follows the page's link clicks: a link to a page of the app navigates as
-  usual, a link to a local service, another app, or a `file:///` path opens
-  where the workspace opens it (the app's window, the workspace's browser, the
-  File Viewer), and an external link opens in the app of the workspace
-  registered for it, else in the user's own browser -- so write plain
-  `<a href>` links and no link handling of your own. A `window.open` to any
-  of the workspace's own addresses is routed the same way and returns `null`;
-  one to another site still opens a browser window. Keep the
-  script on every page the app serves. An app that drops it always reopens at
-  its origin, gets the browser's own menu, and has its links navigate its own
-  window. The runner serves the two modules
+  opens the page's links where the workspace opens them, so write plain
+  `<a href>` links and no link handling of your own; a `window.open` to any
+  of the workspace's own addresses is routed the same way and returns `null`.
+  Keep the script on every page the app serves. An app that drops it always
+  reopens at its origin, gets the browser's own menu, and has its links
+  navigate its own window. The runner serves the two modules
   the script imports from its own origin at `/_static/app_contract.js` and
   `/_static/context_menu.js` (a module import is a fetch without cookies,
   which the forwarder refuses across origins); keep that route too.
@@ -671,12 +666,9 @@ For the full program schema and logging knobs, see the shared
 
 Verification and gotchas references apply identically to this path.
 
-A wrapped tool's pages do not carry the shell page script, so they do not
-speak the app contract: a plain click on one of their links to a local
-service or another app navigates the tool's own window rather than opening
-where the workspace opens it (in the desktop app, a link that opens a new
-window is still sent back into the workspace). If the tool can serve one
-more static file from its own origin and add a script to its pages (Jupyter's
+A wrapped tool's pages do not carry the shell page script, so a plain click
+on one of their links to a local service or another app navigates the tool's
+own window. If the tool can serve one more static file from its own origin and add a script to its pages (Jupyter's
 custom JS, a dev server's plugin hook), give it the contract: serve
 `system/apps/system_interface/imbue/system_interface/static/_static/app_contract.js`
 at `/_static/app_contract.js` and add
