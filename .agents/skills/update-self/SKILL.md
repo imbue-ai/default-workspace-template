@@ -489,7 +489,9 @@ anchored so `terminal` does not match `terminal-pty`'s lease), take them in
 name order (`tk create "editing
 critical app <name>" -t chore`, then `tk start` it, each as its own command),
 and if any is held by another agent, release the ones you took and surface it
-instead of proceeding. Release them afterwards.
+instead of proceeding. Take them right before the apply, once the settle wait
+and the fast-forward check below have passed, so no wait or catch-up round
+runs while you hold them, and release them afterwards.
 
 The apply run from here keeps its own run record and raises no "recently
 updated" notice: `--keep-rollback-point` is the careful flow's, not this one's.
