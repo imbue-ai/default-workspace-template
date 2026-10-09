@@ -1084,7 +1084,7 @@ export class DesktopStore {
         return;
       }
       case "app-address": {
-        const app = this.state.apps.find((candidate) => candidate.label === target.label);
+        const app = openableApps(this.state).find((candidate) => candidate.label === target.label);
         if (app === undefined) {
           this.toast(`Nothing in this workspace is at ${target.url}`);
           return;

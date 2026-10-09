@@ -1450,7 +1450,8 @@ describe("links Imbue Studio hands over", () => {
 
   it("refuses another workspace's address, and an address no app of this workspace is at, with a notice", async () => {
     const store = await startedStore();
-    socket.deliver().onAppsUpdated([appRecord("docs"), FILES_APP]);
+    const shellApp = appRecord("system_interface", { label: "system-interface-aa11bb22", internal: true });
+    socket.deliver().onAppsUpdated([appRecord("docs"), FILES_APP, shellApp]);
 
     await store.openLink(
       "http://files-ab12cd34.host-fedcba9876543210fedcba9876543210.localhost:8421/",
@@ -1460,11 +1461,14 @@ describe("links Imbue Studio hands over", () => {
     await store.openLink(`http://gone-zz99yy88.${COORDINATE}/`, SHELL_HOST, null);
     // The workspace's own bare address, which names no app; the desktop app forwards it like an app address.
     await store.openLink(`http://${COORDINATE}/`, SHELL_HOST, null);
+    // An internal app's address (here the desktop's own) has no window to open.
+    await store.openLink(`http://${SHELL_HOST}/`, SHELL_HOST, null);
 
     expect(notices()).toEqual([
       OTHER_WORKSPACE_LINK_NOTICE,
       `Nothing in this workspace is at http://gone-zz99yy88.${COORDINATE}/`,
       `Nothing in this workspace is at http://${COORDINATE}/`,
+      `Nothing in this workspace is at http://${SHELL_HOST}/`,
     ]);
     expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
   });
