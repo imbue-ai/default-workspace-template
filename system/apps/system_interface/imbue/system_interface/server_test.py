@@ -1016,7 +1016,11 @@ def test_a_move_reported_before_its_page_heard_an_ops_move_is_not_recorded_and_i
         assert len(shell.activity.read_events()) == switches_logged
 
         # One naming a desktop since deleted is not landed on the first desktop and announced either.
-        deleted_before_the_op = {**made_before_the_op, "active_desktop": "gone", "report_id": "report-00000000000000a2"}
+        deleted_before_the_op = {
+            **made_before_the_op,
+            "active_desktop": "gone",
+            "report_id": "report-00000000000000a2",
+        }
         assert (
             _handle_client_state_message(json.dumps(deleted_before_the_op), client_queue, shell, is_first_report=False)
             is True
