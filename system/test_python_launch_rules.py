@@ -17,6 +17,7 @@ Each rule is checked against the real tree and against a planted violation:
 from __future__ import annotations
 
 import ast
+import configparser
 import re
 import shlex
 import subprocess
@@ -79,38 +80,43 @@ _DELIBERATE_SYNCS: tuple[tuple[str, str], ...] = (
 )
 
 
+def _shell_command_string(arguments: list[str]) -> str | None:
+    """The command string a shell runs from its ``arguments``, if they pass one with ``-c``.
+
+    ``-c`` may sit in a cluster of short options (``-lc``, ``-ec``) or after long ones
+    (``--login -c``); the string is the first argument after the options.
+    """
+    takes_command = False
+    for argument in arguments:
+        if not argument.startswith("-"):
+            return argument if takes_command else None
+        if not argument.startswith("--") and "c" in argument[1:]:
+            takes_command = True
+    return None
+
+
 def _runs_uv_run(command: str) -> bool:
     """Whether a program command executes ``uv run``, directly or inside a ``bash -c`` string."""
     words = shlex.split(command)
     for index, word in enumerate(words):
         if PurePosixPath(word).name == "uv" and words[index + 1 : index + 2] == ["run"]:
             return True
-        if (
-            PurePosixPath(word).name in _SHELL_PROGRAMS
-            and words[index + 1 : index + 2] == ["-c"]
-            and index + 2 < len(words)
-            and _runs_uv_run(words[index + 2])
-        ):
-            return True
+        if PurePosixPath(word).name in _SHELL_PROGRAMS:
+            shell_command = _shell_command_string(words[index + 1 :])
+            if shell_command is not None and _runs_uv_run(shell_command):
+                return True
     return False
 
 
 def _program_commands(conf: Path) -> list[tuple[str, str]]:
     """Every ``(section, command)`` a supervisord config file declares, continuation lines joined."""
-    commands: list[tuple[str, str]] = []
-    section = ""
-    lines = conf.read_text().splitlines()
-    for index, line in enumerate(lines):
-        if line.startswith("["):
-            section = line.strip()
-        elif line.startswith("command="):
-            parts = [line.removeprefix("command=")]
-            for continuation in lines[index + 1 :]:
-                if not continuation[:1].isspace() or not continuation.strip():
-                    break
-                parts.append(continuation.strip())
-            commands.append((section, " ".join(parts)))
-    return commands
+    parser = configparser.RawConfigParser(strict=False)
+    parser.read(conf)
+    return [
+        (f"[{section}]", " ".join(parser.get(section, "command").split("\n")))
+        for section in parser.sections()
+        if parser.has_option(section, "command")
+    ]
 
 
 def _programs_under_uv_run(supervisord_dir: Path) -> list[str]:
@@ -208,6 +214,12 @@ def test_a_planted_uv_run_program_is_caught_in_either_form(tmp_path: Path) -> No
         "[program:tagged]\ncommand=python3 system/services/oom_priority/bin/oom_tag_service.py "
         'user bash -c "python3 system/scripts/forward_port.py --name t --url http://x && exec uv run tagged"\n'
     )
+    (dropins / "spaced.conf").write_text(
+        "[program:spaced]\ncommand = uv run --no-sync spaced\n"
+    )
+    (dropins / "login.conf").write_text(
+        '[program:login]\ncommand=bash -lc "exec uv run --no-sync login"\n'
+    )
     (dropins / "fine.conf").write_text(
         '[program:fine]\ncommand=bash -c "uv sync --all-packages --frozen && exec .venv/bin/fine"\n'
     )
@@ -216,6 +228,8 @@ def test_a_planted_uv_run_program_is_caught_in_either_form(tmp_path: Path) -> No
 
     assert [offender.split(" ", 1)[0] for offender in offenders] == [
         "direct.conf",
+        "login.conf",
+        "spaced.conf",
         "tagged.conf",
     ]
 
