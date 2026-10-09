@@ -1021,6 +1021,19 @@ def test_a_move_reported_before_its_page_heard_an_ops_move_is_not_recorded_and_i
         assert drain_messages(other_queue) == []
         assert len(shell.activity.read_events()) == switches_logged
 
+        # One naming a desktop since deleted is not landed on the first desktop and announced either.
+        deleted_before_the_op = {**made_before_the_op, "active_desktop": "gone", "report_id": "report-00000000000000a2"}
+        assert (
+            _handle_client_state_message(json.dumps(deleted_before_the_op), client_queue, shell, is_first_report=False)
+            is True
+        )
+        recorded = shell.clients.get_client("c1")
+        assert recorded is not None and (recorded.active_desktop, recorded.desktop_revision) == (work.id, 2)
+        assert [(message["desktop_id"], message["report_id"]) for message in drain_messages(client_queue)] == [
+            (str(work.id), None)
+        ]
+        assert drain_messages(other_queue) == []
+
         made_after_the_op = {**made_before_the_op, "report_id": "report-0000000000000003", "revision": 2}
         assert (
             _handle_client_state_message(json.dumps(made_after_the_op), client_queue, shell, is_first_report=False)
