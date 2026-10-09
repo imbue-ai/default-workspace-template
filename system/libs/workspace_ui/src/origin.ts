@@ -36,8 +36,6 @@
 
 import { workspaceHostCoordinate } from "./app_contract";
 
-export { workspaceHostCoordinate } from "./app_contract";
-
 /** Derive the origin URL (with trailing slash) whose first hostname label is
  *  ``hostLabel`` (an app's ``<name>-<rand>`` origin label). ``host`` and
  *  ``protocol`` default to the shell's own ``window.location`` but are

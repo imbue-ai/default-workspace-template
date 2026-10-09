@@ -8,8 +8,8 @@
  * derivation is unit-testable without a DOM.
  */
 
-import { LOCAL_HOSTNAMES } from "@imbue/workspace-ui/src/app_contract";
-import { deriveAppOrigin, workspaceHostCoordinate } from "@imbue/workspace-ui/src/origin";
+import { LOCAL_HOSTNAMES, workspaceHostCoordinate } from "@imbue/workspace-ui/src/app_contract";
+import { deriveAppOrigin } from "@imbue/workspace-ui/src/origin";
 import type { AppRecord } from "./records";
 
 /** The origin label an app's public origin uses: its registered label, else its name (a legacy row). */
