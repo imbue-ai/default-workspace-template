@@ -1513,7 +1513,9 @@ describe("links Imbue Studio hands over", () => {
 
   it("hands an external link to the app registered for its kind, and opens nothing outside", async () => {
     const { store, outside } = await outsideRecordingStore();
-    const mailer = appRecord("mailer", { message_handlers: [{ type: "open:mailto", path: "/api/compose", show: null }] });
+    const mailer = appRecord("mailer", {
+      message_handlers: [{ type: "open:mailto", path: "/api/compose", show: null }],
+    });
     socket.deliver().onAppsUpdated([appRecord("docs"), mailer]);
     store.setCanOpenLinksOutside(true);
 

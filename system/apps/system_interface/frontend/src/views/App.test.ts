@@ -35,6 +35,8 @@ const gestures: GestureSource = {
 let api: FakeDesktopApi;
 let socket: FakeDesktopSocket;
 let store: DesktopStore;
+/** Every link the store opened outside the workspace, by where it went. */
+let openedOutside: string[];
 
 function pressEscape(): void {
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
@@ -46,6 +48,7 @@ function pressEscape(): void {
 async function mountApp(options: { isDetached?: boolean; soloWindowId?: string } = {}): Promise<void> {
   api = new FakeDesktopApi();
   socket = new FakeDesktopSocket();
+  openedOutside = [];
   api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
   api.writeLayout("home", CLIENT, {
     updated_at: null,
@@ -60,6 +63,10 @@ async function mountApp(options: { isDetached?: boolean; soloWindowId?: string }
     redraw: () => m.redraw(),
     reloadInterface: () => undefined,
     soloWindowId: options.soloWindowId ?? null,
+    outsideLinks: {
+      openInEmbedder: (url) => openedOutside.push(`embedder:${url}`),
+      openInBrowser: (url) => openedOutside.push(`browser:${url}`),
+    },
   });
   await store.start(NO_LINK);
   socket.deliver().onAppsUpdated([appRecord("docs")]);
@@ -496,7 +503,6 @@ describe("the element menu", () => {
   });
 
   it("opens a chrome link to a local address inside the workspace, and an external one in the browser", async () => {
-    const opened = vi.spyOn(window, "open").mockImplementation(() => null);
     const area = document.querySelector("[data-backdrop-area]") as HTMLElement;
     for (const href of ["http://localhost:3000/preview", "https://example.com/help"]) {
       const anchor = document.createElement("a");
@@ -519,8 +525,7 @@ describe("the element menu", () => {
         sender: "system_interface",
       },
     ]);
-    expect(opened.mock.calls).toEqual([["https://example.com/help", "_blank", "noopener"]]);
-    opened.mockRestore();
+    expect(openedOutside).toEqual(["browser:https://example.com/help"]);
   });
 
   it("stays closed for a right-click on a window's shield, which is the press that closes the launcher", () => {

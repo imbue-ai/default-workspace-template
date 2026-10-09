@@ -44,7 +44,9 @@ LIVENESS_SWEEP_INTERVAL_SECONDS: Final[float] = 10.0
 # Where the share gateway keeps the domain the workspace was last shared under.
 DEFAULT_SHARE_DOMAIN_PATH: Final[Path] = Path("data/.state/share_domain")
 
-_DNS_NAME: Final[re.Pattern[str]] = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_DNS_NAME: Final[re.Pattern[str]] = re.compile(
+    r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+)
 
 
 def read_share_domain(path: Path | None) -> str | None:

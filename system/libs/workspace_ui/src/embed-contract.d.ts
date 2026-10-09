@@ -35,8 +35,10 @@ declare module "@minds/embed-contract" {
   export const PROVIDER_SIGN_IN: "minds:provider-sign-in";
   export const PROVIDER_SIGN_IN_ACK: "minds:provider-sign-in-ack";
   export const PROVIDER_SIGN_IN_END: "minds:provider-sign-in-end";
-  // The link a popup was turned into (contract v8). Probed like the ones above.
+  // The link a popup was turned into, and an external one the workspace hands back (contract v8). Probed like the
+  // ones above.
   export const OPEN_LINK: "minds:open-link";
+  export const OPEN_EXTERNAL: "minds:open-external";
   export const MAX_OPEN_LINK_URL_LENGTH: number;
 
   export const REQUEST_ID_PATTERN: RegExp;
