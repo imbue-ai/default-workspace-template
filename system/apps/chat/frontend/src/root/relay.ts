@@ -108,7 +108,7 @@ export function startInnerFrameRelay(
       return;
     }
     if (window.parent === window) {
-      const url = webLinkToOpen(event.data);
+      const url = linkToOpenItself(event.data);
       if (url !== null) window.open(url, "_blank", "noopener");
       return;
     }
@@ -118,7 +118,7 @@ export function startInnerFrameRelay(
 }
 
 /** The http(s), ``mailto:`` or ``tel:`` URL of a ``shell:open-link``, or null for any other message or URL. */
-function webLinkToOpen(data: unknown): string | null {
+function linkToOpenItself(data: unknown): string | null {
   if (data === null || typeof data !== "object") return null;
   const message = data as { type?: unknown; url?: unknown };
   if (message.type !== SHELL_OPEN_LINK || typeof message.url !== "string") return null;
