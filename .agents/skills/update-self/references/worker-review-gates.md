@@ -38,7 +38,8 @@ All three must hold:
    git diff <merge-sha> "$FIRST^1"
    ```
 
-   A conflict you resolved in any catch-up is an edit.
+   A conflict you resolved in any catch-up, a lockfile you regenerated in one,
+   and any commit you added after one are edits.
 
 Every changed file then arrives exactly as upstream shipped and tested it, and
 there is nothing local for a review to protect. Running `/autofix` here would
