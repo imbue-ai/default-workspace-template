@@ -558,6 +558,8 @@ commits as your edits.
 - **Isolated-service boots** for a service with a file you resolved a conflict
   in. A service the workspace changed on its own is already live in that
   state.
+- **Playwright** for a web surface with a file you resolved a conflict in, as
+  4b drives it.
 - **Bundles**: rebuild all three when you reported them and `$PRE..HEAD`
   touches what they are built from (`system/apps/system_interface/`,
   `system/apps/chat/`, `system/apps/getting_started/`,
