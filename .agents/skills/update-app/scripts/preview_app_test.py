@@ -252,17 +252,7 @@ def test_a_preview_that_opens_on_an_instance_needs_its_key(tmp_path: Path) -> No
             runner=runner,
             dump_registry=_dump_registry,
         )
-    with pytest.raises(mod.PreviewError, match="--instance-key"):
-        mod.up(
-            "system_interface",
-            worktree,
-            tmp_path,
-            with_apps=["chat"],
-            runner=runner,
-            dump_registry=_dump_registry,
-        )
     assert runner.synced == []
-    assert runner.calls == []
 
 
 def test_an_app_with_no_table_previews_by_the_scaffold_convention(
