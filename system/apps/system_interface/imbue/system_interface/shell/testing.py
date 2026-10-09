@@ -49,9 +49,9 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # The one clock the shell tests stamp records with.
 TEST_NOW: Final[datetime] = datetime(2026, 9, 4, tzinfo=timezone.utc)
-# The URL of the supervised ``terminal`` row of ``write_two_app_registry``, which declares a launch path.
+# The page the shell tests' ``client_state`` reports come from, unless a test names another.
 TEST_PAGE_ID: Final[str] = "page-00000000000000ff"
-
+# The URL of the supervised ``terminal`` row of ``write_two_app_registry``, which declares a launch path.
 TEST_TERMINAL_URL: Final[str] = "http://localhost:7681"
 # The URL of the ``files`` row of ``write_two_app_registry``, which declares none.
 TEST_FILES_URL: Final[str] = "http://localhost:7000"
