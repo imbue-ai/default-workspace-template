@@ -59,6 +59,7 @@ from share_gateway.materials import discard_signing_secret
 from share_gateway.materials import load_or_create_auth_label
 from share_gateway.materials import load_or_create_signing_secret
 from share_gateway.materials import read_share_materials
+from share_gateway.materials import record_share_domain
 from share_gateway.retry_state import STATUS_HALTED
 from share_gateway.retry_state import STATUS_RETRYING
 from share_gateway.retry_state import STATUS_UP
@@ -439,6 +440,7 @@ def main() -> None:
         if materials is not None and materials != retried_materials:
             retry_state.reset()
             retried_materials = materials
+            record_share_domain(materials_module.SHARE_DOMAIN_FILE, materials.workspace_domain)
 
         if materials is None and stack is not None:
             _log("Share materials removed; tearing the stack down")

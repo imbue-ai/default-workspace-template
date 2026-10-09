@@ -10,6 +10,7 @@ from share_gateway.materials import load_or_create_auth_label
 from share_gateway.materials import load_or_create_signing_secret
 from share_gateway.materials import parse_share_materials
 from share_gateway.materials import read_share_materials
+from share_gateway.materials import record_share_domain
 
 _TOK_123_DIGEST = hashlib.sha256(b"tok-123").hexdigest()
 
@@ -129,3 +130,16 @@ def test_auth_label_replaces_a_malformed_stored_value(tmp_path: Path) -> None:
     label_path.write_text("not-a-valid-auth-label")
     regenerated = load_or_create_auth_label(label_path)
     assert re.match(r"^auth-[a-z0-9]{8}$", regenerated)
+
+
+def test_the_share_domain_is_recorded_once_and_replaced_only_by_another_share(tmp_path: Path) -> None:
+    path = tmp_path / "state" / "share_domain"
+
+    record_share_domain(path, "aaaa.us1.example.com")
+    first_write = path.stat().st_mtime_ns
+    record_share_domain(path, "aaaa.us1.example.com")
+    assert path.read_text() == "aaaa.us1.example.com\n"
+    assert path.stat().st_mtime_ns == first_write
+
+    record_share_domain(path, "bbbb.us1.example.com")
+    assert path.read_text() == "bbbb.us1.example.com\n"

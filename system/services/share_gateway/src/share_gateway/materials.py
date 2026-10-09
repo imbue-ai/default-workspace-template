@@ -39,6 +39,10 @@ CADDYFILE_PATH = STATE_DIR / "Caddyfile"
 # its region. The last-fetched relay assignment is cached so a container
 # restart brings the tunnels up without the connector.
 ASSIGNMENT_CACHE_PATH = STATE_DIR / "assignment.json"
+# The domain the workspace was last shared under. Unlike everything else here it outlives an unshare: an address the
+# workspace handed out under it (an agent's link to an app) still routes to the app after sharing is turned off, and
+# works again for visitors once it is turned back on, since a re-share keeps the domain. The shell reads it.
+SHARE_DOMAIN_FILE = Path("data/.state/share_domain")
 # Where the runner reports the stack's provisioning state (up / retrying /
 # halted, the last error, the next retry time) for the Imbue Studio desktop client;
 # removed at unshare along with the rest of the stack.
@@ -192,3 +196,17 @@ def load_or_create_auth_label(path: Path) -> str:
     path.write_text(label)
     path.chmod(0o600)
     return label
+
+
+def record_share_domain(path: Path, workspace_domain: str) -> None:
+    """Record the domain the workspace is shared under, rewriting the file only when it names another one."""
+    text = f"{workspace_domain}\n"
+    try:
+        if path.read_text() == text:
+            return
+    except FileNotFoundError:
+        pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.name}.tmp")
+    temporary.write_text(text)
+    temporary.replace(path)
