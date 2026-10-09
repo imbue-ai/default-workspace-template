@@ -538,9 +538,9 @@ sides changed it even without a conflict. Conclude a conflicted merge with
 
 Then validate the delta, scoped by the same rules as 4b but over
 `$PRE..HEAD` only, where `$PRE` is your branch's tip before the catch-up
-merge (that merge's first parent). Do not re-run 4b's recipe: its merged set re-selects the
-whole pass, and its `git diff "$MERGE" HEAD` line would read the workspace's
-commits as your edits.
+merge (that merge's first parent). Do not re-run 4b's recipe: its merged set
+re-selects the whole pass, and its `git diff "$MERGE" HEAD` line would read
+the workspace's commits as your edits.
 
 - **Impact**: when the commits coming in add or change user-created code,
   check it against what the update changed (4a's steps 2 and 3), and list each
