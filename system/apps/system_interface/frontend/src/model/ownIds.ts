@@ -3,7 +3,8 @@
  * for its placement saves, remembered so the ``placements_updated`` broadcast of the window's own save is
  * told from another window's or the shell's, which the window refetches for; and ``report-<16 hex>`` for
  * the desktop moves it reports, remembered so the ``active_desktop_changed`` echo of a move it has since
- * replaced with another is told from news it has to follow.
+ * replaced with another is told from news it has to follow. A window also mints one ``page-<16 hex>`` as its page
+ * loads, carried on its ``client_state`` reports.
  */
 
 export const SAVE_ID_PREFIX = "save-";
