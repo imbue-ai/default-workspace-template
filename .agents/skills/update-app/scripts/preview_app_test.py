@@ -329,6 +329,7 @@ def test_a_shell_preview_boots_its_siblings_first_and_frames_them_through_a_regi
 
     assert code == 0
     assert runner.ups() == ["chat-preview", "system_interface-preview"]
+    assert runner.synced == [worktree]
     shell_argv = runner.up_argv("system_interface-preview")
     assert f"MINDS_APPS_FILE={_shell_registry_copy(tmp_path)}" in _flag_values(
         shell_argv, "--env"

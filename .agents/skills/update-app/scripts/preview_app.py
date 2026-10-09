@@ -376,10 +376,7 @@ def build_up_argv(
     argv.extend(
         [
             *LAUNCHER,
-            *(
-                resolve_own_placeholders(part, registry_copy)
-                for part in launch
-            ),
+            *(resolve_own_placeholders(part, registry_copy) for part in launch),
         ]
     )
     return argv
@@ -397,6 +394,31 @@ def up(
     dump_registry: Callable[[list[dict[str, object]]], str] | None = None,
 ) -> int:
     """Boot the app's preview from ``worktree``, after the siblings named in ``with_apps``."""
+    return _up(
+        app_name,
+        worktree,
+        repo_root,
+        with_apps=with_apps,
+        instance_key=instance_key,
+        title=title,
+        runner=runner,
+        dump_registry=dump_registry,
+        worktree_synced=False,
+    )
+
+
+def _up(
+    app_name: str,
+    worktree: Path,
+    repo_root: Path,
+    *,
+    with_apps: Sequence[str],
+    instance_key: str | None,
+    title: str | None,
+    runner: Runner,
+    dump_registry: Callable[[list[dict[str, object]]], str] | None,
+    worktree_synced: bool,
+) -> int:
     other = live_preview_worktree(repo_root, app_name)
     if other is not None and not _is_same_worktree(other, worktree):
         sys.stderr.write(
@@ -407,7 +429,8 @@ def up(
         )
         return 1
     manifest_path, manifest = find_manifest(worktree, app_name)
-    sync_worktree(worktree, runner)
+    if not worktree_synced:
+        sync_worktree(worktree, runner)
     dump = (
         dump_registry
         if dump_registry is not None
@@ -420,13 +443,16 @@ def up(
         # A sibling opens on the same instance when its path takes one (the chat under a shell
         # preview opens on the user's conversation, like a chat preview of its own).
         if (
-            up(
+            _up(
                 sibling,
                 worktree,
                 repo_root,
+                with_apps=(),
                 instance_key=instance_key,
+                title=None,
                 runner=runner,
                 dump_registry=dump,
+                worktree_synced=True,
             )
             != 0
         ):
@@ -610,7 +636,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     up_parser = subparsers.add_parser(
-        "up", help="Boot the app's preview from a worktree and surface it as an app to open."
+        "up",
+        help="Boot the app's preview from a worktree and surface it as an app to open.",
     )
     up_parser.add_argument(
         "--app", required=True, help="The app's registered name (its manifest's name)."
