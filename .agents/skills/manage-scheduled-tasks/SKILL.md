@@ -10,12 +10,12 @@ metadata:
 Recurring jobs on this host run through the stock **cron** daemon: what runs
 and when is exactly what the drop-in files in `/etc/cron.d/` say. Plain cron
 has two failure modes that drive every choice below: **it only fires when the
-machine is up at that moment** (a job whose time passes while the container
+workspace is running at that moment** (a job whose time passes while the container
 is off or asleep is skipped, never made up), and **it does not care whether
 the job finished** (a run that dies mid-flight is simply gone). When a job
 must not be missed, run it through `system/libs/automations/run_job.sh`: an every-minute cron
-line ticks it, and it runs the job on its cadence when the machine is up --
-catching up the first minute the machine is back after downtime, and
+line ticks it, and it runs the job on its cadence when the workspace is running --
+catching up the first minute the workspace is back after downtime, and
 **retrying a run that failed or was killed before completing**. The built-in
 weekly **Caretaker** is the worked example of that pattern (see below).
 
@@ -26,7 +26,7 @@ Pick per job, based on what matters more:
 - **`run_job.sh`** -- for any recurring cadence (`--every 15m`, `3h`, `1d`,
   `7d`) that **must not be skipped or half-done**. A cron line ticks every
   minute and hands the decision to the runner, which runs the job once per
-  interval: on time when the machine is up, the first minute it is back after
+  interval: on time when the workspace is running, the first minute it is back after
   downtime, and again after a couple of minutes if a run failed or died
   mid-flight. Only a run that **completes** counts.
 - **plain cron line** -- for jobs that need an **exact moment** (9:30 on
@@ -36,7 +36,7 @@ Pick per job, based on what matters more:
 If the user asks for "every N minutes/hours/days" or "daily-ish and
 reliable", use the runner. Use a plain line only for "at exactly HH:MM"
 jobs -- and if such a job also must not be missed, say so: with a plain line
-it will be skipped when the machine is off.
+it will be skipped while the workspace is stopped.
 
 ## Timezone: confirm it before scheduling anything
 
@@ -182,7 +182,7 @@ That is all -- no new agent template is required. `system/libs/automations/run_a
 <skill>` creates a persistent singleton agent (labelled `automation=<skill>`),
 keeps it alive across runs, and on each run clears its chat and re-sends
 `/<skill>`, so the skill runs fresh; the agent surfaces its own chat window
-right after its first message via `system/scripts/layout.py open chat --path "/?chat=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"`
+right after its first message via `uv run --no-sync workspace-layout open chat --path "/?chat=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"`
 (the same way web apps are surfaced). Pass `--template <t>` only when you want a custom agent
 template; otherwise the generic `automation` template is used. The agent runs on the
 workspace's default provider account and its harness (from `.mngr/settings.local.toml`, which

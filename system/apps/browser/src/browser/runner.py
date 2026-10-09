@@ -61,13 +61,14 @@ from types import FrameType
 from typing import Any
 
 from app_manifest.registry import APP_CONTRACT_ROUTE, SHELL_APP_CONTRACT_PATH
-from app_manifest.shell_windows import shell_base_url
 from flask import Flask, Response, jsonify, request, send_file
+from flask.typing import ResponseReturnValue
 from flask_sock import Sock
 from imbue.imbue_common.frozen_model import FrozenModel
 from loguru import logger
 from pydantic import Field
 from simple_websocket import ConnectionClosed
+from workspace_layout.shell_url import shell_base_url
 
 from browser import mediastream, telemetry
 from browser.cdp_proxy import ProxyServer
@@ -419,7 +420,7 @@ def create_browser() -> Response:
     return jsonify({"name": started.browser_id})
 
 
-def close_browser(browser_id: str) -> Response:
+def close_browser(browser_id: str) -> ResponseReturnValue:
     if (gate := _require_ready()) is not None:
         return gate
     # Validate the name before it reaches manager.close / forget_profile_dir, which build a
@@ -432,7 +433,7 @@ def close_browser(browser_id: str) -> Response:
     return jsonify({"closed": True})
 
 
-def stop_browser(browser_id: str) -> Response:
+def stop_browser(browser_id: str) -> ResponseReturnValue:
     """Stop a browser's Chromium while keeping the browser, its profile, and its tabs."""
     if (gate := _require_ready()) is not None:
         return gate
@@ -447,7 +448,7 @@ def stop_browser(browser_id: str) -> Response:
     return jsonify({"stopped": True})
 
 
-def close_active_tab(browser_id: str) -> Response:
+def close_active_tab(browser_id: str) -> ResponseReturnValue:
     """Close the tab the pane is showing (the viewer's close chord); the browser itself stays up."""
     if (gate := _require_ready()) is not None:
         return gate
@@ -463,7 +464,7 @@ def close_active_tab(browser_id: str) -> Response:
     return jsonify({"closed": True})
 
 
-def start_browser(browser_id: str) -> Response:
+def start_browser(browser_id: str) -> ResponseReturnValue:
     """Relaunch a stopped browser on its saved tabs from its profile."""
     if (gate := _require_ready()) is not None:
         return gate
@@ -577,7 +578,7 @@ def cmd_handoff(browser_id: str) -> Response:
     return jsonify(result)
 
 
-def cmd_clipboard_paste(browser_id: str) -> Response:
+def cmd_clipboard_paste(browser_id: str) -> ResponseReturnValue:
     """Human viewer pastes their local clipboard into the browser. Body is the raw
     clipboard bytes; Content-Type is the mime (text/plain or image/*). The paste is
     gated on human control inside the media layer (an agent mid-task can't have a stray
@@ -592,7 +593,7 @@ def cmd_clipboard_paste(browser_id: str) -> Response:
     )
 
 
-def cmd_clipboard_out(browser_id: str) -> Response:
+def cmd_clipboard_out(browser_id: str) -> ResponseReturnValue:
     """Copy-out: the bytes of the last remote copy on this browser, native mime. Gated on
     human control (like paste-in) -- a copy-out can carry a secret the human just copied
     (a password, a 2FA code), so only the party currently holding control may read it, not
@@ -791,7 +792,7 @@ def stream_socket(ws: Any, browser_id: str) -> None:
     mediastream.serve_stream(ws, browser_id, display, session)
 
 
-def telemetry_client(browser_id: str) -> Response:
+def telemetry_client(browser_id: str) -> ResponseReturnValue:
     """Sink for the viewer's own per-stripe decode/paint timings (Rung 2). Watch-only:
     it just forwards each client record into the same hub so the lens can join them to
     the server's sent/ack by (fid, y) and subtract client render from the round trip.

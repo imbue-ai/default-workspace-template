@@ -23,12 +23,12 @@ from pydantic import AwareDatetime
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import ValidationError
+from workspace_layout.primitives import UserId
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.errors import ShellStateError
-from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.state_files import read_json_object
 from imbue.system_interface.shell.state_files import write_json_atomic
 

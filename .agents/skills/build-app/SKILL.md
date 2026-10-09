@@ -221,7 +221,9 @@ What gets generated:
   under `[[references]]` with a `note` naming the surface it uses.
 - `system/apps/<package>/pyproject.toml` -- declares
   `[project.scripts] <name> = "<package>.runner:main"`, the entry point
-  the app's own tool environment exposes.
+  the app's own tool environment exposes, and makes the directory its own
+  `ty` project (an empty `[tool.ty]` table and a pinned `ty` dev dependency)
+  for the ratchets' type check.
 - `system/apps/<package>/src/<package>/__init__.py` -- empty.
 - `system/apps/<package>/src/<package>/runner.py` -- sync Flask starter.
   Builds a `Flask` app and serves it with
@@ -255,7 +257,7 @@ What gets generated:
   interactive control a stable `id` or a first class that names it, and a
   reference resolves to one thing.
 - `system/apps/<package>/test_<package>_ratchets.py` -- standard ratchets at
-  zero.
+  zero, plus `test_no_type_errors`, which fails on any `ty` error in the app.
 - `system/apps/<package>/README.md` -- one-line description.
 
 What gets updated and installed -- no shared file is authored, which is what
@@ -370,7 +372,7 @@ This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
   render *that real data* in the mock so the user judges the UI against real
   content. Otherwise use representative placeholder data that covers the shapes
   the real view will show (including an empty state and a busy/overflow state).
-- `layout.py open` to surface it (see Step 4 for the command and its `--desktop` flag), then loop:
+- `workspace-layout open` to surface it (see Step 4 for the command and its `--desktop` flag), then loop:
   present -> take feedback -> update the mock so the change is *visible* ->
   re-present. Do not accept feedback and move on having only asserted you'll apply
   it.
@@ -494,7 +496,7 @@ launcher -- skip the surfacing step only for services with no UI
 (pure JSON APIs, webhook receivers, etc.).
 
 ```bash
-python3 system/scripts/layout.py open <name> --beside
+uv run --no-sync workspace-layout open <name> --beside
 ```
 
 `--beside` lays it beside the chat that asked for it instead of on top of the
@@ -503,13 +505,15 @@ nudged sideways only if there is no room beside it, and then by the least that
 makes room; it is resized only if it is over half the backdrop wide. Most of the
 time nothing about it changes. Drop the flag
 only for an app the user wanted running rather than shown; with no chat on that
-desktop it is already a no-op.
+desktop it is already a no-op. When the user has popped the chat out into its own
+window, the app opens unpaired where a plain `open` puts it and the summary says
+so; that is fine, and there is no need to `--force` the chat back.
 
 With no `--desktop`, the op edits the desktop the target client is looking
 at, which is where the user expects the new window. (Pass `--desktop <name>`
 to surface it on a different desktop instead; the op edits that desktop and
 switches the client to it.)
-`layout.py` POSTs to a loopback-only shell endpoint that opens the window
+`workspace-layout` POSTs to a loopback-only shell endpoint that opens the window
 on the desktop and writes that client's placement of it (no browser needs
 to be connected) and broadcasts the change, so the client's screen shows the
 new window on top, or brings the window for `<name>` to the front when one is
@@ -522,14 +526,14 @@ To force a reload of an already-open window (e.g. after redeploying the
 service) without prompting the user to click Refresh:
 
 ```bash
-python3 system/scripts/layout.py refresh --app <name>
+uv run --no-sync workspace-layout refresh --app <name>
 ```
 
 You should always `refresh` services after making changes, to make sure the user can see the updates.
 
 For anything beyond `open` / `refresh` -- placing, focusing, minimizing,
 maximizing, navigating a window to another path, reading the desktops -- see
-the `manage-desktop` skill. `layout.py list` is also useful when the user is
+the `manage-desktop` skill. `workspace-layout list` is also useful when the user is
 asking about what is open (it prints every app with its launch paths and
 its windows, and every desktop).
 

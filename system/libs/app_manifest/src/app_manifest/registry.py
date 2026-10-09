@@ -1,4 +1,3 @@
-import os
 import subprocess
 import sys
 import time
@@ -29,12 +28,6 @@ from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
 from app_manifest.primitives import PriorityName
 
-# The registry's location, exactly as system/scripts/forward_port.py and
-# system/scripts/layout.py resolve it: relative to the cwd (the repo root under
-# supervisord) unless MINDS_APPS_FILE points elsewhere.
-DEFAULT_APPS_FILE: Final[str] = "data/.state/apps.toml"
-ENV_APPS_FILE: Final[str] = "MINDS_APPS_FILE"
-
 # The browser-side app contract module (desktop-interface contracts.md section 7), where the
 # shell's frontend build writes it, relative to the repo root every supervised program runs
 # from. An app page imports it from its own origin, so every app serves this one file at
@@ -50,6 +43,8 @@ SHELL_CONTEXT_MENU_PATH: Final[Path] = Path(
     "system/apps/system_interface/imbue/system_interface/static/_static/context_menu.js"
 )
 CONTEXT_MENU_ROUTE: Final[str] = "/_static/context_menu.js"
+# Every shell module an app's pages import.
+SHELL_MODULE_PATHS: Final[tuple[Path, ...]] = (SHELL_APP_CONTRACT_PATH, SHELL_CONTEXT_MENU_PATH)
 
 # The registration script, relative to the repo root every supervised program runs from.
 FORWARD_PORT_SCRIPT: Final[Path] = Path("system/scripts/forward_port.py")
@@ -126,10 +121,6 @@ class RegistryRow(FrozenModel):
     )
 
 
-def registry_path() -> Path:
-    return Path(os.environ.get(ENV_APPS_FILE, DEFAULT_APPS_FILE))
-
-
 def read_registry(path: Path) -> list[RegistryRow]:
     """Every valid row of the registry at ``path``, in file order; a row that fails validation is logged and skipped.
 
@@ -156,7 +147,9 @@ def read_registry(path: Path) -> list[RegistryRow]:
             logger.warning(
                 "Skipped registry row {} ({}) in {}: {}",
                 row_idx,
-                raw_row.get("name", "<unnamed>") if isinstance(raw_row, dict) else "<not a table>",
+                raw_row.get("name", "<unnamed>")  # ty: ignore[no-matching-overload]
+                if isinstance(raw_row, dict)
+                else "<not a table>",
                 path,
                 describe_validation_error(e),
             )

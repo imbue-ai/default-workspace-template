@@ -878,6 +878,8 @@ AUDIT_PATTERNS: Mapping[str, tuple[re.Pattern[str], ...]] = {
         re.compile(r"applications\.toml"),
         re.compile(r"deferred-install"),
         re.compile(r"runtime-sync"),
+        # The removed desktop helper; `uv run --no-sync workspace-layout` replaced it, with changed flags.
+        re.compile(r"\blayout\.py\b"),
     ),
     "retired-skill": (
         re.compile(r"build-web-service"),
