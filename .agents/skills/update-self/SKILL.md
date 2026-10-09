@@ -514,7 +514,8 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 If it is still busy after the hour, record the hold so the app shows what the
 update is waiting on, then tell the user which chat's edit is holding the
 update and that nothing has been applied; a lease is broken only on their
-call. Record `run-status resume` once they answer:
+call. Record `run-status resume`, with the same staged script, once they
+answer:
 
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
