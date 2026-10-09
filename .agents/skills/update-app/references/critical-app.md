@@ -356,8 +356,8 @@ another critical app may have applied since you branched.
 2. **Apply.** Run the general update apply, the same script `update-self` lands
    releases with, pointing it at the pass branch and at the bundles the user
    last previewed (the worker's work_dir after a final preview or a catch-up,
-   otherwise your own worktree). Resolve the worker's in the same invocation, since each bash
-   call starts a fresh shell:
+   otherwise your own worktree). Resolve the worker's in the same invocation,
+   since each bash call starts a fresh shell:
 
    ```bash
    WORK_DIR=$(mngr ls --include "name == \"update-$SLUG\"" --format json \

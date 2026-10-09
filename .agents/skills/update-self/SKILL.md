@@ -590,10 +590,10 @@ Exit codes:
   A dirty tree or a moved `HEAD` is the settle-and-catch-up case above:
   release this pass's critical-app leases, wait, catch the worker up, and
   apply again. Another apply in flight is the same: wait for it to finish,
-  then come back through that check, since it has likely moved `HEAD`. A merge that leaves a rollback in
-  place, or one already landed and rolled back, needs a fresh worker pass off
-  the current `HEAD` (`references/apply-outcomes.md`); the refusal names the
-  commits to revert.
+  then come back through that check, since it has likely moved `HEAD`. A
+  merge that leaves a rollback in place, or one already landed and rolled
+  back, needs a fresh worker pass off the current `HEAD`
+  (`references/apply-outcomes.md`); the refusal names the commits to revert.
 
 What each outcome means for the user, the `provision-incomplete` and
 `emergency.json` records, an interrupted apply (re-run the same command; it
