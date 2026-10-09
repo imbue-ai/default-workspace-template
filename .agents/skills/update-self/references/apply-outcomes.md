@@ -140,6 +140,16 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
     --merge-ref <that branch>
 ```
 
+`<merge sha>` is the update's `update-self:` merge, not the tip the apply
+landed. After a catch-up that tip (and the sha the version history records) is
+the worker's catch-up merge, and reverting it with `-m 1` takes out the
+workspace's own commits instead of the update:
+
+```bash
+git log --first-parent -1 --format=%H --fixed-strings \
+    --grep "update-self: merge upstream template"
+```
+
 (ordinary merge mode, no `--target-ref`), so the revert gets the same refresh,
 restart and health-probe motion the update got. Two residues to mention when
 they matter: the apt snapshot advanced by `env-converge upgrade` stays
