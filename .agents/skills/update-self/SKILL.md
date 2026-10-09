@@ -546,12 +546,12 @@ mkdir -p data/.tasks/update-self/reports/consumed
 ```
 
 ```bash
-mngr message update-self \
+mngr message update-self --on-error abort \
     -m "Catch up to $(git rev-parse HEAD) per §7 of your worker guide, then report done again."
 ```
 
-A non-zero exit means the message did not reach the worker: do not re-arm the
-poll on it. Check whether the worker is alive ("Diagnose worker liveness" in
+A non-zero exit, or a `No agents found` line, means the message did not reach
+the worker: do not re-arm the poll on it. Check whether the worker is alive ("Diagnose worker liveness" in
 `.agents/shared/references/lead-proxy.md`) and send again; a worker that is
 gone takes the fresh pass below.
 
