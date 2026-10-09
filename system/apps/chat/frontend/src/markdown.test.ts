@@ -92,6 +92,8 @@ describe("renderMarkdown links", () => {
     '<a href="/\\evil.example/x">other host</a>',
     '<a href="//[bad/x">other host</a>',
     '<a href="/\\a%20b/x">other host</a>',
+    '<a href="/&#9;/[bad/x">other host</a>',
+    '<a href="/&#10;/evil.example/x">other host</a>',
   ])("renders the raw link %s, which a browser takes to another host, as its text", (source) => {
     const container = render(source);
     expect(container.querySelector("a")).toBeNull();
