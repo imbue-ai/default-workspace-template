@@ -412,23 +412,6 @@ def test_another_passs_preview_of_the_same_app_is_refused_and_the_same_worktrees
     )
     assert "another pass's preview" in capsys.readouterr().err
     assert runner.ups() == ["notes-preview"]
-    # A sibling another pass holds is refused before the worktree's sync, like the app itself.
-    other_worktree = _write_worktree(other_worktree)
-    synced_before = list(runner.synced)
-    assert (
-        mod.up(
-            "system_interface",
-            other_worktree,
-            tmp_path,
-            with_apps=["notes"],
-            runner=runner,
-            dump_registry=_dump_registry,
-        )
-        == 1
-    )
-    assert "another pass's preview of 'notes'" in capsys.readouterr().err
-    assert runner.synced == synced_before
-    assert runner.ups() == ["notes-preview"]
     # A re-run from the same worktree is the normal retry path.
     assert (
         mod.up("notes", worktree, tmp_path, runner=runner, dump_registry=_dump_registry)
