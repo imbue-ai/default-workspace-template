@@ -431,6 +431,8 @@ def _up(
     manifest_path, manifest = find_manifest(worktree, app_name)
     inner_path = resolve_open_path(manifest, instance_key)
     if not worktree_synced:
+        for sibling in with_apps:
+            resolve_open_path(find_manifest(worktree, sibling)[1], instance_key)
         sync_worktree(worktree, runner)
     dump = (
         dump_registry
