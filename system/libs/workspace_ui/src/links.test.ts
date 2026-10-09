@@ -93,6 +93,53 @@ describe("classifyLink", () => {
   });
 });
 
+const SHARE_DOMAIN = "0123456789abcdef0123456789abcdef.fedcba9876543210fedcba9876543210.us1.personal-imbue.com";
+const OTHER_SHARE_DOMAIN = "11111111111111111111111111111111.fedcba9876543210fedcba9876543210.us1.personal-imbue.com";
+
+describe("classifyLink on share addresses", () => {
+  it("opens one of this workspace's share addresses as that app's window from the desktop", () => {
+    const url = `https://files-ab12cd34.${SHARE_DOMAIN}/home/user/?view`;
+
+    expect(classifyLink(url, CHAT_HOST, SHARE_DOMAIN)).toEqual({
+      kind: "app-address",
+      label: "files-ab12cd34",
+      path: "/home/user/?view",
+      url,
+    });
+  });
+
+  it("matches the share domain whatever its case", () => {
+    const url = `https://Files-AB12CD34.${SHARE_DOMAIN.toUpperCase()}/a`;
+
+    expect(classifyLink(url, CHAT_HOST, SHARE_DOMAIN)).toMatchObject({ kind: "app-address", label: "files-ab12cd34" });
+  });
+
+  it("opens an address on the page's own share domain as that app's window, with no share domain known", () => {
+    const url = `https://files-ab12cd34.${SHARE_DOMAIN}/home/user/?view`;
+
+    expect(classifyLink(url, `chat-ab12cd34.${SHARE_DOMAIN}`)).toMatchObject({
+      kind: "app-address",
+      label: "files-ab12cd34",
+    });
+  });
+
+  it("leaves another workspace's share address external, since nothing tells it from any other site", () => {
+    const url = `https://files-ab12cd34.${OTHER_SHARE_DOMAIN}/`;
+
+    expect(classifyLink(url, CHAT_HOST, SHARE_DOMAIN)).toEqual({ kind: "external", url });
+  });
+
+  it("leaves a share address external when the workspace knows no share domain", () => {
+    const url = `https://files-ab12cd34.${SHARE_DOMAIN}/`;
+
+    expect(classifyLink(url, CHAT_HOST)).toEqual({ kind: "external", url });
+  });
+
+  it("calls the bare share domain unroutable", () => {
+    expect(classifyLink(`https://${SHARE_DOMAIN}/`, CHAT_HOST, SHARE_DOMAIN)).toEqual({ kind: "unroutable" });
+  });
+});
+
 describe("agreement with the Imbue Studio desktop app", () => {
   const vectors = JSON.parse(readFileSync(EXTERNALITY_VECTORS_PATH, "utf8")) as ExternalityVector[];
 

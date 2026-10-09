@@ -47,7 +47,7 @@ function notices(): string[] {
 
 function makeStore(
   redraw: () => void = () => undefined,
-  extra: Pick<StoreDependencies, "popOut" | "soloWindowId" | "isSoloReopened"> = {},
+  extra: Pick<StoreDependencies, "popOut" | "soloWindowId" | "isSoloReopened" | "outsideLinks"> = {},
 ): DesktopStore {
   const store = new DesktopStore({
     clientId: CLIENT,
@@ -1476,6 +1476,67 @@ describe("links Imbue Studio hands over", () => {
     await store.openLink("http://localhost:3000/", SHELL_HOST, null);
 
     expect(notices()).toEqual(["browser did not take it: Chromium is not installed"]);
+  });
+
+  /** A started store whose links opened outside the workspace are recorded, by where they went. */
+  async function outsideRecordingStore(): Promise<{ store: DesktopStore; outside: string[] }> {
+    const outside: string[] = [];
+    const store = makeStore(() => undefined, {
+      outsideLinks: {
+        openInEmbedder: (url) => outside.push(`embedder:${url}`),
+        openInBrowser: (url) => outside.push(`browser:${url}`),
+      },
+    });
+    await store.start(NO_LINK);
+    return { store, outside };
+  }
+
+  it("opens an external link no app takes in the user's browser, and through Imbue Studio once it says it can", async () => {
+    const { store, outside } = await outsideRecordingStore();
+
+    await store.openLink("https://example.com/a", SHELL_HOST, "chat");
+    await store.openLink("mailto:someone@example.com", SHELL_HOST, "chat");
+    store.setCanOpenLinksOutside(true);
+    await store.openLink("tel:+15551234567", SHELL_HOST, null);
+
+    expect(outside).toEqual([
+      "browser:https://example.com/a",
+      "browser:mailto:someone@example.com",
+      "embedder:tel:+15551234567",
+    ]);
+    expect(api.relayedMessages).toEqual([]);
+    expect(notices()).toEqual([]);
+  });
+
+  it("hands an external link to the app registered for its kind, and opens nothing outside", async () => {
+    const { store, outside } = await outsideRecordingStore();
+    const mailer = appRecord("mailer", { message_handlers: [{ type: "open:mailto", path: "/api/compose", show: null }] });
+    socket.deliver().onAppsUpdated([appRecord("docs"), mailer]);
+    store.setCanOpenLinksOutside(true);
+
+    await store.openLink("mailto:someone@example.com", SHELL_HOST, "chat");
+    await store.openLink("https://example.com/a", SHELL_HOST, "chat");
+
+    expect(api.relayedMessages).toEqual([
+      { type: "open:mailto", clientId: CLIENT, payload: { url: "mailto:someone@example.com" }, sender: "chat" },
+    ]);
+    expect(outside).toEqual(["embedder:https://example.com/a"]);
+  });
+
+  it("opens an address on the workspace's share domain as that app's window, from a desktop shell", async () => {
+    const shareDomain = "0123456789abcdef0123456789abcdef.fedcba9876543210fedcba9876543210.us1.personal-imbue.com";
+    const { store, outside } = await outsideRecordingStore();
+    socket
+      .deliver()
+      .onAppsUpdated([
+        appRecord("docs", { share_url: `https://docs-zz11yy22.${shareDomain}/` }),
+        appRecord("files", { label: "files-ab12cd34", share_url: `https://files-ab12cd34.${shareDomain}/` }),
+      ]);
+
+    await store.openLink(`https://files-ab12cd34.${shareDomain}/home/user/?view`, SHELL_HOST, "chat");
+
+    expect(api.calls).toContain("openWindow:home:files:/home/user/?view:focus");
+    expect(outside).toEqual([]);
   });
 });
 

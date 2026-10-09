@@ -249,29 +249,28 @@ describe("a framed page's link clicks", () => {
     ["a local URL", "http://localhost:5173/preview?x=1"],
     ["a file URL", "file:///home/user/workspace/plan.md"],
     ["another app's address", "http://files-ab12cd34.host-0123.localhost:8421/home/user/?view"],
-  ])("hands %s to the shell and keeps the page where it is", (_what, href) => {
+    ["another app's share address", "https://files-ab12cd34.0123456789abcdef0123456789abcdef.us1.example.com/"],
+    ["a web link", "https://example.com/docs"],
+    ["mailto", "mailto:someone@example.com"],
+    ["tel", "tel:+15551234567"],
+  ])("hands %s to the shell and keeps the page where it is, whatever its target", (_what, href) => {
     const parent = connect();
     click(`<a href="${href}"><span data-click>open</span></a>`);
-    expect(sentAfterConnect(parent)).toEqual([[{ type: SHELL_OPEN_LINK, url: new URL(href).href }, "*"]]);
-    expect(cancelled).toEqual([true]);
+    click(`<a href="${href}" target="_blank">open</a>`);
+    expect(sentAfterConnect(parent)).toEqual([
+      [{ type: SHELL_OPEN_LINK, url: new URL(href).href }, "*"],
+      [{ type: SHELL_OPEN_LINK, url: new URL(href).href }, "*"],
+    ]);
+    expect(cancelled).toEqual([true, true]);
     expect(opened).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["a web link", "https://example.com/docs"],
-    ["mailto", "mailto:someone@example.com"],
-  ])("opens %s in a new browsing context, which Imbue Studio sends to the user's browser", (_what, href) => {
+  it("hands a modified click on another origin's link to the shell like a plain one", () => {
     const parent = connect();
-    click(`<a href="${href}">out</a>`);
-    expect(opened.mock.calls).toEqual([[new URL(href).href, "_blank", "noopener"]]);
-    expect(sentAfterConnect(parent)).toEqual([]);
+    click('<a href="https://example.com/docs">out</a>', { metaKey: true });
+    expect(sentAfterConnect(parent)).toEqual([[{ type: SHELL_OPEN_LINK, url: "https://example.com/docs" }, "*"]]);
     expect(cancelled).toEqual([true]);
-  });
-
-  it("keeps an external link's noreferrer when it opens it", () => {
-    connect();
-    click('<a href="https://example.com/docs" rel="noopener noreferrer">out</a>');
-    expect(opened.mock.calls).toEqual([["https://example.com/docs", "_blank", "noopener,noreferrer"]]);
+    expect(opened).not.toHaveBeenCalled();
   });
 
   it("leaves a plain click on a link to the page's own origin to the page", () => {

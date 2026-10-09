@@ -118,7 +118,7 @@ describe("startInnerFrameRelay", () => {
     expect(parent.postMessage).not.toHaveBeenCalled();
   });
 
-  it("opens a page's web link in a new tab itself when no shell frames the root, and forwards it when one does", () => {
+  it("opens a page's web, mailto, and tel links itself when no shell frames the root, and forwards them when one does", () => {
     const opened = vi.spyOn(window, "open").mockImplementation(() => null);
     const inner = { name: "inner" };
     startInnerFrameRelay(
@@ -128,11 +128,17 @@ describe("startInnerFrameRelay", () => {
     );
 
     deliver({ type: "shell:open-link", url: "http://localhost:5173/preview" }, inner);
+    deliver({ type: "shell:open-link", url: "mailto:someone@example.com" }, inner);
+    deliver({ type: "shell:open-link", url: "tel:+15551234567" }, inner);
     deliver({ type: "shell:open-link", url: "file:///home/user/plan.md" }, inner);
     const parent = framed();
     deliver({ type: "shell:open-link", url: "http://localhost:5173/other" }, inner);
 
-    expect(opened.mock.calls).toEqual([["http://localhost:5173/preview", "_blank", "noopener"]]);
+    expect(opened.mock.calls).toEqual([
+      ["http://localhost:5173/preview", "_blank", "noopener"],
+      ["mailto:someone@example.com", "_blank", "noopener"],
+      ["tel:+15551234567", "_blank", "noopener"],
+    ]);
     expect(parent.postMessage.mock.calls).toEqual([
       [{ type: "shell:open-link", url: "http://localhost:5173/other" }, "*"],
     ]);

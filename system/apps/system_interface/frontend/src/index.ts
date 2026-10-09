@@ -4,6 +4,7 @@ import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import {
   DETACHED_WINDOWS,
   EMBEDDER_CAPABILITIES,
+  OPEN_EXTERNAL,
   OPEN_LINK,
   POP_OUT_WINDOW,
   REATTACH_WINDOW,
@@ -24,7 +25,7 @@ import { parseSoloMode } from "./model/soloMode";
 import { isPreviewShell } from "./model/PreviewShell";
 import type { Frame } from "./model/records";
 import { frameFromViewportFractions } from "./geometry/frames";
-import type { PopOutBridge } from "./store/DesktopStore";
+import type { OutsideLinkOpener, PopOutBridge } from "./store/DesktopStore";
 import { PointerGestureSource } from "./gestures/pointerGestures";
 import { startPresenceHeartbeat } from "./model/Presence";
 import { initEmbedderRelay } from "./relay";
@@ -77,6 +78,12 @@ const popOutBridge: PopOutBridge = {
   reportDetachedWindows: (windows) => sendToEmbedder(DETACHED_WINDOWS, { windows: [...windows] }),
 };
 
+/** Where an external link no app takes opens: through the chrome, or in a new tab of the browser this shell is in. */
+const outsideLinks: OutsideLinkOpener = {
+  openInEmbedder: (url) => sendToEmbedder(OPEN_EXTERNAL, { url }),
+  openInBrowser: (url) => void window.open(url, "_blank", "noopener,noreferrer"),
+};
+
 function bootstrap(): void {
   const clientId = getClientId();
   // Read and left in the URL, unlike the deep link: a reload of a pulled-out window's page must come back as it.
@@ -99,6 +106,7 @@ function bootstrap(): void {
           redraw: () => m.redraw(),
           reloadInterface,
           popOut: popOutBridge,
+          outsideLinks,
           soloWindowId: solo?.windowId ?? null,
           isSoloReopened: solo?.isReopened ?? false,
         });
@@ -128,6 +136,7 @@ function bootstrap(): void {
   // The pull-out conversation's two asks from the chrome: what it can do, and a window to bring back.
   setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) => {
     desktopStore.setCanPopOut(message.canPopOut === true);
+    desktopStore.setCanOpenLinksOutside(message.opensExternalLinks === true);
   });
   setEmbedderMessageHandler(REATTACH_WINDOW, (message) => {
     const windowId = message.windowId;

@@ -177,6 +177,8 @@ export interface AppRecord {
   /** The messages the app takes, from the Imbue Studio chrome or from other apps' pages, which the shell relays. */
   readonly message_handlers: readonly MessageHandler[];
   readonly is_running: boolean;
+  /** The app's address on the domain the workspace was last shared under, or null when it never was. */
+  readonly share_url: string | null;
 }
 
 /** Where a client keeps a floating entry: the top-left corner of its box, in fractions of the backdrop. */
@@ -509,6 +511,7 @@ export function parseAppRecord(raw: unknown): AppRecord {
     pin: parsePin(record.pin),
     message_handlers: asArray(record.message_handlers ?? [], "app.message_handlers").map(parseMessageHandler),
     is_running: record.is_running === true,
+    share_url: typeof record.share_url === "string" && record.share_url !== "" ? record.share_url : null,
   };
 }
 

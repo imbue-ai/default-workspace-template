@@ -86,6 +86,10 @@ export const PROVIDER_SIGN_IN_END: "minds:provider-sign-in-end" =
 // to a local address, which Imbue Studio turned away from a window of its own; the workspace opens it inside.
 // Payload: { url }. Sent only to a workspace that announced ``opensLinks`` with WORKSPACE_READY.
 export const OPEN_LINK: "minds:open-link" = "OPEN_LINK" in embedContract ? embedContract.OPEN_LINK : "minds:open-link";
+// Workspace -> embedder (contract v8): open an external web, mailto or tel link outside the workspace, which no app of
+// it takes. Payload: { url }. Sent only to an embedder that said ``opensExternalLinks`` with EMBEDDER_CAPABILITIES.
+export const OPEN_EXTERNAL: "minds:open-external" =
+  "OPEN_EXTERNAL" in embedContract ? embedContract.OPEN_EXTERNAL : "minds:open-external";
 
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 

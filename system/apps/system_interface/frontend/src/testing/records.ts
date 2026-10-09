@@ -70,6 +70,7 @@ export function appRecord(name: string, overrides: Partial<AppRecord> = {}): App
     pin: null,
     message_handlers: [],
     is_running: true,
+    share_url: null,
     ...overrides,
   };
 }

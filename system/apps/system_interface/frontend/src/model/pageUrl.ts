@@ -34,6 +34,19 @@ export function windowPageUrl(
   return `${appOrigin(app, host, protocol)}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
+/** The domain the workspace was last shared under, read off its apps' share addresses, or null when it never was. */
+export function shareDomainOf(apps: readonly Pick<AppRecord, "share_url">[]): string | null {
+  for (const app of apps) {
+    if (app.share_url === null) continue;
+    try {
+      return workspaceHostCoordinate(new URL(app.share_url).host.toLowerCase());
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 function loopbackUrl(url: string): URL | null {
   let parsed: URL;
   try {

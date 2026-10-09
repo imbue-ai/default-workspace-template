@@ -17,7 +17,12 @@ import type {
   WindowOpenOutcome,
   WindowOpenRequest,
 } from "../model/api";
-import { OPEN_FILE_MESSAGE, OPEN_URL_MESSAGE, classifyLink } from "@imbue/workspace-ui/src/links";
+import {
+  OPEN_FILE_MESSAGE,
+  OPEN_URL_MESSAGE,
+  classifyLink,
+  externalLinkMessageType,
+} from "@imbue/workspace-ui/src/links";
 import { StalePlacementsSaveError } from "../model/api";
 import {
   NO_DRAFT_APP_REASON,
@@ -31,7 +36,7 @@ import {
   textRowDisabledReason,
 } from "../model/launch";
 import { applyPresence } from "../model/Presence";
-import { windowAtBackendUrl } from "../model/pageUrl";
+import { shareDomainOf, windowAtBackendUrl } from "../model/pageUrl";
 import type {
   AppRecord,
   AvatarCatalog,
@@ -244,6 +249,18 @@ const NULL_POP_OUT_BRIDGE: PopOutBridge = {
   reportDetachedWindows: () => undefined,
 };
 
+/** Where an external link no app of the workspace takes opens: through the Imbue Studio chrome
+ *  (``minds:open-external``), or in the user's own browser when no chrome can. */
+export interface OutsideLinkOpener {
+  openInEmbedder(url: string): void;
+  openInBrowser(url: string): void;
+}
+
+const NULL_OUTSIDE_LINK_OPENER: OutsideLinkOpener = {
+  openInEmbedder: () => undefined,
+  openInBrowser: () => undefined,
+};
+
 // The layout verbs that edit a placement, which two shells never apply. A solo shell (the pull-out-window spec,
 // section 7.5) is a view of one window, and the desktop's arrangement belongs to the client's main window; its
 // two exceptions are its own window's detach (the first load's fallback, when no desktop shell wrote it) and
@@ -270,6 +287,8 @@ export interface StoreDependencies {
   readonly reloadInterface: () => void;
   /** The pull-out conversation with the embedder; absent means no embedder. */
   readonly popOut?: PopOutBridge;
+  /** Where external links open when no app takes them; absent opens none. */
+  readonly outsideLinks?: OutsideLinkOpener;
   /** The one window this shell shows edge to edge (a pulled-out window's own desktop window), else null. */
   readonly soloWindowId?: string | null;
   /** Whether the chrome reopened the solo window's desktop window (a session restore, a reopen of the app, a
@@ -388,9 +407,12 @@ export class DesktopStore {
   private readonly appsLoaded: Promise<void>;
   private markAppsLoaded: () => void = () => undefined;
   private readonly popOut: PopOutBridge;
+  private readonly outsideLinks: OutsideLinkOpener;
   private readonly soloWindowId: string | null;
   /** Whether the embedder can pull a window out; off until it says so (an older chrome, a plain browser). */
   private canPopOut = false;
+  /** Whether the embedder opens external links outside the workspace for it; off until it says so. */
+  private canOpenLinksOutside = false;
   /** The detached set as last reported to the embedder, serialized, so a redraw reports nothing new. */
   private lastReportedDetached: string | null = null;
   /** Solo mode's first layout load is still owed: the one load that may re-detach the solo window. */
@@ -412,6 +434,7 @@ export class DesktopStore {
     this.state = initialDesktopState(deps.clientId, deps.modes);
     this.metrics = deps.metrics;
     this.popOut = deps.popOut ?? NULL_POP_OUT_BRIDGE;
+    this.outsideLinks = deps.outsideLinks ?? NULL_OUTSIDE_LINK_OPENER;
     this.soloWindowId = deps.soloWindowId ?? null;
     this.isSoloFirstLayoutPending = this.soloWindowId !== null;
     this.appsLoaded = new Promise((resolve) => {
@@ -440,6 +463,11 @@ export class DesktopStore {
     if (this.canPopOut === canPopOut) return;
     this.canPopOut = canPopOut;
     this.notifyListeners();
+  }
+
+  /** The embedder said whether it opens external links for the workspace (``minds:embedder-capabilities``). */
+  setCanOpenLinksOutside(canOpenLinksOutside: boolean): void {
+    this.canOpenLinksOutside = canOpenLinksOutside;
   }
 
   /** Whether a window move in progress has pulled ``windowId`` out of the chrome's window (it is hidden meanwhile). */
@@ -1035,12 +1063,13 @@ export class DesktopStore {
 
   /** Open a link where it belongs in this workspace: a file in the File Viewer (``open:file``), a local URL at an
    *  app's registered backend port as that app's window at its path, any other local URL in the workspace's browser
-   *  (``open:url``), one of this workspace's app addresses as that app's window at its path. Another workspace's
-   *  address is refused with a notice.
+   *  (``open:url``), one of this workspace's app addresses (on its share domain too) as that app's window at its
+   *  path, an external link in the app registered for its kind (``open:web``, ``open:mailto``, ``open:tel``) or else
+   *  outside the workspace. Another workspace's address is refused with a notice.
    *  ``workspaceHost`` is this page's own host, which says which workspace it is; ``senderApp`` is the app whose page
-   *  asked, or null for the Imbue Studio chrome, and names the ``open:file`` or ``open:url`` it sends. */
+   *  asked, or null for the Imbue Studio chrome, and names the message it sends. */
   async openLink(url: string, workspaceHost: string, senderApp: string | null): Promise<void> {
-    const target = classifyLink(url, workspaceHost);
+    const target = classifyLink(url, workspaceHost, shareDomainOf(this.state.apps));
     switch (target.kind) {
       case "file":
         await this.deliverMessage({ type: OPEN_FILE_MESSAGE, path: target.path }, senderApp ?? EMBEDDER_SENDER);
@@ -1070,8 +1099,21 @@ export class DesktopStore {
         this.toast(`Nothing in this workspace is at ${url}`);
         return;
       case "external":
-        console.warn(`[si] an opened link was ignored: ${url} is no address of this machine`);
+        await this.openExternalLink(target.url, senderApp);
         return;
+    }
+  }
+
+  /** An external link goes to the app registered for its kind; with none, it opens outside the workspace at once,
+   *  still inside the click that asked for it (a browser opens a new tab only then). */
+  private async openExternalLink(url: string, senderApp: string | null): Promise<void> {
+    const type = externalLinkMessageType(url);
+    if (isEmbedderMessageHandled(this.state, type)) {
+      await this.deliverMessage({ type, url }, senderApp ?? EMBEDDER_SENDER);
+    } else if (this.canOpenLinksOutside) {
+      this.outsideLinks.openInEmbedder(url);
+    } else {
+      this.outsideLinks.openInBrowser(url);
     }
   }
 

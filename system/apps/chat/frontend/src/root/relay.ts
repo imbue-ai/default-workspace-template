@@ -16,8 +16,8 @@
  * that chat in place, exactly as its own New chat button does, rather than asking the shell for
  * a second root window. Everything else a page posts -- its capabilities, its location -- is the
  * root's to know and stops here; the root reports its own. A root opened on its own has no shell
- * to forward to, so it opens a page's web ``shell:open-link`` in a new browser tab itself, as a
- * page with no shell around it does; a ``file:`` link has nowhere to open there.
+ * to forward to, so it opens a page's web, ``mailto:`` or ``tel:`` ``shell:open-link`` itself, as
+ * a page with no shell around it does; a ``file:`` link has nowhere to open there.
  *
  * One kind goes the other way. The minds chrome answers some of an inner page's asks, and its
  * answer reaches the root, which the shell frames, not the page that asked: those answers
@@ -117,10 +117,10 @@ export function startInnerFrameRelay(
   });
 }
 
-/** The http(s) URL of a ``shell:open-link``, or null for any other message or URL. */
+/** The http(s), ``mailto:`` or ``tel:`` URL of a ``shell:open-link``, or null for any other message or URL. */
 function webLinkToOpen(data: unknown): string | null {
   if (data === null || typeof data !== "object") return null;
   const message = data as { type?: unknown; url?: unknown };
   if (message.type !== SHELL_OPEN_LINK || typeof message.url !== "string") return null;
-  return /^https?:\/\//i.test(message.url) ? message.url : null;
+  return /^(?:https?:\/\/|mailto:|tel:)/i.test(message.url) ? message.url : null;
 }

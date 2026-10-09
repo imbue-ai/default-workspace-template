@@ -21,9 +21,9 @@
  *
  * A framed page's link clicks follow one rule, so no app carries link code of its own
  * (``followLinkClick``): a link to the page's own origin navigates the page, or opens a window
- * of its app for a new-window click; an external link opens in a new browsing context, which
- * Imbue Studio sends to the user's browser; any other link (a local URL, another app's address,
- * a ``file:`` URL) goes to the shell, which opens it where it belongs.
+ * of its app for a new-window click; any other link (a local URL, another app's address, a
+ * ``file:`` URL, an external web, ``mailto:`` or ``tel:`` link) goes to the shell, which opens it
+ * where it belongs: an external one in the app registered for it, else outside the workspace.
  */
 
 /** Shell to app: sent after every `load` of the frame; says which window, desktop, path, and client this page is in. */
@@ -53,10 +53,11 @@ export const SHELL_DRAFT_TEXT = "shell:draft-text";
 /** App to shell: a message for whichever apps registered its type (``open:file``, ...; desktop-interface
  *  contracts.md section 5.6), so a page says what it wants done without naming the app that does it. */
 export const SHELL_MESSAGE = "shell:message";
-/** App to shell: open a link that is neither the page's own nor external -- a local URL, one of the workspace's app
- *  addresses (another app's page) or another workspace's, a ``file:`` URL -- which only the shell can put on screen:
- *  it opens the app's window there (for a local URL, the app registered at its port, else the workspace's browser),
- *  the file in the File Viewer, or says why it cannot. */
+/** App to shell: open a link that is not the page's own -- a local URL, one of the workspace's app addresses (another
+ *  app's page) or another workspace's, a ``file:`` URL, an external web, ``mailto:`` or ``tel:`` link -- which only
+ *  the shell can put where it belongs: it opens the app's window there (for a local URL, the app registered at its
+ *  port, else the workspace's browser), the file in the File Viewer, an external link in the app registered for it
+ *  or else outside the workspace, or says why it cannot. */
 export const SHELL_OPEN_LINK = "shell:open-link";
 
 /** The bare host names of this machine (a ``*.localhost`` host is local too). */
@@ -230,10 +231,6 @@ function followLinkClick(
     return;
   }
   event.preventDefault();
-  if (isExternalUrl(url)) {
-    view.open(url.href, "_blank", link.relList.contains("noreferrer") ? "noopener,noreferrer" : "noopener");
-    return;
-  }
   send(SHELL_OPEN_LINK, { url: url.href });
 }
 
