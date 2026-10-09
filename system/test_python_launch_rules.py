@@ -101,7 +101,7 @@ def _is_compliant_uv_run(rest: str) -> bool:
     """
     if not rest.startswith(" "):
         return True
-    words = [word.strip("`'\"()") for word in rest.split()]
+    words = [word.strip("`'\"()*,.;:") for word in rest.split()]
     index = 0
     while index < len(words) and words[index].startswith("--"):
         if words[index] in _NON_SYNCING_OPTIONS:
