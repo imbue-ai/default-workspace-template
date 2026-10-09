@@ -369,6 +369,13 @@ where the data dies. Encode these, cheapest first:
   uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
   ```
 
+  The worktree needs its own environment before the first `up`. A fresh
+  `git worktree add` has no `.venv`, and without one the app's command
+  resolves to the live install, so the preview silently serves the live code.
+  Run `uv sync --all-packages` in the worktree first, and again before
+  `refresh` after changing a dependency or entry point. If the app has a
+  frontend, build it there too.
+
   `--with <sibling>` boots a sibling app's preview from the same worktree first
   and points the app's copied registry at it: a shell preview frames the
   previewed chat that way, and a terminal preview needs `--with terminal-pty`,
