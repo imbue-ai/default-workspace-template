@@ -70,8 +70,8 @@ _TIMEOUT_SECONDS = 10.0
 # answer rather than wait on a slow chat app.
 _WATCHERS_TIMEOUT_SECONDS = 2.0
 
-# `.claude/skills` is a symlink to `.agents/skills`; resolving through it lands on
-# the real file, five directories below the repo root.
+# This module sits five directories below the repo root
+# (.agents/skills/notify-user/python/notify_user_skill/).
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 
 

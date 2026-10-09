@@ -1,6 +1,6 @@
 """Tests for ``preview_app.py``.
 
-Run via: ``uv run --no-sync pytest .agents/skills/update-app/scripts/preview_app_test.py``
+Run via: ``uv run --no-sync pytest .agents/skills/update-app/python/update_app_skill/preview_app_test.py``
 
 A recording runner stands in for the shared ``serve_isolated_instance.py``: it records
 each invocation and files the instance state the real script would, so the resolution
