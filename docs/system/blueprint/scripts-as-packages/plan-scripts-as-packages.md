@@ -342,10 +342,11 @@
 
 ## Open questions
 
-- **`system/scripts` package names** for the bare and venv packages (e.g. `workspace_bare_scripts` / `workspace_scripts`). They must not collide with app or library packages.
-- **Two top-level packages in one hatchling project**: hatchling supports `packages = [...]`, but confirm the editable install exposes both. Otherwise use two projects under `system/scripts/`.
-- **Entry-point declaration table name**: `[tool.workspace.entry-points]` is a placeholder. Pick a name that won't collide with uv/hatch tables.
-- **Test-filename-collision rule** in `type-skill.md`: drop it only after confirming pytest's import mode gives package-qualified names for tests inside `<skill>_skill/`, while `scripts/` itself has no `__init__.py`.
+- Resolved in PR 2:
+  - `system/scripts` packages are `workspace_bare_scripts` and `workspace_scripts`, in one hatchling project (`packages = [...]`). The editable install's `.pth` adds the whole `scripts/` dir to `sys.path`, which exposes both packages (and, as a side effect, the entry stubs as top-level module names).
+  - The entry-point table is `[tool.workspace-template.entry-points."<entry>.py"]` with `heavy-imports = [...]`.
+  - The test-filename-collision rule is dropped: pytest imports a test inside `<skill>_skill/` as `<skill>_skill.<test>`, and two same-named tests in two skill packages collect together (two flat `scripts/` dirs still collide).
+  - A venv-tier stub run through the `.claude/skills` symlink path is not recognised as a workspace member (uv builds an empty `scripts/.venv`), and listing the symlinked glob as a member is refused as a duplicate. `running-python.md` says to run skill scripts by their `.agents/skills/` path.
 - **Expensive-stdlib list for the bare tier**: start with `asyncio`, then measure on the scratch workspace before fixing the list.
 - **Does update-self's apply health probe cover every program?** If a bare wrapper broke after an apply, would the probes catch it? Relevant only to the safety margin. The 3.12 guard makes it moot for the version case.
 - **#831 is still open**: merge its tip into the stack as it moves. #759 (thin `workspace-layout` client and its `--no-sync` changes) and #814 are already merged, and PR 1 inherits them through #831's main merge; don't redo their conversions.
