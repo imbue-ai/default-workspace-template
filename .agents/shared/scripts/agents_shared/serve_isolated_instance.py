@@ -43,8 +43,8 @@ environment -- that is what ``--port-env`` / ``--env`` inject. Scaffolded Flask
 services do this out of the box (``<PKG>_PORT`` / ``<PKG>_DATA_DIR``); an older
 service is retrofitted with the same one-liner when it is edited.
 
-Run via ``uv run --no-sync`` (standard library only) -- it orchestrates the
-environment, so it must not depend on any particular venv being synced.
+Run via ``uv run --no-sync``: the entry imports this package from the root venv.
+The module itself imports only the standard library.
 
 Usage:
     uv run --no-sync serve_isolated_instance.py up --name <slug> --cwd <dir> \\
