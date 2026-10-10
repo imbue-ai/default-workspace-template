@@ -484,6 +484,13 @@
 
   function connectStream() {
     if (browserId === null) return;
+    // Every viewer of the one browser shares its stream and its size: a connect sizes the
+    // capture to this pane and may claim the stream, so a pane the shell has not said is shown (a
+    // window reloaded while minimized or on another desktop) waits for it before connecting.
+    if (shellVisibility !== "shown") {
+      isStreamDeferred = true;
+      return;
+    }
     const url = new URL("browsers/" + browserId + "/stream", document.baseURI);
     url.protocol = (url.protocol === "https:") ? "wss:" : "ws:";
     // Pane size up front, IN the connect URL, so the first frame is already pane-sized
@@ -635,10 +642,10 @@
   function sendPaneSize() {
     if (!streamWs || streamWs.readyState !== WebSocket.OPEN) return;
     const rect = stage.getBoundingClientRect();
-    // Skip ONLY a collapsed pane (a hidden window's frame reads a 0x0 box): reporting that
-    // clamps to the 320x240 minimum and poisons the capture region. A REAL size is always
-    // reported -- even if the app tab is momentarily backgrounded (document.hidden) -- so a
-    // resize is never dropped and the browser reliably grows to fill the pane.
+    // Skip ONLY a collapsed pane (a 0x0 box): reporting that clamps to the 320x240 minimum
+    // and poisons the capture region. A REAL size is always reported -- even if the app tab
+    // is momentarily backgrounded (document.hidden) -- so a resize is never dropped and the
+    // browser reliably grows to fill the pane.
     if (rect.width < 5 || rect.height < 5) return;
     const w = Math.max(320, Math.round(rect.width) & ~1);
     const h = Math.max(240, Math.round(rect.height) & ~1);
@@ -665,12 +672,17 @@
   // -> make me the sole active stream) or "h" (I went off-screen -> pause me, 0 CPU / 0
   // bandwidth). The server arbitrates (last interaction wins, ordered by its own receive
   // time so multi-device clocks don't matter) and pauses everyone else.
-  // "Visible" = the whole workspace tab isn't backgrounded (Page Visibility) AND this pane
-  // isn't a hidden window's frame (display:none -> the canvas box is 0x0, read reliably).
+  // "Visible" = the whole workspace tab isn't backgrounded (Page Visibility), the workspace shell
+  // has said this pane's window is shown (a hidden window's frame keeps its size, so the shell's
+  // word, relayed by the contract script below, is the only sign), AND the pane isn't collapsed
+  // (0x0). A page opened on its own has no shell and counts as shown.
+  const SHELL_VISIBILITY_EVENT = "browser:shell-visibility";
+  let shellVisibility = window.parent === window ? "shown" : "unknown";
+  let isStreamDeferred = false;
   function paneVisible() {
-    if (document.hidden) return false;
+    if (document.hidden || shellVisibility !== "shown") return false;
     const r = stage.getBoundingClientRect();
-    return r.width > 4 && r.height > 4;  // display:none / detached pane -> 0x0
+    return r.width > 4 && r.height > 4;
   }
   function sendStream(msg) { if (streamWs && streamWs.readyState === WebSocket.OPEN) streamWs.send(msg); }
   let claimedActive = false, wasVisible = false;
@@ -693,8 +705,16 @@
     wasVisible = vis;
   }
   document.addEventListener("visibilitychange", onVisibilityTransition);
+  document.addEventListener(SHELL_VISIBILITY_EVENT, (event) => {
+    shellVisibility = event.detail.isShown ? "shown" : "hidden";
+    if (shellVisibility === "shown" && isStreamDeferred) {
+      isStreamDeferred = false;
+      connectStream();
+    }
+    onVisibilityTransition();
+  });
   new IntersectionObserver(onVisibilityTransition, { threshold: [0, 0.01] }).observe(stage);
-  setInterval(onVisibilityTransition, 1500);  // belt: catches a display:none<->visible flip the observer missed
+  setInterval(onVisibilityTransition, 1500);  // belt: catches a collapse<->visible flip the observer missed
   // Belt for sizing: unconditionally re-assert the true pane size on a cadence. The
   // ResizeObserver/visibility re-report can miss on a fresh reconnect (it runs before the
   // pane has laid out, then never fires again since the pane doesn't change), leaving the
@@ -1137,10 +1157,16 @@ registerProcessor('pb', PB);`;
     reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(browserId); }, 1000);
   }
 
+  function browserTitle(name) {
+    const numbered = /^browser-([0-9]+)$/.exec(name);
+    return numbered === null ? name : `Browser ${numbered[1]}`;
+  }
+
   function boot() {
     const params = new URLSearchParams(location.search);
     const name = params.get("session");
     if (!name) { initOverlay.classList.add("static", "show"); initOverlay.querySelector(".msg").textContent = "Open a browser from the launcher."; return; }
+    document.title = browserTitle(name);
     initOverlay.classList.add("show");
     if (!("VideoDecoder" in window)) { initOverlay.classList.add("static"); initOverlay.querySelector(".msg").textContent = "This browser can't play the stream (WebCodecs missing)."; return; }
     setInitStage(15, "Starting browser…");  // seed the bar until the first control message lands
@@ -1150,44 +1176,44 @@ registerProcessor('pb', PB);`;
   boot();
 })();
 </script>
-<script type="module">
+<!-- A contract that cannot load (the shell's frontend not built) leaves nobody to say whether the
+     pane is shown: stream as a page opened on its own does. -->
+<script type="module" onerror="console.warn('[browser] could not load the shell contract: streaming as a page on its own'); document.dispatchEvent(new CustomEvent('browser:shell-visibility', { detail: { isShown: true } }))">
   // The workspace shell's app contract (docs/system/blueprint/desktop-interface/contracts.md
   // section 7), imported from this page's own origin, which the daemon serves it from. The
   // window's path says WHICH browser this page shows and its title is that browser's name; what
   // the browser itself is looking at stays inside the streamed pixels. A session switch is a
   // whole new stream, so this page declares no navigation capability and the shell reloads the
-  // frame to move it.
-  function browserTitle(name) {
-    const numbered = /^browser-([0-9]+)$/.exec(name);
-    return numbered === null ? name : `Browser ${numbered[1]}`;
-  }
+  // frame to move it. Imported statically, so it listens before this page's load: the shell says
+  // shown or hidden right after that load, and the stream above waits for that word.
+  import { connectToShell } from "/_static/app_contract.js";
+
   const session = new URLSearchParams(location.search).get("session");
-  if (session) document.title = browserTitle(session);
   if (window.parent !== window) {
-    import("/_static/app_contract.js")
-      .then(({ connectToShell }) => {
-        // The shell's close chord (Ctrl+W) closes this browser's current tab, not its window:
-        // the window-bound sweep would otherwise stop the whole browser. The browser is
-        // named by the page's own session parameter; the viewer's state above is closure-local.
-        const closeRemoteTab = () => {
-          if (session === null) return;
-          fetch(new URL("browsers/" + session + "/close-tab", document.baseURI), { method: "POST" })
-            .then(async (response) => {
-              if (response.ok) return;
-              let reason = "";
-              try { reason = (await response.json()).error || ""; } catch (_) {}
-              console.warn("[browser] close-tab refused (" + response.status + ")", reason);
-            })
-            .catch((error) => console.warn("[browser] close-tab request failed", error));
-        };
-        const connection = connectToShell({
-          capabilities: { navigation: false, closeChord: true },
-          onCloseRequest: closeRemoteTab,
-        });
-        window.addEventListener("focus", () => connection.focused());
-        if (session) connection.location(`/?session=${encodeURIComponent(session)}`, browserTitle(session));
-      })
-      .catch((error) => console.warn("[browser] could not load the shell contract", error));
+    // The shell's close chord (Ctrl+W) closes this browser's current tab, not its window:
+    // the window-bound sweep would otherwise stop the whole browser. The browser is
+    // named by the page's own session parameter; the viewer's state above is closure-local.
+    const closeRemoteTab = () => {
+      if (session === null) return;
+      fetch(new URL("browsers/" + session + "/close-tab", document.baseURI), { method: "POST" })
+        .then(async (response) => {
+          if (response.ok) return;
+          let reason = "";
+          try { reason = (await response.json()).error || ""; } catch (_) {}
+          console.warn("[browser] close-tab refused (" + response.status + ")", reason);
+        })
+        .catch((error) => console.warn("[browser] close-tab request failed", error));
+    };
+    const tellShellVisibility = (isShown) =>
+      document.dispatchEvent(new CustomEvent("browser:shell-visibility", { detail: { isShown } }));
+    const connection = connectToShell({
+      capabilities: { navigation: false, closeChord: true },
+      onCloseRequest: closeRemoteTab,
+      onShown: () => tellShellVisibility(true),
+      onHidden: () => tellShellVisibility(false),
+    });
+    window.addEventListener("focus", () => connection.focused());
+    if (session) connection.location(`/?session=${encodeURIComponent(session)}`, document.title);
   }
 </script>
 </body>

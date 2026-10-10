@@ -283,8 +283,9 @@ def e2e_server(tmp_path: Path) -> Generator[E2EServer, None, None]:
 # It imports the shell's served contract module and connects: it reports its location (path and a title derived
 # from it) once greeted, and exposes the verbs the tests drive (navigate in place, ask for an open). A navigable
 # page declares the capability and shows a pushed path in place; a plain one declares nothing, so the shell reloads
-# its frame to move it. Its ``#held`` input is state no reload survives. It installs the served element context
-# menu as a scaffolded app's page does, so a right-click in the frame drafts through the shell.
+# its frame to move it. Its ``#held`` input is state no reload survives, and it records each shown and hidden it is
+# told. It installs the served element context menu as a scaffolded app's page does, so a right-click in the frame
+# drafts through the shell.
 _STUB_PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><title>Stub</title></head><body>
 <div id="where"></div><input id="held" value="" />
 <script type="module">
@@ -298,12 +299,15 @@ const show = (path) => { where.textContent = path; document.title = titleOf(path
 show(here());
 window.__navigations = [];
 window.__presses = 0;
+window.__visibility = [];
 window.addEventListener("pointerdown", () => { window.__presses += 1; });
 const handlers = {
   onHandshake(handshake) {
     window.__handshake = handshake;
     connection.location(here(), titleOf(here()));
   },
+  onShown: () => window.__visibility.push("shown"),
+  onHidden: () => window.__visibility.push("hidden"),
 };
 if (isNavigable) {
   handlers.capabilities = { navigation: true, closeChord: false };
@@ -1232,6 +1236,40 @@ def test_clicking_a_lower_window_raises_it_and_the_focused_one_takes_pointer_eve
         return list(_stored_placements(e2e_server.state_dir, client_id))[-1:] == [first]
 
     wait_for(_first_on_top, timeout=15.0, poll_interval=0.1, error_message="the raise never reached the file")
+
+
+# The animation frames a page runs in half a second: none while the browser is not rendering it.
+_FRAMES_IN_HALF_A_SECOND = """() => new Promise((resolve) => {
+  let frames = 0;
+  const count = () => { frames += 1; requestAnimationFrame(count); };
+  requestAnimationFrame(count);
+  setTimeout(() => resolve(frames), 500);
+})"""
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_page_a_window_in_front_wholly_covers_stops_rendering_until_uncovered(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """Maximizing the front of two windows covers the other's page: once the window has landed the browser stops
+    rendering that page, which its app is still told is shown, and restoring the front window brings it back."""
+    _land(page, e2e_server)
+    first, second = _open_a_second_window_over_the_first(page, e2e_server)
+    first_frame = _page_frame(page, first)
+    second_frame = _page_frame(page, second)
+    first_page = page.locator(f'iframe[data-live-page="{first}"]')
+    assert first_frame.evaluate(_FRAMES_IN_HALF_A_SECOND) > 0
+
+    _window(page, second).locator("[data-drag-handle]").dblclick()
+    expect(_window(page, second)).to_have_attribute("data-window-state", "MAXIMIZED")
+    expect(first_page).to_be_hidden()
+    assert first_frame.evaluate(_FRAMES_IN_HALF_A_SECOND) == 0
+    assert second_frame.evaluate(_FRAMES_IN_HALF_A_SECOND) > 0
+    assert first_frame.evaluate("() => window.__visibility") == ["shown"]
+
+    _window(page, second).locator("[data-drag-handle]").dblclick()
+    expect(first_page).to_be_visible()
+    assert first_frame.evaluate(_FRAMES_IN_HALF_A_SECOND) > 0
 
 
 @pytest.mark.timeout(60, func_only=False)
