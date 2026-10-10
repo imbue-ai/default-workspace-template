@@ -698,7 +698,13 @@ def test_a_secret_requirement_names_a_file_with_variables_or_a_legacy_bare_name(
 def test_a_program_running_under_an_undeclared_secret_file_is_flagged(
     tmp_path: Path,
 ) -> None:
-    _write_tree(tmp_path)
+    _write_tree(
+        tmp_path,
+        toml_text=_MINIMAL_TOML.replace(
+            'include = ["system/apps/slack_inbox"]',
+            'include = ["system/apps/slack_inbox", "system/supervisord.conf.d/widget.conf"]',
+        ),
+    )
     (tmp_path / "system/supervisord.conf.d").mkdir(parents=True)
     (tmp_path / "system/supervisord.conf.d/widget.conf").write_text(
         'command=bash -c "python3 system/scripts/with_secrets.py data/.secrets/widget.env -- widget"\n'
@@ -720,7 +726,10 @@ def test_a_program_running_under_an_undeclared_secret_file_is_flagged(
 
     (tmp_path / "declared").mkdir()
     declared = _manifest(
-        _MINIMAL_TOML
+        _MINIMAL_TOML.replace(
+            'include = ["system/apps/slack_inbox"]',
+            'include = ["system/apps/slack_inbox", "system/supervisord.conf.d/widget.conf"]',
+        )
         + '\n[[requirements.secret]]\nfile = "widget"\nvariables = ["A"]\n'
         + '\n[[requirements.secret]]\nfile = "mailer"\nvariables = ["B"]\n',
         tmp_path / "declared",
@@ -728,14 +737,39 @@ def test_a_program_running_under_an_undeclared_secret_file_is_flagged(
     assert check_secret_references(tmp_path, declared) == ()
 
 
+def test_a_conf_file_outside_the_include_paths_is_not_flagged(
+    tmp_path: Path,
+) -> None:
+    # build_template.sh assembles every template on top of the full base
+    # template tree, so system/supervisord.conf.d/ in the assembled snapshot
+    # always also carries the base's own always-present programs (host-backup,
+    # share-gateway, ...) regardless of whether the template's own recipe ever
+    # named them. Those are not part of what the template is adding, so a
+    # secret they reference must not be flagged as undeclared.
+    _write_tree(tmp_path)
+    (tmp_path / "system/supervisord.conf.d").mkdir(parents=True)
+    (tmp_path / "system/supervisord.conf.d/host-backup.conf").write_text(
+        "command=uv run with_secrets.py data/.secrets/restic.env -- host-backup\n"
+    )
+
+    assert validate_template_tree(tmp_path) == ()
+
+
 def test_a_conf_comment_mentioning_a_secrets_file_is_not_flagged(
     tmp_path: Path,
 ) -> None:
-    # A base-template service (e.g. host-backup) whose secret is injected by the
-    # platform documents the file it reads in a comment -- never a
+    # A service whose secret is injected by the platform, not an app/skill
+    # declaration, documents the file it reads in a comment -- never a
     # `with_secrets.py` wrapper on the `command=` line. That comment must not be
-    # flagged as an undeclared reference for every template build.
-    _write_tree(tmp_path)
+    # flagged as an undeclared reference even when the drop-in itself is in the
+    # template's own include set.
+    _write_tree(
+        tmp_path,
+        toml_text=_MINIMAL_TOML.replace(
+            'include = ["system/apps/slack_inbox"]',
+            'include = ["system/apps/slack_inbox", "system/supervisord.conf.d/host-backup.conf"]',
+        ),
+    )
     (tmp_path / "system/supervisord.conf.d").mkdir(parents=True)
     (tmp_path / "system/supervisord.conf.d/host-backup.conf").write_text(
         "# Continuous backup. data/.secrets/restic.env is injected by the minds app.\n"

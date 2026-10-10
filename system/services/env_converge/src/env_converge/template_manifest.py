@@ -670,13 +670,25 @@ SUPERVISORD_DROPIN_DIRECTORY = "system/supervisord.conf.d"
 def _conf_scan_text(text: str) -> str:
     """A `.conf` file's text with `#`-comment lines blanked out.
 
-    Supervisord drop-ins routinely document which secrets-env file a program
-    reads in a leading comment (e.g. a base-template service whose secret is
-    injected by the platform, not an adopter) -- a mention that is not a
-    `with_secrets.py` wrapper invocation and must not read as a reference. See
-    the matching fix in the publish flow's writer.
+    An included drop-in can document which secrets-env file a program reads in
+    a leading comment -- not a `with_secrets.py` wrapper invocation, so it must
+    not read as a reference. See the matching fix in the publish flow's writer.
     """
     return "\n".join("" if line.lstrip().startswith("#") else line for line in text.splitlines())
+
+
+def _paths_under_include(repo_root: Path, include_paths: tuple[str, ...]) -> set[Path]:
+    """Every file an `--include` entry covers: the entry itself if it names a file,
+    or everything nested under it if it names a directory. Mirrors the scoping
+    the publish flow's write_template_manifest.py uses for its own scan."""
+    paths: set[Path] = set()
+    for include in include_paths:
+        base = repo_root / include
+        if base.is_file():
+            paths.add(base)
+        elif base.is_dir():
+            paths.update(path for path in base.rglob("*") if path.is_file())
+    return paths
 
 
 def check_secret_references(
@@ -686,6 +698,10 @@ def check_secret_references(
 
     An adopter is asked for exactly the declared files, so a program or MCP server
     that names an undeclared one starts with no credential and fails silently.
+    `.conf` drop-ins are scoped to the recipe's own `include` paths: the assembled
+    tree always also carries the base template's own always-present programs
+    (host-backup, share-gateway, ...), which are not part of what this template is
+    adding and which no included app/skill could ever declare.
     """
     declared = {
         item.file for item in manifest.requirements.secret if item.file is not None
@@ -693,7 +709,10 @@ def check_secret_references(
     candidates = [repo_root / MCP_SERVERS_FILE_NAME]
     dropins = repo_root / SUPERVISORD_DROPIN_DIRECTORY
     if dropins.is_dir():
-        candidates.extend(sorted(dropins.glob("*.conf")))
+        included = _paths_under_include(repo_root, manifest.recipe.include)
+        candidates.extend(
+            path for path in sorted(dropins.glob("*.conf")) if path in included
+        )
     problems: list[str] = []
     for path in candidates:
         if not path.is_file():
