@@ -52,8 +52,8 @@ and the still-present path below both work for it.
 ## What this skill does NOT cover
 
 - **Other services** (ChatGPT, claude.ai, other AI tools): their chats are not
-  stored on this host. To access them you'd need to pull in that data separately
-  via their own export features.
+  this host's transcripts. The `import-chats` skill copies the user's Claude and
+  ChatGPT conversations into this workspace and says where imported ones live.
 
 - **Other Imbue Studio workspaces**: each workspace is a separate host with its own
   `/home/user/.mngr/`. Transcripts from agents in another workspace live there, not here.
