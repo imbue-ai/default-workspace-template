@@ -19,6 +19,7 @@ import { classifyUserMessage, isHiddenUserMessage } from "./message-classificati
 import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
 import { UserMessageKind } from "./message-kinds";
 import { renderToolBlock } from "./ToolCallBlock";
+import { appPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 
 /** The user rail's shared recipes, owned here and composed by the queued and
  *  outgoing variants (QueuedMessageView / OutgoingMessageView). `message`,
@@ -27,6 +28,9 @@ import { renderToolBlock } from "./ToolCallBlock";
  *  them. The row recipe carries no bottom margin: each caller sets its own
  *  rhythm. */
 export const USER_MESSAGE_ROW_CLASS = "message message-user flex flex-col items-end";
+
+/** The bubble is the chat's declared `user-message` part (its app.toml `[theming]`), which themes may style. */
+export const USER_MESSAGE_PART = appPartAttrs("chat", "user-message");
 
 /** wrap-break-word: long unbreakable tokens (API keys, URLs) wrap inside the
  *  bubble instead of overflowing past its edge. Code inside a bubble is
@@ -150,7 +154,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       if (attachmentBlock !== null) {
         bubbleChildren.push(m(MarkdownContent, { content: attachmentBlock, requestedAt: event.timestamp }));
       }
-      return m("div", { class: USER_BUBBLE_CLASS }, bubbleChildren);
+      return m("div", { class: USER_BUBBLE_CLASS, ...USER_MESSAGE_PART }, bubbleChildren);
     },
   };
 }

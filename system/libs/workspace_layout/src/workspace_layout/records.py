@@ -228,6 +228,9 @@ class DesktopView(Desktop):
     """The ``desktop`` object of desktop contracts.md section 5.2: the record, its windows as views."""
 
     windows: tuple[WindowView, ...] = Field(description="Every window on the desktop, in opening order")
+    theme: str | None = Field(
+        default=None, description="The desktop's own workspace theme id; None when it wears the workspace's default"
+    )
 
 
 class DesktopLayoutView(DesktopLayout):

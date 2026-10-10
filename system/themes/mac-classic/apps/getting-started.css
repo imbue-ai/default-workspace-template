@@ -1,0 +1,5 @@
+/* Getting Started on Classic Mac: the Start tiles' glyphs in black ink on white, like every other icon here. */
+[data-part="getting-started.start-glyph"] {
+  fill: #ffffff;
+  stroke: #000000;
+}

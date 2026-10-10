@@ -26,3 +26,7 @@ params = [{name = "url", label = "Start page", required = false}]
 # Xvfb exists only to give Chromium a display; it is the browser's wiring.
 [wiring]
 programs = ["xvfb"]
+
+# The browser shows other sites; the window around it is themed.
+[theming]
+mode = "none"

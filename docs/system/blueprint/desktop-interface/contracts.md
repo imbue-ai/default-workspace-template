@@ -107,6 +107,16 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
 - A missing file, or one whose `version` is not 1 or that fails validation (logged), reads as listing every app with a shortcut on any desktop, and the next reconcile writes it; with no `desktops.json` either, the default desktop's seeding writes it.
 - `desktops.json` carries none of it.
 
+### 4.1b `desktop_themes.json`
+
+`{"version": 1, "default": "<theme id>" | null, "desktops": {"<desktop id>": "<theme id>"}}`: the workspace's default theme, and each desktop that wears another (Desktop settings > Theme). Themes themselves are folders (`docs/system/blueprint/workspace-themes/`, section 3).
+
+- Kept beside `desktops.json` rather than in it: a shell from before themes still reads that file after a rollback, and its records refuse a key they do not know.
+- A desktop missing from `desktops` wears the default; a `default` of null is the standard theme. Setting a desktop back to the default drops its entry, and deleting a desktop drops its entry too.
+- A missing file, or one whose `version` is not 1 or that fails validation (logged), reads as the standard theme everywhere.
+- A theme that is no longer available (its folder removed, or failing validation) is worn as the standard theme; the file keeps the choice, so the theme comes back when its folder is fixed.
+- The desktop record on the wire (section 5.2) carries its own choice as `theme`, or null when it wears the default.
+
 ### 4.2 `placements/<desktop_id>/<client_id>.json`
 
 ```json
@@ -177,10 +187,13 @@ A preview shell (`system-interface --preview`, booted by `preview_app.py` over a
 | `POST /api/desktops` | `{"name", "color", "glyph"}` | `201 desktop`, seeded shortcuts, no windows, wallpaper `null`; `409` on an id conflict |
 | `POST /api/desktops/<id>/settings` | `{"name", "color", "glyph"}` | `200 desktop` |
 | `POST /api/desktops/<id>/wallpaper` | `{"wallpaper": wallpaper \| null}` | `200 desktop`; `404` when the named wallpaper does not exist |
+| `POST /api/desktops/<id>/theme` | `{"theme": "<theme id>" \| null}` | `200 desktop` (section 4.1b); null wears the default; `400` for a theme that is not available; `404` for an unknown desktop |
 | `POST /api/desktops/<id>/delete` | | `200 {"fallback_desktop_id"}`; `409` for the last desktop |
 | `POST /api/desktops/<id>/shortcuts` | `{"target", "mode", "cell"}` | `200 desktop`; replaces the entry for the same `(app, launch)`; `400` for an app or launch path the registry does not declare |
 | `POST /api/desktops/<id>/shortcuts/move` | `{"app", "launch", "cell"}` | `200 desktop`; an occupant of the cell is moved to the nearest free cell (section 10) |
 | `POST /api/desktops/<id>/shortcuts/remove` | `{"app", "launch"}` | `200 desktop` |
+
+The themes' own routes (`GET /api/themes`, `POST /api/themes/default`, the theme icons) are `docs/system/blueprint/workspace-themes/plan-workspace-themes.md` section 5.2.
 
 `desktop` is the object of section 4.1, each window carrying one field the file does not store: `client_paths`, the path each client's page of an independent window is at, by client id (`{}` for a linked window; a client at the home path has no entry). A reader of the shell's windows (`docs/system/specs/window-bound-resources.md` section 4.2) takes `path` and every `client_paths` value alike, since any client's view of a window keeps what it shows alive. The `window` objects the window routes answer (section 5.3) carry it too.
 
@@ -262,6 +275,7 @@ Outbound:
 | `avatar_status` | `{"mood": "idle" \| "working", "is_stale"}` | on connect, and when either changes |
 | `avatar_selection_changed` | `{"design"}` | after the selection is written |
 | `update_notice_changed` | `{"notice": notice \| null}` | on connect (after `avatar_status`), and whenever `data/.state/update-apply/last-good.json` is written or removed and reads differently: an apply kept it, a rollback's progress and outcome, a confirm cleared it; `notice` is the document `GET /api/updates/pending` answers (section 5.1) |
+| `themes_changed` | `{"catalog"}` | when a theme's files change or a theme folder is added or removed, and after `POST /api/themes/default` sets the workspace's default theme; `catalog` is the `GET /api/themes` document (the workspace-themes plan, section 5.2) |
 | `presence_updated` | `{"users": [present_user, ...]}` | on connect, when a heartbeat brings a user into the connected set, and when the shell's sweep (every 10 seconds) finds that a user's heartbeats have stopped (section 5.1) |
 
 `is_connected` on a client is whether any window of it holds the socket, a solo page's included.
@@ -269,9 +283,10 @@ Outbound:
 ## 7. The app contract (`app_contract.js`)
 
 Built once, into the shell's static output, and served by every app at `/_static/app_contract.js` from its own origin (the shell serves it too, with `Access-Control-Allow-Origin: *`): a page imports it as a module, and a module import is a fetch without cookies, which the desktop client's forwarder and the share gateway refuse across origins.
-Exports `connectToShell({onHandshake, onShown, onHidden, onCloseRequest, onNavigate, capabilities})` returning `{isFramed, focused(), location(path, title), openPath(path, ifPresent), startWithText(text), draftText(text), disconnect()}`.
+Exports `connectToShell({onHandshake, onShown, onHidden, onCloseRequest, onNavigate, onTheme, capabilities})` returning `{isFramed, focused(), location(path, title), openPath(path, ifPresent), startWithText(text), draftText(text), disconnect()}`.
 `openPath` sends `shell:open` below; `startWithText` sends `shell:start-with-text`; `draftText` sends `shell:draft-text`.
 Beside it the shell builds and every app serves `/_static/context_menu.js`, the element context menu of the element-reference-menu plan (section 9 there), which drafts through `draftText`.
+It also builds the page kit, `/_static/workspace_theme.css` and `/_static/workspace_theme.js`, which a page built as plain HTML loads to wear the workspace's theme (the workspace-themes plan, section 5.3). The kit follows `shell:theme` through the contract's `followShellTheme(onTheme)` (same arguments as `onTheme`), which listens without connecting, so it runs beside a page's own `connectToShell`.
 `capabilities` is `{navigation: boolean, closeChord: boolean}` and must agree with the handlers: giving `onNavigate` without `navigation: true`, or `navigation: true` without `onNavigate`, is an error the module throws at connect, and so is `closeChord: true` without `onCloseRequest`. A page that declares `closeChord` owns the close chord: the shell sends `shell:close-request` and leaves the window open (the browser closes its current tab that way).
 
 | Direction | Type | Payload |
@@ -280,6 +295,7 @@ Beside it the shell builds and every app serves `/_static/context_menu.js`, the 
 | shell to page | `shell:shown`, `shell:hidden` | `{}` |
 | shell to page | `shell:close-request` | `{}`; a page that declared `closeChord: true` keeps its window, any other page's window closes right after |
 | shell to page | `shell:navigate` | `{"path"}`; only to a page that declared `navigation: true` |
+| shell to page | `shell:theme` | `{"theme", "revision", "isPreview"}`; the theme the shell wears: the desktop on screen's, or the one Desktop settings is previewing (`isPreview` true, so the page does not remember it); after every handshake and on every change (the workspace-themes plan, section 5.3); `onTheme(theme, revision, isPreview)` receives it |
 | page to shell | `shell:capabilities` | `{"navigation": bool, "closeChord": bool}`; sent once by `connectToShell`; absent means `false` |
 | page to shell | `shell:location` | `{"path", "title"}`; the shell remembers the pair as the page's last report and posts it to the window's location route when it differs from the stored one |
 | page to shell | `shell:focused` | `{}`; the shell raises the page's window. A report from a page that is not shown (minimized, pulled out, being pulled out) is ignored, since a raise would bring the window back onto the desktop and the user cannot have chosen a hidden page (the shell also takes the document's focus off a page as it hides it, so the browser does not restore focus there). It is ignored too while a move or resize of another window is in progress: the gestured window holds the top of the stack until its gesture ends, and a focus report meanwhile (the page's focus coming back with the embedder window's, mid-drag) is not the user choosing that window |
@@ -418,6 +434,7 @@ Both editors (`shell/desktop_document.py` and `frontend/src/geometry/`) implemen
 | `--desk-window-move-ease` | `cubic-bezier(0.2, 0, 0, 1)` | | no |
 | `--desk-launcher-menu-width` | `22rem` | | no |
 
+A workspace theme (section 4.1b; `docs/system/blueprint/workspace-themes/`, section 4.1) may set the metrics marked as theme metrics, within the contract's ranges, `--desk-title-bar-height` (outside touch mode) among the ones `metrics.ts` reads, so the shell reads the metrics again once a theme's stylesheet has loaded, whenever the desktop on screen changes theme or the theme's files change.
 The phone breakpoint is `PHONE_MAX_SHORT_SIDE_PX = 500` and `PHONE_MAX_LONG_SIDE_PX = 1000` in `theme/metrics.ts`, applied to the viewport whichever way round as `matchMedia("(max-width: 500px) and (max-height: 1000px), (max-height: 500px) and (max-width: 1000px)")`, which sets `data-phone`; touch is `matchMedia("(pointer: coarse)")`.
 The phone layout's own tokens (`--desk-phone-*`, and `--desk-toast-gap` and `--desk-toast-radius` for the toasts both layouts draw) are declared on `:root` and read by no behaviour: the bar's controls (`64px` by `42px`), its `48px` pill, and `12px` of padding (above and beside the controls; below them, only the safe-area inset), the sheets' radius and top, the rows and the home grid's tiles.
 The resize handles are strips of `--desk-resize-edge` overhanging the window's border by `--desk-resize-overhang` (so a press just outside the frame still grabs an edge), inset from the corners by `--desk-resize-edge-inset`; the corners are `--desk-resize-corner` squares over the same overhang.

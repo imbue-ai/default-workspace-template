@@ -40,6 +40,7 @@ from playwright.sync_api import Locator
 from playwright.sync_api import Page
 from playwright.sync_api import expect
 from pydantic import Field
+from workspace_themes.contract import BUILTIN_THEMES_DIRECTORY
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.utils.polling import poll_until
@@ -117,6 +118,13 @@ _CELL_HEIGHT = 112
 _GRID_INSET = 16
 _SNAP_THRESHOLD = 16
 _GEOMETRY_TOLERANCE_PX = 4
+# imbue/system_interface/test_e2e.py -> the template's root, whose built-in theme folders a themed shell copies.
+_TEMPLATE_ROOT = Path(__file__).resolve().parents[5]
+_BUILTIN_THEMES = ("standard", "mac-classic", "windows-2000")
+# Where the theme test sets its window: clear of the shortcuts, with room past its every edge for the resizes.
+_OPEN_SPOT = (260.0, 60.0)
+# How far from a window control's centre, each way, a press must still land on it, however small a theme draws it.
+_CONTROL_TARGET_REACH_PX = 6
 
 
 class E2EServer(FrozenModel):
@@ -130,6 +138,7 @@ class E2EServer(FrozenModel):
     agent_events_path: Path = Field(
         description="The agents event file the avatar's mood is read from, absent at first"
     )
+    theme: str | None = Field(default=None, description="The built-in theme the workspace wears by default, if set")
 
 
 def _get_json(url: str) -> Any:
@@ -153,6 +162,8 @@ def _running_e2e_server(
     pin: tuple[str, str, str] | None = None,
     # Further registry rows, for apps a test serves itself.
     extra_rows: tuple[str, ...] = (),
+    # A built-in theme the workspace wears by default; None leaves the standard look and no theme folders.
+    theme: str | None = None,
 ) -> Generator[E2EServer, None, None]:
     """Run the shell on a free port over the stub app (and the second one when asked).
 
@@ -231,6 +242,8 @@ def _running_e2e_server(
         state_dir = tmp_path / "shell-state"
         config = Config(system_interface_host="127.0.0.1", system_interface_port=port)
         repo_root = tmp_path / "repo"
+        if theme is not None:
+            shutil.copytree(_TEMPLATE_ROOT / BUILTIN_THEMES_DIRECTORY, repo_root / BUILTIN_THEMES_DIRECTORY)
         agent_events_path = tmp_path / "mngr-events" / "events.jsonl"
         agent_events_path.parent.mkdir()
         state = build_test_state(
@@ -254,6 +267,8 @@ def _running_e2e_server(
             )
             # Started only once the apps are serving: the first liveness probe must find them answering.
             state.shell.start()
+            if theme is not None:
+                _post_json(f"{base_url}/api/themes/default", {"theme": theme})
             try:
                 yield E2EServer(
                     base_url=base_url,
@@ -262,6 +277,7 @@ def _running_e2e_server(
                     stub_url=stub_url,
                     pinned_url=pinned_served.http_url if pinned_served is not None else "",
                     agent_events_path=agent_events_path,
+                    theme=theme,
                 )
             finally:
                 state.shell.stop()
@@ -275,6 +291,13 @@ def _running_e2e_server(
 def e2e_server(tmp_path: Path) -> Generator[E2EServer, None, None]:
     """Start the shell over the one stub app."""
     with _running_e2e_server(tmp_path) as server:
+        yield server
+
+
+@pytest.fixture(params=_BUILTIN_THEMES)
+def themed_e2e_server(tmp_path: Path, request: pytest.FixtureRequest) -> Generator[E2EServer, None, None]:
+    """The shell over the one stub app, wearing each built-in theme as the workspace's default in turn."""
+    with _running_e2e_server(tmp_path, theme=request.param) as server:
         yield server
 
 
@@ -1203,6 +1226,176 @@ def test_title_bar_double_click_and_controls_toggle_maximize_and_minimize(e2e_se
     )
 
 
+# Each resize edge, and which sides of the window it moves: (left, top, right, bottom) as -1, 0, or +1 of the drag.
+_EDGE_SIDES: dict[str, tuple[int, int, int, int]] = {
+    "n": (0, 1, 0, 0),
+    "s": (0, 0, 0, 1),
+    "e": (0, 0, 1, 0),
+    "w": (1, 0, 0, 0),
+    "ne": (0, 1, 1, 0),
+    "nw": (1, 1, 0, 0),
+    "se": (0, 0, 1, 1),
+    "sw": (1, 0, 0, 1),
+}
+
+
+def _hit_at(page: Page, point: tuple[float, float], selector: str) -> str | None:
+    """What the pointer would land on at ``point``: the ``selector`` match it is in, by its outer HTML's opening tag,
+    or None when something else takes the point."""
+    return page.evaluate(
+        """([x, y, selector]) => {
+            const hit = document.elementFromPoint(x, y)?.closest(selector);
+            return hit === null || hit === undefined ? null : hit.outerHTML.slice(0, hit.outerHTML.indexOf(">") + 1);
+        }""",
+        [point[0], point[1], selector],
+    )
+
+
+def _edge_rim(handle: FloatRect, edge: str) -> tuple[float, float]:
+    """A point on a resize handle's outermost pixels: its outer side for an edge, its outer corner for a corner."""
+    x, y = _center(handle)
+    if "n" in edge:
+        y = handle["y"] + 1
+    if "s" in edge:
+        y = handle["y"] + handle["height"] - 1
+    if "w" in edge:
+        x = handle["x"] + 1
+    if "e" in edge:
+        x = handle["x"] + handle["width"] - 1
+    return x, y
+
+
+def _bare_bar_point(page: Page, bar: Locator) -> tuple[float, float]:
+    """A point on the title bar's own surface, clear of its title and its controls, scanned across its middle row."""
+    point = bar.evaluate(
+        """(bar) => {
+            const box = bar.getBoundingClientRect();
+            const y = box.top + box.height / 2;
+            for (let x = box.left + box.width / 2; x < box.right - 4; x += 2) {
+                const hit = document.elementFromPoint(x, y);
+                if (hit !== null && bar.contains(hit) && hit.closest("[data-window-control], [data-part='window-title']") === null) {
+                    return [x, y];
+                }
+            }
+            return null;
+        }"""
+    )
+    assert point is not None, "the title bar has no bare surface between its title and its controls"
+    return point[0], point[1]
+
+
+@pytest.mark.timeout(180, func_only=False)
+def test_every_theme_keeps_a_window_movable_resizable_from_every_edge_and_its_controls_on_target(
+    themed_e2e_server: E2EServer, page: Page
+) -> None:
+    """Under every built-in theme a window moves by its title bar, from its title and from its bare bar; resizes
+    from each of its four edges and four corners, moving only the sides that edge holds; and each control is what
+    the pointer lands on across a square around its centre, and does its job: maximize and restore, minimize and
+    back from the taskbar, the window menu, reload, and close. The launcher field and a shortcut still answer."""
+    _land(page, themed_e2e_server)
+    window_id = _open_via_shortcut(page, themed_e2e_server)
+    window = _window(page, window_id)
+    # In open desktop, with room past every edge: a handle's rim against the taskbar or the viewport is theirs.
+    opened = _box(window)
+    _drag_title_bar(page, window_id, _OPEN_SPOT[0] - opened["x"], _OPEN_SPOT[1] - opened["y"])
+    page.mouse.move(0, 0)
+
+    # The page wears the theme the fixture made the default, its bundle loaded, before anything is measured.
+    page.wait_for_function(
+        "(theme) => document.documentElement.getAttribute('data-ui-theme') === theme", arg=themed_e2e_server.theme
+    )
+    page.wait_for_function(
+        "() => [...document.querySelectorAll('link[data-workspace-theme]')].every((link) => link.sheet !== null)"
+    )
+    bar = window.locator("[data-drag-handle]")
+
+    # Every control takes the pointer across a square around its centre, however small a theme draws it.
+    for control in window.locator("[data-window-control]").all():
+        name = control.get_attribute("data-window-control")
+        x, y = _center(_box(control))
+        reach = _CONTROL_TARGET_REACH_PX
+        for point in ((x, y), (x - reach, y), (x + reach, y), (x, y - reach), (x, y + reach)):
+            hit = _hit_at(page, point, "[data-window-control]")
+            assert hit is not None and f'data-window-control="{name}"' in hit, (name, point, hit)
+
+    # Every resize edge takes the pointer at its outer rim, just outside the window, where nothing of the theme's
+    # chrome lies over it (inside, a control near a corner is the press's, above the handle).
+    for edge in _EDGE_SIDES:
+        rim = _edge_rim(_box(window.locator(f'[data-resize-edge="{edge}"]')), edge)
+        hit = _hit_at(page, rim, "[data-resize-edge]")
+        assert hit is not None and f'data-resize-edge="{edge}"' in hit, (
+            edge,
+            rim,
+            _box(window),
+            page.evaluate("([x, y]) => document.elementFromPoint(x, y)?.outerHTML.slice(0, 200)", list(rim)),
+        )
+
+    # The title bar drags from its title and from bare bar between the title and the controls.
+    title = window.locator("[data-part='window-title']")
+    for start_at in (lambda: _center(_box(title)), lambda: _bare_bar_point(page, bar)):
+        start = start_at()
+        assert _hit_at(page, start, "[data-drag-handle]") is not None, start
+        before = _box(window)
+        _drag(page, start, (start[0] + 40, start[1] + 30))
+        after = _box(window)
+        _assert_close(after["x"], before["x"] + 40, f"moved x from {start}")
+        _assert_close(after["y"], before["y"] + 30, f"moved y from {start}")
+
+    # Each edge and corner resizes outward by its drag, moving only its own sides.
+    for edge, (left, top, right, bottom) in _EDGE_SIDES.items():
+        before = _box(window)
+        start = _edge_rim(_box(window.locator(f'[data-resize-edge="{edge}"]')), edge)
+        dx = 30 * (right - left)
+        dy = 24 * (bottom - top)
+        _drag(page, start, (start[0] + dx, start[1] + dy))
+        after = _box(window)
+        _assert_close(after["x"], before["x"] - 30 * left, f"{edge} left")
+        _assert_close(after["y"], before["y"] - 24 * top, f"{edge} top")
+        _assert_close(after["x"] + after["width"], before["x"] + before["width"] + 30 * right, f"{edge} right")
+        _assert_close(after["y"] + after["height"], before["y"] + before["height"] + 24 * bottom, f"{edge} bottom")
+
+    # Maximize and restore by the controls.
+    normal = _box(window)
+    window.locator('[data-window-control="maximize"]').click()
+    expect(window).to_have_attribute("data-window-state", "MAXIMIZED")
+    window.locator('[data-window-control="restore"]').click()
+    expect(window).to_have_attribute("data-window-state", "NORMAL")
+    _assert_same_box(_box(window), normal, "restored")
+
+    # Minimize, and back from the taskbar.
+    window.locator('[data-window-control="minimize"]').click()
+    expect(_shown_windows(page)).to_have_count(0)
+    _taskbar_entry(page, window_id).click()
+    expect(window).to_be_visible()
+
+    # The window menu opens and closes.
+    window.locator('[data-window-control="menu"]').click()
+    expect(page.locator('[data-menu-row="close"]')).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(page.locator('[data-menu-row="close"]')).to_have_count(0)
+
+    # Reload reloads the page: what was typed into it is gone.
+    _page_frame(page, window_id).fill("#held", "typed before")
+    window.locator('[data-window-control="refresh"]').click()
+    wait_for(
+        lambda: _page_frame(page, window_id).input_value("#held") == "",
+        timeout=15.0,
+        poll_interval=0.2,
+        error_message="the reload control never reloaded the page",
+    )
+
+    # Close closes it.
+    window.locator('[data-window-control="close"]').click()
+    expect(_shown_windows(page)).to_have_count(0)
+    _wait_for_window_count(themed_e2e_server.base_url, 0)
+
+    # The taskbar's launcher field opens the launcher, and the shortcut opens its app again, under the theme's look.
+    _open_launcher(page)
+    page.keyboard.press("Escape")
+    expect(page.locator("[data-launcher-overlay]")).to_have_count(0)
+    _open_via_shortcut(page, themed_e2e_server)
+
+
 @pytest.mark.timeout(60, func_only=False)
 def test_clicking_a_lower_window_raises_it_and_the_focused_one_takes_pointer_events(
     e2e_server: E2EServer, page: Page
@@ -1605,8 +1798,10 @@ def test_an_independent_pinned_window_keeps_a_path_per_client_and_an_agent_navig
             frame.evaluate("() => window.__navigateTo('/?doc=1')")
             other_frame.evaluate("() => window.__navigateTo('/?doc=2')")
             wait_for(
-                lambda: _own_window_path(server.base_url, client_id, pinned["id"]) == "/?doc=1"
-                and _own_window_path(server.base_url, other_client_id, pinned["id"]) == "/?doc=2",
+                lambda: (
+                    _own_window_path(server.base_url, client_id, pinned["id"]) == "/?doc=1"
+                    and _own_window_path(server.base_url, other_client_id, pinned["id"]) == "/?doc=2"
+                ),
                 timeout=15.0,
                 poll_interval=0.1,
                 error_message="the two clients' own paths never reached their window path files",
@@ -1803,8 +1998,10 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
             )
             assert _get_json(f"{server.base_url}/api/avatars")["selected"] == "jelly-cat"
             wait_for(
-                lambda: _avatar_image_source(entry).endswith("/api/avatars/jelly-cat/image.svg?mood=idle")
-                and _avatar_image_source(other_entry).endswith("/api/avatars/jelly-cat/image.svg?mood=idle"),
+                lambda: (
+                    _avatar_image_source(entry).endswith("/api/avatars/jelly-cat/image.svg?mood=idle")
+                    and _avatar_image_source(other_entry).endswith("/api/avatars/jelly-cat/image.svg?mood=idle")
+                ),
                 timeout=10.0,
                 poll_interval=0.1,
                 error_message="the windows never drew the chosen design",

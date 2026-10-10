@@ -18,6 +18,14 @@ launcher_rank = 15
 launch = "open"
 mode = "focus"
 
+# The page is built from the shared components and the design tokens, but for the Start tiles' glyphs, which wear
+# the brand palette's hues: themes may recolor them (docs/system/blueprint/workspace-themes/, section 7).
+[theming]
+mode = "parts"
+parts = [
+    {name = "start-glyph", description = "The two-tone glyph on a Start something tile, in the tile's hue"},
+]
+
 # A Getting Started preview serves its page on a free port, unregistered, over a scratch state
 # directory: it neither re-points the live row nor opens the first-visit window, and its catalog
 # cache is its own. The app keeps nothing under data/.apps/, so there is nothing to copy.

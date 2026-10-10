@@ -13,6 +13,9 @@ from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import LayoutOp
 from workspace_layout.primitives import UserId
+from workspace_themes.contract import BUILTIN_THEMES_DIRECTORY
+from workspace_themes.testing import write_standard_theme
+from workspace_themes.testing import write_test_theme
 
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
@@ -932,6 +935,19 @@ def test_desktops_are_created_settled_papered_and_deleted(client: FlaskClient, a
         client.post("/api/desktops/missing/settings", json={"name": "x", "color": "#222222", "glyph": 2}).status_code
         == 404
     )
+
+    # A desktop's own theme rides on its wire record; null wears the workspace's default.
+    themes_root = shell.repo_root / BUILTIN_THEMES_DIRECTORY
+    write_standard_theme(shell.repo_root)
+    write_test_theme(themes_root, "mac-classic", '[data-part="window-frame"] { border: 1px solid #000000; }\n')
+    assert settled.get_json()["theme"] is None
+    themed = client.post("/api/desktops/research/theme", json={"theme": "mac-classic"})
+    assert themed.status_code == 200 and themed.get_json()["theme"] == "mac-classic"
+    listed = {desktop["id"]: desktop for desktop in client.get("/api/desktops").get_json()["desktops"]}
+    assert listed["research"]["theme"] == "mac-classic"
+    assert client.post("/api/desktops/research/theme", json={"theme": "beos"}).status_code == 400
+    assert client.post("/api/desktops/research/theme", json={"theme": None}).get_json()["theme"] is None
+    assert client.post("/api/desktops/missing/theme", json={"theme": "standard"}).status_code == 404
 
     # A wallpaper must exist to be set; file wallpapers are whatever sits in the wallpapers directory.
     unknown = client.post("/api/desktops/research/wallpaper", json={"wallpaper": {"kind": "bundled", "name": "nope"}})
@@ -2643,3 +2659,104 @@ def test_an_open_op_at_a_post_launch_path_posts_for_its_page_with_and_without_a_
     assert unplaced.status_code == 200, unplaced.get_json()
     assert unplaced.get_json()["client_id"] is None
     assert poster.posts[1].body == {"target": "new_chat", "message": "later"}
+
+
+def test_the_theme_catalog_lists_every_theme_with_its_chrome_icons_and_problems(
+    client: FlaskClient, app: Flask
+) -> None:
+    shell = _shell(app)
+    themes_root = shell.repo_root / BUILTIN_THEMES_DIRECTORY
+    write_standard_theme(shell.repo_root)
+    write_test_theme(
+        themes_root, "paper", '[data-part="title-bar"] { background: #ffffff; }\n', app_names_with_icons=("files",)
+    )
+    write_test_theme(themes_root, "broken", ".title-bar { color: red; }\n")
+
+    catalog = client.get("/api/themes").get_json()
+
+    assert catalog["default"] is None
+    by_id = {theme["id"]: theme for theme in catalog["themes"]}
+    assert [theme["id"] for theme in catalog["themes"]][0] == "standard"
+    assert by_id["paper"]["available"] is True and by_id["paper"]["base"] == "standard"
+    assert by_id["paper"]["chrome"] == {
+        "title_align": "center",
+        "leading": ["close", "title", "refresh", "menu"],
+        "trailing": ["minimize", "maximize"],
+    }
+    assert set(by_id["paper"]["icons"]["apps"]) == {"files"}
+    assert by_id["broken"]["available"] is False
+    assert any(".title-bar is a class" in problem for problem in by_id["broken"]["problems"])
+    assert by_id["broken"]["icons"] is None
+    assert client.get("/api/themes/broken/icons/app.png").status_code == 404
+    icon = client.get(by_id["paper"]["icons"]["apps"]["files"])
+    assert icon.status_code == 200 and icon.data.startswith(b"\x89PNG")
+    assert client.get(by_id["paper"]["icons"]["fallback_url"]).status_code == 200
+    assert client.get("/api/themes/paper/icons/terminal.png").status_code == 404
+
+
+def test_a_theme_icon_is_never_sniffed_and_an_svg_icon_runs_nothing(client: FlaskClient, app: Flask) -> None:
+    shell = _shell(app)
+    themes_root = shell.repo_root / BUILTIN_THEMES_DIRECTORY
+    write_standard_theme(shell.repo_root)
+    write_test_theme(themes_root, "paper", "", app_names_with_icons=("files",))
+    outline = write_test_theme(themes_root, "outline", "")
+    manifest_path = outline / "theme.toml"
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="utf-8").replace('format = "png"', 'format = "svg"'), encoding="utf-8"
+    )
+    for name in ("app", "files"):
+        (outline / "icons" / f"{name}.svg").write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32"/></svg>\n',
+            encoding="utf-8",
+        )
+
+    png = client.get("/api/themes/paper/icons/files.png")
+    svg = client.get("/api/themes/outline/icons/files.svg")
+
+    assert png.status_code == 200 and svg.status_code == 200, (png.status_code, svg.status_code)
+    assert png.headers["X-Content-Type-Options"] == "nosniff"
+    assert "Content-Security-Policy" not in png.headers
+    assert svg.headers["X-Content-Type-Options"] == "nosniff"
+    assert svg.headers["Content-Security-Policy"] == "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+
+
+def test_the_default_theme_is_set_broadcast_and_refused_when_unavailable(client: FlaskClient, app: Flask) -> None:
+    shell = _shell(app)
+    client_queue = _register_client(app, "c1", "home")
+    write_standard_theme(shell.repo_root)
+    write_test_theme(shell.repo_root / BUILTIN_THEMES_DIRECTORY, "paper", "")
+
+    answered = client.post("/api/themes/default", json={"theme": "paper"})
+
+    assert answered.status_code == 200 and answered.get_json() == {"default": "paper"}
+    assert client.get("/api/themes").get_json()["default"] == "paper"
+    changed = [message for message in drain_messages(client_queue) if message["type"] == "themes_changed"]
+    assert changed and changed[-1]["catalog"]["default"] == "paper"
+    assert client.post("/api/themes/default", json={"theme": "beos"}).status_code == 400
+    assert client.post("/api/themes/default", json={"theme": None}).get_json() == {"default": None}
+
+
+def test_a_theme_bundle_imports_its_chain_and_its_files_are_served_from_this_origin(
+    client: FlaskClient, app: Flask
+) -> None:
+    shell = _shell(app)
+    themes_root = shell.repo_root / BUILTIN_THEMES_DIRECTORY
+    write_standard_theme(shell.repo_root)
+    write_test_theme(themes_root, "paper", '[data-part="window"] { color: #000000; }\n')
+    write_test_theme(themes_root, "dark-paper", '[data-part="window"] { color: #ffffff; }\n', base="paper")
+
+    bundle = client.get("/_static/themes/dark-paper/theme.css")
+
+    assert bundle.status_code == 200 and bundle.mimetype == "text/css"
+    imports = [line for line in bundle.get_data(as_text=True).splitlines() if line.startswith("@import")]
+    assert [line.split("?")[0] for line in imports] == [
+        '@import url("../paper/parts.css',
+        '@import url("../dark-paper/parts.css',
+    ]
+    assert bundle.headers["Cache-Control"] == "no-cache"
+    revalidated = client.get("/_static/themes/dark-paper/theme.css", headers={"If-None-Match": bundle.headers["ETag"]})
+    assert revalidated.status_code == 304
+    assert client.get("/_static/themes/paper/parts.css").get_data(as_text=True).startswith("[data-part")
+    assert client.get("/_static/themes/paper/theme.toml").status_code == 404
+    assert client.get("/_static/themes/paper/../standard/theme.toml").status_code == 404
+    assert client.get("/_static/themes/nowhere/theme.css").status_code == 404

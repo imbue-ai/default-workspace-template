@@ -42,6 +42,7 @@ import { harnessLabel } from "./harness-labels";
 import { capitalizeEffort, modelPickLabel } from "./model-pick-label";
 import { raiseFailureNotice, restoreComposerDraft, takeComposerDraft } from "./MessageInput";
 import { hasUserTurn } from "./turn-grouping";
+import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 
 /** The value of the model select's first row: no pick, so the target harness's default on a handoff and the
  *  agent's own model on a rebind. */
@@ -253,6 +254,7 @@ function renderPicker(dialog: OpenDialog): m.Children {
       "select",
       {
         class: inputClass({ extra: "switch-dialog-model" }),
+        ...partAttrs("select"),
         "aria-label": "Model",
         value: dialog.modelId,
         onchange: (event: Event) => {
@@ -278,6 +280,7 @@ function renderPicker(dialog: OpenDialog): m.Children {
           "select",
           {
             class: inputClass({ extra: "switch-dialog-effort" }),
+            ...partAttrs("select"),
             "aria-label": "Reasoning effort",
             value: dialog.effort ?? "",
             onchange: (event: Event) => {

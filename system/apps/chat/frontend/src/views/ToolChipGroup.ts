@@ -14,6 +14,7 @@ import m from "mithril";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import { icon, type IconName } from "@imbue/workspace-ui/src/components/icons";
 import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
+import { TOOL_CALL_PART } from "./ToolCallBlock";
 import { resolveToolPayloads } from "./tool-payloads";
 
 /** One call in a run, with the assistant event that issued it. */
@@ -420,7 +421,7 @@ function renderDetail(chip: ChipCall, toolResult: ToolResultEvent | null, chatId
     "div",
     // Keyed because its siblings in the row are: mithril rejects a fragment
     // that mixes keyed and unkeyed children.
-    { class: DETAIL_CLASS, key: `detail-${chip.call.tool_call_id}` },
+    { class: DETAIL_CLASS, key: `detail-${chip.call.tool_call_id}`, ...TOOL_CALL_PART },
     [
       renderDetailHeader(chip),
       // Dashed: the rule between the panes separates two parts of one call, which is

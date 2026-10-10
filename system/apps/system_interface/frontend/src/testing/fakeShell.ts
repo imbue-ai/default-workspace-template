@@ -33,6 +33,7 @@ import { SHOWN_HOME } from "../model/records";
 import { withShownRecorded } from "../reducers/desktopState";
 import type { DesktopSocket, SocketHandlers } from "../store/socket";
 import { clientRecord } from "./records";
+import { EMPTY_THEME_CATALOG, type ThemeCatalog } from "../model/themes";
 
 /** The frame the shell answers for a pinned window a client has never placed (the shell's own constant). */
 export const PINNED_WINDOW_FRAME = { x: 0.46, y: 0.05, width: 0.5, height: 0.9 };
@@ -60,8 +61,8 @@ export class FakeDesktopApi implements DesktopApi {
   refusal: string | null = null;
   /** The page a POST launch path answers (as the app would); a GET launch path's page is built from its path. */
   postLaunchAnswer = "/launched";
-  /** While set, the inventory, the client records, a layout, and the catalog answer only once this settles: a
-   *  test holds those reads open. */
+  /** While set, the inventory, the client records, a layout, and the avatar and theme catalogs answer only once
+   *  this settles: a test holds those reads open. */
   readGate: Promise<void> | null = null;
 
   /** Hold the reads open until the answered function is called. */
@@ -165,6 +166,7 @@ export class FakeDesktopApi implements DesktopApi {
       color,
       glyph,
       wallpaper: null,
+      theme: null,
       shortcuts: [],
       windows: [],
     };
@@ -176,6 +178,33 @@ export class FakeDesktopApi implements DesktopApi {
     this.calls.push(`updateDesktopSettings:${desktopId}:${name}`);
     this.refuse();
     return this.replace({ ...this.desktop(desktopId), name, color, glyph });
+  }
+
+  async setDesktopTheme(desktopId: string, theme: string | null): Promise<Desktop> {
+    this.calls.push(`setDesktopTheme:${desktopId}:${theme ?? "null"}`);
+    this.refuse();
+    return this.replace({ ...this.desktop(desktopId), theme });
+  }
+
+  /** The workspace's themes, as a test sets them. */
+  themeCatalog: ThemeCatalog = EMPTY_THEME_CATALOG;
+  /** How many of the next theme catalog reads fail. */
+  themeReadFailures = 0;
+
+  async fetchThemes(): Promise<ThemeCatalog> {
+    this.calls.push("fetchThemes");
+    if (this.themeReadFailures > 0) {
+      this.themeReadFailures -= 1;
+      throw new Error("the themes could not be read");
+    }
+    if (this.readGate !== null) await this.readGate;
+    return this.themeCatalog;
+  }
+
+  async setDefaultTheme(theme: string | null): Promise<void> {
+    this.calls.push(`setDefaultTheme:${theme ?? "null"}`);
+    this.refuse();
+    this.themeCatalog = { ...this.themeCatalog, default: theme };
   }
 
   async setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<Desktop> {

@@ -1,0 +1,263 @@
+/* Classic Mac, part by part. system.css (vendor/system.css) draws the rounded push buttons, the
+   standard dialog, the fields, and the checkered scrollbars; this file draws the rest. */
+
+::selection {
+  background: #000000;
+  color: #ffffff;
+}
+code,
+pre,
+kbd {
+  font-family: var(--font-mono);
+}
+
+/* Windows: a one-pixel black frame with a one-pixel shadow; the page shows through the frame. */
+[data-part="window-frame"] {
+  border: 1px solid #000000;
+  background: transparent;
+}
+
+/* The title bar: white; the focused window's striped with six black lines between white margins, its
+   name centred on a white patch over the stripes, the close box at the left and the collapse and zoom
+   boxes at the right (the slots are this theme's [chrome]). */
+[data-part="title-bar"] {
+  gap: 0;
+  padding: 0 9px;
+  border-bottom: 1px solid #000000;
+  background: #ffffff;
+}
+[data-part="title-bar"][data-focused="true"] {
+  background: var(--theme-stripes) 2px 4px / calc(100% - 4px) 11px no-repeat, #ffffff;
+}
+[data-part="window-title"] {
+  padding: 0 6px;
+  background: #ffffff;
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 19px;
+  opacity: 1;
+  color: #000000;
+}
+[data-part="title-bar"][data-focused="false"] [data-part="window-title"] {
+  color: #808080;
+}
+
+/* Every control sits on a white patch that parts the stripes around it. */
+[data-part="window-control"] {
+  min-width: 0;
+  min-height: 0;
+  height: 11px;
+  width: 11px;
+  padding: 0;
+  margin: 0 0 0 6px;
+  border: 1px solid #000000;
+  border-image: none;
+  border-radius: 0;
+  background: #ffffff;
+  box-shadow: 0 0 0 2px #ffffff;
+  color: transparent;
+  translate: none;
+}
+[data-part="window-control"] > * {
+  display: none;
+}
+/* The boxes are drawn 11 pixels square, as System 7 drew them; the press reaches 3 pixels past each side. */
+[data-part="window-control"]:is([data-control="close"], [data-control="minimize"], [data-control="maximize"], [data-control="restore"]) {
+  position: relative;
+}
+[data-part="window-control"]:is([data-control="close"], [data-control="minimize"], [data-control="maximize"], [data-control="restore"])::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+}
+[data-part="window-control"]:active {
+  background: #000000;
+}
+[data-part="window-control"][data-control="close"] {
+  margin: 0;
+}
+[data-part="window-control"][data-control="close"]:active {
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='9' shape-rendering='crispEdges'%3E%3Cpath d='M4 0h1v3H4zM4 6h1v3H4zM0 4h3v1H0zM6 4h3v1H6zM1 1h1v1H1zM7 1h1v1H7zM1 7h1v1H1zM7 7h1v1H7zM2 2h1v1H2zM6 2h1v1H6zM2 6h1v1H2zM6 6h1v1H6z'/%3E%3C/svg%3E")
+    center no-repeat #ffffff;
+}
+/* The collapse box (System 7.5's window shade): two lines across the middle. */
+[data-part="window-control"][data-control="minimize"] {
+  background: linear-gradient(#000000, #000000) center 3px / 100% 1px no-repeat,
+    linear-gradient(#000000, #000000) center 5px / 100% 1px no-repeat, #ffffff;
+}
+/* The zoom box: a small box in the box's top-left corner. */
+[data-part="window-control"]:is([data-control="maximize"], [data-control="restore"]) {
+  background: linear-gradient(#000000, #000000) 5px 0 / 1px 6px no-repeat,
+    linear-gradient(#000000, #000000) 0 5px / 6px 1px no-repeat, #ffffff;
+}
+[data-part="window-control"]:is([data-control="minimize"], [data-control="maximize"], [data-control="restore"]):active {
+  background: #000000;
+}
+/* The window's own actions (reload, the window menu) keep their glyphs, and join the close box on one white
+   patch, so the stripes part once around the group rather than showing in stubs between its boxes. */
+[data-part="window-control"]:is([data-control="refresh"], [data-control="menu"]) {
+  height: 14px;
+  width: 16px;
+  margin-left: 4px;
+  border: none;
+  box-shadow: 0 0 0 2px #ffffff;
+  color: #000000;
+}
+[data-part="window-control"]:is([data-control="refresh"], [data-control="menu"]) > * {
+  display: block;
+}
+[data-part="window-control"]:is([data-control="refresh"], [data-control="menu"]):active {
+  color: #ffffff;
+}
+
+/* Push buttons: system.css's rounded button for anything with words on it; the default (primary)
+   button wears the thick ring Return would press. Icon-only buttons are bare glyphs that invert
+   while pressed. */
+[data-part="button"] {
+  font-family: var(--font-display);
+  font-weight: 400;
+  color: #000000;
+  background: #ffffff;
+  border-width: 5px;
+  transition: none;
+  translate: none;
+}
+[data-part="button"]:not(:disabled):hover {
+  background: #ffffff;
+}
+[data-part="button"]:not(:disabled):active {
+  background: #000000;
+  color: #ffffff;
+}
+[data-part="button"][data-variant="primary"] {
+  border-width: 8px;
+}
+[data-part="button"][data-shape="icon"] {
+  border: none;
+  border-image: none;
+  border-radius: 0;
+  background: transparent;
+}
+[data-part="button"][data-shape="icon"]:not(:disabled):hover {
+  background: rgb(0 0 0 / 0.08);
+}
+[data-part="button"][data-shape="icon"]:not(:disabled):active {
+  background: #000000;
+  color: #ffffff;
+}
+
+/* Check boxes: a white 12-pixel box with a one-pixel black edge, crossed by an X when checked, as System 7
+   drew them; radios keep the browser's, in black. */
+input[type="checkbox"] {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  flex: none;
+  border: 1px solid #000000;
+  border-radius: 0;
+  background: #ffffff;
+}
+input[type="checkbox"]:checked {
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' shape-rendering='crispEdges'%3E%3Cpath d='M0 0h1v1H0zM1 1h1v1H1zM2 2h1v1H2zM3 3h1v1H3zM4 4h2v2H4zM6 6h1v1H6zM7 7h1v1H7zM8 8h1v1H8zM9 9h1v1H9zM9 0h1v1H9zM8 1h1v1H8zM7 2h1v1H7zM6 3h1v1H6zM3 6h1v1H3zM2 7h1v1H2zM1 8h1v1H1zM0 9h1v1H0z'/%3E%3C/svg%3E")
+    center / 10px 10px no-repeat #ffffff;
+}
+input[type="checkbox"]:disabled {
+  border-color: #808080;
+}
+input[type="radio"] {
+  accent-color: #000000;
+}
+
+/* Fields: system.css's black box, in Geneva rather than the display face. */
+input,
+textarea,
+select {
+  font-family: var(--font-sans);
+  border-radius: 0;
+}
+
+/* Menus: a white card with a black edge and a hard shadow; the row under the pointer inverts. */
+[data-part="menu"] {
+  border: 1px solid #000000;
+  border-radius: 0;
+  box-shadow: 1px 1px 0 #000000;
+  padding: 2px 0;
+  font-family: var(--font-display);
+}
+[data-part="menu-item"] {
+  border-radius: 0;
+}
+[data-part="menu-item"]:not([aria-disabled="true"]):hover,
+[data-part="menu-item"]:not([aria-disabled="true"]):hover * {
+  background: #000000;
+  color: #ffffff;
+}
+
+/* Dialogs: system.css's standard dialog, a double black frame. */
+[data-part="dialog"] {
+  border: 2px solid #000000;
+  border-radius: 0;
+  box-shadow: 2px 2px 0 #000000;
+  outline: 1px solid #000000;
+  outline-offset: -6px;
+  padding: 12px;
+}
+
+/* The taskbar: a white strip ruled off from the desktop, the window you are in inverted. */
+[data-part="taskbar"] {
+  border-top: 1px solid #000000;
+  font-family: var(--font-display);
+}
+[data-part="taskbar-entry"] {
+  border-radius: 0;
+}
+[data-part="taskbar-entry"][data-focused="true"] {
+  background: #000000;
+  color: #ffffff;
+}
+[data-part="launcher-field"] {
+  background: #ffffff;
+  border: 1px solid #000000;
+  border-radius: 0;
+  box-shadow: 1px 1px 0 #000000;
+}
+
+/* Finder labels: black on a white patch that hugs the name. */
+[data-part="shortcut-label"] > * {
+  color: #000000;
+  background: #ffffff;
+  border-radius: 0;
+  padding: 0 2px;
+  font-weight: 400;
+}
+
+/* Lists: the current row inverted, as the Finder selects a file. */
+[data-part="list-row"][aria-current="true"],
+[data-part="list-row"][aria-current="true"] * {
+  background: #000000;
+  color: #ffffff;
+}
+
+/* Tiles: each a little window. */
+[data-part="tile"] {
+  border: 1px solid #000000;
+  box-shadow: 1px 1px 0 #000000;
+}
+[data-part="tile"]:hover {
+  box-shadow: 2px 2px 0 #000000;
+}
+[data-part="tile"][aria-pressed="true"] {
+  outline: 2px solid #000000;
+  outline-offset: 1px;
+}
+
+/* The avatar: drawn with the hard edge of a one-bit screen; a design drawn as a picture, in black and white. */
+[data-part="avatar"] {
+  shape-rendering: crispEdges;
+}
+[data-part="avatar"][data-avatar-kind="image"] {
+  filter: grayscale(1) contrast(8);
+  image-rendering: pixelated;
+}

@@ -30,6 +30,7 @@ import type {
   PresentUser,
   UpdateNoticeWire,
 } from "../model/records";
+import { parseThemeCatalog, type ThemeCatalog } from "../model/themes";
 
 /** The ops that reach the browser as messages: the transient ones, and those that put a window on this client's
  *  screen (applied to the files too; a phone shows the window, and a desktop acts only on a ``show`` of a
@@ -69,6 +70,8 @@ export interface SocketHandlers {
   onAvatarSelectionChanged(design: string): void;
   /** The update notice as the shell now holds it, null once the record is cleared. */
   onUpdateNoticeChanged(notice: UpdateNoticeWire | null): void;
+  /** The workspace's themes or its default theme changed (workspace-themes plan section 5.2). */
+  onThemesChanged(catalog: ThemeCatalog): void;
   onLayoutOp(event: LayoutOpEvent): void;
   /** The connected users, one entry per user, on connect and whenever someone joins or leaves. */
   onPresenceUpdated(users: PresentUser[]): void;
@@ -99,6 +102,7 @@ interface RawSocketEvent {
   client_id?: unknown;
   save_id?: unknown;
   entries?: unknown;
+  catalog?: unknown;
 }
 
 const LAYOUT_OP_NAMES: readonly string[] = ["refresh", "reload_system_interface", "show", "open", "focus"];
@@ -211,6 +215,9 @@ export class ShellSocket implements DesktopSocket {
         return;
       case "update_notice_changed":
         handlers.onUpdateNoticeChanged(parseUpdateNoticeChanged(event));
+        return;
+      case "themes_changed":
+        handlers.onThemesChanged(parseThemeCatalog(event.catalog));
         return;
       case "layout_op": {
         // A targeted op is for one client's windows; an untargeted one (a refresh of a whole app,

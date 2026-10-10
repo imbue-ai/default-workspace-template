@@ -1,0 +1,141 @@
+{
+  "source": "win95.css faff13b",
+  "license": "MIT",
+  "unpack": "files",
+  "files": {
+    "win95.css": {
+      "url": "https://raw.githubusercontent.com/AlexBSoft/win95.css/faff13b2788e9b44e92ac0d51433d2d878907f50/assets/win95.css",
+      "sha256": "fd5489c42eb855bb2970a2bdeb27096bca62f2e1e6e6fad358901c20b1b79ce4"
+    },
+    "LICENSE": {
+      "url": "https://raw.githubusercontent.com/AlexBSoft/win95.css/faff13b2788e9b44e92ac0d51433d2d878907f50/license.txt",
+      "sha256": "227db7da09e8ce4b9bd8192083b742aa47f3dfa2f11f2b547b3ec16ef40310ab"
+    },
+    "combo.png": {
+      "url": "https://raw.githubusercontent.com/AlexBSoft/win95.css/faff13b2788e9b44e92ac0d51433d2d878907f50/assets/combo.png",
+      "sha256": "c30a70fc49aaf0b03271fd792c8fd49f730257218c3c80ee86dfcc51496a4477"
+    },
+    "comboup.png": {
+      "url": "https://raw.githubusercontent.com/AlexBSoft/win95.css/faff13b2788e9b44e92ac0d51433d2d878907f50/assets/comboup.png",
+      "sha256": "357a5aeb20cde90512a2b277b79a617e8cdb0dbacaeec77b01fd5ff314a94b55"
+    },
+    "comboright.png": {
+      "url": "https://raw.githubusercontent.com/AlexBSoft/win95.css/faff13b2788e9b44e92ac0d51433d2d878907f50/assets/comboright.png",
+      "sha256": "b933a31eda85340371d7cc114112b7733695c8afa71838253c56530fb18b3fc7"
+    },
+    "comboleft.png": {
+      "url": "https://raw.githubusercontent.com/AlexBSoft/win95.css/faff13b2788e9b44e92ac0d51433d2d878907f50/assets/comboleft.png",
+      "sha256": "77f0b4edcec796b84e5004f8403c83856e77fdad0e69e9ebe8b7577a38a854af"
+    },
+    "background.bmp": {
+      "url": "https://raw.githubusercontent.com/AlexBSoft/win95.css/faff13b2788e9b44e92ac0d51433d2d878907f50/assets/background.bmp",
+      "sha256": "31dd25b2c1bbf93e4d77c535380eae4a21da563c3de1f57026becd74a1e8acde"
+    }
+  },
+  "css": "win95.css",
+  "licenseFile": "LICENSE",
+  "output": "win95.css",
+  "selectorMap": {
+    "btn": "[data-part=\"button\"]",
+    "btn-primary": "[data-part=\"button\"][data-variant=\"primary\"]",
+    "card": "[data-part=\"window-frame\"]",
+    "card-header": "[data-part=\"title-bar\"]",
+    "header-inactive": "[data-part=\"title-bar\"][data-focused=\"false\"]",
+    "dropdown-menu": "[data-part=\"menu\"]",
+    "dropdown-item": "[data-part=\"menu-item\"]",
+    "taskbar": "[data-part=\"taskbar\"]",
+    "form-95": "[data-part=\"field\"]",
+    "modal-content": "[data-part=\"dialog\"]",
+    "modal-header": "[data-part=\"dialog-header\"]",
+    "modal-title": "[data-part=\"dialog-title\"]",
+    "modal-footer": "[data-part=\"dialog-actions\"]"
+  },
+  "fontFamilies": {},
+  "droppedRules": [
+    {
+      "pattern": "^html$",
+      "why": "The library's demo landing page."
+    },
+    {
+      "pattern": "^header\\b",
+      "why": "The demo page's full-screen video header."
+    },
+    {
+      "pattern": "^input\\[type=\"(radio|checkbox)\"\\]$",
+      "why": "Moves every checkbox and radio off screen, for Bootstrap's custom labels the interface does not draw."
+    },
+    {
+      "pattern": "^\\.btn:(hover|focus|active)$",
+      "why": "Windows buttons keep their raised face under the pointer and after a click; the library sinks and dithers them on hover, focus, and press (with !important), so a clicked button stays sunk. The theme draws the pressed state."
+    },
+    {
+      "pattern": "^:-webkit-scrollbar",
+      "why": "A one-colon typo of the ::-webkit-scrollbar-button rule the library also spells correctly."
+    },
+    {
+      "pattern": "^\\.modal-header \\.btn",
+      "why": "Bootstrap's close button geometry; the interface's dialogs carry their own."
+    },
+    {
+      "pattern": "^#page-content$",
+      "why": "The demo page's content column."
+    }
+  ],
+  "droppedDeclarations": [
+    {
+      "selector": "^body$",
+      "property": "^(color|padding-bottom|background)$",
+      "why": "White text and room for the demo's fixed footer; the interface sets its own colors and fills the page."
+    },
+    {
+      "selector": "^\\.taskbar$",
+      "property": "^(margin|margin-right|position|bottom|width|z-index|padding)$",
+      "why": "The demo's footer placement; the desktop lays its taskbar out itself."
+    },
+    {
+      "selector": "^\\.dropdown-menu$",
+      "property": "^(display|margin-left|font-size)$",
+      "why": "Bootstrap opens its menus by toggling display; the interface mounts a menu only while it is open."
+    },
+    {
+      "selector": "^\\.btn$",
+      "property": "^padding$",
+      "why": "Sized for Bootstrap's own button padding; the interface's buttons bring theirs."
+    },
+    {
+      "selector": "^\\.modal-header$",
+      "property": "^height$",
+      "why": "The dialog header is as tall as its title."
+    },
+    {
+      "selector": "^\\.modal-content$",
+      "property": "^padding$",
+      "why": "The theme pads a dialog itself, so its header can run the full width."
+    },
+    {
+      "selector": "^\\.card$",
+      "property": "^(background|border|border-width|border-color|border-top-color|border-left-color|border-right-color|border-bottom-color|color)$",
+      "why": "A window's page is a frame laid under its chrome, so the frame paints no face over it; the theme draws the bevel around it."
+    },
+    {
+      "selector": "^\\.card-header$",
+      "property": "^(display|white-space|text-align|padding-top|padding-bottom|background)$",
+      "why": "The caption is the interface's flex row of icon, title, and controls; the theme draws the Windows 2000 gradient."
+    },
+    {
+      "selector": "^\\.header-inactive$",
+      "property": "^background$",
+      "why": "The theme draws the inactive gradient."
+    }
+  ],
+  "colors": [
+    [
+      "silver",
+      "#d4d0c8"
+    ],
+    [
+      "#c0c0c0",
+      "#d4d0c8"
+    ]
+  ]
+}

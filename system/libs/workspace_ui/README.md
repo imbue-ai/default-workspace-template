@@ -37,6 +37,17 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   `src/embed-contract.d.ts`: the Imbue Studio embed contract (the vendored source is
   aliased by each app's vite config); `src/terminalFocus.ts`: the focus grant
   the shell sends a framed page.
+- `src/themes/`: a page's side of workspace themes
+  (`docs/system/blueprint/workspace-themes/`): `parts.ts`, the contract's part
+  names and the attributes that mark an element as one; `themeClient.ts`, which
+  wears the theme the shell names (`shell:theme`) and remembers it unless it is
+  a preview; and
+  `themeBoot.ts`, the Vite plugin whose inline script wears the remembered theme
+  before a page's first paint. The themes themselves are folders under
+  `system/themes/`, not part of this library.
+- `src/page/`: the page kit, built by the shell's frontend into
+  `/_static/workspace_theme.css` and `/_static/workspace_theme.js`, which a page
+  built as plain HTML loads to wear the workspace's theme.
 - `src/search.ts`: `matchesQuery`, the one text match of the workspace's
   typeaheads (every whitespace token of the query occurring in one of the given
   texts, case-insensitively), which the desktop's launcher, the Getting Started

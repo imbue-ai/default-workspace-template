@@ -301,6 +301,7 @@ Unknown types are ignored; shipped types never change meaning.
 | shell to app | `shell:shown` / `shell:hidden` | `{}` |
 | shell to app | `shell:close-request` | `{}` |
 | shell to app | `shell:navigate` | `{"path"}`; desktop interface only, sent to a page that declared `navigation: true` |
+| shell to app | `shell:theme` | `{"theme", "revision", "isPreview"}`; desktop interface only: the workspace theme the page wears, sent after the handshake and on every change, with `isPreview` true for an unsaved Desktop-settings choice the page wears but does not remember (`docs/system/blueprint/workspace-themes/plan-workspace-themes.md` section 5.3); `connectToShell`'s `onTheme(theme, revision, isPreview)` receives it |
 | app to shell | `shell:capabilities` | `{"navigation"}`; sent once on connect; this model's shell ignores it |
 | app to shell | `shell:focused` | `{}` |
 | app to shell | `shell:location` | `{"path", "title"}`; the shell resolves the frame to its tab, remembers the path as that tab's last reported path, and relays it to the owning app's location route; this model's shell ignores `title` |

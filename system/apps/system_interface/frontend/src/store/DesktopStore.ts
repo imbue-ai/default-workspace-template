@@ -82,6 +82,14 @@ import {
   placedShortcutKey,
   withRoomMadeFor,
 } from "../geometry/grid";
+import {
+  chromeOf,
+  EMPTY_THEME_CATALOG,
+  resolveDesktopTheme,
+  type ThemeCatalog,
+  type ThemeChrome,
+  type ThemeRecord,
+} from "../model/themes";
 import type { GridDimensions, PlacedShortcut } from "../geometry/grid";
 import { placementOf } from "../geometry/stack";
 import {
@@ -121,6 +129,7 @@ import {
   resolveLaunchRun,
 } from "../reducers/shortcuts";
 import type { ThemeMetrics, RenderModes } from "../theme/metrics";
+import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import type {
   ActiveDesktopChangedEvent,
   ClientEntriesChangedEvent,
@@ -145,6 +154,10 @@ export interface DesktopApi {
   createDesktop(name: string, color: string, glyph: number): Promise<Desktop>;
   updateDesktopSettings(desktopId: string, name: string, color: string, glyph: number): Promise<Desktop>;
   setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<Desktop>;
+  setDesktopTheme(desktopId: string, theme: string | null): Promise<Desktop>;
+  /** The workspace's themes and its default (workspace-themes plan section 5.2). */
+  fetchThemes(): Promise<ThemeCatalog>;
+  setDefaultTheme(theme: string | null): Promise<void>;
   deleteDesktop(desktopId: string): Promise<string>;
   setDesktopShortcut(desktopId: string, shortcut: DesktopShortcut): Promise<Desktop>;
   moveDesktopShortcut(desktopId: string, app: string, launch: string, cell: GridCell): Promise<Desktop>;
@@ -335,6 +348,14 @@ interface ReleasedWatchedDrag {
 
 type Listener = () => void;
 
+/** The theme this client wears, and whether it is a choice Desktop settings shows without having saved it. */
+export interface ShownTheme {
+  readonly record: ThemeRecord;
+  readonly isPreview: boolean;
+}
+
+type ShownThemeListener = (shown: ShownTheme) => void;
+
 export class DesktopStore {
   private state: DesktopState;
   private metrics: ThemeMetrics;
@@ -344,6 +365,18 @@ export class DesktopStore {
   private isLauncherOpenNow = false;
   // Set when the shell had to seed a fresh desktop for this user at arrival; the notice shows once.
   private replacedDesktop: ReplacedDesktop | null = null;
+  /** A theme picked in a desktop's settings and not yet saved: shown while that desktop is on screen. */
+  private themePreview: { readonly desktopId: string; readonly choice: string | null } | null = null;
+  /** The workspace's themes as the shell last answered or pushed them. */
+  private themeCatalog: ThemeCatalog = EMPTY_THEME_CATALOG;
+  private hasThemeCatalog = false;
+  /** Until the first catalog arrives the client cannot know its theme, so a failed read is retried, further apart
+   *  each time. */
+  private readonly themeReadBackoff = new ReconnectBackoff();
+  private themeReadRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly shownThemeListeners = new Set<ShownThemeListener>();
+  /** The shown theme the listeners last heard. */
+  private lastShownTheme: ShownTheme | null = null;
   private readonly listeners = new Set<Listener>();
   private readonly saveIds = new SaveIdMinter();
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -365,6 +398,9 @@ export class DesktopStore {
   // push answers older than the push, and must not overwrite it.
   private avatarSelectionPushes = 0;
   private entryPushes = 0;
+  // Bumped by every pushed theme catalog and by every read of it as the read starts: a read answers only if neither
+  // came since.
+  private themeCatalogChanges = 0;
   // Resolved by the first app list to land: the bootstrap's inventory read, or the socket's ``apps_updated`` when
   // the socket is quicker; a deep link's open or launch waits for it.
   private readonly appsLoaded: Promise<void>;
@@ -708,9 +744,15 @@ export class DesktopStore {
     if (own !== undefined) this.takeShownHistory(own.shown_history);
   }
 
+  /** Schedule a redraw, telling the shown-theme listeners first when the shown theme changed. */
+  private redraw(): void {
+    this.noteShownTheme();
+    this.deps.redraw();
+  }
+
   private notifyListeners(): void {
     for (const listener of this.listeners) listener();
-    this.deps.redraw();
+    this.redraw();
     this.reportDetachedWindows();
   }
 
@@ -769,10 +811,15 @@ export class DesktopStore {
       },
       onUpdateNoticeChanged: (wire) =>
         this.dispatch({ type: "update_notice_changed", notice: wire === null ? null : noticeFromWire(wire) }),
+      onThemesChanged: (catalog) => {
+        this.themeCatalogChanges += 1;
+        this.takeThemeCatalog(catalog);
+      },
       onLayoutOp: (event) => this.handleLayoutOp(event),
       onPresenceUpdated: (users) => this.takePresence(users),
     });
     void this.loadAvatarSelection();
+    void this.loadThemes();
     const entryPushesBefore = this.entryPushes;
     // The arrival comes first: it may seed a desktop for this user, which the inventory read then includes.
     let arrival: ClientArrival | null;
@@ -855,6 +902,7 @@ export class DesktopStore {
       console.warn("[si] could not read the client records after reconnecting", error);
     }
     void this.loadAvatarSelection();
+    void this.loadThemes();
     const isRecordedKnown = recorded !== null && this.state.desktops.some((desktop) => desktop.id === recorded);
     // A solo shell stays on its window's desktop: the recorded one is the main window's, and a report from
     // any other desktop would omit the solo window, which the chrome reads as its return.
@@ -874,7 +922,7 @@ export class DesktopStore {
 
   private takePresence(users: PresentUser[]): void {
     applyPresence(users);
-    this.deps.redraw();
+    this.redraw();
   }
 
   private async applyDeepLink(link: DeepLink): Promise<void> {
@@ -1174,11 +1222,108 @@ export class DesktopStore {
 
   dismissReplacedDesktopNotice(): void {
     this.replacedDesktop = null;
-    this.deps.redraw();
+    this.redraw();
   }
 
   async setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<void> {
     this.takeDesktop(await this.deps.api.setDesktopWallpaper(desktopId, wallpaper));
+  }
+
+  /** The theme a desktop wears by its own choice; null wears the workspace's default. */
+  async setDesktopTheme(desktopId: string, theme: string | null): Promise<void> {
+    this.takeDesktop(await this.deps.api.setDesktopTheme(desktopId, theme));
+  }
+
+  /** The workspace's default theme; null wears the standard one. Every window hears the new catalog over the
+   *  socket; this one takes the new default at once, so it shows even while the socket is down. */
+  async setDefaultTheme(theme: string | null): Promise<void> {
+    await this.deps.api.setDefaultTheme(theme);
+    this.themeCatalogChanges += 1;
+    this.takeThemeCatalog({ ...this.themeCatalog, default: theme });
+  }
+
+  /** Read the workspace's themes again. */
+  async loadThemes(): Promise<void> {
+    if (this.themeReadRetryTimer !== null) clearTimeout(this.themeReadRetryTimer);
+    this.themeReadRetryTimer = null;
+    const change = ++this.themeCatalogChanges;
+    try {
+      const catalog = await this.deps.api.fetchThemes();
+      this.themeReadBackoff.reset();
+      if (change === this.themeCatalogChanges) this.takeThemeCatalog(catalog);
+    } catch (error) {
+      console.warn("[si] could not read the themes", error);
+      if (!this.hasThemeCatalog && change === this.themeCatalogChanges) {
+        this.themeReadRetryTimer = setTimeout(() => {
+          this.themeReadRetryTimer = null;
+          if (!this.hasThemeCatalog) void this.loadThemes();
+        }, this.themeReadBackoff.nextDelay());
+      }
+    }
+  }
+
+  private takeThemeCatalog(catalog: ThemeCatalog): void {
+    this.themeCatalog = catalog;
+    this.hasThemeCatalog = true;
+    this.redraw();
+  }
+
+  /** Whether `shownTheme()` names the theme this client should wear: the catalog has arrived and a desktop is on
+   *  screen. Before then it answers the standard look or the default, which is not yet known to be right. */
+  isShownThemeKnown(): boolean {
+    return this.hasThemeCatalog && activeDesktop(this.state) !== null;
+  }
+
+  getThemeCatalog(): ThemeCatalog {
+    return this.themeCatalog;
+  }
+
+  /** Show a theme choice on a desktop before it is saved: a theme id, or null for the workspace's default. */
+  previewDesktopTheme(desktopId: string, choice: string | null): void {
+    this.themePreview = { desktopId, choice };
+    this.redraw();
+  }
+
+  /** Go back to the desktop's saved theme. */
+  clearThemePreview(): void {
+    if (this.themePreview === null) return;
+    this.themePreview = null;
+    this.redraw();
+  }
+
+  /** The theme this client wears: the active desktop's (or the one previewed on it), resolved through the
+   *  workspace's default to an available theme, or the standard look. */
+  shownTheme(): ThemeRecord {
+    const desktop = activeDesktop(this.state);
+    const isPreviewed = desktop !== null && this.themePreview?.desktopId === desktop.id;
+    const choice = isPreviewed ? (this.themePreview?.choice ?? null) : (desktop?.theme ?? null);
+    return resolveDesktopTheme(this.themeCatalog, choice);
+  }
+
+  /** Hear the shown theme whenever it changes: another theme or revision, or a preview put on or taken off. A
+   *  listener hears the current one at once when it is known. */
+  onShownThemeChanged(listener: ShownThemeListener): () => void {
+    this.shownThemeListeners.add(listener);
+    if (this.lastShownTheme !== null) listener(this.lastShownTheme);
+    return () => void this.shownThemeListeners.delete(listener);
+  }
+
+  private noteShownTheme(): void {
+    if (!this.isShownThemeKnown()) return;
+    const desktop = activeDesktop(this.state);
+    const shown: ShownTheme = {
+      record: this.shownTheme(),
+      isPreview: desktop !== null && this.themePreview?.desktopId === desktop.id,
+    };
+    const last = this.lastShownTheme;
+    if (last !== null && last.record === shown.record && last.isPreview === shown.isPreview) return;
+    this.lastShownTheme = shown;
+    for (const listener of this.shownThemeListeners) listener(shown);
+  }
+
+  /** The title bar the shown theme draws (workspace-themes plan section 4.3). */
+  shownChrome(): ThemeChrome {
+    return chromeOf(this.shownTheme());
   }
 
   /** Delete a desktop; the shell moves this client to the fallback and says so over the socket. */

@@ -78,15 +78,20 @@ _FORWARD_PORT_PATH = (
     Path(__file__).resolve().parents[4] / "system/scripts/forward_port.py"
 )
 LOWEST_AUTO_PORT = 8080
-# The browser-side modules every app serves from its own origin (a module import is a fetch
-# without cookies, which the forwarder refuses across origins): the app contract and the
-# element context menu, built by the shell's frontend into its static output. Mirrors
-# app_manifest.registry's SHELL_APP_CONTRACT_PATH and SHELL_CONTEXT_MENU_PATH; the scaffold
+# The browser-side files every app serves from its own origin (a module import is a fetch
+# without cookies, which the forwarder refuses across origins): the app contract, the
+# element context menu and the page kit, built by the shell's frontend into its static
+# output. Mirrors app_manifest.registry's SHELL_*_PATH constants; the scaffold
 # runs in its own environment and cannot import the library, so it carries the path.
 SHELL_STATIC_MODULES_DIR = (
     "system/apps/system_interface/imbue/system_interface/static/_static"
 )
-SHELL_STATIC_MODULE_NAMES = ("app_contract.js", "context_menu.js")
+SHELL_STATIC_MODULE_NAMES = (
+    "app_contract.js",
+    "context_menu.js",
+    "workspace_theme.js",
+    "workspace_theme.css",
+)
 KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 # The <name> of data/.secrets/<name>.env, as the chat app's secret card and
 # app_manifest.primitives.SECRET_FILE_NAME_PATTERN spell it.
@@ -244,7 +249,13 @@ def _pick_port(
 
 
 def _format_dep_list(extras: Iterable[str]) -> str:
-    base = ['"flask>=3.0"', '"flask-sock>=0.7"', '"werkzeug>=3.0"']
+    # workspace-themes serves the workspace's themes from the app's own origin (the workspace-themes plan).
+    base = [
+        '"flask>=3.0"',
+        '"flask-sock>=0.7"',
+        '"werkzeug>=3.0"',
+        '"workspace-themes"',
+    ]
     extras_lines = [f'"{dep}"' for dep in extras]
     all_lines = base + extras_lines
     return ",\n    ".join(all_lines)
@@ -322,6 +333,7 @@ from pathlib import Path
 
 from flask import Flask, Response, abort, send_file
 from werkzeug.serving import run_simple
+from workspace_themes.flask_routes import register_workspace_theme_route
 
 # Persistent state for this app lives under DATA_DIR. It defaults to
 # ``data/.apps/{name}/`` but is overridable via the ``{env_var}`` env var
@@ -338,12 +350,14 @@ DATA_DIR = Path(os.environ.get("{env_var}", "data/.apps/{name}"))
 # Never hardcode the port at the ``run_simple`` call, or the override is bypassed.
 PORT = int(os.environ.get("{port_env_var}", "{port}"))
 
-# The browser-side modules the workspace shell builds and every app serves from
-# its own origin: the app contract (how a page talks to the shell framing it) and
+# The browser-side files the workspace shell builds and every app serves from
+# its own origin: the app contract (how a page talks to the shell framing it),
 # the element context menu (the right-click menu whose last rows hand the
-# clicked element to a chat). A module import is a fetch without cookies, which
-# the forwarder refuses across origins, so they are served here rather than from
-# the shell. Relative to the repo root the service runs from, like DATA_DIR.
+# clicked element to a chat), and the page kit (the script that wears the
+# workspace's theme, and the standard look's stylesheet). A module import is a
+# fetch without cookies, which the forwarder refuses across origins, so they are
+# served here rather than from the shell. Relative to the repo root the service
+# runs from, like DATA_DIR.
 SHELL_STATIC_MODULES_DIR = Path("{SHELL_STATIC_MODULES_DIR}")
 SHELL_STATIC_MODULE_NAMES = {SHELL_STATIC_MODULE_NAMES!r}
 
@@ -367,12 +381,25 @@ SHELL_PAGE_SCRIPT = """\
 </script>"""
 
 app = Flask("{package}", static_folder=None)
+# The workspace's themes, served from this origin at /_static/themes/ for the page kit to load.
+register_workspace_theme_route(app)
+
+# The page wears the workspace's theme (docs/system/blueprint/workspace-themes/): the kit's
+# stylesheet is the standard look, and its script, after it, loads the theme the page wears.
+# Build the page from the kit's parts and tokens -- data-part="button" (with data-variant),
+# "field", "tile", "list-row", "badge", and var(--c-...) for every color -- never a literal
+# color or font, so every theme dresses it (the build-app skill's references/theming.md).
+SHELL_PAGE_HEAD = """\
+<link rel="stylesheet" href="/_static/workspace_theme.css" />
+<script src="/_static/workspace_theme.js"></script>"""
 
 
 @app.route("/")
 def index() -> Response:
     return Response(
-        "<!doctype html><html><head><title>{name}</title></head><body>"
+        "<!doctype html><html><head><title>{name}</title>"
+        + SHELL_PAGE_HEAD
+        + "</head><body>"
         "<h1>{name}</h1>"
         "<p>{description}</p>"
         + SHELL_PAGE_SCRIPT
@@ -383,15 +410,16 @@ def index() -> Response:
 
 @app.route("/_static/<basename>")
 def shell_module(basename: str) -> Response:
-    # The two shell-built modules and nothing else: a name that is not one of
-    # them is a 404, so this route can never read outside that directory.
+    # The shell-built files and nothing else: a name that is not one of them
+    # is a 404, so this route can never read outside that directory.
     if basename not in SHELL_STATIC_MODULE_NAMES:
         abort(404)
     module_path = SHELL_STATIC_MODULES_DIR / basename
     if not module_path.is_file():
         abort(404)
+    mimetype = "text/css" if basename.endswith(".css") else "text/javascript"
     # Flask resolves a relative path against the app's own directory, not the cwd.
-    return send_file(module_path.absolute(), mimetype="text/javascript")
+    return send_file(module_path.absolute(), mimetype=mimetype)
 
 
 @app.route("/health")
@@ -575,6 +603,12 @@ program = "{name}"
 # (a background thread, a poller, a scheduled refresh, a subscription to an
 # outside service, a job that outlives the window): a stop loses that work.
 stop_when_no_windows = true
+
+# Built from the page kit's parts and tokens, so every workspace theme dresses it
+# (docs/system/blueprint/workspace-themes/, section 7). An app with a look of its
+# own declares mode = "parts" and the parts a theme may style.
+[theming]
+mode = "tokens"
 
 # How update-app boots a throwaway preview of this app: on a free port, over a
 # scratch copy of its data (see .agents/skills/update-app/scripts/preview_app.py).

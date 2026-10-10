@@ -6,6 +6,7 @@ from typing import Final
 import click
 from flask import Flask
 from pydantic import Field
+from workspace_themes.flask_routes import register_workspace_theme_route
 
 from app_manifest.primitives import AppName
 from app_manifest.primitives import AppUrl
@@ -53,6 +54,7 @@ class GettingStartedArguments(FrozenModel):
 
 def build_pages_app(arguments: GettingStartedArguments) -> Flask:
     app = Flask(__name__, static_folder=None)
+    register_workspace_theme_route(app)
     app.register_blueprint(
         build_pages_blueprint(
             static_directory=arguments.static_directory,

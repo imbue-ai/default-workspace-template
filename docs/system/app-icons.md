@@ -7,6 +7,12 @@ and a dock tab's leading glyph. The file sits beside the app's manifest as
 reads the file at registration and stores the *markup* on the registry row, so an icon
 changes whenever the app registers -- on its next restart, or at once if you run that
 script yourself. The shell watches the registry and redraws; it never needs rebuilding.
+This is the standard theme's icon guide. Every workspace theme has its own (Desktop
+settings > Theme; its `icons/guide.md`, under `system/themes/<id>/` or `themes/<id>/`, which
+`workspace-themes icon spec <theme>` prints), and under a theme the shell
+draws that theme's icon for the app, or one it derives from this one until the theme has
+its own (`docs/system/blueprint/workspace-themes/plan-workspace-themes.md`, section 6). The
+`make-theme-icon` skill draws a theme's icons.
 
 What follows is this workspace's default look, not a law of nature: the user can have a
 different one whenever they want it, and this doc is where that change starts. Rewrite the

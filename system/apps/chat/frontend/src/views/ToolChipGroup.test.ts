@@ -164,6 +164,15 @@ describe("the tool chip row", () => {
     expect(root.querySelector(".tool-chip-detail")).toBeNull();
   });
 
+  it("marks the open chip's panel as the chat's tool-call part, which themes style", () => {
+    mockDetailState.mockReturnValue(undefined);
+    const chips = [chip(read), chip(exec)];
+    mount(chips);
+
+    click(0, chips);
+    expect(root.querySelector(".tool-chip-detail")?.getAttribute("data-part")).toBe("chat.tool-call");
+  });
+
   it("puts the panel directly after the chip that opened it, inside the row", () => {
     mockDetailState.mockReturnValue(undefined);
     const chips = [chip(read), chip(exec), chip(unlabelled)];

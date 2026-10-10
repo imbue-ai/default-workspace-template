@@ -17,6 +17,7 @@
  */
 
 import { matchesQuery } from "@imbue/workspace-ui/src/search";
+import { appPartAttrs, partAttrsMarkup } from "@imbue/workspace-ui/src/themes/parts";
 
 export interface StartOption {
   /** Stable marker (``data-start``) and vnode key. */
@@ -163,13 +164,17 @@ export function glyphTones(option: StartOption): { stroke: string; fill: string 
   };
 }
 
+/** The glyph is the app's declared `start-glyph` part (its app.toml `[theming]`): a theme may recolor it. */
+const START_GLYPH_PART = appPartAttrs("getting-started", "start-glyph");
+
 /** A tile's glyph, in the shared stroke-outline frame: tinted in the tile's hue, or inheriting the
  *  text colour (the standing-down look) when ``isTinted`` is false. */
 export function startGlyph(option: StartOption, size: number, isTinted: boolean): string {
   const tones = glyphTones(option);
   const colours = isTinted ? `fill="${tones.fill}" stroke="${tones.stroke}"` : 'fill="none" stroke="currentColor"';
   return (
-    `<svg xmlns="${XMLNS}" width="${size}" height="${size}" viewBox="0 0 24 24" ${colours} ` +
+    `<svg xmlns="${XMLNS}" ${partAttrsMarkup(START_GLYPH_PART)} width="${size}" height="${size}" ` +
+    `viewBox="0 0 24 24" ${colours} ` +
     `stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
     `${option.glyphPaths}</svg>`
   );

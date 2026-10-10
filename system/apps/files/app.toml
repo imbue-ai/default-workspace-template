@@ -16,3 +16,7 @@ id = "new"
 label = "File Viewer"
 path = "/home/user/workspace/"
 params = [{name = "path", label = "Path", required = false}]
+
+# The File Viewer is dufs's own vendored page; the window around it is themed.
+[theming]
+mode = "none"

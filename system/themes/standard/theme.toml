@@ -1,0 +1,14 @@
+# The standard look, and the base every other theme starts from. Its tokens are the defaults compiled into
+# every app (system/libs/workspace_ui/src/base.css and the shell's theme/default.css), so it has no style files.
+contract = 1
+id = "standard"
+name = "Standard"
+description = "The workspace's own look: warm neutrals, a green accent, and hand-drawn two-color icon tiles."
+
+[icons]
+guide = "icons/guide.md"
+format = "svg"
+size = 216
+rendering = "smooth"
+background = "transparent"
+derive = "none"

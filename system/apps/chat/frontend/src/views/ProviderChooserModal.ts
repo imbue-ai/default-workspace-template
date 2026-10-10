@@ -36,7 +36,7 @@
 
 import m from "mithril";
 
-import { Button, buttonClass } from "@imbue/workspace-ui/src/components/Button";
+import { Button, buttonClass, buttonPartAttrs } from "@imbue/workspace-ui/src/components/Button";
 import { icon, loginSpinnerIcon, warningIcon } from "@imbue/workspace-ui/src/components/icons";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { MODAL_OVERLAY_CLASS } from "@imbue/workspace-ui/src/components/Modal";
@@ -65,6 +65,7 @@ import {
   submitCode,
   submitKey,
 } from "../models/Providers";
+import { FIELD_PART, partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { requestProviderRelay } from "../models/providerRelay";
 
 export interface ProviderChooserModalAttrs {
@@ -521,6 +522,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         "a",
         {
           class: buttonClass("primary", { block: true, extra: "gap-[7px]" }),
+          ...buttonPartAttrs("primary", false),
           href: url,
           target: "_blank",
           rel: "noopener noreferrer",
@@ -550,6 +552,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       m("div", { class: css.FIELD_ROW }, [
         m("input", {
           class: inputClass({ mono: true, extra: "flex-1" }),
+          ...FIELD_PART,
           type: "text",
           value: codeInput,
           // No placeholder. It read as an instruction about the code's SHAPE, and the shape
@@ -631,6 +634,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     const keyField = m("div", { class: css.FIELD_ROW }, [
       m("input", {
         class: inputClass({ mono: true, extra: "flex-1" }),
+        ...FIELD_PART,
         type: "password",
         value: keyInput,
         placeholder: withPicker ? (selected?.hint ?? "Paste your key") : (selected?.hint ?? "sk-..."),
@@ -979,9 +983,10 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
               "aria-modal": "true",
               "aria-label": "Pick your AI provider",
               "data-e2e": "provider-chooser",
+              ...partAttrs("dialog"),
             },
             m("div", { class: css.PANEL }, [
-              m("div", { class: css.HEADER }, [
+              m("div", { class: css.HEADER, ...partAttrs("dialog-header") }, [
                 current !== null
                   ? m(
                       Button,
@@ -989,7 +994,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                       m.trust(icon("chevron-left", { size: 16 })),
                     )
                   : null,
-                m("h2", { class: css.TITLE }, title),
+                m("h2", { class: css.TITLE, ...partAttrs("dialog-title") }, title),
                 // Which harness this connection will run on. Not a picker: provider ->
                 // harness is fixed in V1, so there is nothing to choose -- but it is still the
                 // fact you want before you hand over a credential, so the header states it.

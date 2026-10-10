@@ -1,0 +1,104 @@
+{
+  "source": "system.css 0.1.11",
+  "license": "MIT",
+  "unpack": "npm-tarball",
+  "files": {
+    "package.tgz": {
+      "url": "https://registry.npmjs.org/@sakun/system.css/-/system.css-0.1.11.tgz",
+      "sha256": "287604b3a1e2e757d9049ac5cfc6f3d8c952e0218bb2a73e57760f7535814034"
+    }
+  },
+  "css": "package/dist/system.css",
+  "licenseFile": "package/LICENSE",
+  "output": "system.css",
+  "selectorMap": {
+    "window": "[data-part=\"window\"]",
+    "title-bar": "[data-part=\"title-bar\"]",
+    "inactive-title-bar": "[data-part=\"title-bar\"][data-focused=\"false\"]",
+    "title": "[data-part=\"window-title\"]",
+    "btn": "[data-part=\"button\"]",
+    "btn-default": "[data-part=\"button\"][data-variant=\"primary\"]",
+    "standard-dialog": "[data-part=\"dialog\"]"
+  },
+  "droppedRules": [
+    {
+      "pattern": "^body$",
+      "why": "The demo page's grid backdrop; the desktop paints its own, and every app page its own."
+    },
+    {
+      "pattern": "^form$",
+      "why": "Sets every form in a monospace face."
+    },
+    {
+      "pattern": "^input\\[type=\"?[a-z-]+\"?\\]:focus-visible$",
+      "why": "Inverts a field to white on black while it has the focus, which leaves a chat composer black."
+    },
+    {
+      "pattern": "^textarea:focus$",
+      "why": "The same inversion for text areas."
+    },
+    {
+      "pattern": "^input\\[type=\"?(radio|checkbox)\"?\\]",
+      "why": "Hides every checkbox and radio for labels the desktop does not draw."
+    },
+    {
+      "pattern": "^\\.title-bar button",
+      "why": "The library's 40px close and resize boxes; the theme draws the title bar's controls on the contract's window-control part."
+    },
+    {
+      "pattern": "^\\[class",
+      "why": "Spacing between the demo page's form rows, selected by class name."
+    },
+    {
+      "pattern": "^\\.inactive-title-bar",
+      "why": "A background window's bar at its own height, with a 1.5rem title; the theme draws a background window's bar itself, at the --desk-title-bar-height metric."
+    },
+    {
+      "pattern": "^@font-face$",
+      "why": "system.css bundles ChicagoFLF, ChiKareGo2, FindersKeepers and a Monaco revival under no license this theme can confirm (Monaco is Apple's typeface), so the theme ships no font files; its type comes from installed faces through its own --font-* tokens."
+    }
+  ],
+  "droppedDeclarations": [
+    {
+      "selector": "^(input|select|\\.btn|\\.btn-default|\\.btn:disabled)$",
+      "property": "^(font-size|width|min-width|min-height)$",
+      "why": "18px type and fixed widths sized for the library's demo page; the interface sizes its own."
+    },
+    {
+      "selector": "^input$",
+      "property": "^padding-left$",
+      "why": "Fields bring their own padding, which leaves room for an icon inside them."
+    },
+    {
+      "selector": "^(\\.btn|\\.btn-default)$",
+      "property": "^padding$",
+      "why": "A 20px side padding would push the icon out of the interface's square icon buttons."
+    },
+    {
+      "selector": "^\\.window$",
+      "property": "^(margin|min-width|font-family|background-color|border|overflow)$",
+      "why": "A window is placed and sized by the desktop, and its page is a frame laid under its chrome, so the window paints no background or border over it."
+    },
+    {
+      "selector": "^(\\.heading|h1|h2)$",
+      "property": "^font-size$",
+      "why": "Demo-page heading sizes (h2 at twice the body); the interface and its apps size their own."
+    },
+    {
+      "selector": "^\\.title-bar \\.title$",
+      "property": "^font-size$",
+      "why": "The title bar's type size is the theme's."
+    },
+    {
+      "selector": "^\\.title-bar$",
+      "property": "^(height|margin|padding|background|background-clip|background-size)$",
+      "why": "The title bar's height is the --desk-title-bar-height metric, and its stripes are drawn by the theme so they stop at the controls."
+    },
+    {
+      "selector": ".*",
+      "property": "^font-family$",
+      "why": "The library's faces are its bundled ones, which the theme does not ship; the theme sets its type through --font-sans, --font-display and --font-mono, on the parts it styles."
+    }
+  ],
+  "colors": []
+}

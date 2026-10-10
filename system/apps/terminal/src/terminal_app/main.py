@@ -12,6 +12,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import log_span
 from pydantic import Field
 from workspace_layout.shell_url import shell_base_url
+from workspace_themes.flask_routes import register_workspace_theme_route
 
 from terminal_app.data_types import TerminalPaths
 from terminal_app.discovery import write_server_registered_event
@@ -99,6 +100,7 @@ def build_window_sweeper(source: TmuxSessionSource) -> WindowSweeper:
 
 def build_pages_app(source: TmuxSessionSource, sweeper: WindowSweeper) -> Flask:
     app = Flask(__name__, static_folder=None)
+    register_workspace_theme_route(app)
     app.register_blueprint(
         build_pages_blueprint(
             source=source,

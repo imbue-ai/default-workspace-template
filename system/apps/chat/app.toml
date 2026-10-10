@@ -67,6 +67,16 @@ params = [{name = "message", label = "Draft message", required = false}]
 presets = {target = "current_chat", is_draft = "true"}
 draft_param = "message"
 
+# The chat's own look beyond the shared components: themes may style these elements in their apps/chat.css
+# (docs/system/blueprint/workspace-themes/, section 7). Renaming one breaks the themes that style it.
+[theming]
+mode = "parts"
+parts = [
+    {name = "user-message", description = "A message the user sent, in its bubble"},
+    {name = "composer", description = "The box a message is typed in, with its buttons"},
+    {name = "tool-call", description = "A block showing a tool the agent called and what came back"},
+]
+
 # A chat's launch stacks on the ``chat`` create template the committed mngr settings hold, and the
 # chat's create defaults resolve beside that file, so a change to it can break chat creation.
 [[references]]
