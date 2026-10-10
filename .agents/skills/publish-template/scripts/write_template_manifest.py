@@ -228,6 +228,19 @@ def parse_skill_secrets(skill_text: str) -> list[dict[str, object]]:
     return entries
 
 
+def _paths_under_include(repo_root: Path, include_paths: list[str]) -> list[Path]:
+    """Every path an `--include` entry covers: the entry itself if it names a file,
+    or everything nested under it if it names a directory."""
+    paths: list[Path] = []
+    for include in include_paths:
+        base = repo_root / include
+        if base.is_file():
+            paths.append(base)
+        elif base.is_dir():
+            paths.extend(sorted(base.rglob("*")))
+    return paths
+
+
 def collect_declarations(
     repo_root: Path, include_paths: list[str]
 ) -> dict[str, SecretDeclaration]:
@@ -248,58 +261,61 @@ def collect_declarations(
             existing.note = f"{existing.note}; {note}" if existing.note else note
         existing.sources.append(source)
 
-    for include in include_paths:
-        base = repo_root / include
-        candidates = (
-            [base]
-            if base.is_file()
-            else sorted(base.rglob("*"))
-            if base.is_dir()
-            else []
-        )
-        for path in candidates:
-            relative = path.relative_to(repo_root).as_posix()
-            if path.name == APP_MANIFEST_NAME:
-                try:
-                    manifest = tomllib.loads(path.read_text(encoding="utf-8"))
-                except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
-                    raise SecretDeclarationError(
-                        f"{relative}: cannot read the app manifest: {e}"
-                    ) from e
-                for raw in manifest.get("secrets", []):
-                    file, variables, note = _validated_declaration(raw, relative)
-                    add(file, variables, note, relative)
-            elif path.name == SKILL_FILE_NAME:
-                for raw in parse_skill_secrets(
-                    path.read_text(encoding="utf-8", errors="replace")
-                ):
-                    file, variables, note = _validated_declaration(raw, relative)
-                    add(file, variables, note, relative)
+    for path in _paths_under_include(repo_root, include_paths):
+        relative = path.relative_to(repo_root).as_posix()
+        if path.name == APP_MANIFEST_NAME:
+            try:
+                manifest = tomllib.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+                raise SecretDeclarationError(
+                    f"{relative}: cannot read the app manifest: {e}"
+                ) from e
+            for raw in manifest.get("secrets", []):
+                file, variables, note = _validated_declaration(raw, relative)
+                add(file, variables, note, relative)
+        elif path.name == SKILL_FILE_NAME:
+            for raw in parse_skill_secrets(
+                path.read_text(encoding="utf-8", errors="replace")
+            ):
+                file, variables, note = _validated_declaration(raw, relative)
+                add(file, variables, note, relative)
     return declaration_by_file
 
 
 def _conf_scan_text(text: str) -> str:
     """A `.conf` file's text with `#`-comment lines blanked out.
 
-    Supervisord drop-ins routinely document which `data/.secrets/<file>.env` a
-    program reads in a leading comment (e.g. "injected by the minds app" for a
-    base-template service that is never part of an `--include` set and whose
-    secret is supplied by the platform, not an adopter) -- a mention that is
-    not a `with_secrets.py` wrapper invocation and must not trip the
-    undeclared-reference check. Only `command=` (and similar) lines are real
-    references; blanking comment lines before the regex scan keeps the line
-    numbers stable (irrelevant here, but cheap) while dropping only prose.
+    An included drop-in can document which `data/.secrets/<file>.env` a program
+    reads in a leading comment -- not a `with_secrets.py` wrapper invocation, so
+    it must not trip the undeclared-reference check. Only `command=` (and
+    similar) lines are real references; blanking comment lines before the regex
+    scan keeps line numbers stable (irrelevant here, but cheap) while dropping
+    only prose.
     """
     return "\n".join("" if line.lstrip().startswith("#") else line for line in text.splitlines())
 
 
-def collect_references(repo_root: Path) -> dict[str, list[str]]:
-    """Every secret file the snapshot's MCP config and supervisord programs name, with where."""
+def collect_references(
+    repo_root: Path, include_paths: list[str]
+) -> dict[str, list[str]]:
+    """Every secret file the snapshot's MCP config and the template's own
+    supervisord programs name, with where.
+
+    `MCP_SERVERS_FILE` is generated fresh for every template, so it is always
+    scanned. `.conf` drop-ins are scoped to `include_paths` the same way
+    `collect_declarations` scopes its own scan: the assembled tree always also
+    carries the base template's own always-present programs (host-backup,
+    share-gateway, ...), which are not part of what this template is adding and
+    which no included `app.toml`/`SKILL.md` could ever declare.
+    """
     sources_by_file: dict[str, list[str]] = {}
     candidates = [repo_root / MCP_SERVERS_FILE]
     dropins = repo_root / SUPERVISORD_DROPIN_DIRECTORY
     if dropins.is_dir():
-        candidates.extend(sorted(dropins.glob("*.conf")))
+        included = set(_paths_under_include(repo_root, include_paths))
+        candidates.extend(
+            path for path in sorted(dropins.glob("*.conf")) if path in included
+        )
     for path in candidates:
         if not path.is_file():
             continue
@@ -542,7 +558,7 @@ def main(argv: list[str] | None = None) -> int:
         declarations = collect_declarations(repo_root, list(args.include))
         problems = check_declarations(
             declarations,
-            collect_references(repo_root),
+            collect_references(repo_root, list(args.include)),
             Path(args.workspace_dir) if args.workspace_dir else None,
         )
     except SecretDeclarationError as e:

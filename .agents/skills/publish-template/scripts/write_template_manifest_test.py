@@ -90,21 +90,61 @@ def test_references_are_read_off_mcp_config_and_supervisord_programs(
         '{"mcpServers": {"w": {"command": "python3", "args": ["/home/user/workspace/system/scripts/with_secrets.py", "/home/user/workspace/data/.secrets/widget.env", "--", "npx", "w"]},'
         ' "h": {"url": "https://mcp.example.com/mcp", "headers": {"Authorization": "Bearer ${HOSTED_KEY}"}, "secretsFile": "/home/user/workspace/data/.secrets/hosted.env"}}}'
     )
-    assert writer.collect_references(root) == {
+    assert writer.collect_references(
+        root, ["system/supervisord.conf.d/widget-app.conf"]
+    ) == {
         "widget": ["mcp-servers.json", "system/supervisord.conf.d/widget-app.conf"],
         "hosted": ["mcp-servers.json"],
+    }
+
+
+def test_a_conf_file_outside_the_include_paths_is_not_a_reference(
+    tmp_path: Path,
+) -> None:
+    # `build_template.sh` assembles every template on top of the full base
+    # template tree, so system/supervisord.conf.d/ in the assembled snapshot
+    # always also carries the base's own always-present programs (host-backup,
+    # share-gateway, ...) regardless of whether the template's own --include
+    # list ever named them. Those are not part of what the template is adding,
+    # so a secret they reference must not trip the undeclared-reference check.
+    root = _tree(tmp_path)
+    (root / "system/supervisord.conf.d/host-backup.conf").write_text(
+        "[program:host-backup]\ncommand=uv run with_secrets.py data/.secrets/restic.env -- host-backup\n"
+    )
+    assert writer.collect_references(
+        root, ["system/supervisord.conf.d/widget-app.conf"]
+    ) == {
+        "widget": ["system/supervisord.conf.d/widget-app.conf"],
+    }
+
+
+def test_an_included_conf_file_with_an_undeclared_reference_still_fails(
+    tmp_path: Path,
+) -> None:
+    root = _tree(tmp_path)
+    (root / "system/supervisord.conf.d/host-backup.conf").write_text(
+        "[program:host-backup]\ncommand=uv run with_secrets.py data/.secrets/restic.env -- host-backup\n"
+    )
+    assert writer.collect_references(
+        root,
+        [
+            "system/supervisord.conf.d/widget-app.conf",
+            "system/supervisord.conf.d/host-backup.conf",
+        ],
+    ) == {
+        "widget": ["system/supervisord.conf.d/widget-app.conf"],
+        "restic": ["system/supervisord.conf.d/host-backup.conf"],
     }
 
 
 def test_a_conf_comment_mentioning_a_secrets_file_is_not_a_reference(
     tmp_path: Path,
 ) -> None:
-    # A base-template service (e.g. host-backup) whose secret is injected by the
-    # platform, not an app/skill declaration, documents the file it reads in a
-    # comment -- never a `with_secrets.py` wrapper on the `command=` line. That
-    # comment must not trip the undeclared-reference check for every template
-    # build, since no included app.toml/SKILL.md could ever declare a file no
-    # adopter supplies themselves.
+    # A service whose secret is injected by the platform, not an app/skill
+    # declaration, documents the file it reads in a comment -- never a
+    # `with_secrets.py` wrapper on the `command=` line. That comment must not
+    # trip the undeclared-reference check even when the drop-in itself is in
+    # the template's own include set.
     root = tmp_path / "repo"
     (root / "system/supervisord.conf.d").mkdir(parents=True)
     (root / "system/supervisord.conf.d/host-backup.conf").write_text(
@@ -112,7 +152,10 @@ def test_a_conf_comment_mentioning_a_secrets_file_is_not_a_reference(
         "[program:host-backup]\n"
         "command=uv run host-backup\n"
     )
-    assert writer.collect_references(root) == {}
+    assert (
+        writer.collect_references(root, ["system/supervisord.conf.d/host-backup.conf"])
+        == {}
+    )
 
 
 def test_an_undeclared_reference_and_a_missing_variable_stop_the_publish(
@@ -139,19 +182,25 @@ def test_a_complete_workspace_passes_and_the_check_is_skipped_without_one(
     tmp_path: Path,
 ) -> None:
     root = _tree(tmp_path)
-    declarations = writer.collect_declarations(root, ["system/apps/widget_app"])
+    include_paths = [
+        "system/apps/widget_app",
+        "system/supervisord.conf.d/widget-app.conf",
+    ]
+    declarations = writer.collect_declarations(root, include_paths)
     workspace = _workspace(
         tmp_path,
         {"widget": "export WIDGET_TOKEN='t'\n", "mailer": "SMTP_PASSWORD='p'\n"},
     )
     assert (
         writer.check_declarations(
-            declarations, writer.collect_references(root), workspace
+            declarations, writer.collect_references(root, include_paths), workspace
         )
         == []
     )
     assert (
-        writer.check_declarations(declarations, writer.collect_references(root), None)
+        writer.check_declarations(
+            declarations, writer.collect_references(root, include_paths), None
+        )
         == []
     )
 
@@ -242,6 +291,8 @@ def test_main_refuses_an_undeclared_reference_and_writes_nothing(
             "template.svg",
             "--include",
             "system/apps/widget_app",
+            "--include",
+            "system/supervisord.conf.d/ghost.conf",
             "--repo-root",
             str(root),
             "--output",
@@ -251,3 +302,48 @@ def test_main_refuses_an_undeclared_reference_and_writes_nothing(
     assert status == 1
     assert "ghost" in capsys.readouterr().err
     assert not output.exists()
+
+
+def test_main_ignores_a_base_template_program_outside_the_include_set(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # build_template.sh assembles every template on top of the full base tree, so
+    # system/supervisord.conf.d/ always also carries base-template-only programs
+    # like host-backup, regardless of the template's own --include list. Those
+    # must not fail the publish just for existing in the assembled snapshot.
+    root = _tree(tmp_path)
+    (root / "system/supervisord.conf.d/host-backup.conf").write_text(
+        "command=uv run with_secrets.py data/.secrets/restic.env -- host-backup\n"
+    )
+    workspace = _workspace(
+        tmp_path, {"widget": "WIDGET_TOKEN='t'\n", "mailer": "SMTP_PASSWORD='p'\n"}
+    )
+    output = tmp_path / "template.toml"
+    status = writer.main(
+        [
+            "--slug",
+            "w",
+            "--title",
+            "W",
+            "--description",
+            "d",
+            "--version",
+            "v1",
+            "--format",
+            "v2",
+            "--thumbnail",
+            "template.svg",
+            "--include",
+            "system/apps/widget_app",
+            "--include",
+            "system/supervisord.conf.d/widget-app.conf",
+            "--repo-root",
+            str(root),
+            "--workspace-dir",
+            str(workspace),
+            "--output",
+            str(output),
+        ]
+    )
+    assert status == 0, capsys.readouterr().err
+    assert output.exists()
