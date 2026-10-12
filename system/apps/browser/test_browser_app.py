@@ -2,6 +2,7 @@
 launch path, served by the real Flask app over the real manager and bridge (started once by
 the conftest); the one create captures the launch it would spawn instead of starting Chromium."""
 
+import re
 from pathlib import Path
 
 import pytest
@@ -24,11 +25,10 @@ def test_the_daemon_names_itself_after_its_manifest() -> None:
     assert manifest.window_closed_path == runner.WINDOW_CLOSED_PATH
 
 
-def test_the_viewer_page_imports_the_app_contract_from_its_own_origin() -> None:
+def test_the_viewer_page_is_served_uncached() -> None:
     response = runner.application.test_client().get("/")
 
     assert response.status_code == 200
-    assert 'import("/_static/app_contract.js")' in response.text
     assert response.headers["Cache-Control"] == "no-store"
 
 
@@ -166,6 +166,8 @@ def test_close_tab_closes_the_shown_tab_of_a_running_browser_and_refuses_the_res
 def test_the_viewer_module_script_reads_no_state_from_the_classic_script() -> None:
     """The shell-contract block is a module: it cannot see the viewer closure's names."""
     page = (Path(__file__).parent / "src" / "browser" / "assets" / "index.html").read_text()
-    module_block = page.split('<script type="module">', 1)[1].split("</script>", 1)[0]
+    found = re.search(r'<script type="module"[^>]*>(.*?)</script>', page, re.DOTALL)
+    assert found is not None
+    module_block = found.group(1)
     assert "browserId" not in module_block
     assert '"browsers/" + session + "/close-tab"' in module_block

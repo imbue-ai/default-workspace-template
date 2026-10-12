@@ -41,15 +41,29 @@ function pressEscape(): void {
   m.redraw.sync();
 }
 
-/** A fresh fake shell whose home desktop holds win-1 (pulled out when ``isDetached``), a store started over it
- *  (opened to show ``soloWindowId`` alone when given), and the App mounted over the store. */
-async function mountApp(options: { isDetached?: boolean; soloWindowId?: string } = {}): Promise<void> {
+/** A fresh fake shell whose home desktop holds win-1 (pulled out when ``isDetached``) and any ``laterWindowIds``
+ *  stacked in front of it, a store started over it (opened to show ``soloWindowId`` alone when given), and the
+ *  App mounted over the store. */
+async function mountApp(
+  options: { isDetached?: boolean; soloWindowId?: string; laterWindowIds?: readonly string[] } = {},
+): Promise<void> {
   api = new FakeDesktopApi();
   socket = new FakeDesktopSocket();
-  api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
+  const laterWindowIds = options.laterWindowIds ?? [];
+  api.desktops = [
+    desktopRecord("home", {
+      windows: [
+        windowRecord("win-1", "docs", "/a"),
+        ...laterWindowIds.map((windowId) => windowRecord(windowId, "docs", `/${windowId}`)),
+      ],
+    }),
+  ];
   api.writeLayout("home", CLIENT, {
     updated_at: null,
-    placements: [placementRecord("win-1", { is_detached: options.isDetached === true })],
+    placements: [
+      placementRecord("win-1", { is_detached: options.isDetached === true }),
+      ...laterWindowIds.map((windowId) => placementRecord(windowId)),
+    ],
   });
   store = new DesktopStore({
     clientId: CLIENT,
@@ -256,13 +270,13 @@ describe("a window drag", () => {
       document.querySelector('iframe[data-live-page="win-1"]')?.parentElement as HTMLElement;
     measureContent();
     m.redraw.sync();
-    expect(pageOf().style.display).toBe("");
+    expect(pageOf().style.visibility).toBe("");
     store.setCanPopOut(true);
     const listener = gestureListener as GestureListener;
     listener.onBegin(binding, { x: 100, y: 60 }, { x: 100, y: 60 });
     store.setTearOut("win-1", "out");
     m.redraw.sync();
-    expect(pageOf().style.display).toBe("none");
+    expect(pageOf().style.visibility).toBe("hidden");
     store.setTearOut("win-1", "released");
     m.redraw.sync();
     expect(store.getGesture()).toBeNull();
@@ -270,7 +284,7 @@ describe("a window drag", () => {
     m.redraw.sync();
     measureContent();
     m.redraw.sync();
-    expect(pageOf().style.display).toBe("");
+    expect(pageOf().style.visibility).toBe("");
   });
 
   it("turns window motion off for the press and back on when it ends", () => {
@@ -356,6 +370,46 @@ describe("a window's travel", () => {
 
     expect(scheduled).not.toHaveBeenCalled();
     scheduled.mockRestore();
+  });
+
+  it("covers a page once the window travelling over it lands, when another window's travel ends by leaving", async () => {
+    unmountViews();
+    await mountApp({ laterWindowIds: ["win-2", "win-3"] });
+    store.setBackdropSize({ width: 1000, height: 800 });
+    m.redraw.sync();
+    const chromeOf = (windowId: string): HTMLElement =>
+      document.querySelector(`[data-window-id="${windowId}"]`) as HTMLElement;
+    const measure = (element: Element, box: { left: number; top: number; width: number; height: number }): void => {
+      element.getBoundingClientRect = () => box as DOMRect;
+    };
+    // Both win-1 and win-2 sit at the first cascade frame of the 1000x800 backdrop, but win-2 is still drawn on
+    // its way there from the bottom right.
+    measure(chromeOf("win-1"), { left: 50, top: 48, width: 600, height: 560 });
+    for (const windowId of ["win-1", "win-2"]) {
+      measure(chromeOf(windowId).querySelector("[data-window-content]") as Element, {
+        left: 50,
+        top: 84,
+        width: 600,
+        height: 524,
+      });
+    }
+    measure(chromeOf("win-2"), { left: 600, top: 450, width: 400, height: 350 });
+    m.redraw.sync();
+    const frame = requestAnimationFrame.bind(globalThis);
+    await twoFrames(frame);
+    const coveredPage = document.querySelector('iframe[data-live-page="win-1"]')?.parentElement as HTMLElement;
+    expect(coveredPage.style.visibility).toBe("");
+
+    const leaving = chromeOf("win-3");
+    leaving.dispatchEvent(new Event("transitionrun", { bubbles: true }));
+    chromeOf("win-2").dispatchEvent(new Event("transitionrun", { bubbles: true }));
+    measure(chromeOf("win-2"), { left: 50, top: 48, width: 600, height: 560 });
+    chromeOf("win-2").dispatchEvent(new Event("transitionend", { bubbles: true }));
+    // Out of the document mid-travel, the way a window closed while travelling leaves: its travel ends in the
+    // follow's frame rather than with an event, and that is when nothing is travelling any more.
+    leaving.remove();
+    await twoFrames(frame);
+    expect(coveredPage.style.visibility).toBe("hidden");
   });
 });
 
@@ -823,7 +877,7 @@ describe("a solo shell", () => {
     const host = document.querySelector('[data-solo-window="win-1"] .live-pages') as HTMLElement;
     resizeHost(host, 1000, 800);
     const page = document.querySelector('iframe[data-live-page="win-1"]')?.parentElement as HTMLElement;
-    expect(page.style.display).toBe("");
+    expect(page.style.visibility).toBe("");
     expect(page.style.pointerEvents).toBe("auto");
     expect([page.style.left, page.style.top, page.style.width, page.style.height]).toEqual([
       "0px",
@@ -882,7 +936,7 @@ describe("the switch to the phone layout", () => {
     const host = document.querySelector("[data-phone-page-host] .live-pages") as HTMLElement;
     resizeHost(host, 393, 760);
     const page = document.querySelector('iframe[data-live-page="win-1"]')?.parentElement as HTMLElement;
-    expect([page.style.display, page.style.width, page.style.height]).toEqual(["", "393px", "760px"]);
+    expect([page.style.visibility, page.style.width, page.style.height]).toEqual(["", "393px", "760px"]);
     resizeHost(host, 393, 420);
     expect([page.style.width, page.style.height]).toEqual(["393px", "420px"]);
     resizeHost(host, 852, 300);
