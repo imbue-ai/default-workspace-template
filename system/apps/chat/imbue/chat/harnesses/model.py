@@ -376,8 +376,8 @@ class HarnessModelResolver(ABC):
         account exists -- a classmethod for the same reason: there is no agent to build from. The
         default is None, the honest answer for a harness whose catalog is static and the same on
         every account of it (claude, pi): the catalog is the offer, and the account changes nothing
-        about it. A harness whose set is account-derived (codex) overrides this and asks the
-        account.
+        about it. A harness whose set is account-derived (codex, or claude on a gateway account)
+        overrides this and asks the account.
         """
         return None
 
@@ -387,7 +387,8 @@ class HarnessModelResolver(ABC):
         A dynamic harness (codex) has no static catalog: its model set, each model's efforts, and
         fast support are all account/daemon-derived, so ids alone (:meth:`list_offered_models`)
         cannot carry the per-model effort/fast the picker needs. Such a harness overrides this to
-        return the full :class:`ModelOption`s, fetched fresh per picker-open (D2). The default --
+        return the full :class:`ModelOption`s, fetched fresh per picker-open (D2); claude does the
+        same for an account that points it at a gateway. The default --
         for a static, catalog-backed harness (claude, pi) -- returns None: the picker renders the
         catalog options (narrowed by :meth:`list_offered_models`)."""
         return None

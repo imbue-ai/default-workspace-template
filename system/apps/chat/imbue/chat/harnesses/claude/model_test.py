@@ -7,7 +7,7 @@ from typing import Any
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.claude.model import CLAUDE_CATALOG
 from imbue.chat.harnesses.claude.model import ClaudeModelResolver
-from imbue.chat.harnesses.claude.model import _CLAUDE_EFFORTS
+from imbue.chat.harnesses.claude.model import CLAUDE_EFFORTS
 from imbue.chat.harnesses.claude.model import _get_agent_fast_mode_write_path
 from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelIdentity
@@ -115,7 +115,7 @@ def test_every_option_declares_the_full_effort_set() -> None:
     # Sonnet 4.5 rejects the axis), and match_option shrugs on a level the option does not
     # declare -- so guessing narrow risks a shrug and buys nothing, since a hidden option's
     # effort set is never shown in a picker. supports_fast deliberately goes the other way.
-    declared = {choice.level for choice in _CLAUDE_EFFORTS}
+    declared = {choice.level for choice in CLAUDE_EFFORTS}
     for option in CLAUDE_CATALOG.options:
         assert {choice.level for choice in option.efforts} == declared
 

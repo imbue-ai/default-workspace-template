@@ -21,6 +21,7 @@ from imbue.chat.harnesses.auth_flows import FlowError
 from imbue.chat.harnesses.auth_flows import FlowShape
 from imbue.chat.harnesses.auth_flows import FlowState
 from imbue.chat.harnesses.auth_flows import flow_shape
+from imbue.chat.harnesses.claude.gateway_models import Gateway
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import get_method
 from imbue.chat.harnesses.registry import build_account_binding
@@ -33,7 +34,9 @@ from imbue.chat.testing import FakePexpectProcess
 def service(tmp_path: Path) -> AuthFlowService:
     work_dir = tmp_path / "workspace"
     work_dir.mkdir()
-    return AuthFlowService.create(home=tmp_path, work_dir=work_dir, probe=lambda *_a: SignedIn.YES)
+    return AuthFlowService.create(
+        home=tmp_path, work_dir=work_dir, probe=lambda *_a: SignedIn.YES, gateway_check=lambda _gateway: True
+    )
 
 
 # Full length on purpose: the agy scrape sets a min_length floor precisely so a wrapped
@@ -115,6 +118,25 @@ def test_a_claude_key_lands_in_the_account_settings_env(service: AuthFlowService
     (account,) = read_index(tmp_path).accounts
     settings = json.loads((tmp_path / ".minds" / "accounts" / account.id / "settings.json").read_text())
     assert settings["env"]["ANTHROPIC_API_KEY"] == "sk-ant-xyz"
+
+
+def test_a_concentrate_key_is_written_with_concentrates_address(service: AuthFlowService, tmp_path: Path) -> None:
+    """The user pastes only a key; the lane supplies the gateway address claude needs to reach it."""
+    started = service.start("concentrate", "api_key")
+    service.submit_key(started.flow_id, "sk-cn-xyz", None)
+    (account,) = read_index(tmp_path).accounts
+    assert account.display == "Concentrate AI"
+    assert harness_for(account) is HarnessType.CLAUDE
+    settings = json.loads((tmp_path / ".minds" / "accounts" / account.id / "settings.json").read_text())
+    assert settings["env"] == {"ANTHROPIC_API_KEY": "sk-cn-xyz", "ANTHROPIC_BASE_URL": "https://api.concentrate.ai"}
+
+
+def test_a_plain_anthropic_key_gets_no_gateway_address(service: AuthFlowService, tmp_path: Path) -> None:
+    started = service.start("anthropic", "api_key")
+    service.submit_key(started.flow_id, "sk-ant-xyz", None)
+    (account,) = read_index(tmp_path).accounts
+    settings = json.loads((tmp_path / ".minds" / "accounts" / account.id / "settings.json").read_text())
+    assert "ANTHROPIC_BASE_URL" not in settings["env"]
 
 
 def test_a_codex_key_lands_in_the_account_auth_json(service: AuthFlowService, tmp_path: Path) -> None:
@@ -313,6 +335,147 @@ def test_a_probe_that_cannot_run_does_not_throw_the_key_away(tmp_path: Path) -> 
 
     assert status.state is FlowState.OK
     assert len(read_index(tmp_path).accounts) == 1
+
+
+def test_a_concentrate_key_the_gateway_refuses_fails_at_the_field(tmp_path: Path) -> None:
+    """The probe only reads the folder; the gateway is the one that knows whether a key works."""
+    service = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES, gateway_check=lambda _gateway: False
+    )
+    started = service.start("concentrate", "api_key")
+
+    status = service.submit_key(started.flow_id, "sk-wrong", None)
+
+    assert status.state is FlowState.FAILED
+    assert read_index(tmp_path).accounts == ()
+
+
+def test_a_concentrate_key_is_checked_against_the_gateway_with_the_key_written(tmp_path: Path) -> None:
+    asked: list[Gateway] = []
+
+    def gateway_check(gateway: Gateway) -> bool:
+        asked.append(gateway)
+        return True
+
+    service = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES, gateway_check=gateway_check
+    )
+    started = service.start("concentrate", "api_key")
+
+    service.submit_key(started.flow_id, "sk-cn-xyz", None)
+
+    assert asked == [Gateway(base_url="https://api.concentrate.ai", api_key="sk-cn-xyz")]
+    assert len(read_index(tmp_path).accounts) == 1
+
+
+def test_a_gateway_check_that_cannot_run_does_not_throw_the_key_away(tmp_path: Path) -> None:
+    service = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES, gateway_check=lambda _gateway: None
+    )
+    started = service.start("concentrate", "api_key")
+
+    service.submit_key(started.flow_id, "sk-cn-xyz", None)
+
+    assert len(read_index(tmp_path).accounts) == 1
+
+
+def test_a_concentrate_re_auth_key_the_gateway_refuses_puts_the_working_one_back(tmp_path: Path) -> None:
+    """The gateway refusal takes the same rollback as a probe refusal: the folder is a live account."""
+    answers = [True, False]
+    service = AuthFlowService.create(
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        probe=lambda *_a: SignedIn.YES,
+        gateway_check=lambda _gateway: answers.pop(0),
+    )
+    started = service.start("concentrate", "api_key")
+    service.submit_key(started.flow_id, "sk-cn-good", None)
+    (account,) = read_index(tmp_path).accounts
+    path = tmp_path / ".minds" / "accounts" / account.id / "settings.json"
+    accepted = path.read_text()
+    assert "sk-cn-good" in accepted
+
+    again = service.start("concentrate", "api_key", account_id=account.id)
+    status = service.submit_key(again.flow_id, "sk-cn-wrong", None)
+
+    assert status.state is FlowState.FAILED
+    assert status.detail == "Concentrate AI did not accept that key."
+    assert path.read_text() == accepted
+    assert read_index(tmp_path).accounts == (account,)
+
+
+def test_a_refused_first_concentrate_key_leaves_no_folder_behind(tmp_path: Path) -> None:
+    service = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES, gateway_check=lambda _gateway: False
+    )
+    started = service.start("concentrate", "api_key")
+
+    assert service.submit_key(started.flow_id, "sk-cn-wrong", None).state is FlowState.FAILED
+    assert list((tmp_path / ".minds" / "accounts").glob("*/")) == []
+
+
+def test_a_key_the_probe_already_refused_is_not_sent_to_the_gateway(tmp_path: Path) -> None:
+    """The gateway check is a paid request, so it is only made when its answer can matter."""
+    asked: list[Gateway] = []
+
+    def gateway_check(gateway: Gateway) -> bool:
+        asked.append(gateway)
+        return True
+
+    service = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.NO, gateway_check=gateway_check
+    )
+    started = service.start("concentrate", "api_key")
+
+    assert service.submit_key(started.flow_id, "sk-cn-xyz", None).state is FlowState.FAILED
+    assert asked == []
+
+
+def test_a_key_for_anthropic_itself_is_not_sent_to_a_gateway(tmp_path: Path) -> None:
+    asked: list[Gateway] = []
+
+    def gateway_check(gateway: Gateway) -> bool:
+        asked.append(gateway)
+        return False
+
+    service = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES, gateway_check=gateway_check
+    )
+    started = service.start("anthropic", "api_key")
+
+    assert service.submit_key(started.flow_id, "sk-ant-api03-xyz", None).state is FlowState.OK
+    assert asked == []
+
+
+def test_a_gateway_check_that_breaks_leaves_the_working_key_in_place(tmp_path: Path) -> None:
+    """An error the check did not expect is a bug to surface, not a verdict -- but it must not
+    leave the new, unchecked key in a live account: the flow stays open, and closing it puts
+    the working key back."""
+    answers: list[bool | Exception] = [True, RuntimeError("check broke")]
+
+    def gateway_check(_gateway: Gateway) -> bool:
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    service = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES, gateway_check=gateway_check
+    )
+    started = service.start("concentrate", "api_key")
+    service.submit_key(started.flow_id, "sk-cn-good", None)
+    (account,) = read_index(tmp_path).accounts
+    path = tmp_path / ".minds" / "accounts" / account.id / "settings.json"
+    accepted = path.read_text()
+
+    again = service.start("concentrate", "api_key", account_id=account.id)
+    with pytest.raises(RuntimeError, match="check broke"):
+        service.submit_key(again.flow_id, "sk-cn-other", None)
+    assert "sk-cn-other" not in (path.read_text() if path.exists() else "")
+
+    service.abort(again.flow_id)
+    assert path.read_text() == accepted
+    assert read_index(tmp_path).accounts == (account,)
 
 
 def test_an_abandoned_re_auth_leaves_the_live_account_alone(service: AuthFlowService, tmp_path: Path) -> None:
