@@ -4,5 +4,8 @@
   },
   "offload-modal.toml": {
     "image_id": "im-zBUgvZjIsMAkA9zuU7q9zi"
+  },
+  "offload-modal-system-interface.toml": {
+    "image_id": "im-JJ7EztycIkTyM4jtnbF3hZ"
   }
 }
