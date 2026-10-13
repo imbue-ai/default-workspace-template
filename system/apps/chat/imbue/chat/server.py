@@ -822,6 +822,7 @@ def _get_model_options_endpoint(chat_id: str) -> Response:
     * a DYNAMIC harness (codex) has no static catalog, so it returns the FULL per-agent
       :class:`ModelOption`s (``options``) -- id, label, per-model efforts, fast support -- fetched
       fresh from ``model/list`` on this open (D2), so a subscription-tier change shows up live.
+      Claude answers the same way for an account on a gateway, with the gateway's model list.
     * a static/catalog-backed harness (claude, pi) returns ``models`` -- the ids to offer, matched
       back to the static catalog for labels/efforts (``null`` = offer the whole catalog). This
       reflects an account-gated set (pi's authenticated models) on a fresh login without a refetch.

@@ -46,11 +46,15 @@ from loguru import logger as _loguru_logger
 
 from imbue.chat import accounts
 from imbue.chat.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
+from imbue.chat.harnesses.claude.auth import ANTHROPIC_BASE_URL_ENV_VAR
 from imbue.chat.harnesses.claude.auth import CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR
 from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
 from imbue.chat.harnesses.claude.auth import parse_credential_lines
 from imbue.chat.harnesses.claude.auth import read_managed_auth_env
 from imbue.chat.harnesses.claude.auth import record_api_key_approval
+from imbue.chat.harnesses.claude.gateway_models import Gateway
+from imbue.chat.harnesses.claude.gateway_models import gateway_accepts_key
+from imbue.chat.harnesses.claude.gateway_models import read_gateway
 from imbue.chat.harnesses.codex.sign_in import APP_SERVER_SOCKET_FILENAME
 from imbue.chat.harnesses.codex.sign_in import CodexLoginClient
 from imbue.chat.harnesses.codex.sign_in import SIGN_IN_FLOW_ENV_VAR
@@ -284,6 +288,7 @@ class AuthFlowService:
     _fetch_callback: CallbackFetcher
     _clock: Callable[[], float]
     _connect_login_client: Callable[[Path], CodexLoginClient]
+    _gateway_check: Callable[[Gateway], bool | None]
 
     @classmethod
     def create(
@@ -292,6 +297,7 @@ class AuthFlowService:
         work_dir: Path | None = None,
         spawner: Callable[..., Any] | None = None,
         probe: Callable[[HarnessType, Path], SignedIn] | None = None,
+        gateway_check: Callable[[Gateway], bool | None] | None = None,
         restart_bound_agents: Callable[[str], None] | None = None,
         fetch_callback: CallbackFetcher | None = None,
         clock: Callable[[], float] | None = None,
@@ -311,6 +317,7 @@ class AuthFlowService:
         service._session = None
         service._spawner = spawner or spawn_pty
         service._probe = probe or is_signed_in
+        service._gateway_check = gateway_check or gateway_accepts_key
         service._restart_bound_agents = restart_bound_agents or (lambda _account_id: None)
         service._fetch_callback = fetch_callback or fetch_loopback_callback
         service._clock = clock or time.monotonic
@@ -603,12 +610,18 @@ class AuthFlowService:
             # re-auth the folder is a LIVE account, and leaving a rejected key there would
             # quietly break every agent bound to it until each one's next turn.
             with _credentials_restored_on_error(_credential_paths(method.sink, path)) as before:
-                display = _write_paste(method.sink, path, api_key, key_provider, session.lane)
+                display = _write_paste(
+                    method.sink, path, api_key, key_provider, session.lane, base_url=method.base_url
+                )
                 # Writing the file is not the same as the harness accepting it. Ask before
                 # committing, so a key the harness cannot use fails here -- where the user is
                 # looking at the field they just typed into -- rather than later, as a chat that
                 # silently cannot take a turn.
                 verdict = self._probe(session.lane.harness, path)
+                # The probe only reads the folder; a gateway's key is judged by the gateway.
+                gateway = read_gateway(path)
+                if gateway is not None and verdict is not SignedIn.NO and self._gateway_check(gateway) is False:
+                    verdict = SignedIn.NO
                 session.last_verdict = verdict
                 if verdict is SignedIn.NO:
                     _restore_credentials(before)
@@ -1141,7 +1154,14 @@ def _credentials_restored_on_error(paths: Sequence[Path]) -> Iterator[Mapping[Pa
         raise
 
 
-def _write_paste(sink: PasteSink, account_path: Path, api_key: str, key_provider: str | None, lane: Lane) -> str:
+def _write_paste(
+    sink: PasteSink,
+    account_path: Path,
+    api_key: str,
+    key_provider: str | None,
+    lane: Lane,
+    base_url: str = "",
+) -> str:
     """Write a pasted credential and return the provider noun the account is named after."""
     match sink:
         case PasteSink.PI_AUTH_JSON:
@@ -1163,7 +1183,12 @@ def _write_paste(sink: PasteSink, account_path: Path, api_key: str, key_provider
             path.chmod(0o600)
             return lane.provider_name
         case PasteSink.CLAUDE_ENV:
-            write_claude_env(account_path, claude_env_from_paste(api_key))
+            managed_env = claude_env_from_paste(api_key)
+            # A gateway lane supplies its own address for a bare key. An env-block paste that
+            # names one already says where it goes, so it is left alone.
+            if base_url and ANTHROPIC_API_KEY_ENV_VAR in managed_env:
+                managed_env.setdefault(ANTHROPIC_BASE_URL_ENV_VAR, base_url)
+            write_claude_env(account_path, managed_env)
             return lane.provider_name
         case _ as unreachable:
             assert_never(unreachable)

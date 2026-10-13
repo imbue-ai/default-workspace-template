@@ -85,6 +85,7 @@ import {
 import { slidersGlyph } from "../glyphs";
 import { accountRow, emptyAccountRowState } from "./accountRow";
 import { capitalizeEffort, modelPickLabel } from "./model-pick-label";
+import { modelMark } from "./providerMarks";
 import * as css from "./modelProviderMenuStyles";
 import { createSlidingMenuTrack } from "./slidingMenuTrack";
 
@@ -756,7 +757,9 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       .filter((option) => offeredIds === null || offeredIds.has(option.id));
     const query = modelQuery.trim().toLowerCase();
     const filtered = query === "" ? all : all.filter((option) => option.label.toLowerCase().includes(query));
-    const visible = filtered.slice(0, MODEL_SEARCH_CAP);
+    // Only a search picker is capped: a list picker's rows are its whole offer (a gateway's runs
+    // past the cap), and one cut off there would hide models no scroll can reach.
+    const visible = searchable ? filtered.slice(0, MODEL_SEARCH_CAP) : filtered;
     const loading = (searchable || dynamic) && (offeredLoading || !offeredLoaded);
     const hasSearchField = searchable || all.length > 8;
     return [
@@ -770,7 +773,10 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
               type: "text",
               placeholder: "Search models",
               value: modelQuery,
-              oncreate: (inputVnode: m.VnodeDOM) => (inputVnode.dom as HTMLInputElement).focus(),
+              // preventScroll: on a phone the submenu slides in on a horizontal track, and a plain focus
+              // scrolls that track to bring the field into view mid-slide, leaving the pane blank.
+              oncreate: (inputVnode: m.VnodeDOM) =>
+                (inputVnode.dom as HTMLInputElement).focus({ preventScroll: true }),
               oninput: (event: Event) => {
                 modelQuery = (event.target as HTMLInputElement).value;
               },
@@ -806,6 +812,11 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
                     },
                   },
                   [
+                    m(
+                      "span",
+                      { class: css.SUBMENU_ROW_MARK, "aria-hidden": "true" },
+                      m.trust(modelMark(option.id, 16)),
+                    ),
                     // Front-truncated: an openrouter id is a path whose tail tells rows apart.
                     startTruncated(option.label),
                     isCurrent
@@ -884,8 +895,12 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       const readOnlyTooltip = interactive ? null : READ_ONLY_TOOLTIP;
       const searchable = catalog?.picker_mode === "search";
       const dynamic = catalog?.picker_mode === "dynamic";
+      // A list picker asks too: its harness may answer with a per-account set in place of the
+      // catalog (claude on a gateway account offers the gateway's models). Until that answer
+      // lands, and whenever it is null, the list is the catalog's.
+      const fetchesList = !readOnly && catalog?.picker_mode === "list";
       viewedChatId = chatId;
-      viewedPickerIsFetched = searchable || dynamic;
+      viewedPickerIsFetched = searchable || dynamic || fetchesList;
 
       // The account the chat is moving to, and the model it runs on there: while a switch is armed
       // for the next send, or being carried out, the menu reads as the target, since that is what
@@ -958,7 +973,9 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
         matched === null
           ? { model_id: "", effort: recordedEffort, fast: currentFast }
           : { model_id: matched.id, effort: recordedEffort, fast: currentFast };
-      const sourceOptions: CatalogModelOption[] = dynamic ? (dynamicOptions ?? []) : (catalog?.options ?? []);
+      const sourceOptions: CatalogModelOption[] = dynamic
+        ? (dynamicOptions ?? [])
+        : (dynamicOptions ?? catalog?.options ?? []);
 
       const rows: MenuRow[] = [];
       if (armed !== null) {
@@ -1025,7 +1042,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
                   truncateValue: "start",
                   maxHeight: css.MODEL_SUBMENU_MAX_HEIGHT,
                   onOpen: () => {
-                    if (searchable || dynamic) warmOfferedModels(chatId);
+                    if (searchable || dynamic || fetchesList) warmOfferedModels(chatId);
                   },
                   content: () =>
                     modelSubmenu(chatId, sourceOptions, matched, currentIdentity, optimistic, searchable, dynamic),

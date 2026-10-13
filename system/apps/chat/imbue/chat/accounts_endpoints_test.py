@@ -8,6 +8,7 @@ about the WIRE -- the key sets and the status codes -- which is the part nothing
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -20,6 +21,8 @@ from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import read_index
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.harnesses.auth_flows import AuthFlowService
+from imbue.chat.harnesses.claude.gateway_models import GATEWAY_MODELS_FILE_NAME
+from imbue.chat.harnesses.claude.model import CLAUDE_CATALOG
 from imbue.chat.harnesses.codex.model import codex_model_options_path
 from imbue.chat.harnesses.codex.model import write_codex_model_options
 from imbue.chat.harnesses.signed_in import SignedIn
@@ -485,3 +488,28 @@ def test_an_api_key_account_signs_in_again_with_a_key() -> None:
         key_id: "api_key",
         codex_key_id: "api_key",
     }
+
+
+def test_account_model_options_offers_a_gateway_accounts_own_list(tmp_path: Path) -> None:
+    """A claude account pointed at a gateway (Concentrate) offers the gateway's models, from the list
+    kept beside the account while the gateway cannot be reached, and the catalog when none is kept."""
+    account_id, account_dir = mint_account_dir()
+    commit_account(account_id, "concentrate", "Concentrate AI")
+    # A port nothing listens on: the fetch is refused at once, so the kept list (or the catalog) answers.
+    (account_dir / "settings.json").write_text(
+        json.dumps({"env": {"ANTHROPIC_API_KEY": "sk-cn-xyz", "ANTHROPIC_BASE_URL": "http://127.0.0.1:9"}})
+    )
+    with _client_for(build_test_state()) as client:
+        unknown = client.get(f"/api/accounts/{account_id}/model-options")
+        assert unknown.status_code == 200
+        assert [option["id"] for option in unknown.get_json()["options"]] == [
+            option.id for option in CLAUDE_CATALOG.options
+        ]
+
+        (account_dir / GATEWAY_MODELS_FILE_NAME).write_text(
+            json.dumps({"data": [{"id": "kimi-k2-6", "display_name": "Kimi K2.6"}, {"id": "claude-opus-5-5"}]})
+        )
+        kept = client.get(f"/api/accounts/{account_id}/model-options")
+        offered = [(option["id"], option["label"]) for option in kept.get_json()["options"] if option["in_picker"]]
+        assert offered[-1] == ("kimi-k2-6", "Kimi K2.6")
+        assert "claude-opus-5-5" not in [option_id for option_id, _ in offered]

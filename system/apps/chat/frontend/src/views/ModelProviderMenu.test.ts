@@ -1243,3 +1243,62 @@ describe("the phone layout's card", () => {
     expect(document.querySelector('[data-menu-row="source-view"]')).toBeNull();
   });
 });
+
+describe("a claude account on a gateway", () => {
+  /** A model option as the backend sends one, offered in the picker. */
+  function optionOf(id: string, label: string): Record<string, unknown> {
+    return { ...OPUS, id, label };
+  }
+
+  /** Answer the chat's model-options ask with ``response``, and let the answer land. */
+  async function openModelListAnswering(response: unknown): Promise<void> {
+    const request = vi.spyOn(m, "request").mockResolvedValue(response as never);
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="model"]');
+    await vi.waitFor(() => expect(request).toHaveBeenCalled());
+    await Promise.resolve();
+    render();
+    const urls = request.mock.calls.map(([options]) => (options as unknown as { url: string }).url);
+    expect(urls.some((url) => url.includes("model-options"))).toBe(true);
+  }
+
+  function modelRows(): HTMLElement[] {
+    return [...document.querySelectorAll<HTMLElement>('[data-menu-part="submenu"] button')].filter(
+      (row) => row.getAttribute("data-menu-row") === null && row.querySelector('[aria-hidden="true"]') !== null,
+    );
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("lists every model the gateway offers, past the search picker's cap, each beside its vendor's mark", async () => {
+    // Concentrate's list runs to some 160 models once the Claude aliases are folded in; a list
+    // picker cut off at the search picker's cap would hide the last 60 with nothing to scroll to.
+    const extra = Array.from({ length: 150 }, (_, i) => optionOf(`kimi-k${i}`, `Kimi K${i}`));
+    await openModelListAnswering({ models: null, options: [OPUS, optionOf("gpt-5", "GPT-5"), ...extra] });
+    const rows = modelRows();
+    expect(rows).toHaveLength(152);
+    const last = rows[rows.length - 1];
+    expect(last.textContent).toContain("Kimi K149");
+    expect(last.querySelector("svg")).not.toBeNull();
+    const gpt = rows.find((row) => row.textContent?.includes("GPT-5"));
+    expect(gpt?.querySelector("svg")).not.toBeNull();
+  });
+
+  it("keeps the catalog's list for an account that answers with no list of its own", async () => {
+    await openModelListAnswering({ models: null, options: null });
+    const rows = modelRows();
+    expect(rows.map((row) => row.textContent?.trim())).toEqual(["Opus"]);
+  });
+
+  it("gives a model no vendor knows a blank mark that holds the label's place", async () => {
+    await openModelListAnswering({ models: null, options: [optionOf("apodex-1.1-mini", "Apodex 1.1 Mini")] });
+    const [row] = modelRows();
+    expect(row.textContent).toContain("Apodex 1.1 Mini");
+    const mark = row.querySelector<HTMLElement>('[aria-hidden="true"]');
+    expect(mark?.className).toBe(css.SUBMENU_ROW_MARK);
+    expect(mark?.querySelector("svg")).toBeNull();
+  });
+});

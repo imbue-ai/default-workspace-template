@@ -129,6 +129,19 @@ def test_only_the_key_lanes_offer_key_providers() -> None:
     assert LANE_OPENAI.key_providers == ()
 
 
+def test_only_gateway_lanes_set_a_base_url_and_only_on_a_claude_paste() -> None:
+    """A base URL is written as ANTHROPIC_BASE_URL, which only the claude sink understands."""
+    for lane in LANES:
+        for method in lane.methods:
+            if isinstance(method, PasteMethod) and method.base_url:
+                assert method.sink is PasteSink.CLAUDE_ENV, lane.id
+                assert method.base_url.startswith("https://"), lane.id
+    concentrate = get_method("concentrate", "api_key")
+    anthropic = get_method("anthropic", "api_key")
+    assert isinstance(concentrate, PasteMethod) and concentrate.base_url == "https://api.concentrate.ai"
+    assert isinstance(anthropic, PasteMethod) and anthropic.base_url == ""
+
+
 def test_key_provider_ids_are_unique_within_a_lane() -> None:
     for lane in LANES:
         ids = [k.provider_id for k in lane.key_providers]

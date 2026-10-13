@@ -67,6 +67,7 @@ from typing import Any
 from loguru import logger
 
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.harnesses.claude.gateway_models import gateway_options_for_account
 from imbue.chat.harnesses.model import EffortChoice
 from imbue.chat.harnesses.model import HarnessCatalog
 from imbue.chat.harnesses.model import HarnessModelResolver
@@ -81,7 +82,7 @@ from imbue.mngr_claude.claude_config import get_agent_hook_settings_path
 
 # Every Claude model offers the same efforts: low..max shown, ultra (ultracode)
 # declared-but-hidden. Effort levels are plain strings, as the catalog carries them.
-_CLAUDE_EFFORTS: tuple[EffortChoice, ...] = (
+CLAUDE_EFFORTS: tuple[EffortChoice, ...] = (
     EffortChoice(level="low"),
     EffortChoice(level="medium"),
     EffortChoice(level="high"),
@@ -99,28 +100,28 @@ _OFFERED_MODELS: tuple[ModelOption, ...] = (
     ModelOption(
         id="fable[1m]",
         label="Fable 5.1",
-        efforts=_CLAUDE_EFFORTS,
+        efforts=CLAUDE_EFFORTS,
         supports_fast=False,
         harness_reported_model_id="claude-fable-5-1",
     ),
     ModelOption(
         id="opus[1m]",
         label="Opus 5.5",
-        efforts=_CLAUDE_EFFORTS,
+        efforts=CLAUDE_EFFORTS,
         supports_fast=True,
         harness_reported_model_id="claude-opus-5-5",
     ),
     ModelOption(
         id="sonnet[1m]",
         label="Sonnet 5.5",
-        efforts=_CLAUDE_EFFORTS,
+        efforts=CLAUDE_EFFORTS,
         supports_fast=False,
         harness_reported_model_id="claude-sonnet-5-5",
     ),
     ModelOption(
         id="haiku",
         label="Haiku 5.5",
-        efforts=_CLAUDE_EFFORTS,
+        efforts=CLAUDE_EFFORTS,
         supports_fast=False,
         harness_reported_model_id="claude-haiku-5-5",
     ),
@@ -159,7 +160,7 @@ _HIDDEN_MODELS: tuple[ModelOption, ...] = tuple(
     ModelOption(
         id=model_id,
         label=label,
-        efforts=_CLAUDE_EFFORTS,
+        efforts=CLAUDE_EFFORTS,
         supports_fast=supports_fast,
         in_picker=False,
         harness_reported_model_id=model_id,
@@ -290,6 +291,19 @@ class ClaudeModelResolver(HarnessModelResolver):
         self._config_dir = agent_info.claude_config_dir
         self._state_dir = agent_info.agent_state_dir
         return self
+
+    def list_offered_options(self) -> tuple[ModelOption, ...] | None:
+        """The gateway's models for an account that points claude at one; None (the catalog) otherwise.
+
+        The agent's config dir IS its account folder, so the account's own settings say where
+        its requests go. See ``gateway_models`` for why the gateway's list replaces the catalog.
+        """
+        return gateway_options_for_account(self._config_dir, CLAUDE_CATALOG.options, CLAUDE_EFFORTS)
+
+    @classmethod
+    def list_account_options(cls, account_dir: Path) -> tuple[ModelOption, ...] | None:
+        """As :meth:`list_offered_options`, for an account no agent runs on yet."""
+        return gateway_options_for_account(account_dir, CLAUDE_CATALOG.options, CLAUDE_EFFORTS)
 
     def switch(self, identity: ModelIdentity, axes: frozenset[ModelAxis], send: Callable[[str], bool]) -> SwitchResult:
         # Model, effort, and fast are three distinct Claude Code commands. Send only

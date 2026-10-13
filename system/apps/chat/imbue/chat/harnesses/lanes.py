@@ -135,6 +135,10 @@ class PasteMethod(FrozenModel):
     # Where to go to get a key in the first place. A lane whose provider you have to subscribe
     # to before a key exists needs this; one you already have an account with does not.
     signup_url: str = ""
+    # A gateway that speaks Anthropic's API at its own address. Only meaningful on the
+    # CLAUDE_ENV sink: a bare key pasted here is written with this as ANTHROPIC_BASE_URL, so
+    # the user pastes one key and never has to know the address exists.
+    base_url: str = ""
     # As on `PtyMethod`, and for the same reason: nothing else bounds a flow, and the service
     # is single-flight, so an abandoned one is in the way of the next. Shorter than a browser
     # method's, because there is no round trip to wait out -- the field is already on screen.
@@ -502,6 +506,26 @@ LANE_OPENROUTER = Lane(
     ),
 )
 
+# A gateway in front of Anthropic and 200+ other models that speaks Anthropic's Messages API,
+# so claude runs on it unchanged once its address is set. Its own lane rather than a hidden
+# use of the anthropic one: the account is billed by Concentrate, and its row should say so.
+LANE_CONCENTRATE = Lane(
+    id="concentrate",
+    provider_name="Concentrate AI",
+    subtitle="200+ models from a single key.",
+    harness=HarnessType.CLAUDE,
+    methods=(
+        PasteMethod(
+            id="api_key",
+            label="Paste your Concentrate key",
+            description="Paste a raw sk-cn-... API key.",
+            sink=PasteSink.CLAUDE_ENV,
+            signup_url="https://concentrate.ai/dashboard",
+            base_url="https://api.concentrate.ai",
+        ),
+    ),
+)
+
 LANE_API_KEY = Lane(
     id="api-key",
     provider_name="API key",
@@ -526,6 +550,7 @@ LANES: Final[tuple[Lane, ...]] = (
     LANE_GOOGLE,
     LANE_OPENCODE_GO,
     LANE_OPENROUTER,
+    LANE_CONCENTRATE,
     LANE_API_KEY,
 )
 

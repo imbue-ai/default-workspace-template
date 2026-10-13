@@ -39,6 +39,7 @@ from imbue.chat.harnesses.claude.activity import ClaudeActivityTracker
 from imbue.chat.harnesses.claude.model import CLAUDE_CATALOG
 from imbue.chat.harnesses.claude.model import CLAUDE_STATE_RELATIVE_PATH
 from imbue.chat.harnesses.claude.model import ClaudeModelResolver
+from imbue.chat.harnesses.claude.session import ClaudeHarnessSession
 from imbue.chat.harnesses.claude.one_shot import ClaudeOneShotCompletion
 from imbue.chat.harnesses.claude.tap import ClaudeAtomicShoulderTap
 from imbue.chat.harnesses.claude.tap import ClaudeInterruptToComposer
@@ -355,6 +356,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         binding_class=ClaudeAccountBinding,
         one_shot_completion_class=ClaudeOneShotCompletion,
         resolver_class=ClaudeModelResolver,
+        session_class=ClaudeHarnessSession,
         catalog_factory=lambda: CLAUDE_CATALOG,
         model_state_relative_path=CLAUDE_STATE_RELATIVE_PATH,
         # Claude Code's transcript has no turn boundaries; activity is inferred from an

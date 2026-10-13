@@ -189,6 +189,8 @@ export const SUBMENU_ROW_SELECTED = `${SUBMENU_ROW_SHAPE} bg-fill-active text-pr
 export const ACCOUNT_ROW = `${ACCOUNT_ROW_BASE} text-primary group-hover/conn:bg-fill-hover cursor-pointer`;
 export const ACCOUNT_ROW_SELECTED = `${ACCOUNT_ROW_BASE} bg-fill-active text-primary cursor-pointer`;
 export const SUBMENU_ROW_NAME = "truncate";
+/** A model row's vendor mark: a fixed square, so rows without one keep their labels aligned. */
+export const SUBMENU_ROW_MARK = "inline-flex h-4 w-4 shrink-0 items-center justify-center text-secondary";
 export const SUBMENU_ROW_SUB = "type-helper text-faint";
 /** The MODEL row's tick: the last thing in the row, pushed out by `ml-auto` and so landing on
  *  the row's own `px-2` padding edge -- which is where the account rows' pinned tick sits too,
