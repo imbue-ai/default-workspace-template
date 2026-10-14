@@ -1,0 +1,19 @@
+pi chats now keep the workspace's shared memory (`data/memories/`) alongside Claude chats, in the same notes and format, so a fact one chat saves reaches the other.
+
+- New `.pi/extensions/memory.ts` gives pi what Claude Code gives Claude. Before every pi turn it adds two system prompt sections: the memory protocol and the current `MEMORY.md` index, with any notice of notes the user deleted or edited. Neither depends on the clock, because pi appends a changed section's full text to the conversation; this way the protocol is recorded once per chat and the index only after a note changes. Right after pi writes or edits a note, the extension stamps the note's `metadata.modified` (and `metadata.source` when missing), so the date is never the model's guess. It fails open, logging to `$MNGR_AGENT_STATE_DIR/pi_workspace_memory.log`, and keeps working when `tk_workflow.ts` replaces the prompt.
+
+- New `system/scripts/agent_memory_context.py` (standard library only, listed in `stdlib_only_scripts_test.py`) renders those sections, stamps notes, and backs a new UserPromptSubmit hook in `.claude/settings.json`. Before each Claude message the hook announces the user's deletes and edits, and notes other chats saved, that are newer than its last run for that chat. Claude Code loads the index only when a chat starts, so without it a Claude chat never saw a note a pi chat saved later, and could write a deleted note back from its conversation.
+
+- pi's system prompt in `.mngr/settings.toml` no longer tells it to avoid memory.
+
+- `CLAUDE.md` tells Claude chats never to save secrets, not to save sensitive personal details (health, race or ethnicity, religious beliefs, political views, sexual orientation or gender identity) unless asked, and that the user's deletes and edits win.
+
+- `AGENTS.md` and `data/memories/README.md` describe the folder as shared by Claude and pi chats.
+
+- Each note's line in `MEMORY.md`, the summary every chat starts from, is now kept in code to match the note's `description`: `agent_memory_context.py` rewrites a stale line, adds a missing one and drops repeats. It runs after any Claude or pi tool call that writes to the notes folder (a new PostToolUse hook in `.claude/settings.json`, and the pi extension's `tool_result`), and before each message. Before this, a chat that changed a note but not its line left every new chat starting from the old fact, for example a pi chat that moved the user's location back to California while the line still said Virginia.
+
+- The index sync takes a lock the Agent Memory app also takes, and drops lines for note files that are gone, so a sync racing a delete can't put a deleted fact back into what chats start from. It keeps the file's line endings.
+
+- Claude's hook tells a chat about every delete and edit (it used to stop at 20), says how many saved notes it left off its list, and keeps its mark five seconds behind its clock so a change recorded at the same moment isn't missed. A delete notice stops once the note is saved again.
+
+- The pi extension stamps notes written through a symlinked path and logs why the script could not start.

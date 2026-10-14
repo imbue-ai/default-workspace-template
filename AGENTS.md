@@ -202,7 +202,7 @@ Commit all your changes locally. Do not wait for user confirmation for anything 
 
 **Git is invisible plumbing, like `tk`.** The user cares about exactly one property of it: their work is kept, and any change can be undone. They never need to hear how. So commit silently, and keep git vocabulary out of everything the user reads (chat, progress-view titles and summaries): no "committed", "branch", "pushed", "merged", "PR", "rebase", "checkout", "diff", "repo", "revert". If the record itself is the news ("did you save that?"), say "it's saved and I can undo it". If you must undo something, say "I'll put it back the way it was", not "I'll revert the commit". Full vocabulary and rewrites: `.agents/shared/references/user-facing-language.md`. Use git words only when the user used them first or asked how the saving works.
 
-`data/` is gitignored (it holds all workspace data: `data/memories/` for Claude memory, `data/.tickets/`, per-app data, uploads, and machine state).
+`data/` is gitignored (it holds all workspace data: `data/memories/` for the memory Claude and pi chats share, `data/.tickets/`, per-app data, uploads, and machine state).
 
 Chat file uploads (files a user attaches to a message) are stored under `data/uploads/`. Uploads can be arbitrarily large and any format, so they don't belong in version-controllable content; like the rest of `data/` they are gitignored and never pushed to GitHub, but the host-level `host-backup` service (a restic snapshot of the whole home tree) captures them, so uploads survive container loss. See `system/services/host_backup/README.md`.
 

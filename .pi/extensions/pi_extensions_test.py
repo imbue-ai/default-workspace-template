@@ -15,7 +15,8 @@ scripts live in this repo, so those tests point it at the repo root and run the
 real PreToolUse hook scripts and ``agent_rewrite_bash_command.py`` -- covering
 the extension and its wiring together. ``tk_workflow.ts`` reads step state
 from the vendored ``ticket`` script, so those tests point it at a temp tree with
-a stub ``ticket`` whose output a test can drive.
+a stub ``ticket`` whose output a test can drive. ``memory.ts`` runs the real
+``agent_memory_context.py`` with ``HOME`` pointed at a temp tree holding the notes.
 
 See ``system/apps/chat/imbue/chat/harnesses/core-contracts/tool-call-policies.md`` for what each rule enforces on each
 harness.
@@ -26,9 +27,11 @@ from __future__ import annotations
 import functools
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +51,7 @@ _EXTENSIONS_DIR = Path(__file__).parent
 _REPO_ROOT = _EXTENSIONS_DIR.parents[1]
 _POLICY_GUARDS = _EXTENSIONS_DIR / "policy_guards.ts"
 _TK_WORKFLOW = _EXTENSIONS_DIR / "tk_workflow.ts"
+_MEMORY = _EXTENSIONS_DIR / "memory.ts"
 
 # Node driver: load one extension by absolute path, register its handlers against a
 # fake `pi`, fire a single event, and report the handler's return value and the event
@@ -545,3 +549,304 @@ def test_stop_nudge_reports_open_steps_on_stderr(
         assert expected in proc.stderr
     else:
         assert "Stopping with" not in proc.stderr
+
+
+_MEMORY_INDEX_LINE = "- [Units](units.md) — Prefers metric units"
+
+
+def _memory_notes_dir(tmp_path: Path) -> Path:
+    return tmp_path / "home" / "workspace" / "data" / "memories"
+
+
+def _memory_output(
+    tmp_path: Path,
+    payload: dict[str, Any],
+    *,
+    work_dir: Path = _REPO_ROOT,
+    changes: str | None = None,
+    event: str = "before_agent_start",
+) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
+    """Fire ``event`` through memory.ts, with one note in the shared index under a temp HOME."""
+    home = tmp_path / "home"
+    notes_dir = _memory_notes_dir(tmp_path)
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    (notes_dir / "units.md").write_text(
+        "---\nname: Units\ndescription: Prefers metric units\n---\nx\n"
+    )
+    (notes_dir / "MEMORY.md").write_text(_MEMORY_INDEX_LINE + "\n")
+    if changes is not None:
+        record = (
+            home / "workspace" / "data" / ".apps" / "memories" / "user-changes.jsonl"
+        )
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(changes)
+    proc = _run_event(
+        tmp_path,
+        _MEMORY,
+        event,
+        payload,
+        work_dir=work_dir,
+        env={"HOME": str(home)},
+    )
+    return proc, _event_output(proc)
+
+
+def test_memory_adds_the_protocol_and_index_as_their_own_system_prompt_section(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "systemPrompt": "BASE",
+        "systemPromptOptions": {"sections": {"tool_guidance": "unchanged"}},
+    }
+
+    _, out = _memory_output(tmp_path, payload)
+
+    assert out["result"] is None
+    sections = out["payload"]["systemPromptOptions"]["sections"]
+    assert sections["tool_guidance"] == "unchanged"
+    assert list(sections) == [
+        "tool_guidance",
+        "workspace_memory_protocol",
+        "workspace_memory",
+    ]
+    assert sections["workspace_memory_protocol"].startswith("# Workspace memory")
+    assert "  source: pi-coding" in sections["workspace_memory_protocol"]
+    assert sections["workspace_memory"].startswith("## Your memory index")
+    assert sections["workspace_memory"].endswith(_MEMORY_INDEX_LINE)
+
+
+def test_memory_sections_are_identical_on_messages_where_no_note_changed(
+    tmp_path: Path,
+) -> None:
+    """pi re-appends a section to the conversation whenever its text differs from last time."""
+    payload = {"systemPrompt": "BASE", "systemPromptOptions": {"sections": {}}}
+
+    _, first = _memory_output(tmp_path, payload)
+    _, second = _memory_output(tmp_path, payload)
+
+    assert (
+        first["payload"]["systemPromptOptions"]["sections"]
+        == second["payload"]["systemPromptOptions"]["sections"]
+    )
+
+
+def test_memory_gives_pi_only_the_off_notice_while_the_user_has_memory_off(
+    tmp_path: Path,
+) -> None:
+    settings = (
+        tmp_path
+        / "home"
+        / "workspace"
+        / "data"
+        / ".apps"
+        / "memories"
+        / "settings.json"
+    )
+    settings.parent.mkdir(parents=True)
+    settings.write_text('{"is_paused": true, "disabled_harnesses": []}')
+    payload = {"systemPrompt": "BASE", "systemPromptOptions": {"sections": {}}}
+
+    _, out = _memory_output(tmp_path, payload)
+
+    sections = out["payload"]["systemPromptOptions"]["sections"]
+    assert sections["workspace_memory_protocol"].startswith(
+        "## Workspace memory is off"
+    )
+    assert sections["workspace_memory"] == ""
+    assert _MEMORY_INDEX_LINE not in json.dumps(sections)
+
+
+def test_memory_stamps_a_note_pi_just_wrote(tmp_path: Path) -> None:
+    notes_dir = _memory_notes_dir(tmp_path)
+    notes_dir.mkdir(parents=True)
+    job = notes_dir / "user-profession.md"
+    job.write_text(
+        "---\nname: user-profession\nmetadata:\n  type: user\n  modified: 2025-06-18T00:00:00Z\n---\nx\n"
+    )
+    elsewhere = tmp_path / "notes.md"
+    elsewhere.write_text("---\nname: other\n---\nx\n")
+
+    _memory_output(
+        tmp_path,
+        {"toolName": "write", "input": {"path": str(job)}, "isError": False},
+        event="tool_result",
+    )
+    _memory_output(
+        tmp_path,
+        {"toolName": "write", "input": {"path": str(elsewhere)}, "isError": False},
+        event="tool_result",
+    )
+
+    stamped = job.read_text()
+    assert "  source: pi-coding\n" in stamped
+    assert "2025-06-18" not in stamped
+    assert re.search(r"  modified: \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\n", stamped)
+    assert elsewhere.read_text() == "---\nname: other\n---\nx\n"
+
+
+_UNSTAMPED_NOTE = "---\nname: job\nmetadata:\n  type: user\n---\nx\n"
+
+
+def _memory_stamps(tmp_path: Path, tool_name: str, path: str) -> bool:
+    """Whether a successful ``tool_name`` call on ``path`` gets the note at
+    ``path`` stamped, which is written fresh before the call."""
+    target = (
+        tmp_path / "home" / path.removeprefix("~/")
+        if path.startswith("~/")
+        else Path(path)
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(_UNSTAMPED_NOTE)
+    _memory_output(
+        tmp_path,
+        {"toolName": tool_name, "input": {"path": path}, "isError": False},
+        event="tool_result",
+    )
+    return "  source: pi-coding\n" in target.read_text()
+
+
+def test_memory_stamps_a_note_however_pi_names_its_path(tmp_path: Path) -> None:
+    notes_dir = _memory_notes_dir(tmp_path)
+    notes_dir.mkdir(parents=True)
+    linked = tmp_path / "linked-memories"
+    linked.symlink_to(notes_dir)
+
+    assert _memory_stamps(tmp_path, "edit", str(notes_dir / "edited.md"))
+    assert _memory_stamps(tmp_path, "write", "~/workspace/data/memories/home.md")
+    # pi resolves a relative path against its own working directory, which the
+    # driver inherits from this process.
+    assert _memory_stamps(
+        tmp_path, "write", os.path.relpath(notes_dir / "relative.md", Path.cwd())
+    )
+    assert _memory_stamps(tmp_path, "write", str(linked / "linked.md"))
+
+
+def test_memory_leaves_a_note_outside_the_notes_folder_alone(tmp_path: Path) -> None:
+    lookalike = tmp_path / "project" / "data" / "memories" / "job.md"
+
+    assert not _memory_stamps(tmp_path, "write", str(lookalike))
+    assert not _memory_stamps(
+        tmp_path, "edit", str(_memory_notes_dir(tmp_path) / "nested" / "job.md")
+    )
+
+
+def test_memory_logs_why_python_could_not_be_started(tmp_path: Path) -> None:
+    no_python = tmp_path / "bin"
+    no_python.mkdir()
+    payload = {"systemPrompt": "BASE", "systemPromptOptions": {"sections": {}}}
+
+    proc = _run_event(
+        tmp_path,
+        _MEMORY,
+        "before_agent_start",
+        payload,
+        work_dir=_REPO_ROOT,
+        env={"HOME": str(tmp_path / "home"), "PATH": str(no_python)},
+    )
+
+    assert _event_output(proc)["payload"]["systemPromptOptions"]["sections"] == {}
+    log = (tmp_path / "state" / "pi_workspace_memory.log").read_text()
+    assert "failed: spawnSync python3 ENOENT; running this turn without memory" in log
+
+
+def test_memory_syncs_the_index_after_a_shell_command_on_the_notes(
+    tmp_path: Path,
+) -> None:
+    notes_dir = _memory_notes_dir(tmp_path)
+    notes_dir.mkdir(parents=True)
+    (notes_dir / "user-location.md").write_text(
+        "---\nname: user-location\ndescription: User lives in California\n---\nx\n"
+    )
+    synced = (
+        _MEMORY_INDEX_LINE
+        + "\n- [User location](user-location.md) — User lives in California\n"
+    )
+
+    for command, is_error, expected in (
+        ("ls system", False, _MEMORY_INDEX_LINE + "\n"),
+        (
+            "cat > ~/workspace/data/memories/user-location.md",
+            True,
+            _MEMORY_INDEX_LINE + "\n",
+        ),
+        ("cat > ~/workspace/data/memories/user-location.md", False, synced),
+    ):
+        _memory_output(
+            tmp_path,
+            {"toolName": "bash", "input": {"command": command}, "isError": is_error},
+            event="tool_result",
+        )
+        assert (notes_dir / "MEMORY.md").read_text() == expected, command
+
+
+def test_memory_leaves_a_failed_write_and_other_tools_alone(tmp_path: Path) -> None:
+    notes_dir = _memory_notes_dir(tmp_path)
+    notes_dir.mkdir(parents=True)
+    job = notes_dir / "job.md"
+    original = "---\nname: job\n---\nx\n"
+    job.write_text(original)
+
+    for payload in (
+        {"toolName": "write", "input": {"path": str(job)}, "isError": True},
+        {"toolName": "read", "input": {"path": str(job)}, "isError": False},
+    ):
+        _memory_output(tmp_path, payload, event="tool_result")
+
+    assert job.read_text() == original
+
+
+def test_memory_appends_to_a_prompt_another_extension_already_replaced(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "systemPrompt": "FORCED_BY_TK_WORKFLOW",
+        "systemPromptOptions": {
+            "forceSystemPrompt": "FORCED_BY_TK_WORKFLOW",
+            "sections": {},
+        },
+    }
+
+    _, out = _memory_output(tmp_path, payload)
+
+    assert out["result"]["systemPrompt"].startswith(
+        "FORCED_BY_TK_WORKFLOW\n\n# Workspace memory"
+    )
+    assert out["result"]["systemPrompt"].endswith(_MEMORY_INDEX_LINE)
+    assert out["payload"]["systemPromptOptions"]["sections"] == {}
+
+
+def test_memory_appends_to_the_prompt_when_pi_offers_no_sections(
+    tmp_path: Path,
+) -> None:
+    _, out = _memory_output(tmp_path, {"systemPrompt": "BASE"})
+
+    assert out["result"]["systemPrompt"].startswith("BASE\n\n# Workspace memory")
+
+
+def test_memory_fails_open_when_its_script_is_missing(tmp_path: Path) -> None:
+    empty_work_dir = tmp_path / "work"
+    empty_work_dir.mkdir()
+    payload = {"systemPrompt": "BASE", "systemPromptOptions": {"sections": {}}}
+
+    proc, out = _memory_output(tmp_path, payload, work_dir=empty_work_dir)
+
+    assert out["result"] is None
+    assert out["payload"]["systemPromptOptions"]["sections"] == {}
+    log = (tmp_path / "state" / "pi_workspace_memory.log").read_text()
+    assert "running this turn without memory" in log
+    assert "running this turn without memory" not in proc.stderr
+
+
+def test_memory_tells_pi_which_notes_the_user_deleted(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    payload = {"systemPrompt": "BASE", "systemPromptOptions": {"sections": {}}}
+
+    _, out = _memory_output(
+        tmp_path,
+        payload,
+        changes=f'{{"file_name":"user-profile.md","change":"DELETED","at":"{now}"}}\n',
+    )
+
+    memory = out["payload"]["systemPromptOptions"]["sections"]["workspace_memory"]
+    assert "## Changes the user made to saved memories" in memory
+    assert "`user-profile.md` was deleted" in memory

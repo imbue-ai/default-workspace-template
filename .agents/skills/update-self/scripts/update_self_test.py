@@ -8788,3 +8788,9 @@ def test_a_rollback_whose_restored_app_serves_no_page_is_an_emergency_that_keeps
     assert "copies are still kept" in settled.outcome
     assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
     assert not _refreshed_the_view(runner, apply_repo)
+
+
+def test_every_frontend_bundles_sources_count_as_a_frontend_change() -> None:
+    """A change under a bundle's frontend must be classed as a frontend change, or its bundle is never rebuilt."""
+    for bundle in update_layout.FRONTEND_BUNDLES:
+        assert bundle.frontend_dir in update_layout.FRONTEND_SOURCE_DIRS, bundle.app
