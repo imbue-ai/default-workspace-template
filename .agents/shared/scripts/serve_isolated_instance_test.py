@@ -81,6 +81,15 @@ class _RecordingRunner(mod.Runner):
             if tuple(argv_list[: len(prefix)]) == prefix:
                 assert isinstance(result, _Result)
                 return result
+        # Simulate forward_port.py printing the minted label on stdout.
+        if (
+            len(argv_list) >= 4
+            and tuple(argv_list[: len(mod.FORWARD_PORT_CMD)]) == mod.FORWARD_PORT_CMD
+            and "--name" in argv_list
+        ):
+            name_idx = argv_list.index("--name") + 1
+            if name_idx < len(argv_list):
+                return _Result(stdout=f"{argv_list[name_idx]}-testlbl")
         return _Result()
 
     def argvs_starting(self, *prefix: str) -> list[list[str]]:
@@ -486,7 +495,10 @@ def test_up_preview_boots_wrapper_registers_both_and_reports_tab(
     wrapper_argv = spawner.detached_spawns[1]
     assert mod.WRAPPER_SCRIPT in wrapper_argv[1]
     assert "--inner-service" in wrapper_argv
-    assert "demo-app" in wrapper_argv
+    # The wrapper must receive the minted origin label (with random suffix),
+    # not the bare service name, so the iframe derives the correct hostname.
+    inner_service_idx = wrapper_argv.index("--inner-service") + 1
+    assert wrapper_argv[inner_service_idx] == "demo-app-testlbl"
     assert "my change" in wrapper_argv
     # Registered both the inner app and the user-facing wrapper.
     registered = runner.argvs_starting(*mod.FORWARD_PORT_CMD, "--name")
@@ -500,6 +512,36 @@ def test_up_preview_boots_wrapper_registers_both_and_reports_tab(
     assert state["pids"] == spawner.detached_pids
     assert state["services"] == ["demo-app", "demo-preview"]
     assert isinstance(state["wrapper_port"], int)
+
+
+def test_up_preview_uses_the_minted_label_not_the_bare_service_name(
+    tmp_path: Path,
+) -> None:
+    """Regression: the wrapper's iframe must target the real registered label.
+
+    forward_port.py mints an unguessable ``<name>-<rand>`` origin label for every
+    registered service. The wrapper page derives the inner iframe's hostname from
+    ``location.host`` by swapping its own leading label for the value passed as
+    ``--inner-service``. When that value was the bare service name (missing the
+    random suffix), the computed hostname was never claimed by frpc/caddy, so the
+    iframe failed to load -- often surfacing as a confusing auth-looking failure
+    that wastes time debugging the wrong layer.
+    """
+    spawner = _FakeSpawner()
+
+    code = _up_preview(tmp_path, spawner=spawner)
+
+    assert code == 0
+    wrapper_argv = spawner.detached_spawns[1]
+    inner_service = wrapper_argv[wrapper_argv.index("--inner-service") + 1]
+    # The label carries the random suffix forward_port.py mints.
+    assert inner_service.startswith("demo-app-")
+    assert inner_service != "demo-app"
+    # The served page bakes the same value into the JS literal.
+    html = wrapper_mod.build_wrapper_html(
+        inner_service=inner_service, title="t", inner_path="/"
+    )
+    assert f'var previewService = "{inner_service}";' in html
 
 
 def test_up_preview_surfaces_only_the_frame_and_titles_it(tmp_path: Path) -> None:
