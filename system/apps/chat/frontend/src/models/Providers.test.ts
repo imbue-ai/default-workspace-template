@@ -131,6 +131,115 @@ describe("whenAccountsReadyToChoose", () => {
   });
 });
 
+describe("isAccountSignedOut", () => {
+  // A fresh module per test: the list and the accounts held signed out are module state.
+  let providers: typeof import("./Providers");
+  const EMPTY_ACCOUNTS_BODY = { accounts: [], mru: null };
+
+  beforeEach(async () => {
+    mockRequest.mockReset();
+    vi.resetModules();
+    providers = await import("./Providers");
+  });
+
+  it("does not call an account signed in on another page signed out, and reads the list again to find it", async () => {
+    // A chat page read its list before the chat list's own chooser signed in to acct-1 and launched this chat on it.
+    mockRequest.mockResolvedValueOnce(EMPTY_ACCOUNTS_BODY).mockResolvedValueOnce(ACCOUNTS_BODY);
+    await providers.loadAccounts();
+
+    expect(providers.isAccountSignedOut("acct-1")).toBe(false);
+    providers.checkChatAccount("acct-1");
+
+    await vi.waitFor(() => expect(providers.accountForAgent("acct-1")?.id).toBe("acct-1"));
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+    expect(providers.isAccountSignedOut("acct-1")).toBe(false);
+  });
+
+  it("calls an account signed out once a fresh read of the list still lacks it", async () => {
+    mockRequest.mockResolvedValueOnce(EMPTY_ACCOUNTS_BODY).mockResolvedValueOnce(EMPTY_ACCOUNTS_BODY);
+    await providers.loadAccounts();
+
+    providers.checkChatAccount("acct-1");
+
+    await vi.waitFor(() => expect(providers.isAccountSignedOut("acct-1")).toBe(true));
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads the list once for an account however many chat list pushes ask", async () => {
+    let answer: (body: typeof EMPTY_ACCOUNTS_BODY) => void = () => {};
+    mockRequest
+      .mockResolvedValueOnce(EMPTY_ACCOUNTS_BODY)
+      .mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    await providers.loadAccounts();
+
+    providers.checkChatAccount("acct-1");
+    providers.checkChatAccount("acct-1");
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+
+    answer(EMPTY_ACCOUNTS_BODY);
+    await vi.waitFor(() => expect(providers.isAccountSignedOut("acct-1")).toBe(true));
+    providers.checkChatAccount("acct-1");
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads nothing for an account the list names, or before the list's first read", async () => {
+    providers.checkChatAccount("acct-1");
+    expect(mockRequest).not.toHaveBeenCalled();
+
+    mockRequest.mockResolvedValueOnce(ACCOUNTS_BODY);
+    await providers.loadAccounts();
+    providers.checkChatAccount("acct-1");
+    providers.checkChatAccount(null);
+
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+    expect(providers.isAccountSignedOut("acct-1")).toBe(false);
+  });
+
+  it("leaves the account signed in when the fresh read fails, and reads again on the next check", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockRequest
+      .mockResolvedValueOnce(EMPTY_ACCOUNTS_BODY)
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(ACCOUNTS_BODY);
+    await providers.loadAccounts();
+
+    providers.checkChatAccount("acct-1");
+    await vi.waitFor(() => expect(consoleError).toHaveBeenCalledOnce());
+    expect(providers.isAccountSignedOut("acct-1")).toBe(false);
+
+    providers.checkChatAccount("acct-1");
+    await vi.waitFor(() => expect(providers.accountForAgent("acct-1")?.id).toBe("acct-1"));
+    expect(providers.isAccountSignedOut("acct-1")).toBe(false);
+    consoleError.mockRestore();
+  });
+
+  it("calls an account this page removed signed out at once, and signed in again once a read names it", async () => {
+    mockRequest
+      .mockResolvedValueOnce(ACCOUNTS_BODY)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(EMPTY_ACCOUNTS_BODY)
+      .mockResolvedValueOnce(ACCOUNTS_BODY);
+    await providers.loadAccounts();
+
+    await providers.deleteAccount("acct-1");
+    expect(providers.isAccountSignedOut("acct-1")).toBe(true);
+
+    await providers.loadAccounts();
+    expect(providers.isAccountSignedOut("acct-1")).toBe(false);
+  });
+
+  it("calls the account signed out when a re-read after a refused send lacks it", async () => {
+    // The send was refused because another window removed acct-1, which this page's list still names.
+    mockRequest.mockResolvedValueOnce(ACCOUNTS_BODY).mockResolvedValueOnce(EMPTY_ACCOUNTS_BODY);
+    await providers.loadAccounts();
+    expect(providers.isAccountSignedOut("acct-1")).toBe(false);
+
+    await providers.rereadAccountsFor("acct-1");
+
+    expect(providers.isAccountSignedOut("acct-1")).toBe(true);
+  });
+});
+
 describe("startFlow", () => {
   beforeEach(() => {
     vi.useFakeTimers();

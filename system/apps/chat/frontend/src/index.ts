@@ -6,10 +6,15 @@
 import m from "mithril";
 import "./style.css";
 import { getChatAgentId, getChatId, getChatSessionId } from "./document-meta";
-import { addActiveAgentChangedListener, initChats } from "./models/Chats";
+import { addActiveAgentChangedListener, addChatsUpdatedListener, getChatById, initChats } from "./models/Chats";
 import { forgetPendingChoice } from "./models/ModelSettings";
 import { trackPendingLaneSettlement } from "./models/PendingLane";
-import { closeProviderChooser, isProviderChooserOpen, loadAccountsWithRetry } from "./models/Providers";
+import {
+  checkChatAccount,
+  closeProviderChooser,
+  isProviderChooserOpen,
+  loadAccountsWithRetry,
+} from "./models/Providers";
 import { ProviderChooserModal } from "./views/ProviderChooserModal";
 import { llmApi } from "./llm-api";
 import type { LlmApi } from "./llm-api";
@@ -84,7 +89,10 @@ async function bootstrap(): Promise<void> {
   });
   // The pointer hides while text is typed into the composer.
   installCursorHidingWhileTyping(document);
-  void loadAccountsWithRetry();
+  // The chat's account, checked against a fresh list whenever this page's list or the chat's binding arrives.
+  const checkOwnChatAccount = (): void => checkChatAccount(getChatById(chatId)?.active_agent.account_id);
+  addChatsUpdatedListener(checkOwnChatAccount);
+  void loadAccountsWithRetry().then(checkOwnChatAccount);
   // A page visited directly follows its own width into and out of the phone layout; a framed one is told.
   window.matchMedia(COMPACT_MEDIA_QUERY).addEventListener("change", () => m.redraw());
   const rootElement = document.getElementById("app");
