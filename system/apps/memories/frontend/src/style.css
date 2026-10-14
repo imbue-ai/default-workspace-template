@@ -1,0 +1,9 @@
+@import "tailwindcss" source(none);
+/* The design system: colour and type tokens, the typography roles and the base layer, shared with
+   every other frontend of the workspace (see system/libs/workspace_ui). This page needs nothing
+   the utilities cannot express. */
+@import "@imbue/workspace-ui/src/base.css";
+
+/* The utility classes live in the TS views' class strings; a class name assembled by string
+   concatenation is NOT detected. */
+@source "./**/*.ts";
