@@ -1,4 +1,5 @@
 # data/memories/
 
-Your agent's long-term memory notes, written and organized by the agent itself
-(Claude's built-in memory system points here). Feel free to read them.
+Your agents' long-term memory notes, written and organized by the agents
+themselves. Claude's built-in memory points here, and pi chats keep the same
+notes. Read, edit or delete them in the "What agents know" app.

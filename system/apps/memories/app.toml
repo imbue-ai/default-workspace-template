@@ -1,0 +1,20 @@
+# The memories app: what the workspace's Claude chats have written down about the user and their
+# work (Claude's built-in memory, data/memories/), who wrote each note and how many chats have
+# read it, and a way to correct or delete a note. It reads everything when asked
+# and keeps nothing between requests, so the shell stops it once no window shows it.
+name = "memories"
+display_name = "What agents know"
+icon = "icon.svg"
+critical = false
+stop_when_no_windows = true
+priority = "memories"
+# After the ways into the workspace (chat, getting started, files, browser, terminal): this is a tool for
+# understanding it.
+launcher_rank = 55
+
+# A preview serves the page on a free port, unregistered, so it never re-points the live row. It
+# reads and writes the live notes folder, as the app does.
+[preview]
+command = ["memories-app", "--no-register"]
+env = {MEMORIES_PORT = "{port:main}", MEMORIES_HOST = "{host}"}
+health_path = "/api/health"
