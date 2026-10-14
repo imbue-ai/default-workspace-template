@@ -96,6 +96,25 @@ def test_references_are_read_off_mcp_config_and_supervisord_programs(
     }
 
 
+def test_a_conf_comment_mentioning_a_secrets_file_is_not_a_reference(
+    tmp_path: Path,
+) -> None:
+    # A base-template service (e.g. host-backup) whose secret is injected by the
+    # platform, not an app/skill declaration, documents the file it reads in a
+    # comment -- never a `with_secrets.py` wrapper on the `command=` line. That
+    # comment must not trip the undeclared-reference check for every template
+    # build, since no included app.toml/SKILL.md could ever declare a file no
+    # adopter supplies themselves.
+    root = tmp_path / "repo"
+    (root / "system/supervisord.conf.d").mkdir(parents=True)
+    (root / "system/supervisord.conf.d/host-backup.conf").write_text(
+        "# Continuous backup. data/.secrets/restic.env is injected by the minds app.\n"
+        "[program:host-backup]\n"
+        "command=uv run host-backup\n"
+    )
+    assert writer.collect_references(root) == {}
+
+
 def test_an_undeclared_reference_and_a_missing_variable_stop_the_publish(
     tmp_path: Path,
 ) -> None:

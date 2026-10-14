@@ -667,6 +667,18 @@ MCP_SERVERS_FILE_NAME = "mcp-servers.json"
 SUPERVISORD_DROPIN_DIRECTORY = "system/supervisord.conf.d"
 
 
+def _conf_scan_text(text: str) -> str:
+    """A `.conf` file's text with `#`-comment lines blanked out.
+
+    Supervisord drop-ins routinely document which secrets-env file a program
+    reads in a leading comment (e.g. a base-template service whose secret is
+    injected by the platform, not an adopter) -- a mention that is not a
+    `with_secrets.py` wrapper invocation and must not read as a reference. See
+    the matching fix in the publish flow's writer.
+    """
+    return "\n".join("" if line.lstrip().startswith("#") else line for line in text.splitlines())
+
+
 def check_secret_references(
     repo_root: Path, manifest: TemplateManifest
 ) -> tuple[str, ...]:
@@ -687,6 +699,8 @@ def check_secret_references(
         if not path.is_file():
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
+        if path.suffix == ".conf":
+            text = _conf_scan_text(text)
         for file in sorted(set(SECRET_REFERENCE_PATTERN.findall(text))):
             if file not in declared:
                 problems.append(
