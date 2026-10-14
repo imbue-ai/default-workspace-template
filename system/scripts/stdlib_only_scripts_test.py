@@ -20,6 +20,7 @@ import pytest
 _SCRIPTS_DIR = Path(__file__).parent
 
 _SCRIPTS_RUN_WITH_SYSTEM_PYTHON = (
+    "agent_memory_context.py",
     "collect_bug_report_diagnostics.py",
     "forward_port.py",
     "install_mngr.py",

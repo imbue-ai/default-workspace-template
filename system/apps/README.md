@@ -15,7 +15,7 @@ Built-in apps:
   follows the workspace's agent observer (the `agent-observer` program, one
   `mngr observe` per workspace), serves the chat pages and their API on port
   8010, and owns the provider accounts. Its frontend, the shell's, and the
-  Getting Started app's are builds of one npm workspace (`system/package.json`)
+  Getting Started and memories apps' are builds of one npm workspace (`system/package.json`)
   sharing the `system/libs/workspace_ui` library.
 - `getting_started/` - The Getting Started page: the "Start something" intents
   and the "Start from a template" shelves (the published template catalog it
@@ -25,6 +25,12 @@ Built-in apps:
   first desktop for the first client that connects, and remembers having done
   so under `data/.state/getting-started/`. Served on port 8030 by the
   `getting-started` package.
+- `memories/` - Agent Memory: the notes Claude and pi chats share in
+  `data/memories/`, grouped by what they are about, with which chat wrote each
+  one, the file as it is on disk, and Edit and Delete (Delete is permanent, and
+  the page says what still holds a copy). It
+  reads everything on request and holds nothing, so it declares
+  `stop_when_no_windows`. Served on port 8050 by the `memories` package.
 - `terminal/` - The terminal (ttyd over the web), including its named
   persistent sessions; a Python package with two entry points: `terminal-app`
   serves the wrapper pages (each frames one session's ttyd page) over the

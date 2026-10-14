@@ -1,0 +1,1 @@
+The memories app is renamed Agent Memory (it was "What agents know") in the notices chats get from `agent_memory_context.py`, the pi memory extension, the app tables in the docs, `system/apps/README.md` and `data/memories/README.md`.
