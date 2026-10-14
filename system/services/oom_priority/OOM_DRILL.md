@@ -10,13 +10,15 @@ To check the shed *order* itself, run the automated drill,
 sleeper per band you name, grows a hog at `oom_score_adj` -1000 until the last
 sleeper is shed, and checks each kill against a prediction of earlyoom's
 badness taken before earlyoom chose it; it prints a JSON verdict and exits
-non-zero on the first wrong victim. It is stdlib-only, so it can be sent in as
-part of the command. `mngr exec` does not pass its stdin through (a `python3 -` fed by
-`< oom_drill.py` runs nothing and exits 0), so the script travels
-base64-encoded:
+non-zero on the first wrong victim. It is stdlib-only and needs just itself and
+the scoring model it shares with other callers (`src/oom_priority/badness.py`),
+in the package's layout, so the pair can be sent in as part of the command,
+whatever template version the workspace runs. `mngr exec` does not pass its
+stdin through (a `python3 -` fed by `< oom_drill.py` runs nothing and exits 0),
+so the pair travels as a base64-encoded tarball:
 
 ```bash
-mngr exec <agent> "echo $(base64 < system/services/oom_priority/bin/oom_drill.py | tr -d '\n') | base64 -d | python3 - --bands 1000,900,800,600,300"
+mngr exec <agent> "mkdir -p /tmp/oom-drill && echo $(tar -C system/services/oom_priority -cz bin/oom_drill.py src/oom_priority/__init__.py src/oom_priority/badness.py | base64 | tr -d '\n') | base64 -d | tar -xz -C /tmp/oom-drill && python3 /tmp/oom-drill/bin/oom_drill.py --bands 1000,900,800,600,300"
 ```
 
 The drill sheds processes for real, so run it only on a disposable workspace,
