@@ -1,0 +1,3 @@
+`run_job.sh` keeps each job's state under `data/.state/jobs/<job-id>/` again. Since the script moved into `system/libs/automations/` it had resolved the workspace root one directory short, so the state went to `system/data/.state/jobs/<job-id>/`: an untracked `system/data/` in `git status`, and a different place from the one the script header and the `manage-scheduled-tasks` and `enable-caretaker` skills name, so seeding or resetting a job as those skills describe had no effect.
+
+A job that already has state in the wrong place has it moved to the right one the next time the job ticks, so no job fires an extra time after the upgrade. State already present at the right path is left as it is.

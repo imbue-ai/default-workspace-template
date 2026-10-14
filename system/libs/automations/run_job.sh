@@ -39,7 +39,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 usage() {
     echo "usage: run_job.sh <job-id> --every <N[mhd]> [--at <hour>] [--retry-after <N[mhd]>] <command...>" >&2
@@ -75,6 +75,16 @@ EVERY_SECONDS=$(to_seconds "$EVERY")
 RETRY_SECONDS=$(to_seconds "$RETRY_AFTER")
 
 STATE_DIR="${MINDS_JOB_STATE_DIR:-$ROOT/data/.state/jobs}/$JOB_ID"
+
+# A build of this script resolved ROOT one level short and kept its state
+# under system/data/.state/jobs. Bring that state along, or every job on an
+# upgraded workspace would look like it had never run and fire again.
+MISPLACED_STATE_DIR="$ROOT/system/data/.state/jobs/$JOB_ID"
+if [ -z "${MINDS_JOB_STATE_DIR:-}" ] && [ -d "$MISPLACED_STATE_DIR" ] && [ ! -e "$STATE_DIR" ]; then
+    mkdir -p "$(dirname "$STATE_DIR")"
+    mv "$MISPLACED_STATE_DIR" "$STATE_DIR"
+    (cd "$ROOT/system" && rmdir -p data/.state/jobs 2>/dev/null) || true
+fi
 mkdir -p "$STATE_DIR"
 
 log() { printf '%s run_job[%s]: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$JOB_ID" "$*"; }

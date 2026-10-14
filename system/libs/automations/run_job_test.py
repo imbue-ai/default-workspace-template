@@ -9,6 +9,7 @@ bash snippet that records its invocations to a marker file.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -192,3 +193,44 @@ def test_missing_arguments_are_a_usage_error(tmp_path: Path) -> None:
     )
     assert result.returncode == 2
     assert "usage:" in result.stderr
+
+
+def _run_from_workspace(workspace: Path) -> subprocess.CompletedProcess[str]:
+    """Run a copy of the script installed in ``workspace``, with no state-dir override."""
+    installed = workspace / "system" / "libs" / "automations" / "run_job.sh"
+    installed.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(_SCRIPT, installed)
+    return subprocess.run(
+        ["bash", str(installed), "job", "--every", "7d", "bash", "-c", f"echo run >> {workspace / 'ran'}"],
+        env={
+            "PATH": "/usr/bin:/bin",
+            "MINDS_JOB_NOW_EPOCH": str(_BASE_NOW),
+            "MINDS_JOB_NOW_HOUR": "12",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_default_state_dir_is_under_the_workspace_data_dir(tmp_path: Path) -> None:
+    """Guards the root derivation: state once landed in system/data/.state/jobs."""
+    result = _run_from_workspace(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "data" / ".state" / "jobs" / "job" / "last_success").read_text().strip() == str(_BASE_NOW)
+    assert not (tmp_path / "system" / "data").exists()
+
+
+def test_state_left_under_system_data_is_moved_and_still_covers_its_window(tmp_path: Path) -> None:
+    misplaced = tmp_path / "system" / "data" / ".state" / "jobs" / "job"
+    misplaced.mkdir(parents=True)
+    (misplaced / "last_attempt").write_text(f"{_BASE_NOW - _DAY}\n")
+    (misplaced / "last_success").write_text(f"{_BASE_NOW - _DAY}\n")
+
+    result = _run_from_workspace(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert _runs(tmp_path) == 0
+    moved = tmp_path / "data" / ".state" / "jobs" / "job" / "last_success"
+    assert moved.read_text().strip() == str(_BASE_NOW - _DAY)
+    assert not (tmp_path / "system" / "data").exists()
