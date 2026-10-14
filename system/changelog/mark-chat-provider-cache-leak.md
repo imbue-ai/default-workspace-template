@@ -1,0 +1,1 @@
+Adds the design spec `docs/specs/chat-mngr-context-lifecycle.md`, which explains why the chat server kept one mngr context per message, stop press, terminal open and agent listing, how much memory each held, and how the chat now releases them through a single `mngr_context()` context manager.

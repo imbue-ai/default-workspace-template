@@ -17,6 +17,7 @@ from playwright.sync_api import sync_playwright
 
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.testing import FORTRESS_CHROMIUM_PATH
+from imbue.chat.testing import prepare_isolated_mngr_host_dir
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 
 
@@ -224,6 +225,19 @@ def browser(
         # without it a mid-teardown error can leak the browser subprocess
         # into session_cleanup's leaked-child check.
         browser_instance.close()
+
+
+@pytest.fixture
+def isolated_mngr_host_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """An empty mngr host dir with the isolated profile (opted into pytest, docker and modal off), as ``MNGR_HOST_DIR``.
+
+    For tests that run real mngr discovery in-process: the context they build loads that
+    profile, so discovery never reaches beyond this machine.
+    """
+    host_dir = tmp_path / "mngr-host"
+    prepare_isolated_mngr_host_dir(host_dir)
+    monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
+    return host_dir
 
 
 @pytest.fixture

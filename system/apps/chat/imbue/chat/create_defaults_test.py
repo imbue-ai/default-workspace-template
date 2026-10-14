@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from imbue.chat.agent_discovery import mngr_context
 from imbue.chat.create_defaults import CreateDefaults
 from imbue.chat.create_defaults import ENV_KEY
 from imbue.chat.create_defaults import LABEL_KEY
@@ -21,9 +22,6 @@ from imbue.chat.create_defaults import managed_create_settings
 from imbue.chat.create_defaults import write_create_defaults
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.testing import read_create_defaults_type
-from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
-from imbue.mngr.config.loader import load_config
-from imbue.mngr.main import get_or_create_plugin_manager
 
 _COMMITTED_SETTINGS = Path(__file__).parents[5] / ".mngr" / "settings.toml"
 
@@ -172,10 +170,9 @@ def test_the_file_loads_beside_the_committed_settings_and_resolves_the_create_de
     create_defaults_path().write_text("is_allowed_in_pytest = true\n")
     write_create_defaults(create_defaults_path(), defaults)
 
-    with ConcurrencyGroup(name="create-defaults-test") as cg:
-        context = load_config(get_or_create_plugin_manager(), cg, strict=False)
+    with mngr_context() as context:
+        create = context.config.commands["create"].defaults
 
-    create = context.config.commands["create"].defaults
     expected = managed_create_settings(defaults)
     assert create["type"] == harness.value
     assert list(create["label"]) == expected[LABEL_KEY]
