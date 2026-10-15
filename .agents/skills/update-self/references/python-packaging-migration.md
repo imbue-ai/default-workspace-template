@@ -18,7 +18,7 @@ How each shows up during the update:
 | `test_no_plain_uv_run_in_agent_facing_files` or `test_python3_invocations_name_bare_entry_points` names a user file | [Commands in the user's docs](#commands-in-the-users-docs) |
 | `system/test_entry_point_import_cost.py` names a user skill's entry | [A user skill with scripts](#a-user-skill-with-scripts), last step |
 | `test_only_the_declared_bare_stubs_edit_sys_path` names a user file | [A user skill with scripts](#a-user-skill-with-scripts) |
-| `system/test_no_type_errors.py` reports errors in a user skill or script | [Type errors in the user's scripts](#type-errors-in-the-users-scripts) |
+| `system/test_no_type_errors.py` reports errors in a user skill or script, or a user app's own `test_no_type_errors` fails | [Type errors in the user's skills and apps](#type-errors-in-the-users-skills-and-apps) |
 
 ## A user skill with scripts
 
@@ -73,11 +73,21 @@ check sees it; after editing one, re-install it live with
   `from use_ai_integration_skill.claude_p import ...` (a copy of `claude_p.py`
   inside the user's own app is theirs and stays as it is).
 
-## Type errors in the user's scripts
+## Type errors in the user's skills and apps
 
 The root project now type-checks `.agents/`, `system/scripts/` and the root-level
 tests (`uv run --no-sync ty check` from the repo root), so a user skill's scripts are
-checked for the first time. Fix each error in the code: narrow an `X | None` with a
+checked for the first time; a user app is checked by its own `test_no_type_errors`.
+
+Fix these during the update, in the user's skills and apps alike, rather than
+handing them back: the update brought the check, so the update fixes what it
+finds. The exception is an error whose only fix changes behavior the user can
+see -- what a skill or command does or prints, or what an app shows or accepts.
+Leave that code as it is and raise it as a customization the update cannot keep
+(a `question`, case (c), in `update-self-worker.md`), naming the error, the
+behavior change the fix needs, and the options.
+
+Fix each error in the code: narrow an `X | None` with a
 check that fails loudly where `None` cannot happen, give a dict the key type its
 callers use, correct a wrong annotation. Don't silence a rule with an ignore
 comment unless the code is correct and ty cannot express it, and say so in the

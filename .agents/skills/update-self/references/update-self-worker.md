@@ -316,10 +316,10 @@ in your report.
   merged set: `uv lock --check` then `uv sync --all-packages`. A failure here
   is a precise blocker (an unparseable root lock means no service in the
   workspace can start); fix it before running anything else. A failure here
-  or in the root suites below on the workspace's own skills, services or docs
+  or in the suites below on the workspace's own skills, apps, services or docs
   that the update's changelog ties to a changed rule (for example a user
   skill whose `scripts/` still holds PEP 723 scripts, which the root import-cost
-  and type checks reject) is fixed by following
+  and type checks reject, or a type error in a user skill or app) is fixed by following
   `references/python-packaging-migration.md`.
   Separately, before any suite or boot below runs, sync the venv
   (`uv sync --all-packages --frozen`) whenever the merge changed a

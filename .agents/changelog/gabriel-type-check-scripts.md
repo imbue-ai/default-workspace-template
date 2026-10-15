@@ -2,7 +2,7 @@
 
 - **update-self on an older Python:** the staged `update_self.py` now checks the interpreter before importing anything. On a workspace whose system Python is older than 3.12 (a local workspace from before 2026-09-14), it exits with code 75 and says the update is impossible. Step 3a then treats that as a migration-required update and offers `migrate-workspace`.
 
-- **Migration reference:** a new section on fixing ty errors in a workspace's own scripts, and the command rewrites also cover the user's scheduled jobs in `data/.state/cron.d/`, which no check scans.
+- **Migration reference:** a new section on fixing ty errors in a workspace's own skills and apps. The update-self worker fixes them during the update, except an error whose only fix changes behavior the user can see, which it raises with the user instead. The command rewrites also cover the user's scheduled jobs in `data/.state/cron.d/`, which no check scans.
 
 - **Syncing after a merge:** after merging a worker's branch that changed a `pyproject.toml` or `uv.lock` (such as a newly crystallized skill's `python/` project), the lead now runs `uv sync --all-packages --frozen`, so the new package is installed before anything runs it with `uv run --no-sync`. `running-python.md` lists this case. The update-self worker does the same before its validation suites and boots whenever the merge changed a `pyproject.toml` or `uv.lock`, including one only upstream changed, since those suites run `uv run --no-sync`.
 
