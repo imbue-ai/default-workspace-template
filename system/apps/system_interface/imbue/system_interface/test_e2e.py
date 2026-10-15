@@ -15,6 +15,7 @@ import contextlib
 import json
 import re
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -2409,7 +2410,7 @@ def test_a_kept_rollback_point_raises_one_banner_naming_its_apps_and_everything_
     frame = _page_frame(page, window_id)
     expect(page.locator(".update-notice-banner")).to_have_count(0)
 
-    write_rollback_point(e2e_server.repo_root, apps=[_STUB_APP_NAME, "system_interface"])
+    write_rollback_point(e2e_server.repo_root, apps=[_STUB_APP_NAME, "system_interface"], applied_at=time.time())
 
     banner = page.locator(".update-notice-banner")
     expect(banner).to_be_visible(timeout=15000)

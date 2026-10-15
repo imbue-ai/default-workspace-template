@@ -8,6 +8,7 @@
 import m from "mithril";
 import { findWindow } from "../reducers/desktopState";
 import type { DesktopStore } from "../store/DesktopStore";
+import { BootFailureNotice } from "./FailureLine";
 
 export interface SoloViewAttrs {
   readonly store: DesktopStore;
@@ -21,6 +22,7 @@ export const SoloView: m.Component<SoloViewAttrs> = {
     const { store, windowId } = vnode.attrs;
     const state = store.getState();
     const isKnown = findWindow(state, windowId) !== null;
+    const bootFailure = store.getBootFailure();
     return m(
       "div",
       {
@@ -33,16 +35,22 @@ export const SoloView: m.Component<SoloViewAttrs> = {
           oncreate: (created: m.VnodeDOM) => vnode.attrs.onPagesHostCreated(created.dom as HTMLElement),
           onbeforeupdate: () => false,
         }),
-        isKnown || !state.isDesktopsLoaded
-          ? null
-          : m(
+        bootFailure !== null && !state.isDesktopsLoaded
+          ? m(
               "div",
-              {
-                "data-solo-window-gone": "",
-                class: "flex h-full items-center justify-center text-(length:--font-size-row) text-faint",
-              },
-              "This window is no longer open.",
-            ),
+              { class: "flex h-full items-center justify-center" },
+              m(BootFailureNotice, { notice: bootFailure }),
+            )
+          : isKnown || !state.isDesktopsLoaded
+            ? null
+            : m(
+                "div",
+                {
+                  "data-solo-window-gone": "",
+                  class: "flex h-full items-center justify-center text-(length:--font-size-row) text-faint",
+                },
+                "This window is no longer open.",
+              ),
       ],
     );
   },

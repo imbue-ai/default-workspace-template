@@ -15,15 +15,17 @@ It runs as the `getting-started` supervisord program (`system/supervisord.conf.d
 from its own uv tool environment (`system/scripts/build_workspace.sh`), serving on
 `http://127.0.0.1:8030`:
 
-- `GET /`: the page (the frontend's build, `src/getting_started/static/index.html`; a
-  placeholder until it is built), with its bundle under `/assets/`.
+- `GET /`: the page (the frontend's build, `src/getting_started/static/index.html`; until it is
+  built, a placeholder that checks again every ten seconds and offers Reload and, inside a shell's
+  window, an agent to rebuild it), with its bundle under `/assets/`.
 - `GET /api/health`: `{"status", "is_frontend_built"}`, the app's liveness probe (the update
   apply's post-restart probes cover critical apps only, which this one is not).
 - `GET /api/templates-catalog`: the template catalog (`catalog/README.md` at the repo root),
   fetched from `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL` (the shell's old variable name, kept
   so nothing outside the workspace changes), reused for six hours, and kept as a last good
   copy under `data/.state/getting-started/template_catalog.json`; `{"catalog": null}` when
-  no URL is configured, a 503 when nothing could ever be loaded.
+  no URL is configured, a 503 when nothing could ever be loaded. A failed fetch is not tried again
+  for a minute, except by `?retry=1`, which the page's "Try again" sends.
 - `GET /_static/app_contract.js`: the shell's browser-side contract module, served from this
   origin as every app serves it.
 

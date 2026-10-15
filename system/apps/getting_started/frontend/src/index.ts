@@ -13,7 +13,11 @@ import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
 import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
-import { ensureTemplateCatalogRequested, getTemplateCatalogState } from "./models/TemplateCatalog";
+import {
+  ensureTemplateCatalogRequested,
+  getTemplateCatalogState,
+  retryTemplateCatalog,
+} from "./models/TemplateCatalog";
 import { GettingStartedPage } from "./views/GettingStartedPage";
 
 export const PAGE_PATH = "/";
@@ -25,6 +29,8 @@ function bootstrap(): void {
     onHandshake: (received) => {
       handshake = received;
       connection.location(PAGE_PATH, PAGE_TITLE);
+      // The handshake says whether Report a bug can work, which the page's failure line reads.
+      m.redraw();
     },
   });
   window.addEventListener("focus", () => connection.focused());
@@ -40,6 +46,8 @@ function bootstrap(): void {
       m(GettingStartedPage, {
         catalog: getTemplateCatalogState(),
         onStartWithText: (text) => connection.startWithText(text),
+        onRetryTemplates: retryTemplateCatalog,
+        connection,
       }),
   });
 }

@@ -1,5 +1,47 @@
+from enum import auto
+from typing import Final
+
+from imbue.imbue_common.enums import LowerCaseStrEnum
+
+
+class RefusalKind(LowerCaseStrEnum):
+    """What a refusal is, for a frontend that words it with what only it holds: the name of an app the shell no
+    longer has, the label of a launch path an app no longer offers, the sentence of the press that failed (a wire
+    value: the ``kind`` of an error answer)."""
+
+    APP_UNAVAILABLE = auto()
+    LAUNCH_PATH_GONE = auto()
+    WINDOW_GONE = auto()
+    # A state file could not be written: the frontend offers to try the change again.
+    OUT_OF_SPACE = auto()
+    NOT_SAVED = auto()
+
+
+APP_UNAVAILABLE_SENTENCE: Final[str] = "This app isn't available in this workspace right now, so nothing was changed."
+WINDOW_GONE_SENTENCE: Final[str] = "That window is no longer here, so nothing was changed. Try again."
+DESKTOP_GONE_SENTENCE: Final[str] = "That desktop was just deleted, so nothing was changed."
+LAST_DESKTOP_SENTENCE: Final[str] = "You can't delete your only desktop. Add another one first."
+OUT_OF_SPACE_SENTENCE: Final[str] = "This workspace is out of space, so your change could not be saved."
+NOT_SAVED_SENTENCE: Final[str] = "Your change could not be saved. Try again. If this persists, report a bug."
+
+
 class ShellError(Exception):
-    """Base error for everything in the shell subpackage."""
+    """Base error for everything in the shell subpackage. The message is the developer's reason, which the log,
+    agents, and "See details" read; ``user_facing_message``, when set, is the sentence a person is shown in its place,
+    ``reportable`` whether that sentence asks for a bug report, and ``kind`` names the refusal for a frontend that
+    words it itself."""
+
+    def __init__(
+        self,
+        message: str = "",
+        user_facing_message: str | None = None,
+        kind: RefusalKind | None = None,
+        reportable: bool | None = None,
+    ) -> None:
+        self.user_facing_message = user_facing_message
+        self.kind = kind
+        self.reportable = reportable
+        super().__init__(message)
 
 
 class InvalidShellValueError(ShellError, ValueError):
@@ -51,7 +93,7 @@ class DesktopNotFoundError(ShellError, LookupError):
 
     def __init__(self, desktop: str) -> None:
         self.desktop = desktop
-        super().__init__(f"Desktop '{desktop}' not found")
+        super().__init__(f"Desktop '{desktop}' not found", user_facing_message=DESKTOP_GONE_SENTENCE)
 
 
 class DesktopConflictError(ShellError, ValueError):
@@ -60,6 +102,9 @@ class DesktopConflictError(ShellError, ValueError):
 
 class LastDesktopError(ShellError, ValueError):
     """The last remaining desktop cannot be deleted (answered 409)."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, user_facing_message=LAST_DESKTOP_SENTENCE)
 
 
 class DesktopValueError(ShellError, ValueError):
@@ -72,9 +117,7 @@ class LaunchFailureError(ShellError):
     whether that sentence asks for a bug report; both are None when the app gave none (the frontends word it then)."""
 
     def __init__(self, message: str, user_facing_message: str | None = None, reportable: bool | None = None) -> None:
-        self.user_facing_message = user_facing_message
-        self.reportable = reportable
-        super().__init__(message)
+        super().__init__(message, user_facing_message=user_facing_message, reportable=reportable)
 
 
 class LaunchRefusedError(LaunchFailureError, ValueError):
@@ -90,9 +133,9 @@ class LaunchUnavailableError(LaunchFailureError, RuntimeError):
 class WindowNotFoundError(ShellError, LookupError):
     """No window on the desktop has the given id."""
 
-    def __init__(self, window: str) -> None:
+    def __init__(self, window: str, user_facing_message: str | None = None, kind: RefusalKind | None = None) -> None:
         self.window = window
-        super().__init__(f"Window '{window}' not found")
+        super().__init__(f"Window '{window}' not found", user_facing_message=user_facing_message, kind=kind)
 
 
 class WindowPoppedOutError(ShellError, ValueError):

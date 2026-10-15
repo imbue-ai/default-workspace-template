@@ -23,10 +23,12 @@ import {
   menuCardClass,
   menuDividerClass,
 } from "@imbue/workspace-ui/src/components/menu";
+import type { FailureNotice } from "../model/failures";
 import { appShortcutOf } from "../model/launch";
 import { shortcutKey } from "../model/records";
 import type { LauncherMenuRows, LauncherRow, TextRow } from "../reducers/launcherRows";
 import { isRowEnabled } from "../reducers/launcherRows";
+import { FailureLine } from "./FailureLine";
 import { appGlyph, glyph } from "./glyphs";
 
 /** An app's icon in a row, filling the cell that holds it, so its tile reads as the tile it wears
@@ -39,6 +41,7 @@ const MARK_GLYPH_SIZE = 20;
 const SHEET_APP_GLYPH_SIZE = 32;
 const SHEET_MARK_GLYPH_SIZE = 22;
 const NO_MATCH_MESSAGE = "No apps or windows match";
+export const NOTHING_TO_OPEN_MESSAGE = "Nothing in this workspace can be opened yet.";
 /** How many words of the typed text a free-text row's caption repeats. */
 const PREVIEW_WORD_COUNT = 4;
 
@@ -59,6 +62,8 @@ export interface LauncherSectionsAttrs {
 export interface LauncherMenuAttrs extends Omit<LauncherSectionsAttrs, "isSheet"> {
   /** How far above the backdrop's foot the card's foot sits, in px: the field's rise above its one row. */
   readonly bottomOffsetPx: number;
+  /** Why the last row the launcher ran failed, shown at the card's foot, by the field that still holds its text. */
+  readonly failure: FailureNotice | null;
 }
 
 /** The key that runs the secondary text action, as the platform spells it. */
@@ -144,6 +149,7 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherSectionsAttrs):
         {
           ...rowAttrs(row, index, attrs),
           "data-launch": shortcutKey(row.app.name, row.launchPath.id),
+          ...hoverTooltipAttrs(row.stoppedReason),
           oncontextmenu:
             onAppShortcutContextMenu !== null && appShortcutOf(row.app)?.launch === row.launchPath.id
               ? (event: MouseEvent) => {
@@ -225,13 +231,19 @@ function launcherSections(attrs: LauncherSectionsAttrs): m.Children {
           textRows.map((row, index) => rowView(row, textFrom + index, attrs)),
         ]),
     rows.length === 0
-      ? m(
-          "p",
-          { class: NO_MATCH_CLASS },
-          isNoMatch ? NO_MATCH_MESSAGE : "No apps are registered in this workspace yet.",
-        )
+      ? m("p", { class: NO_MATCH_CLASS }, isNoMatch ? NO_MATCH_MESSAGE : NOTHING_TO_OPEN_MESSAGE)
       : null,
   ];
+}
+
+/** Why a run of the launcher (or the phone's start sheet) failed, beside its field. */
+export function launcherFailureLine(failure: FailureNotice | null): m.Children {
+  if (failure === null) return null;
+  return m(
+    "div",
+    { class: "mx-3 my-1.5" },
+    m(FailureLine, { notice: failure, marker: "launcher-failure", messageClass: "type-helper text-danger" }),
+  );
 }
 
 /** The sections alone, for a surface that frames them itself. */
@@ -254,7 +266,7 @@ export function LauncherMenu(): m.Component<LauncherMenuAttrs> {
           // Anchored above the field (plan section 4.2): the card rises with a field that grew past one row.
           style: { bottom: `${attrs.bottomOffsetPx}px` },
         },
-        launcherSections({ ...attrs, isSheet: false }),
+        [launcherSections({ ...attrs, isSheet: false }), launcherFailureLine(attrs.failure)],
       );
     },
   };

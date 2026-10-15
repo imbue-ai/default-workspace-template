@@ -2,15 +2,25 @@
  * The dialog for one desktop's settings (plan section 4.8): its name, colour, glyph, and wallpaper,
  * plus the one place a desktop can be deleted. Deleting is confirm-gated in
  * place (a second, red button inside this same dialog) rather than a second stacked dialog. The
- * last desktop cannot be deleted; the shell refuses with a 409 the dialog shows.
+ * last desktop cannot be deleted: its Delete is disabled, saying why, and the shell's refusal (another window
+ * deleted the other desktop meanwhile) says the same. A failed save or delete says which, with the shell's own
+ * words behind "See details".
  */
 
 import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { MODAL_LABEL_CLASS, MODAL_MESSAGE_CLASS, Modal } from "@imbue/workspace-ui/src/components/Modal";
+import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
+import type { FailureNotice } from "../model/failures";
 import type { Desktop, Wallpaper, WallpaperListing } from "../model/records";
+import { FailureLine } from "./FailureLine";
 import { SQUIGGLE_GLYPHS, squiggleMarkup } from "./squiggles";
+
+/** Why the only desktop cannot be deleted, on its disabled Delete. */
+export const ONLY_DESKTOP_REASON = "You can't delete your only desktop. Add another one first.";
+const SETTINGS_NOT_SAVED = "These settings couldn't be saved";
+const DESKTOP_NOT_DELETED = "This desktop couldn't be deleted";
 
 // The palette is exactly the glyphs' own signature colors, so every desktop colour belongs to
 // the family the squiggles were drawn in.
@@ -25,6 +35,10 @@ export interface DesktopSettingsDialogAttrs {
   readonly wallpapers: readonly WallpaperListing[] | null;
   /** Whether the dialog opens straight into the delete confirmation. */
   readonly isDeleting: boolean;
+  /** Whether this is the workspace's only desktop, which cannot be deleted. */
+  readonly isOnlyDesktop: boolean;
+  /** A failed save or delete as the dialog's line says it: what failed, a sentence stem, then the reason. */
+  readonly wordFailure: (whatFailed: string, error: unknown) => FailureNotice;
   readonly onSave: (name: string, color: string, glyph: number, wallpaper: Wallpaper | null) => Promise<void>;
   readonly onDelete: () => Promise<void>;
   readonly onCancel: () => void;
@@ -48,7 +62,7 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
   let isSaving = false;
   let isDeleting = false;
   let isConfirmingDelete = false;
-  let error: string | null = null;
+  let error: FailureNotice | null = null;
 
   async function save(attrs: DesktopSettingsDialogAttrs): Promise<void> {
     const chosen = name.trim();
@@ -60,7 +74,7 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
     try {
       await attrs.onSave(chosen, color, glyphIndex, resolvedWallpaper(attrs.wallpapers));
     } catch (e) {
-      error = (e as Error).message;
+      error = attrs.wordFailure(SETTINGS_NOT_SAVED, e);
       isSaving = false;
     }
     m.redraw();
@@ -74,7 +88,7 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
     try {
       await attrs.onDelete();
     } catch (e) {
-      error = (e as Error).message;
+      error = attrs.wordFailure(DESKTOP_NOT_DELETED, e);
       isDeleting = false;
     }
     m.redraw();
@@ -198,15 +212,19 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
   function editActions(attrs: DesktopSettingsDialogAttrs, trimmedName: string): m.Children {
     return [
       m(
-        Button,
-        {
-          extra: "desktop-settings-delete mr-auto",
-          disabled: isSaving || isDeleting,
-          onclick() {
-            isConfirmingDelete = true;
+        "span",
+        { class: "mr-auto inline-block", ...hoverTooltipAttrs(attrs.isOnlyDesktop ? ONLY_DESKTOP_REASON : null) },
+        m(
+          Button,
+          {
+            extra: "desktop-settings-delete",
+            disabled: isSaving || isDeleting || attrs.isOnlyDesktop,
+            onclick() {
+              isConfirmingDelete = true;
+            },
           },
-        },
-        "Delete",
+          "Delete",
+        ),
       ),
       m(Button, { onclick: attrs.onCancel, disabled: isSaving || isDeleting }, "Cancel"),
       m(
@@ -280,7 +298,17 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
           ),
           m("label", { class: MODAL_LABEL_CLASS }, "Wallpaper"),
           m("div", { class: "mb-3" }, wallpaperPicker(attrs)),
-          error ? m("p", { class: "type-helper mt-1 text-danger" }, error) : null,
+          error === null
+            ? null
+            : m(
+                "div",
+                { class: "mt-1" },
+                m(FailureLine, {
+                  notice: error,
+                  marker: "desktop-settings-error",
+                  messageClass: "type-helper text-danger",
+                }),
+              ),
           isConfirmingDelete
             ? m("p", { class: MODAL_MESSAGE_CLASS }, [
                 "Delete ",

@@ -37,7 +37,8 @@ export const OPEN_SHARE_SETTINGS: "minds:open-share-settings" =
 // Studio shell; show that chat. Payload: { chatId } (the chat's id, which is its
 // first agent's id). No page handles it here: the shell relays it to the app
 // whose manifest registers the type.
-const FOCUS_CHAT: "minds:focus-chat" = "FOCUS_CHAT" in embedContract ? embedContract.FOCUS_CHAT : "minds:focus-chat";
+export const FOCUS_CHAT: "minds:focus-chat" =
+  "FOCUS_CHAT" in embedContract ? embedContract.FOCUS_CHAT : "minds:focus-chat";
 // Workspace -> embedder: this page's endpoint is listening. Payload: {}. The
 // embedder holds a focus-chat ask until it arrives, rather than guessing when
 // a freshly-mounted frame's page is live.

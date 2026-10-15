@@ -1,6 +1,7 @@
 """The shell's state files: JSON documents under ``data/.state/system_interface/``, written atomically under one lock."""
 
 import contextlib
+import errno
 import json
 import os
 import threading
@@ -14,6 +15,10 @@ from loguru import logger
 from pydantic import ValidationError
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.pure import pure
+from imbue.system_interface.shell.errors import NOT_SAVED_SENTENCE
+from imbue.system_interface.shell.errors import OUT_OF_SPACE_SENTENCE
+from imbue.system_interface.shell.errors import RefusalKind
 from imbue.system_interface.shell.errors import ShellStateError
 
 # Where the shell keeps its state (desktop contracts.md section 4), relative to the workspace root the
@@ -25,6 +30,8 @@ DEFAULT_STATE_DIRECTORY: Final[Path] = Path("data/.state/system_interface")
 STATE_FILES_LOCK: Final[threading.RLock] = threading.RLock()
 
 _DocumentT = TypeVar("_DocumentT", bound=FrozenModel)
+
+_OUT_OF_SPACE_ERRNOS: Final[frozenset[int]] = frozenset({errno.ENOSPC, errno.EDQUOT})
 
 
 def read_json_object(path: Path) -> dict[str, Any] | None:
@@ -76,4 +83,17 @@ def write_json_atomic(path: Path, document: dict[str, Any]) -> None:
         # directory may be the very thing that is wrong).
         with contextlib.suppress(OSError):
             temp_path.unlink(missing_ok=True)
-        raise ShellStateError(f"cannot write shell state file {path}: {e}") from e
+        raise state_write_error(path, e) from e
+
+
+@pure
+def state_write_error(path: Path, error: OSError) -> ShellStateError:
+    """The error a failed write of ``path`` is answered with: the path and errno for the log and "See details", and a
+    sentence that says a full disk is one, since that is the cause a person can do something about."""
+    is_out_of_space = error.errno in _OUT_OF_SPACE_ERRNOS
+    return ShellStateError(
+        f"cannot write shell state file {path}: {error}",
+        user_facing_message=OUT_OF_SPACE_SENTENCE if is_out_of_space else NOT_SAVED_SENTENCE,
+        kind=RefusalKind.OUT_OF_SPACE if is_out_of_space else RefusalKind.NOT_SAVED,
+        reportable=not is_out_of_space,
+    )

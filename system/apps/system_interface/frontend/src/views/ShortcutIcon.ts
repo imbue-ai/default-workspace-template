@@ -17,6 +17,7 @@ import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverToolt
 import type { PixelPoint, PixelRect } from "../geometry/frames";
 import type { AppRecord, DesktopShortcut, GridCell } from "../model/records";
 import { shortcutKey } from "../model/records";
+import { stoppedSentence } from "../model/failures";
 import { appGlyph } from "./glyphs";
 import { rectStyle } from "./pixelStyle";
 
@@ -104,10 +105,11 @@ function shortcutContent(app: AppRecord | undefined, label: string, isLifted: bo
   ];
 }
 
-/** The hover text a shortcut owes: why it is faint, or nothing when it is ready. */
-export function shortcutTooltip(label: string, isStopped: boolean, isConnecting: boolean): string | null {
+/** The hover text a shortcut owes: why it is faint (in the words its window's placeholder uses), or nothing when it
+ *  is ready. */
+export function shortcutTooltip(app: AppRecord | undefined, isStopped: boolean, isConnecting: boolean): string | null {
   if (isConnecting) return CONNECTING_TOOLTIP;
-  return isStopped ? `${label}: not running` : null;
+  return isStopped && app !== undefined ? stoppedSentence(app) : null;
 }
 
 /** What being in the hand comes to, spelled once for the render and for the per-frame paint of the drag:
@@ -174,7 +176,7 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
               : "") +
             (isStopped || isConnecting ? "text-faint" : "text-primary"),
           style: { ...rectStyle(rect), ...liftStyle(lift) },
-          ...hoverTooltipAttrs(shortcutTooltip(label, isStopped, isConnecting)),
+          ...hoverTooltipAttrs(shortcutTooltip(app, isStopped, isConnecting)),
           onclick: isRunOnClick ? onRun : onSelect,
           // A double tap's dblclick follows two clicks that already ran the shortcut.
           ondblclick: (event: MouseEvent) => {

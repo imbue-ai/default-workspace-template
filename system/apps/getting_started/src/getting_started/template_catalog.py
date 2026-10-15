@@ -254,7 +254,9 @@ class TemplateCatalogStore(MutableModel):
     _fetched_at: float | None = PrivateAttr(default=None)
     _failed_at: float | None = PrivateAttr(default=None)
 
-    def read(self) -> TemplateCatalogReading:
+    def read(self, is_retry: bool = False) -> TemplateCatalogReading:
+        """The freshest catalog held, fetching first when the held copy is due; ``is_retry`` (a person asking again)
+        fetches past the hold that follows a failed fetch."""
         if self.catalog_url == "":
             return TemplateCatalogReading(availability=TemplateCatalogAvailability.DISABLED, catalog=None)
         with self._lock:
@@ -262,16 +264,19 @@ class TemplateCatalogStore(MutableModel):
                 self._catalog = self._read_cache_file()
                 self._is_cache_loaded = True
             now = time.monotonic()
-            if self._should_fetch(now):
+            if self._should_fetch(now, is_retry):
                 self._refresh_locked(now)
             if self._catalog is None:
                 return TemplateCatalogReading(availability=TemplateCatalogAvailability.UNAVAILABLE, catalog=None)
             availability = TemplateCatalogAvailability.STALE if self._is_stale else TemplateCatalogAvailability.FRESH
             return TemplateCatalogReading(availability=availability, catalog=self._catalog)
 
-    def _should_fetch(self, now: float) -> bool:
-        if self._failed_at is not None and now - self._failed_at < self.retry_after_failure_seconds:
-            return False
+    def _should_fetch(self, now: float, is_retry: bool) -> bool:
+        if self._failed_at is not None:
+            if is_retry:
+                return True
+            if now - self._failed_at < self.retry_after_failure_seconds:
+                return False
         return self._fetched_at is None or now - self._fetched_at >= self.fresh_for_seconds
 
     def _refresh_locked(self, now: float) -> None:

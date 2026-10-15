@@ -34,7 +34,12 @@ def test_the_page_says_it_is_not_built_until_the_bundle_exists_and_then_serves_i
     client = _client(tmp_path)
     response = client.get("/")
     assert response.status_code == 200
-    assert b"not been built" in response.data
+    page = response.text
+    assert "The Getting Started page isn't available right now. It comes back on its own once it is rebuilt." in page
+    assert 'id="reload">Reload</button>' in page and "Ask an agent to\nrebuild it" in page
+    # The build command is behind "See details", and the page asks its health probe whether it has been built since.
+    assert page.index("<summary>See details</summary>") < page.index("<code>npm run build</code>")
+    assert 'fetch("api/health"' in page and 'import("/_static/app_contract.js")' in page
     assert client.get("/api/health").get_json() == {"status": "ok", "is_frontend_built": False}
 
     (tmp_path / "static" / "assets").mkdir(parents=True)
@@ -77,6 +82,20 @@ def test_the_catalog_route_says_when_nothing_could_be_loaded_and_answers_null_wh
     disabled = _client(tmp_path / "disabled", catalog_url="").get("/api/templates-catalog")
     assert disabled.status_code == 200
     assert disabled.get_json() == {"catalog": None, "is_stale": False}
+
+
+def test_a_try_again_fetches_the_catalog_past_the_hold_after_a_failed_fetch(tmp_path: Path) -> None:
+    fetcher = FakeTemplateCatalogFetcher()
+    client = _client(tmp_path, fetcher=fetcher)
+    assert client.get("/api/templates-catalog").status_code == 503
+    fetcher.body_by_url[_CATALOG_URL] = catalog_document(catalog_template_document("inbox"))
+
+    # An ordinary read waits out the hold that follows a failure; a person's Try again does not.
+    assert client.get("/api/templates-catalog").status_code == 503
+    retried = client.get("/api/templates-catalog?retry=1")
+
+    assert retried.status_code == 200 and retried.get_json()["catalog"]["templates"][0]["slug"] == "inbox"
+    assert fetcher.fetched_urls == [_CATALOG_URL, _CATALOG_URL]
 
 
 @pytest.mark.parametrize("is_built", [False, True])

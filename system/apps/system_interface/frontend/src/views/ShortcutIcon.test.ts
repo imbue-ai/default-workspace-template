@@ -32,9 +32,11 @@ describe("shortcutLabel", () => {
 
 describe("shortcutTooltip", () => {
   it("says the page is connecting before the apps are known, else why the app is faint, else nothing", () => {
-    expect(shortcutTooltip("Docs", false, true)).toBe(CONNECTING_TOOLTIP);
-    expect(shortcutTooltip("Docs", true, false)).toBe("Docs: not running");
-    expect(shortcutTooltip("Docs", false, false)).toBeNull();
+    expect(shortcutTooltip(undefined, false, true)).toBe(CONNECTING_TOOLTIP);
+    // The words a stopped app's window says, which tell an app the workspace does not run from one it keeps on.
+    expect(shortcutTooltip({ ...docs, program: "" }, true, false)).toBe("Docs isn't running.");
+    expect(shortcutTooltip({ ...docs, program: "docs" }, true, false)).toBe("Docs is not running right now.");
+    expect(shortcutTooltip(docs, false, false)).toBeNull();
   });
 });
 

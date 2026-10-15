@@ -10,6 +10,7 @@ proxies anything, and answers every method and path the same way.
 
 import errno
 import html
+import json
 import socket
 import threading
 from collections.abc import Callable
@@ -36,17 +37,20 @@ _LOOPBACK_HOSTS: Final[frozenset[str]] = frozenset({"127.0.0.1", "localhost", ":
 _REQUEST_READ_TIMEOUT_SECONDS: Final[float] = 2.0
 _REQUEST_READ_LIMIT_BYTES: Final[int] = 8192
 _LISTEN_BACKLOG: Final[int] = 8
-# A stopped app's page reloads every few seconds until the app answers; one that failed to start waits longer
-# between attempts, since each reload is a new request and so a new wake.
+# A stopped app's page reloads every few seconds until the app answers. A page saying it could not start does not
+# reload itself: each reload is a new request and so a new wake, which spends the app's wake budget, so it waits for
+# the person's Try again. Its answer still asks a client that retries on its own to wait longer between attempts.
 STARTING_REFRESH_SECONDS: Final[int] = 2
 FAILED_REFRESH_SECONDS: Final[int] = 15
 
 
 class ParkedPageKind(LowerCaseStrEnum):
-    """What the parker answers the request that woke the app with: that it is starting, or that it could not start."""
+    """What the parker answers the request that woke the app with: that it is starting, that it could not start, or
+    that it was not started again because its recent starts all failed (the wake budget is spent)."""
 
     STARTING = auto()
     FAILED = auto()
+    BUDGET_SPENT = auto()
 
 
 class ParkingTarget(FrozenModel):
@@ -67,21 +71,65 @@ def parking_target_of(url: str) -> ParkingTarget | None:
 
 
 _PAGE_TEMPLATE: Final[str] = """<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta http-equiv="refresh" content="{refresh}">
+<html><head><meta charset="utf-8">{refresh}
 <title>{title}</title>
 <style>body{{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;
-height:100vh;margin:0;color:#334155}}div{{text-align:center;max-width:32rem}}code{{font-size:0.9em}}</style></head>
-<body><div><h1>{heading}</h1><p>{detail}</p></div></body></html>
+height:100vh;margin:0;color:#334155}}div{{text-align:center;max-width:32rem}}code{{font-size:0.9em}}
+button{{font:inherit;padding:0.4rem 1rem;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:inherit;
+cursor:pointer}}button:hover{{background:#f1f5f9}}details{{margin-top:1.5rem;font-size:0.85em;color:#64748b}}
+summary{{cursor:pointer}}</style></head>
+<body><div><h1>{heading}</h1>{body}</div></body></html>
 """
+
+# The app contract's wire (system/libs/workspace_ui/src/app_contract.ts), which this page speaks without the
+# contract module: the parker answers every path with this page, so it cannot serve the module beside it.
+SHELL_HANDSHAKE_TYPE: Final[str] = "shell:handshake"
+SHELL_START_WITH_TEXT_TYPE: Final[str] = "shell:start-with-text"
+
+# What a page that could not start offers: a Try again that asks once more, an agent asked to look at it (shown once
+# a shell that frames the page has greeted it, since only a shell can start one), and the log's command for whoever
+# wants it.
+_FAILED_BODY_TEMPLATE: Final[str] = (
+    '{sentence}<p><button type="button" onclick="location.reload()">Try again</button> '
+    '<button type="button" id="ask-agent" hidden>Ask an agent to look at it</button></p>'
+    "<details><summary>See details</summary><p>The program's log may say why: "
+    "<code>supervisorctl tail {program} stderr</code></p></details>"
+    "<script>(function () {"
+    'var ask = document.getElementById("ask-agent");'
+    "if (window.parent === window) return;"
+    'window.addEventListener("message", function (event) {'
+    "if (event.source === window.parent && event.data && event.data.type === {handshake}) ask.hidden = false;"
+    "});"
+    'ask.addEventListener("click", function () {'
+    'window.parent.postMessage({ type: {start_with_text}, text: {request} }, "*");'
+    "});"
+    "})();</script>"
+)
+
+
+@pure
+def _script_literal(value: str) -> str:
+    """``value`` as a JavaScript string literal that cannot close the script element it sits in."""
+    return json.dumps(value).replace("<", "\\u003c")
+
+
+@pure
+def could_not_start_request(display_name: str, program: str) -> str:
+    """What an agent asked to look at an app that could not start is told: the app, and where its log is."""
+    return (
+        f"{display_name} couldn't start in this workspace. Its program's log may say why "
+        f"(supervisorctl tail {program} stderr). Please find out why and get it running again."
+    )
 
 
 @pure
 def parked_refresh_seconds(kind: ParkedPageKind) -> int:
-    """How long a page of the kind waits before asking again: the page's meta refresh and the answer's Retry-After."""
+    """How long a client that retries on its own should wait before asking again: the answer's Retry-After, and the
+    starting page's own reload."""
     match kind:
         case ParkedPageKind.STARTING:
             return STARTING_REFRESH_SECONDS
-        case ParkedPageKind.FAILED:
+        case ParkedPageKind.FAILED | ParkedPageKind.BUDGET_SPENT:
             return FAILED_REFRESH_SECONDS
         case _ as unreachable:
             assert_never(unreachable)
@@ -89,24 +137,39 @@ def parked_refresh_seconds(kind: ParkedPageKind) -> int:
 
 @pure
 def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> str:
-    """The page the parker answers with: starting (reloading every few seconds) or could not start."""
+    """The page the parker answers with: starting (reloading every few seconds until the app answers), or could not
+    start (with a Try again, an agent to look at it, and the program's log behind "See details")."""
     name = html.escape(display_name)
+    failed_body = (
+        _FAILED_BODY_TEMPLATE.replace("{program}", html.escape(program))
+        .replace("{handshake}", _script_literal(SHELL_HANDSHAKE_TYPE))
+        .replace("{start_with_text}", _script_literal(SHELL_START_WITH_TEXT_TYPE))
+        .replace("{request}", _script_literal(could_not_start_request(display_name, program)))
+    )
     match kind:
         case ParkedPageKind.STARTING:
             return _PAGE_TEMPLATE.format(
-                refresh=parked_refresh_seconds(kind),
+                refresh=f'<meta http-equiv="refresh" content="{parked_refresh_seconds(kind)}">',
                 title=f"Starting {name}",
                 heading=f"Starting {name}&hellip;",
-                detail="The app was stopped while nothing showed it. This page opens it once it answers.",
+                body="<p>This opens on its own once it's ready.</p>",
             )
         case ParkedPageKind.FAILED:
             return _PAGE_TEMPLATE.format(
-                refresh=parked_refresh_seconds(kind),
-                title=f"{name} could not start",
-                heading=f"{name} could not start",
-                detail=(
-                    f"The app's program did not stay up. Its log says why: "
-                    f"<code>supervisorctl tail {html.escape(program)} stderr</code>. This page tries again in a while."
+                refresh="",
+                title=f"{name} couldn't start",
+                heading=f"{name} couldn't start.",
+                body=failed_body.replace("{sentence}", ""),
+            )
+        case ParkedPageKind.BUDGET_SPENT:
+            return _PAGE_TEMPLATE.format(
+                refresh="",
+                title=f"{name} couldn't start",
+                heading=f"{name} couldn't start.",
+                body=failed_body.replace(
+                    "{sentence}",
+                    f"<p>{name} failed to start several times in the last few minutes, so it wasn't started again. "
+                    "Try again in a few minutes.</p>",
                 ),
             )
         case _ as unreachable:

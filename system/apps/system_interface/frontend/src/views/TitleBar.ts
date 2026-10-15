@@ -30,6 +30,8 @@ export interface TitleBarAttrs {
   readonly app: AppRecord | undefined;
   readonly state: WindowState;
   readonly isFocused: boolean;
+  /** Whether the window has a page to refresh. */
+  readonly canRefresh: boolean;
   readonly isMenuOpen: boolean;
   /** Spread onto the maximize control: resting on it opens the window's size menu. */
   readonly sizeMenuTrigger: m.Attributes;
@@ -78,7 +80,8 @@ function control(
 export function TitleBar(): m.Component<TitleBarAttrs> {
   return {
     view(vnode) {
-      const { title, app, state, isFocused, isMenuOpen, sizeMenuTrigger, onControl, onDoubleClick } = vnode.attrs;
+      const { title, app, state, isFocused, canRefresh, isMenuOpen, sizeMenuTrigger, onControl, onDoubleClick } =
+        vnode.attrs;
       const isMaximized = state === "MAXIMIZED";
       const sizing = { extra: "ml-1", hover: sizeMenuTrigger };
       return m(
@@ -128,7 +131,7 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
           // and what is left then is the window's name and the controls every window owes you.
           // They come back with the click that focuses the window, and nothing to their right
           // moves, since the spacer beside them takes up the room.
-          !isFocused
+          !isFocused || !canRefresh
             ? null
             : control("refresh", "Refresh", icon("refresh", { size: TITLE_ACTION_GLYPH_SIZE }), false, onControl, {
                 extra: "ml-2",
@@ -136,7 +139,7 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
           !isFocused
             ? null
             : control("menu", "Window menu", glyph("kebab", TITLE_ACTION_GLYPH_SIZE), isMenuOpen, onControl, {
-                extra: "ml-0.5",
+                extra: canRefresh ? "ml-0.5" : "ml-2",
               }),
           m("span", { class: "flex-1" }),
           control("minimize", "Minimize", glyph("minimize", CONTROL_GLYPH_SIZE), false, onControl),
