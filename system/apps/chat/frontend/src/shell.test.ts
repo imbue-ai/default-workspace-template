@@ -6,7 +6,7 @@
  * the shell to open beside it are named by path: the chat root's path for a sibling chat, and the
  * three-part subagent key's path for a sub-agent view.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("mithril", () => ({ default: { redraw: vi.fn() } }));
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
@@ -14,6 +14,9 @@ const createChat = vi.fn();
 const getChatById = vi.fn();
 const addChatsUpdatedListener = vi.fn();
 vi.mock("./models/Chats", () => ({ createChat, getChatById, addChatsUpdatedListener }));
+// The composer's module brings in the whole chat page, which every test's fresh import of the shell module would
+// evaluate again; the shell only hands it a drafted text.
+vi.mock("./views/MessageInput", () => ({ prependToComposer: vi.fn() }));
 vi.mock("./presence", () => ({
   startPresenceReporting: vi.fn(),
   reportPresence: vi.fn(),
@@ -84,6 +87,14 @@ function windowListenersAddedBy(connect: () => void): (type: string) => Array<(e
 function deliver(data: unknown, source: unknown): void {
   window.dispatchEvent(new MessageEvent("message", { data, source: source as Window }));
 }
+
+// The first import of the shell module transforms its graph, which a loaded machine (every frontend's suite at once)
+// can stretch past a test's five seconds; it is paid here, once, under a longer allowance, so each test's fresh
+// import only evaluates what is already transformed.
+const FIRST_IMPORT_TIMEOUT_MS = 20_000;
+beforeAll(async () => {
+  await import("./shell");
+}, FIRST_IMPORT_TIMEOUT_MS);
 
 beforeEach(() => {
   vi.clearAllMocks();

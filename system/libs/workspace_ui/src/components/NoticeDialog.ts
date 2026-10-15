@@ -1,5 +1,6 @@
 import m from "mithril";
 import { Button } from "./Button";
+import { nonEmptyString } from "../models/failure";
 import { MODAL_MESSAGE_CLASS, Modal } from "./Modal";
 import { SeeDetails } from "./SeeDetails";
 import { hoverTooltipAttrs } from "./hoverTooltip";
@@ -103,7 +104,7 @@ export function makeNoticeDialog(): m.Component<NoticeDialogAttrs> {
           ...body
             .filter((line): line is string => line !== null && line !== "")
             .map((line) => m("p", { class: NOTICE_BODY_CLASS }, line)),
-          details === null
+          nonEmptyString(details) === null
             ? null
             : m("div", { class: "notice-details mb-4 text-secondary" }, m(SeeDetails, { details })),
           vnode.children,

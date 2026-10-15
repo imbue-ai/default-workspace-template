@@ -299,7 +299,9 @@ a protected one.
   `upstream_fallback` if earlyoom's startup self-check could not read those
   inputs, which also leaves `badness_kib` null; null when earlyoom did not
   report them). Read by the revival-notice hook
-  (`system/services/oom_priority/bin/claude_shed_notice_hook.py`) and the launch-task report poll.
+  (`system/services/oom_priority/bin/claude_shed_notice_hook.sh`, which starts
+  `claude_shed_notice_hook.py` only when the ledger names the agent) and the
+  launch-task report poll.
 - **Agent-pid registry** (`data/.state/oom_priority/agent_pids/<pid>.json`): written
   by the launch wrapper (`system/services/oom_priority/bin/agent_oom_launch.py`), read by the kill hook.
 

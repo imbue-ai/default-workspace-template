@@ -49,7 +49,7 @@ const mocks = vi.hoisted(() => {
     pick: null,
   };
   return {
-    sendMessage: vi.fn(async () => {}),
+    sendMessage: vi.fn(async (): Promise<string | null> => "ok"),
     switchChat: vi.fn(async () => ({ kind: "handoff", phase: "summarizing", returned_block: "" })),
     setPendingAccount: vi.fn(),
     openSwitchDialog: vi.fn(),
@@ -132,7 +132,8 @@ vi.mock("../models/attachments", () => ({
     paths.length === 0 ? text : `${text} + ${paths.join(" ")}`,
   formatFileSize: () => "0 B",
 }));
-vi.mock("@imbue/workspace-ui/src/models/request-error", () => ({
+vi.mock("@imbue/workspace-ui/src/models/request-error", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@imbue/workspace-ui/src/models/request-error")>()),
   describeRequestError: (e: unknown) => String(e),
   describeRequestErrorKind: (e: unknown) =>
     typeof e === "object" && e !== null && "kind" in e ? (e as { kind: string }).kind : "unknown",
@@ -150,10 +151,15 @@ vi.mock("../models/HarnessCatalog", async () => {
   const { harnessCatalogFixture } = await import("../models/harnessCatalogFixture");
   const catalogs: Record<
     string,
-    { label: string; popups: { trigger: string; commands: string[]; action: string }[] }
+    {
+      label: string;
+      can_interrupt_compaction: boolean;
+      popups: { trigger: string; commands: string[]; action: string }[];
+    }
   > = {
     claude: {
       label: harnessCatalogFixture("claude")!.label,
+      can_interrupt_compaction: harnessCatalogFixture("claude")!.can_interrupt_compaction,
       popups: [
         { trigger: "composer_command", commands: ["/login", "/logout"], action: "open_auth" },
         { trigger: "composer_command", commands: ["/status", "/exit"], action: "notice" },
@@ -161,6 +167,7 @@ vi.mock("../models/HarnessCatalog", async () => {
     },
     codex: {
       label: harnessCatalogFixture("codex")!.label,
+      can_interrupt_compaction: harnessCatalogFixture("codex")!.can_interrupt_compaction,
       popups: [
         { trigger: "composer_command", commands: ["/login", "/logout"], action: "open_auth" },
         { trigger: "composer_command", commands: ["/new", "/fast"], action: "notice" },
@@ -204,7 +211,9 @@ vi.mock("../models/Providers", () => ({
 }));
 
 import { jsonBlock } from "@imbue/workspace-ui/src/element_reference";
+import { notAnsweredSentence } from "@imbue/workspace-ui/src/models/failure";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
+import { getOutgoingMessages } from "../models/OutgoingMessages";
 import { MessageInput, prependToComposer, restoreComposerDraft, takeComposerDraft } from "./MessageInput";
 
 type AnyVnode = { tag?: unknown; attrs?: Record<string, unknown>; children?: unknown; text?: unknown };
@@ -471,6 +480,39 @@ describe("MessageInput placeholder", () => {
     mocks.agent.activity_state = "THINKING";
     const textarea = findByTag(MessageInput().view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
     expect(textarea?.attrs?.placeholder).toBe("Type to queue more messages...");
+  });
+
+  it("teaches queueing while the agent compacts its context", () => {
+    mocks.agent.activity_state = "COMPACTING";
+    const textarea = findByTag(MessageInput().view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
+    expect(textarea?.attrs?.placeholder).toBe("Type to queue more messages...");
+  });
+});
+
+describe("MessageInput stop button during a compaction", () => {
+  beforeEach(() => {
+    mocks.agent.activity_state = "COMPACTING";
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    mocks.agent.harness = "claude";
+    mocks.agent.activity_state = undefined;
+  });
+
+  it("shows for a harness whose interrupt cancels a compaction", () => {
+    mocks.agent.harness = "claude";
+    const rendered = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(findByAttr(rendered, "aria-label", "Interrupt agent")).toBeDefined();
+  });
+
+  it("is hidden for a harness whose interrupt does not, and back once its turn runs", () => {
+    mocks.agent.harness = "codex";
+    const component = MessageInput();
+    const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(findByAttr(render(), "aria-label", "Interrupt agent")).toBeUndefined();
+    mocks.agent.activity_state = "THINKING";
+    expect(findByAttr(render(), "aria-label", "Interrupt agent")).toBeDefined();
   });
 });
 
@@ -765,12 +807,80 @@ describe("MessageInput send failure notice", () => {
     expect(text).toContain("restarting it is the only way");
   });
 
+  it("says a refused send was not delivered, and an unanswered one may have been, offering no resend for it", async () => {
+    mocks.sendMessage.mockRejectedValueOnce(
+      Object.assign(new Error("{}"), { code: 409, response: { detail: "Agent 'a' is switching" } }),
+    );
+    const refused = renderedText(await typeAndSend(MessageInput(), "agent-1", "hello"));
+    expect(refused).toContain("Couldn't send your message");
+    expect(refused).toContain("Your message wasn't delivered.");
+    expect(refused).toContain("Retry");
+
+    mocks.sendMessage.mockRejectedValueOnce(Object.assign(new Error("null"), { code: 0, response: null }));
+    const unanswered = renderedText(await typeAndSend(MessageInput(), "agent-1", "hello"));
+    expect(unanswered).toContain("Your message may not have been sent");
+    expect(unanswered).toContain(notAnsweredSentence("change"));
+    expect(unanswered).not.toContain("Retry");
+    expect(unanswered).not.toContain("Force");
+    expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
+  });
+
   it("keeps Retry for a blocked input, which a person can clear", async () => {
     mocks.sendMessage.mockRejectedValueOnce({ kind: "input_blocked", toString: () => "a dialog is open" });
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
     const text = renderedText(after);
     expect(text).toContain("Retry");
     expect(text).toContain("Force");
+  });
+
+  it.each([
+    ["nothing_to_compact", "Nothing to compact yet."],
+    ["compact_unavailable", "The agent is busy. Send /compact again once it has finished."],
+  ])(
+    "shows a /compact the server declined (%s) as a declined command, keeping the typed text",
+    async (kind, detail) => {
+      mocks.sendMessage.mockRejectedValueOnce(
+        Object.assign(new Error("{}"), { code: 409, response: { detail, user_facing_message: detail, kind } }),
+      );
+      const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const component = MessageInput();
+
+      const after = await typeAndSend(component, "agent-1", "/compact");
+
+      const text = renderedText(after);
+      expect(text).toContain("/compact wasn't sent");
+      expect(text).toContain(detail);
+      expect(text).not.toContain("Couldn't send your message");
+      expect(text).not.toContain("Retry");
+      expect(text).not.toContain("Force");
+      expect(text).not.toContain("terminal");
+      expect(findByTag(after, "textarea")?.attrs?.value).toBe("/compact");
+      expect(error).not.toHaveBeenCalled();
+      error.mockRestore();
+
+      (findByClass(after, "notice-dismiss")!.attrs!.onclick as () => void)();
+      expect(renderedText(component.view!({ attrs: { chatId: "agent-1" } } as never))).not.toContain(
+        "/compact wasn't sent",
+      );
+    },
+  );
+
+  it("drops the Sending bubble of a /compact the server ran as a compaction, which no turn will echo", async () => {
+    mocks.sendMessage.mockResolvedValueOnce("compaction_requested");
+
+    const after = await typeAndSend(MessageInput(), "agent-compacted", "/compact");
+
+    expect(getOutgoingMessages("agent-compacted")).toEqual([]);
+    expect(findByTag(after, "textarea")?.attrs?.value).toBe("");
+    expect(renderedText(after)).not.toContain("wasn't sent");
+  });
+
+  it("keeps the Sending bubble of a delivered message until its turn arrives", async () => {
+    mocks.sendMessage.mockResolvedValueOnce("ok");
+
+    await typeAndSend(MessageInput(), "agent-delivered", "/compact");
+
+    expect(getOutgoingMessages("agent-delivered").map((outgoing) => outgoing.content)).toEqual(["/compact"]);
   });
 
   it("removes the delivered message even when Force drained a queue block above it", async () => {
@@ -826,10 +936,6 @@ describe("MessageInput send failure notice", () => {
     expect(restored).toContain("newer draft");
     expect(restored.indexOf("failed message")).toBeLessThan(restored.indexOf("newer draft"));
   });
-
-  // Escape-dismisses-as-Cancel is not covered here: these tests render vnodes with no DOM, so
-  // there is no document to dispatch a keydown at. The handler delegates to the same function
-  // the Cancel button calls, which is the whole of the fix.
 
   it("retries the same message through the ordinary send", async () => {
     mocks.sendMessage.mockRejectedValueOnce("nope");
@@ -1392,10 +1498,12 @@ describe("MessageInput on a chat whose account was signed out", () => {
     mocks.loadAccounts.mockImplementationOnce(async () => {
       mocks.signedOutAccountIds.add("account-signed-out-5521");
     });
-    mocks.sendMessage.mockRejectedValueOnce({
-      response: { kind: "account_signed_out" },
-      toString: () => "You signed out of the account this chat runs on.",
-    });
+    mocks.sendMessage.mockRejectedValueOnce(
+      Object.assign(new Error("{}"), {
+        code: 409,
+        response: { detail: "You signed out of the account this chat runs on.", kind: "account_signed_out" },
+      }),
+    );
     const component = MessageInput();
 
     await typeAndSend(component, "agent-signed-out", "are you still there?");
@@ -1408,10 +1516,9 @@ describe("MessageInput on a chat whose account was signed out", () => {
 
   it("leaves the account list alone when a send fails for any other reason", async () => {
     mocks.signedOutAccountIds.clear();
-    mocks.sendMessage.mockRejectedValueOnce({
-      response: { kind: "input_blocked" },
-      toString: () => "a dialog is open",
-    });
+    mocks.sendMessage.mockRejectedValueOnce(
+      Object.assign(new Error("{}"), { code: 500, response: { detail: "a dialog is open", kind: "input_blocked" } }),
+    );
 
     await typeAndSend(MessageInput(), "agent-signed-out", "hello");
 

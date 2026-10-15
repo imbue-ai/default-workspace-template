@@ -1,81 +1,45 @@
 /** What the workspace's REST routes answer, read the way the user needs it said. */
 
-import {
-  GATEWAY_STATUSES,
-  fallbackSentence,
-  joinDetails,
-  notAnsweredSentence,
-  type Failure,
-  type RequestKind,
-} from "./failure";
-
-/** The fallback for a refusal that carries no reason. */
-export const REST_FALLBACK_MESSAGE = fallbackSentence("Something went wrong in this workspace");
-
-// How much of a body that is not a reason (an error page, a proxy's plain text) "See details" quotes.
-const RAW_BODY_LIMIT = 2000;
+import { failureText, readFailure, type Failure, type RequestKind } from "./failure";
 
 /**
- * A refused or unanswered request to a REST route. ``message`` is what to show: a sentence the server wrote for
- * people (``user_facing_message``), else its ``detail`` (or ``error``), else one of the fallbacks. ``status`` is 0
- * when nothing answered.
+ * A refused or unanswered request to a REST route, as ``readFailure`` read it. Its ``message`` is ``failureText``'s
+ * (the server's reason, for the log and the screens not yet worded); a surface words it with ``failureSentence``.
  */
-export class HttpError extends Error implements Failure {
-  constructor(
-    readonly status: number,
-    message: string,
-    readonly details: string | null,
-    readonly isReportable: boolean,
-    /** The server's sentence was written for people, so it stands on its own rather than after what failed. */
-    readonly isUserFacing: boolean = false,
-  ) {
-    super(message);
+export class HttpError extends Error {
+  constructor(readonly failure: Failure) {
+    super(failureText(failure));
   }
-}
 
-interface ErrorBody {
-  readonly user_facing_message?: unknown;
-  readonly detail?: unknown;
-  readonly error?: unknown;
-  readonly details?: unknown;
-}
+  /** The HTTP status, or 0 when nothing answered. */
+  get status(): number {
+    return this.failure.status ?? 0;
+  }
 
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+  /** The JSON object the server answered, for a caller that reads a field of its own; null when there was none. */
+  get body(): Readonly<Record<string, unknown>> | null {
+    return this.failure.body;
+  }
 }
 
 /** The failure a non-2xx ``response`` stands for. */
-export async function readResponseFailure(response: Response, kind: RequestKind): Promise<HttpError> {
+export async function readResponseFailure(response: Response, requestKind: RequestKind): Promise<HttpError> {
   const text = await response.text().catch(() => "");
-  let body: ErrorBody = {};
+  let body: unknown = null;
   try {
-    const parsed: unknown = JSON.parse(text);
-    if (typeof parsed === "object" && parsed !== null) body = parsed as ErrorBody;
+    body = JSON.parse(text);
   } catch {
-    // Not JSON (an error page, a proxy's plain text): quoted behind "See details" below.
+    // Not JSON (an error page, a proxy's plain text): quoted behind "See details".
   }
-  const userFacing = nonEmptyString(body.user_facing_message);
-  const reason = nonEmptyString(body.detail) ?? nonEmptyString(body.error);
-  const details = joinDetails([
-    `HTTP ${response.status}`,
-    userFacing === null ? null : reason,
-    nonEmptyString(body.details),
-    userFacing === null && reason === null ? text.slice(0, RAW_BODY_LIMIT) : null,
-  ]);
-  if (userFacing !== null) return new HttpError(response.status, userFacing, details, false, true);
-  if (reason !== null) return new HttpError(response.status, reason, details, false);
-  if (GATEWAY_STATUSES.has(response.status)) {
-    return new HttpError(response.status, notAnsweredSentence(kind), details, false);
-  }
-  return new HttpError(response.status, REST_FALLBACK_MESSAGE, details, true);
+  return new HttpError(readFailure({ status: response.status, body, rawText: text, requestKind }));
 }
 
 /** ``fetch`` that answers a request nothing answered (the connection refused or dropped) as an ``HttpError``. */
-export async function fetchOrNotAnswered(url: string, init: RequestInit, kind: RequestKind): Promise<Response> {
+export async function fetchOrNotAnswered(url: string, init: RequestInit, requestKind: RequestKind): Promise<Response> {
   try {
     return await fetch(url, init);
   } catch (error) {
-    throw new HttpError(0, notAnsweredSentence(kind), joinDetails([(error as Error).message]), false);
+    throw new HttpError(readFailure({ status: 0, body: null, rawText: (error as Error).message, requestKind }));
   }
 }
 

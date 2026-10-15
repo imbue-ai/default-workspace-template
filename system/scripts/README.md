@@ -14,10 +14,16 @@ Provisioning and utility scripts:
   `.pi/extensions/policy_guards.ts` and agy's `agy_shim/bash` feed the same
   scripts the payload they read on stdin. See `tool-call-policies.md` for what
   each one enforces.
-- Plugin provisioning: `claude_update_plugin.sh` installs project-scoped Claude
-  plugins; `codex_update_plugin.sh` installs native code-guardian into each
-  mngr Codex agent's isolated home, after its config is written and before
-  launch. Requires code-guardian 0.6.0 or newer on the marketplace's `main`.
+- Plugin provisioning: `install_agent_plugins.sh` (run by `setup_system.sh`)
+  puts the agent plugins under `/opt/agent-plugins/` as local marketplaces, at
+  commits it pins: code-guardian, and Anthropic's `frontend-design` under a
+  marketplace of our own (`claude-code-plugins-pinned`, since Claude reserves
+  the official name for GitHub sources). `.claude/settings.json` declares them,
+  and Claude loads them in place, so no session or account installs anything
+  and nothing is fetched at runtime; a pin bump reaches running workspaces when
+  update-self re-runs `setup_system.sh`. `codex_update_plugin.sh` installs
+  code-guardian into each mngr Codex agent's isolated home from the same local
+  copy, after its config is written and before launch.
   Re-provisioning restores plugin enablement after mngr rewrites the config.
   Install failures warn without blocking launch; use `--strict` for verification.
   The marketplace source and plugin enablement are declared in the Codex agent

@@ -236,7 +236,15 @@ jobs:
       # Test discovery runs on the runner (`pytest --collect-only` per root);
       # execution happens in the image.
       - name: Install Python dependencies
-        run: uv sync --all-packages
+        # --compile-bytecode moves site-packages .pyc compilation into uv's
+        # parallel install phase, off offload's pytest-discovery critical
+        # path (OFFLOAD-16).
+        run: uv sync --all-packages --compile-bytecode
+
+      # Editable installs are not covered by --compile-bytecode; precompile
+      # them for the same reason (OFFLOAD-17).
+      - name: Precompile repo bytecode
+        run: uv run python -m compileall -q -j 4 system catalog
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

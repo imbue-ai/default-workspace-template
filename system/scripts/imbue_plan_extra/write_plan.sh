@@ -29,12 +29,8 @@
 # The child runs a separate headless claude:
 #
 #   --setting-sources user   Does NOT load this repo's .claude/settings.json, so
-#                            none of the workspace's project hooks fire for it --
-#                            in particular the SessionStart `uv sync --all-packages`,
-#                            which would rebuild the venv underneath the agent that
-#                            spawned us. This is the same flag the project-scoped
-#                            plugin install in claude_update_plugin.sh is written to
-#                            protect. It also means project skills are NOT discovered,
+#                            none of the workspace's project hooks or plugins load
+#                            for it. It also means project skills are NOT discovered,
 #                            which is why the instructions are fed in as the prompt
 #                            rather than invoked as a slash command.
 #   --allowed-tools          Read-only. The plan comes back on stdout; the child has

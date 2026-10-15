@@ -104,6 +104,8 @@ describe("NoticeDialog details", () => {
 
     render(null);
     expect(root.querySelector(".see-details")).toBeNull();
+    render("  ");
+    expect(root.querySelector(".notice-details")).toBeNull();
     m.render(root, []);
   });
 });

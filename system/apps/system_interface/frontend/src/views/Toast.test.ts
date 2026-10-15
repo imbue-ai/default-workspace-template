@@ -33,10 +33,11 @@ describe("Toasts", () => {
     const queue = new ToastQueue(() => m.redraw.sync());
     const retry = vi.fn();
     queue.show("This window couldn't be closed. Try again. If this persists, report a bug.", {
+      isLasting: true,
       details: "HTTP 500",
       actions: [{ label: "Try again", run: retry }],
     });
-    queue.show("A second note", { details: "HTTP 502" });
+    queue.show("A second note", { isLasting: true, details: "HTTP 502" });
     const root = mountQueue(queue);
 
     const [first, second] = Array.from(root.querySelectorAll("[data-toast]")) as HTMLElement[];

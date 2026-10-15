@@ -1,8 +1,9 @@
 /**
  * The shell's desktop routes (desktop-interface contracts.md section 5), as the frontend calls
- * them: every function posts or fetches one route and answers the parsed record, throwing with
- * the shell's own ``detail`` on a refusal. A placements save refused as stale throws
- * ``StalePlacementsSaveError`` so the caller can refetch rather than retry.
+ * them: every function posts or fetches one route and answers the parsed record, throwing an
+ * ``HttpError`` (the shared library's reading of the refusal, or of no answer) when it fails. A
+ * placements save refused as stale throws ``StalePlacementsSaveError`` so the caller can refetch
+ * rather than retry.
  */
 
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
