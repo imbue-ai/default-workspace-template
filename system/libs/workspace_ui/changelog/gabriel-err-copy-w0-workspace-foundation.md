@@ -6,6 +6,8 @@ A failed request inside a workspace is now told the same way everywhere: a sente
 
 - A server's own sentence asks for a bug report only when its answer says `reportable: true`.
 
+- A screen not yet worded this way keeps showing the server's own reason: a failed request's error message, and `describeRequestError`, are still the route's `detail`, with our sentence only where the route gave none.
+
 - "Report a bug" (which opens Imbue Studio's bug report) is offered only where the embedder said `opensHelp` in its capabilities, so it stays hidden in a shared visit, the hosted web client and an older desktop app; the sentence still says "report a bug".
 
 - New pieces for the screens that adopt them: `SeeDetails` (also drawn by `NoticeDialog` from its new `details`) and `report-bug.ts`.

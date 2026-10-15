@@ -16,6 +16,8 @@ export type Failure = FailureFields &
         /** The server wrote a sentence for people (``user_facing_message``), shown as written. */
         readonly cause: "user_facing";
         readonly userFacingMessage: string;
+        /** The server's developer text beside its sentence, when it gave one. */
+        readonly reason: string | null;
         /** The server said its sentence asks for a bug report (``reportable: true``). */
         readonly isReportable: boolean;
       }
@@ -34,8 +36,6 @@ export type Failure = FailureFields &
         readonly cause: "no_reason";
       }
   );
-
-export type FailureCause = Failure["cause"];
 
 interface FailureFields {
   readonly requestKind: RequestKind;
@@ -60,13 +60,12 @@ export interface FailureMessage {
 
 /** What Imbue Studio's forward proxy and the workspace's own front door answer when the server behind them did not.
  *  Neither tells whether the request reached the server first. */
-export const GATEWAY_STATUSES: ReadonlySet<number> = new Set([502, 503, 504]);
+const GATEWAY_STATUSES: ReadonlySet<number> = new Set([502, 503, 504]);
 
-export const READ_NOT_ANSWERED = "The workspace didn't answer. Try again in a moment.";
+const READ_NOT_ANSWERED = "The workspace didn't answer. Try again in a moment.";
 // Never "nothing was changed": a gateway status can arrive after the request was carried out, and a connection that
 // dropped after the request was sent looks the same as one that never opened.
-export const CHANGE_NOT_ANSWERED =
-  "The workspace didn't answer, so Imbue Studio can't tell whether this went through.";
+const CHANGE_NOT_ANSWERED = "The workspace didn't answer, so Imbue Studio can't tell whether this went through.";
 
 /** What failed, for a surface that has not said in its own words yet. */
 export const DEFAULT_WHAT_FAILED = "The workspace couldn't do that";
@@ -87,7 +86,7 @@ export function fallbackSentence(whatFailed: string): string {
 }
 
 /** The non-empty lines of a "See details" text, joined; null when every one is empty. */
-export function joinDetails(lines: readonly (string | null | undefined)[]): string | null {
+function joinDetails(lines: readonly (string | null | undefined)[]): string | null {
   const kept = lines.map((line) => (line ?? "").trim()).filter((line) => line !== "");
   return kept.length === 0 ? null : kept.join("\n");
 }
@@ -136,7 +135,13 @@ export function readFailure(answer: FailedAnswer): Failure {
     body,
   };
   if (userFacing !== null) {
-    return { ...fields, cause: "user_facing", userFacingMessage: userFacing, isReportable: body?.reportable === true };
+    return {
+      ...fields,
+      cause: "user_facing",
+      userFacingMessage: userFacing,
+      reason,
+      isReportable: body?.reportable === true,
+    };
   }
   if (reason !== null) return { ...fields, cause: "reason", reason };
   if (status === 0 || GATEWAY_STATUSES.has(status)) return { ...fields, cause: "not_answered" };
@@ -163,5 +168,22 @@ export function failureSentence(failure: Failure, whatFailed: string = DEFAULT_W
       return { message: fallbackSentence(whatFailed), details, isReportable: true };
     case "no_reason":
       return { message: fallbackSentence(whatFailed), details, isReportable: true };
+  }
+}
+
+/**
+ * What ``failure`` says in the server's own words, for a surface not yet worded with ``failureSentence`` and for the
+ * log: the server's reason (developer text), else its sentence for people, else ``failureSentence``'s sentence for a
+ * failure that carries neither. An ``HttpError``'s ``message``.
+ */
+export function failureText(failure: Failure): string {
+  switch (failure.cause) {
+    case "user_facing":
+      return failure.reason ?? failure.userFacingMessage;
+    case "reason":
+      return failure.reason;
+    case "not_answered":
+    case "no_reason":
+      return failureSentence(failure).message;
   }
 }

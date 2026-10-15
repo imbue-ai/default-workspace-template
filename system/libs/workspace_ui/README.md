@@ -36,7 +36,9 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   prefixed with what failed (and never "nothing was changed": Imbue Studio's
   forward proxy can send a gateway status after the request arrived); a refusal
   (4xx) with a reason as "<what failed>."; anything else as the fallback "<what
-  failed>. Try again. If this persists, report a bug.". The status and the
+  failed>. Try again. If this persists, report a bug.". A screen not yet worded
+  this way shows `failureText` (an `HttpError`'s `message`, and
+  `describeRequestError`): the server's own reason, else our sentence. The status and the
   server's own text go behind "See details" (`src/components/SeeDetails.ts`,
   which `NoticeDialog` draws from its `details`). "Report a bug"
   (`src/report-bug.ts`) opens Imbue Studio's bug report, and is offered only

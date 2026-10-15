@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import type { SecretResolution } from "./message-classification";
 import type { SecretCardHandlers, SecretCardState } from "./secret-card";
-import { CHANGE_NOT_ANSWERED } from "@imbue/workspace-ui/src/models/failure";
+import { notAnsweredSentence } from "@imbue/workspace-ui/src/models/failure";
 import {
   SECRET_STATUS_RETRY_DELAY_MS,
   SecretStatusCache,
@@ -284,7 +284,7 @@ describe("status hydration", () => {
 });
 
 describe("submit and decline", () => {
-  it("words a refusal and an unanswered answer through the shared reader, never saying whether the latter went through", async () => {
+  it("passes the route's own reason on, and never says whether an unanswered answer went through", async () => {
     vi.stubGlobal(
       "fetch",
       vi
@@ -299,9 +299,12 @@ describe("submit and decline", () => {
     expect(await submitSecret("secret-1", { SVC_TOKEN: "t" })).toEqual({ ok: true, detail: "" });
     expect(await submitSecret("secret-1", { SVC_TOKEN: "t" })).toEqual({
       ok: false,
-      detail: "The workspace couldn't do that.",
+      detail: "Request secret-1 is not pending",
     });
-    expect(await declineSecret("secret-1", "")).toEqual({ ok: false, detail: CHANGE_NOT_ANSWERED });
-    expect(await submitSecret("secret-1", { SVC_TOKEN: "t" })).toEqual({ ok: false, detail: CHANGE_NOT_ANSWERED });
+    expect(await declineSecret("secret-1", "")).toEqual({ ok: false, detail: notAnsweredSentence("change") });
+    expect(await submitSecret("secret-1", { SVC_TOKEN: "t" })).toEqual({
+      ok: false,
+      detail: notAnsweredSentence("change"),
+    });
   });
 });

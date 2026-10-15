@@ -84,7 +84,6 @@ vi.mock("./OutgoingMessageView", () => ({ renderOutgoingMessages: () => mocks.ou
 vi.mock("./fast-mode-limit", () => ({ maybeApplyFastModeLimit: () => undefined }));
 vi.mock("./FastModeNotice", () => ({ FastModeNotice: { view: () => null } }));
 
-import { REQUEST_FALLBACK_MESSAGE } from "@imbue/workspace-ui/src/models/request-error";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { ChatPanel } from "./ChatPanel";
 import { MESSAGE_LIST_CLASS } from "./conversation-rows";
@@ -267,7 +266,7 @@ describe("ChatPanel over a provisional chat", () => {
     expect(mocks.launchChat).toHaveBeenCalledWith(AGENT_ID, "acct-1");
   });
 
-  it("says a relaunch was refused beside the create's reason, and forgets it once the chat is being created", async () => {
+  it("shows a refused relaunch's reason beside the create's, and forgets it once the chat is being created", async () => {
     failed("acct-1", "mngr create exited with code 1");
     mocks.launchChat.mockImplementationOnce(async () => {
       throw new Error("account acct-1 is on a lane this build does not have");
@@ -279,7 +278,7 @@ describe("ChatPanel over a provisional chat", () => {
     const refused = render();
 
     expect(renderedText(refused)).toContain("mngr create exited with code 1");
-    expect(renderedText(refused)).toContain(REQUEST_FALLBACK_MESSAGE);
+    expect(renderedText(refused)).toContain("account acct-1 is on a lane this build does not have");
 
     mocks.proto = {
       chat_id: AGENT_ID,
@@ -294,7 +293,7 @@ describe("ChatPanel over a provisional chat", () => {
     const tree = render();
 
     expect(renderedText(tree)).toContain("mngr create exited with code 2");
-    expect(renderedText(tree)).not.toContain(REQUEST_FALLBACK_MESSAGE);
+    expect(renderedText(tree)).not.toContain("is on a lane this build does not have");
   });
 });
 

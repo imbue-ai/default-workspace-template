@@ -1,11 +1,4 @@
-import {
-  DEFAULT_WHAT_FAILED,
-  failureSentence,
-  fallbackSentence,
-  readFailure,
-  type Failure,
-  type RequestKind,
-} from "./failure";
+import { failureText, readFailure, type Failure, type RequestKind } from "./failure";
 import { HttpError } from "./http";
 
 /**
@@ -22,9 +15,6 @@ import { HttpError } from "./http";
  * and is listed only so any other producer of this shape is covered too.)
  */
 const UNINFORMATIVE_MESSAGES: ReadonlySet<string> = new Set(["null", "undefined", "[object Object]"]);
-
-/** The fallback for a failed request that carries no reason, from a surface that names nothing of its own. */
-export const REQUEST_FALLBACK_MESSAGE = fallbackSentence(DEFAULT_WHAT_FAILED);
 
 function informativeMessage(value: unknown): string | null {
   const message = typeof value === "string" ? value.trim() : "";
@@ -58,9 +48,10 @@ export function describeRequestFailure(error: unknown, requestKind?: RequestKind
   return readFailure({ status: err.code, body: err.response, rawText: message, requestKind: kind });
 }
 
-/** The sentence ``error`` reads as from a surface that names nothing of its own; always non-empty. */
+/** ``failureText`` for ``error``: the server's own words, for a surface not yet worded with ``failureSentence``;
+ *  always non-empty. */
 export function describeRequestError(error: unknown, requestKind?: RequestKind): string {
-  return failureSentence(describeRequestFailure(error, requestKind)).message;
+  return failureText(describeRequestFailure(error, requestKind));
 }
 
 /**

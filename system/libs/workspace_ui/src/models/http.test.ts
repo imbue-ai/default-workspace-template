@@ -38,6 +38,7 @@ describe("postJson", () => {
     expect(failure).toEqual({
       cause: "user_facing",
       userFacingMessage: "Chat couldn't read its agent list. If this persists, report a bug.",
+      reason: "chat answered the launch with 500: boom",
       isReportable: true,
       requestKind: "change",
       status: 502,
@@ -51,6 +52,8 @@ describe("postJson", () => {
     answering(409, { detail: "the stored layout is newer" });
     const error = await failureOf(postJson("/api/x", {}));
     expect(error.status).toBe(409);
+    // The message stays the server's reason, for the screens not yet worded with failureSentence.
+    expect(error.message).toBe("the stored layout is newer");
     expect(error.failure).toMatchObject({ cause: "reason", reason: "the stored layout is newer" });
     expect(error.failure.details).toBe("HTTP 409\nthe stored layout is newer");
   });

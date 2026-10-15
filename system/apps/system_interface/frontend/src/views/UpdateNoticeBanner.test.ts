@@ -120,7 +120,7 @@ describe("UpdateNoticeBanner", () => {
     expect(requestedPaths(fetchMock)).toEqual(["/api/updates/pending/confirm"]);
   });
 
-  it("tells of the shell's refusal in the banner and keeps the verbs", async () => {
+  it("shows the shell's refusal in the banner and keeps the verbs", async () => {
     stubFetch(403, "This is a preview of a proposed change; it cannot change the live workspace.");
     const root = mountBanner();
     deliverNotice(noticeWire(["chat"]));
@@ -128,7 +128,7 @@ describe("UpdateNoticeBanner", () => {
     click(root, ".update-notice-confirm");
     await settled();
 
-    expect(root.querySelector(".update-notice-banner-error")?.textContent).toBe("The workspace couldn't do that.");
+    expect(root.querySelector(".update-notice-banner-error")?.textContent).toContain("preview");
     expect(root.querySelector(".update-notice-confirm")).not.toBeNull();
   });
 
@@ -143,7 +143,7 @@ describe("UpdateNoticeBanner", () => {
     m.redraw.sync();
     click(root, ".destroy-dialog-btn-destroy");
     await settled();
-    expect(root.querySelector(".update-notice-banner-error")?.textContent).toBe("The workspace couldn't do that.");
+    expect(root.querySelector(".update-notice-banner-error")?.textContent).toContain("already running");
 
     deliverNotice(noticeWire(["chat"], { progress: "Reverting the update" }));
 

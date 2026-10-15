@@ -1,19 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  CHANGE_NOT_ANSWERED,
-  READ_NOT_ANSWERED,
-  failureSentence,
-  readFailure,
-  type FailedAnswer,
-  type RequestKind,
-} from "./failure";
+import { failureSentence, failureText, notAnsweredSentence, readFailure, type RequestKind } from "./failure";
 
 const CLOSE_FAILED = "This window couldn't be closed";
 
 function answer(status: number, body: unknown, rawText: string | null = null, requestKind: RequestKind = "change") {
-  const answered: FailedAnswer = { status, body, rawText, requestKind };
-  return readFailure(answered);
+  return readFailure({ status, body, rawText, requestKind });
 }
 
 describe("failureSentence", () => {
@@ -35,11 +27,13 @@ describe("failureSentence", () => {
 
   it("says only that the workspace didn't answer, never prefixed with what failed, for a read and for a change", () => {
     expect(failureSentence(answer(0, null, "Failed to fetch"), CLOSE_FAILED)).toEqual({
-      message: CHANGE_NOT_ANSWERED,
+      message: notAnsweredSentence("change"),
       details: "Failed to fetch",
       isReportable: false,
     });
-    expect(failureSentence(answer(502, null, "Bad Gateway", "read"), CLOSE_FAILED).message).toBe(READ_NOT_ANSWERED);
+    expect(failureSentence(answer(502, null, "Bad Gateway", "read"), CLOSE_FAILED).message).toBe(
+      notAnsweredSentence("read"),
+    );
   });
 
   it("names what failed for a refusal with a reason, the reason behind See details and no bug report", () => {
@@ -67,5 +61,21 @@ describe("failureSentence", () => {
 
   it("names the workspace when the surface names nothing of its own", () => {
     expect(failureSentence(answer(400, { detail: "bad path" })).message).toBe("The workspace couldn't do that.");
+  });
+});
+
+describe("failureText", () => {
+  it("keeps the server's own words for a screen not yet worded, and our sentence where it gave none", () => {
+    expect(failureText(answer(403, { detail: "This is a preview of a proposed change." }))).toBe(
+      "This is a preview of a proposed change.",
+    );
+    expect(failureText(answer(502, { detail: "x answered 500: boom", user_facing_message: "X broke." }))).toBe(
+      "x answered 500: boom",
+    );
+    expect(failureText(answer(502, { user_facing_message: "X broke." }))).toBe("X broke.");
+    expect(failureText(answer(0, null, "Failed to fetch"))).toBe(notAnsweredSentence("change"));
+    expect(failureText(answer(500, null, "<html>oops</html>"))).toBe(
+      "The workspace couldn't do that. Try again. If this persists, report a bug.",
+    );
   });
 });

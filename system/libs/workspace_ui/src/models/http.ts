@@ -1,14 +1,14 @@
 /** What the workspace's REST routes answer, read the way the user needs it said. */
 
-import { failureSentence, readFailure, type Failure, type RequestKind } from "./failure";
+import { failureText, readFailure, type Failure, type RequestKind } from "./failure";
 
 /**
- * A refused or unanswered request to a REST route, as ``readFailure`` read it. Its ``message`` is the sentence a
- * surface that names nothing of its own would show, for the log; a surface words it with ``failureSentence``.
+ * A refused or unanswered request to a REST route, as ``readFailure`` read it. Its ``message`` is ``failureText``'s
+ * (the server's reason, for the log and the screens not yet worded); a surface words it with ``failureSentence``.
  */
 export class HttpError extends Error {
   constructor(readonly failure: Failure) {
-    super(failureSentence(failure).message);
+    super(failureText(failure));
   }
 
   /** The HTTP status, or 0 when nothing answered. */

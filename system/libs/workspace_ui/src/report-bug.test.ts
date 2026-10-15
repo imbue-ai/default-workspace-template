@@ -5,7 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EMBEDDER_CAPABILITIES, resetEmbedEndpointForTesting, setEmbedderMessageHandler } from "./embed";
-import { canReportBug, reportBugActions } from "./report-bug";
+import { canReportBug, openBugReport } from "./report-bug";
 
 function capabilitiesArrive(payload: Record<string, unknown>): void {
   window.dispatchEvent(
@@ -26,24 +26,21 @@ afterEach(() => {
 });
 
 describe("Report a bug", () => {
-  it("is offered for a reportable failure only once the embedder says it opens its bug report", () => {
-    expect(reportBugActions(true)).toEqual([]);
+  it("can be offered only once the embedder says it opens its bug report", () => {
+    expect(canReportBug()).toBe(false);
     capabilitiesArrive({});
     expect(canReportBug()).toBe(false);
     capabilitiesArrive({ opensHelp: true });
-    expect(reportBugActions(true).map((action) => action.label)).toEqual(["Report a bug"]);
-    expect(reportBugActions(false)).toEqual([]);
+    expect(canReportBug()).toBe(true);
     capabilitiesArrive({ opensHelp: false });
-    expect(reportBugActions(true)).toEqual([]);
+    expect(canReportBug()).toBe(false);
   });
 
-  it("asks the embedder to open its bug report when pressed", () => {
-    capabilitiesArrive({ opensHelp: true });
+  it("asks the embedder to open its bug report", async () => {
     const posted: unknown[] = [];
     window.addEventListener("message", (event) => posted.push(event.data));
-    reportBugActions(true)[0].run();
-    return new Promise<void>((resolve) => setTimeout(resolve, 0)).then(() => {
-      expect(posted).toContainEqual(expect.objectContaining({ type: "minds:open-help" }));
-    });
+    openBugReport();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(posted).toContainEqual(expect.objectContaining({ type: "minds:open-help" }));
   });
 });
