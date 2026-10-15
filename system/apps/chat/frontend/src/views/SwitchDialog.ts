@@ -18,7 +18,7 @@ import m from "mithril";
 import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
-import type { Failure } from "@imbue/workspace-ui/src/models/failure";
+import { failureSentence, type Failure } from "@imbue/workspace-ui/src/models/failure";
 import { describeRequestError, describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { fetchAccountModelOptions } from "../models/AccountModelOptions";
 import { getChatById } from "../models/Chats";
@@ -230,7 +230,11 @@ function renderPicker(dialog: OpenDialog): m.Children {
   }
   if (dialog.optionsError !== null) {
     return m("div", { class: "switch-dialog-models-failed text-(length:--font-size-helper) text-secondary" }, [
-      m("p", `Couldn't load the list of models. ${whenNothingIsPicked}; you can change it once it is running.`),
+      m(
+        "p",
+        `${failureSentence(dialog.optionsError, "Couldn't load the list of models").message} ` +
+          `${whenNothingIsPicked}; you can change it once it is running.`,
+      ),
       m(SeeDetails, { details: dialog.optionsError.details }),
     ]);
   }

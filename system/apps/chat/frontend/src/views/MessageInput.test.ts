@@ -211,7 +211,7 @@ vi.mock("../models/Providers", () => ({
 }));
 
 import { jsonBlock } from "@imbue/workspace-ui/src/element_reference";
-import { CHANGE_NOT_ANSWERED } from "@imbue/workspace-ui/src/models/failure";
+import { notAnsweredSentence } from "@imbue/workspace-ui/src/models/failure";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
 import { MessageInput, prependToComposer, restoreComposerDraft, takeComposerDraft } from "./MessageInput";
@@ -819,7 +819,7 @@ describe("MessageInput send failure notice", () => {
     mocks.sendMessage.mockRejectedValueOnce(Object.assign(new Error("null"), { code: 0, response: null }));
     const unanswered = renderedText(await typeAndSend(MessageInput(), "agent-1", "hello"));
     expect(unanswered).toContain("Your message may not have been sent");
-    expect(unanswered).toContain(CHANGE_NOT_ANSWERED);
+    expect(unanswered).toContain(notAnsweredSentence("change"));
     expect(unanswered).not.toContain("Retry");
     expect(unanswered).not.toContain("Force");
     expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
@@ -1498,10 +1498,12 @@ describe("MessageInput on a chat whose account was signed out", () => {
     mocks.loadAccounts.mockImplementationOnce(async () => {
       mocks.signedOutAccountIds.add("account-signed-out-5521");
     });
-    mocks.sendMessage.mockRejectedValueOnce({
-      response: { kind: "account_signed_out" },
-      toString: () => "You signed out of the account this chat runs on.",
-    });
+    mocks.sendMessage.mockRejectedValueOnce(
+      Object.assign(new Error("{}"), {
+        code: 409,
+        response: { detail: "You signed out of the account this chat runs on.", kind: "account_signed_out" },
+      }),
+    );
     const component = MessageInput();
 
     await typeAndSend(component, "agent-signed-out", "are you still there?");
@@ -1514,10 +1516,9 @@ describe("MessageInput on a chat whose account was signed out", () => {
 
   it("leaves the account list alone when a send fails for any other reason", async () => {
     mocks.signedOutAccountIds.clear();
-    mocks.sendMessage.mockRejectedValueOnce({
-      response: { kind: "input_blocked" },
-      toString: () => "a dialog is open",
-    });
+    mocks.sendMessage.mockRejectedValueOnce(
+      Object.assign(new Error("{}"), { code: 500, response: { detail: "a dialog is open", kind: "input_blocked" } }),
+    );
 
     await typeAndSend(MessageInput(), "agent-signed-out", "hello");
 

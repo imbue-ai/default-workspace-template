@@ -107,10 +107,6 @@ function dropOutgoingOfRequestedCompaction(chatId: string, outgoingId: string, s
   }
 }
 
-function sendFailureKind(sendError: unknown): unknown {
-  return (sendError as { response?: { kind?: unknown } | null } | null)?.response?.kind;
-}
-
 function messageTextKey(chatId: string): string {
   return `${MESSAGE_TEXT_KEY_PREFIX}${chatId}`;
 }
@@ -313,7 +309,7 @@ function composeRow(leading: m.Children | undefined, boxChildren: m.Children[]):
  * actions refresh: a removal made in another window leaves it listing the account until then.
  */
 function catchUpOnSignedOutAccount(sendError: unknown): void {
-  if (sendFailureKind(sendError) !== ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND) {
+  if (describeRequestFailure(sendError).kind !== ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND) {
     return;
   }
   loadAccounts().then(
@@ -716,7 +712,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           const failure = describeRequestFailure(err);
           const isUnanswered = failure.cause === "not_answered";
           const told = failureSentence(failure, "Your message wasn't delivered");
-          const isDeclined = DECLINED_COMPACT_SEND_FAILURE_KINDS.has(sendFailureKind(err));
+          const isDeclined = DECLINED_COMPACT_SEND_FAILURE_KINDS.has(failure.kind);
           if (!isDeclined) {
             console.error(`Failed to send message to chat ${chatId}: ${told.message}`, failure.details);
           }
@@ -1167,9 +1163,13 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           title: actionFailureTitle,
           body: [
             detail,
+            // Only when the detail does not already say what to do. An input_blocked reason is
+            // the dialog's own advice ("press Enter in its terminal to run it") -- following it
+            // with a vaguer paraphrase of the same instruction is the third time one screen has
+            // told the reader to go look at their terminal.
             actionFailureKind === "agent_unreachable"
               ? "The agent's terminal is gone, so restarting it is the only way to deliver this."
-              : isRepeatable
+              : isRepeatable && actionFailureKind !== "input_blocked"
                 ? "You can open the agent's terminal, fix it there, then Retry."
                 : null,
           ],
