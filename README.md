@@ -4,7 +4,7 @@ A window in Imbue Studio that gets people into the Imbue Studio Discord and lets
 Studio. Hardcoded to one server (Imbue) and its Studio channels; it never reads anything else on the user's
 Discord account.
 
-Status: the confirmed look-and-feel, serving static sample data. Real Discord data is next.
+Status: working. Shows who is online, the join link, and (once the user connects their Discord) the latest messages in the three Studio channels. Every Discord reply is kept as received under the app's data folder.
 
 - Plan: the workspace's `docs/system/specs/discord-app/plan.md`.
 - What it needs from Studio, and how it gets it: [docs/studio-contract.md](docs/studio-contract.md). In short, the
