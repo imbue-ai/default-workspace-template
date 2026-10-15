@@ -46,9 +46,9 @@ _REBUILD_REQUEST: Final[str] = (
 )
 
 # Served in place of the page while the frontend has not been built (``static/`` is build output): it checks again
-# on its own, offers a Reload, and, inside a shell's window, an agent to rebuild it; the build command is behind
+# on its own, offers a Reload, and, once a shell has greeted it, an agent to rebuild it; the build command is behind
 # "See details". The contract module it asks the shell with is the shell's, served from this origin; when it cannot
-# be loaded (the shell's frontend is not built either), or no shell frames the page, the agent button stays hidden.
+# be loaded (the shell's frontend is not built either), or no shell greets the page, the agent button stays hidden.
 _NOT_BUILT_PAGE: Final[str] = (
     """<!doctype html>
 <html><head><meta charset="utf-8"><title>Getting Started</title>
@@ -78,9 +78,9 @@ rebuild it</button></p>
   if (window.parent !== window) {
     import("__CONTRACT_PATH__")
       .then(({ connectToShell }) => {
-        const shell = connectToShell({});
         const ask = document.getElementById("ask-agent");
-        ask.hidden = false;
+        // Only a shell can start a chat, so the button waits for one to greet the page.
+        const shell = connectToShell({ onHandshake: () => (ask.hidden = false) });
         ask.addEventListener("click", () => shell.startWithText(__REBUILD_REQUEST__));
       })
       .catch((error) => console.warn("[getting-started] could not load the shell contract", error));
