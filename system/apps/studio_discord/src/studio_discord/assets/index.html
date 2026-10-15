@@ -96,14 +96,25 @@
   .faces i { position: absolute; right: -1px; bottom: -1px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--bg); }
 
   /* Connected: a slim bar instead of the pitch. */
-  .topbar { flex-wrap: wrap; align-items: center; gap: 8px 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+  .topbar { flex-wrap: nowrap; align-items: center; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
   .topbar .id { display: flex; align-items: center; gap: 10px; margin-right: auto; min-width: 0; }
   .topbar .id img { width: 28px; height: 28px; border-radius: 8px; flex: none; }
   .topbar .id .title { font-weight: 700; font-size: 17px; line-height: 1.2; }
-  .topbar .id .who { font-size: 13px; color: var(--muted); }
-  .pills { display: flex; gap: 8px; flex-wrap: wrap; }
+  .topbar .id .who { font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; align-items: center; column-gap: 6px; }
+  .topbar .id .who .linkish { font: inherit; font-size: 13px; color: var(--muted); background: none; border: 0; padding: 0; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+  .topbar .id > div { min-width: 0; }
+  .topbar .id .who .keep { white-space: nowrap; }
+  @media (max-width: 600px) {
+    .topbar .id .who .keep { flex-basis: 100%; }
+    .topbar .id .who .sep { display: none; }
+    .topbar .id .who .linkish { display: inline-flex; align-items: center; min-height: 32px; }
+  }
+  .pills { display: flex; gap: 6px; flex: none; }
+  .iconbtn { display: inline-grid; place-items: center; width: var(--tap); height: var(--tap); border-radius: 999px; border: 1px solid var(--line); background: var(--raised); color: var(--ink); cursor: pointer; padding: 0; }
+  .iconbtn svg { width: 16px; height: 16px; }
+  .iconbtn.busy svg { animation: spin .9s linear infinite; }
+  @media (prefers-reduced-motion: reduce) { .iconbtn.busy svg { animation: none; } }
   .pill { white-space: nowrap; display: inline-flex; align-items: center; min-height: var(--tap); padding: 0 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--raised); color: var(--ink); font: inherit; font-size: 14px; text-decoration: none; cursor: pointer; }
-  @media (max-width: 600px) { .topbar .pills { width: 100%; } .topbar .pill { flex: 1 1 auto; justify-content: center; padding: 0 12px; } }
 
   /* Channels. */
   section.chs { margin-top: 30px; }
@@ -114,9 +125,9 @@
   .connectedish .channels { border-top: 0; }
   .channel { border-bottom: 1px solid var(--line); padding: 4px 0 8px; }
   a.chrow { display: grid; grid-template-columns: 1fr auto; column-gap: 12px; align-items: center; min-height: 56px; padding: 8px 0; text-decoration: none; }
-  .chrow .name { font-weight: 600; }
+  .chrow .name { font-weight: 700; font-size: 17px; line-height: 1.25; }
   .chrow .name .hash { color: var(--muted); font-weight: 500; margin-right: 2px; }
-  .chrow .desc { grid-column: 1; color: var(--muted); font-size: 14px; }
+  .chrow .desc { grid-column: 1; color: var(--muted); font-size: 13px; }
   .chrow .go { grid-column: 2; grid-row: 1 / span 2; color: var(--link); font-size: 14px; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; }
   .chrow:hover .go .label { text-decoration: underline; }
   @media (max-width: 600px) { .chrow .go .label { display: none; } .chrow .go svg { width: 18px; height: 18px; } }
@@ -130,10 +141,7 @@
   .msg .meta { font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; column-gap: 8px; }
   .msg .meta b { color: var(--ink); font-weight: 600; }
   .msg .meta span { white-space: nowrap; }
-  .msg .text { display: block; overflow-wrap: anywhere; }
-  .more { display: none; align-items: center; min-height: var(--tap); font-size: 14px; color: var(--link); text-decoration: none; }
-  body[data-state="connected"] .more, body[data-state="error"] .more { display: inline-flex; }
-  .more:hover { text-decoration: underline; }
+  .msg .text { display: block; overflow-wrap: anywhere; font-size: 15px; line-height: 1.45; }
 
   /* Remove confirmation: a centred dialog on wide screens, a bottom sheet on a phone. */
   .scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, .42); display: none; align-items: center; justify-content: center; padding: 16px; }
@@ -146,8 +154,9 @@
   .empty { color: var(--muted); font-size: 14px; padding: 6px 0 2px; }
   .loadingline { color: var(--muted); font-size: 14px; padding: 40px 0; text-align: center; }
   .msg .av img { width: 30px; height: 30px; border-radius: 50%; display: block; }
-  .rawlink { display: inline-flex; align-items: center; min-height: var(--tap); font-size: 12px; color: var(--muted); margin-left: 14px; }
-  .ftr { display: flex; align-items: center; }
+  .rawlink { display: inline-flex; align-items: center; min-height: 32px; font-size: 12px; color: var(--muted); text-underline-offset: 3px; }
+  @media (max-width: 600px) { .rawlink { min-height: var(--tap); } }
+  .ftr { display: flex; justify-content: flex-end; margin-top: -4px; }
   /* Uninstalled: just the link. */
   .removed { max-width: 420px; margin: 18vh auto 0; text-align: center; padding: 0 20px; }
   .removed p { color: var(--muted); margin: 0 0 14px; }
@@ -203,13 +212,12 @@
       <img alt="" src="https://cdn.discordapp.com/icons/1391837726583820409/4dd244f63f0b3d659f6c1358ed04ea6e.png?size=64">
       <div>
         <div class="title">Studio Discord</div>
-        <div class="who"><b id="account-name"></b> &middot; <span id="updated">loading</span></div>
+        <div class="who"><b id="account-name"></b><span>&middot;</span><span id="updated">loading</span><span class="keep"><span class="sep">&middot; </span><button class="linkish" id="disconnect">Disconnect</button></span></div>
       </div>
     </div>
     <div class="pills">
-      <button class="pill" id="refresh">Refresh</button>
+      <button class="iconbtn" id="refresh" aria-label="Refresh" title="Refresh"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.7-4M13.5 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <a class="pill open-discord" href="#" target="_blank" rel="noopener">Open Discord</a>
-      <button class="pill" id="disconnect">Disconnect</button>
     </div>
   </div>
 

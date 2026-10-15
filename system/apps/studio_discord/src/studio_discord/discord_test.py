@@ -76,7 +76,7 @@ def test_plain_text_makes_markup_readable() -> None:
         "content": f"hi <@42> see <#{GENERAL}> and <#999> <@&7> <:wave:123> <a:spin:456>",
         "mentions": [{"id": "42", "global_name": "Ana", "username": "ana1"}],
     }
-    assert discord.plain_text(message) == "hi @Ana see #general and #channel @role :wave: :spin:"
+    assert discord.plain_text(message) == "hi @Ana see #general and #other-channel @role :wave: :spin:"
 
 
 def test_plain_text_of_an_attachment_only_message_is_empty() -> None:

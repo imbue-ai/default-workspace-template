@@ -90,7 +90,7 @@ def plain_text(message: dict[str, Any]) -> str:
     names = {m["id"]: (m.get("global_name") or m.get("username") or "someone") for m in message.get("mentions", [])}
     text = re.sub(r"<@!?(\d+)>", lambda m: "@" + names.get(m.group(1), "someone"), text)
     known = {c.id: c.name for c in config.CHANNELS}
-    text = re.sub(r"<#(\d+)>", lambda m: "#" + known.get(m.group(1), "channel"), text)
+    text = re.sub(r"<#(\d+)>", lambda m: "#" + known.get(m.group(1), "other-channel"), text)
     text = re.sub(r"<@&\d+>", "@role", text)
     text = re.sub(r"<a?:(\w+):\d+>", r":\1:", text)
     return text.strip()
