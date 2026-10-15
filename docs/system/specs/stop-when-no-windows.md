@@ -181,12 +181,13 @@ The rendered Caddyfile gains one site-level block:
 
 ```
 handle_errors 502 {
-    rewrite * /_auth/loading
+    rewrite * /_auth/unresponsive
     reverse_proxy 127.0.0.1:<gateway port>
 }
 ```
 
-A registered service whose backend refuses the connection (the moment between the app stopping and the parker binding, or between the parker releasing and the app binding) then shows the gateway's existing auto-refreshing loading page instead of a bare 502.
+A registered service whose backend refuses the connection (the moment between the app stopping and the parker binding, or between the parker releasing and the app binding) then shows the gateway's not-responding page instead of a bare 502.
+It is a path of its own, apart from the loading page for an origin caddy has no route for yet, because the gateway counts how long each address has gone unanswered, across every visitor: the page reloads every 3 seconds for the first minute, then stops on "This page isn't responding right now" with a Try again button (for an app the shell does not start on demand, "The workspace owner may need to restart it"), and the minute starts over after 30 seconds with no such request.
 The parker's own 503 is a backend answer, not a caddy error, and passes through as it does locally.
 The visitor's next request wakes the app through the parker exactly as the owner's does, so a shared app is stoppable too.
 
@@ -269,7 +270,7 @@ The shell still imports nothing from mngr and runs no `mngr` binary: the writer 
 - The shell, `state_test.py`: the close hint is not posted to a stopped app.
 - The shell, `launches_test.py` or `state_test.py`: a POST launch to a stopped stoppable app wakes it first.
 - The shell, `app_announcements_test.py`: the diff rules the watcher's tests pinned (every row on the first read, nothing on an unchanged read, only the changed row, a relabel, a row without a URL), now over `RegistryRow`s; `inventory_test.py`: the hook is called with the rows, and the mtime backstop re-reads.
-- The share gateway, `caddyfile_test.py`: the `handle_errors 502` block routes to the loading page.
+- The share gateway, `caddyfile_test.py`: the `handle_errors 502` block routes to the not-responding page.
 - The frontend: `WindowMenu.test.ts` (Quit for a stoppable app, running or not; nothing for a critical one), `Window.test.ts` (no placeholder for a stopped stoppable app; the placeholder without a button for an unmanaged one), `livePages.test.ts` (a stoppable app's page is neither held nor reloaded), `records.test.ts` (the parsed field).
 - `system/test_app_manifests.py`: the built-in table; `oom_priority`'s band tests without the watcher.
 - Manual, on a workspace: close the last File Viewer window, see `supervisorctl status files` go `STOPPED` about a minute later and `ss -ltnp` show the shell holding port 8300; open the File Viewer from the launcher, see the loading page turn into the viewer and `files` back to `RUNNING`; Quit the browser from its window menu and see its windows close and the program stop; share the workspace and open the stopped app from the share link.

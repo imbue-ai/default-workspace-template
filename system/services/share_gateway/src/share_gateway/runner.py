@@ -68,6 +68,7 @@ from share_gateway.retry_state import remove_gateway_status
 from share_gateway.retry_state import utc_now
 from share_gateway.retry_state import write_gateway_status
 from share_gateway.server import PendingLoginRegistry
+from share_gateway.server import UnansweredAddressWaits
 from share_gateway.server import build_gateway_app
 
 POLL_INTERVAL_SECONDS = 10
@@ -273,6 +274,7 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
         jwks_cache=JwksCache(f"{materials.broker_url}/share/jwks.json"),
         jti_registry=SingleUseJtiRegistry(),
         pending_logins=PendingLoginRegistry(),
+        unanswered_waits=UnansweredAddressWaits(),
         auth_label=auth_label,
         get_registered_apps=lambda: read_registered_apps(APPS_TOML_PATH),
     )

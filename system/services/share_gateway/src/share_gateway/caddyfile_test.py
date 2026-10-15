@@ -3,6 +3,7 @@ from pathlib import Path
 from share_gateway.caddyfile import build_frame_ancestors_policy
 from share_gateway.caddyfile import build_grantable_service_names
 from share_gateway.caddyfile import build_label_to_name
+from share_gateway.caddyfile import is_started_on_demand
 from share_gateway.caddyfile import parse_registered_apps
 from share_gateway.caddyfile import render_caddyfile
 
@@ -210,8 +211,58 @@ def test_caddyfile_wires_forward_auth_and_loading_fallback() -> None:
     assert "protocols h1 h2" in rendered
 
 
-def test_caddyfile_serves_the_loading_page_for_a_backend_it_cannot_reach() -> None:
+def test_caddyfile_sends_a_backend_it_cannot_reach_to_the_not_responding_page() -> None:
     rendered = _render()
 
-    assert "handle_errors 502 {" in rendered
-    assert rendered.count("rewrite * /_auth/loading") == 2
+    error_route = rendered.split("handle_errors 502 {", 1)[1].split("}", 1)[0]
+    assert "rewrite * /_auth/unresponsive" in error_route
+    # The route-not-loaded fallback keeps its own path, so the gateway can tell the two apart.
+    assert rendered.count("rewrite * /_auth/loading") == 1
+    assert "rewrite * /_auth/unresponsive" not in rendered.split("handle_errors 502 {", 1)[0]
+
+
+_ON_DEMAND_APPS_TOML = """
+[[apps]]
+name = "system_interface"
+url = "http://localhost:8000"
+label = "system_interface-aaaa1111"
+program = "system_interface"
+critical = true
+
+[[apps]]
+name = "files"
+url = "http://127.0.0.1:8300"
+label = "files-dddd4444"
+program = "files"
+
+[[apps]]
+name = "shell-sidecar"
+url = "http://127.0.0.1:8001"
+label = "shell-sidecar-eeee5555"
+program = "system_interface"
+
+[[apps]]
+name = "agent-preview"
+url = "http://127.0.0.1:3000"
+label = "agent-preview-ffff6666"
+
+[[apps]]
+name = "remote-tool"
+url = "http://10.0.0.7:9000"
+label = "remote-tool-gggg7777"
+program = "remote-tool"
+"""
+
+
+def test_only_a_stoppable_program_on_a_loopback_address_is_started_on_demand() -> None:
+    apps = parse_registered_apps(_ON_DEMAND_APPS_TOML)
+
+    started_on_demand = {app.name: is_started_on_demand(app, apps) for app in apps}
+
+    assert started_on_demand == {
+        "system_interface": False,
+        "files": True,
+        "shell-sidecar": False,
+        "agent-preview": False,
+        "remote-tool": False,
+    }
