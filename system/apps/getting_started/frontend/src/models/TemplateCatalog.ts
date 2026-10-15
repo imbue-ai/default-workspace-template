@@ -127,7 +127,7 @@ export function getTemplateCatalogState(): TemplateCatalogState {
 /** Fetch the catalog once per page load; a failed fetch is tried again on the next call. */
 export function ensureTemplateCatalogRequested(): void {
   if (isRequested && state.kind !== "failed") return;
-  requestTemplateCatalog(state.kind === "failed");
+  requestTemplateCatalog(false);
 }
 
 /** The failure line's Try again: fetch again now, and have the app fetch afresh too. */
