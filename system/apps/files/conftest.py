@@ -231,10 +231,10 @@ def fetch_calls() -> list[dict[str, Any]]:
 
 
 @pytest.fixture
-def open_files_page(
-    module_browser: Browser, dufs_origin: str, fetch_calls: list[dict[str, Any]]
-) -> Iterator[Callable[[str, int, int], Page]]:
-    """Open a path of the dufs stand-in in a fresh page of the given viewport size.
+def new_files_context(
+    module_browser: Browser, fetch_calls: list[dict[str, Any]]
+) -> Iterator[Callable[[int, int], BrowserContext]]:
+    """A fresh browser context of the given viewport size whose pages' writes are stubbed into ``fetch_calls``.
 
     Times render in UTC, so a listing's timestamps read the same on every machine.
     """
@@ -243,46 +243,48 @@ def open_files_page(
     def record_fetch(call: dict[str, Any]) -> None:
         fetch_calls.append(call)
 
-    def open_page(path: str, width: int, height: int) -> Page:
+    def new_context(width: int, height: int) -> BrowserContext:
         context = module_browser.new_context(
             viewport={"width": width, "height": height}, timezone_id="UTC"
         )
         contexts.append(context)
         context.expose_function("recordFetch", record_fetch)
         context.add_init_script(_FETCH_STUB)
-        page = context.new_page()
-        page.goto(dufs_origin + path)
-        return page
+        return context
 
-    yield open_page
+    yield new_context
     for context in contexts:
         context.close()
 
 
 @pytest.fixture
+def open_files_page(
+    new_files_context: Callable[[int, int], BrowserContext], dufs_origin: str
+) -> Callable[[str, int, int], Page]:
+    """Open a path of the dufs stand-in in a fresh page of the given viewport size."""
+
+    def open_page(path: str, width: int, height: int) -> Page:
+        page = new_files_context(width, height).new_page()
+        page.goto(dufs_origin + path)
+        return page
+
+    return open_page
+
+
+@pytest.fixture
 def open_framed_files_page(
-    module_browser: Browser,
+    new_files_context: Callable[[int, int], BrowserContext],
     dufs_origin: str,
     shell_stand_in_origin: str,
-    fetch_calls: list[dict[str, Any]],
-) -> Iterator[Callable[[str, bool], tuple[Page, Frame]]]:
+) -> Callable[[str, bool], tuple[Page, Frame]]:
     """Open a path of the dufs stand-in in a stand-in for the shell, which greets it saying whether Imbue Studio opens
     a bug report; answers the stand-in's page and the viewer's frame once the viewer has had its handshake."""
-    contexts: list[BrowserContext] = []
-
-    def record_fetch(call: dict[str, Any]) -> None:
-        fetch_calls.append(call)
 
     def open_page(path: str, can_report_bug: bool) -> tuple[Page, Frame]:
         built_app_contract_source()
         frame_url = dufs_origin + path
         query = urlencode({"frame": frame_url, "can_report_bug": json.dumps(can_report_bug)})
-        context = module_browser.new_context(
-            viewport={"width": 1280, "height": 800}, timezone_id="UTC"
-        )
-        contexts.append(context)
-        context.expose_function("recordFetch", record_fetch)
-        context.add_init_script(_FETCH_STUB)
+        context = new_files_context(1280, 800)
         context.add_init_script(SHELL_HANDSHAKE_COUNTER_SCRIPT)
         page = context.new_page()
         page.goto(f"{shell_stand_in_origin}/?{query}")
@@ -291,6 +293,4 @@ def open_framed_files_page(
         frame.wait_for_function("window.shellHandshakes > 0")
         return page, frame
 
-    yield open_page
-    for context in contexts:
-        context.close()
+    return open_page
