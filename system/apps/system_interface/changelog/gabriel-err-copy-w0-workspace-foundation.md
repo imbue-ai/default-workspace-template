@@ -6,6 +6,6 @@ Failure toasts on the workspace desktop can now be read and acted on.
 
 - Failures no longer read "Could not close the window: <the shell's reason>": the reason goes behind "See details" on a toast that stays, and to the browser console under a plain note, and a request that got no answer says so on its own.
 
-- App pages can offer "Report a bug" too: the shell tells each page in its handshake whether the desktop app opens its bug report, tells pages already open again when the desktop app says so after they loaded, and opens the bug report when a page asks with `shell:report-bug`.
+- App pages can offer "Report a bug" too: the shell tells each page in its handshake whether the desktop app opens its bug report, tells pages already open again when the desktop app says so after they loaded, and opens the bug report when a page asks with `shell:report-bug`. A page that connects to the shell after its window loaded (one that loads the app contract with a dynamic `import()`) is now greeted when it says its capabilities, so it learns it has a shell and can show these buttons; before, it never heard a handshake.
 
 - A preview shell's refusal ("This is a preview of a proposed change; it cannot change the live workspace.") is sent as a sentence for people, so a screen that words failures shows it as written.
