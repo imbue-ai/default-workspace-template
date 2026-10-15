@@ -531,6 +531,30 @@ describe("renderPermissionCard", () => {
     expect(findReviewButton(vnode)).toBeNull();
   });
 
+  it("says what an error outcome means for the agent, and offers to ask it to try again", () => {
+    const details = parsePermissionRequest(
+      makeToolCall(PERMISSION_INPUT.length, "permission_request"),
+      makeResult(PERMISSION_OUTPUT),
+    );
+    const askAgain = vi.fn();
+    const vnode = renderPermissionCard(details, null, "error", "", true, false, () => {}, askAgain);
+
+    const note = findVnode(
+      vnode,
+      (v) =>
+        v.tag === "#" &&
+        String((v as { children?: unknown }).children ?? "").includes(
+          "this request wasn't answered, so the agent didn't get permission.",
+        ),
+    );
+    expect(note).not.toBeNull();
+    const button = findByClass(vnode, "permission-request-ask-again") as {
+      attrs: { onclick: () => void };
+    } | null;
+    button!.attrs.onclick();
+    expect(askAgain).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the gateway service name as the title once the catalog resolves", () => {
     const scopeInfo: ScopeInfo = {
       scope: "slack-api",

@@ -132,6 +132,10 @@ def test_a_newer_request_supersedes_the_pending_one_and_a_submit_on_it_is_refuse
     assert client.get(f"/api/secret-requests/{first['request_id']}").get_json()["status"] == "superseded"
     refused = client.post(f"/api/secret-requests/{first['request_id']}/submit", json={"values": {"SVC_TOKEN": "v"}})
     assert refused.status_code == 409
+    assert refused.get_json()["kind"] == "superseded"
+    assert refused.get_json()["user_facing_message"] == (
+        "The agent asked again in a newer request. Answer that one instead."
+    )
     # The superseded request lived in another chat, which learns of it only through a notice.
     assert bridge.delivered == [
         (
@@ -201,3 +205,26 @@ def test_malformed_bodies_are_400s_and_unknown_ids_are_404s(tmp_path: Path) -> N
     unknown = client.post("/api/secret-requests/nope/submit", json={"values": {}})
     assert unknown.status_code == 404
     assert unknown.get_json()["detail"] == "No secret request with id 'nope'"
+    assert unknown.get_json()["kind"] == "request_gone"
+
+
+def test_an_answer_to_a_request_already_answered_says_so_and_names_how_it_was_answered(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path, RecordingSecretRequestBridge(known_chat_ids=frozenset({_CHAT})))
+    filed = _file(client)
+    assert client.post(f"/api/secret-requests/{filed['request_id']}/decline", json={}).status_code == 200
+
+    again = client.post(f"/api/secret-requests/{filed['request_id']}/submit", json={"values": {"SVC_TOKEN": "v"}})
+
+    assert again.status_code == 409
+    assert again.get_json()["user_facing_message"] == "This request was already answered."
+    assert again.get_json()["kind"] == "already_declined"
+
+
+def test_a_decline_note_over_the_limit_is_refused_with_how_long_it_may_be(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path, RecordingSecretRequestBridge(known_chat_ids=frozenset({_CHAT})))
+    filed = _file(client)
+
+    refused = client.post(f"/api/secret-requests/{filed['request_id']}/decline", json={"note": "x" * 2001})
+
+    assert refused.status_code == 400
+    assert refused.get_json()["user_facing_message"] == "Shorten the note to 2000 characters or fewer."

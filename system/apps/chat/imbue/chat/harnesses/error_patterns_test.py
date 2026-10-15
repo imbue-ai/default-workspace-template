@@ -97,3 +97,10 @@ def test_auth_wins_so_the_two_subtexts_cannot_stack() -> None:
     is in BOTH this module's type table and the auth vocabulary. Classifying it here as well
     would put two contradictory next steps under one message."""
     assert classify_api_error('400 {"type":"invalid_request_error","message":"credit balance is too low"}') is None
+
+
+def test_an_ordinary_refused_request_is_an_invalid_request_not_a_dead_credential() -> None:
+    kind = classify_api_error(
+        '400 {"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 210000 tokens"}}'
+    )
+    assert kind == "invalid_request"

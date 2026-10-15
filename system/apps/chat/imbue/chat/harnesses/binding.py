@@ -13,7 +13,7 @@ from imbue.chat import accounts
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import choose_default_account
 from imbue.chat.accounts import harness_for
-from imbue.chat.harnesses.account_binding import BindingError
+from imbue.chat.harnesses.account_binding import AccountLaneUnavailableError
 from imbue.chat.harnesses.harness_type import HarnessType
 
 
@@ -38,12 +38,15 @@ def resolve_binding(account_id: str = "", home: Path | None = None) -> Account:
     if account_id:
         account = accounts.resolve_account(account_id, home)
         if harness_for(account) is None:
-            raise BindingError(f"account {account_id} is on a lane this build does not have")
+            raise AccountLaneUnavailableError(f"account {account_id} is on a lane this build does not have")
         return account
 
-    chosen = choose_default_account(accounts.read_index(home))
+    index = accounts.read_index(home)
+    chosen = choose_default_account(index)
+    if chosen is None and not index.accounts:
+        raise accounts.NoAccountsError("no provider accounts exist yet")
     if chosen is None:
-        raise accounts.AccountError("no provider accounts exist yet")
+        raise AccountLaneUnavailableError("no signed-in account is on a lane this build has")
     # Back through `resolve_account` for the folder check. The explicit-id path above has
     # always had it; this one did not, so a row whose folder had gone bound an agent to a
     # directory that is not there -- which surfaces as an empty model bar, not as an error.

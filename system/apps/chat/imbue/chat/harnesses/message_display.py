@@ -61,7 +61,15 @@ _STOP_HOOK_PREFIX = "Stop hook feedback:\n"
 _TASK_NOTIFICATION_OPEN = "<task-notification>"
 _TASK_NOTIFICATION_PREAMBLE = "[SYSTEM NOTIFICATION"
 _TASK_SUMMARY_RE = re.compile(r"<summary>([\s\S]*?)</summary>")
+_TASK_STATUS_RE = re.compile(r"<status>\s*([a-z_]+)\s*</status>", re.IGNORECASE)
 _ZERO_EXIT_CODE_RE = re.compile(r"\s*\(exit code 0\)")
+# A summary's closing outcome when the task did not exit cleanly: a non-zero exit code or a kill by a signal.
+_FAILED_OUTCOME_RE = re.compile(r"\s*\((exit code [1-9]\d*|killed by signal \d+)\)\s*$")
+# The task-notification statuses that say the task did not finish cleanly.
+_FAILED_TASK_STATUSES = frozenset({"failed", "killed", "error"})
+_FAILED_TASK_LABEL = "Background task failed"
+# The resolution a NOTICE carries for a task that failed or was killed: a warning mark rather than the tick.
+FAILED_NOTICE_RESOLUTION = "failed"
 # Anchored, DOTALL match of the fleet sentinel wrapping the whole message. We control the
 # format, so an exact match is safe.
 _BROWSER_FLEET_RE = re.compile(rf"^\s*<{BROWSER_FLEET_TAG}>([\s\S]*)</{BROWSER_FLEET_TAG}>\s*$")
@@ -175,7 +183,7 @@ SECRET_RESOLUTION_VERDICTS = tuple(verdict.value for verdict in SecretResolution
 _SECRET_RESOLUTION_TAG_RE = re.compile(
     r"\(secret:\s*(" + "|".join(SECRET_RESOLUTION_VERDICTS) + r"),\s*request_id:\s*([^)\s]+)\)"
 )
-_RESOLUTION_VALUES = ("granted", "denied", "error", *SECRET_RESOLUTION_VERDICTS)
+_RESOLUTION_VALUES = ("granted", "denied", "error", *SECRET_RESOLUTION_VERDICTS, FAILED_NOTICE_RESOLUTION)
 
 
 @pure
@@ -219,8 +227,11 @@ class MessageDisplay(FrozenModel):
     # the declined note from it.
     display_body: str | None = None
     # PERMISSION_RESOLUTION only: granted / denied / error. SECRET_RESOLUTION only: stored /
-    # declined / superseded.
+    # declined / superseded. NOTICE only: failed, for a background task that did not exit cleanly.
     resolution: str | None = Field(default=None, pattern="^(" + "|".join(_RESOLUTION_VALUES) + ")$")
+    # NOTICE only: what goes behind "See details" -- a failed task's exit code or signal, or a notification's own
+    # text when it carries no summary line.
+    display_details: str | None = None
     # PERMISSION_RESOLUTION and SECRET_RESOLUTION only: the resolved request's own id, when
     # the notice carries one (see _RESOLUTION_REQUEST_ID_RE). None for a permission notice
     # recorded before request-id embedding shipped; a secret notice always carries one.
@@ -283,23 +294,39 @@ def _match_task_notification(content: str) -> MessageDisplay | None:
     )
     if not is_notice:
         return None
+    match = _TASK_SUMMARY_RE.search(content)
+    if match is None:
+        return MessageDisplay(
+            display=DisplayKind.NOTICE,
+            display_label="A background task finished.",
+            display_body="",
+            display_details=content.strip(),
+        )
+    # A zero exit code is dropped: every ordinary completion carries one, so it says nothing that "completed" has not.
+    summary = _ZERO_EXIT_CODE_RE.sub("", match.group(1)).strip()
+    status_match = _TASK_STATUS_RE.search(content)
+    status = status_match.group(1).lower() if status_match is not None else ""
+    summary_without_outcome, failed_outcome = _split_failed_outcome(summary)
+    if failed_outcome is None and status not in _FAILED_TASK_STATUSES:
+        return MessageDisplay(
+            display=DisplayKind.NOTICE, display_label="Background task completed", display_body=summary
+        )
     return MessageDisplay(
         display=DisplayKind.NOTICE,
-        display_label="Background task completed",
-        display_body=_task_notification_summary(content),
+        display_label=_FAILED_TASK_LABEL,
+        display_body=summary_without_outcome,
+        resolution=FAILED_NOTICE_RESOLUTION,
+        display_details=failed_outcome or f"status: {status}",
     )
 
 
-def _task_notification_summary(content: str) -> str:
-    """The notice's ``<summary>`` line, or the raw content when it carries none.
-
-    A zero exit code is dropped: every ordinary completion carries one, so it says nothing
-    that "completed" has not already said. A non-zero one stays -- that is the whole news.
-    """
-    match = _TASK_SUMMARY_RE.search(content)
+@pure
+def _split_failed_outcome(summary: str) -> tuple[str, str | None]:
+    """``summary`` without a closing non-zero exit code or signal, and that outcome; None when it has neither."""
+    match = _FAILED_OUTCOME_RE.search(summary)
     if match is None:
-        return content.strip()
-    return _ZERO_EXIT_CODE_RE.sub("", match.group(1)).strip()
+        return summary, None
+    return summary[: match.start()].strip(), match.group(1)
 
 
 def _match_background_task_report(content: str) -> MessageDisplay | None:
@@ -315,9 +342,19 @@ def _match_background_task_report(content: str) -> MessageDisplay | None:
         return None
     # Several reports flushed together are one message, so its one notice names each of them.
     each_report = (_BACKGROUND_TASK_REPORT_RE.match(report) for report in reports)
-    summaries = "; ".join(report.group(1).strip() for report in each_report if report is not None)
+    summaries = [report.group(1).strip() for report in each_report if report is not None] or [match.group(1).strip()]
+    split = [_split_failed_outcome(summary) for summary in summaries]
+    failed_outcomes = [f"{text}: {outcome}" for text, outcome in split if outcome is not None]
+    if not failed_outcomes:
+        return MessageDisplay(
+            display=DisplayKind.NOTICE, display_label="Background task", display_body="; ".join(summaries)
+        )
     return MessageDisplay(
-        display=DisplayKind.NOTICE, display_label="Background task", display_body=summaries or match.group(1).strip()
+        display=DisplayKind.NOTICE,
+        display_label=_FAILED_TASK_LABEL,
+        display_body="; ".join(text for text, _outcome in split),
+        resolution=FAILED_NOTICE_RESOLUTION,
+        display_details="\n".join(failed_outcomes),
     )
 
 

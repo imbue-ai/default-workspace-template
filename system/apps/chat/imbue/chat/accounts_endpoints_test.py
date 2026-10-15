@@ -462,6 +462,7 @@ def test_a_relayed_callback_answers_with_how_the_sign_in_ended(tmp_path: Path) -
     assert response.get_json() == {
         "state": "failed",
         "detail": "Access wasn't approved on Claude's page.",
+        "details": None,
         "account_id": None,
         "provider_name": "Anthropic",
     }

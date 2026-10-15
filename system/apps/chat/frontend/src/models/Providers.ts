@@ -90,6 +90,8 @@ interface FlowStart {
 interface FlowStatus {
   state: FlowState;
   detail: string | null;
+  /** What goes behind "See details" under a failed flow's ``detail``. */
+  details?: string | null;
   account_id: string | null;
 }
 

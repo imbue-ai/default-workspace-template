@@ -20,6 +20,7 @@ import {
   takeChooserAccountId,
 } from "../models/Providers";
 import { startChatOnAccount } from "../shell";
+import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 
 // Avoid importing the shell connection (chat/shell.ts, which pulls in the agents store) and
 // the DOM-dependent markdown renderer (dompurify) at test time; renderSubagentCard only
@@ -139,19 +140,58 @@ function apiErrorEvent(
   };
 }
 
+/** The text behind the tree's "See details", or null when it has none. */
+function seeDetailsOf(node: unknown): string | null {
+  const found: string[] = [];
+  const walk = (current: unknown): void => {
+    if (current === null || current === undefined || typeof current !== "object") return;
+    if (Array.isArray(current)) {
+      current.forEach(walk);
+      return;
+    }
+    const vnode = current as { tag?: unknown; attrs?: { details?: unknown }; children?: unknown };
+    if (vnode.tag === SeeDetails && typeof vnode.attrs?.details === "string") found.push(vnode.attrs.details);
+    walk(vnode.children);
+  };
+  walk(node);
+  return found.length === 0 ? null : found.join("\n");
+}
+
 // Uses allText + collectClasses (defined lower in this file) to read the rendered tree.
 describe("renderAssistantMessageChildren API errors", () => {
-  it("wraps a provider-fault error in the red block with a not-our-fault note", () => {
+  it("puts a provider's status line behind See details and leads with a plain line, blaming nobody", () => {
     const children = renderAssistantMessageChildren(
       apiErrorEvent("API Error: 529 Overloaded", "overloaded", true),
       new Map(),
       "agent-1",
     );
-    const classes = collectClasses(children);
-    expect(classes).toContain("message-api-error");
-    expect(classes).toContain("message-api-error-note");
-    expect(allText(children)).toContain("isn't Imbue Studio's fault");
-    expect(allText(children)).toContain("overloaded");
+    expect(collectClasses(children)).toContain("message-api-error");
+    expect(allText(children)).toContain("The model provider is having trouble. Try again in a moment.");
+    expect(allText(children)).not.toContain("isn't Imbue Studio's fault");
+    expect(seeDetailsOf(children)).toBe("API Error: 529 Overloaded");
+  });
+
+  it("keeps a provider's own sentence on screen, with a plain note when its servers failed", () => {
+    const children = renderAssistantMessageChildren(
+      apiErrorEvent("The service is overloaded right now.", "overloaded", true),
+      new Map(),
+      "agent-1",
+    );
+    expect(collectClasses(children)).toContain("message-api-error-note");
+    expect(allText(children)).toContain("The model provider is having trouble. Try again in a moment.");
+    expect(seeDetailsOf(children)).toBeNull();
+  });
+
+  it("leads a credential failure whose text is a raw body with the way to sign in again", () => {
+    const body = '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}';
+    const children = renderAssistantMessageChildren(
+      { ...apiErrorEvent(body, null, false, false), is_auth_error: true },
+      new Map(),
+      "agent-1",
+    );
+    expect(allText(children)).toContain("This provider is no longer working.");
+    expect(allText(children)).not.toContain("having trouble");
+    expect(seeDetailsOf(children)).toBe(body);
   });
 
   it("styles a client-side error red but adds no not-our-fault note", () => {

@@ -542,3 +542,15 @@ def test_regenerating_writes_the_file_for_an_index_that_predates_it(tmp_path: Pa
     regenerate_create_defaults(tmp_path)
 
     assert _written_create_section()["label__extend"] == [f"account={account.id}"]
+
+
+def test_an_unreadable_index_is_told_apart_from_a_missing_account(tmp_path: Path) -> None:
+    index_path(tmp_path).parent.mkdir(parents=True, exist_ok=True)
+    index_path(tmp_path).write_text("{not json")
+
+    with pytest.raises(AccountError) as unreadable:
+        resolve_account("any", tmp_path)
+
+    assert unreadable.value.user_facing_message == (
+        "Imbue Studio couldn't read this workspace's accounts. Try again. If this persists, report a bug."
+    )

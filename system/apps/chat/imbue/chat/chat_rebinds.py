@@ -89,10 +89,7 @@ class AgentUntrackedError(RebindStepError):
 @pure
 def rebind_cancel_refused_detail(target_label: str) -> str:
     """What a cancel of a rebind tells the user (the 409's ``detail``, shown as is): there is no window for one."""
-    return (
-        f"This chat's switch to {target_label} cannot be called off: "
-        "the agent restarts on the new account as soon as the switch is confirmed."
-    )
+    return f"The switch couldn't be called off -- this chat is already moving to {target_label}."
 
 
 @pure

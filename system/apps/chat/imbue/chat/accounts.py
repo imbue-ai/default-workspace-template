@@ -90,6 +90,29 @@ def _index_lock(home: Path | None = None) -> Generator[None, None, None]:
 class AccountError(RuntimeError):
     """An account could not be created, resolved, or removed."""
 
+    # The sentence a page shows for this refusal, beside the developer's reason; None where the case has none.
+    user_facing_message: str | None = None
+
+
+class NoAccountsError(AccountError):
+    """Nothing is signed in at all."""
+
+    user_facing_message = "No providers are signed in yet. Sign in to start this chat."
+
+
+class AccountSignedOutError(AccountError):
+    """The named account is no longer signed in: its row or its folder is gone."""
+
+    user_facing_message = "That account is signed out. Sign in to it again, or pick another one."
+
+
+class AccountIndexUnreadableError(AccountError):
+    """The account index could not be read, so nothing can be said about any account."""
+
+    user_facing_message = (
+        "Imbue Studio couldn't read this workspace's accounts. Try again. If this persists, report a bug."
+    )
+
 
 class Account(FrozenModel):
     """One signed-in provider account.
@@ -159,17 +182,17 @@ def read_index(home: Path | None = None) -> AccountIndex:
     try:
         payload = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as e:
-        raise AccountError(f"account index at {path} is unreadable: {e}") from e
+        raise AccountIndexUnreadableError(f"account index at {path} is unreadable: {e}") from e
     if not isinstance(payload, dict):
-        raise AccountError(f"account index at {path} is not an object: {type(payload).__name__}")
+        raise AccountIndexUnreadableError(f"account index at {path} is not an object: {type(payload).__name__}")
     version = payload.get("version", 0)
     # `.get`'s default only covers an ABSENT key, so `{"version": null}` yields None and
     # `None > int` raises TypeError -- which boot does not catch (it catches AccountError), so
     # supervisord restarts forever. A string version does the same. Validated before comparing.
     if not isinstance(version, int) or isinstance(version, bool):
-        raise AccountError(f"account index at {path} has a non-numeric version: {version!r}")
+        raise AccountIndexUnreadableError(f"account index at {path} has a non-numeric version: {version!r}")
     if version > INDEX_VERSION:
-        raise AccountError(
+        raise AccountIndexUnreadableError(
             f"account index at {path} is version {version}, but this build understands "
             f"{INDEX_VERSION}. Refusing to read it rather than silently dropping accounts."
         )
@@ -181,7 +204,7 @@ def read_index(home: Path | None = None) -> AccountIndex:
         # to catch. Raised as AccountError because that is what boot degrades on; a bare
         # ValidationError escapes the guard and supervisord restarts forever with no UI, and
         # therefore no way to delete the offending account.
-        raise AccountError(f"account index at {path} is not readable: {e}") from e
+        raise AccountIndexUnreadableError(f"account index at {path} is not readable: {e}") from e
 
 
 def _write_index(index: AccountIndex, home: Path | None = None) -> None:
@@ -503,7 +526,7 @@ def account_label_for(account_id: str, home: Path | None = None) -> str:
     for numbered in number_accounts(read_index(home).accounts):
         if numbered.account.id == account_id:
             return numbered.label
-    raise AccountError(f"no such account: {account_id}")
+    raise AccountSignedOutError(f"no such account: {account_id}")
 
 
 def set_mru(account_id: str, home: Path | None = None) -> None:
@@ -553,16 +576,16 @@ def resolve_account(account_id: str, home: Path | None = None) -> Account:
     """
     index = read_index(home)
     if not index.accounts:
-        raise AccountError("no provider accounts exist yet")
+        raise NoAccountsError("no provider accounts exist yet")
     for account in index.accounts:
         if account.id == account_id:
             # A row whose folder is gone would bind an agent to a directory that is not
             # there, and the harness fails every call rather than reporting signed-out.
             # Refusing here is what turns that into something the user can act on.
             if not account_dir(account.id, home).is_dir():
-                raise AccountError(f"account {account_id} has no folder on disk; sign in to it again")
+                raise AccountSignedOutError(f"account {account_id} has no folder on disk; sign in to it again")
             return account
-    raise AccountError(f"no such account: {account_id}")
+    raise AccountSignedOutError(f"no such account: {account_id}")
 
 
 def reconcile(home: Path | None = None) -> tuple[tuple[str, ...], tuple[str, ...]]:

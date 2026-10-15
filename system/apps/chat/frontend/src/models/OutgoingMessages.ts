@@ -16,8 +16,9 @@
  *
  * A send FAILURE is NOT rendered here: the caller drops the bubble (``dropOutgoing``)
  * and handles failure the original way -- a popup plus restoring the text to the
- * composer. A bubble that somehow never sees an arrival dies on reload; there is no
- * frontend timer, and it never gates real state.
+ * composer. A bubble whose send the backend accepted but whose arrival never comes is
+ * marked unconfirmed after ``UNCONFIRMED_AFTER_MS`` (``noteOutgoingAccepted``), so it
+ * stops reading as delivered; it still never gates real state, and dies on reload.
  */
 import m from "mithril";
 
@@ -32,7 +33,13 @@ export interface OutgoingMessage {
    *  carries the same id (a message held while the chat switches harness) replaces this bubble
    *  exactly, rather than by position. */
   messageId?: string;
+  /** The backend accepted the send long enough ago that its arrival should have come, and none has. */
+  isUnconfirmed?: boolean;
 }
+
+/** How long after the backend accepted a send its arrival may take before the bubble stops reading as delivered.
+ *  Acceptance already waited for the agent to take the message, so the arrival normally follows within seconds. */
+export const UNCONFIRMED_AFTER_MS = 30_000;
 
 const byChat: Record<string, OutgoingMessage[]> = {};
 // Arrival ids already accounted for, per chat -- so a re-streamed transcript
@@ -52,6 +59,17 @@ export function addOutgoing(chatId: string, content: string, messageId?: string)
   (byChat[chatId] ??= []).push(messageId === undefined ? { id, content } : { id, content, messageId });
   m.redraw();
   return id;
+}
+
+/** The backend accepted the send behind bubble ``id``: if no arrival has replaced it after ``UNCONFIRMED_AFTER_MS``,
+ *  mark it unconfirmed. Not for a launch's first message, whose agent may still be starting long after. */
+export function noteOutgoingAccepted(chatId: string, id: string): void {
+  setTimeout(() => {
+    const entry = byChat[chatId]?.find((candidate) => candidate.id === id);
+    if (entry === undefined) return;
+    entry.isUnconfirmed = true;
+    m.redraw();
+  }, UNCONFIRMED_AFTER_MS);
 }
 
 /** Keep only the chat's bubbles that ``keep`` accepts, redrawing when any went. */

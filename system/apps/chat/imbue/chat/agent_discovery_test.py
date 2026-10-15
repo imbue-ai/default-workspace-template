@@ -10,6 +10,7 @@ import pytest
 from imbue.chat.agent_discovery import COMPACT_UNAVAILABLE_SEND_FAILURE_KIND
 from imbue.chat.agent_discovery import COMPACT_WHILE_BUSY_DETAIL
 from imbue.chat.agent_discovery import MngrMessenger
+from imbue.chat.agent_discovery import NO_REASON_SEND_FAILURE
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_discovery import _first_failure
 from imbue.chat.agent_discovery import compact_stale_agents_if_enabled
@@ -231,9 +232,9 @@ def test_returns_a_reason_when_nothing_reachable() -> None:
     messenger = MngrMessenger(discover=_discover, send=_send)
     failure = messenger.send_to_agent(_AGENT_ID, "hi", ())
     assert failure is not None
-    assert failure.reason == "The agent could not be reached."
-    # Nothing matched the id, and trying again will not change that.
-    assert failure.kind == "agent_unreachable"
+    assert failure.reason == NO_REASON_SEND_FAILURE
+    # mngr gave no reason, so nothing says the agent is gone: unclassified, not unreachable.
+    assert failure.kind == "unknown"
 
 
 @pytest.mark.usefixtures("isolated_mngr_env")
@@ -296,10 +297,10 @@ def test_a_real_failure_still_outranks_a_blocked_one() -> None:
     assert failure.kind == "agent_unreachable"
 
 
-def test_nothing_matched_is_still_the_unreachable_catch_all() -> None:
+def test_a_failure_with_no_reason_is_unclassified() -> None:
     failure = _first_failure(MessageResult())
-    assert failure.kind == "agent_unreachable"
-    assert failure.reason == "The agent could not be reached."
+    assert failure.kind == "unknown"
+    assert failure.reason == NO_REASON_SEND_FAILURE
 
 
 def test_unknown_config_field_degrades_to_a_warning_not_a_failure(

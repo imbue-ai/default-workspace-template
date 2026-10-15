@@ -30,7 +30,10 @@ from imbue.imbue_common.pure import pure
 class AgentCreationError(ValueError):
     """Raised when agent creation fails due to invalid input."""
 
-    ...
+    def __init__(self, detail: str, user_facing_message: str | None = None) -> None:
+        super().__init__(detail)
+        # The sentence a page shows for this refusal, beside the developer's reason; None where the case has none.
+        self.user_facing_message = user_facing_message
 
 
 class AgentEventsStatus(FrozenModel):
@@ -234,6 +237,12 @@ class AgentDestroyError(RuntimeError):
     ...
 
 
+class ChatPartlyDestroyedError(AgentDestroyError):
+    """Raised when a chat's agents were destroyed but its folder could not be removed, so its record can bring it back."""
+
+    ...
+
+
 class ModelApplyError(RuntimeError):
     """A model pick could not be applied to a running agent: the pick was not one of the agent's options, or
     the harness refused the switch. The message is what the user sees."""
@@ -258,7 +267,12 @@ class ChatConvergingError(RuntimeError):
 class HandoffError(ValueError):
     """Raised when a switch (a handoff or a rebind) cannot begin, be cancelled, or be retried as asked (a 400)."""
 
-    ...
+    def __init__(self, detail: str, user_facing_message: str | None = None, kind: str | None = None) -> None:
+        super().__init__(detail)
+        # The sentence a page shows for this refusal, beside the developer's reason.
+        self.user_facing_message = user_facing_message
+        # Names a refusal a page answers differently from a failure (a cancel with nothing left to cancel).
+        self.kind = kind
 
 
 class ErrorResponse(FrozenModel):
@@ -298,6 +312,8 @@ class QueuedMessageState(FrozenModel):
     )
     display_label: str | None = Field(default=None, description="The decision's chip or notice label")
     display_body: str | None = Field(default=None, description="The decision's body, when it is not the content")
+    resolution: str | None = Field(default=None, description="The decision's resolution (a notice's ``failed``)")
+    display_details: str | None = Field(default=None, description="The decision's text behind See details")
 
 
 class AgentStateItem(FrozenModel):

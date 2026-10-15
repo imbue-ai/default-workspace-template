@@ -262,33 +262,25 @@ describe("startChatOnAccount", () => {
     expect(createChat).toHaveBeenCalledWith("", "account-1", "", null);
   });
 
-  it("passes a first message through and reports whether the chat opened", async () => {
+  it("passes a first message through", async () => {
     const parent = framed();
     const { connectChatToShell, startChatOnAccount } = await loadShell();
     connection = connectChatToShell("agent-1", { isPresenceReported: false, path: "/agent-1" });
     deliver(HANDSHAKE, parent);
     createChat.mockResolvedValueOnce({ chatId: "agent-2", name: "Chat-2", displayName: "Chat 2" });
-    expect(await startChatOnAccount("account-1", "Carry on here")).toBe(true);
+    await startChatOnAccount("account-1", "Carry on here");
     expect(createChat).toHaveBeenCalledWith("", "account-1", "Carry on here", null);
-
-    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
-    createChat.mockRejectedValueOnce(new Error("no usable account"));
-    expect(await startChatOnAccount("account-1", "Carry on here")).toBe(false);
-    alertSpy.mockRestore();
   });
 
-  it("tells the user when the create fails rather than opening nothing silently", async () => {
+  it("hands a refused create back to the caller to tell, opening nothing", async () => {
     const parent = framed();
     const { connectChatToShell, startChatOnAccount } = await loadShell();
     connection = connectChatToShell("agent-1", { isPresenceReported: false, path: "/agent-1" });
-    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
     createChat.mockRejectedValueOnce(new Error("no usable account"));
 
-    await startChatOnAccount("account-1");
+    await expect(startChatOnAccount("account-1")).rejects.toThrow("no usable account");
 
-    expect(alertSpy).toHaveBeenCalledWith("Failed to create chat: no usable account");
     expect(parent.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "shell:open" }), "*");
-    alertSpy.mockRestore();
   });
 });
 

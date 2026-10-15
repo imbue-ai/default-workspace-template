@@ -208,6 +208,22 @@ def test_re_authenticating_reuses_the_folder_so_bound_chats_recover(service: Aut
     assert json.loads(path.read_text())["opencode-go"]["key"] == "new-key"
 
 
+def test_signing_in_again_through_another_provider_says_to_pick_the_account_from_the_list(
+    service: AuthFlowService, tmp_path: Path
+) -> None:
+    started = service.start("opencode-go", "api_key")
+    service.submit_key(started.flow_id, "a-key", "opencode-go")
+    (account,) = read_index(tmp_path).accounts
+
+    with pytest.raises(FlowError) as refused:
+        service.start("api-key", "api_key", account_id=account.id)
+
+    assert refused.value.user_facing_message == (
+        "That account signs in a different way -- pick it from the provider list instead."
+    )
+    assert "opencode-go" in str(refused.value)
+
+
 def test_re_authenticating_an_unknown_account_is_refused(service: AuthFlowService) -> None:
     """The index answers this now, not `is_dir()` -- so the error names the account."""
     with pytest.raises(AccountError):
@@ -814,6 +830,27 @@ def test_a_callback_carrying_a_denial_is_answered_with_why_the_sign_in_failed(tm
 
     assert status.state is FlowState.FAILED
     assert status.detail == "Access wasn't approved on Claude's page."
+
+
+def test_a_failure_line_the_lane_only_echoes_names_the_provider_with_its_words_behind_the_details(
+    tmp_path: Path,
+) -> None:
+    process = _claude_process()
+
+    def refuse() -> None:
+        process.print_output("Login failed: the callback did not match\r\n")
+        process.exit(1)
+
+    service = _claude_flow_service(tmp_path, process, _CLAUDE_RELAY_URL, [], on_callback=refuse)
+    started = service.start("anthropic", "subscription")
+
+    status = service.relay_callback(started.flow_id, "/callback?code=the-code&state=relay-state")
+
+    assert status.state is FlowState.FAILED
+    assert status.detail == "Anthropic didn't accept that sign-in. Try again, or use a different provider."
+    assert status.details == "the callback did not match"
+    # A later poll of the settled flow says the same.
+    assert service.poll(started.flow_id).details == "the callback did not match"
 
 
 def test_a_callback_the_cli_does_not_take_is_answered_with_how_the_flow_stands(tmp_path: Path) -> None:

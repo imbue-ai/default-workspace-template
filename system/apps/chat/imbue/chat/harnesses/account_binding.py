@@ -52,6 +52,15 @@ _STATE_DIR_SHELL_VAR: Final = '"$MNGR_AGENT_STATE_DIR"'
 class BindingError(RuntimeError):
     """An agent could not be bound to an account."""
 
+    # The sentence a page shows for this refusal, beside the developer's reason; None where the case has none.
+    user_facing_message: str | None = None
+
+
+class AccountLaneUnavailableError(BindingError):
+    """The account runs on a lane this build does not have."""
+
+    user_facing_message = "That account isn't available in this version of Imbue Studio. Pick another one."
+
 
 class DefaultCreateBinding(FrozenModel):
     """What the workspace's local create defaults carry to bind an agent that does not exist yet."""

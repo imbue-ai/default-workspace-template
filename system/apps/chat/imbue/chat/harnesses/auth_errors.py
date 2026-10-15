@@ -36,8 +36,10 @@ _SOURCES: Final[tuple[str, ...]] = (
     # Status codes, however the CLI frames them ("401 Unauthorized", "status 401", "API Error: 401").
     r"\b(?:401|403)\b[^\n]{0,40}(?:unauthorized|forbidden|invalid|expired|auth)",
     r"(?:status|error)[^\n]{0,10}\b(?:401|403)\b",
-    # The structured error type every Anthropic-shaped and OpenAI-shaped API returns.
-    r'"type"\s*:\s*"(?:authentication_error|invalid_request_error)"',
+    # The structured error type every Anthropic-shaped and OpenAI-shaped API returns for a credential. Not
+    # `invalid_request_error`: that is also every ordinary refused request, and the exhausted-usage 400s that share it
+    # are matched by their text below.
+    r'"type"\s*:\s*"authentication_error"',
     r'"code"\s*:\s*"(?:invalid_api_key|invalid_token|token_expired)"',
     r"auth error code:\s*\w+",
     # Prose the CLIs use when they know it is the credential.
@@ -59,6 +61,7 @@ _SOURCES: Final[tuple[str, ...]] = (
     # as `usage_limit_exceeded` -- but the only way forward for both is different credentials,
     # which is exactly what the subtext offers.
     r"credit balance is too low",
+    r"reached your specified api usage limits",
     r"usage_limit_exceeded",
     r"exceeded your current quota",
     # LiteLLM proxy rejections. The Imbue sign-in mode routes claude through a proxy with a

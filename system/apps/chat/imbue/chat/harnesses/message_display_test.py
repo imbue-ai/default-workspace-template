@@ -99,7 +99,7 @@ def test_task_notification_behind_a_system_preamble_is_a_notice() -> None:
     )
     assert decision is not None
     assert decision.display is DisplayKind.NOTICE
-    assert decision.display_label == "Background task completed"
+    assert decision.display_label == "A background task finished."
 
 
 def test_a_task_notification_summary_drops_a_zero_exit_code_and_keeps_any_other() -> None:
@@ -112,18 +112,34 @@ def test_a_task_notification_summary_drops_a_zero_exit_code_and_keeps_any_other(
     assert zero is not None
     assert zero.display_body == 'Background command "build" completed'
 
+
+def test_a_task_notification_for_a_failed_task_is_marked_failed_with_its_exit_code_behind_the_details() -> None:
     failed = classify_user_message(
         '<task-notification>\n<summary>Background command "build" completed (exit code 2)</summary>\n'
         "</task-notification>"
     )
     assert failed is not None
-    assert failed.display_body == 'Background command "build" completed (exit code 2)'
+    assert failed.display_label == "Background task failed"
+    assert failed.display_body == 'Background command "build" completed'
+    assert failed.resolution == "failed"
+    assert failed.display_details == "exit code 2"
+
+    killed = classify_user_message(
+        '<task-notification>\n<status>killed</status>\n<summary>Background command "serve" was stopped</summary>\n'
+        "</task-notification>"
+    )
+    assert killed is not None
+    assert killed.display_label == "Background task failed"
+    assert killed.resolution == "failed"
 
 
-def test_a_task_notification_with_no_summary_shows_what_it_does_carry() -> None:
-    decision = classify_user_message("<task-notification>\n<status>completed</status>\n</task-notification>")
+def test_a_task_notification_with_no_summary_says_a_task_finished_and_keeps_its_text_behind_the_details() -> None:
+    raw = "<task-notification>\n<status>completed</status>\n</task-notification>"
+    decision = classify_user_message(raw)
     assert decision is not None
-    assert decision.display_body == "<task-notification>\n<status>completed</status>\n</task-notification>"
+    assert decision.display_label == "A background task finished."
+    assert decision.display_body == ""
+    assert decision.display_details == raw
 
 
 def test_skill_expansion_lifts_the_skill_name_as_the_label() -> None:
@@ -377,6 +393,24 @@ def test_a_background_task_report_is_a_notice_showing_only_its_summary() -> None
     assert decision.display_label == "Background task"
     assert decision.display_body == "Wait for the background agent (finished)"
     assert is_non_turn_tail(report) is False
+
+
+def test_a_background_task_report_for_a_killed_command_is_marked_failed() -> None:
+    report = _load_system_script("run_in_background.py").compose_report(
+        description="Run the test suite",
+        command=["uv", "run", "pytest"],
+        returncode=-9,
+        output="",
+        output_path=Path("data/.tasks/run-in-background/x/output.log"),
+    )
+
+    decision = classify_user_message(report)
+
+    assert decision is not None
+    assert decision.display_label == "Background task failed"
+    assert decision.display_body == "Run the test suite"
+    assert decision.resolution == "failed"
+    assert decision.display_details == "Run the test suite: killed by signal 9"
 
 
 def _compose_report(description: str, command: Sequence[str] = ("make",), output: str = "built\n") -> str:
