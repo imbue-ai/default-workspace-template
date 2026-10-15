@@ -341,9 +341,9 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
     });
   }
 
-  // Run one of the placeholder's launches; answers the app's origin label, the page's path, and its name, or
-  // rejects with the reason the shell gave (its sentence for people as ``sentence``, when it wrote one).
-  function launch(purpose) {
+  // Run one of the placeholder's launches: the app's origin label, the page's path and its name, or a failure whose
+  // ``sentence`` follows workspace_ui's failureSentence, which this page cannot import (the frontend is not built).
+  function launch(purpose, whatFailed) {
     return fetch(launchUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -352,7 +352,8 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
       return response.json().catch(function () { return {}; }).then(function (body) {
         if (response.ok) return body;
         var failure = new Error(["HTTP " + response.status, body.detail || ""].join("\\n").trim());
-        failure.sentence = body.user_facing_message || null;
+        failure.sentence = body.user_facing_message ||
+          (response.status < 500 ? whatFailed + "." : whatFailed + ". Try again. If this persists, report a bug.");
         throw failure;
       });
     }, function (error) {
@@ -374,7 +375,7 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
     askButton.addEventListener("click", function () {
       askButton.disabled = true;
       document.getElementById("ask-agent-failure").hidden = true;
-      launch("repair_agent").then(function (answer) {
+      launch("repair_agent", "Couldn't start an agent").then(function (answer) {
         var page = pageAt(answer);
         askButton.hidden = true;
         var started = document.getElementById("agent-started");
@@ -388,8 +389,7 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
         }
       }, function (failure) {
         askButton.disabled = false;
-        document.getElementById("ask-agent-failure-message").textContent =
-          failure.sentence || "Couldn't start an agent. Try again. If this persists, report a bug.";
+        document.getElementById("ask-agent-failure-message").textContent = failure.sentence;
         document.getElementById("ask-agent-failure-details").textContent = failure.message;
         document.getElementById("ask-agent-failure").hidden = false;
       });
@@ -405,7 +405,7 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
   details.addEventListener("toggle", function () {
     if (!details.open || !isTerminalOffered || isTerminalAsked) return;
     isTerminalAsked = true;
-    launch("terminal").then(function (answer) {
+    launch("terminal", "The workspace's terminal couldn't be opened here").then(function (answer) {
       var page = pageAt(answer);
       if (!page) return;
       document.getElementById("terminal").src = page;
@@ -413,8 +413,7 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
       document.getElementById("terminal-intro").hidden = false;
     }, function (failure) {
       var line = document.getElementById("terminal-failure");
-      line.textContent = (failure.sentence || "The workspace's terminal couldn't be opened here.") +
-        " (" + failure.message.replace(/\\n/g, ": ") + ")";
+      line.textContent = failure.sentence + " (" + failure.message.replace(/\\n/g, ": ") + ")";
       line.hidden = false;
     });
   });
