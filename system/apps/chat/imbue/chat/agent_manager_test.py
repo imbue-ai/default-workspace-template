@@ -122,6 +122,7 @@ from imbue.chat.testing import make_chat_handoff_record
 from imbue.chat.testing import make_chat_rebind_record
 from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import observer_holding_the_lock
+from imbue.chat.testing import put_stand_in_cli_on_path
 from imbue.chat.testing import read_create_defaults_type
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import seed_failed_chat
@@ -912,9 +913,10 @@ def test_a_seeded_chats_failed_create_destroys_the_agent_mngr_had_already_made(
         assert manager.get_agent_by_id(agent.agent_id) is not None
 
         go_path.touch()
-        wait_until_true(lambda: len(destroys()) == 1, 10, "the stale agent's destroy")
+        # Once before the create's retry, and once when the retry fails too.
+        wait_until_true(lambda: len(destroys()) == 2, 10, "the stale agent's destroys")
 
-        assert destroys() == [f"destroy {agent.agent_id} --force"]
+        assert destroys() == [f"destroy {agent.agent_id} --force"] * 2
         failed = manager.get_provisional_chat(seeded.chat_id)
         assert failed is not None and failed.phase is ProvisionalChatPhase.FAILED
         withdrawn = store.read(chat_id)
@@ -1093,6 +1095,65 @@ def test_create_chat_refuses_labels_and_the_waiver_beside_a_minted_id(agent_mana
         agent_manager.create_chat("", chat_id="failed-3", labels={"auto_open": "true"})
     with pytest.raises(AgentCreationError, match="relabel"):
         agent_manager.create_chat("", chat_id="failed-3", is_installation_check_skipped=True)
+
+
+def _write_flaky_create_mngr_binary(tmp_path: Path, failed_creates: int) -> tuple[str, Path]:
+    """A stand-in ``mngr`` whose first ``failed_creates`` creates exit 1 and the rest succeed;
+    every other command succeeds. Every argv is appended to the returned log."""
+    log_path = tmp_path / "mngr-argv.log"
+    count_path = tmp_path / "mngr-creates"
+    script = tmp_path / "fake-mngr"
+    script.write_text(
+        f'#!/bin/sh\nprintf "%s\\n" "$1 $3" >> "{log_path}"\n'
+        'if [ "$1" = "create" ]; then\n'
+        f'    echo x >> "{count_path}"\n'
+        f'    [ "$(wc -l < "{count_path}")" -gt {failed_creates} ] || exit 1\n'
+        "fi\n"
+        "exit 0\n"
+    )
+    script.chmod(0o755)
+    return str(script), log_path
+
+
+def test_a_failed_create_syncs_the_venv_and_is_retried_once(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale venv is the one cause of a failed create the workspace can fix itself, so the user
+    sees a failure only if the create fails again after a sync. What the first attempt left under
+    the chat's id is destroyed first, since mngr refuses an id still in use."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    uv_log = put_stand_in_cli_on_path(tmp_path, "uv", "exit 0", monkeypatch)
+    mngr_binary, argv_log = _write_flaky_create_mngr_binary(tmp_path, failed_creates=1)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
+    try:
+        created = manager.create_chat("Second try")
+        outcome = manager.wait_for_chat_creation(created.chat_id, timeout=30.0)
+    finally:
+        manager.stop()
+
+    assert outcome is not None and outcome.is_created
+    assert uv_log.read_text().splitlines() == ["sync --all-packages"]
+    assert argv_log.read_text().splitlines() == ["create --id", "destroy --force", "create --id"]
+
+
+def test_a_create_that_fails_again_after_the_sync_reports_the_failure(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    put_stand_in_cli_on_path(tmp_path, "uv", "exit 0", monkeypatch)
+    mngr_binary, argv_log = _write_flaky_create_mngr_binary(tmp_path, failed_creates=2)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
+    try:
+        created = manager.create_chat("Doomed chat")
+        outcome = manager.wait_for_chat_creation(created.chat_id, timeout=30.0)
+    finally:
+        manager.stop()
+
+    assert outcome is not None and not outcome.is_created
+    assert outcome.error.startswith("mngr create exited with code 1")
+    assert [line.split()[0] for line in argv_log.read_text().splitlines()] == ["create", "destroy", "create"]
 
 
 def test_a_waited_create_reports_the_failure_the_record_holds(

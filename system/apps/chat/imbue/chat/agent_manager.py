@@ -230,6 +230,10 @@ _SESSION_SWEEP_INTERVAL_SECONDS: Final[float] = 10.0
 # user is waiting on, so they are bounded rather than left to hang.
 _RENAME_TIMEOUT_SECONDS: Final[float] = 30.0
 
+# Cap on the ``uv sync --all-packages`` a failed chat create runs before it retries; a sync
+# with nothing to do takes well under a second.
+_VENV_SYNC_TIMEOUT_SECONDS: Final[float] = 300.0
+
 # Cap on the `mngr destroy` subprocess. A destroy measured ~16s idle on this
 # class of host (mngr CLI startup + discovery + teardown + inline worktree gc)
 # and degrades under load, so a tight cap would SIGTERM real destroys mid-
@@ -3587,22 +3591,15 @@ class AgentManager:
         half_made_agent_id: str | None = None
 
         try:
-            _loguru_logger.info("mngr create: [cwd: {}] {}", work_dir, shlex.join(cmd))
-            try:
-                result = run_local_command_modern_version(
-                    command=cmd,
-                    cwd=work_dir,
-                    is_checked=False,
-                    trace_output=True,
-                    trace_on_line_callback=output_tail,
-                    shutdown_event=self._shutdown_event,
-                )
-                success = result.returncode == 0
-                if not success:
-                    error = f"mngr create exited with code {result.returncode}"
-            except (OSError, ConcurrencyGroupError) as e:
-                error = str(e)
-                _loguru_logger.opt(exception=e).error("Error creating agent {}", agent_id)
+            success, error = self._run_create_command(agent_id, cmd, work_dir, output_tail)
+            if not success and not self._shutdown_event.is_set():
+                # A stale venv is the one cause the workspace can fix on its own, so sync it and
+                # try once more before the user sees the failure.
+                _loguru_logger.warning("Chat {}: create failed ({}); syncing the venv and retrying", chat_id, error)
+                self._sync_workspace_venv(work_dir)
+                self._destroy_half_made_agent(chat_id, agent_id)
+                output_tail = CreationOutputTail()
+                success, error = self._run_create_command(agent_id, cmd, work_dir, output_tail)
 
             with self._lock:
                 if success:
@@ -3661,6 +3658,57 @@ class AgentManager:
             if settled is not None:
                 settled.set()
             self._broadcaster.broadcast_provisional_chat_completed(chat_id=chat_id, success=success, error=error)
+
+    def _run_create_command(
+        self, agent_id: str, cmd: list[str], work_dir: Path, output_tail: CreationOutputTail
+    ) -> tuple[bool, str | None]:
+        """Run one ``mngr create``; whether it succeeded, and why not when it did not."""
+        _loguru_logger.info("mngr create: [cwd: {}] {}", work_dir, shlex.join(cmd))
+        try:
+            result = run_local_command_modern_version(
+                command=cmd,
+                cwd=work_dir,
+                is_checked=False,
+                trace_output=True,
+                trace_on_line_callback=output_tail,
+                shutdown_event=self._shutdown_event,
+            )
+        except (OSError, ConcurrencyGroupError) as e:
+            _loguru_logger.opt(exception=e).error("Error creating agent {}", agent_id)
+            return False, str(e)
+        if result.returncode != 0:
+            return False, f"mngr create exited with code {result.returncode}"
+        return True, None
+
+    def _sync_workspace_venv(self, work_dir: Path) -> None:
+        """``uv sync --all-packages`` in the workspace; a failure is logged, and the retry runs regardless."""
+        try:
+            result = run_local_command_modern_version(
+                command=["uv", "sync", "--all-packages"],
+                cwd=work_dir,
+                is_checked=False,
+                timeout=_VENV_SYNC_TIMEOUT_SECONDS,
+                shutdown_event=self._shutdown_event,
+            )
+        except (OSError, ConcurrencyGroupError) as e:
+            _loguru_logger.opt(exception=e).warning("uv sync --all-packages could not run")
+            return
+        if result.returncode != 0:
+            _loguru_logger.warning(
+                "uv sync --all-packages exited with code {}: {}", result.returncode, result.stderr.strip()[-500:]
+            )
+
+    def _destroy_half_made_agent(self, chat_id: ChatId, agent_id: str) -> None:
+        """Destroy what a failed create left under ``agent_id``, so the retry can mint the id again.
+
+        mngr tears down an agent that never signalled ready, but not one whose create failed later
+        (provisioning, the first message), and it refuses a create whose id is still in use. When
+        the failed create left nothing, mngr refuses the destroy, which is expected.
+        """
+        try:
+            self.destroy_agent_process(agent_id)
+        except AgentDestroyError as e:
+            _loguru_logger.debug("Chat {}: no half-made agent {} to destroy: {}", chat_id, agent_id, e)
 
     def _settle_new_chat(self, chat_id: ChatId, agent_id: str, model_pick: ModelPick | None, message: str) -> None:
         """Put a just-created chat on its pick and hand it the message its create left out.

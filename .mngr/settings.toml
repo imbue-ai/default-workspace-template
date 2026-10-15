@@ -351,9 +351,10 @@ config_overrides.suppress_unstable_features_warning = true
 config_overrides.service_tier = "default"
 config_overrides.features = { memories = false, code_mode_only = true, code_mode_host = true, goals = false, unified_exec_tty = false, apps = false }
 config_overrides.tools = { update_plan = { enabled = false }, experimental_request_user_input = { enabled = false }, web_search = { enabled = false } }
-# Keep source and enablement through mngr's config rewrite. Codex refuses to
-# re-add a cached Git marketplace if its source declaration has disappeared.
-config_overrides.marketplaces.imbue-code-guardian = { source_type = "git", source = "https://github.com/imbue-ai/code-guardian.git", ref = "main" }
+# Keep source and enablement through mngr's config rewrite. The source is the
+# copy of code-guardian that system/scripts/install_agent_plugins.sh pins into
+# the image, so an agent's install needs no network.
+config_overrides.marketplaces.imbue-code-guardian = { source_type = "local", source = "/opt/agent-plugins/imbue-code-guardian" }
 config_overrides.plugins."imbue-code-guardian@imbue-code-guardian" = { enabled = true }
 # Codex-only instructions, appended to every codex agent's system prompt.
 append_system_prompt__extend = ["""# Codex-specific instructions
@@ -1790,29 +1791,22 @@ append_system_prompt__extend = ["You are an automation agent for this workspace.
 # outright. (The venv converge that used to sit here now runs for every agent
 # from [commands.create], and lands before this.)
 #
-# claude_update_plugin.sh installs the code-guardian plugin (and the other
-# .claude/settings.json plugins) for the worker's worktree path BEFORE its
-# claude starts. Claude Code resolves the plugin set at session startup, so the
-# SessionStart-hook install that chat agents rely on lands too late for a
-# worker's single session -- it would start with no /autofix or
-# /verify-architecture at all, and the harden contract mandates both. It runs
-# WITHOUT --strict on purpose: a plugin or marketplace outage must never make a
-# worker undeployable, so an install failure is a warning in the provision
-# output (and the worker reports the missing gate) rather than a failed launch.
+# The worker's Claude plugins need no install: .claude/settings.json declares
+# them from local marketplaces under /opt/agent-plugins, which claude loads in
+# place, so a worker's first session has /autofix and /verify-architecture.
 [create_templates.worker]
 transfer = "git-worktree"
 extra_window__extend = ["reviewer_settings='system/scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
 env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=0", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
-# Converge the venv for worker agents, ahead of the plugin install so deps are ready
-# first. A fresh git worktree (transfer = "git-worktree" above) carries no .venv
-# (gitignored), so a worker's first `uv run` would otherwise cold-build one mid-task --
+# Converge the venv for worker agents. A fresh git worktree (transfer =
+# "git-worktree" above) carries no .venv (gitignored), so a worker's first `uv run` would otherwise cold-build one mid-task --
 # lazily, with root-closure scope rather than --all-packages, racing whatever the agent
 # is doing (intermittent ModuleNotFoundError, e.g. imbue_common). Scoped to the worker
 # role: a `-t worker` create resolves to type `claude` and applies THIS template, so the
 # sync belongs here, not on the `[agent_types.worker]` legacy shim (which only re-resolves
 # agents whose persisted type is already worker). Chat/main agents share the services
 # agent's boot-time converge. uv's warm cache makes this hardlink-fast when up to date.
-extra_provision_command__extend = ["uv sync --all-packages", "bash system/scripts/claude_update_plugin.sh"]
+extra_provision_command__extend = ["uv sync --all-packages"]
 append_system_prompt__extend = ["You were launched by another agent. List any questions at the end of your final response, along with the assumptions you made."]
 
 # Shims for agents created before roles moved to create templates: their persisted

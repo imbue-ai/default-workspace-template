@@ -52,7 +52,8 @@ COPY system/scripts/agy_install-1.1.22.sh /usr/local/bin/default-workspace-templ
 COPY system/scripts/install_owner_exec.sh /usr/local/bin/default-workspace-template-install-owner-exec
 COPY system/scripts/install_dufs.sh /usr/local/bin/default-workspace-template-install-dufs
 COPY system/scripts/install_earlyoom.sh /usr/local/bin/default-workspace-template-install-earlyoom
-RUN chmod +x /usr/local/bin/default-workspace-template-setup-system /usr/local/bin/default-workspace-template-install-secret-scanners /usr/local/bin/default-workspace-template-install-agy /usr/local/bin/default-workspace-template-install-owner-exec /usr/local/bin/default-workspace-template-install-dufs /usr/local/bin/default-workspace-template-install-earlyoom && default-workspace-template-setup-system
+COPY system/scripts/install_agent_plugins.sh /usr/local/bin/default-workspace-template-install-agent-plugins
+RUN chmod +x /usr/local/bin/default-workspace-template-setup-system /usr/local/bin/default-workspace-template-install-secret-scanners /usr/local/bin/default-workspace-template-install-agy /usr/local/bin/default-workspace-template-install-owner-exec /usr/local/bin/default-workspace-template-install-dufs /usr/local/bin/default-workspace-template-install-earlyoom /usr/local/bin/default-workspace-template-install-agent-plugins && default-workspace-template-setup-system
 
 # /var/cache/user is the off-volume cache target, pinned via ENV so BOTH the
 # build layers below (dependency pre-warm) and the runtime container cache to
