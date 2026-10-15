@@ -26,10 +26,12 @@ The venv stays current without those per-call syncs:
 - a claude or codex session starts with the same sync
   (`system/scripts/session_start_sync.sh`), which never rewrites `uv.lock`: if
   the lock has drifted from `pyproject.toml` it says so once and syncs from
-  the lock as committed (other harnesses rely on the boot sync);
-- after a merge or pull that changes `uv.lock` (a worker's branch that added a
-  dependency, say), run `uv sync --all-packages --frozen` before the next
-  one-off;
+  the lock as committed. Other harnesses have no session-start hook, so on
+  them run `uv sync --all-packages --frozen` yourself when a `pyproject.toml`
+  or `uv.lock` changed since the workspace booted;
+- after a merge or pull that changes a `pyproject.toml` or `uv.lock` (a
+  worker's branch that added a skill or a dependency, say), run
+  `uv sync --all-packages --frozen` before the next one-off;
 - after you change a dependency yourself, run `uv lock` and then
   `uv sync --all-packages`, and commit the new `uv.lock` with the change.
 

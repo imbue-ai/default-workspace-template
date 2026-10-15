@@ -2,7 +2,7 @@ Each skill's Python now lives in its own uv project, `.agents/skills/<name>/pyth
 
 - **Scripts that call scripts:** the shared preview script registers its servers through `forward_port` in-process and starts the preview frame with `python -m agents_shared.preview_wrapper_server`; `preview_app.py` boots, refreshes and tears down previews by calling it in-process; launch-task sends the task and every reply through `message_chat` in-process, and a failed task send is reported with the destroy hint instead of raising; build-app's scaffold validates the manifest with `app_manifest` in-process.
 
-- **Third-party skills are unaffected:** a skill whose `scripts/` holds plain or PEP 723 scripts never touches the workspace's uv setup.
+- **Third-party skills don't break uv:** a skill whose `scripts/` holds plain or PEP 723 scripts is not a uv workspace member, so it can't break `uv` commands in the workspace. The root import-cost and type checks still cover its scripts.
 
 - **What existing workspaces need:** a workspace's own skills with Python need the same layout. The update worker converts them by following the new `update-self/references/python-packaging-migration.md`, which also covers a skill test that loads its module from a file: it imports the module from the package instead. `migrate-workspace` converts the skills it brings over from an older workspace the same way.
 

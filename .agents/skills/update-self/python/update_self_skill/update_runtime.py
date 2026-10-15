@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Protocol, Sequence
 
 
 class ApplyError(Exception):
@@ -161,6 +161,16 @@ class HttpClient:
             return None
 
 
+class SpawnedServer(Protocol):
+    """What the pre-flight boot reads off a spawned throwaway server."""
+
+    def terminate(self) -> None: ...
+
+    def has_exited(self) -> bool: ...
+
+    def read_output(self) -> str: ...
+
+
 @dataclass
 class Spawned:
     """A handle to a spawned throwaway server process."""
@@ -194,7 +204,7 @@ class Spawner:
 
     def spawn(
         self, argv: Sequence[str], cwd: str, env: dict, output_path: Path
-    ) -> Spawned:
+    ) -> SpawnedServer:
         with output_path.open("wb") as output_file:
             process = subprocess.Popen(
                 list(argv),

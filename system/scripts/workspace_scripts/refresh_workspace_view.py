@@ -27,7 +27,8 @@ Every outcome is reported on stderr and the exit code is always 0. The change
 has already landed on disk; failing a reveal because the user had the window
 shut would be worse than a stale tab.
 
-Runs from the root venv: every caller has just synced it.
+Run with ``uv run --no-sync``: it is venv tier, and its callers (update-app, and
+update-self's apply) run it right after a sync.
 
 Usage:
     uv run --no-sync system/scripts/refresh_workspace_view.py

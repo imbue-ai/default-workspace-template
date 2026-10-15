@@ -43,19 +43,20 @@ environment -- that is what ``--port-env`` / ``--env`` inject. Scaffolded Flask
 services do this out of the box (``<PKG>_PORT`` / ``<PKG>_DATA_DIR``); an older
 service is retrofitted with the same one-liner when it is edited.
 
-Run via ``uv run --no-sync``. It imports only the standard library and the
-stdlib-only ``forward_port`` it registers through.
+Run via ``uv run --no-sync``: the entry imports this package from the root venv.
+The module itself imports only the standard library and the stdlib-only
+``forward_port`` it registers through.
 
 Usage:
-    uv run --no-sync serve_isolated_instance.py up --name <slug> --cwd <dir> \\
+    uv run --no-sync .agents/shared/scripts/serve_isolated_instance.py up --name <slug> --cwd <dir> \\
         (--port-env <ENVVAR> | --port main) [--port-env <name>=<ENVVAR> | --port <name> ...] \\
         [--host-env <ENVVAR>] \\
         [--env NAME=VALUE ...] [--unset-env NAME ...] [--copy KEY=SOURCE ...] \\
         [--health-path /path] [--service-name <name>] \\
         [--preview-service-name <name> --preview-title <label> [--inner-path /path]] \\
         [--repo-root PATH] -- <launch argv...>
-    uv run --no-sync serve_isolated_instance.py refresh --name <slug> [--repo-root PATH]
-    uv run --no-sync serve_isolated_instance.py down --name <slug> [--repo-root PATH]
+    uv run --no-sync .agents/shared/scripts/serve_isolated_instance.py refresh --name <slug> [--repo-root PATH]
+    uv run --no-sync .agents/shared/scripts/serve_isolated_instance.py down --name <slug> [--repo-root PATH]
 
 ``refresh`` re-boots the inner server (only) on its existing port so a rebuild or
 edit is picked up in place -- the port, the wrapper frame, the service

@@ -121,9 +121,9 @@ only pretend to cover. The worker reference owns that recipe.
 
 This module is the command line: argument parsing and the git-touching wrappers;
 ``scripts/update_self.py`` is its entry stub, run with the system ``python3`` and
-no venv, which puts the skill's ``python/`` on ``sys.path`` to import this
-package (the whole skill directory is staged and run as one unit). The logic
-lives in the package's other modules:
+no venv; the stub puts the skill's ``python/`` directory on ``sys.path``, which
+is what makes this package importable (the whole skill directory is staged and
+run as one unit). The logic lives in the package's other modules:
 ``update_target`` (which ref to update to), ``update_classification`` (change
 classes and the apply plan), ``update_apply_contract`` (every path, phase,
 verdict and record the Imbue Studio app, bootstrap and the system interface read),

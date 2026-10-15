@@ -27,7 +27,7 @@ import sys
 import time
 import tomllib
 import traceback
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Collection, NamedTuple, Sequence
@@ -1658,7 +1658,7 @@ class RollbackPointBusyError(Exception):
 
 
 @contextmanager
-def _holding_rollback_point_lock(repo_root: Path) -> Iterator[None]:
+def _holding_rollback_point_lock(repo_root: Path) -> Generator[None, None, None]:
     """Hold the rollback point's lock for the body, or raise ``RollbackPointBusyError`` at once."""
     lock_path = rollback_lock_path(repo_root)
     lock_path.parent.mkdir(parents=True, exist_ok=True)

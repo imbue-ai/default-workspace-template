@@ -10,7 +10,7 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 # Pin $HOME to the image-build home. Several installers below follow $HOME (the
-# claude.ai installer, the uv installer, `uv python install` / `uv tool install`),
+# claude.ai installer, the uv installer, `uv tool install`),
 # while the checks and PATH entries in this script are fixed to /root/.local. A
 # live re-provision (the update apply, or an agent running this by hand) runs
 # under HOME=/home/user -- root's passwd home at runtime -- so without this pin
@@ -215,17 +215,6 @@ rm -rf /tmp/frp.tar.gz "/tmp/frp_${FRP_VERSION}_linux_${frp_goarch}"
 # uv (pinned). Installs to /root/.local/bin.
 curl -LsSf "${CURL_RETRY[@]}" "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
 export PATH="/root/.local/bin:$PATH"
-
-# Ensure a uv-managed Python that satisfies the workspace lockfile (>=3.12).
-# The Docker base image ships 3.12, but other bases (e.g. a Debian VM whose
-# system Python is 3.11) do not -- and the root pyproject's requires-python
-# (>=3.11) lets uv otherwise pick the system 3.11, which the frozen lock then
-# rejects. Fetch a managed 3.12 here so install_dependencies.sh /
-# build_workspace.sh can pin uv to it. No-op when system Python is already
-# >=3.12, so the Docker build is unchanged.
-if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null; then
-    uv python install 3.12
-fi
 
 # Make /root/.local/bin discoverable in login and interactive shells. The docker
 # image also sets ENV PATH; the Lima VM relies on these profile writes.

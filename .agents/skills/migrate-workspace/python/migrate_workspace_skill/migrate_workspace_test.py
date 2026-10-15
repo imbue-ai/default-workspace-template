@@ -597,7 +597,9 @@ def test_reconcile_ports_never_auto_resolves_a_real_wiring_collision() -> None:
     assert [entry["name"] for entry in result["name_collisions"]] == ["dashboard"]
     assert [entry["name"] for entry in result["port_collisions"]] == ["triage"]
     assert [entry["name"] for entry in result["free"]] == ["news"]
-    assert result["port_collisions"][0]["collides_with"]["name"] == "weather"
+    collides_with = result["port_collisions"][0]["collides_with"]
+    assert isinstance(collides_with, dict)
+    assert collides_with["name"] == "weather"
 
 
 # scheduled jobs

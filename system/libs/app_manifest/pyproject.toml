@@ -3,7 +3,7 @@ name = "app-manifest"
 version = "0.1.0"
 description = "The app manifest (app.toml) and app registry (data/.state/apps.toml) models every workspace app is described by"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "click>=8.1",
     "imbue-common",

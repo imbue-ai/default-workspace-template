@@ -302,36 +302,35 @@ def test_a_shell_preview_boots_its_siblings_first_and_frames_them_through_a_regi
     worktree = _write_worktree(tmp_path)
     live_registry = tmp_path / "apps.toml"
     monkeypatch.setenv("MINDS_APPS_FILE", str(live_registry))
-    instances = _RecordingInstances(tmp_path)
-
     # The sibling's own registration lands in the live registry when it boots; stand in for it.
-    def up_and_register(spec: mod.InstanceSpec, repo_root: Path) -> int:
-        code = _RecordingInstances.up(instances, spec, repo_root)
-        if spec.name == "chat-preview":
-            live_registry.write_text(
-                _dump_registry(
-                    [
-                        {
-                            "name": "chat",
-                            "url": "http://localhost:8010",
-                            "label": "chat-live",
-                        },
-                        {
-                            "name": "terminal",
-                            "url": "http://localhost:7681",
-                            "label": "terminal-live",
-                        },
-                        {
-                            "name": "chat-preview-app",
-                            "url": "http://localhost:40001",
-                            "label": "chat-preview-x1y2",
-                        },
-                    ]
+    class _RegisteringInstances(_RecordingInstances):
+        def up(self, spec: mod.InstanceSpec, repo_root: Path) -> int:
+            code = super().up(spec, repo_root)
+            if spec.name == "chat-preview":
+                live_registry.write_text(
+                    _dump_registry(
+                        [
+                            {
+                                "name": "chat",
+                                "url": "http://localhost:8010",
+                                "label": "chat-live",
+                            },
+                            {
+                                "name": "terminal",
+                                "url": "http://localhost:7681",
+                                "label": "terminal-live",
+                            },
+                            {
+                                "name": "chat-preview-app",
+                                "url": "http://localhost:40001",
+                                "label": "chat-preview-x1y2",
+                            },
+                        ]
+                    )
                 )
-            )
-        return code
+            return code
 
-    instances.up = up_and_register  # type: ignore[method-assign]
+    instances = _RegisteringInstances(tmp_path)
     code = mod.up(
         "system_interface",
         worktree,

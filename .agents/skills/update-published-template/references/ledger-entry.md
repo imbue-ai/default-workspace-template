@@ -20,7 +20,7 @@ from `$WT`).
   `docs/VERSION_HISTORY.md` is missing, recreate the shipped four-section
   starter (`## Workspace`, `## Migrations`, `## Templates`, `## Adopted
   templates`; the exact block is `_VERSION_HISTORY_STARTER` in `update-self`'s
-  `scripts/update_self.py`) and re-add the heading before appending.
+  `python/update_self_skill/update_ledger.py`) and re-add the heading before appending.
 - Append one line under that heading:
 
   ```

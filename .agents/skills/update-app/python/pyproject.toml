@@ -2,7 +2,7 @@
 name = "update-app-skill"
 version = "0.1.0"
 description = "Previews an app's worktree beside the live one"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "agents-shared",
     "app-manifest",
@@ -16,7 +16,7 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["update_app_skill"]
 
-# preview_app's up and down both read manifests through app_manifest, and its
+# preview_app's up reads the app's manifest through app_manifest, and the module's
 # signatures name AppManifest, so the library (and the pydantic it loads) is
 # imported at module level.
 [tool.workspace-template.entry-points."preview_app.py"]

@@ -3,7 +3,7 @@ name = "terminal-app"
 version = "0.1.0"
 description = "The terminal app: the wrapper pages over the workspace's tmux sessions (terminal-app), and ttyd on its own origin (terminal-pty)"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "app-manifest",
     "click>=8.1",

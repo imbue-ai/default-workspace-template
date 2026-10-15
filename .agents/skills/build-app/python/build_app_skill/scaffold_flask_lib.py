@@ -92,6 +92,7 @@ def _read_and_validate_icon(path: Path) -> str:
     markup, error = forward_port.read_icon_file(path)
     if error is not None:
         sys.exit(f"error: {error}")
+    assert markup is not None
     return markup
 
 
@@ -236,7 +237,7 @@ name = "{name}"
 version = "0.1.0"
 description = "{description}"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     {deps_block},
 ]

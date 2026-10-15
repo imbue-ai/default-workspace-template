@@ -3,7 +3,7 @@ name = "pytest-executable-tmp"
 version = "0.1.0"
 description = "Test-only pytest plugin that keeps temporary files on a filesystem that can run them"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "imbue-common",
     "pydantic>=2.0",

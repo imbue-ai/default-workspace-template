@@ -87,7 +87,11 @@ def test_the_staged_runner_delivers_through_the_messenger_of_the_workspace_it_ru
 
     started = subprocess.run(
         [
+            # No site-packages, as the system python3 runs it: the root venv's editable
+            # install would otherwise satisfy the import whatever was staged.
             sys.executable,
+            "-S",
+            "-s",
             str(staged),
             "--description",
             "Wait for the update's background agent",
