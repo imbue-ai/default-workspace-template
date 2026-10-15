@@ -28,14 +28,13 @@ import subprocess
 import tomllib
 from pathlib import Path, PurePosixPath
 
-from entry_points_testing import is_bare_entry
+from entry_points_testing import REPO_ROOT, is_bare_entry
 from imbue.mngr.interfaces.host import NamedCommand
 from inline_snapshot import snapshot
 from vendor_testing import resolves_into_vendor
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-_SUPERVISORD_DIR = _REPO_ROOT / "system"
-_MNGR_SETTINGS = _REPO_ROOT / ".mngr" / "settings.toml"
+_SUPERVISORD_DIR = REPO_ROOT / "system"
+_MNGR_SETTINGS = REPO_ROOT / ".mngr" / "settings.toml"
 
 _SHELL_PROGRAMS = frozenset({"bash", "sh", "zsh", "dash"})
 _EXTRA_WINDOW_KEYS = frozenset(
@@ -247,7 +246,7 @@ def _is_scanned(relative: str, suffixes: tuple[str, ...]) -> bool:
 
 
 def _scanned_files(
-    suffixes: tuple[str, ...] = _UV_RUN_SCANNED_SUFFIXES, repo_root: Path = _REPO_ROOT
+    suffixes: tuple[str, ...] = _UV_RUN_SCANNED_SUFFIXES, repo_root: Path = REPO_ROOT
 ) -> list[Path]:
     """The tracked files agents read commands from.
 
@@ -282,7 +281,7 @@ def _plain_uv_run_violations() -> list[tuple[str, str]]:
             else _plain_uv_runs(text)
         )
         violations.extend(
-            (str(path.relative_to(_REPO_ROOT)), line) for _, line in found
+            (str(path.relative_to(REPO_ROOT)), line) for _, line in found
         )
     return violations
 
@@ -423,7 +422,7 @@ def test_the_python_scan_catches_strings_and_argv_and_skips_comparisons() -> Non
 
 
 def test_scanning_skips_records_and_tests_but_reaches_living_contracts() -> None:
-    scanned = {str(path.relative_to(_REPO_ROOT)) for path in _scanned_files()}
+    scanned = {str(path.relative_to(REPO_ROOT)) for path in _scanned_files()}
 
     assert not any(
         "/changelog/" in path or path.endswith("CHANGELOG.md") for path in scanned
@@ -532,7 +531,7 @@ def _python3_violations(files: list[Path], repo_root: Path) -> list[str]:
 
 
 def test_python3_invocations_name_bare_entry_points() -> None:
-    offenders = _python3_violations(_scanned_files(_PYTHON3_SCANNED_SUFFIXES), _REPO_ROOT)
+    offenders = _python3_violations(_scanned_files(_PYTHON3_SCANNED_SUFFIXES), REPO_ROOT)
     assert not offenders, (
         "These run a script with the system python3, but it is not a bare entry point (or does not exist): "
         "the system python3 has no venv. Run it with `uv run --no-sync <path>` instead "
@@ -556,7 +555,7 @@ def test_the_python3_scan_catches_a_venv_script_and_a_stale_path(tmp_path: Path)
 
     offenders = [
         written
-        for written, resolved in _named_python3_scripts(doc.read_text(), doc.parent, _REPO_ROOT)
+        for written, resolved in _named_python3_scripts(doc.read_text(), doc.parent, REPO_ROOT)
         if resolved is None or not is_bare_entry(resolved)
     ]
 
@@ -568,8 +567,8 @@ def test_the_python3_scan_catches_a_venv_script_and_a_stale_path(tmp_path: Path)
 
 def test_uv_run_invocations_name_scripts_that_exist() -> None:
     offenders = [
-        f"{path.relative_to(_REPO_ROOT)}: uv run {written}"
-        for path, written in _missing_uv_run_scripts(_scanned_files(_PYTHON3_SCANNED_SUFFIXES), _REPO_ROOT)
+        f"{path.relative_to(REPO_ROOT)}: uv run {written}"
+        for path, written in _missing_uv_run_scripts(_scanned_files(_PYTHON3_SCANNED_SUFFIXES), REPO_ROOT)
     ]
     assert not offenders, (
         "These run a script that is not in the tree, likely one that moved into its package "
@@ -591,7 +590,7 @@ def test_the_uv_run_scan_catches_a_moved_script(tmp_path: Path) -> None:
         )
     )
 
-    assert _missing_uv_run_scripts([doc], _REPO_ROOT) == [(doc, ".agents/shared/scripts/validate_skill.py")]
+    assert _missing_uv_run_scripts([doc], REPO_ROOT) == [(doc, ".agents/shared/scripts/validate_skill.py")]
 
 
 # Calls that put a directory on the import path without naming ``sys.path``.
@@ -704,7 +703,7 @@ def _sys_path_editors(repo_root: Path) -> list[str]:
 
 
 def test_prevent_sys_path_edits() -> None:
-    offenders = _sys_path_editors(_REPO_ROOT)
+    offenders = _sys_path_editors(REPO_ROOT)
     assert len(offenders) <= snapshot(15), (
         "These edit the import path (sys.path, PYTHONPATH, or a pytest pythonpath setting). Import the package instead: a skill's modules live in its python/ "
         "project and a system script's beside it, all importable from the root venv:\n"
@@ -775,7 +774,7 @@ def _path_loading_sites(repo_root: Path) -> list[str]:
 
 
 def test_prevent_loading_modules_by_file_path() -> None:
-    sites = _path_loading_sites(_REPO_ROOT)
+    sites = _path_loading_sites(REPO_ROOT)
     assert len(sites) <= snapshot(6), (
         "These load a module from a file path. Import it instead: a skill's modules live in its "
         "python/ project and a system script's beside it, all importable from the root venv:\n"
