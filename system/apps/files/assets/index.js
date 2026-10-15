@@ -260,13 +260,13 @@ class Uploader {
           this.complete();
         } else {
           if (ajax.status != 0) {
-            this.fail(`${ajax.status} ${ajax.statusText}`);
+            this.fail({ status: ajax.status, statusText: ajax.statusText });
           }
         }
       }
     })
-    ajax.addEventListener("error", () => this.fail(), false);
-    ajax.addEventListener("abort", () => this.fail(), false);
+    ajax.addEventListener("error", () => this.fail(null), false);
+    ajax.addEventListener("abort", () => this.fail(null), false);
     if (this.uploadOffset > 0) {
       ajax.open("PATCH", url);
       ajax.setRequestHeader("X-Update-Range", "append");
@@ -280,9 +280,16 @@ class Uploader {
 
   async retry() {
     const { url } = this;
-    let res = await fetch(url, {
-      method: "HEAD",
-    });
+    let res;
+    try {
+      res = await fetch(url, {
+        method: "HEAD",
+      });
+    } catch {
+      // minds patch: a retry whose own first request fails says so again, rather than leaving the row as it was.
+      this.showFailure(null);
+      return;
+    }
     let uploadOffset = 0;
     if (res.status == 200) {
       let value = res.headers.get("content-length");
@@ -316,15 +323,35 @@ class Uploader {
     Uploader.runQueue();
   }
 
-  fail(reason = "") {
-    this.$uploadStatus.innerHTML = `<span style="width: 20px;" title="${reason}">✗</span><span class="retry-btn" id="retry${this.idx}" title="Retry">↻</span>`;
+  /**
+   * @param {{status: number, statusText: string} | null} refusal what the server answered, or null when the
+   *   connection dropped before it answered
+   */
+  fail(refusal) {
+    this.showFailure(refusal);
     failUploaders.set(this.idx, this);
     Uploader.runnings--;
     Uploader.runQueue();
   }
+
+  // minds patch: the row says why the upload failed, beside the retry control, rather than a glyph whose tooltip
+  // is the raw status line; the status stays in the line's tooltip.
+  showFailure(refusal) {
+    const line = uploadFailureLine(refusal);
+    const statusLine = refusal === null ? "" : `HTTP ${refusal.status} ${refusal.statusText}`.trim();
+    this.$uploadStatus.innerHTML = `<span class="upload-failure" title="${encodedStr(statusLine)}">${line}</span><span class="retry-btn" id="retry${this.idx}" title="Retry">↻</span>`;
+  }
 }
 
 Uploader.globalIdx = 0;
+
+// minds patch: what a failed upload's row says. A 403 is dufs refusing to write there; any other status names no
+// cause of its own.
+function uploadFailureLine(refusal) {
+  if (refusal === null) return "Upload interrupted";
+  if (refusal.status === 403) return "Upload failed — this folder is read-only";
+  return "Upload failed";
+}
 
 Uploader.runnings = 0;
 
@@ -544,6 +571,9 @@ function setupHiddenFilesToggle() {
   syncToggle();
 }
 
+// The longest path a window can be at (workspace_layout's MAX_WINDOW_PATH_LENGTH): the shell refuses a longer one.
+const MAX_WINDOW_PATH_LENGTH = 2048;
+
 // minds patch: files open in workspace windows. Once the workspace shell has handed the page
 // its handshake, a click on a file's name or its View button asks the shell for a file viewer
 // window on the file's view page, and the Edit button for one on its edit page, raising a window
@@ -558,7 +588,16 @@ function setupWorkspaceWindowLinks() {
       return;
     }
     event.preventDefault();
-    shell.openPath(`${new URL($anchor.href).pathname}?${$anchor.dataset.mindsPage}`, "focus");
+    const page = `${new URL($anchor.href).pathname}?${$anchor.dataset.mindsPage}`;
+    if (page.length > MAX_WINDOW_PATH_LENGTH) {
+      showNotice({
+        message: "This file's location is too long to open in a window of its own. Download it from the listing instead.",
+        cause: "",
+        details: null,
+      });
+      return;
+    }
+    shell.openPath(page, "focus");
   };
   $pathsTableBody.addEventListener("click", openInWorkspaceWindow);
   $pathsTableBody.addEventListener("auxclick", (event) => {
@@ -801,11 +840,18 @@ async function setupEditorPage() {
       $notEditable.insertAdjacentHTML("afterend", `<iframe src="${url}" sandbox width="100%" height="${window.innerHeight - 100}px"></iframe>`);
     } else {
       $notEditable.classList.remove("hidden");
-      $notEditable.textContent = "Cannot edit because file is too large or binary.";
+      // minds patch: say what the page cannot do (show, or edit) and point at Download, the way forward.
+      const verb = DATA.kind === "View" ? "shown" : "edited";
+      $notEditable.textContent = `This file can't be ${verb} here — it's either too big or not a text file. Download it to open it another way.`;
     }
     return;
   }
 
+  await loadEditorContents();
+}
+
+async function loadEditorContents() {
+  document.querySelector(".load-failure").classList.add("hidden");
   $editor.classList.remove("hidden");
   try {
     const res = await fetch(baseUrl());
@@ -820,8 +866,23 @@ async function setupEditorPage() {
       $editor.value = decoder.decode(dataView);
     }
   } catch (err) {
-    alert(`Failed to get file, ${err.message}`);
+    showLoadFailure(err);
   }
+}
+
+// minds patch: a file whose contents could not be loaded is told in the page, in place of an empty editor, with a
+// Try again and what the server said behind "See details".
+function showLoadFailure(err) {
+  $editor.classList.add("hidden");
+  const $failure = document.querySelector(".load-failure");
+  $failure.querySelector(".load-failure-message").textContent = err.status === 404
+    ? "This file is no longer there. It may have been moved or deleted."
+    : "This file couldn't be opened. Try again. If this persists, report a bug.";
+  $failure.querySelector(".load-failure-details-text").textContent = failureDetails(err);
+  $failure.querySelector(".load-failure-retry").onclick = loadEditorContents;
+  $failure.querySelector(".report-bug").dataset.reportable = String(err.status !== 404);
+  syncReportBugButtons();
+  $failure.classList.remove("hidden");
 }
 
 /**
@@ -904,8 +965,25 @@ async function doMovePath(fileUrl) {
     await assertResOK(res2);
     return newFileUrl;
   } catch (err) {
-    alert(`Cannot move \`${filePath}\` to \`${newPath}\`, ${err.message}`);
+    showNotice({
+      message: moveFailureMessage(filePath, newPath),
+      cause: { 403: "That folder is read-only.", 404: "It's no longer there." }[err.status] ?? null,
+      details: failureDetails(err),
+    });
   }
+}
+
+// minds patch: a move names the thing moved and the folder it was going into; a rename within its folder names both
+// names.
+function moveFailureMessage(filePath, newPath) {
+  const name = baseName(filePath) || filePath;
+  const newName = baseName(newPath) || newPath;
+  const parent = (path) => path.replace(/\/+$/, "").split("/").slice(0, -1).join("/");
+  if (parent(filePath) === parent(newPath)) {
+    return `Couldn't rename "${name}" to "${newName}".`;
+  }
+  const folder = baseName(parent(newPath)) || "/";
+  return `Couldn't move "${name}" into "${folder}".`;
 }
 
 
@@ -961,7 +1039,7 @@ async function createFolder(name) {
     await assertResOK(res);
     location.href = url;
   } catch (err) {
-    alert(`Cannot create folder \`${name}\`, ${err.message}`);
+    showCreateFailure(name, err);
   }
 }
 
@@ -976,8 +1054,17 @@ async function createFile(name) {
     await assertResOK(res);
     location.href = url + "?edit";
   } catch (err) {
-    alert(`Cannot create file \`${name}\`, ${err.message}`);
+    showCreateFailure(name, err);
   }
+}
+
+// minds patch: dufs answers 405 for a folder that is already there, and 403 where it may not write.
+function showCreateFailure(name, err) {
+  showNotice({
+    message: `Couldn't create "${name}".`,
+    cause: { 403: "This folder is read-only.", 405: "Something with that name is already there." }[err.status] ?? null,
+    details: failureDetails(err),
+  });
 }
 
 async function addFileEntries(entries, dirs) {
@@ -1100,8 +1187,53 @@ function encodedStr(rawStr) {
 
 async function assertResOK(res) {
   if (!(res.status >= 200 && res.status < 300)) {
-    throw new Error(await res.text() || `Invalid status ${res.status}`);
+    const err = new Error(await res.text() || `Invalid status ${res.status}`);
+    err.status = res.status;
+    throw err;
   }
+}
+
+// minds patch: what goes behind "See details" for a failed request: its status and the server's own text, or the
+// browser's reason for a request nothing answered.
+function failureDetails(err) {
+  if (err.status === undefined) return err.message;
+  const body = err.message === `Invalid status ${err.status}` ? "" : err.message;
+  return [`HTTP ${err.status}`, body].filter((line) => line.trim() !== "").join("\n");
+}
+
+const FALLBACK_CAUSE = "Try again. If this persists, report a bug.";
+
+// minds patch: a failure whose sentence asks for a bug report offers "Report a bug", which asks the shell framing the
+// page to open Imbue Studio's (the app contract's ``reportBug``). It shows only once the shell's handshake has said
+// Imbue Studio opens one here, so shell.js announces each handshake.
+function syncReportBugButtons() {
+  const canReportBug = window.mindsShell !== undefined && window.mindsShell.canReportBug();
+  for (const $button of document.querySelectorAll(".report-bug")) {
+    $button.classList.toggle("hidden", !canReportBug || $button.dataset.reportable !== "true");
+  }
+}
+window.addEventListener("minds-shell-handshake", syncReportBugButtons);
+for (const $button of document.querySelectorAll(".report-bug")) {
+  $button.addEventListener("click", () => window.mindsShell.reportBug());
+}
+
+/**
+ * minds patch: tell a failure in the page's own dialog: our sentence, a cause where one is known (else the fallback
+ * ending; "" for none), and what the server said behind "See details".
+ * @param {{message: string, cause: string | null, details: string | null}} notice
+ */
+function showNotice({ message, cause, details }) {
+  const $notice = document.querySelector(".notice");
+  $notice.querySelector(".notice-message").textContent = message;
+  const $cause = $notice.querySelector(".notice-cause");
+  $cause.textContent = cause ?? FALLBACK_CAUSE;
+  $cause.classList.toggle("hidden", $cause.textContent === "");
+  $notice.querySelector(".report-bug").dataset.reportable = String(cause === null);
+  syncReportBugButtons();
+  $notice.querySelector(".notice-details-text").textContent = details ?? "";
+  $notice.querySelector(".notice-details").classList.toggle("hidden", !details);
+  $notice.querySelector(".notice-close").onclick = () => $notice.close();
+  $notice.showModal();
 }
 
 function getEncoding(contentType) {

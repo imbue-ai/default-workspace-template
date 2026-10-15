@@ -10,7 +10,7 @@ from imbue.imbue_common.pure import pure
 from pydantic import Field, PrivateAttr, ValidationError
 
 from terminal_app.data_types import TerminalSessionRecord, TerminalStoreDocument
-from terminal_app.errors import TerminalStoreError
+from terminal_app.errors import TerminalStoreError, TerminalStoreVersionError
 from terminal_app.interfaces import TerminalSessionStoreInterface
 from terminal_app.primitives import TmuxSessionName
 
@@ -46,6 +46,11 @@ class JsonTerminalSessionStore(TerminalSessionStoreInterface):
         document = _read_store_document(self.store_path)
         if document is None:
             return ()
+        if document.version > STORE_VERSION:
+            raise TerminalStoreVersionError(
+                f"the terminal store {self.store_path} is version {document.version}, written by a newer version of "
+                f"the app; this app reads version {STORE_VERSION}"
+            )
         if document.version != STORE_VERSION:
             raise TerminalStoreError(
                 f"the terminal store {self.store_path} is version {document.version}; this app reads version {STORE_VERSION}"

@@ -65,6 +65,7 @@ from flask import Flask, Response, jsonify, request, send_file
 from flask.typing import ResponseReturnValue
 from flask_sock import Sock
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import Field
 from simple_websocket import ConnectionClosed
@@ -81,6 +82,7 @@ from browser.errors import (
     InvalidStartUrlError,
     UnknownBrowserError,
 )
+from browser.install_gate import InstallGate
 from browser.loop_bridge import AsyncLoopBridge
 from browser.names import is_valid_browser_name
 from browser.oom_retag import start_oom_retagging
@@ -124,6 +126,19 @@ _SHELL_SHOW_TIMEOUT_SECONDS = 5.0
 # The launch path's one parameter (the manifest's ``params``): the start page. The shell posts it
 # in a JSON object beside its own envelope fields, which are ignored here.
 START_URL_PARAM = "url"
+
+# What a person is told when the browser could not be started for them, from the launcher (the shell passes a
+# launch refusal's ``user_facing_message`` on), a local link, or the viewer's Start button. A body that carries one
+# keeps the developer's reason beside it (``detail`` or ``error``), which agents read and "See details" shows.
+_COULD_NOT_START_MESSAGE = "Couldn't start the browser. Try again. If this persists, report a bug."
+_RESTORING_MESSAGE = "Your browsers are still being restored. Try again in a moment."
+_FLEET_FULL_MESSAGE = (
+    "Another browser is already running, and only one can run at a time. Close its window, then press Start "
+    "browser again."
+)
+_LINK_WHILE_RESTORING_MESSAGE = "The browser is still starting up. Try again in a moment."
+_LINK_NOT_OPENED_MESSAGE = "Couldn't open this link in the browser. Try again. If this persists, report a bug."
+_LINK_WINDOW_NOT_SHOWN_MESSAGE = "The page is open in the browser, but its window couldn't be shown."
 
 # Errors raised when Chromium can't be launched (install not finished, CDP failure).
 # CDP failures surface as these built-ins.
@@ -204,6 +219,7 @@ def _require_ready() -> Response | None:
             {
                 "error": "Browser fleet is still restoring your saved browsers; try again in a moment.",
                 "status": "initializing",
+                "user_facing_message": _RESTORING_MESSAGE,
             },
             503,
         )
@@ -218,11 +234,11 @@ async def _startup() -> None:
     construction), so it does not block read-only routes from serving immediately.
     """
     try:
-        ready, reason = deferred_install_ready()
-        if not ready:
+        install = deferred_install_ready()
+        if not install.is_ready:
             # Chromium isn't installed yet; don't block. The fleet starts empty and the
             # first create() (once the install marker appears) brings a browser up.
-            _publish_init_status({"phase": "waiting_for_chromium", "reason": reason})
+            _publish_init_status({"phase": "waiting_for_chromium", "reason": install.reason})
             return
         await manager.restore()
         _publish_init_status({"phase": "ready"})
@@ -292,6 +308,10 @@ class _StartRefusal(FrozenModel):
 
     reason: str = Field(description="What was wrong, in words for the caller")
     status: int = Field(description="The HTTP status: 400 for a bad request, 409 for a conflict, 503 while unable")
+    user_facing_message: str = Field(
+        default="", description="What a person is told, where a person can have asked; '' when the reason is enough"
+    )
+    is_reportable: bool = Field(default=False, description="Whether the sentence asks the person to report a bug")
 
 
 def _start_browser(name: str | None, raw_url: str | None) -> "LiveBrowser | _StartRefusal":
@@ -304,9 +324,9 @@ def _start_browser(name: str | None, raw_url: str | None) -> "LiveBrowser | _Sta
     registered. A missing or empty ``raw_url`` opens the home page (or nothing new in a browser
     already up).
     """
-    ready, reason = deferred_install_ready()
-    if not ready:
-        return _StartRefusal(reason=reason, status=503)
+    install = deferred_install_ready()
+    if not install.is_ready:
+        return _StartRefusal(reason=install.reason, status=503, user_facing_message=install.user_facing_message)
     start_url: str | None = None
     if raw_url:
         try:
@@ -324,13 +344,34 @@ def _start_browser(name: str | None, raw_url: str | None) -> "LiveBrowser | _Sta
         return _StartRefusal(reason=str(e), status=409)
     except _STARTUP_ERRORS as e:
         logger.error("failed to register browser: {}", e)
-        return _StartRefusal(reason=f"Could not start browser: {e}", status=503)
+        return _StartRefusal(
+            reason=f"Could not start browser: {e}",
+            status=503,
+            user_facing_message=_COULD_NOT_START_MESSAGE,
+            is_reportable=True,
+        )
 
 
-def _launch_refusal(reason: str, status: int) -> Response:
-    """A refusal of the ``new`` launch path, as the shell's launch route reads one: a 4xx whose ``detail`` is passed
-    on to the caller as the app's own reason (post-launch-paths plan section 3.2)."""
-    return _error({"detail": reason}, status)
+def _launch_refusal(reason: str, status: int, user_facing_message: str, is_reportable: bool) -> Response:
+    """A refusal of the ``new`` launch path or of a relayed message, as the shell reads one (post-launch-paths plan
+    section 3.2): ``detail`` is the reason, passed on behind "See details", ``user_facing_message``, when there is
+    one, the sentence the person is shown, and ``reportable`` whether that sentence asks for a bug report."""
+    body: dict[str, object] = {"detail": reason}
+    if user_facing_message:
+        body["user_facing_message"] = user_facing_message
+    if is_reportable:
+        body["reportable"] = True
+    return _error(body, status)
+
+
+@pure
+def _install_refusal_body(install: InstallGate) -> dict[str, object]:
+    """The viewer's Start refused for a browser not installed: the reason, the sentence, and for a failed install
+    what its "Ask an agent to fix this" hands an agent."""
+    body: dict[str, object] = {"error": install.reason, "user_facing_message": install.user_facing_message}
+    if install.agent_fix is not None:
+        body["ask_agent"] = install.agent_fix.model_dump(mode="json")
+    return body
 
 
 def new_browser() -> Response:
@@ -344,13 +385,20 @@ def new_browser() -> Response:
     """
     body = request.get_json(force=True, silent=True)
     if not isinstance(body, dict):
-        return _launch_refusal("the launch body must be a JSON object", 400)
+        return _launch_refusal(
+            "the launch body must be a JSON object", 400, user_facing_message="", is_reportable=False
+        )
     raw_url = body.get(START_URL_PARAM)
     if raw_url is not None and not isinstance(raw_url, str):
-        return _launch_refusal("url: must be a string", 400)
+        return _launch_refusal("url: must be a string", 400, user_facing_message="", is_reportable=False)
     started = _start_browser(None, raw_url)
     if isinstance(started, _StartRefusal):
-        return _launch_refusal(started.reason, started.status)
+        return _launch_refusal(
+            started.reason,
+            started.status,
+            user_facing_message=started.user_facing_message,
+            is_reportable=started.is_reportable,
+        )
     return jsonify({"path": browser_page_path(BrowserName(started.browser_id))})
 
 
@@ -366,39 +414,58 @@ def open_url() -> Response:
     503, and a window the shell would not show 502.
     """
     if not _init_done.is_set():
-        return _launch_refusal("The browser is still restoring its saved browsers; try again in a moment.", 503)
+        return _launch_refusal(
+            "The browser is still restoring its saved browsers; try again in a moment.",
+            503,
+            user_facing_message=_LINK_WHILE_RESTORING_MESSAGE,
+            is_reportable=False,
+        )
     body = request.get_json(force=True, silent=True)
     if not isinstance(body, dict):
-        return _launch_refusal("the message body must be a JSON object", 400)
+        return _launch_refusal(
+            "the message body must be a JSON object", 400, user_facing_message="", is_reportable=False
+        )
     raw_url = body.get(START_URL_PARAM)
     if not isinstance(raw_url, str):
-        return _launch_refusal("url: must be a string", 400)
+        return _launch_refusal("url: must be a string", 400, user_facing_message="", is_reportable=False)
     try:
         url = LocalHttpUrl(raw_url)
     except InvalidStartUrlError as e:
-        return _launch_refusal(f"url: {e}", 400)
+        return _launch_refusal(f"url: {e}", 400, user_facing_message="", is_reportable=False)
     raw_client_id = body.get("client_id")
     try:
         client_id = ClientId(raw_client_id if isinstance(raw_client_id, str) else "")
     except InvalidLayoutValueError as e:
-        return _launch_refusal(f"client_id: {e}", 400)
-    ready, reason = deferred_install_ready()
-    if not ready:
-        return _launch_refusal(reason, 503)
+        return _launch_refusal(f"client_id: {e}", 400, user_facing_message="", is_reportable=False)
+    install = deferred_install_ready()
+    if not install.is_ready:
+        return _launch_refusal(
+            install.reason, 503, user_facing_message=install.user_facing_message, is_reportable=False
+        )
     try:
         browser = bridge.run(manager.open_url_for_human(str(url)), timeout=_ROUTE_TIMEOUT)
     except FleetFullError as e:
-        return _launch_refusal(str(e), 409)
+        return _launch_refusal(str(e), 409, user_facing_message="", is_reportable=False)
     except _STARTUP_ERRORS as e:
         logger.error("could not open {} for the human: {}", url, e)
-        return _launch_refusal(f"Could not start the browser: {e}", 503)
+        return _launch_refusal(
+            f"Could not start the browser: {e}",
+            503,
+            user_facing_message=_LINK_NOT_OPENED_MESSAGE,
+            is_reportable=True,
+        )
     page = browser_page_path(BrowserName(browser.browser_id))
     shell = ShellLayoutClient(shell_url=shell_base_url(), requester=None, timeout_seconds=_SHELL_SHOW_TIMEOUT_SECONDS)
     try:
         shown = shell.show(ShowArgs(app=APP_NAME, path=WindowPath(page), client=client_id))
     except ShellOpError as e:
         logger.warning("Opened {} in browser {} but could not show its window: {}", url, browser.browser_id, e)
-        return _launch_refusal(f"The browser has the page, but its window could not be shown: {e}", 502)
+        return _launch_refusal(
+            f"The browser has the page, but its window could not be shown: {e}",
+            502,
+            user_facing_message=_LINK_WINDOW_NOT_SHOWN_MESSAGE,
+            is_reportable=False,
+        )
     return jsonify({"browser": browser.browser_id, "window_id": shown.window_id, "shown": shown.shown})
 
 
@@ -448,14 +515,14 @@ def list_browsers() -> Response:
     new one), so only a missing Chromium install disables it; ``can_create`` is NOT gated on
     ``_init_done`` either, since a create works DURING restore (it queues behind the
     serialized relaunches)."""
-    ready, install_reason = deferred_install_ready()
+    install = deferred_install_ready()
     # capacity() reads the manager's _browsers dict, which is mutated on the loop
     # thread; reading it directly from this Flask worker thread can KeyError mid
     # iteration. Route it through the bridge so the read runs ON the loop thread,
     # like every other manager-state access here.
     count, cap = bridge.run(manager.capacity_async(), timeout=_ROUTE_TIMEOUT)
-    if not ready:
-        can_create, create_reason = False, install_reason or "installing browser support"
+    if not install.is_ready:
+        can_create, create_reason = False, install.reason
     else:
         can_create, create_reason = True, ""
     return jsonify(
@@ -549,15 +616,15 @@ def start_browser(browser_id: str) -> ResponseReturnValue:
         return gate
     if not is_valid_browser_name(browser_id):
         return jsonify({"error": "invalid browser name"}), 404
-    ready, reason = deferred_install_ready()
-    if not ready:
-        return _error({"error": reason}, 503)
+    install = deferred_install_ready()
+    if not install.is_ready:
+        return _error(_install_refusal_body(install), 503)
     try:
         bridge.run(manager.start_browser(browser_id), timeout=_ROUTE_TIMEOUT)
     except UnknownBrowserError as e:
         return _error({"error": str(e)}, 404)
     except FleetFullError as e:
-        return _error({"error": str(e)}, 409)
+        return _error({"error": str(e), "user_facing_message": _FLEET_FULL_MESSAGE}, 409)
     return jsonify({"started": True})
 
 
@@ -834,8 +901,11 @@ def _close_unresolved_ws(ws: Any, browser_id: str) -> None:
           layout-restored tab of a browser closed in a PRIOR daemon life, whose in-memory
           close memory didn't survive the restart) -> ``closed`` + 4001 terminal, so the
           viewer shows the terminated overlay instead of looping forever on "Starting browser…".
-    - an invalid name (could never exist) -> ``closed`` + 1008 terminal."""
-    if bridge.run(manager.recently_failed_launch_async(browser_id), timeout=_ROUTE_TIMEOUT):
+    - an invalid name (could never exist) -> ``closed`` + 1008 terminal.
+    - any name while the program itself is stopping -> 1013 retryable: its browsers come back with it."""
+    if manager.is_shutting_down:
+        ws.close(1013)
+    elif bridge.run(manager.recently_failed_launch_async(browser_id), timeout=_ROUTE_TIMEOUT):
         _send_terminal_signal(ws, {"type": "launch_failed", "browser_id": browser_id})
         ws.close(1008)
     elif bridge.run(manager.recently_closed_async(browser_id), timeout=_ROUTE_TIMEOUT):

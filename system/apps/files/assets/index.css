@@ -250,6 +250,69 @@ body {
   cursor: pointer;
 }
 
+/* minds patch: a failed upload's reason, in its row beside the retry control */
+.upload-failure {
+  color: #cb2431;
+  margin-right: 0.4em;
+}
+
+.uploaders-table .upload-status {
+  white-space: nowrap;
+}
+
+/* minds patch: the page's own dialog for a failure (index.js showNotice) */
+.notice {
+  max-width: min(420px, calc(100vw - 48px));
+  padding: 16px 20px;
+  border: 1px solid #d1d5da;
+  border-radius: 8px;
+  color: inherit;
+  background-color: white;
+}
+
+.notice::backdrop {
+  background-color: rgba(0, 0, 0, 0.3);
+}
+
+.notice p {
+  margin: 0 0 8px;
+}
+
+.notice-message {
+  font-weight: 600;
+}
+
+.notice-details summary,
+.load-failure-details summary {
+  cursor: pointer;
+  color: #586069;
+}
+
+.notice-details pre,
+.load-failure-details pre {
+  max-height: 30vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 12px;
+}
+
+.notice-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* minds patch: a file whose contents could not be loaded (index.js showLoadFailure) */
+.load-failure {
+  padding: 1em 0;
+}
+
+.load-failure p {
+  margin: 0 0 8px;
+}
+
 @media (min-width: 768px) {
   .path a {
     min-width: 400px;
@@ -303,5 +366,10 @@ body {
   .editor {
     background: black;
     color: white;
+  }
+
+  .notice {
+    background-color: #111;
+    border-color: #444;
   }
 }

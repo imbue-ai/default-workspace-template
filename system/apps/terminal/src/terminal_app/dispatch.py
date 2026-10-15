@@ -12,7 +12,7 @@ from loguru import logger
 from terminal_app.data_types import TerminalPaths
 from terminal_app.errors import ClientHasNoBodyCloseError, UnsafeDispatchPathError
 from terminal_app.primitives import TERMINAL_SESSION_BAND_KEY
-from terminal_app.pty_page import add_pty_page_script
+from terminal_app.pty_page import TERMINAL_ENDED_OSC, add_pty_page_script
 
 # The dispatch scripts the ttyd dispatch snippet runs by URL key: ``?arg=_&arg=<key>&arg=...``
 # runs ``<commands_dir>/<key>.sh`` with the remaining arguments.
@@ -21,6 +21,27 @@ WORKDIR_SCRIPT_FILENAME: Final[str] = "workdir.sh"
 SESSION_SCRIPT_FILENAME: Final[str] = "session.sh"
 
 _EXECUTABLE_MODE: Final[int] = 0o755
+
+# Why a terminal ended, as its dispatch script tells the wrapper page (through pty_page.TERMINAL_ENDED_OSC), which
+# shows the reason in place of ttyd's "Connection Closed".
+# tmux would not attach or create the session, or failed within its first seconds.
+ENDED_NOT_STARTED: Final[str] = "not-started"
+# tmux ended the session with an error after it had been running.
+ENDED_WITH_ERROR: Final[str] = "ended"
+# The folder a terminal was asked to open in is not there.
+ENDED_MISSING_FOLDER: Final[str] = "missing-folder"
+# How long after it starts a tmux failure still counts as the terminal not starting.
+_START_WINDOW_SECONDS: Final[int] = 5
+
+# Prints the sequence for kind $1 and detail $2, then the plain line $3 for a pane no wrapper page frames, and holds
+# the pane open (so the sequence reaches the page before ttyd closes it) until it is closed or a line is typed.
+_REPORT_END_FUNCTION: Final[str] = """report_end() {
+    printf '\\033]{osc};%s;%s\\007' "$1" "$(printf '%s' "$2" | base64 | tr -d '\\n')"
+    printf '%s\\r\\n' "$3"
+    read -r || true
+    exit 1
+}
+"""
 
 # The snippet ``ttyd -W bash -c`` runs for every connection. ttyd appends the URL's ``arg``
 # values to the command, so the first one lands in ``$0`` (the frontend sends ``_`` for it) and
@@ -60,8 +81,10 @@ unset TMUX
 exec tmux attach -t "$TARGET_SESSION":0
 """
 
-_WORKDIR_SCRIPT: Final[str] = """#!/bin/bash
+_WORKDIR_SCRIPT_TEMPLATE: Final[str] = """#!/bin/bash
+{report_end}
 cd "$1" 2>/dev/null && exec bash
+report_end {missing_folder} "$1" "The folder $1 does not exist."
 """
 
 # The shell a terminal session runs, tagged into its memory-shedding band first: the tagging
@@ -88,6 +111,12 @@ _SESSION_SCRIPT_TEMPLATE: Final[str] = """#!/bin/bash
 # name exists and creates it otherwise, so the window comes back as a fresh
 # shell. A created session runs the login shell through the memory-shedding
 # tag, as the app's own creates do.
+#
+# A session the user ends goes back to ttyd, whose overlay offers to reconnect.
+# When tmux says anything on stderr or exits non-zero instead (it can report a
+# failure with status 0), the reason is told to the wrapper page: as the
+# terminal not starting when that happened in its first seconds, else as the
+# terminal having closed.
 set -euo pipefail
 SESSION_NAME="${1:-}"
 WORKDIR="${2:-}"
@@ -96,6 +125,26 @@ unset TMUX
 if [ -z "$SESSION_NAME" ]; then
     exec bash
 fi
+
+{report_end}
+run_tmux() {
+    local started_at=$SECONDS
+    local error_file
+    error_file="$(mktemp)"
+    local status=0
+    tmux "$@" 2>"$error_file" || status=$?
+    local error
+    error="$(cat "$error_file")"
+    rm -f "$error_file"
+    if [ "$status" -eq 0 ] && [ -z "$error" ]; then
+        exit 0
+    fi
+    error="${error:-tmux exited with status $status}"
+    if [ $((SECONDS - started_at)) -lt {start_window} ]; then
+        report_end {not_started} "$error" "This terminal couldn't start: $error"
+    fi
+    report_end {ended} "$error" "This terminal closed: $error"
+}
 
 # The id file holds the session id and its creation time: tmux reuses ids across servers, so
 # only a session created when the file says was the terminal's.
@@ -106,7 +155,7 @@ if [ -f "$SESSION_ID_FILE" ]; then
     if [ -n "$SESSION_ID" ] && [ -n "$SESSION_CREATED" ] && tmux has-session -t "$SESSION_ID" 2>/dev/null; then
         LIVE_CREATED="$(tmux display-message -p -t "$SESSION_ID" '#{session_created}' 2>/dev/null || true)"
         if [ "$LIVE_CREATED" = "$SESSION_CREATED" ]; then
-            exec tmux attach-session -t "$SESSION_ID"
+            run_tmux attach-session -t "$SESSION_ID"
         fi
     fi
 fi
@@ -116,7 +165,7 @@ if [ -n "$WORKDIR" ] && [ -d "$WORKDIR" ]; then
     WORKDIR_ARGS=(-c "$WORKDIR")
 fi
 
-exec tmux new-session -A -s "$SESSION_NAME" "${WORKDIR_ARGS[@]}" {session_command}
+run_tmux new-session -A -s "$SESSION_NAME" "${WORKDIR_ARGS[@]}" {session_command}
 """
 
 
@@ -145,8 +194,15 @@ def render_agent_script() -> str:
 
 
 @pure
+def _report_end_function() -> str:
+    return _REPORT_END_FUNCTION.replace("{osc}", str(TERMINAL_ENDED_OSC))
+
+
+@pure
 def render_workdir_script() -> str:
-    return _WORKDIR_SCRIPT
+    return _WORKDIR_SCRIPT_TEMPLATE.replace("{report_end}", _report_end_function()).replace(
+        "{missing_folder}", ENDED_MISSING_FOLDER
+    )
 
 
 def warn_if_oom_tag_script_is_missing(oom_tag_script: Path) -> None:
@@ -172,8 +228,13 @@ def build_session_command(oom_tag_script: Path) -> list[str]:
 @pure
 def render_session_script(sessions_dir: Path, oom_tag_script: Path) -> str:
     """The named-session dispatch script: session ids under ``sessions_dir``, and the tagged shell."""
-    return _SESSION_SCRIPT_TEMPLATE.replace("{sessions_dir}", _shell_verbatim_path(sessions_dir)).replace(
-        "{session_command}", " ".join(build_session_command(oom_tag_script))
+    return (
+        _SESSION_SCRIPT_TEMPLATE.replace("{report_end}", _report_end_function())
+        .replace("{start_window}", str(_START_WINDOW_SECONDS))
+        .replace("{not_started}", ENDED_NOT_STARTED)
+        .replace("{ended}", ENDED_WITH_ERROR)
+        .replace("{sessions_dir}", _shell_verbatim_path(sessions_dir))
+        .replace("{session_command}", " ".join(build_session_command(oom_tag_script)))
     )
 
 

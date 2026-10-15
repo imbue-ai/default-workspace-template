@@ -1,0 +1,1 @@
+Test helpers for an app page framed by the workspace shell: `shell_stand_in_page` frames a page and greets it with a handshake as the shell does (saying whether a bug report can open), keeping what the page posts; `built_app_contract_source` serves the shell's built app contract to the page; `SHELL_HANDSHAKE_COUNTER_SCRIPT` tells a test when a page has had its handshake.

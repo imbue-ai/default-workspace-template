@@ -85,7 +85,9 @@ something is indexing into it rather than tracking creation order.
 
 Kill Chromium from a terminal: `pkill -f tilion`
 
-**Expect:** within ~20s the pane shows "This browser crashed". The agent's next command fails;
+**Expect:** within ~20s the pane shows "This browser stopped. Its tabs and sign-ins are kept." (with "It was
+likely stopped because the machine this workspace runs on was low on memory." under it, since the process was
+killed by a signal) and a "Start browser" button. The agent's next command fails;
 asked to continue, it should run `ls`, see `crashed`, and start a **new** browser rather than
 re-attaching the dead one. The freed slot lets `new` work immediately.
 

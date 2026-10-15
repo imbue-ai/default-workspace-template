@@ -14,6 +14,11 @@ this script, inserted into that client when it is installed, listens for the wra
   releases. ``triggerDataEvent`` is xterm's internal API, not its public one, so a client whose xterm lacks it
   keeps the strip's own keys working and warns that typed keys will not take the Ctrl.
 
+A dispatch script that ends the terminal for a reason the person should be told prints a private OSC sequence first
+(``TERMINAL_ENDED_OSC``: a kind and a base64 detail); the script registers a handler for it with xterm's parser
+and posts ``{type: "terminal:ended", kind, detail}`` to the wrapper, which shows the reason in place of ttyd's
+"Connection Closed".
+
 A tap on the terminal (a touch that ends where it started, quickly) focuses xterm from that touch's own handler.
 iOS raises the soft keyboard only for a focus made inside a user gesture in the focused element's own frame, so
 the wrapper's posted ``ttyd-focus`` (which the patched client already handles) cannot raise it; this can.
@@ -25,10 +30,15 @@ from imbue.imbue_common.pure import pure
 
 from terminal_app.errors import ClientHasNoBodyCloseError
 
+# A terminal that ends for a reason the person should be told prints this private OSC sequence before its dispatch
+# script exits (dispatch.py): ``ESC ] <code> ; <kind> ; <base64 of the detail> BEL``.
+TERMINAL_ENDED_OSC: Final[int] = 7790
+
 # The script's text inside a <script> element: it must never contain a closing script tag.
 PTY_PAGE_SCRIPT: Final[str] = r"""
 (() => {
   "use strict";
+  const TERMINAL_ENDED_OSC = __TERMINAL_ENDED_OSC__;
   const ARROW_FINALS = new Map([["ArrowUp", "A"], ["ArrowDown", "B"], ["ArrowRight", "C"], ["ArrowLeft", "D"]]);
   const PLAIN_KEYS = new Map([["Escape", "\x1b"], ["Tab", "\t"]]);
   // xterm's own Ctrl mapping (its keyboard evaluator) for the keys that are not letters.
@@ -103,6 +113,44 @@ PTY_PAGE_SCRIPT: Final[str] = r"""
     }
   });
 
+  function decodeDetail(encoded) {
+    try {
+      return new TextDecoder().decode(Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0)));
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function reportEndsTo(term) {
+    if (term?.parser?.registerOscHandler === undefined) {
+      console.warn("[terminal] this xterm has no OSC handlers: a terminal's end is not told to the wrapper");
+      return;
+    }
+    term.parser.registerOscHandler(TERMINAL_ENDED_OSC, (data) => {
+      const separator = data.indexOf(";");
+      const kind = separator < 0 ? data : data.slice(0, separator);
+      const detail = separator < 0 ? "" : decodeDetail(data.slice(separator + 1));
+      if (isFramed) window.parent.postMessage({ type: "terminal:ended", kind, detail }, "*");
+      return true;
+    });
+  }
+
+  // The client may create its terminal after this script runs: the handler is registered the moment it is set, so
+  // nothing the pty prints first can miss it.
+  if (window.term !== undefined) {
+    reportEndsTo(window.term);
+  } else {
+    let created;
+    Object.defineProperty(window, "term", {
+      configurable: true,
+      get: () => created,
+      set: (term) => {
+        created = term;
+        reportEndsTo(term);
+      },
+    });
+  }
+
   window.addEventListener("touchstart", (event) => {
     const touch = event.touches[0];
     touchStart = event.touches.length === 1 ? { x: touch.clientX, y: touch.clientY, at: event.timeStamp } : null;
@@ -118,7 +166,7 @@ PTY_PAGE_SCRIPT: Final[str] = r"""
     if (isTap) window.term?.focus();
   }, { capture: true, passive: true });
 })();
-"""
+""".replace("__TERMINAL_ENDED_OSC__", str(TERMINAL_ENDED_OSC))
 
 _SCRIPT_TAG: Final[bytes] = f"<script>{PTY_PAGE_SCRIPT}</script>".encode()
 _BODY_CLOSE: Final[bytes] = b"</body>"

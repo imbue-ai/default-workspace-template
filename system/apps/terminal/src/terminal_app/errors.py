@@ -18,6 +18,10 @@ class TerminalStoreError(TerminalAppError, OSError):
     """The terminal's JSON store cannot be read or written."""
 
 
+class TerminalStoreVersionError(TerminalStoreError):
+    """The terminal's JSON store was written by a newer version of the app than this one."""
+
+
 class TmuxCommandError(TerminalAppError):
     """A tmux command could not run, or ran and left the server in a state other than the one asked for."""
 

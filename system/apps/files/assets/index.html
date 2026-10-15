@@ -7,10 +7,10 @@
   <noscript>
     <meta http-equiv="refresh" content="0; url=?noscript">
   </noscript>
-  <link rel="icon" type="image/x-icon" href="__ASSETS_PREFIX__favicon.ico?v=minds-9">
-  <link rel="stylesheet" href="__ASSETS_PREFIX__index.css?v=minds-9">
+  <link rel="icon" type="image/x-icon" href="__ASSETS_PREFIX__favicon.ico?v=minds-10">
+  <link rel="stylesheet" href="__ASSETS_PREFIX__index.css?v=minds-10">
   <!-- minds patch: the phone layout (phone.css, phone.js) -->
-  <link rel="stylesheet" href="__ASSETS_PREFIX__phone.css?v=minds-9">
+  <link rel="stylesheet" href="__ASSETS_PREFIX__phone.css?v=minds-10">
 </head>
 
 <body>
@@ -145,15 +145,38 @@
     </div>
     <div class="editor-page hidden">
       <div class="not-editable hidden"></div>
+      <!-- minds patch: a file whose contents could not be loaded, told in the page (index.js showLoadFailure) -->
+      <div class="load-failure hidden">
+        <p class="load-failure-message"></p>
+        <details class="load-failure-details">
+          <summary>See details</summary>
+          <pre class="load-failure-details-text"></pre>
+        </details>
+        <button type="button" class="load-failure-retry">Try again</button>
+        <button type="button" class="report-bug hidden">Report a bug</button>
+      </div>
       <textarea id="editor" class="editor hidden" aria-label="Editor" cols="10"></textarea>
     </div>
   </div>
+  <!-- minds patch: a failure told in the page (index.js showNotice) rather than in a browser alert -->
+  <dialog class="notice" aria-labelledby="notice-message">
+    <p class="notice-message" id="notice-message"></p>
+    <p class="notice-cause"></p>
+    <details class="notice-details hidden">
+      <summary>See details</summary>
+      <pre class="notice-details-text"></pre>
+    </details>
+    <div class="notice-actions">
+      <button type="button" class="report-bug hidden">Report a bug</button>
+      <button type="button" class="notice-close">Close</button>
+    </div>
+  </dialog>
   <template id="index-data">__INDEX_DATA__</template>
-  <script src="__ASSETS_PREFIX__index.js?v=minds-9"></script>
+  <script src="__ASSETS_PREFIX__index.js?v=minds-10"></script>
   <!-- minds patch: the phone layout (phone.css, phone.js) -->
-  <script src="__ASSETS_PREFIX__phone.js?v=minds-9"></script>
+  <script src="__ASSETS_PREFIX__phone.js?v=minds-10"></script>
   <!-- minds patch: the connection to the workspace shell (shell.js) -->
-  <script type="module" src="__ASSETS_PREFIX__shell.js?v=minds-9"></script>
+  <script type="module" src="__ASSETS_PREFIX__shell.js?v=minds-10"></script>
 </body>
 
 </html>
