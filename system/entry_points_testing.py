@@ -23,10 +23,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # The packages the system python3 runs: stdlib only, no venv.
 BARE_PACKAGES = frozenset({"workspace_bare_scripts", "update_self_skill"})
 
-# Bare scripts that are not package stubs: oom_priority's own entry scripts, and a
-# stdlib-only maintenance script.
+# Bare scripts that are not package stubs: oom_priority's own entry scripts, a
+# stdlib-only maintenance script, and the Datalib app's launcher (the app is not a
+# workspace member, and the launcher is its supervisord program).
 STANDALONE_BARE_DIRS = (REPO_ROOT / "system" / "services" / "oom_priority" / "bin",)
-STANDALONE_BARE_SCRIPTS = (REPO_ROOT / "catalog" / "build_catalog_from_export.py",)
+STANDALONE_BARE_SCRIPTS = (
+    REPO_ROOT / "catalog" / "build_catalog_from_export.py",
+    REPO_ROOT / "system" / "apps" / "datalib" / "launch_datalib_http.py",
+)
 
 # Where a scripts directory declares the heavy modules an entry point may load at import.
 ENTRY_POINTS_TABLE = ("workspace-template", "entry-points")
