@@ -939,6 +939,28 @@ describe("the switch to the phone layout", () => {
     expect(rightClick().defaultPrevented).toBe(true);
   });
 
+  it("tells a failed start-sheet run under its field, and a sheet opened anew starts without it", async () => {
+    store.setThemeMetrics(themeMetricsRecord(), { isPhone: true, isTouch: true });
+    m.redraw.sync();
+    const openStartSheet = (): void => {
+      (document.querySelector("[data-phone-new]") as HTMLElement).click();
+      m.redraw.sync();
+    };
+    openStartSheet();
+    api.refusal = "the shell is restarting";
+    (document.querySelector('[data-launch="docs:new"]') as HTMLElement).click();
+    await settle();
+    m.redraw.sync();
+    expect(document.querySelector(".launcher-failure-message")?.textContent).toBe("Docs couldn't open that.");
+
+    // Left some other way than its own dismiss (the windows sheet replacing it), then opened again with New.
+    store.openPhoneSheet("windows");
+    m.redraw.sync();
+    openStartSheet();
+    expect(document.querySelector('[data-launch="docs:new"]')).not.toBeNull();
+    expect(document.querySelector(".launcher-failure")).toBeNull();
+  });
+
   it("creates no page for a window the phone does not show", () => {
     // win-1 is shown on the desktop; the phone lands on its home grid, where no window's page lives.
     const createElement = vi.spyOn(document, "createElement");

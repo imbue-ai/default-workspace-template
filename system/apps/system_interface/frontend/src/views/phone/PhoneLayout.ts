@@ -310,6 +310,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
             onNew: () => {
               startQuery = "";
               startHighlight = null;
+              startFailure = null;
               store.openPhoneSheet("start");
             },
             thresholdPx,
