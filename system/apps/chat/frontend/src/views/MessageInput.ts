@@ -187,6 +187,18 @@ export function raiseNewChatFailure(chatId: string, error: unknown, retry: () =>
   });
 }
 
+/** Open a new chat beside ``chatId``, on the account a new chat would start on, in place of a chat the app no longer
+ *  has; with nothing signed in, the provider chooser. A failure is told on ``chatId``'s composer. */
+export function startNewChatInPlaceOf(chatId: string): void {
+  const account = getSelectedAccount();
+  if (account === null) {
+    openProviderChooser();
+    return;
+  }
+  const startNewChat = (): Promise<void> => startChatOnAccount(account.id);
+  startNewChat().catch((error: unknown) => raiseNewChatFailure(chatId, error, startNewChat));
+}
+
 // Chats whose draft was taken out of the composer by a sibling view (the switch dialog's "Start a
 // new chat" moves it to the new chat); the mounted composer clears its own text on its next pass.
 const pendingComposerClears = new Set<string>();
@@ -1160,19 +1172,17 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         };
       }
 
-      /** Open a new chat beside this one, on the account a new chat would start on, for a send whose chat is gone.
-       *  The message stays in this composer, for the user to copy. */
+      /** A new chat in place of this one, for a send whose chat is gone. The message stays in this composer, for the
+       *  user to copy. */
       function startNewChatInsteadOfGoneOne(): void {
-        const account = getSelectedAccount();
         const goneChatId = currentChatId;
         clearActionFailureNotice();
         m.redraw();
-        if (account === null || goneChatId === null) {
+        if (goneChatId === null) {
           openProviderChooser();
           return;
         }
-        const startNewChat = (): Promise<void> => startChatOnAccount(account.id);
-        startNewChat().catch((error: unknown) => raiseNewChatFailure(goneChatId, error, startNewChat));
+        startNewChatInPlaceOf(goneChatId);
       }
 
       /** Cancel: give the message back and close. Also what Escape and a backdrop press do. */

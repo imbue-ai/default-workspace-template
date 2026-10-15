@@ -54,11 +54,10 @@ import { FastModeNotice } from "./FastModeNotice";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { EmptySlot } from "./EmptySlot";
 import { uploadFilesToComposer } from "../models/ComposerAttachments";
-import { MessageInput, raiseNewChatFailure } from "./MessageInput";
+import { MessageInput, startNewChatInPlaceOf } from "./MessageInput";
 import { isAgentProcessDead } from "./agentLiveness";
-import { startChatOnAccount } from "../shell";
 import { getShellConnection } from "../shellConnection";
-import { getSelectedAccount, openProviderChooser } from "../models/Providers";
+import { openProviderChooser } from "../models/Providers";
 import { destroyChat, startChat } from "../root/verbs";
 import { ModelProviderMenu } from "./ModelProviderMenu";
 import { ConnectingIndicator } from "./ConnectingIndicator";
@@ -333,18 +332,6 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         pageActionInFlight = false;
         m.redraw();
       });
-  }
-
-  /** A new chat on the account a new chat starts on, in place of one the chat app no longer has; with nothing
-   *  signed in, the provider chooser. */
-  function startNewChatInPlaceOf(chatId: string): void {
-    const account = getSelectedAccount();
-    if (account === null) {
-      openProviderChooser();
-      return;
-    }
-    const start = (): Promise<void> => startChatOnAccount(account.id);
-    start().catch((error: unknown) => raiseNewChatFailure(chatId, error, start));
   }
 
   /** A failure line under a page's controls, with its details collapsed beneath it. */
