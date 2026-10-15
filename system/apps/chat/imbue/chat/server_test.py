@@ -4532,6 +4532,37 @@ def test_a_compact_command_the_agent_refused_shows_no_compaction(tmp_path: Path)
         state.shutdown()
 
 
+@pytest.mark.parametrize(
+    ("kind", "is_worded_for_people"),
+    [
+        pytest.param("input_blocked", True, id="input_blocked"),
+        pytest.param("agent_unreachable", True, id="agent_unreachable"),
+        pytest.param("unknown", False, id="unclassified"),
+    ],
+)
+def test_a_refused_send_passes_a_classified_reason_on_as_a_sentence_for_people(
+    tmp_path: Path, kind: str, is_worded_for_people: bool
+) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    agent_info, _ = make_agent_fixture(tmp_path, agent_id=agent_id)
+    reason = f"The agent is waiting on a dialog {uuid4().hex}."
+    messenger = RecordingMngrMessenger(succeeds=False, failure_reason=reason, failure_kind=kind)
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager.note_agent_list_known()
+    state = build_test_state(agent_manager=manager)
+    try:
+        with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+            response = (
+                create_application(state).test_client().post(f"/api/chats/{agent_id}/message", json={"message": "hi"})
+            )
+
+        assert response.status_code == 500
+        worded = {"user_facing_message": reason} if is_worded_for_people else {}
+        assert response.get_json() == {"detail": reason, "kind": kind, **worded}
+    finally:
+        state.shutdown()
+
+
 _EXCHANGE_EVENTS: Final[list[dict[str, Any]]] = [
     {"type": "user_message", "event_id": "evt-user", "content": "Hello agent!"},
     {"type": "assistant_message", "event_id": "evt-reply", "text": "Hello! How can I help you?", "tool_calls": []},

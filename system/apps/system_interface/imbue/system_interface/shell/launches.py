@@ -44,7 +44,8 @@ REPORTABLE_FIELD: Final[str] = "reportable"
 # A launch is one loopback request an app answers once it has decided what to show; an app that takes longer
 # than this has hung.
 LAUNCH_TIMEOUT_SECONDS: Final[float] = 30.0
-# How much of one field of an app's failed launch answer (its detail, its user_facing_message) the shell quotes.
+# How much of an app's failed launch answer's detail the shell quotes; its user_facing_message, a sentence for people,
+# is passed on whole.
 _DETAIL_LIMIT: Final[int] = 400
 
 
@@ -139,9 +140,9 @@ def launch_post(entry: AppInventoryEntry, launch_path: RegistryLaunchPath, body:
 
 
 @pure
-def _quoted_field(body: Any, field: str) -> str:
+def _string_field(body: Any, field: str) -> str:
     if isinstance(body, dict) and isinstance(body.get(field), str):
-        return body[field].strip()[:_DETAIL_LIMIT]
+        return body[field].strip()
     return ""
 
 
@@ -160,8 +161,8 @@ def launched_path(app: str, outcome: LaunchPostOutcome) -> WindowPath:
     carries the app's ``detail`` too when it gave one, whatever the status. A failed answer's ``user_facing_message``
     and ``reportable`` go with either as the app wrote them; the shell writes no sentence of its own."""
     if outcome.status_code != 200:
-        detail = _quoted_field(outcome.body, "detail")
-        user_facing_message = _quoted_field(outcome.body, USER_FACING_MESSAGE_FIELD) or None
+        detail = _string_field(outcome.body, "detail")[:_DETAIL_LIMIT]
+        user_facing_message = _string_field(outcome.body, USER_FACING_MESSAGE_FIELD) or None
         reportable = _reportable_field(outcome.body) if user_facing_message is not None else None
         if 400 <= outcome.status_code < 500 and detail:
             raise LaunchRefusedError(f"{app} refused the launch: {detail}", user_facing_message, reportable)

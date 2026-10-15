@@ -2481,6 +2481,7 @@ def test_a_preview_shell_reads_the_notice_but_refuses_to_close_or_roll_it_back(
     for verb in ("confirm", "rollback"):
         refusal = client.post(f"/api/updates/pending/{verb}")
         assert refusal.status_code == 403 and "preview" in refusal.get_json()["detail"]
+        assert refusal.get_json()["user_facing_message"] == refusal.get_json()["detail"]
     assert read_stub_update_self_calls(_repo_root(application)) == []
     assert client.get("/api/updates/pending").get_json() is not None
 
@@ -2636,6 +2637,8 @@ def test_a_post_launch_the_app_refuses_or_cannot_answer_is_passed_on_and_opens_n
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
     starting = "Buddy is still starting. Try again in a few seconds."
+    # Longer than the cap on a quoted detail: a sentence for people is passed on whole.
+    deleted = "That chat was deleted. " + "Open the chat list to start a new one. " * 12
     poster = _RecordingLaunchPoster(
         [
             LaunchPostOutcome(status_code=400, body={"detail": "no account is signed in"}),
@@ -2645,9 +2648,7 @@ def test_a_post_launch_the_app_refuses_or_cannot_answer_is_passed_on_and_opens_n
                 status_code=503,
                 body={"detail": "agent list not read", "user_facing_message": starting, "reportable": False},
             ),
-            LaunchPostOutcome(
-                status_code=409, body={"detail": "chat is gone", "user_facing_message": "That chat was deleted."}
-            ),
+            LaunchPostOutcome(status_code=409, body={"detail": "chat is gone", "user_facing_message": deleted}),
             LaunchPostOutcome(status_code=200, body={"nope": True}),
             LaunchPostOutcome(status_code=200, body={"path": "//evil"}),
             LaunchUnavailableError("buddy could not be reached for the launch: refused"),
@@ -2682,7 +2683,7 @@ def test_a_post_launch_the_app_refuses_or_cannot_answer_is_passed_on_and_opens_n
     assert gone.status_code == 400
     assert gone.get_json() == {
         "detail": "buddy refused the launch: chat is gone",
-        "user_facing_message": "That chat was deleted.",
+        "user_facing_message": deleted.strip(),
     }
     for expected in (
         "buddy answered the launch with no page path",
