@@ -8,6 +8,9 @@ critical = false
 stop_when_no_windows = false
 priority = "browser"
 launcher_rank = 30
+# Part of the workspace itself rather than an app built on it, so the Share tab tucks it under its System group
+# rather than offering it up front.
+system = true
 # The one browser lives as long as a window shows it: the shell posts every closed window
 # here and the daemon stops a browser no window shows (docs/system/specs/window-bound-resources.md).
 window_closed_path = "/api/window-closed"
@@ -26,3 +29,10 @@ params = [{name = "url", label = "Start page", required = false}]
 # Xvfb exists only to give Chromium a display; it is the browser's wiring.
 [wiring]
 programs = ["xvfb"]
+
+# A link to a local address no app is registered at, clicked in the workspace (a chat's ``http://localhost:3000/``
+# link, or a page's popup Imbue Studio hands back), opens as a tab in the one browser, whose window the route then
+# shows.
+[[message_handlers]]
+type = "open:url"
+path = "/api/open-url"

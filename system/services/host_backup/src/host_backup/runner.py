@@ -34,6 +34,7 @@ from host_backup.config import (
 from host_backup.events import (
     BackupEventType,
     make_event,
+    record_abandoned_tick,
     rotate_events_log_if_over,
     write_event,
 )
@@ -123,6 +124,7 @@ def _run_loop(capabilities: BackupCapabilities) -> None:
             trigger_dir=str(capabilities.trigger_dir),
         ),
     )
+    record_abandoned_tick(state.events_dir)
     while True:
         try:
             _service_iteration(state)

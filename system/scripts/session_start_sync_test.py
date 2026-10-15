@@ -1,4 +1,4 @@
-"""The SessionStart sync relocks only a drifted lock, says so once, and always syncs frozen."""
+"""The SessionStart sync never relocks: it syncs from the committed lock and reports a drift once."""
 
 import os
 import subprocess
@@ -11,17 +11,24 @@ _PYPROJECT = """\
 name = "session-start-sync-probe"
 version = "0.1.0"
 requires-python = "{requires_python}"
-dependencies = [{dependencies}]
+dependencies = []
 
 [tool.uv]
 package = false
 """
 
 
-def _project(root: Path, requires_python: str, dependencies: str = "") -> None:
+def _project(root: Path, requires_python: str) -> None:
     (root / "pyproject.toml").write_text(
-        _PYPROJECT.format(requires_python=requires_python, dependencies=dependencies)
+        _PYPROJECT.format(requires_python=requires_python)
     )
+
+
+def _locked_project(root: Path) -> str:
+    """Write the probe project, lock it, and return the committed lock's text."""
+    _project(root, ">=3.11")
+    subprocess.run(["uv", "lock", "--quiet"], cwd=root, check=True, timeout=120)
+    return (root / "uv.lock").read_text()
 
 
 def _run_hook(root: Path) -> subprocess.CompletedProcess[str]:
@@ -38,9 +45,7 @@ def _run_hook(root: Path) -> subprocess.CompletedProcess[str]:
 
 
 def test_an_in_sync_lock_syncs_silently(tmp_path: Path) -> None:
-    _project(tmp_path, ">=3.11")
-    subprocess.run(["uv", "lock", "--quiet"], cwd=tmp_path, check=True, timeout=120)
-    lock_before = (tmp_path / "uv.lock").read_text()
+    lock_before = _locked_project(tmp_path)
 
     result = _run_hook(tmp_path)
 
@@ -50,46 +55,14 @@ def test_an_in_sync_lock_syncs_silently(tmp_path: Path) -> None:
     assert (tmp_path / ".venv").is_dir()
 
 
-def test_a_drifted_lock_is_regenerated_and_the_agent_told_to_commit_it(
-    tmp_path: Path,
-) -> None:
-    _project(tmp_path, ">=3.11")
-    subprocess.run(["uv", "lock", "--quiet"], cwd=tmp_path, check=True, timeout=120)
+def test_a_drifted_lock_is_left_alone_and_reported_once(tmp_path: Path) -> None:
+    lock_before = _locked_project(tmp_path)
     _project(tmp_path, ">=3.12")
 
     result = _run_hook(tmp_path)
 
     assert result.returncode == 0, result.stderr
-    assert (
-        "uv.lock was out of date with pyproject.toml and has been regenerated"
-        in result.stdout
-    )
+    assert "uv.lock is out of date with pyproject.toml" in result.stdout
     assert len(result.stdout.splitlines()) == 1
-    assert 'requires-python = ">=3.12"' in (tmp_path / "uv.lock").read_text()
-    subprocess.run(
-        ["uv", "lock", "--check"],
-        cwd=tmp_path,
-        check=True,
-        timeout=120,
-        capture_output=True,
-    )
-    assert (tmp_path / ".venv").is_dir()
-
-
-def test_a_lock_that_cannot_be_regenerated_is_left_alone_and_said_so(
-    tmp_path: Path,
-) -> None:
-    _project(tmp_path, ">=3.11")
-    subprocess.run(["uv", "lock", "--quiet"], cwd=tmp_path, check=True, timeout=120)
-    lock_before = (tmp_path / "uv.lock").read_text()
-    # Offline, a dependency that is in no cache cannot resolve, so the relock fails.
-    _project(tmp_path, ">=3.11", '"no-such-package-for-session-start-sync"')
-
-    result = _run_hook(tmp_path)
-
-    assert result.returncode == 0, result.stderr
-    assert len(result.stdout.splitlines()) == 1
-    assert "failed to regenerate it" in result.stdout
-    assert "has been regenerated" not in result.stdout
     assert (tmp_path / "uv.lock").read_text() == lock_before
     assert (tmp_path / ".venv").is_dir()

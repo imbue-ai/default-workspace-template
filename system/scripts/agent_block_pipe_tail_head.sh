@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Block commands that pipe output into tail or head when the rest of that output would be lost.
 # Instead, the agent should run the command redirected to a file and then read from it. The
-# decision lives in the sibling agent_block_pipe_tail_head_check.py.
+# decision lives in workspace_bare_scripts/agent_block_pipe_tail_head_check.py.
 
 # Read JSON input from stdin
 input=$(cat)
@@ -36,4 +36,4 @@ pipe_re='(^|[^|])\|&?[[:space:]]*(tail|head)([[:space:]]|$)'
 [[ "$command" =~ $pipe_re ]] || exit 0
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
-exec python3 "$script_dir/agent_block_pipe_tail_head_check.py" "$command"
+exec python3 "$script_dir/agent_hook_check.py" block_pipe_tail_head "$command"

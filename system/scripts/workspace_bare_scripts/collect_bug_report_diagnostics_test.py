@@ -1,15 +1,14 @@
 """Tests for the resident bug-report diagnostics collector.
 
-Each test loads its own fresh copy of the script as a module and rebinds the
-container paths it hardcodes (the workspace layout, the supervisord log dir,
-mngr's agent tree, the secret-scan gate) at tmp fixtures, then drives the
-helpers or ``main`` directly. The scan gate is exercised end to end through
+Each test builds its own ``Collector`` with the container paths it would read
+(the workspace layout, the supervisord log dir, mngr's agent tree, the
+secret-scan gate) pointed at tmp fixtures, then drives its methods or ``run``
+directly. The scan gate is exercised end to end through
 stub ``scan_secrets.sh`` scripts on disk that reproduce the real gate's output
 markers verbatim.
 """
 
 import base64
-import importlib.util
 import io
 import json
 import os
@@ -20,12 +19,10 @@ import zipfile
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from types import ModuleType
-from typing import Any
 
 import pytest
 
-_SCRIPT_PATH = Path(__file__).resolve().parent / "collect_bug_report_diagnostics.py"
+from workspace_bare_scripts import collect_bug_report_diagnostics as diagnostics
 
 # A supervisord.conf in the realistic shape the workspace writes. The collector
 # only consumes it via ``supervisorctl -c`` for the report's metadata, so the
@@ -54,15 +51,7 @@ command=python3 system/services/oom_priority/bin/oom_tag_backstop.py
 """
 
 
-def _rebind(namespace: dict[str, Any], name: str, value: object) -> None:
-    """Rebind one of the script's module-level names, failing loudly if it is gone."""
-    assert name in namespace, (
-        f"the collector no longer defines {name}; update this test"
-    )
-    namespace[name] = value
-
-
-def _load_collector(
+def _collector(
     *,
     supervisor_log_dir: Path | None = None,
     mngr_binary: Path | None = None,
@@ -70,34 +59,29 @@ def _load_collector(
     workspace_dir: Path | None = None,
     scan_gate_dir: Path | None = None,
     agents_dir: Path | None = None,
-) -> ModuleType:
-    """Load a fresh copy of the collector with its container paths redirected.
+    max_log_class_bytes: int = diagnostics.MAX_LOG_CLASS_BYTES,
+    max_pane_class_bytes: int = diagnostics.MAX_PANE_CLASS_BYTES,
+) -> diagnostics.Collector:
+    """A collector with the named container paths pointed at fixtures, and the rest left at its defaults.
 
     ``agents_dir`` is left at the collector's own default when a test does not
     name one -- that default is empty outside an agent's env, so a test that
     says nothing about agent logs collects none rather than reading whatever
     mngr tree the machine running the suite happens to have.
     """
-    spec = importlib.util.spec_from_file_location(
-        "collect_bug_report_diagnostics_under_test", _SCRIPT_PATH
+    paths = {
+        "supervisor_log_dir": supervisor_log_dir,
+        "mngr_binary": mngr_binary,
+        "supervisord_conf": supervisord_conf,
+        "workspace_dir": workspace_dir,
+        "scan_gate_dir": scan_gate_dir,
+        "agents_dir": agents_dir,
+    }
+    return diagnostics.Collector(
+        **{name: str(value) for name, value in paths.items() if value is not None},
+        max_log_class_bytes=max_log_class_bytes,
+        max_pane_class_bytes=max_pane_class_bytes,
     )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    namespace = module.__dict__
-    if supervisor_log_dir is not None:
-        _rebind(namespace, "SUPERVISOR_LOG_DIR", str(supervisor_log_dir))
-    if mngr_binary is not None:
-        _rebind(namespace, "MNGR_BINARY", str(mngr_binary))
-    if supervisord_conf is not None:
-        _rebind(namespace, "SUPERVISORD_CONF", str(supervisord_conf))
-    if workspace_dir is not None:
-        _rebind(namespace, "WORKSPACE_DIR", str(workspace_dir))
-    if scan_gate_dir is not None:
-        _rebind(namespace, "SCAN_GATE_DIR", str(scan_gate_dir))
-    if agents_dir is not None:
-        _rebind(namespace, "AGENTS_DIR", str(agents_dir))
-    return module
 
 
 def _write_log(log_dir: Path, name: str, *, mtime: float, content: str = "") -> Path:
@@ -390,20 +374,20 @@ def test_the_scan_gate_path_points_at_a_gate_that_exists_in_this_repo() -> None:
     kept pointing at the old path, so every CI collection reported
     scanner_unavailable.
     """
-    module = _load_collector()
     repo_root = Path(__file__).resolve().parents[3]
-    gate_dir = repo_root / Path(module.SCAN_GATE_DIR).relative_to(module.WORKSPACE_DIR)
+    gate_dir = repo_root / Path(diagnostics.SCAN_GATE_DIR).relative_to(
+        diagnostics.WORKSPACE_DIR
+    )
 
     assert (gate_dir / "scan_secrets.sh").is_file(), f"no scan gate at {gate_dir}"
     assert (gate_dir / "betterleaks.toml").is_file(), f"no scanner config at {gate_dir}"
 
 
 def test_collector_caps_match_the_documented_limits() -> None:
-    module = _load_collector()
-    assert module.MAX_LOG_FILES == 100
-    assert module.MAX_LINES_PER_LOG == 2000
-    assert module.MIN_TRANSCRIPT_COUNT == 5
-    assert module.LOG_RECENCY_WINDOW_SECONDS == 24 * 60 * 60
+    assert diagnostics.MAX_LOG_FILES == 100
+    assert diagnostics.MAX_LINES_PER_LOG == 2000
+    assert diagnostics.MIN_TRANSCRIPT_COUNT == 5
+    assert diagnostics.LOG_RECENCY_WINDOW_SECONDS == 24 * 60 * 60
 
 
 def test_select_log_files_caps_at_the_newest_hundred_files(tmp_path: Path) -> None:
@@ -414,14 +398,14 @@ def test_select_log_files_caps_at_the_newest_hundred_files(tmp_path: Path) -> No
     # second apart so newest-first is a strict order.
     for index in range(over_cap_count):
         _write_log(log_dir, f"svc-{index:03d}-stderr.log", mtime=now - index)
-    module = _load_collector(supervisor_log_dir=log_dir)
+    collector = _collector(supervisor_log_dir=log_dir)
 
-    selected = module.select_log_files()
+    selected = collector.select_log_files()
 
-    assert len(selected) == module.MAX_LOG_FILES
+    assert len(selected) == diagnostics.MAX_LOG_FILES
     expected_newest_first = [
         str(log_dir / f"svc-{index:03d}-stderr.log")
-        for index in range(module.MAX_LOG_FILES)
+        for index in range(diagnostics.MAX_LOG_FILES)
     ]
     assert selected == expected_newest_first
 
@@ -435,9 +419,9 @@ def test_select_log_files_drops_logs_not_written_to_in_the_last_day(
     _write_log(log_dir, "system_interface-stderr.log", mtime=now - 60)
     _write_log(log_dir, "terminal-stderr.log", mtime=now - 23 * 60 * 60)
     _write_log(log_dir, "xvfb-stderr.log", mtime=now - 25 * 60 * 60)
-    module = _load_collector(supervisor_log_dir=log_dir)
+    collector = _collector(supervisor_log_dir=log_dir)
 
-    selected = module.select_log_files()
+    selected = collector.select_log_files()
 
     assert [os.path.basename(path) for path in selected] == [
         "system_interface-stderr.log",
@@ -461,9 +445,9 @@ def test_select_log_files_keeps_every_programs_logs_both_streams(
     _write_log(log_dir, "system_interface-stdout.log", mtime=now - 2)
     _write_log(log_dir, "terminal-stdout.log", mtime=now - 3)
     _write_log(log_dir, "geopolitical-dashboard-stderr.log", mtime=now - 4)
-    module = _load_collector(supervisor_log_dir=log_dir)
+    collector = _collector(supervisor_log_dir=log_dir)
 
-    selected = module.select_log_files()
+    selected = collector.select_log_files()
 
     assert [os.path.basename(path) for path in selected] == [
         "supervisord.log",
@@ -488,7 +472,7 @@ def test_every_agent_is_a_transcript_candidate(
         tmp_path,
         agents=("chatty", "system-services", "worker"),
     )
-    collector = _load_collector(mngr_binary=stub)
+    collector = _collector(mngr_binary=stub)
 
     assert collector.list_agents(5.0) == [
         ("chatty", "agent-chatty", "agent-chatty@stub-host-id.local", "", 1),
@@ -517,7 +501,7 @@ def test_a_transcript_is_named_for_the_harness_that_wrote_it_not_the_agent_type(
         agents=("chatty",),
         events_by_agent={"chatty": _transcript_events("hello", source="claude")},
     )
-    collector = _load_collector(mngr_binary=stub)
+    collector = _collector(mngr_binary=stub)
 
     members = collector.collect_transcript_members(5.0)
 
@@ -538,9 +522,9 @@ def test_the_collector_reads_conversations_with_the_transcript_command(
     """
     chats = {"chatty": _chat_events("hello")}
     stub = _mngr_stub_for_chats(tmp_path, chats)
-    module = _load_collector(mngr_binary=stub)
+    collector = _collector(mngr_binary=stub)
 
-    module.collect_transcript_members(5.0)
+    collector.collect_transcript_members(5.0)
 
     invocations = (tmp_path / "stub-argv.log").read_text(encoding="utf-8")
     transcript_calls = [
@@ -575,7 +559,7 @@ def test_a_chat_handed_to_another_harness_attaches_as_one_conversation(
             "Chat-1": ("agent-chat-1", 2),
         },
     )
-    collector = _load_collector(mngr_binary=stub)
+    collector = _collector(mngr_binary=stub)
 
     members = collector.collect_transcript_members(5.0)
 
@@ -595,7 +579,7 @@ def test_an_unlabelled_agent_is_a_chat_of_its_own(tmp_path: Path) -> None:
             "worker": _chat_events("worker-said"),
         },
     )
-    collector = _load_collector(mngr_binary=stub)
+    collector = _collector(mngr_binary=stub)
 
     members = collector.collect_transcript_members(5.0)
 
@@ -633,7 +617,7 @@ def test_an_older_segment_rides_along_with_the_chat_it_belongs_to(
             "Chat-1": ("agent-chat-1", 2),
         },
     )
-    collector = _load_collector(mngr_binary=stub)
+    collector = _collector(mngr_binary=stub)
 
     members = collector.collect_transcript_members(5.0)
 
@@ -647,7 +631,7 @@ def test_an_older_segment_rides_along_with_the_chat_it_belongs_to(
 
 def test_an_agent_with_no_conversation_contributes_no_member(tmp_path: Path) -> None:
     stub = _write_mngr_stub(tmp_path, agents=("chatty",))
-    collector = _load_collector(mngr_binary=stub)
+    collector = _collector(mngr_binary=stub)
 
     assert collector.collect_transcript_members(5.0) == []
 
@@ -672,7 +656,7 @@ def test_every_chat_written_to_inside_the_window_rides_along_newest_first(
         agents=tuple([*recent_names, "idle"]),
         events_by_agent=events_by_agent,
     )
-    collector = _load_collector(mngr_binary=stub)
+    collector = _collector(mngr_binary=stub)
 
     members = collector.collect_transcript_members(5.0)
 
@@ -703,7 +687,7 @@ def test_a_quiet_window_still_sends_the_five_newest_chats(
         agents=tuple(events_by_agent),
         events_by_agent=events_by_agent,
     )
-    collector = _load_collector(mngr_binary=stub)
+    collector = _collector(mngr_binary=stub)
 
     members = collector.collect_transcript_members(5.0)
 
@@ -730,7 +714,7 @@ def test_an_idle_workspace_still_carries_its_most_recent_chats(
             "staler": _transcript_events("ancient", timestamp="2025-01-01T12:00:00Z"),
         },
     )
-    collector = _load_collector(mngr_binary=stub)
+    collector = _collector(mngr_binary=stub)
 
     members = collector.collect_transcript_members(5.0)
 
@@ -746,7 +730,7 @@ def test_a_workspace_whose_mngr_cannot_be_asked_reports_no_chats(
     """A failing mngr must read as no transcript, never as a crash: the collector
     asks mngr precisely so it does not re-derive this from the files itself."""
     stub = _write_mngr_stub(tmp_path, agents=("chatty",), exit_code=3)
-    collector = _load_collector(mngr_binary=stub)
+    collector = _collector(mngr_binary=stub)
 
     assert collector.list_agents(5.0) == []
     assert collector.collect_transcript_members(5.0) == []
@@ -757,9 +741,8 @@ def test_transcript_member_names_live_under_chats_and_cannot_escape_an_extractio
 ):
     """Member names are built from names mngr reports, so they are sanitized
     before they can reach a reader's filesystem on extraction."""
-    module = _load_collector()
 
-    name = module.transcript_member_name("../../../etc/passwd", "claude", set())
+    name = diagnostics.transcript_member_name("../../../etc/passwd", "claude", set())
 
     assert name.startswith("chats/"), name
     remainder = name[len("chats/") :]
@@ -771,11 +754,10 @@ def test_transcript_member_names_live_under_chats_and_cannot_escape_an_extractio
 def test_transcript_member_names_stay_unique_within_one_archive() -> None:
     """Two chats that resolve to the same agent and harness must not collide: a
     zip member silently overwriting another would drop a whole conversation."""
-    module = _load_collector()
     used: set[str] = set()
 
-    first = module.transcript_member_name("agent-a", "claude", used)
-    second = module.transcript_member_name("agent-a", "claude", used)
+    first = diagnostics.transcript_member_name("agent-a", "claude", used)
+    second = diagnostics.transcript_member_name("agent-a", "claude", used)
 
     assert first == "chats/agent-a-claude.jsonl"
     assert second != first
@@ -789,9 +771,8 @@ def test_zip_records_an_epoch_fallback_mtime_at_the_formats_floor() -> None:
     """A transcript whose mtime falls back to the 1970 epoch is clamped to the
     earliest instant a zip can record, rather than failing the whole archive --
     zip rejects any timestamp before 1980."""
-    module = _load_collector()
 
-    archive_bytes = module.build_zip(
+    archive_bytes = diagnostics.build_zip(
         [("chats/agent-a-claude.jsonl", '{"seq": 1}\n', 0.0)]
     )
 
@@ -809,10 +790,9 @@ def test_zip_records_a_far_future_chat_at_the_formats_ceiling() -> None:
     everything, which would cost the report every attachment. Clock skew and a
     restored or touched file both reach this.
     """
-    module = _load_collector()
     far_future = time.mktime((2110, 5, 1, 12, 0, 0, 0, 0, -1))
 
-    archive_bytes = module.build_zip(
+    archive_bytes = diagnostics.build_zip(
         [("chats/agent-a-claude.jsonl", '{"seq": 1}\n', far_future)]
     )
 
@@ -828,9 +808,9 @@ def test_zip_records_a_far_future_chat_at_the_formats_ceiling() -> None:
 def test_scan_targets_releases_every_file_on_a_clean_scan(tmp_path: Path) -> None:
     gate = tmp_path / "gate"
     _write_stub_scan_gate(gate, exit_code=0)
-    module = _load_collector(scan_gate_dir=gate)
+    collector = _collector(scan_gate_dir=gate)
 
-    verdicts = module.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
+    verdicts = collector.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
 
     assert verdicts == {"/tmp/logs.txt": None, "/tmp/transcript.txt": None}
 
@@ -842,13 +822,13 @@ def test_scan_targets_drops_only_the_file_a_finding_names(tmp_path: Path) -> Non
         exit_code=1,
         stderr="scan_secrets.sh: SECRET SCAN FINDING [betterleaks] aws-key: /tmp/transcript.txt:4 (value redacted)",
     )
-    module = _load_collector(scan_gate_dir=gate)
+    collector = _collector(scan_gate_dir=gate)
 
-    verdicts = module.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
+    verdicts = collector.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
 
     assert verdicts == {
         "/tmp/logs.txt": None,
-        "/tmp/transcript.txt": module.NOTE_SECRETS_FOUND,
+        "/tmp/transcript.txt": diagnostics.NOTE_SECRETS_FOUND,
     }
 
 
@@ -876,13 +856,13 @@ def test_scan_targets_disqualifies_every_file_when_a_scanner_did_not_complete(
         stderr=marker
         + "\nscan_secrets.sh: SECRET SCAN FINDING [kingfisher] aws-key: /tmp/transcript.txt:4 (value redacted)",
     )
-    module = _load_collector(scan_gate_dir=gate)
+    collector = _collector(scan_gate_dir=gate)
 
-    verdicts = module.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
+    verdicts = collector.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
 
     assert verdicts == {
-        "/tmp/logs.txt": module.NOTE_SCANNER_UNAVAILABLE,
-        "/tmp/transcript.txt": module.NOTE_SCANNER_UNAVAILABLE,
+        "/tmp/logs.txt": diagnostics.NOTE_SCANNER_UNAVAILABLE,
+        "/tmp/transcript.txt": diagnostics.NOTE_SCANNER_UNAVAILABLE,
     }
 
 
@@ -895,13 +875,13 @@ def test_scan_targets_drops_every_file_when_a_report_could_not_be_parsed(
         exit_code=1,
         stderr="scan_secrets.sh: SECRET SCAN FAILED (kingfisher found leaks but its report could not be parsed)",
     )
-    module = _load_collector(scan_gate_dir=gate)
+    collector = _collector(scan_gate_dir=gate)
 
-    verdicts = module.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
+    verdicts = collector.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
 
     assert verdicts == {
-        "/tmp/logs.txt": module.NOTE_SECRETS_FOUND,
-        "/tmp/transcript.txt": module.NOTE_SECRETS_FOUND,
+        "/tmp/logs.txt": diagnostics.NOTE_SECRETS_FOUND,
+        "/tmp/transcript.txt": diagnostics.NOTE_SECRETS_FOUND,
     }
 
 
@@ -914,13 +894,13 @@ def test_scan_targets_drops_every_file_when_a_finding_names_none_of_them(
         exit_code=1,
         stderr="scan_secrets.sh: SECRET SCAN FINDING [betterleaks] aws-key: /tmp/elsewhere.txt:9 (value redacted)",
     )
-    module = _load_collector(scan_gate_dir=gate)
+    collector = _collector(scan_gate_dir=gate)
 
-    verdicts = module.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
+    verdicts = collector.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
 
     assert verdicts == {
-        "/tmp/logs.txt": module.NOTE_SECRETS_FOUND,
-        "/tmp/transcript.txt": module.NOTE_SECRETS_FOUND,
+        "/tmp/logs.txt": diagnostics.NOTE_SECRETS_FOUND,
+        "/tmp/transcript.txt": diagnostics.NOTE_SECRETS_FOUND,
     }
 
 
@@ -929,32 +909,32 @@ def test_scan_targets_drops_every_file_when_a_failed_scan_said_nothing(
 ) -> None:
     gate = tmp_path / "gate"
     _write_stub_scan_gate(gate, exit_code=1)
-    module = _load_collector(scan_gate_dir=gate)
+    collector = _collector(scan_gate_dir=gate)
 
-    verdicts = module.scan_targets(["/tmp/logs.txt"], 10)
+    verdicts = collector.scan_targets(["/tmp/logs.txt"], 10)
 
-    assert verdicts == {"/tmp/logs.txt": module.NOTE_SCANNER_UNAVAILABLE}
+    assert verdicts == {"/tmp/logs.txt": diagnostics.NOTE_SCANNER_UNAVAILABLE}
 
 
 def test_scan_targets_fails_closed_when_the_scan_gate_is_absent(tmp_path: Path) -> None:
     """A workspace missing the template's gate must never release anything."""
-    module = _load_collector(scan_gate_dir=tmp_path / "no-such-gate")
+    collector = _collector(scan_gate_dir=tmp_path / "no-such-gate")
 
-    verdicts = module.scan_targets(["/tmp/logs.txt"], 10)
+    verdicts = collector.scan_targets(["/tmp/logs.txt"], 10)
 
-    assert verdicts == {"/tmp/logs.txt": module.NOTE_SCANNER_UNAVAILABLE}
+    assert verdicts == {"/tmp/logs.txt": diagnostics.NOTE_SCANNER_UNAVAILABLE}
 
 
 def test_scan_targets_fails_closed_when_the_scan_times_out(tmp_path: Path) -> None:
     gate = tmp_path / "gate"
     _write_sleeping_stub_scan_gate(gate, sleep_seconds=5)
-    module = _load_collector(scan_gate_dir=gate)
+    collector = _collector(scan_gate_dir=gate)
 
-    verdicts = module.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 0.5)
+    verdicts = collector.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 0.5)
 
     assert verdicts == {
-        "/tmp/logs.txt": module.NOTE_SCANNER_UNAVAILABLE,
-        "/tmp/transcript.txt": module.NOTE_SCANNER_UNAVAILABLE,
+        "/tmp/logs.txt": diagnostics.NOTE_SCANNER_UNAVAILABLE,
+        "/tmp/transcript.txt": diagnostics.NOTE_SCANNER_UNAVAILABLE,
     }
 
 
@@ -1001,7 +981,7 @@ def test_main_prints_only_the_base64_zip_line_with_all_content_on_a_clean_scan(
         events_by_agent=chats,
         panes_by_agent={"agent-older": "claude crashed here\n"},
     )
-    module = _load_collector(
+    collector = _collector(
         supervisor_log_dir=log_dir,
         mngr_binary=mngr_stub,
         supervisord_conf=conf,
@@ -1010,7 +990,7 @@ def test_main_prints_only_the_base64_zip_line_with_all_content_on_a_clean_scan(
         agents_dir=agents_dir,
     )
 
-    module.main(["--logs", "--transcript"])
+    collector.run(["--logs", "--transcript"])
 
     with _zip_from_stdout(capsys.readouterr().out) as archive:
         assert archive.testzip() is None
@@ -1053,9 +1033,9 @@ def test_main_prints_only_the_base64_zip_line_with_all_content_on_a_clean_scan(
 def test_main_reports_no_chat_transcript_when_the_agent_tree_is_empty(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    module = _load_collector(mngr_binary=_mngr_stub_for_chats(tmp_path, {}))
+    collector = _collector(mngr_binary=_mngr_stub_for_chats(tmp_path, {}))
 
-    module.main(["--transcript"])
+    collector.run(["--transcript"])
 
     with _zip_from_stdout(capsys.readouterr().out) as archive:
         assert archive.namelist() == ["collection-notes.txt"]
@@ -1091,7 +1071,7 @@ def test_main_omits_an_unrequested_content_type_from_both_members_and_notes(
         mtime=time.time(),
         content="daemon up\n",
     )
-    module = _load_collector(
+    collector = _collector(
         supervisor_log_dir=log_dir,
         mngr_binary=_write_mngr_stub(
             tmp_path,
@@ -1105,7 +1085,7 @@ def test_main_omits_an_unrequested_content_type_from_both_members_and_notes(
         agents_dir=agents_dir,
     )
 
-    module.main(["--logs"])
+    collector.run(["--logs"])
 
     with _zip_from_stdout(capsys.readouterr().out) as archive:
         # Logs only: metadata, the service logs and the agent's own -- no chats,
@@ -1135,11 +1115,11 @@ def test_main_withholds_the_whole_archive_when_one_chat_carries_a_secret(
         "agent-clean": _chat_events("agent-clean"),
         "agent-leaky": _chat_events("agent-leaky") + f'{{"note": "{secret}"}}\n',
     }
-    module = _load_collector(
+    collector = _collector(
         mngr_binary=_mngr_stub_for_chats(tmp_path, chats), scan_gate_dir=gate
     )
 
-    module.main(["--transcript"])
+    collector.run(["--transcript"])
 
     with _zip_from_stdout(capsys.readouterr().out) as archive:
         assert archive.namelist() == ["collection-notes.txt"]
@@ -1161,11 +1141,11 @@ def test_main_scans_the_member_name_a_chat_will_be_archived_under(
     gate = tmp_path / "gate"
     _write_content_matching_stub_scan_gate(gate, secret=secret)
     chats = {f"agent-{secret}": _chat_events("clean")}
-    module = _load_collector(
+    collector = _collector(
         mngr_binary=_mngr_stub_for_chats(tmp_path, chats), scan_gate_dir=gate
     )
 
-    module.main(["--transcript"])
+    collector.run(["--transcript"])
 
     with _zip_from_stdout(capsys.readouterr().out) as archive:
         assert archive.namelist() == ["collection-notes.txt"]
@@ -1202,7 +1182,7 @@ def test_main_withholds_only_the_logs_when_the_finding_is_in_the_logs(
         mtime=time.time(),
         content="nothing secret here\n",
     )
-    module = _load_collector(
+    collector = _collector(
         supervisor_log_dir=log_dir,
         mngr_binary=_mngr_stub_for_chats(tmp_path, chats),
         supervisord_conf=conf,
@@ -1211,7 +1191,7 @@ def test_main_withholds_only_the_logs_when_the_finding_is_in_the_logs(
         agents_dir=agents_dir,
     )
 
-    module.main(["--logs", "--transcript"])
+    collector.run(["--logs", "--transcript"])
 
     with _zip_from_stdout(capsys.readouterr().out) as archive:
         # Every service-logs member goes, metadata included; the clean agent log
@@ -1248,7 +1228,7 @@ def test_main_reports_everything_scanner_unavailable_when_the_gate_is_missing(
         mtime=time.time(),
         content="daemon up\n",
     )
-    module = _load_collector(
+    collector = _collector(
         supervisor_log_dir=log_dir,
         mngr_binary=_mngr_stub_for_chats(tmp_path, chats),
         supervisord_conf=conf,
@@ -1257,7 +1237,7 @@ def test_main_reports_everything_scanner_unavailable_when_the_gate_is_missing(
         agents_dir=agents_dir,
     )
 
-    module.main(["--logs", "--transcript"])
+    collector.run(["--logs", "--transcript"])
 
     with _zip_from_stdout(capsys.readouterr().out) as archive:
         assert archive.namelist() == ["collection-notes.txt"]
@@ -1291,11 +1271,11 @@ def test_main_packs_every_collected_chat_with_no_size_cap(
         + "\n"
         for agent_id, age in (("agent-a", 180), ("agent-b", 120), ("agent-c", 60))
     }
-    module = _load_collector(
+    collector = _collector(
         mngr_binary=_mngr_stub_for_chats(tmp_path, chats), scan_gate_dir=gate
     )
 
-    module.main(["--transcript"])
+    collector.run(["--transcript"])
 
     with _zip_from_stdout(capsys.readouterr().out) as archive:
         assert archive.namelist() == [
@@ -1333,10 +1313,10 @@ def test_agent_logs_are_collected_from_every_shape_a_harness_writes(
         mtime=now,
         content="converted\n",
     )
-    module = _load_collector(agents_dir=agents_dir)
+    collector = _collector(agents_dir=agents_dir)
 
     collected = {
-        os.path.basename(p) for p in module.select_agent_log_files("agent-chatty")
+        os.path.basename(p) for p in collector.select_agent_log_files("agent-chatty")
     }
 
     assert collected == {"app_server.log", "agy_cli.log", "codex-tui.log"}
@@ -1360,10 +1340,10 @@ def test_an_agent_log_nothing_has_written_to_in_a_day_is_left_behind(
         mtime=now - 25 * 60 * 60,
         content="old\n",
     )
-    module = _load_collector(agents_dir=agents_dir)
+    collector = _collector(agents_dir=agents_dir)
 
     collected = [
-        os.path.basename(p) for p in module.select_agent_log_files("agent-chatty")
+        os.path.basename(p) for p in collector.select_agent_log_files("agent-chatty")
     ]
 
     assert collected == ["app_server.log"]
@@ -1400,9 +1380,11 @@ def test_only_allowlisted_targets_are_read_out_of_a_log_db(tmp_path: Path) -> No
             (1789078902, 3, "TRACE", "codex_core::session::turn", "api_key=SECRET-KEY"),
         ],
     )
-    module = _load_collector(agents_dir=agents_dir)
+    collector = _collector(agents_dir=agents_dir)
 
-    rendered = module.read_log_db(str(module.select_agent_log_dbs("agent-chatty")[0]))
+    rendered = diagnostics.read_log_db(
+        str(collector.select_agent_log_dbs("agent-chatty")[0])
+    )
 
     assert "app-server request: thread/read" in rendered
     assert "SECRET-TOKEN" not in rendered
@@ -1427,9 +1409,11 @@ def test_a_log_db_target_allowlist_entry_does_not_match_underscores_as_wildcards
             (1789078901, 2, "TRACE", "codexXappXserver::impostor", "SECRET-IMPOSTOR"),
         ],
     )
-    module = _load_collector(agents_dir=agents_dir)
+    collector = _collector(agents_dir=agents_dir)
 
-    rendered = module.read_log_db(str(module.select_agent_log_dbs("agent-chatty")[0]))
+    rendered = diagnostics.read_log_db(
+        str(collector.select_agent_log_dbs("agent-chatty")[0])
+    )
 
     assert "wanted" in rendered
     assert "SECRET-IMPOSTOR" not in rendered
@@ -1469,9 +1453,11 @@ def test_a_log_db_target_allowlist_entry_does_not_admit_a_crate_sharing_its_name
             ),
         ],
     )
-    module = _load_collector(agents_dir=agents_dir)
+    collector = _collector(agents_dir=agents_dir)
 
-    rendered = module.read_log_db(str(module.select_agent_log_dbs("agent-chatty")[0]))
+    rendered = diagnostics.read_log_db(
+        str(collector.select_agent_log_dbs("agent-chatty")[0])
+    )
 
     assert "wanted-from-the-root" in rendered
     assert "wanted-from-below" in rendered
@@ -1523,9 +1509,8 @@ def test_a_log_db_read_sees_rows_a_live_harness_has_not_checkpointed(
                     "still-in-the-wal",
                 ),
             )
-        module = _load_collector(agents_dir=agents_dir)
 
-        rendered = module.read_log_db(str(db_path))
+        rendered = diagnostics.read_log_db(str(db_path))
     finally:
         writer.close()
 
@@ -1557,10 +1542,11 @@ def test_a_log_db_renders_oldest_first_and_drops_whole_oldest_rows_to_fit(
             for index in range(10)
         ],
     )
-    module = _load_collector(agents_dir=agents_dir)
-    _rebind(module.__dict__, "MAX_READ_BYTES", 800)
+    collector = _collector(agents_dir=agents_dir)
 
-    rendered = module.read_log_db(str(module.select_agent_log_dbs("agent-chatty")[0]))
+    rendered = diagnostics.read_log_db(
+        str(collector.select_agent_log_dbs("agent-chatty")[0]), max_bytes=800
+    )
     lines = rendered.splitlines()
     kept = [line.split()[-2] for line in lines]
 
@@ -1592,9 +1578,8 @@ def test_a_log_db_the_collector_cannot_read_reports_itself_rather_than_raising(
     )
     db_path.parent.mkdir(parents=True, exist_ok=True)
     db_path.write_text("not a database at all", encoding="utf-8")
-    module = _load_collector(agents_dir=agents_dir)
 
-    assert module.read_log_db(str(db_path)).startswith("(unreadable:")
+    assert diagnostics.read_log_db(str(db_path)).startswith("(unreadable:")
 
 
 @pytest.mark.parametrize(
@@ -1632,9 +1617,8 @@ def test_a_log_db_row_the_render_cannot_format_reports_itself_rather_than_raisin
             ),
         )
     connection.close()
-    module = _load_collector(agents_dir=agents_dir)
 
-    assert module.read_log_db(str(db_path)).startswith("(unreadable:")
+    assert diagnostics.read_log_db(str(db_path)).startswith("(unreadable:")
 
 
 def test_a_secret_in_a_log_db_does_not_cost_the_report_its_harness_logs(
@@ -1668,14 +1652,14 @@ def test_a_secret_in_a_log_db_does_not_cost_the_report_its_harness_logs(
     scan_gate_dir = tmp_path / "gate"
     _write_content_matching_stub_scan_gate(scan_gate_dir, secret="leaked-token")
     stub = _write_mngr_stub(tmp_path, agents=("chatty",))
-    module = _load_collector(
+    collector = _collector(
         mngr_binary=stub,
         agents_dir=agents_dir,
         scan_gate_dir=scan_gate_dir,
         supervisor_log_dir=tmp_path / "supervisor",
     )
 
-    module.main(["--logs"])
+    collector.run(["--logs"])
 
     with _zip_from_stdout(capsys.readouterr().out) as archive:
         assert "agent-logs/chatty/app_server.log" in archive.namelist()
@@ -1691,9 +1675,9 @@ def test_capturing_a_pane_never_starts_a_stopped_agent(tmp_path: Path) -> None:
     stub = _write_mngr_stub(
         tmp_path, agents=("chatty",), panes_by_agent={"chatty": "on screen\n"}
     )
-    module = _load_collector(mngr_binary=stub)
+    collector = _collector(mngr_binary=stub)
 
-    assert module.capture_pane("agent-chatty@stub-host-id.local", 5.0) == "on screen"
+    assert collector.capture_pane("agent-chatty@stub-host-id.local", 5.0) == "on screen"
 
     invocations = (tmp_path / "stub-argv.log").read_text(encoding="utf-8")
     capture_calls = [
@@ -1708,9 +1692,9 @@ def test_an_agent_that_is_not_running_contributes_no_pane(tmp_path: Path) -> Non
     """A stopped agent has no pane to read, and mngr says so by failing. That is
     an absence, not an error the report should carry."""
     stub = _write_mngr_stub(tmp_path, agents=("chatty",))
-    module = _load_collector(mngr_binary=stub)
+    collector = _collector(mngr_binary=stub)
 
-    assert module.capture_pane("agent-chatty@stub-host-id.local", 5.0) is None
+    assert collector.capture_pane("agent-chatty@stub-host-id.local", 5.0) is None
 
 
 def test_a_chatty_agent_log_cannot_crowd_the_rest_out_of_the_archive(
@@ -1736,10 +1720,11 @@ def test_a_chatty_agent_log_cannot_crowd_the_rest_out_of_the_archive(
             agents_dir, name, "app_server.log", mtime=now - age, content=content
         )
     stub = _write_mngr_stub(tmp_path, agents=("oldest", "middle", "newest"))
-    module = _load_collector(mngr_binary=stub, agents_dir=agents_dir)
-    _rebind(module.__dict__, "MAX_LOG_CLASS_BYTES", 900)
+    collector = _collector(
+        mngr_binary=stub, agents_dir=agents_dir, max_log_class_bytes=900
+    )
 
-    members, dropped = module.collect_agent_log_members(5.0, is_pane_included=True)
+    members, dropped = collector.collect_agent_log_members(5.0, is_pane_included=True)
 
     assert [name for name, _, _ in members] == [
         "agent-logs/newest/app_server.log",
@@ -1760,10 +1745,11 @@ def test_one_outsized_agent_log_still_rides_rather_than_emptying_the_class(
         agents_dir, "chatty", "app_server.log", mtime=time.time(), content="x" * 5000
     )
     stub = _write_mngr_stub(tmp_path, agents=("chatty",))
-    module = _load_collector(mngr_binary=stub, agents_dir=agents_dir)
-    _rebind(module.__dict__, "MAX_LOG_CLASS_BYTES", 100)
+    collector = _collector(
+        mngr_binary=stub, agents_dir=agents_dir, max_log_class_bytes=100
+    )
 
-    members, _dropped = module.collect_agent_log_members(5.0, is_pane_included=True)
+    members, _dropped = collector.collect_agent_log_members(5.0, is_pane_included=True)
 
     assert [name for name, _, _ in members] == ["agent-logs/chatty/app_server.log"]
 
@@ -1781,9 +1767,9 @@ def test_agent_log_members_stay_unique_when_two_agent_names_sanitize_alike(
             agents_dir, name, "app_server.log", mtime=now, content=f"from {name}\n"
         )
     stub = _write_mngr_stub(tmp_path, agents=("chat 1", "chat+1"))
-    module = _load_collector(mngr_binary=stub, agents_dir=agents_dir)
+    collector = _collector(mngr_binary=stub, agents_dir=agents_dir)
 
-    members, _dropped = module.collect_agent_log_members(5.0, is_pane_included=True)
+    members, _dropped = collector.collect_agent_log_members(5.0, is_pane_included=True)
 
     assert sorted(name for name, _, _ in members) == [
         "agent-logs/chat_1/app_server-2.log",
@@ -1803,10 +1789,9 @@ def test_the_service_log_class_stops_at_its_byte_budget(tmp_path: Path) -> None:
             mtime=now - 300 + index * 100,
             content="x" * 400,
         )
-    module = _load_collector(supervisor_log_dir=log_dir)
-    _rebind(module.__dict__, "MAX_LOG_CLASS_BYTES", 900)
+    collector = _collector(supervisor_log_dir=log_dir, max_log_class_bytes=900)
 
-    members, dropped = module.collect_log_members()
+    members, dropped = collector.collect_log_members()
 
     assert [name for name, _, _ in members] == [
         "logs/newest.log",
@@ -1836,9 +1821,9 @@ def test_a_pane_is_not_captured_when_the_user_declined_to_send_their_chats(
         agents=("chatty",),
         panes_by_agent={"chatty": "the whole conversation\n"},
     )
-    module = _load_collector(mngr_binary=stub, agents_dir=agents_dir)
+    collector = _collector(mngr_binary=stub, agents_dir=agents_dir)
 
-    members, _dropped = module.collect_agent_log_members(5.0, is_pane_included=False)
+    members, _dropped = collector.collect_agent_log_members(5.0, is_pane_included=False)
 
     assert [name for name, _, _ in members] == ["agent-logs/chatty/app_server.log"]
     # Not merely absent from the archive -- never captured, so nothing to leak.
@@ -1868,12 +1853,15 @@ def test_panes_do_not_displace_the_harness_logs_of_the_agent_that_broke(
         agents=("one", "two", "three"),
         panes_by_agent={name: "pane-" + "y" * 300 for name in ("one", "two", "three")},
     )
-    module = _load_collector(mngr_binary=stub, agents_dir=agents_dir)
     # Room for two members in each class, had they been competing for one budget.
-    _rebind(module.__dict__, "MAX_LOG_CLASS_BYTES", 700)
-    _rebind(module.__dict__, "MAX_PANE_CLASS_BYTES", 700)
+    collector = _collector(
+        mngr_binary=stub,
+        agents_dir=agents_dir,
+        max_log_class_bytes=700,
+        max_pane_class_bytes=700,
+    )
 
-    members, _dropped = module.collect_agent_log_members(5.0, is_pane_included=True)
+    members, _dropped = collector.collect_agent_log_members(5.0, is_pane_included=True)
     names = [name for name, _, _ in members]
 
     assert sum(1 for name in names if name.endswith("app_server.log")) == 2
@@ -1913,7 +1901,7 @@ def test_a_secret_rendered_on_a_pane_withholds_the_agent_logs_and_nothing_else(
         mtime=time.time(),
         content="nothing secret here\n",
     )
-    module = _load_collector(
+    collector = _collector(
         supervisor_log_dir=log_dir,
         mngr_binary=_write_mngr_stub(
             tmp_path,
@@ -1927,7 +1915,7 @@ def test_a_secret_rendered_on_a_pane_withholds_the_agent_logs_and_nothing_else(
         agents_dir=agents_dir,
     )
 
-    module.main(["--logs", "--transcript"])
+    collector.run(["--logs", "--transcript"])
 
     with _zip_from_stdout(capsys.readouterr().out) as archive:
         assert archive.namelist() == [
@@ -1973,17 +1961,17 @@ def test_a_class_the_budget_could_not_fit_whole_says_so_in_the_notes(
             mtime=now - 100 + index,
             content="x" * 400,
         )
-    module = _load_collector(
+    collector = _collector(
         supervisor_log_dir=log_dir,
         mngr_binary=_write_mngr_stub(tmp_path, agents=("oldest", "newest")),
         supervisord_conf=conf,
         workspace_dir=tmp_path / "workspace",
         scan_gate_dir=gate,
         agents_dir=agents_dir,
+        max_log_class_bytes=500,
     )
-    _rebind(module.__dict__, "MAX_LOG_CLASS_BYTES", 500)
 
-    module.main(["--logs"])
+    collector.run(["--logs"])
 
     with _zip_from_stdout(capsys.readouterr().out) as archive:
         assert archive.namelist() == [
@@ -2031,17 +2019,17 @@ def test_a_withheld_class_does_not_also_claim_it_was_merely_trimmed(
         mtime=now,
         content="export API_KEY={}\n{}".format(secret, "y" * 400),
     )
-    module = _load_collector(
+    collector = _collector(
         supervisor_log_dir=log_dir,
         mngr_binary=_write_mngr_stub(tmp_path, agents=("oldest", "newest")),
         supervisord_conf=conf,
         workspace_dir=tmp_path / "workspace",
         scan_gate_dir=gate,
         agents_dir=agents_dir,
+        max_log_class_bytes=500,
     )
-    _rebind(module.__dict__, "MAX_LOG_CLASS_BYTES", 500)
 
-    module.main(["--logs"])
+    collector.run(["--logs"])
 
     with _zip_from_stdout(capsys.readouterr().out) as archive:
         assert not any(name.startswith("agent-logs/") for name in archive.namelist()), (
@@ -2081,7 +2069,7 @@ def test_a_whole_collection_asks_mngr_for_the_agent_listing_once(
         "agent-a",
         [(1789078900, 1, "TRACE", "codex_app_server::message_processor", "served")],
     )
-    module = _load_collector(
+    collector = _collector(
         supervisor_log_dir=log_dir,
         mngr_binary=_write_mngr_stub(
             tmp_path,
@@ -2095,7 +2083,7 @@ def test_a_whole_collection_asks_mngr_for_the_agent_listing_once(
         agents_dir=agents_dir,
     )
 
-    module.main(["--logs", "--transcript"])
+    collector.run(["--logs", "--transcript"])
 
     # Every half that reads the listing landed, so every one of them did ask.
     with _zip_from_stdout(capsys.readouterr().out) as archive:

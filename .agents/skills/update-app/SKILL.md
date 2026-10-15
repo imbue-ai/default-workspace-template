@@ -369,6 +369,15 @@ where the data dies. Encode these, cheapest first:
   uv run --no-sync .agents/skills/update-app/scripts/preview_app.py down --app <name>
   ```
 
+  Every `up` and `refresh` runs `uv sync --all-packages --frozen` in the
+  worktree and then starts the app from the worktree's own `.venv`, so the
+  preview serves the worktree's code. That boot sync counts against the
+  preview's health wait, so on a fresh `git worktree add` run
+  `uv sync --all-packages --frozen` there once before the first `up`. The
+  sync never relocks: after changing a dependency in the worktree, run
+  `uv lock` there before `refresh`, or the preview boots without the change.
+  If the app has a frontend, build it in the worktree too.
+
   `--with <sibling>` boots a sibling app's preview from the same worktree first
   and points the app's copied registry at it: a shell preview frames the
   previewed chat that way, and a terminal preview needs `--with terminal-pty`,

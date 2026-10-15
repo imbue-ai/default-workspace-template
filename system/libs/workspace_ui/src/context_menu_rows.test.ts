@@ -44,8 +44,10 @@ function byId(id: string): Element {
 }
 
 let clipboard: { writeText: ReturnType<typeof vi.fn>; readText?: ReturnType<typeof vi.fn> };
+let openLink: ReturnType<typeof vi.fn<(anchor: HTMLAnchorElement) => void>>;
 
 beforeEach(() => {
+  openLink = vi.fn<(anchor: HTMLAnchorElement) => void>();
   clipboard = { writeText: vi.fn(async () => undefined), readText: vi.fn(async () => "pasted") };
   Object.defineProperty(navigator, "clipboard", { value: clipboard, configurable: true });
   document.body.innerHTML =
@@ -75,32 +77,36 @@ function selectContentsOf(element: Element): void {
 
 describe("standardContextMenuRows", () => {
   it("offers nothing for a plain element with nothing selected", () => {
-    expect(standardContextMenuRows(targetOf(byId("para")))).toEqual([]);
+    expect(standardContextMenuRows(targetOf(byId("para")), openLink)).toEqual([]);
   });
 
   it("offers Copy alone for a selection on read-only text", () => {
-    expect(keysOf(standardContextMenuRows(targetOf(byId("para"), "words")))).toEqual(["copy"]);
+    expect(keysOf(standardContextMenuRows(targetOf(byId("para"), "words"), openLink))).toEqual(["copy"]);
   });
 
   it("offers Paste and Select All for a field, and Cut and Copy once it has a selection", () => {
     const field = byId("field") as HTMLInputElement;
-    expect(keysOf(standardContextMenuRows(targetOf(field)))).toEqual(["paste", "select-all"]);
+    expect(keysOf(standardContextMenuRows(targetOf(field), openLink))).toEqual(["paste", "select-all"]);
     field.setSelectionRange(0, 5);
-    expect(keysOf(standardContextMenuRows(targetOf(field)))).toEqual(["cut", "copy", "paste", "select-all"]);
+    expect(keysOf(standardContextMenuRows(targetOf(field), openLink))).toEqual(["cut", "copy", "paste", "select-all"]);
   });
 
   it("offers Copy but not Cut on an editable target when the selection lies elsewhere on the page", () => {
     const field = byId("field") as HTMLInputElement;
     field.setSelectionRange(0, 0);
-    expect(keysOf(standardContextMenuRows(targetOf(field, "plain words")))).toEqual(["copy", "paste", "select-all"]);
+    expect(keysOf(standardContextMenuRows(targetOf(field, "plain words"), openLink))).toEqual([
+      "copy",
+      "paste",
+      "select-all",
+    ]);
     selectContentsOf(byId("para"));
-    expect(keysOf(standardContextMenuRows(targetOf(byId("note"), "plain words")))).toEqual([
+    expect(keysOf(standardContextMenuRows(targetOf(byId("note"), "plain words"), openLink))).toEqual([
       "copy",
       "paste",
       "select-all",
     ]);
     selectContentsOf(byId("note"));
-    expect(keysOf(standardContextMenuRows(targetOf(byId("note"), "editable")))).toEqual([
+    expect(keysOf(standardContextMenuRows(targetOf(byId("note"), "editable"), openLink))).toEqual([
       "cut",
       "copy",
       "paste",
@@ -111,28 +117,28 @@ describe("standardContextMenuRows", () => {
   it("withholds Cut and Copy on a password field with a selection, keeping Paste and Select All", () => {
     const secret = byId("secret") as HTMLInputElement;
     secret.setSelectionRange(0, 6);
-    expect(keysOf(standardContextMenuRows(targetOf(secret)))).toEqual(["paste", "select-all"]);
+    expect(keysOf(standardContextMenuRows(targetOf(secret), openLink))).toEqual(["paste", "select-all"]);
   });
 
   it("withholds Paste where the browser withholds readText", () => {
     delete clipboard.readText;
-    expect(keysOf(standardContextMenuRows(targetOf(byId("note"))))).toEqual(["select-all"]);
+    expect(keysOf(standardContextMenuRows(targetOf(byId("note")), openLink))).toEqual(["select-all"]);
   });
 
   it("offers the link rows in an anchor and the image row on an image, after the edit rows", () => {
-    expect(keysOf(standardContextMenuRows(targetOf(byId("link"), "intro")))).toEqual([
+    expect(keysOf(standardContextMenuRows(targetOf(byId("link"), "intro"), openLink))).toEqual([
       "copy",
       "|",
       "copy-link",
       "open-link",
     ]);
-    expect(keysOf(standardContextMenuRows(targetOf(byId("pic"))))).toEqual(["copy-image"]);
+    expect(keysOf(standardContextMenuRows(targetOf(byId("pic")), openLink))).toEqual(["copy-image"]);
   });
 
   it("copies a field's own selection, and cuts it out of the value", async () => {
     const field = byId("field") as HTMLInputElement;
     field.setSelectionRange(0, 5);
-    const rows = standardContextMenuRows(targetOf(field));
+    const rows = standardContextMenuRows(targetOf(field), openLink);
     actionRowOf(rows, "copy").onSelect();
     await Promise.resolve();
     expect(clipboard.writeText).toHaveBeenCalledWith("hello");
@@ -147,7 +153,7 @@ describe("standardContextMenuRows", () => {
     });
     const field = byId("field") as HTMLInputElement;
     field.setSelectionRange(0, 5);
-    const rows = standardContextMenuRows(targetOf(field));
+    const rows = standardContextMenuRows(targetOf(field), openLink);
     actionRowOf(rows, "cut").onSelect();
     await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining("not focused")));
     expect(field.value).toBe("hello world");
@@ -158,7 +164,7 @@ describe("standardContextMenuRows", () => {
     const mail = byId("mail") as HTMLInputElement;
     const execCommand = vi.fn(() => true);
     Object.defineProperty(document, "execCommand", { value: execCommand, configurable: true });
-    const rows = standardContextMenuRows(targetOf(mail));
+    const rows = standardContextMenuRows(targetOf(mail), openLink);
     expect(keysOf(rows)).toEqual(["paste", "select-all"]);
     actionRowOf(rows, "paste").onSelect();
     await vi.waitFor(() => expect(execCommand).toHaveBeenCalledWith("insertText", false, "pasted"));
@@ -172,7 +178,7 @@ describe("standardContextMenuRows", () => {
     note.innerHTML = '<span id="word">editable</span>';
     const execCommand = vi.fn(() => true);
     Object.defineProperty(document, "execCommand", { value: execCommand, configurable: true });
-    const rows = standardContextMenuRows(targetOf(byId("word")));
+    const rows = standardContextMenuRows(targetOf(byId("word")), openLink);
     expect(keysOf(rows)).toEqual(["paste", "select-all"]);
     actionRowOf(rows, "paste").onSelect();
     await vi.waitFor(() => expect(execCommand).toHaveBeenCalledWith("insertText", false, "pasted"));
@@ -183,8 +189,17 @@ describe("standardContextMenuRows", () => {
     expect(document.activeElement).toBe(note);
   });
 
+  it("opens a link as a click on it would, handing over the link element under the target", () => {
+    const link = byId("link");
+    link.innerHTML = '<b id="inner">intro</b>';
+    const rows = standardContextMenuRows(targetOf(byId("inner")), openLink);
+    expect(actionRowOf(rows, "open-link").label).toBe("Open link");
+    actionRowOf(rows, "open-link").onSelect();
+    expect(openLink.mock.calls).toEqual([[link]]);
+  });
+
   it("copies an absolute link address", async () => {
-    const rows = standardContextMenuRows(targetOf(byId("link")));
+    const rows = standardContextMenuRows(targetOf(byId("link")), openLink);
     actionRowOf(rows, "copy-link").onSelect();
     await Promise.resolve();
     expect(clipboard.writeText).toHaveBeenCalledWith(`${window.location.origin}/docs/intro`);
@@ -229,7 +244,7 @@ describe("elementReferenceRows", () => {
 describe("elementMenuRows", () => {
   it("puts the page's own rows first, then the standard rows, then the reference rows, with dividers between", () => {
     const own: ContextMenuRow[] = [{ kind: "action", key: "rename", label: "Rename", onSelect: () => undefined }];
-    const rows = elementMenuRows(targetOf(byId("link"), "intro"), SCOPE, vi.fn(), true, own);
+    const rows = elementMenuRows(targetOf(byId("link"), "intro"), SCOPE, vi.fn(), true, own, openLink);
     expect(keysOf(rows)).toEqual([
       "rename",
       "|",
@@ -245,7 +260,7 @@ describe("elementMenuRows", () => {
   });
 
   it("draws no divider before the reference rows when nothing else applies", () => {
-    expect(keysOf(elementMenuRows(targetOf(byId("para")), SCOPE, vi.fn(), true, []))).toEqual([
+    expect(keysOf(elementMenuRows(targetOf(byId("para")), SCOPE, vi.fn(), true, [], openLink))).toEqual([
       "copy-reference",
       "explain-element",
       "modify-element",

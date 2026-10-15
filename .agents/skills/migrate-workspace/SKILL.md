@@ -29,7 +29,7 @@ produce the whole inventory and audit, and surface every question you can *up
 front*. Then dispatch a **worker** for the transfer, path rewriting,
 re-registration, and agent recreation, proxy its one gate, verify, and write the
 summary. Every mechanical step lives in
-`.agents/skills/migrate-workspace/scripts/migrate_workspace.py`; its results are
+`.agents/skills/migrate-workspace/python/migrate_workspace_skill/migrate_workspace.py`; its results are
 the raw material for your judgement, not a substitute for it. **Where the script
 reports something ambiguous or incomplete, that is a real question -- never treat
 an empty or partial result as "nothing there".**
@@ -159,7 +159,7 @@ auto-resolved.
 
 ```bash
 git log --first-parent --format='%H %s' HEAD
-git diff --name-status "$(uv run --no-sync .agents/shared/scripts/resolve_template_base.py)"
+git diff --name-status "$(uv run --no-sync .agents/shared/scripts/agents_shared/resolve_template_base.py)"
 ```
 
 **Pin the source's state.** If the source has uncommitted work, ask, then commit
@@ -174,7 +174,7 @@ anything that shifts is re-synced during verification (Step 8).
 ## 4. Detect the layout, then resolve the baseline
 
 ```bash
-uv run --no-sync .agents/skills/migrate-workspace/scripts/migrate_workspace.py detect-layout \
+uv run --no-sync .agents/skills/migrate-workspace/python/migrate_workspace_skill/migrate_workspace.py detect-layout \
     --ssh-host <host> --ssh-port <port> --ssh-user <user>
 ```
 
@@ -191,7 +191,7 @@ Then resolve what the user actually authored there, passing the `repo_root` and
 `layout` the detection reported:
 
 ```bash
-uv run --no-sync .agents/skills/migrate-workspace/scripts/migrate_workspace.py baseline-diff \
+uv run --no-sync .agents/skills/migrate-workspace/python/migrate_workspace_skill/migrate_workspace.py baseline-diff \
     --ssh-host <host> --ssh-port <port> --ssh-user <user> \
     --repo-root <repo_root> --layout <layout>
 ```
@@ -217,7 +217,7 @@ now, ask now: the user should not be interrupted repeatedly later.
 
 ```bash
 S="--ssh-host <host> --ssh-port <port> --ssh-user <user>"
-M=".agents/skills/migrate-workspace/scripts/migrate_workspace.py"
+M=".agents/skills/migrate-workspace/python/migrate_workspace_skill/migrate_workspace.py"
 uv run --no-sync $M list-agents        $S --host-dir <host_dir>
 uv run --no-sync $M classify-branches  $S --repo-root <repo_root>
 uv run --no-sync $M list-ports         $S --repo-root <repo_root>
@@ -363,19 +363,17 @@ what you tried.
 end to end** to confirm it still means what it meant:
 
 ```bash
-uv run --no-sync .agents/skills/migrate-workspace/scripts/migrate_workspace.py rewrite-refs \
+uv run --no-sync .agents/skills/migrate-workspace/python/migrate_workspace_skill/migrate_workspace.py rewrite-refs \
     --paths-from /tmp/migrated-skill-files.txt
 ```
 
 The report lists every substitution. The rewriter deliberately leaves the
 ambiguous legacy prefixes alone -- resolve those by reading.
 
-A skill from an older workspace whose `scripts/` holds Python but which has no
-`python/pyproject.toml` (PEP 723 or plain scripts) predates the packaged layout:
-convert it, and its `uv run` / `python3` calls, per
-`.agents/skills/update-self/references/python-packaging-migration.md`, until
-`uv run --no-sync .agents/shared/scripts/validate_skill.py .agents/skills/<name>`
-prints `ok`.
+A skill whose Python sits in its `scripts/` (PEP 723 or plain scripts, the layout
+of older workspaces) moves into its own `python/` project here, by "A user skill
+with scripts" in `.agents/skills/update-self/references/python-packaging-migration.md`;
+until it does, `validate_skill.py` rejects it.
 
 **Template-file edits.** Port them *semantically* into their new counterparts and
 report each port: `CLAUDE.md` additions appended to this `CLAUDE.md`, settings
@@ -400,7 +398,7 @@ except the source's primary -- dormant, under its old name, with its original
 creation label:
 
 ```bash
-uv run --no-sync .agents/skills/migrate-workspace/scripts/migrate_workspace.py recreate-agents \
+uv run --no-sync .agents/skills/migrate-workspace/python/migrate_workspace_skill/migrate_workspace.py recreate-agents \
     --agents-json data/.tasks/migrate-workspace/agents.json \
     --sessions-dir data/.tasks/migrate-workspace/sessions
 ```
@@ -437,7 +435,7 @@ an assumption:
 - **Every migrated app opens and shows the user's own data** -- not an empty
   state. Open it and look.
 - **Every migrated skill loads**:
-  `uv run --no-sync .agents/shared/scripts/validate_skill.py .agents/skills/<name>`.
+  `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py .agents/skills/<name>`.
 - **The data is present** at its new locations, including the secrets file that
   was supposed to come over.
 - **Every recreated tab renders its history.**

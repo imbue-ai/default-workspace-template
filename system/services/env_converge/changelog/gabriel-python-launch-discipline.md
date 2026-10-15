@@ -1,1 +1,1 @@
-The README documents the CLI subcommands as `uv run --no-sync env-converge ...`.
+The README and the CLI's module help document the subcommands as `uv run --no-sync env-converge ...`.

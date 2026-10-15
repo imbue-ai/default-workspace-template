@@ -46,7 +46,6 @@ from share_gateway import materials as materials_module
 from share_gateway.assignment import RelayAssignment
 from share_gateway.assignment import load_assignment
 from share_gateway.log import log as _log
-from share_gateway.caddyfile import build_label_to_name
 from share_gateway.caddyfile import read_registered_apps
 from share_gateway.caddyfile import render_caddyfile
 from share_gateway.certs import CertProvisioningError
@@ -59,6 +58,7 @@ from share_gateway.materials import discard_signing_secret
 from share_gateway.materials import load_or_create_auth_label
 from share_gateway.materials import load_or_create_signing_secret
 from share_gateway.materials import read_share_materials
+from share_gateway.materials import record_share_domain
 from share_gateway.retry_state import STATUS_HALTED
 from share_gateway.retry_state import STATUS_RETRYING
 from share_gateway.retry_state import STATUS_UP
@@ -274,7 +274,7 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
         jti_registry=SingleUseJtiRegistry(),
         pending_logins=PendingLoginRegistry(),
         auth_label=auth_label,
-        get_label_to_name=lambda: build_label_to_name(read_registered_apps(APPS_TOML_PATH)),
+        get_registered_apps=lambda: read_registered_apps(APPS_TOML_PATH),
     )
     stack.gateway_server = make_server("127.0.0.1", materials_module.GATEWAY_PORT, app, threaded=True)
     threading.Thread(target=stack.gateway_server.serve_forever, name="share-gateway-http", daemon=True).start()
@@ -439,6 +439,11 @@ def main() -> None:
         if materials is not None and materials != retried_materials:
             retry_state.reset()
             retried_materials = materials
+            # Only the shell's share links depend on the record, so the share comes up without it.
+            try:
+                record_share_domain(materials_module.SHARE_DOMAIN_FILE, materials.workspace_domain)
+            except OSError as exc:
+                _log(f"Could not record the share domain in {materials_module.SHARE_DOMAIN_FILE}: {exc}")
 
         if materials is None and stack is not None:
             _log("Share materials removed; tearing the stack down")

@@ -17,31 +17,35 @@ How each shows up during the update:
 | `system/test_python_launch_rules.py::test_no_supervisord_program_runs_under_uv_run` names a user drop-in | [A user service](#a-user-service) |
 | `test_no_plain_uv_run_in_agent_facing_files` or `test_python3_invocations_name_bare_entry_points` names a user file | [Commands in the user's docs](#commands-in-the-users-docs) |
 | `system/test_entry_point_import_cost.py` names a user skill's entry | [A user skill with scripts](#a-user-skill-with-scripts), last step |
-| `test_only_the_declared_bare_stubs_edit_sys_path` names a user file | [A user skill with scripts](#a-user-skill-with-scripts) |
+| `test_prevent_sys_path_edits` or `test_prevent_loading_modules_by_file_path` fails and lists a user file | [A user skill with scripts](#a-user-skill-with-scripts), step 2 |
 | `system/test_no_type_errors.py` reports errors in a user skill or script, or a user app's own `test_no_type_errors` fails | [Type errors in the user's skills and apps](#type-errors-in-the-users-skills-and-apps) |
 
 ## A user skill with scripts
 
 For a skill with Python in `.agents/skills/<name>/scripts/` (package name
-`<name_with_underscores>_skill`, the skill name with hyphens turned to underscores; a skill whose
-`scripts/` holds only shell scripts needs none of this):
+`<name_with_underscores>_skill`: `<name>` with hyphens turned to underscores,
+plus `_skill`; a skill whose `scripts/` holds only shell scripts needs none of this):
 
 1. Create `.agents/skills/<name>/python/pyproject.toml` in the shape
    `spec-summary.md` ("Packaging") shows: project `<name>-skill`, hatchling,
-   `packages = ["<name_with_underscores>_skill"]`. Its `dependencies` are the union of the
-   scripts' PEP 723 `# /// script` headers; delete those headers.
+   `packages = ["<name_with_underscores>_skill"]`. Its `dependencies` are the
+   union of the scripts' PEP 723 `# /// script` headers; delete those headers.
 2. Move every module into `python/<name_with_underscores>_skill/` (with an empty
    `__init__.py`), tests included. Leave a thin entry file in `scripts/` at each
    path the skill's SKILL.md, cron entries or program lines run, importing its
-   module from the package and calling it under `if __name__ == "__main__":`.
+   module from the package and calling it under `if __name__ == "__main__":`;
+   drop the moved module's own `if __name__ == "__main__":` block, since
+   `validate_skill.py` runs any module that has one by its own path.
    Change sibling imports (`import helpers`) to package imports
    (`from <name_with_underscores>_skill import helpers`), and delete any `sys.path` edit that
-   existed to make them work. A path computed from `__file__` in a moved module
-   is now one directory deeper.
+   existed to make them work. A test that loads its module from a file
+   (`importlib.util.spec_from_file_location`, `runpy.run_path`) imports it from
+   the package instead. A path computed from `__file__` in a moved module is now
+   one directory deeper.
 3. `uv lock`, then `uv sync --all-packages`. A dependency that cannot
    co-resolve with the workspace fails here; pick a compatible version (the
    skill shares the workspace's lock now), and say so in the report.
-4. `uv run --no-sync .agents/shared/scripts/validate_skill.py .agents/skills/<name>`
+4. `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py .agents/skills/<name>`
    must print `ok`, and the skill's tests must pass by path.
 5. If the import-cost test names the entry, move the heavy import into the
    function that uses it, or declare it as the test's message says.

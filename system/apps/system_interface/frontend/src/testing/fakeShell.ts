@@ -24,6 +24,8 @@ import type {
   GridCell,
   Inventory,
   Layout,
+  MessageDelivery,
+  MessageRelay,
   StoredWindowPath,
   Wallpaper,
   WindowRecord,
@@ -31,7 +33,7 @@ import type {
 import { withWindowMinimized, withWindowPlacedOnOpen, withWindowRaised, withoutPlacement } from "../geometry/stack";
 import { SHOWN_HOME } from "../model/records";
 import { withShownRecorded } from "../reducers/desktopState";
-import type { DesktopSocket, SocketHandlers } from "../store/socket";
+import type { ClientStateReport, DesktopSocket, SocketHandlers } from "../store/socket";
 import { clientRecord } from "./records";
 
 /** The frame the shell answers for a pinned window a client has never placed (the shell's own constant). */
@@ -54,8 +56,17 @@ export class FakeDesktopApi implements DesktopApi {
   /** ``<client>/<window>`` -> the client's own path and title for an independent window. */
   readonly windowPaths = new Map<string, StoredWindowPath>();
   readonly calls: string[] = [];
-  /** Every message relayed for the Imbue Studio chrome, in order. */
-  readonly relayedMessages: { type: string; clientId: string; payload: Readonly<Record<string, unknown>> }[] = [];
+  /** Every message relayed, from the Imbue Studio chrome or an app's page, with its sender, in order. */
+  readonly relayedMessages: {
+    type: string;
+    clientId: string;
+    payload: Readonly<Record<string, unknown>>;
+    sender: string;
+  }[] = [];
+  /** What the relay answers each app did with a message it took. */
+  relayDeliveries: MessageDelivery[] = [];
+  /** What every window open answers of whether the client has only pop-outs open. */
+  hasNoDesktopWindow = false;
   /** A refusal every route raises while set. */
   refusal: string | null = null;
   /** The page a POST launch path answers (as the app would); a GET launch path's page is built from its path. */
@@ -247,7 +258,7 @@ export class FakeDesktopApi implements DesktopApi {
         request.clientId,
         withWindowRaised(this.layoutOf(desktopId, request.clientId), existing.id),
       );
-      return { window: existing, isNew: false };
+      return { window: existing, isNew: false, hasNoDesktopWindow: this.hasNoDesktopWindow && !request.isMinimized };
     }
     this.windowCounter += 1;
     const window: WindowRecord = {
@@ -266,7 +277,7 @@ export class FakeDesktopApi implements DesktopApi {
       request.clientId,
       request.isMinimized ? withWindowMinimized(placed, window.id) : placed,
     );
-    return { window, isNew: true };
+    return { window, isNew: true, hasNoDesktopWindow: this.hasNoDesktopWindow && !request.isMinimized };
   }
 
   /** As the shell does: a GET launch path's page is its path with the presets and params as the query, a POST one's
@@ -451,16 +462,18 @@ export class FakeDesktopApi implements DesktopApi {
     type: string,
     clientId: string,
     payload: Readonly<Record<string, unknown>>,
-  ): Promise<void> {
-    this.calls.push(`relayEmbedderMessage:${type}:${clientId}`);
+    sender: string,
+  ): Promise<MessageRelay> {
+    this.calls.push(`relayEmbedderMessage:${type}:${clientId}:${sender}`);
     this.refuse();
-    this.relayedMessages.push({ type, clientId, payload });
+    this.relayedMessages.push({ type, clientId, payload, sender });
+    return { deliveries: this.relayDeliveries };
   }
 }
 
 export class FakeDesktopSocket implements DesktopSocket {
   handlers: SocketHandlers | null = null;
-  readonly reports: { activeDesktop: string; previousDesktop: string }[] = [];
+  readonly reports: ClientStateReport[] = [];
   /** How many times the store registered the socket as a pop-out's. */
   popOutReports = 0;
 
@@ -468,8 +481,8 @@ export class FakeDesktopSocket implements DesktopSocket {
     this.handlers = handlers;
   }
 
-  reportClientState(activeDesktop: string, previousDesktop: string): void {
-    this.reports.push({ activeDesktop, previousDesktop });
+  reportClientState(report: ClientStateReport): void {
+    this.reports.push(report);
   }
 
   reportPopOut(): void {

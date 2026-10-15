@@ -21,15 +21,19 @@ both and leaves about 40 ms of uv over running the entry point directly.
 
 The venv stays current without those per-call syncs:
 
-- the workspace syncs `--frozen` at boot, and each claude session starts with
-  a `--frozen` sync (`system/scripts/session_start_sync.sh`), which also
-  regenerates a drifted lock once and says so; other harnesses have no
-  session-start hook, so on them run `uv sync --all-packages --frozen` yourself
-  when a `pyproject.toml` or `uv.lock` changed since the workspace booted;
+- the workspace syncs `--frozen` from the committed lock at boot, and a
+  worker's checkout at provisioning;
+- a claude or codex session starts with the same sync
+  (`system/scripts/session_start_sync.sh`), which never rewrites `uv.lock`: if
+  the lock has drifted from `pyproject.toml` it says so once and syncs from
+  the lock as committed. Other harnesses have no session-start hook, so on
+  them run `uv sync --all-packages --frozen` yourself when a `pyproject.toml`
+  or `uv.lock` changed since the workspace booted;
+- after a merge or pull that changes a `pyproject.toml` or `uv.lock` (a
+  worker's branch that added a skill or a dependency, say), run
+  `uv sync --all-packages --frozen` before the next one-off;
 - after you change a dependency yourself, run `uv lock` and then
   `uv sync --all-packages`, and commit the new `uv.lock` with the change.
-- after you merge a branch that changed a `pyproject.toml` or `uv.lock`
-  (a worker's new skill or dependency), run `uv sync --all-packages --frozen`.
 
 `--no-sync` is a no-op for a script carrying inline (PEP 723) metadata: uv
 always runs those in their own environment.
@@ -46,12 +50,18 @@ import.
 
 ## The two tiers, and how scripts are laid out
 
-Every Python script here is a thin entry file at a fixed path that imports a
-package. A skill keeps its entry files (and any shell scripts) in `scripts/`
-and its code in its own uv project, `python/` (`python/pyproject.toml`, package
-`python/<skill_name>_skill/`). `.agents/shared/scripts` (package
-`agents_shared`) and `system/scripts` are a project each, with the packages
-beside the entry files. The code runs under one of two interpreters:
+Every Python script here is a module of a package. A skill keeps its code in
+its own uv project, `python/` (`python/pyproject.toml`, package
+`python/<skill_name>_skill/`), and its entry files (and any shell scripts) in
+`scripts/`. `.agents/shared/scripts` (package `agents_shared`) and
+`system/scripts` are a project each, with the packages beside the entry files.
+A built-in script that only this release calls has no entry file: its module
+has its own `if __name__ == "__main__":` block and runs by its path
+(`uv run --no-sync system/scripts/workspace_scripts/smoketest_app.py`). Such a
+run puts the module's own directory first on `sys.path`, so a package with one
+never holds a module named like a standard-library module. An entry file is
+kept where a script runs with no venv or something outside this release calls
+it by a fixed path. The code runs under one of two interpreters:
 
 - **Venv tier** (the default): runs from the root venv, through
   `uv run --no-sync <entry>`. It may use any dependency its `pyproject.toml`

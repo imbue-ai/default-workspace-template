@@ -151,19 +151,11 @@ window.addEventListener("DOMContentLoaded", async () => {
 });
 
 async function ready() {
-  // minds patch: location beacon. Post the path being viewed and the folder's name ONE hop
-  // up -- to the workspace shell embedding this frame, never further out -- on each page
+  // minds patch: location beacon. Report the path being viewed and the folder's name to the
+  // workspace shell embedding this frame, through the app contract (shell.js), on each page
   // load, so the shell can reopen this file viewer at the same place and title its window
-  // (docs/system/blueprint/desktop-interface/contracts.md section 7). The shell validates the
-  // sender's origin and resolves which frame posted; the payload carries nothing but the path
-  // and the title. The wildcard target is fine for the same reason: both are already visible
-  // to any embedder.
-  if (window.parent !== window) {
-    window.parent.postMessage(
-      { type: "shell:location", path: location.pathname + location.search, title: pageTitle(DATA.href) },
-      "*",
-    );
-  }
+  // (docs/system/blueprint/desktop-interface/contracts.md section 7).
+  window.mindsShell?.location(location.pathname + location.search, pageTitle(DATA.href));
 
   $pathsTable = document.querySelector(".paths-table");
   $pathsTableHead = document.querySelector(".paths-table thead");
@@ -552,24 +544,21 @@ function setupHiddenFilesToggle() {
   syncToggle();
 }
 
-// minds patch: files open in workspace windows. Framed by the workspace shell, a click on a
-// file's name or its View button asks the shell for a file viewer window on the file's view
-// page, and the Edit button for one on its edit page, raising a window already on that page
-// (``shell:open``, desktop-interface contracts.md section 7) rather than letting
-// ``target="_blank"`` open a bare browser window. A modified or middle click is taken the same
-// way. Unframed, the anchors keep dufs's own behaviour.
+// minds patch: files open in workspace windows. Once the workspace shell has handed the page
+// its handshake, a click on a file's name or its View button asks the shell for a file viewer
+// window on the file's view page, and the Edit button for one on its edit page, raising a window
+// already on that page (the app contract's ``openPath``, desktop-interface contracts.md section 7)
+// rather than letting ``target="_blank"`` open a bare browser window. A modified or middle click
+// is taken the same way. With no shell above the page, the anchors keep dufs's own behaviour.
 function setupWorkspaceWindowLinks() {
-  if (window.parent === window) {
-    return;
-  }
   const openInWorkspaceWindow = (event) => {
+    const shell = window.mindsShell;
     const $anchor = event.target.closest("a[data-minds-page]");
-    if ($anchor === null) {
+    if (shell === undefined || !shell.hasShell() || $anchor === null) {
       return;
     }
     event.preventDefault();
-    const path = `${new URL($anchor.href).pathname}?${$anchor.dataset.mindsPage}`;
-    window.parent.postMessage({ type: "shell:open", path, ifPresent: "focus" }, "*");
+    shell.openPath(`${new URL($anchor.href).pathname}?${$anchor.dataset.mindsPage}`, "focus");
   };
   $pathsTableBody.addEventListener("click", openInWorkspaceWindow);
   $pathsTableBody.addEventListener("auxclick", (event) => {

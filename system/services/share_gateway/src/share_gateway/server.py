@@ -18,6 +18,7 @@ import threading
 import time
 from collections.abc import Callable
 from collections.abc import Mapping
+from collections.abc import Sequence
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -26,6 +27,9 @@ from flask import Response
 from flask import request
 from werkzeug.datastructures import Headers
 
+from share_gateway.caddyfile import RegisteredApp
+from share_gateway.caddyfile import build_grantable_service_names
+from share_gateway.caddyfile import build_label_to_name
 from share_gateway.grants import Grants
 from share_gateway.grants import GrantsError
 from share_gateway.grants import load_grants
@@ -160,10 +164,10 @@ def build_gateway_app(
     jti_registry: SingleUseJtiRegistry,
     pending_logins: PendingLoginRegistry,
     auth_label: str,
-    # Reads the current label -> service-name map (from apps.toml) fresh on each
-    # call, so a service registered while shared is recognized without
-    # rebuilding the app. Grants are keyed by service name, not label.
-    get_label_to_name: Callable[[], Mapping[str, str]],
+    # Reads the registered services (from apps.toml) fresh on each call, so a
+    # service registered while shared is recognized without rebuilding the app.
+    # Grants are keyed by service name, not label.
+    get_registered_apps: Callable[[], Sequence[RegisteredApp]],
 ) -> Flask:
     app = Flask(__name__)
     workspace_domain = materials.workspace_domain
@@ -222,7 +226,7 @@ def build_gateway_app(
             # without a session -- the workspace host id is a capability, but
             # backend/service state is not leaked to an unauthenticated probe.
             return _apply_health_cors(Response(status=204))
-        label_to_name = get_label_to_name()
+        label_to_name = build_label_to_name(get_registered_apps())
         is_backend_registered = _SYSTEM_INTERFACE_SERVICE_NAME in label_to_name.values()
         detail = {
             "gateway": "ok",
@@ -245,7 +249,8 @@ def build_gateway_app(
         host = request.headers.get("X-Forwarded-Host", "")
         method = request.headers.get("X-Forwarded-Method", "GET")
         forwarded_uri = request.headers.get("X-Forwarded-Uri", "/")
-        label_to_name = get_label_to_name()
+        registered_apps = get_registered_apps()
+        label_to_name = build_label_to_name(registered_apps)
         is_ours, service_name = service_for_host(host, workspace_domain, label_to_name, auth_label)
         if not is_ours:
             _log_denied("hostname is not one of this workspace's origins", host)
@@ -295,8 +300,10 @@ def build_gateway_app(
             except GrantsError as exc:
                 _log_denied(f"grants file is missing or malformed (failing closed): {exc}", host)
                 return _misconfigured()
-            if not grants.allows(identity.user_id, identity.email, service_name):
-                _log_denied("session identity is not granted this service", host)
+            if not grants.allows(
+                identity.user_id, identity.email, service_name, build_grantable_service_names(registered_apps)
+            ):
+                _log_denied("session identity has no grant admitting it to this service", host)
                 return _forbidden()
             _upgrade_invite(grants, identity)
 
@@ -341,8 +348,12 @@ def build_gateway_app(
         # The owner always has access regardless of the grants file (the broker
         # vouched for ownership by user id, so an owner never needs an explicit
         # grant to reach their own workspace). Non-owners still need a grant.
-        if not handoff.is_owner and not grants.allows_any(handoff.user_id, handoff.email):
-            _log_denied(f"signed-in account {handoff.user_id} has no grant on this workspace", auth_host)
+        if not handoff.is_owner and not grants.allows_any(
+            handoff.user_id, handoff.email, build_grantable_service_names(get_registered_apps())
+        ):
+            _log_denied(
+                f"signed-in account {handoff.user_id} has no grant admitting it anywhere on this workspace", auth_host
+            )
             return _forbidden()
         _upgrade_invite(grants, handoff)
 
@@ -373,7 +384,7 @@ def build_gateway_app(
         # is not registered and there is nowhere sensible to land.
         if _is_workspace_url(next_url):
             return next_url
-        label_to_name = get_label_to_name()
+        label_to_name = build_label_to_name(get_registered_apps())
         shell_label = next((label for label, name in label_to_name.items() if name == _SHELL_SERVICE_NAME), None)
         return f"https://{shell_label}.{workspace_domain}/" if shell_label else auth_origin
 
@@ -396,7 +407,9 @@ def build_gateway_app(
         if not url.startswith("https://"):
             return False
         next_host = url.removeprefix("https://").split("/", 1)[0]
-        is_ours, _service = service_for_host(next_host, workspace_domain, get_label_to_name(), auth_label)
+        is_ours, _service = service_for_host(
+            next_host, workspace_domain, build_label_to_name(get_registered_apps()), auth_label
+        )
         return is_ours
 
     def _upgrade_invite(grants: Grants, identity: RequesterIdentity) -> None:

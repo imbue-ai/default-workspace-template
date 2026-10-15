@@ -7,16 +7,16 @@ so in-container verification targets the local port directly.
 
 ## Quick verification with smoketest_app.py (Recommended)
 
-Use `system/scripts/smoketest_app.py` for instant verification (<0.1s for HTTP/marker checks,
+Use `system/scripts/workspace_scripts/smoketest_app.py` for instant verification (<0.1s for HTTP/marker checks,
 ~1.3s for browser rendering & screenshots). It resolves the port automatically from
 the app name:
 
 ```bash
 # Fast HTTP readiness & content marker check (<0.1s):
-uv run --no-sync system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>"
+uv run --no-sync system/scripts/workspace_scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>"
 
 # Full headless browser render + visual screenshot (~1.3s):
-uv run --no-sync system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>" --screenshot /tmp/app_mock.png
+uv run --no-sync system/scripts/workspace_scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>" --screenshot /tmp/app_mock.png
 ```
 
 

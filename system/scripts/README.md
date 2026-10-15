@@ -1,11 +1,11 @@
 # system/scripts/
 
-Provisioning and utility scripts. The Python ones are entry stubs at the paths
-below; their code lives in one of two packages beside them (one uv project,
-`pyproject.toml`): `workspace_bare_scripts/`, which the system `python3` runs
-with no venv and which imports only the standard library (and the stdlib-only
-libraries its hook stubs put on `sys.path`), and `workspace_scripts/`,
-which runs from the root venv (`uv run --no-sync`). See
+Provisioning and utility scripts. Their Python lives in one of two packages
+here (one uv project, `pyproject.toml`): `workspace_bare_scripts/`, which the
+system `python3` runs with no venv and which imports only the standard library
+(and the stdlib-only libraries its hook stubs put on `sys.path`), through entry
+stubs at the paths below, and `workspace_scripts/`, whose modules run by their
+own path from the root venv (`uv run --no-sync`). See
 `.agents/shared/references/running-python.md`.
 
 - Image build / provisioning: `setup_system.sh`, `install_dependencies.sh`,
@@ -20,10 +20,16 @@ which runs from the root venv (`uv run --no-sync`). See
   `.pi/extensions/policy_guards.ts` and agy's `agy_shim/bash` feed the same
   scripts the payload they read on stdin. See `tool-call-policies.md` for what
   each one enforces.
-- Plugin provisioning: `claude_update_plugin.sh` installs project-scoped Claude
-  plugins; `codex_update_plugin.sh` installs native code-guardian into each
-  mngr Codex agent's isolated home, after its config is written and before
-  launch. Requires code-guardian 0.6.0 or newer on the marketplace's `main`.
+- Plugin provisioning: `install_agent_plugins.sh` (run by `setup_system.sh`)
+  puts the agent plugins under `/opt/agent-plugins/` as local marketplaces, at
+  commits it pins: code-guardian, and Anthropic's `frontend-design` under a
+  marketplace of our own (`claude-code-plugins-pinned`, since Claude reserves
+  the official name for GitHub sources). `.claude/settings.json` declares them,
+  and Claude loads them in place, so no session or account installs anything
+  and nothing is fetched at runtime; a pin bump reaches running workspaces when
+  update-self re-runs `setup_system.sh`. `codex_update_plugin.sh` installs
+  code-guardian into each mngr Codex agent's isolated home from the same local
+  copy, after its config is written and before launch.
   Re-provisioning restores plugin enablement after mngr rewrites the config.
   Install failures warn without blocking launch; use `--strict` for verification.
   The marketplace source and plugin enablement are declared in the Codex agent
@@ -53,9 +59,9 @@ which runs from the root venv (`uv run --no-sync`). See
   conversation the Imbue Studio app had before the workspace existed; run through
   `mngr exec` by the Imbue Studio app), `require_create_account.py` (the
   create gate), `refresh_workspace_view.py` (rebuild the user's view after the
-  interface changes), `migrate_claude_auth.py` (one-time auth migration).
+  interface changes).
 - Boot recovery: `minds_start_services_agent.sh`, `minds_lima_autostart.sh`.
-- The changelog gate: `check_changelog_entries.py`.
+- The changelog gate: `workspace_scripts/check_changelog_entries.py`.
 
 Cohesive machinery lives in packages instead: the recurring-job/automation
 scripts in `system/libs/automations/`, the Caretaker check in

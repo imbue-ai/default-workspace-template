@@ -24,8 +24,8 @@ solely to support one app lives in that app's folder under
   tests in its package, and exercise its entry point (`uv run --no-sync <name>`) with a
   bounded invocation where feasible. Never start supervisord, and never
   `supervisorctl` against the served tree from a worktree.
-- While you iterate, run the package's tests by path, never a bare root `uv
-  run pytest`:
+- While you iterate, run the package's tests by path, never a bare root
+  `uv run --no-sync pytest`:
 
   ```bash
   uv run --no-sync pytest system/services/<package>       # standalone

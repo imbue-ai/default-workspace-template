@@ -125,6 +125,9 @@ class InventoryApp(FrozenModel):
     pin: Pin | None = Field(description="The app's pinned taskbar entry")
     message_handlers: tuple[MessageHandler, ...] = Field(description="The message types the app handles")
     is_running: bool = Field(description="Derived from supervisord or a TCP probe, never stored")
+    share_url: str | None = Field(
+        description="The app's address on the domain the workspace was last shared under; None when it never was"
+    )
 
 
 class InventoryDocument(FrozenModel):

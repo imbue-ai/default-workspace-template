@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { deriveAppOrigin, workspaceHostCoordinate } from "./origin";
+import { workspaceHostCoordinate } from "./app_contract";
+import { deriveAppOrigin } from "./origin";
 
 describe("deriveAppOrigin", () => {
   it("nests the app's origin label as a hostname label on a local workspace host", () => {

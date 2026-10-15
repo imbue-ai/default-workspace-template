@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Previews an app's worktree beside the live one"
 requires-python = ">=3.12"
 dependencies = [
+    "agents-shared",
     "app-manifest",
     "workspace-scripts",
 ]

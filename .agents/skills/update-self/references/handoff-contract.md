@@ -10,7 +10,7 @@ target release's own copy (or the local one, when the ref predates the skill).
 
 - **Steps 1-2 always run from the local copy.** They are what decide `$REF`,
   so by construction they cannot come from the target. A future version's
-  Steps 1-2 must stay "capture a backup, the lease and clean-tree checks, then
+  Steps 1-2 must stay "check the backup, the lease and clean-tree checks, then
   resolve a ref into `$REF`".
 - **The target's flow is entered at Step 3**, and everything from there on --
   the worker dispatch, the report audit, and the apply (Step 5b runs the

@@ -23,12 +23,12 @@
 > * The Python floor is 3.12 everywhere: `requires-python >=3.12` for the root and the 16 projects at `>=3.11`; the bare ty check targets 3.12; the 3.12 install workaround in `setup_system.sh`/`build_workspace.sh` is removed once verified by a fresh Lima build; pre-2026-09-14 local Lima workspaces (Debian 12, system Python 3.11) are not supported for updates. This all lands in PR 3, together with the guard below.
 > * The bare `update_self.py` stub checks the interpreter version before importing its package. On anything older than 3.12 it exits with a distinct code and a message saying the update is impossible on this workspace and pointing to `migrate-workspace`. Update-self's Step 3a (the first staged-copy run) tells the lead to stop on that exit, report the update as impossible, and offer `migrate-workspace`. A test runs the stub with a faked older version and asserts the exit code and message.
 > * Launch principles (from 23f0b3f3's uv overhead analysis): long-running processes run directly without uv; one-offs may use `uv run --no-sync`, with imports optimized so startup overhead is small. On gVisor, `--no-sync` leaves ~40 ms of uv while a pydantic CLI's imports cost ~450-560 ms, so startup imports are the main lever. #759 (merged 2026-10-08) made the `workspace-layout` CLI a stdlib-only thin client.
-> * Three stacked PRs on #831: (1) launch discipline (long-running processes run directly; agent-facing plain `uv run` becomes `--no-sync`, excluding skill/system script invocations), (2) scripts become packages with their invocations on `uv run --no-sync`, (3) type checking.
+> * Three stacked PRs on main: (1) launch discipline (long-running processes run directly; agent-facing plain `uv run` becomes `--no-sync`, excluding skill/system script invocations), (2) scripts become packages with their invocations on `uv run --no-sync`, (3) type checking.
 > * The PR split exists only for testing and review: all three are expected to merge together or close together, so user workspaces migrate once and the one migration reference covers everything.
 > * A paired mngr PR on `gabriel/skill-scripts-as-packages` (matching PR 2's template branch name) converts minds_evals' and minds_admin's `uv run` invocations of template scripts to `--no-sync` and runs their tests against PR 2's branch.
 > * Every long-running program line uses `bash -c "uv sync --all-packages --frozen && exec .venv/bin/<name>"`: host-backup, share-gateway, env-converge (unchanged), plus the `bootstrap` window, github-sync, and the user-service guide and its example.
 > * The `bootstrap` window uses `;` instead of `&&`: a failed boot-time sync (e.g. a skill `scripts/` dir with no `pyproject.toml`, which fails every uv command in the workspace) still starts supervisord on the existing venv, so the workspace stays reachable for an agent to repair it.
-> * The `SessionStart` sync checks the lock. If it's stale, it relocks and prints a message that the lock was regenerated and should go into the agent's next commit, phrased so the agent doesn't act on it before the user's first message. Then it syncs `--frozen`.
+> * The `SessionStart` sync (claude and codex) checks the lock. If it's stale, it never relocks (in the shared main tree a drift is usually another agent's dependency change in progress); it prints one note for whoever is changing dependencies, phrased so the agent doesn't act on it before the user's first message. Then it syncs `--frozen`.
 > * A root test fails on any supervisord program line that runs under `uv run`, so the update worker fixes existing user services the same way it migrates user skills.
 > * On the scratch workspace after PR 1: `ps` shows no `uv` process parenting supervisord or any program, every program reaches RUNNING, and the PR records per-process memory before/after.
 > * All agent-facing plain `uv run` (dev tools included) becomes `--no-sync`. A root check scans tracked `.md`, `.toml`, `.sh` and `.conf` files for plain `uv run`, skipping changelog dirs, consolidated changelogs and test fixtures; any remaining deliberate use is listed with file and context in the check.
@@ -71,7 +71,7 @@
   - One root ty project, checked against the root venv.
   - One bare-tier check against an environment with no third-party packages, so ty's `unresolved-import` *is* the stdlib-only rule.
   - Floor raised to Python 3.12 everywhere.
-- **Delivery.** Three stacked template PRs on #831 plus a paired mngr PR. #759 and #814 have merged, so the stack sits on #831 alone, and PR 1's base becomes `main` once #831 merges. The split is for review only; they merge together, so user workspaces migrate once.
+- **Delivery.** Three stacked template PRs on main plus a paired mngr PR. #759, #814 and #831 have merged, so PR 1's base is `main`. The split is for review only; they merge together, so user workspaces migrate once.
 
 ## Expected behavior
 
@@ -84,9 +84,9 @@
   - a bare script also runs under uv (stdlib only), at about 40 ms more;
   - `python3` on a venv-tier script fails loudly at its first third-party import;
   - the contexts where bareness matters (hooks, pre-sync build steps, program lines, minds/CI/owner-exec calls, update-self's own flow) are wired in config, not typed by agents.
-- At session start:
-  - If `uv.lock` has drifted from `pyproject.toml`, it is regenerated, and the agent is told (as context, not an instruction to act now) to include it in its next commit.
-  - The venv is then synced `--frozen`.
+- At session start (claude and codex):
+  - If `uv.lock` has drifted from `pyproject.toml`, it is left as it is, and the agent is told once (as context, not an instruction to act now) that whoever is changing dependencies relocks.
+  - The venv is then synced `--frozen` from the lock.
   - With no drift, nothing visible happens.
 - Skill-authoring docs say:
   - a skill with scripts gets `scripts/pyproject.toml`;
@@ -101,7 +101,7 @@
 
 ### For long-running processes
 - No `uv` process stays resident as a parent of supervisord or any program.
-  - `bootstrap`, github-sync, and the user-service guide use `bash -c "uv sync --all-packages --frozen && exec .venv/bin/<name>"`, like host-backup, share-gateway and env-converge already do.
+  - github-sync and the user-service guide use `bash -c "uv sync --all-packages --frozen && exec .venv/bin/<name>"`, like host-backup, share-gateway and env-converge already do; the `bootstrap` window uses the same form with `;`.
 - A user service whose program line uses `uv run` fails a root test, so the update worker rewrites it during the merge.
 
 ### For guards and external callers
@@ -124,9 +124,9 @@
 
 ## Implementation plan
 
-### PR 1 -- `gabriel/python-launch-discipline` (template; base `gabriel/ty-version-bump`)
+### PR 1 -- `gabriel/python-launch-discipline` (template; base `main`)
 
-- **`.mngr/settings.toml`**: `extra_window = ["bootstrap='uv run bootstrap'"]` becomes `bash -c "uv sync --all-packages --frozen; exec .venv/bin/bootstrap"` (`;`, so a failed sync still boots). mngr's `NamedCommand.from_string` strips the outer single quotes and runs the rest as the window command.
+- **`.mngr/settings.toml`**: `extra_window = ["bootstrap='uv run bootstrap'"]` becomes `bash -c "uv sync --all-packages --frozen; exec .venv/bin/bootstrap"` (`;`, so a failed sync still boots). mngr's `NamedCommand.from_string` strips the outer single quotes and runs the rest as the window command. `uv run` had also put `.venv/bin` first on `PATH` (and set `VIRTUAL_ENV`) for everything supervisord runs, which program lines naming an entry point bare rely on, so `bootstrap` execs supervisord with that environment itself.
 - **`.agents/skills/github-sync/SKILL.md`** (program line at ~174): `uv run github-sync run` becomes the same exec form.
 - **`.agents/shared/references/service-processes.md`**:
   - The example program line (line 22) becomes the exec form.
@@ -135,10 +135,10 @@
 - **`SessionStart` sync**:
   - New `system/scripts/session_start_sync.sh`:
     - `uv lock --check`;
-    - on failure, `uv lock` and print one line: "`uv.lock` was out of date with `pyproject.toml` and has been regenerated; include it in your next commit.";
+    - on failure, print one line saying the lock is stale and the environment was synced from the committed lock, for whoever is changing dependencies to relock; never `uv lock` here, since in the shared main tree a drift is usually another agent's change in progress;
     - then `uv sync --all-packages --frozen`.
-  - `.claude/settings.json` `SessionStart` calls it instead of `uv sync --all-packages`.
-  - `.codex/hooks.json` has no `SessionStart` sync, so nothing changes there.
+  - `.claude/settings.json` and `.codex/hooks.json` `SessionStart` call it (claude instead of `uv sync --all-packages`).
+  - Worker provisioning's `uv sync --all-packages` becomes `--frozen` too.
 - **`uv run` → `uv run --no-sync`**, everywhere agents call a command, except skill and system script calls (PR 2 rewrites those):
   - `AGENTS.md`, `.mngr/settings.toml` prompts, `SKILL.md`s and references, `.sh` scripts.
   - Commands: `pytest`, `python`, `mngr`, `app-manifest`, `env-converge`, `host-backup-*`, `tk`, `ruff`, `ty`, `agentic-browser-fleet`, etc.
@@ -146,12 +146,14 @@
 - **Guards** (`system/scripts/agent_secrets_guard_check.py` `_allowed_script`):
   - After `uv run`, skip any of `{"--no-sync", "--frozen", "--quiet"}`, then continue as today.
   - Any other option leaves the call unrecognised, so it is blocked.
-  - Check `agent_latchkey_request_check.py`, which matches by basename (`word.rsplit("/", 1)[-1]`), and the chat app's `harnesses/tool_output.py` regex, which also matches by basename. Add tests for the `--no-sync` forms; no code change is expected there.
+  - The skip list lives in one shared helper, `tk_command_parsing.uv_run.unwrap_uv_run` (stdlib-only, like `parser`). The secrets guard and the chat app's tk-lifecycle detection (`harnesses/tool_output.py`, `is_tk_lifecycle_anywhere`) both call it, so they agree on which `uv run` forms they see through.
+  - Check `agent_latchkey_request_check.py`, which matches by basename (`word.rsplit("/", 1)[-1]`), and the chat app's secret-request regex in `harnesses/tool_output.py`, which also matches by basename. Add tests for the `--no-sync` forms; no code change is expected in either.
 - **New root test `system/test_python_launch_rules.py`**:
-  - `test_no_supervisord_program_runs_under_uv_run`: parses `system/supervisord.conf` and `system/supervisord.conf.d/*.conf` (including user-added files) and fails on any `command=` that executes `uv run`.
+  - `test_no_supervisord_program_runs_under_uv_run`: parses `system/supervisord.conf` and `system/supervisord.conf.d/*.conf` (including user-added files) with `configparser` and fails on any `command` that executes `uv run`.
+  - `test_no_mngr_window_runs_under_uv_run`: the same check over every `extra_window` entry in `.mngr/settings.toml`.
   - `test_no_plain_uv_run_in_agent_facing_files`:
-    - scans tracked `.md`/`.toml`/`.sh`/`.conf` files for `uv run` not followed by `--no-sync`;
-    - skips `*/changelog/*`, `CHANGELOG.md`, `UNABRIDGED_CHANGELOG.md` and test fixtures;
+    - scans tracked `.md`/`.toml`/`.sh`/`.conf` files, and the string and argv literals of non-test `.py` files, for `uv run` not followed by `--no-sync`;
+    - skips `*/changelog/*`, `CHANGELOG.md`, `UNABRIDGED_CHANGELOG.md`, `vendor/`, test fixtures, and the dated plans and specs under `blueprint/` and `specs/` (but not the living `contracts.md` files there);
     - a small explicit allowlist of (file, context) pairs for deliberate syncs.
 - **New `.agents/shared/references/running-python.md`**:
   - long-running vs one-off;
@@ -300,14 +302,14 @@
   - `uv run --no-sync .../request_secret.py --file ...` and `uv run --frozen --quiet .../with_secrets.py ... -- cmd` are recognised;
   - `uv run --env-file x .../with_secrets.py` and `uv run --with pkg ...` are not, so they're blocked;
   - matching cases in `agent_latchkey_request_check_test.py` and the chat app's tool-output tests.
-- **Program-line rule**: the test fails on a planted `command=... uv run x` conf in a tmp copy and passes on the real tree; it also covers the `oom_tag_service.py ... uv run` wrapping form.
+- **Program-line rule**: the test fails on a planted `command=... uv run x` conf in a tmp copy and passes on the real tree; it also covers the `oom_tag_service.py ... uv run` wrapping form, a spaced `command = ...` line, and a comment that only mentions `uv run`. A planted settings file shows the same for `extra_window` entries at any depth.
 - **Plain-`uv run` rule**:
-  - the test catches a planted plain `uv run` in a `.md`;
-  - it ignores changelogs and fixtures;
+  - the test catches a planted plain `uv run` in a `.md`, and in a Python string and argv, while skipping a `("uv", "run")` comparison and an argv whose program is a variable;
+  - it ignores changelogs, fixtures, tests and dated plans, and reaches `contracts.md`;
   - every allowlisted entry still exists (no stale exceptions).
 - **`session_start_sync.sh`** (in a tmp copy of a minimal uv project):
   - in-sync lock → no output, exit 0;
-  - drifted lock → the lock is regenerated, the one-line message printed, the sync succeeds.
+  - drifted lock → the lock is left as it was, the one-line note printed, the sync succeeds.
 - **Import-cost tests**:
   - prove the probe can fail: a planted `import pydantic` at an entry's top level fails the test;
   - a declared heavy import passes;
@@ -345,6 +347,7 @@
 - Decided during PR 2 review (2026-10-09), superseding the bullets above that put a skill's uv project in `scripts/`:
   - A skill's uv project lives in `.agents/skills/<name>/python/` (pyproject + `<name>_skill/`), globbed as `.agents/skills/*/python`; `scripts/` keeps the entry files and shell scripts. A `scripts/` glob let any third-party skill's plain `scripts/` break every uv command in the workspace. Venv-tier stubs import through the editable install; update-self's and publish-template's no-venv stubs put `../python` on `sys.path`.
   - `refresh_workspace_view` and `check_changelog_entries` stay venv tier: update-self runs the refresh through `uv run --no-sync` (every caller has just synced the venv), and CI's changelog job syncs `workspace-scripts` first.
+- Decided 2026-10-13: the stub path-edit check is a `snapshot(N)` count like the other ratchets, not a declared list, and a second count covers loading a module from a file path (`spec_from_file_location`, `SourceFileLoader`, `runpy.run_path`). Both scan tests too. The test-side path loaders that could import instead were converted first: the chat tests (with `workspace-scripts` as a chat dev dependency), the supervisord readers, and the bug-report collector (now a `Collector` object). The one-time `migrate_claude_auth` script, the only reason `workspace-scripts` depended on chat, was deleted, so that dev dependency forms no cycle. The counts skip skills without a `python/` project, so a third-party skill never fails them.
 - Resolved in PR 2:
   - `system/scripts` packages are `workspace_bare_scripts` and `workspace_scripts`, in one hatchling project (`packages = [...]`). The editable install's `.pth` adds the whole `scripts/` dir to `sys.path`, which exposes both packages (and, as a side effect, the entry stubs as top-level module names).
   - The entry-point table is `[tool.workspace-template.entry-points."<entry>.py"]` with `heavy-imports = [...]`.
@@ -352,5 +355,4 @@
   - With the project in `scripts/`, a stub run through the `.claude/skills` symlink was not recognised as a workspace member; with it in `python/`, uv walks up to the workspace root and the symlinked path works.
 - **Expensive-stdlib list for the bare tier**: start with `asyncio`, then measure on the scratch workspace before fixing the list.
 - **Does update-self's apply health probe cover every program?** If a bare wrapper broke after an apply, would the probes catch it? Relevant only to the safety margin. The 3.12 guard makes it moot for the version case.
-- **#831 is still open**: merge its tip into the stack as it moves. #759 (thin `workspace-layout` client and its `--no-sync` changes) and #814 are already merged, and PR 1 inherits them through #831's main merge; don't redo their conversions.
 - **Follow-ups outside this stack**: MIND-485 (guard dispatcher and the rewrite hook's `Bash` matcher, on main after this merges); MIND-486 (migration-doc system that reshapes the migration reference).

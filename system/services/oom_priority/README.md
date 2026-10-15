@@ -31,9 +31,9 @@ runs with the memory cap the template's `[providers.docker]` block sets
 gVisor (runsc, the default on Linux) the container's `/proc/meminfo` reports
 that cap as MemTotal, so earlyoom's thresholds and badness scores are relative
 to the workspace's own limit and shedding starts before the cgroup OOM killer
-does. Under runc (the macOS fallback) `/proc/meminfo` still reports the whole
-machine, so earlyoom only reacts once the machine itself runs short, and a
-workspace at its cgroup limit is shed by the kernel instead. A resize while the
+does. Under runc (the macOS fallback, and the create form's default runtime)
+`/proc/meminfo` reports the whole machine, so the workspace publishes its own
+cgroup's limit and headroom for earlyoom instead (see below). A resize while the
 container runs changes the cgroup cap at once but a gVisor container's reported
 MemTotal only after a restart. A lima workspace runs directly in its VM, so
 MemTotal is the VM's own RAM (the lima create template's `--memory`,
@@ -46,8 +46,21 @@ threshold can arrive only after the cgroup has killed the whole sandbox. A
 gen-2 slice VM therefore publishes the cgroup's own limit and headroom into the
 workspace's volume, and earlyoom runs with `--host-meminfo
 /mngr-vol/.host-meminfo` (`system/supervisord.conf.d/earlyoom.conf`), acting on
-whichever of the two shows less headroom. Where nothing is published (local
-docker, lima), earlyoom logs that once and uses `/proc/meminfo` alone.
+whichever of the two shows less headroom. A local docker workspace under runc
+publishes the same file for itself: the `publish_cgroup_meminfo` program
+(`bin/publish_cgroup_meminfo.py`, over `cgroup_meminfo`) reads the container's
+own cgroup v2 controller at `/sys/fs/cgroup` four times a second and writes the
+limit as MemTotal and the limit minus the usage plus the reclaimable page cache
+and slab as MemAvailable, with the same formula as the gen-2 VM. It removes the
+file while the container is uncapped (and keeps checking, since `mngr docker
+resize` can cap a running container), and touches nothing where it has no
+answer: no cgroup v2 memory controller (lima's root cgroup, gVisor's own
+cgroupfs) or a counter it cannot read, so the gen-2 VM's file is never
+disturbed and earlyoom otherwise logs once and uses `/proc/meminfo` alone.
+Under gVisor it exits at once, since the VM publishes the file. earlyoom's swap gate is
+held open (`-s 100,100`): a workspace container can never swap, but under runc
+it sees the host's swap as its own, which would otherwise keep earlyoom from
+ever acting on a laptop with swap.
 
 - **`bands`** -- the `oom_score_adj` value per band and the helper that writes
   it. From least- to most-expendable: never-kill infrastructure (0) < built-in
@@ -68,6 +81,9 @@ docker, lima), earlyoom logs that once and uses `/proc/meminfo` alone.
   inherited default of 0 and is additionally shielded by earlyoom `--avoid`. The
   service order is a best-effort steer, not a hard guarantee -- see "Protection
   is soft" below.
+- **`cgroup_meminfo`** -- the container's own memory headroom, read from its
+  cgroup, in the form earlyoom's `--host-meminfo` takes; the
+  `publish_cgroup_meminfo` program writes it under runc.
 - **`app_registry`** -- the narrow, stdlib-only reader of the app registry the
   backstop listener uses: each registered app's `priority` band name, by the
   supervisord program that runs it.
@@ -124,8 +140,8 @@ unrecognized. The `oom_tag_service.py <key>` prefix passes band keys by name.
 It only ever raises,
 never lowers, so a process already tagged higher (a Chromium process the
 browser sweep has remapped into its band) and the `PROTECTED` programs
-(earlyoom, the listener itself, and the one-shots env-converge and
-vm-exec-register) are never demoted. Because this path *raises*, a built-in
+(earlyoom, the listener itself, publish_cgroup_meminfo, and the one-shots
+env-converge and vm-exec-register) are never demoted. Because this path *raises*, a built-in
 missing from either band map is not merely left alone but actively pushed to
 `USER_SERVICE`, above every other built-in -- so
 `oom_tag_service_test.test_every_built_in_supervisord_program_has_an_explicit_band`
@@ -283,7 +299,9 @@ a protected one.
   `upstream_fallback` if earlyoom's startup self-check could not read those
   inputs, which also leaves `badness_kib` null; null when earlyoom did not
   report them). Read by the revival-notice hook
-  (`system/services/oom_priority/bin/claude_shed_notice_hook.py`) and the launch-task report poll.
+  (`system/services/oom_priority/bin/claude_shed_notice_hook.sh`, which starts
+  `claude_shed_notice_hook.py` only when the ledger names the agent) and the
+  launch-task report poll.
 - **Agent-pid registry** (`data/.state/oom_priority/agent_pids/<pid>.json`): written
   by the launch wrapper (`system/services/oom_priority/bin/agent_oom_launch.py`), read by the kill hook.
 

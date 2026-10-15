@@ -1,5 +1,15 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$MNGR_AGENT_WORK_DIR/system/scripts/session_start_sync.sh\""
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "hooks": [

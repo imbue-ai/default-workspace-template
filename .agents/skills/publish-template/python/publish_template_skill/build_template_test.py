@@ -20,7 +20,7 @@ _REPO_ROOT = _SKILL_DIR.parents[2]
 _SCHEMA = (
     _REPO_ROOT / "system/services/env_converge/src/env_converge/template_manifest.py"
 )
-_RESOLVE_TEMPLATE_BASE = _REPO_ROOT / ".agents/shared/scripts/resolve_template_base.py"
+_RESOLVE_TEMPLATE_BASE = _REPO_ROOT / ".agents/shared/scripts/agents_shared/resolve_template_base.py"
 # The scan is a hard gate with no fallback: both binaries are baked into the
 # workspace image, so their absence means a dev box rather than a real failure.
 _SCANNERS = ("betterleaks", "kingfisher")

@@ -142,7 +142,6 @@ mode = "focus"
 id = "new"                     # the id shortcuts and layout.py refer to
 label = "New File Viewer"      # every action is a create: POST /_instances with the action id, then open the returned instance
 
-[handles]                      # reserved for protocol and intent handlers (deferred, section 11); must be absent or empty
 ```
 
 An app with `instances = false` declares no actions; the shell synthesizes its one action, `open`, which focuses the app's tab.
@@ -152,10 +151,10 @@ An app with `instances = false` declares no actions; the shell synthesizes its o
 
 ### 4.2 Registry rows
 
-A registry row carries `name`, `url`, `label`, `icon`, `internal`, and `program` from the registration, and `display_name`, `instances`, `instances_url`, `actions`, `default_shortcut`, `critical`, and `priority`, all copied from the manifest at registration.
+A registry row carries `name`, `url`, `label`, `icon`, `internal`, and `program` from the registration, and `display_name`, `instances`, `instances_url`, `actions`, `default_shortcut`, `critical`, `system`, and `priority`, all copied from the manifest at registration.
 The `label` suffix has one job, an unguessable origin, and is never used as an identifier.
 Liveness (`is_running`) is derived from supervisord and is never stored.
-The shell's services event writer, which writes the `service_registered` and `service_deregistered` events minds reads, reads `name`, `url`, `label`, and `icon` and ignores the manifest fields.
+The shell's services event writer, which writes the `service_registered` and `service_deregistered` events minds reads, announces `name`, `url`, `label`, `icon`, `display_name`, `system`, and `internal`; it ignores the other manifest fields.
 
 ## 5. The app contract
 
@@ -355,6 +354,7 @@ Worker agents that chats spawn are listed as instances too; they are chats with 
 
 The share gateway re-renders from the registry, so the chat origin is claimed like every app's.
 A workspace-level grant admits the chat origin directly, and a per-app grant (the grants file keys apps as `[services.<name>]`, so `[services.chat]`) can narrow a visitor to it.
+The chat declares `system = true`, so the minds Share tab lists it under its System group rather than up front; the gateway treats the grant like any other.
 Read-only sharing of one chat is deferred (section 11).
 
 ### 8.2 Memory shedding
@@ -424,7 +424,7 @@ After phase 11, an existing workspace is upgraded through update-self and exerci
 ## 11. Deferred
 
 - Stable app ids and app renaming; the home for an id, if ever needed, is the manifest.
-- Protocol and intent handlers; only the reserved `handles` table exists.
+- Protocol handlers. Intent handlers arrived later as the manifest's `message_handlers` (the workspace link routing plan), which replaced the reserved `handles` table.
 - Follow mode between clients; the client-tagged layout broadcasts are its prerequisite.
 - The fast switcher in the minds chrome; the inventory endpoint and deep links (6.7) are its prerequisites, and so is the chrome forwarding a deep link's query string to the shell frame, which no phase of this arc does.
 - Minimum terminal size across viewers.

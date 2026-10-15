@@ -89,7 +89,9 @@ refusal, and logs every denial (never the token) to the service's stderr:
   telling the visitor the owner must fix the workspace's sharing settings.
   `/_auth/verify` answers the same way for a non-owner mid-session; the owner
   is never grant-checked, so they still get in.
-- A verified account with no grant is **"Not shared with you"** (403).
+- A verified account with no grant is **"Not shared with you"** (403). So is
+  one whose only grants are per-service grants on internal apps (see
+  "Grants") or on apps not registered, since those admit it nowhere.
 
 ## When the stack cannot come up
 
@@ -109,6 +111,13 @@ written to `data/.state/share_gateway/status.json`:
 
 `state` is `up`, `retrying`, or `halted`. The Imbue Studio desktop client reads this
 file to explain a share that is not live yet; it is removed at unshare.
+
+The runner also records the share's domain (`SHARE_WORKSPACE_DOMAIN`) in
+`data/.state/share_domain` whenever it reads new materials, and never removes it:
+the shell builds each app's share address from it (`share_url` in its inventory,
+the `link` of `workspace-layout list`), and an address an agent wrote under it
+should keep opening the app's window after an unshare. A re-share keeps the
+domain.
 
 ## Grants
 
@@ -132,8 +141,13 @@ email_domains = []
 ```
 
 Workspace-level grants admit every service; per-service grants admit exactly
-that service's origin (the shell and siblings stay 403). Within a scope the
-visitor's `user_id` is matched against `users` first, then their verified
+that service's origin (the shell and siblings stay 403), and only for an app
+the registry does not mark `internal`. An internal app (the shell itself, the
+terminal's pty, the owner and VM exec services) is reached only through a
+workspace-level grant: a per-service grant on it admits nobody, and a visitor
+whose only grants are on such apps is refused at login. The gateway reads this
+from `data/.state/apps.toml` on every request, beside the label map. Within a
+scope the visitor's `user_id` is matched against `users` first, then their verified
 email against `emails` (case-insensitive), then its domain against
 `email_domains`. A document written before `users` existed reads as having
 none.
@@ -163,9 +177,11 @@ grant narrows a visitor to it. A visitor holding only a per-app grant reaches
 that app's origin and nothing else -- not the shell, so not the tabs the shell
 arranges; the origin's own pages (a chat at `/<agent-id>`, the file viewer's
 listing) are what they see, and a `[services.files]` grant admits only the
-file viewer. Nothing here is configured per app: caddy re-renders its routes
-from the registry, so the chat origin (like every app's) is claimed and routed
-as soon as the app registers.
+file viewer. Whether an app declares `system` (part of the workspace itself,
+which the Imbue Studio Share tab lists under its System group) makes no
+difference here. Nothing here is configured per app: caddy re-renders its
+routes from the registry, so the chat origin (like every app's) is claimed and
+routed as soon as the app registers.
 
 ## Request identity (what a service sees)
 

@@ -12,8 +12,8 @@ scripts, references, or assets. The SKILL.md reads like a recipe: "do X,
 then Y, then Z." Each step of that process is one of three kinds:
 
 - **`[script]`** -- deterministic. Runs the same code every time, only the
-  data varies. Its entry file lives in `.agents/skills/<name>/scripts/` and
-  its code in the skill's `python/` package.
+  data varies. Lives in the skill's `python/` package, run through an entry
+  file in `.agents/skills/<name>/scripts/`.
 - **`[ai-script]`** -- needs a model's judgement, but is a *fixed part of
   the flow* (the same prompt/criteria every run, only the data varies).
   Script it as an AI call following the `use-ai-integration` skill (see
@@ -131,9 +131,9 @@ only when every step is `[prose]` executor meta-work; if any flow step is
 deterministic or model-driven, it belongs in a script. Use scripts where
 they earn their keep; don't force a script for genuine executor meta-work.
 
-When you do include `run.py`, write the flow's logic in the skill's package
-(see Packaging below) as small helper functions (one per step) and expose
-them two ways:
+When you do include `run.py`, write the flow's logic as small helper
+functions (one per step) in the skill's package (see Packaging below), and
+have `run.py` expose them two ways:
 
 - **A subcommand per step**, whenever the step's inputs and outputs serialize
   cleanly -- data, not live handles. (A step that hands the next one an open
@@ -213,7 +213,7 @@ For [ai-script] steps, make sure to read and follow the instructions in the **`u
 
 ## Validation
 
-`uv run --no-sync .agents/shared/scripts/validate_skill.py <skill_dir>` checks SKILL.md
+`uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py <skill_dir>` checks SKILL.md
 frontmatter, the kebab-case name rules, directory-name match, description
 length and the 500-line body limit. When the skill has Python (entry files in
 `scripts/`, or a `python/` dir) it also checks that `python/pyproject.toml`
@@ -221,7 +221,8 @@ exists and names the project
 `<name>-skill` and the package `<name_with_underscores>_skill`, that `uv lock
 --check` passes (the workspace lock includes the skill's dependencies), and
 that `uv run --no-sync <entry> --help` exits 0 for every entry file at the top
-of `scripts/` -- so a broken import or a missing dependency fails validation
+of `scripts/` and every package module with its own `if __name__ == "__main__":`
+block -- so a broken import or a missing dependency fails validation
 here rather than only at scenario time. (This is a shallow import check:
 `--help` exercises top-level imports and the argparse wiring, not imports done
 lazily inside subcommand bodies -- those are left to scenario testing.) Prints

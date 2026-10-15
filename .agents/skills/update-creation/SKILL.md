@@ -217,7 +217,8 @@ Then merge `mngr/update-$TARGET`, destroy the worker per `lead-proxy.md`
 (`create_worker.py destroy --name update-$TARGET`), and go live by creation:
 
 - **skill**: nothing beyond the merge (the worker's cross-reference sweep is part
-  of the change). If the target is a built-in upstream skill, note the local
+  of the change), except `uv sync --all-packages --frozen` when it has a
+  `python/` project, so the workspace venv carries any dependency the merge added. If the target is a built-in upstream skill, note the local
   drift to reconcile later via `update-self` / `submit-upstream-changes`.
 - **service**: refresh its window (`uv run --no-sync workspace-layout refresh
   --app <service-name>`).

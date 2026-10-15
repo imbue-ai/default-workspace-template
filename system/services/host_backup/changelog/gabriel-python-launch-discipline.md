@@ -1,1 +1,1 @@
-Each backup tick refreshes the environment record with `uv run --no-sync env-converge capture`, so a tick can no longer relock or sync the workspace.
+Each backup tick refreshes the environment record with `uv run --no-sync env-converge capture`, so a tick can no longer relock or sync the workspace. The slow-backup hint points at `uv run --no-sync host-backup-heavy-dirs`.

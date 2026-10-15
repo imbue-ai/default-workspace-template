@@ -3,7 +3,8 @@
 Run via: ``uv run --no-sync pytest .agents/shared/scripts/agents_shared/serve_isolated_instance_test.py``
 
 Like the ``preview_app.py`` tests, these inject a recording
-``Runner`` (so no real ``uv``/``forward_port`` runs), a programmable
+``Runner`` (so no real process group is signalled), a recording ``Registry`` (so
+no real registry is written), a programmable
 ``HttpClient`` (so the health probe is deterministic), a fake ``Spawner`` (so no
 throwaway server is launched), and a no-op sleeper. We assert on the exact env
 overrides / commands the ``up`` motion produces and on the teardown-on-failure
@@ -17,13 +18,13 @@ import io
 import json
 import os
 import signal
-import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
 
 import pytest
+from workspace_bare_scripts import forward_port
 
 from agents_shared import preview_wrapper_server as wrapper_mod
 from agents_shared import serve_isolated_instance as mod
@@ -35,40 +36,15 @@ _PORT_ENV = "MYSVC_PORT"
 _LAUNCH = ["uv", "run", "my-service"]
 
 
-class _Result(subprocess.CompletedProcess[str]):
-    def __init__(self, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
-        super().__init__(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
-
-
 @dataclass
 class _RecordingRunner(mod.Runner):
-    """Records every ``run`` call; returns canned results keyed by argv prefix."""
+    """Records every process-group signal; reports ``alive_pids`` as still running."""
 
-    calls: list[list[str]] = field(default_factory=list)
-    _responses: dict[tuple[str, ...], object] = field(default_factory=dict)
     killed_pgroups: list[int] = field(default_factory=list)
     kill_signals: list[tuple[int, int]] = field(default_factory=list)
     # Pids reported as still-alive by ``process_group_alive`` (default: none, so a
     # just-killed process reads as gone immediately -- the common refresh path).
     alive_pids: set[int] = field(default_factory=set)
-
-    def respond(self, prefix: tuple[str, ...], result: object) -> None:
-        self._responses[prefix] = result
-
-    def run(self, argv: Sequence[str], **kwargs) -> _Result:
-        argv_list = list(argv)
-        self.calls.append(argv_list)
-        for prefix, result in self._responses.items():
-            if tuple(argv_list[: len(prefix)]) == prefix:
-                assert isinstance(result, _Result)
-                return result
-        return _Result()
-
-    def argvs_starting(self, *prefix: str) -> list[list[str]]:
-        return [c for c in self.calls if tuple(c[: len(prefix)]) == prefix]
-
-    def ran(self, *prefix: str) -> bool:
-        return bool(self.argvs_starting(*prefix))
 
     def kill_process_group(self, pid: int, sig: int = signal.SIGTERM) -> None:
         self.killed_pgroups.append(pid)
@@ -103,6 +79,42 @@ class _SignalRecordingRealRunner(mod.Runner):
     def kill_process_group(self, pid: int, sig: int = signal.SIGTERM) -> None:
         self.sent.append(sig)
         super().kill_process_group(pid, sig)
+
+
+@dataclass(frozen=True)
+class _Registration:
+    service_name: str
+    url: str
+    internal: bool
+    display_name: str | None
+
+
+@dataclass
+class _RecordingRegistry(mod.Registry):
+    """Records registrations and removals; refuses names in ``refused``."""
+
+    registered: list[_Registration] = field(default_factory=list)
+    removed: list[str] = field(default_factory=list)
+    refused: frozenset[str] = frozenset()
+
+    def register(
+        self,
+        repo_root: Path,
+        service_name: str,
+        url: str,
+        *,
+        internal: bool,
+        display_name: str | None,
+    ) -> None:
+        if service_name in self.refused:
+            raise forward_port.RegistrationError(f"refusing {service_name}")
+        self.registered.append(_Registration(service_name, url, internal, display_name))
+
+    def remove(self, repo_root: Path, service_name: str) -> None:
+        self.removed.append(service_name)
+
+    def by_name(self) -> dict[str, _Registration]:
+        return {entry.service_name: entry for entry in self.registered}
 
 
 class _FakeHttp(mod.HttpClient):
@@ -159,6 +171,7 @@ def _up(
     tmp_path: Path,
     *,
     runner: _RecordingRunner | None = None,
+    registry: _RecordingRegistry | None = None,
     http: _FakeHttp | None = None,
     spawner: _FakeSpawner | None = None,
     cwd: Path | None = None,
@@ -173,6 +186,7 @@ def _up(
             "port_env_by_name", {mod.MAIN_PORT_NAME: _PORT_ENV}
         ),
         runner=runner or _RecordingRunner(),
+        registry=registry or _RecordingRegistry(),
         http=http or _FakeHttp(_all_healthy),
         spawner=spawner or _FakeSpawner(),
         sleeper=lambda _seconds: None,
@@ -223,12 +237,12 @@ def test_up_boots_on_a_port_injects_port_env_and_reports_url(
 
 
 def test_up_bare_instance_registers_no_service(tmp_path: Path) -> None:
-    runner = _RecordingRunner()
+    registry = _RecordingRegistry()
 
-    code = _up(tmp_path, runner=runner)
+    code = _up(tmp_path, registry=registry)
 
     assert code == 0
-    assert not runner.ran(*mod.FORWARD_PORT_CMD, "--name")
+    assert not registry.registered
 
 
 def test_up_applies_env_overrides_and_unset(
@@ -264,27 +278,28 @@ def test_up_rejects_a_missing_cwd(tmp_path: Path) -> None:
 
 
 def test_up_tears_down_when_the_boot_raises(tmp_path: Path) -> None:
-    runner = _RecordingRunner()
+    registry = _RecordingRegistry()
     spawner = _FakeSpawner(detached_raises=FileNotFoundError("uv not found"))
 
-    code = _up(tmp_path, runner=runner, spawner=spawner)
+    code = _up(tmp_path, registry=registry, spawner=spawner)
 
     assert code == 1
-    assert not runner.ran(*mod.FORWARD_PORT_CMD, "--name")
+    assert not registry.registered
     assert not _state_path(tmp_path).exists()
 
 
 def test_up_tears_down_when_the_instance_never_gets_healthy(tmp_path: Path) -> None:
     runner = _RecordingRunner()
+    registry = _RecordingRegistry()
     spawner = _FakeSpawner()
     http = _FakeHttp(lambda _url: None)  # never returns 200
 
-    code = _up(tmp_path, runner=runner, http=http, spawner=spawner)
+    code = _up(tmp_path, runner=runner, registry=registry, http=http, spawner=spawner)
 
     assert code == 1
     assert spawner.detached_spawns  # it was booted
     assert runner.killed_pgroup(spawner.detached_pid)  # then killed
-    assert not runner.ran(*mod.FORWARD_PORT_CMD, "--name")  # never registered
+    assert not registry.registered
     assert not _state_path(tmp_path).exists()
 
 
@@ -404,12 +419,13 @@ def test_up_clears_a_stale_instance_before_booting(tmp_path: Path) -> None:
         json.dumps({"pids": [999], "services": ["old-svc"]})
     )
     runner = _RecordingRunner()
+    registry = _RecordingRegistry()
 
-    code = _up(tmp_path, runner=runner)
+    code = _up(tmp_path, runner=runner, registry=registry)
 
     assert code == 0
     assert runner.killed_pgroup(999)  # old server killed
-    assert runner.ran(*mod.FORWARD_PORT_CMD, "--remove", "--name")  # old svc removed
+    assert registry.removed == ["old-svc"]
     assert json.loads(_state_path(tmp_path).read_text())["pids"][0] == 4242
 
 
@@ -417,16 +433,16 @@ def test_up_clears_a_stale_instance_before_booting(tmp_path: Path) -> None:
 
 
 def test_up_with_service_name_registers_the_instance(tmp_path: Path) -> None:
-    runner = _RecordingRunner()
+    registry = _RecordingRegistry()
 
-    code = _up(tmp_path, runner=runner, service_name="demo-app")
+    code = _up(tmp_path, registry=registry, service_name="demo-app")
 
     assert code == 0
-    registered = runner.argvs_starting(*mod.FORWARD_PORT_CMD, "--name")
-    flat = [token for argv in registered for token in argv]
-    assert "demo-app" in flat
+    port = json.loads(_state_path(tmp_path).read_text())["inner_port"]
     # Unwrapped, the instance's own origin is the surface: it stays an app to open.
-    assert "--internal" not in flat
+    assert registry.registered == [
+        _Registration("demo-app", f"http://localhost:{port}", False, None)
+    ]
     state = json.loads(_state_path(tmp_path).read_text())
     assert state["services"] == ["demo-app"]
 
@@ -438,6 +454,7 @@ def _up_preview(
     tmp_path: Path,
     *,
     runner: _RecordingRunner | None = None,
+    registry: _RecordingRegistry | None = None,
     http: _FakeHttp | None = None,
     spawner: _FakeSpawner | None = None,
     **kwargs,
@@ -445,6 +462,7 @@ def _up_preview(
     return _up(
         tmp_path,
         runner=runner,
+        registry=registry,
         http=http,
         spawner=spawner,
         service_name="demo-app",
@@ -457,24 +475,24 @@ def _up_preview(
 def test_up_preview_boots_wrapper_registers_both_and_reports_tab(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    runner = _RecordingRunner()
+    registry = _RecordingRegistry()
     spawner = _FakeSpawner()
 
-    code = _up_preview(tmp_path, runner=runner, spawner=spawner)
+    code = _up_preview(tmp_path, registry=registry, spawner=spawner)
 
     assert code == 0
     # Two detached servers: the instance, then the wrapper chrome page.
     assert spawner.detached_spawns[0] == _LAUNCH
     wrapper_argv = spawner.detached_spawns[1]
-    assert wrapper_argv[1] == str(_SCRIPT.with_name(mod.WRAPPER_SCRIPT))
+    assert wrapper_argv[1:3] == ["-m", wrapper_mod.__name__]
     assert "--inner-service" in wrapper_argv
     assert "demo-app" in wrapper_argv
     assert "my change" in wrapper_argv
     # Registered both the inner app and the user-facing wrapper.
-    registered = runner.argvs_starting(*mod.FORWARD_PORT_CMD, "--name")
-    flat = [token for argv in registered for token in argv]
-    assert "demo-app" in flat
-    assert "demo-preview" in flat
+    assert [entry.service_name for entry in registry.registered] == [
+        "demo-app",
+        "demo-preview",
+    ]
     # The app to open (the wrapper's service name) is printed to stdout; its
     # browser origin depends on the workspace host, which is not knowable here.
     assert capsys.readouterr().out.strip() == "demo-preview"
@@ -489,20 +507,16 @@ def test_up_preview_surfaces_only_the_frame_and_titles_it(tmp_path: Path) -> Non
     it previews. The inner service keeps its origin (the frame reaches it by
     swapping the hostname label) but is not an app to open: its bare page is the
     same app with nothing marking it as a preview."""
-    runner = _RecordingRunner()
+    registry = _RecordingRegistry()
 
-    code = _up_preview(tmp_path, runner=runner)
+    code = _up_preview(tmp_path, registry=registry)
 
     assert code == 0
-    by_name = {
-        argv[argv.index("--name") + 1]: argv
-        for argv in runner.argvs_starting(*mod.FORWARD_PORT_CMD, "--name")
-    }
-    assert "--internal" in by_name["demo-app"]
-    assert "--display-name" not in by_name["demo-app"]
-    assert "--internal" not in by_name["demo-preview"]
-    frame = by_name["demo-preview"]
-    assert frame[frame.index("--display-name") + 1] == "my change"
+    by_name = registry.by_name()
+    assert by_name["demo-app"].internal
+    assert by_name["demo-app"].display_name is None
+    assert not by_name["demo-preview"].internal
+    assert by_name["demo-preview"].display_name == "my change"
 
 
 def test_up_preview_requires_service_name(tmp_path: Path) -> None:
@@ -544,20 +558,67 @@ def test_up_preview_tears_down_both_when_the_wrapper_never_gets_healthy(
     tmp_path: Path,
 ) -> None:
     runner = _RecordingRunner()
+    registry = _RecordingRegistry()
     spawner = _FakeSpawner()
     # Inner health passes; the wrapper root probe never does. The inner is probed
     # on its own port with the caller's health path (``/`` here); the wrapper is
     # probed at ``/``. Distinguish by which port each call targets.
     http = _FakeHttp(lambda url: 200 if _first_port(url, spawner) else None)
 
-    code = _up_preview(tmp_path, runner=runner, http=http, spawner=spawner)
+    code = _up_preview(
+        tmp_path, runner=runner, registry=registry, http=http, spawner=spawner
+    )
 
     assert code == 1
     assert len(spawner.detached_pids) == 2  # both booted
     for pid in spawner.detached_pids:
         assert runner.killed_pgroup(pid)  # both killed
-    assert runner.ran(*mod.FORWARD_PORT_CMD, "--remove", "--name")  # inner deregistered
+    assert registry.removed == ["demo-app"]  # inner deregistered
     assert not _state_path(tmp_path).exists()
+
+
+def test_up_preview_tears_down_when_a_registration_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    runner = _RecordingRunner()
+    registry = _RecordingRegistry(refused=frozenset({"demo-preview"}))
+    spawner = _FakeSpawner()
+
+    code = _up_preview(tmp_path, runner=runner, registry=registry, spawner=spawner)
+
+    assert code == 1
+    assert "forward_port register (wrapper) failed: refusing demo-preview" in (
+        capsys.readouterr().err
+    )
+    for pid in spawner.detached_pids:
+        assert runner.killed_pgroup(pid)
+    assert registry.removed == ["demo-app"]
+    assert not _state_path(tmp_path).exists()
+
+
+def test_the_registry_writes_the_repo_roots_registry_from_any_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(forward_port.ENV_APPS_FILE, raising=False)
+    repo_root = tmp_path / "repo"
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    registry = mod.Registry()
+
+    registry.register(
+        repo_root,
+        "demo-preview",
+        "http://localhost:9001",
+        internal=False,
+        display_name="my change",
+    )
+
+    apps = repo_root / forward_port.DEFAULT_APPS_FILE
+    assert '"demo-preview"' in apps.read_text()
+    assert not (elsewhere / forward_port.DEFAULT_APPS_FILE).exists()
+    registry.remove(repo_root, "demo-preview")
+    assert '"demo-preview"' not in apps.read_text()
 
 
 def _first_port(url: str, spawner: _FakeSpawner) -> bool:
@@ -576,18 +637,14 @@ def test_down_tears_down_servers_and_services(tmp_path: Path) -> None:
         json.dumps({"pids": [4242, 4243], "services": ["demo-app", "demo-preview"]})
     )
     runner = _RecordingRunner()
+    registry = _RecordingRegistry()
 
-    code = mod.down(_NAME, tmp_path, runner=runner)
+    code = mod.down(_NAME, tmp_path, runner=runner, registry=registry)
 
     assert code == 0
     assert runner.killed_pgroup(4242)
     assert runner.killed_pgroup(4243)
-    removed = [
-        argv[-1]
-        for argv in runner.argvs_starting(*mod.FORWARD_PORT_CMD, "--remove", "--name")
-    ]
-    assert "demo-app" in removed
-    assert "demo-preview" in removed
+    assert registry.removed == ["demo-app", "demo-preview"]
     assert not state_dir.exists()
 
 
@@ -609,7 +666,13 @@ def test_down_escalates_to_sigkill_for_a_server_that_traps_sigterm(
     state_dir = _write_state(tmp_path, [4242], ["demo-app"])
     runner = _SigtermProofRunner(alive_pids={4242})
 
-    code = mod.down(_NAME, tmp_path, runner=runner, sleeper=lambda _seconds: None)
+    code = mod.down(
+        _NAME,
+        tmp_path,
+        runner=runner,
+        registry=_RecordingRegistry(),
+        sleeper=lambda _seconds: None,
+    )
 
     assert code == 0
     assert runner.signals_sent_to(4242) == [signal.SIGTERM, signal.SIGKILL]
@@ -623,7 +686,13 @@ def test_down_keeps_the_state_and_fails_when_a_server_survives_sigkill(
     state_dir = _write_state(tmp_path, [4242], ["demo-app"])
     runner = _RecordingRunner(alive_pids={4242})
 
-    code = mod.down(_NAME, tmp_path, runner=runner, sleeper=lambda _seconds: None)
+    code = mod.down(
+        _NAME,
+        tmp_path,
+        runner=runner,
+        registry=_RecordingRegistry(),
+        sleeper=lambda _seconds: None,
+    )
 
     assert code == 1
     assert runner.signals_sent_to(4242) == [signal.SIGTERM, signal.SIGKILL]
@@ -706,7 +775,8 @@ def test_refresh_reboots_inner_on_same_port_leaving_wrapper_and_services(
     # refresh it with a distinct spawner so the new inner pid (5555) is
     # distinguishable from the old.
     up_spawner = _FakeSpawner()
-    assert _up_preview(tmp_path, spawner=up_spawner) == 0
+    registry = _RecordingRegistry()
+    assert _up_preview(tmp_path, registry=registry, spawner=up_spawner) == 0
     inner_port = json.loads(_state_path(tmp_path).read_text())["inner_port"]
 
     runner = _RecordingRunner()
@@ -721,7 +791,7 @@ def test_refresh_reboots_inner_on_same_port_leaving_wrapper_and_services(
     assert spawner.detached_spawns == [_LAUNCH]
     assert spawner.detached_envs[0][_PORT_ENV] == str(inner_port)
     # Services were never deregistered (the window keeps routing to the same port).
-    assert not runner.ran(*mod.FORWARD_PORT_CMD, "--remove", "--name")
+    assert not registry.removed
     # State now points at the new inner pid; the wrapper pid is preserved.
     state = json.loads(_state_path(tmp_path).read_text())
     assert state["pids"] == [5555, 4243]
@@ -785,7 +855,7 @@ def test_main_routes_refresh(tmp_path: Path) -> None:
 def test_down_without_state_is_a_noop_success(tmp_path: Path) -> None:
     runner = _RecordingRunner()
 
-    code = mod.down(_NAME, tmp_path, runner=runner)
+    code = mod.down(_NAME, tmp_path, runner=runner, registry=_RecordingRegistry())
 
     assert code == 0
     assert not runner.killed_pgroups
@@ -797,7 +867,7 @@ def test_down_reports_unreadable_state(tmp_path: Path) -> None:
     _state_path(tmp_path).write_text("not json{")
     runner = _RecordingRunner()
 
-    code = mod.down(_NAME, tmp_path, runner=runner)
+    code = mod.down(_NAME, tmp_path, runner=runner, registry=_RecordingRegistry())
 
     assert code == 1
 
@@ -846,6 +916,7 @@ def test_named_ports_reach_the_env_and_the_argv(tmp_path: Path) -> None:
         port_env_by_name={"main": _PORT_ENV, "sidecar": "MYSVC_API_PORT"},
         env_overrides={"MYSVC_API_URL": "http://{host}:{port:sidecar}"},
         runner=_RecordingRunner(),
+        registry=_RecordingRegistry(),
         http=_FakeHttp(_all_healthy),
         spawner=spawner,
         sleeper=lambda _seconds: None,
@@ -893,6 +964,7 @@ def test_copies_land_in_the_scratch_space_and_fill_their_placeholder(
             "missing": "data/.apps/never-written",
         },
         runner=_RecordingRunner(),
+        registry=_RecordingRegistry(),
         http=_FakeHttp(_all_healthy),
         spawner=spawner,
         sleeper=lambda _seconds: None,
@@ -1013,6 +1085,7 @@ def test_a_port_with_no_env_var_reaches_the_argv_by_placeholder_alone(
         port_env_by_name={"main": None},
         env_overrides={"MYSVC_PORT_URL": "http://{host}:{port:main}"},
         runner=_RecordingRunner(),
+        registry=_RecordingRegistry(),
         http=_FakeHttp(_all_healthy),
         spawner=spawner,
         sleeper=lambda _seconds: None,
@@ -1036,6 +1109,7 @@ def test_a_placeholder_naming_nothing_the_instance_was_given_fails_the_boot(
         tmp_path,
         port_env_by_name={"main": _PORT_ENV},
         runner=_RecordingRunner(),
+        registry=_RecordingRegistry(),
         http=_FakeHttp(_all_healthy),
         spawner=spawner,
         sleeper=lambda _seconds: None,
@@ -1070,6 +1144,7 @@ def test_refresh_replays_the_named_ports_and_copies(tmp_path: Path) -> None:
             env_overrides={"MYSVC_STORE": "{copy:store}"},
             copy_sources={"store": "data/.apps/my-service"},
             runner=_RecordingRunner(),
+            registry=_RecordingRegistry(),
             http=_FakeHttp(_all_healthy),
             spawner=_FakeSpawner(),
             sleeper=lambda _seconds: None,

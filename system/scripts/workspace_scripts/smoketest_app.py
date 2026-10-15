@@ -4,15 +4,14 @@ Performs active socket/HTTP readiness polling, reload verification, and
 optional headless Playwright browser screenshot capture with optimized flags.
 
 Usage:
-    uv run --no-sync system/scripts/smoketest_app.py <name-or-port>
-    uv run --no-sync system/scripts/smoketest_app.py <name-or-port> --marker "Add a task"
-    uv run --no-sync system/scripts/smoketest_app.py <name-or-port> --screenshot /tmp/mock.png
-    uv run --no-sync system/scripts/smoketest_app.py <name-or-port> --marker "Add a task" --screenshot /tmp/mock.png
+    uv run --no-sync system/scripts/workspace_scripts/smoketest_app.py <name-or-port>
+    uv run --no-sync system/scripts/workspace_scripts/smoketest_app.py <name-or-port> --marker "Add a task"
+    uv run --no-sync system/scripts/workspace_scripts/smoketest_app.py <name-or-port> --screenshot /tmp/mock.png
+    uv run --no-sync system/scripts/workspace_scripts/smoketest_app.py <name-or-port> --marker "Add a task" --screenshot /tmp/mock.png
 """
 
 import argparse
 import json
-import os
 import re
 import sys
 import time
@@ -174,12 +173,10 @@ def _run_playwright_check(
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        # Re-exec with repo root .venv python if playwright is not in current environment
-        repo_root = _find_repo_root()
-        venv_py = repo_root / ".venv/bin/python"
-        if venv_py.exists() and sys.executable != str(venv_py):
-            os.execv(str(venv_py), [str(venv_py), *sys.argv])
-        sys.exit("error: playwright is not installed. Run with `uv run --no-sync system/scripts/smoketest_app.py ...` or activate workspace .venv.")
+        sys.exit(
+            "error: playwright is not installed in the workspace venv. Run `uv sync --all-packages`, then "
+            "`uv run --no-sync system/scripts/workspace_scripts/smoketest_app.py ...`."
+        )
 
     executable_path = str(DEFAULT_FORTRESS_PATH) if DEFAULT_FORTRESS_PATH.exists() else None
 
@@ -248,3 +245,7 @@ def main() -> None:
 
     if args.marker:
         print(f"Marker confirmed: {args.marker!r}")
+
+
+if __name__ == "__main__":
+    main()

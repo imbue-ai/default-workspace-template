@@ -16,3 +16,12 @@ id = "new"
 label = "File Viewer"
 path = "/home/user/workspace/"
 params = [{name = "path", label = "Path", required = false}]
+
+# A link to a file or folder (a chat's absolute-path link) opens on its view page in a file viewer window: dufs shows a
+# file there (text as read-only source, PDFs and media embedded, anything else offered as a download) and ignores
+# ``?view`` on a folder, so a folder opened this way stays at ``/a/b?view``. A window already at the folder, however
+# it got there (a click through the listing leaves it at ``/a/b/``), is raised instead.
+[[message_handlers]]
+type = "open:file"
+show = "{path}?view"
+showing = ["{path}", "{path}/", "{path}/?view"]

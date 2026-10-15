@@ -20,6 +20,7 @@ import re
 import shutil
 import subprocess
 import urllib.request
+from collections.abc import Mapping
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -34,6 +35,8 @@ from bootstrap.claude_state_migration import (
 # Path (relative to the repo root, which is bootstrap's cwd) of the supervisord
 # config that defines every background service.
 SUPERVISORD_CONF = Path("system/supervisord.conf")
+# The workspace venv, relative to the repo root like the config above.
+WORKSPACE_VENV = Path(".venv")
 # Container-local directory for supervisord's own log + the per-service logs. Not
 # under data/, so these are never backed up.
 SUPERVISOR_LOG_DIR = Path("/var/log/supervisor")
@@ -572,22 +575,17 @@ _UV_SYNC_TIMEOUT_SECONDS = 600.0
 
 
 def _sync_workspace_venv() -> None:
-    """Converge the workspace .venv to the landed lockfile before any agent runs.
+    """Converge the workspace .venv to the lockfile of the tree boot will run.
 
-    The venv is a bake-time artifact (build_workspace.sh at image build / host
-    provisioning) while the working tree is a landing-time artifact (the
-    create's git-mirror checkout) -- and on docker and pool-lease hosts nothing
-    re-runs the sync at create, so the two can disagree whenever the baked
-    image lags the landed branch. One-offs run ``uv run --no-sync`` and never
-    sync, and the syncs that do (an agent's session start, a program's start)
-    run only once that agent or service is already starting.
-
-    The ``bootstrap`` window runs this same sync before starting this process,
-    so here it is normally a no-op; it stays so a boot that reached bootstrap
-    some other way still converges before the chat agent exists and before
-    supervisord starts anything. ``--frozen`` asserts the committed lockfile is
-    canonical, matching build_workspace.sh. Best-effort: a failure is logged
-    loudly but never blocks boot.
+    The bootstrap window syncs ``--frozen`` before this program starts, but
+    against the tree as the container came up. ``_recover_interrupted_update``
+    can then roll a half-applied update back, restoring an older ``uv.lock``,
+    and supervisord's programs and every agent's one-offs
+    (``uv run --no-sync``) run from the venv as it is, without a sync of their own.
+    Converging here, before supervisord starts anything and before the chat
+    agent exists, is what puts the venv on the restored lock. ``--frozen``
+    takes the committed lockfile as canonical, matching build_workspace.sh.
+    Best-effort: a failure is logged loudly but never blocks boot.
     """
     try:
         result = subprocess.run(
@@ -613,6 +611,23 @@ def _sync_workspace_venv() -> None:
     logger.info("Workspace venv converged (uv sync --all-packages --frozen)")
 
 
+def _supervisord_environment(environ: Mapping[str, str], venv: Path) -> dict[str, str]:
+    """``environ`` with ``venv`` activated the way ``uv run`` activates it.
+
+    supervisord's programs inherit this environment, and a program line that names
+    its entry point bare (``chat-app``, the ``exec <name>`` ending a scaffolded app's
+    line) resolves it on PATH. The copy it has to find there is the console script
+    ``uv sync --all-packages`` writes into the venv: a user-built app's
+    ``uv tool install -e`` puts its own entry point under a HOME that is not on PATH.
+    The bootstrap window starts this program from ``.venv/bin`` rather than under
+    ``uv run``, so nothing else has put the venv there.
+    """
+    path = os.pathsep.join(
+        entry for entry in (str(venv / "bin"), environ.get("PATH", "")) if entry
+    )
+    return {**environ, "VIRTUAL_ENV": str(venv), "PATH": path}
+
+
 def _exec_supervisord() -> None:
     """Replace this process with supervisord running in the foreground.
 
@@ -622,7 +637,11 @@ def _exec_supervisord() -> None:
     [unix_http_server] socket that `supervisorctl` talks to.
     """
     logger.info("Launching supervisord with config {}", SUPERVISORD_CONF)
-    os.execvp("supervisord", ["supervisord", "-n", "-c", str(SUPERVISORD_CONF)])
+    os.execvpe(
+        "supervisord",
+        ["supervisord", "-n", "-c", str(SUPERVISORD_CONF)],
+        _supervisord_environment(os.environ, WORKSPACE_VENV.resolve()),
+    )
 
 
 def _run_env_converge_fast_phase() -> None:

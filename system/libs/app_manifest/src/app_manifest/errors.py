@@ -6,6 +6,10 @@ class InvalidManifestValueError(AppManifestError, ValueError):
     """A manifest or registry value does not satisfy its rule."""
 
 
+class PageTemplateFieldError(AppManifestError, ValueError):
+    """A message cannot fill a page template: a field it names is missing, not a string, or leaves no rooted path."""
+
+
 class ManifestLoadError(AppManifestError):
     """An app.toml file cannot be read, parsed, or validated."""
 

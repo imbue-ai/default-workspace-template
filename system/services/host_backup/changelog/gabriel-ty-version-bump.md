@@ -1,1 +1,1 @@
-The type-check ratchet runs `ty` 0.0.85 (was 0.0.24); the project passes it unchanged.
+The type-check ratchet runs `ty` 0.0.85 (was 0.0.24). Finding the newest rotated events log answers `None` for no candidates before taking the `max`, rather than passing `max` a `default=None` that 0.0.85 folds into the key's parameter type.

@@ -31,7 +31,6 @@ import os
 import re
 import shlex
 import subprocess
-import sys
 import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -120,6 +119,12 @@ class _RecordingRunner(create_worker.Runner):
 
     repo_root: Path
     calls: list[_RecordedCall] = field(default_factory=list)
+
+    def send_message(self, chat_id: str, text: str) -> int:
+        self.calls.append(
+            _RecordedCall(argv=["send-message", chat_id, text], kwargs={})
+        )
+        return 0
 
     def run(self, argv: Sequence[str], **kwargs):
         self.calls.append(_RecordedCall(argv=list(argv), kwargs=kwargs))
@@ -416,13 +421,7 @@ def test_launch_on_the_real_task_file_syncs_runtime_dir_and_addresses_the_worker
         f"{worker_name}:{runtime_dir}",
         "--uncommitted-changes=clobber",
     ] in argvs
-    assert argvs[-1] == [
-        sys.executable,
-        str(create_worker._repo_root() / "system" / "scripts" / "message_chat.py"),
-        _WORKER_ID,
-        "--message-file",
-        str(task_file.relative_to(tmp_path)),
-    ]
+    assert argvs[-1] == ["send-message", _WORKER_ID, task_file.read_text()]
     # Lead and worker agree on the report file: what await polls for is what
     # the worker's parse hands back as FINISH_REPORT_PATH.
     frontmatter = parse_task_frontmatter.parse(task_file)
@@ -430,9 +429,8 @@ def test_launch_on_the_real_task_file_syncs_runtime_dir_and_addresses_the_worker
         frontmatter["finish_report_path"]
     )
     # Both stamps the worker depends on landed, and both name what the launch
-    # itself used: the lead that will poll for the report, and the very path
-    # the task file was messaged from (repo-relative -- tmp_path stands in for
-    # the lead's checkout root).
+    # itself used: the lead that will poll for the report, and the task file's
+    # own path (repo-relative -- tmp_path stands in for the lead's checkout root).
     assert frontmatter["lead_agent"] == _LEAD_ID
     assert frontmatter["task_file"] == dispatcher.launch_option("--task-file")
     create_argv = next(argv for argv in argvs if argv[:2] == ["mngr", "create"])

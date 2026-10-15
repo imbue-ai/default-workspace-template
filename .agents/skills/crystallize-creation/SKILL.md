@@ -236,7 +236,9 @@ and the `done` merge brings the remainder of the branch.
 On `done`, after merging the worker's branch and destroying the worker (the
 sub-workers it split its pass across are already gone with it):
 
-- **skill**: read and follow `references/post-crystallize-migration.md` before
+- **skill**: if it has a `python/` project, run `uv sync --all-packages --frozen`
+  first, so the workspace venv carries its package and any dependency the merge
+  added. Then read and follow `references/post-crystallize-migration.md` before
   declaring crystallize done -- point consumers at the installed skill path,
   delete the stale runtime dir, pick up any breaking renames the worker
   introduced, restart any caching service, and close the ticket recorded in

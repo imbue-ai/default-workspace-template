@@ -25,6 +25,9 @@ service.
 3. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
    via `exec` keeps the bootstrap tmux window alive as supervisord and lets the
    supervised services inherit this shell's already-sourced agent environment.
+   That environment gets the workspace venv activated (`.venv/bin` first on
+   `PATH`, `VIRTUAL_ENV` set), so a program line that names its entry point bare
+   resolves the venv's console script.
 
 ## Services (supervisord)
 

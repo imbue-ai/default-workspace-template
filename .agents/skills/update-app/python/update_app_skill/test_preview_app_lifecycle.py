@@ -1,19 +1,19 @@
-"""A preview's whole lifecycle through the real shared script and the real registration script.
+"""A preview's whole lifecycle through the real shared substrate and the real registry.
 
 Run via: ``uv run --no-sync pytest .agents/skills/update-app/python/update_app_skill/test_preview_app_lifecycle.py``
 
-``preview_app_test.py`` pins the exact commands this script hands the shared
-``serve_isolated_instance.py``; here nothing stands in for it. A fixture app is
+``preview_app_test.py`` pins the exact boots this script asks the shared
+``serve_isolated_instance`` for; here nothing stands in for it. A fixture app is
 booted from a worktree with its manifest's ``[preview]`` table, rebuilt and
-refreshed, and torn down, so a change to the shared script's flags, its state
-file, or its registrations that ``preview_app.py`` has not kept up with fails
-here even though both scripts' own suites still pass.
+refreshed, and torn down, so a change to the shared substrate's parameters, its
+state file, or its registrations that ``preview_app.py`` has not kept up with fails
+here even though both modules' own suites still pass.
 """
 
 from __future__ import annotations
 
 import json
-import shutil
+import subprocess
 import tempfile
 import tomllib
 import urllib.error
@@ -22,7 +22,6 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from workspace_bare_scripts import forward_port
 
 from update_app_skill import preview_app as mod
 
@@ -47,6 +46,17 @@ command = ["python3", "system/apps/fixture/serve.py"]
 env = {FIXTURE_PORT = "{port:main}", FIXTURE_DATA_DIR = "{copy:data}"}
 copies = {data = "data/.apps/fixture"}
 health_path = "/health"
+"""
+
+_WORKTREE_PYPROJECT = """
+[project]
+name = "fixture-worktree"
+version = "0"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.uv]
+package = false
 """
 
 # Reads its build once at boot, so only a re-boot shows a rebuild; and writes into its
@@ -107,18 +117,6 @@ def test_a_preview_boots_from_its_manifest_refreshes_a_rebuild_in_place_and_tear
     tmp_path: Path, repo_root_on_disk: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo_root = repo_root_on_disk
-    # The shared script registers through ``python3 system/scripts/forward_port.py``
-    # from the repo root, so the copy needs the entry stub and the package it imports.
-    scripts_dir = repo_root / "system" / "scripts"
-    bare_package = Path(forward_port.__file__).parent
-    shutil.copytree(
-        bare_package,
-        scripts_dir / bare_package.name,
-        ignore=shutil.ignore_patterns("__pycache__"),
-    )
-    shutil.copy(
-        bare_package.parent / "forward_port.py", scripts_dir / "forward_port.py"
-    )
     live_data = repo_root / "data" / ".apps" / "fixture"
     live_data.mkdir(parents=True)
     (live_data / "greeting.txt").write_text("from the live data")
@@ -132,6 +130,10 @@ def test_a_preview_boots_from_its_manifest_refreshes_a_rebuild_in_place_and_tear
     (app_dir / "icon.svg").write_text(_ICON)
     (app_dir / "serve.py").write_text(_SERVER)
     (app_dir / "build.txt").write_text("first build")
+    # A real worktree is a checkout of the repo's locked project, which the preview syncs
+    # --frozen before running the app from its venv.
+    (worktree / "pyproject.toml").write_text(_WORKTREE_PYPROJECT)
+    subprocess.run(["uv", "lock", "--offline"], cwd=worktree, check=True)
 
     repo_args = ["--repo-root", str(repo_root)]
     assert (

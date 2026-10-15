@@ -32,9 +32,9 @@ pipeline is part of this skill, not a separate creation:
 
 ## Where a skill's behavior lives
 
-A skill's behavior is split between its scripts (`[script]` / `[ai-script]`, entry
-files in `.agents/skills/<name>/scripts/` and their code in the skill's `python/`
-package) and its SKILL.md prose, so a change -- or a
+A skill's behavior is split between its scripts (`[script]` / `[ai-script]`, in
+its `python/` package, run through `.agents/skills/<name>/scripts/`) and its
+SKILL.md prose, so a change -- or a
 fix -- may touch either or both. When a wrong behavior traces to an ambiguous
 or incorrect prose instruction, the edit is a SKILL.md edit even if the skill
 has scripts; a pure-prose skill (no scripts) has all of its behavior in
@@ -84,7 +84,7 @@ belongs to the app itself is that app's own pass.
   The gate is `harden-creation.md`'s "The test gate": when the reverse lookup
   above found an app that claims this skill, `select-tests` runs that app's
   suite too, since it exercises the surface the skill calls.
-- Validate with `uv run --no-sync .agents/shared/scripts/validate_skill.py
+- Validate with `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py
   .agents/skills/<name>` -- it must print `ok` (see `spec-summary.md` for what it
   checks).
 - Hand-craft and run 2-3 scenarios (template in `spec-summary.md`); they are

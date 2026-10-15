@@ -2,10 +2,10 @@
 
 Serves the .md files under ``system/apps/system_interface/docs`` rendered to HTML,
 with a sidebar for navigation. Rendering is on the fly, so edits to a spec show up
-on refresh. It is a long-running server, so start it from the root venv directly rather
-than under ``uv run``::
+on refresh. It stays up, so run it with the root venv's interpreter rather than
+under ``uv run``::
 
-    .venv/bin/python system/scripts/docs_viewer.py --port 8791
+    .venv/bin/python system/scripts/workspace_scripts/docs_viewer.py --port 8791
 
 Then register + surface it as a workspace tab::
 
@@ -122,3 +122,7 @@ def main() -> None:
         f"docs-viewer serving {DOCS_DIR} on http://{args.host}:{args.port}", flush=True
     )
     server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

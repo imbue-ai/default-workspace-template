@@ -8,7 +8,7 @@ command, the named ports, the environment, the directories copied into its scrat
 space, the health path, and the path the window opens on. This script reads that
 table from the worktree, fills in the one placeholder only it knows -- ``{registry}``,
 a copy of the live registry whose rows for previewed sibling apps point at their
-previews -- and hands the rest to the shared ``serve_isolated_instance.py``, which
+previews -- and hands the rest to the shared ``serve_isolated_instance``, which
 owns the ports, the copies, the processes, the registrations, and the state file.
 
 One preview per app at a time: a preview of the same app from a different worktree
@@ -33,19 +33,20 @@ with the siblings it booted, and verifies the processes died.
 Exit codes:
     0  Success.
     1  The manifest could not be read, the table could not be resolved, another
-       pass's preview is up, or the shared script failed (which quotes the boot log).
+       pass's preview is up, or the shared boot failed (which quotes the boot log).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
+from agents_shared import serve_isolated_instance
 from app_manifest.errors import ManifestLoadError
 from app_manifest.manifest import (
     MANIFEST_FILENAME,
@@ -56,10 +57,10 @@ from app_manifest.manifest import (
 from app_manifest.registry_location import registry_path
 from workspace_bare_scripts import forward_port
 
-# Where the shared script files each instance (its STATE_ROOT / STATE_FILENAME), and
-# where this script keeps what it adds: the registry copy and the sibling list.
-INSTANCES_ROOT = "data/.state/isolated-instances"
-INSTANCE_STATE_FILENAME = "instance.json"
+# Where the shared substrate files each instance, and where this script keeps what it
+# adds: the registry copy and the sibling list.
+INSTANCES_ROOT = serve_isolated_instance.STATE_ROOT
+INSTANCE_STATE_FILENAME = serve_isolated_instance.STATE_FILENAME
 PREVIEW_STATE_SUFFIX = ".preview.json"
 REGISTRY_COPY_SUFFIX = ".registry.toml"
 
@@ -69,7 +70,7 @@ REGISTRY_COPY_SUFFIX = ".registry.toml"
 INNER_SERVICE_SUFFIX = "-preview-app"
 PREVIEW_SERVICE_SUFFIX = "-preview"
 
-# The placeholder this script fills before the shared script sees the table.
+# The placeholder this script fills before the shared substrate sees the table.
 REGISTRY_PLACEHOLDER = "{registry}"
 
 # The shell's app name: the one preview whose registry copy other previews are framed through.
@@ -77,8 +78,14 @@ SHELL_APP_NAME = "system_interface"
 
 # Every app's tool runs from the repo root; a worktree's app runs from the worktree root
 # through its own environment, which is what makes the preview serve the worktree's code
-# rather than the live tool's.
-LAUNCHER = ("uv", "run")
+# rather than the live tool's. Like a supervisord program, it syncs that environment
+# --frozen and then execs the app from it, so no uv process stays resident as its parent.
+LAUNCHER = (
+    "bash",
+    "-c",
+    'uv sync --all-packages --frozen && export VIRTUAL_ENV="$PWD/.venv" PATH="$PWD/.venv/bin:$PATH" && exec "$@"',
+    "bash",
+)
 
 # An app that declares ``[[secrets]]`` runs under the wrapper, which is the only reader
 # of its secret files; the preview does the same. The worktree has no ``data/``, so the
@@ -86,23 +93,67 @@ LAUNCHER = ("uv", "run")
 WITH_SECRETS_SCRIPT = Path("system") / "scripts" / "with_secrets.py"
 SECRETS_DIRECTORY = Path("data") / ".secrets"
 
-_SHARED_SERVE_SCRIPT = (
-    Path(__file__).resolve().parents[4]
-    / "shared"
-    / "scripts"
-    / "serve_isolated_instance.py"
-)
-
 
 class PreviewError(Exception):
     """A preview could not be described or booted."""
 
 
-class Runner:
-    """Indirection over ``subprocess.run`` so tests can intercept the shared script."""
+@dataclass(frozen=True)
+class InstanceSpec:
+    """One preview's boot, as ``serve_isolated_instance.up`` takes it."""
 
-    def run(self, argv: Sequence[str], cwd: Path) -> int:
-        return int(subprocess.run(list(argv), cwd=str(cwd), check=False).returncode)
+    name: str
+    command: list[str]
+    cwd: Path
+    port_env_by_name: dict[str, str | None]
+    env_overrides: dict[str, str]
+    copy_sources: dict[str, str]
+    health_path: str
+    service_name: str
+    preview_service_name: str
+    preview_title: str
+    inner_path: str
+
+
+class Instances:
+    """Indirection over the shared isolated-instance substrate, so tests can stand in for it."""
+
+    def up(self, spec: InstanceSpec, repo_root: Path) -> int:
+        return serve_isolated_instance.up(
+            spec.name,
+            spec.command,
+            str(spec.cwd),
+            repo_root,
+            port_env_by_name=spec.port_env_by_name,
+            env_overrides=spec.env_overrides,
+            copy_sources=spec.copy_sources,
+            health_path=spec.health_path,
+            service_name=spec.service_name,
+            preview_service_name=spec.preview_service_name,
+            preview_title=spec.preview_title,
+            inner_path=spec.inner_path,
+            runner=serve_isolated_instance.Runner(),
+            registry=serve_isolated_instance.Registry(),
+            http=serve_isolated_instance.HttpClient(),
+            spawner=serve_isolated_instance.Spawner(),
+        )
+
+    def refresh(self, name: str, repo_root: Path) -> int:
+        return serve_isolated_instance.refresh(
+            name,
+            repo_root,
+            runner=serve_isolated_instance.Runner(),
+            http=serve_isolated_instance.HttpClient(),
+            spawner=serve_isolated_instance.Spawner(),
+        )
+
+    def down(self, name: str, repo_root: Path) -> int:
+        return serve_isolated_instance.down(
+            name,
+            repo_root,
+            runner=serve_isolated_instance.Runner(),
+            registry=serve_isolated_instance.Registry(),
+        )
 
 
 def find_manifest(worktree: Path, app_name: str) -> tuple[Path, AppManifest]:
@@ -214,7 +265,7 @@ def write_registry_copy(
 
 
 def resolve_own_placeholders(text: str, registry_copy: Path | None) -> str:
-    """Fill the placeholders only this script knows; the shared script fills the rest."""
+    """Fill the placeholders only this script knows; the shared substrate fills the rest."""
     if REGISTRY_PLACEHOLDER in text:
         if registry_copy is None:
             raise PreviewError(
@@ -251,61 +302,43 @@ def _under_declared_secrets(
     return launch
 
 
-def build_up_argv(
+def build_instance_spec(
     manifest: AppManifest,
     worktree: Path,
     repo_root: Path,
     title: str,
     registry_copy: Path | None,
     inner_path: str,
-) -> list[str]:
-    """The shared script's ``up`` invocation for the manifest's preview table."""
+) -> InstanceSpec:
+    """The shared substrate's boot of the manifest's preview table."""
     preview = manifest.preview
-    argv = [
-        sys.executable,
-        str(_SHARED_SERVE_SCRIPT),
-        "up",
-        "--name",
-        instance_name(manifest.name),
-        "--cwd",
-        str(worktree),
-        "--repo-root",
-        str(repo_root),
-        "--health-path",
-        preview.health_path,
-        "--service-name",
-        f"{manifest.name}{INNER_SERVICE_SUFFIX}",
-        "--preview-service-name",
-        instance_name(manifest.name),
-        "--preview-title",
-        title,
-        "--inner-path",
-        inner_path,
-    ]
-    for port_name in preview.ports:
-        argv.extend(["--port", str(port_name)])
-    for key, value in preview.env.items():
-        argv.extend(
-            [
-                "--env",
-                f"{key}={resolve_own_placeholders(value, registry_copy)}",
-            ]
+    try:
+        port_env_by_name = serve_isolated_instance.parse_port_envs(
+            (), [str(port_name) for port_name in preview.ports]
         )
-    for key, source in preview.copies.items():
-        argv.extend(["--copy", f"{key}={source}"])
+    except serve_isolated_instance.InstanceError as exc:
+        raise PreviewError(f"the [preview] table of {manifest.name!r}: {exc}") from exc
     command = list(preview.command) if preview.command else [str(manifest.program)]
     launch = _under_declared_secrets(manifest, repo_root, [*command, *preview.args])
-    argv.append("--")
-    argv.extend(
-        [
+    return InstanceSpec(
+        name=instance_name(manifest.name),
+        command=[
             *LAUNCHER,
-            *(
-                resolve_own_placeholders(part, registry_copy)
-                for part in launch
-            ),
-        ]
+            *(resolve_own_placeholders(part, registry_copy) for part in launch),
+        ],
+        cwd=worktree,
+        port_env_by_name=port_env_by_name,
+        env_overrides={
+            key: resolve_own_placeholders(value, registry_copy)
+            for key, value in preview.env.items()
+        },
+        copy_sources={str(key): source for key, source in preview.copies.items()},
+        health_path=preview.health_path,
+        service_name=f"{manifest.name}{INNER_SERVICE_SUFFIX}",
+        preview_service_name=instance_name(manifest.name),
+        preview_title=title,
+        inner_path=inner_path,
     )
-    return argv
 
 
 def up(
@@ -316,7 +349,7 @@ def up(
     with_apps: Sequence[str] = (),
     instance_key: str | None = None,
     title: str | None = None,
-    runner: Runner,
+    instances: Instances,
     dump_registry: Callable[[list[dict[str, object]]], str] | None = None,
 ) -> int:
     """Boot the app's preview from ``worktree``, after the siblings named in ``with_apps``."""
@@ -343,7 +376,7 @@ def up(
                 worktree,
                 repo_root,
                 instance_key=instance_key,
-                runner=runner,
+                instances=instances,
                 dump_registry=dump,
             )
             != 0
@@ -360,7 +393,7 @@ def up(
     if _uses_placeholder(manifest, REGISTRY_PLACEHOLDER):
         registry_copy = _registry_copy_path(repo_root, app_name)
         write_registry_copy(registry_path(), registry_copy, preview_url_by_app, dump)
-    argv = build_up_argv(
+    spec = build_instance_spec(
         manifest,
         worktree,
         repo_root,
@@ -384,7 +417,7 @@ def up(
             }
         )
     )
-    code = runner.run(argv, cwd=repo_root)
+    code = instances.up(spec, repo_root)
     if code != 0 and not siblings:
         # Kept when siblings may be up: their names live only in this record, so dropping it
         # would leave them running with nothing left for ``down`` to reach them by. They are
@@ -443,20 +476,9 @@ def _uses_placeholder(manifest: AppManifest, placeholder: str) -> bool:
     return any(placeholder in text for text in texts)
 
 
-def refresh(app_name: str, repo_root: Path, *, runner: Runner) -> int:
+def refresh(app_name: str, repo_root: Path, *, instances: Instances) -> int:
     """Re-boot the preview's inner process in place, after a rebuild in its worktree."""
-    return runner.run(
-        [
-            sys.executable,
-            str(_SHARED_SERVE_SCRIPT),
-            "refresh",
-            "--name",
-            instance_name(app_name),
-            "--repo-root",
-            str(repo_root),
-        ],
-        cwd=repo_root,
-    )
+    return instances.refresh(instance_name(app_name), repo_root)
 
 
 def _recorded_siblings(repo_root: Path, app_name: str) -> list[str]:
@@ -472,7 +494,7 @@ def down(
     app_name: str,
     repo_root: Path,
     *,
-    runner: Runner,
+    instances: Instances,
     dump_registry: Callable[[list[dict[str, object]]], str] | None = None,
 ) -> int:
     """Tear the preview down, then the siblings it booted; keep everything a survivor still needs.
@@ -482,25 +504,14 @@ def down(
     """
     siblings = _recorded_siblings(repo_root, app_name)
     dump = dump_registry if dump_registry is not None else forward_port.dump_registry
-    code = runner.run(
-        [
-            sys.executable,
-            str(_SHARED_SERVE_SCRIPT),
-            "down",
-            "--name",
-            instance_name(app_name),
-            "--repo-root",
-            str(repo_root),
-        ],
-        cwd=repo_root,
-    )
+    code = instances.down(instance_name(app_name), repo_root)
     if code != 0:
         return code
     _registry_copy_path(repo_root, app_name).unlink(missing_ok=True)
     _preview_state_path(repo_root, app_name).unlink(missing_ok=True)
     _reframe_previews_naming(repo_root, app_name, dump)
     for sibling in siblings:
-        code = down(sibling, repo_root, runner=runner, dump_registry=dump)
+        code = down(sibling, repo_root, instances=instances, dump_registry=dump)
         if code != 0:
             return code
     return 0
@@ -521,7 +532,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     up_parser = subparsers.add_parser(
-        "up", help="Boot the app's preview from a worktree and surface it as an app to open."
+        "up",
+        help="Boot the app's preview from a worktree and surface it as an app to open.",
     )
     up_parser.add_argument(
         "--app", required=True, help="The app's registered name (its manifest's name)."
@@ -574,12 +586,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 with_apps=args.with_apps,
                 instance_key=args.instance_key,
                 title=args.title,
-                runner=Runner(),
+                instances=Instances(),
             )
         if args.command == "refresh":
-            return refresh(args.app, repo_root, runner=Runner())
+            return refresh(args.app, repo_root, instances=Instances())
         if args.command == "down":
-            return down(args.app, repo_root, runner=Runner())
+            return down(args.app, repo_root, instances=Instances())
     except (PreviewError, ManifestLoadError) as exc:
         sys.stderr.write(f"preview: {exc}\n")
         return 1

@@ -199,20 +199,14 @@ describe("the chat page's location report", () => {
 
 describe("the embed API", () => {
   it("drives a framed page's presence the way the shell's messages do", async () => {
-    framed();
+    const parent = framed();
     const { connectChatToShell, presence } = await loadShell();
     connection = connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
     const embed = window.chatPageEmbed;
     expect(embed).toBeDefined();
     if (embed === undefined) throw new Error("no embed API on a framed page");
 
-    embed.handshake({
-      clientId: "client-2",
-      windowId: "",
-      desktopId: "",
-      app: "",
-      path: "",
-    });
+    deliver({ type: SHELL_HANDSHAKE, clientId: "client-2" }, parent);
     embed.shown();
     embed.hidden();
 

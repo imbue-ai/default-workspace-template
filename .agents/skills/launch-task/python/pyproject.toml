@@ -7,6 +7,8 @@ dependencies = [
     # Reads the OOM shed ledger for a worker it is about to revive.
     "oom-priority",
     "pyyaml>=6",
+    # Sends the task and the lead's replies through the chat messenger.
+    "workspace-scripts",
 ]
 
 [build-system]

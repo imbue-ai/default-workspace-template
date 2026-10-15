@@ -19,11 +19,11 @@ host cannot be known server-side -- so the inner iframe's ``src`` is derived
 in the page's JavaScript from ``location.host`` by swapping the wrapper's own
 leading label for the inner service's name.
 
-Standard library only; ``serve_isolated_instance.py`` launches it under its own
-interpreter. It is a long-running server, so to run it by hand start it from the root
-venv directly rather than under ``uv run``:
+Standard library only; ``serve_isolated_instance`` launches it as a module under its
+own interpreter. It stays up, so to run it by hand use the root venv's interpreter
+rather than ``uv run``:
 
-    .venv/bin/python .agents/shared/scripts/preview_wrapper_server.py --port 8200 \\
+    .venv/bin/python -m agents_shared.preview_wrapper_server --port 8200 \\
         --inner-service chat-preview-app --title "my-change"
 """
 
@@ -190,3 +190,7 @@ def main(argv: list[str] | None = None) -> int:
         inner_path=args.inner_path,
     )
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

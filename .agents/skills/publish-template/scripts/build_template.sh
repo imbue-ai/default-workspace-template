@@ -229,7 +229,7 @@ while IFS=' ' read -r marker_sha marker_subject; do
     if [ "$marker_sha" != "$BASE_COMMIT" ] \
         && git merge-base --is-ancestor "$marker_sha" "$BASE_COMMIT"; then
         echo "build_template.sh: BASE REF INVALID: '${BASE_REF}' descends from this workspace's Initial workspace commit (${marker_sha}), so its tree and history carry the workspace's own work, not just the template" >&2
-        echo "build_template.sh: resolve the base with .agents/shared/scripts/resolve_template_base.py (for an update-self: merge it is the merge's second parent)" >&2
+        echo "build_template.sh: resolve the base with .agents/shared/scripts/agents_shared/resolve_template_base.py (for an update-self: merge it is the merge's second parent)" >&2
         exit 5
     fi
     break

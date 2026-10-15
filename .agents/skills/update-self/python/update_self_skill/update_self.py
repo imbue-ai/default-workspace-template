@@ -25,8 +25,7 @@ belong in tested code rather than agent prose:
 
     A default target the workspace is **already on** is a refusal too: the command
     asks git whether the chosen ref is already an ancestor of ``HEAD``, rather
-    than spending a backup, a worker, and a validation run on a merge that changes
-    nothing. A workspace *behind* the ceiling still updates to it.
+    than spending a worker and a validation run on a merge that changes nothing. A workspace *behind* the ceiling still updates to it.
 
 ``classify-merge``
     Split the files upstream changed into the reconciled **merged** set (local
@@ -516,7 +515,7 @@ def _cmd_changelog_entries(args: argparse.Namespace) -> int:
     # Per-PR changelog entries live in a ``changelog/`` dir under each project
     # bucket -- ``system/changelog/``, ``.agents/changelog/``, and
     # ``system/{libs,services,apps}/<name>/changelog/`` (see
-    # system/scripts/check_changelog_entries.py for the bucket definition).
+    # system/scripts/workspace_scripts/check_changelog_entries.py for the bucket definition).
     # Match every one of them at any depth with a single glob rather than one
     # dir alone, or the "what's new" digest silently drops everything landed
     # under the bucketed layout. Exclude system/vendor, whose snapshots carry

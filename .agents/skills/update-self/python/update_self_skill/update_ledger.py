@@ -93,7 +93,7 @@ def _origin_line(repo_root: Path, runner: Runner) -> str:
     top of the cloned template, so the tag is on an ancestor of it.
 
     The rule is spelled out here rather than imported from
-    ``.agents/shared/scripts/resolve_template_base.py`` (whose ``--origin`` is the
+    ``.agents/shared/scripts/agents_shared/resolve_template_base.py`` (whose ``--origin`` is the
     same rule, and which the skills reach as a CLI): the apply is staged and run
     from ``data/.tasks/update-self/skill-at-target/``, a ``git archive`` of the
     update-self skill directory alone, so nothing outside it can be imported --

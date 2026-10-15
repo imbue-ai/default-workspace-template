@@ -253,6 +253,24 @@ describe("a submenu", () => {
     expect(changes).toEqual(["colour"]);
   });
 
+  it("keeps the open row filled while its submenu is up, and only that row", () => {
+    rows = [
+      ...rows,
+      {
+        kind: "submenu",
+        key: "size",
+        label: "Size",
+        rows: () => [{ kind: "action", key: "large", label: "Large", onSelect: () => undefined }],
+      },
+    ];
+    menu.open(ANCHOR);
+    expect(row("colour").classList.contains("bg-fill-hover")).toBe(false);
+    row("colour").click();
+    expect(menu.isSubmenuOpen("colour")).toBe(true);
+    expect(row("colour").classList.contains("bg-fill-hover")).toBe(true);
+    expect(row("size").classList.contains("bg-fill-hover")).toBe(false);
+  });
+
   it("does not open for a hover the pointer did not stay for", () => {
     menu.open(ANCHOR);
     row("colour").dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: 110, clientY: 110 }));

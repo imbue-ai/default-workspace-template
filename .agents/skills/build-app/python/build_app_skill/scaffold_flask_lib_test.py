@@ -32,7 +32,7 @@ from app_manifest.registry import SHELL_APP_CONTRACT_PATH, SHELL_CONTEXT_MENU_PA
 
 from build_app_skill import scaffold_flask_lib
 
-_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "scaffold_flask_lib.py"
+_SCRIPT = Path(__file__).resolve().with_name("scaffold_flask_lib.py")
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 
@@ -336,6 +336,22 @@ def test_write_lib_writes_a_manifest_the_library_accepts(tmp_path: Path) -> None
     assert manifest.default_shortcut is None
 
 
+def test_the_scaffold_refuses_a_manifest_the_library_would_skip(tmp_path: Path) -> None:
+    lib_dir = scaffold_flask_lib._write_lib(
+        tmp_path, "inbox-status", "inbox status", "Inbox status", 8081, [], _ICON
+    )
+    scaffold_flask_lib._validate_manifest(tmp_path, "inbox_status")
+
+    (lib_dir / "icon.svg").unlink()
+    with pytest.raises(SystemExit) as refused:
+        scaffold_flask_lib._validate_manifest(tmp_path, "inbox_status")
+
+    assert str(refused.value).startswith(
+        "error: system/apps/inbox_status/app.toml is invalid:"
+    )
+    assert "icon" in str(refused.value)
+
+
 def _test_function_names(source: str) -> frozenset[str]:
     return frozenset(
         node.name
@@ -349,14 +365,20 @@ def test_a_scaffolded_apps_ratchets_define_the_tests_every_project_defines() -> 
     app the scaffold writes must carry exactly that set or its first commit fails it."""
     reference = _REPO_ROOT / "system/libs/app_manifest/test_app_manifest_ratchets.py"
 
-    assert _test_function_names(scaffold_flask_lib._lib_ratchets()) == _test_function_names(
-        reference.read_text()
-    )
+    assert _test_function_names(
+        scaffold_flask_lib._lib_ratchets()
+    ) == _test_function_names(reference.read_text())
 
 
 def test_a_scaffolded_app_passes_its_own_type_check(tmp_path: Path) -> None:
     lib_dir = scaffold_flask_lib._write_lib(
-        tmp_path, "inbox-status", "inbox status dashboard", "Inbox status", 8081, [], _ICON
+        tmp_path,
+        "inbox-status",
+        "inbox status dashboard",
+        "Inbox status",
+        8081,
+        [],
+        _ICON,
     )
 
     result = subprocess.run(

@@ -22,7 +22,7 @@ show up as a dirty file in the tree, so it is not accurate to say a scaffold
 touches nothing shared.
 
 Usage:
-    uv run --no-sync .agents/skills/build-app/scripts/scaffold_flask_lib.py \\
+    uv run --no-sync .agents/skills/build-app/python/build_app_skill/scaffold_flask_lib.py \\
         --name inbox-status --description "inbox status dashboard" \\
         --icon-file icon.svg [--display-name "Inbox status"] \\
         [--port 8081] [--extra-dep "jinja2>=3.1"] [--extra-dep "anthropic>=0.40"]
@@ -662,15 +662,17 @@ def _run_checked(argv: list[str], repo_root: Path, description: str) -> None:
 
 
 def _validate_manifest(repo_root: Path, package: str) -> None:
-    # The written manifest is checked against the app_manifest library's rules
-    # (from the root venv, where the library is a workspace member) so a
-    # scaffolded app never registers a manifest its readers would skip.
-    manifest_path = f"system/apps/{package}/app.toml"
-    _run_checked(
-        ["uv", "run", "--no-sync", "app-manifest", "validate-manifest", manifest_path],
-        repo_root,
-        f"uv run --no-sync app-manifest validate-manifest {manifest_path}",
-    )
+    # The written manifest is checked against the app_manifest library's rules so a
+    # scaffolded app never registers a manifest its readers would skip. Imported
+    # here, so only a scaffold that validates pays for the library and its pydantic.
+    from app_manifest.errors import AppManifestError
+    from app_manifest.manifest import load_manifest
+
+    manifest_path = repo_root / "system" / "apps" / package / "app.toml"
+    try:
+        load_manifest(manifest_path)
+    except AppManifestError as error:
+        sys.exit(f"error: {manifest_path.relative_to(repo_root)} is invalid: {error}")
 
 
 def _install_app_tool(repo_root: Path, package: str) -> None:
@@ -826,3 +828,7 @@ def main() -> None:
         f"Next: implement your routes in src/{package}/runner.py, then verify per "
         f"references/verify.md (smoketest_app.py or curl + Playwright against http://127.0.0.1:{port}/)."
     )
+
+
+if __name__ == "__main__":
+    main()

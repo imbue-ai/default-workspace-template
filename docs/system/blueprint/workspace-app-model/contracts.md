@@ -36,6 +36,7 @@ Parsed by the `app_manifest` library (section 14) with pydantic, `extra = "forbi
 | `priority` | string | no | `"user"` | A key of `SERVICE_BANDS` in `oom_priority.bands`, or `user`. |
 | `program` | string | no | `name` | The supervisord program that runs the app. |
 | `internal` | bool | no | `false` | Hidden from every open surface. |
+| `system` | bool | no | `false` | Part of the workspace itself rather than an app built on it: the minds Share tab lists it under a collapsed System group instead of offering it up front, and it can still be granted on its own. The share gateway admits a per-app grant on any app that is not `internal`, and only such a grant keeps a `stop_when_no_windows` app running. |
 | `default_shortcut` | table | no | absent | `{action = "<id>", launch = "<id>"?, mode = "focus" \| "new"}`. `action` must be a declared action id, or `open` for a single-instance app. `launch`, optional, is the desktop interface's spelling: a declared launch path id, or `open` when the app declares none. |
 | `actions` | array of tables | no | `[]` | Each `{id, label, params?}`; `id` matches `^[a-z0-9][a-z0-9-]{0,31}$` and is unique; `label` non-empty. `params` is an optional array of `{name, label, required}` describing the create body's `params` keys, for documentation and the New Tab page (an action with a `message` param is one the page can seed a first message into). Forbidden when `instances = false`. |
 | `launch_paths` | array of tables | no | `[]` | Each `{id, label, path, params?}`: the paths the desktop interface opens windows at (`docs/system/blueprint/desktop-interface/contracts.md` section 2). `id` follows the action id rule, is unique, and is never `open` (reserved for the synthesized root launch path); `path` is rooted with one slash, carries no query string or fragment, and nothing a URL would escape; `params` is the optional `{name, label, required}` array naming the query parameters the shell may append. Declared beside `actions` until the desktop interface replaces the tabbed shell. |
@@ -43,8 +44,7 @@ Parsed by the `app_manifest` library (section 14) with pydantic, `extra = "forbi
 | `references` | array of tables | no | `[]` | Each `{path, note?}`. `path` is a literal repo-root-relative POSIX file or directory the app owns outside its own folder (no globs, no `.` or `..` segments, no empty segments, no trailing slash, no backslashes, never under `system/vendor/` or `data/`, and never through a symlinked directory, which git does not report diffs through) and is unique within the manifest. `note` is one non-empty line, at most 200 characters, saying why it belongs to the app and which surface it uses. Location rules below. |
 | `scope` | table | no | `{}` | `{exclude = ["<glob>", ...]}`. Each glob is repo-root-relative gitignore syntax (non-empty, not absolute, no `.` or `..` segments, no empty segments, no backslashes, no leading `!` -- negation would re-include a built-in). A glob that covers the app's own directory or one of its references is rejected when the footprint is computed. A hard denylist for the footprint, combined with the built-in excludes `system/vendor/**`, `data/**`, `**/node_modules/**`, `**/dist/**`, `**/.venv/**`. |
 | `wiring` | table | no | `{}` | `{programs = ["<program>", ...]}`: further `[program:*]` blocks under `system/supervisord.conf.d/` the app owns beyond its own and its `<name>-<role>` sidecars (the browser declares `xvfb`). Unique, never the app's own `program`; each must have a block there when the footprint is computed. |
-| `message_handlers` | array of tables | no | `[]` | Each `{type, path}`: a message type the app takes from the minds chrome (`minds:` and a lowercase kebab-case name, unique within the manifest) and the route under its origin the shell posts each one to (`docs/system/blueprint/desktop-interface/contracts.md` sections 2 and 5.6). |
-| `handles` | table | no | absent | Reserved for protocol and intent handlers (deferred); must be absent or empty. |
+| `message_handlers` | array of tables | no | `[]` | Each `{type, path}` or `{type, show, showing?}`: a message type the app takes (a lowercase prefix, `:`, and a lowercase kebab-case name, unique within the manifest; the minds chrome and apps' pages send them alike), and either the route under its origin the shell posts each one to or the page of the app the shell shows for it (`docs/system/blueprint/desktop-interface/contracts.md` sections 2 and 5.6). These are the workspace's intent handlers; the reserved `handles` table they replace is gone, and a manifest that carries it fails to load. |
 | `preview` | table | no | the scaffold convention | How a throwaway instance boots for a preview (`PreviewSpec`): `command` (default: the program as its console script), `ports` (named free ports; `main` always), `env`, `args`, `copies` (repo-relative directories copied into the instance's scratch space, by key), `health_path` (default `/health`), `open_path` (default `/`), `open_path_takes_key`. `command`, `args`, and `env` values may carry `{port:<name>}`, `{copy:<key>}`, `{host}`, `{scratch}`, and `{registry}` (a copied registry with previewed siblings rewritten); `open_path` may carry `{key}` exactly when `open_path_takes_key`. A placeholder naming an undeclared port or copy fails validation. Absent, the table is `env = {<PACKAGE_UPPER>_PORT = "{port:main}", <PACKAGE_UPPER>_HOST = "{host}", <PACKAGE_UPPER>_DATA_DIR = "{copy:data}"}` over `copies = {data = "data/.apps/<name>"}`. |
 
 A single-instance app (`instances = false`) has exactly one synthesized action, `open`, labelled `Open <display_name>`, which the shell adds when it reads the registry; the manifest never declares it.
@@ -63,6 +63,8 @@ Built-in manifests:
 | `files` | false | `files` | `{launch = "new", mode = "new"}` | `new` ("New File Viewer" at `/home/user/workspace/`, param `path` optional) | the convention |
 | `browser` | false | `browser` | `{launch = "new", mode = "focus"}`; also `window_closed_path = "/api/window-closed"` | `new` ("New Browser" at `/new`, param `url` optional) | the convention |
 
+The chat, terminal, browser, and Getting Started declare `system = true`.
+
 Every built-in except the shell and the terminal's pty points `icon` at an `icon.svg` beside its manifest; those two are `internal` and have none.
 
 ## 3. The registry (`data/.state/apps.toml`)
@@ -79,6 +81,7 @@ Each `[[apps]]` row:
 | `instances` | manifest | Absent reads as `false`. |
 | `instances_url` | manifest | Absent reads as `url`. |
 | `critical` | manifest | Absent reads as `false`. |
+| `system` | manifest | Absent reads as `false`. |
 | `priority` | manifest | Absent reads as `user`. |
 | `default_shortcut` | manifest | Inline table `{action, launch?, mode}`. |
 | `actions` | manifest | Array of inline tables `{id, label, params?}`; `params` is the array of the manifest's param names, present only when there are any. |
@@ -90,7 +93,7 @@ Each `[[apps]]` row:
 `--remove` deletes the row.
 The script validates only what it copies from files; the shell validates every row against the `RegistryRow` model on read and logs and skips a row that fails, so a hand-edited registry degrades to a missing app rather than a crashed shell.
 
-The shell's services event writer and the minds side read `name`, `url`, `label`, and `icon` and ignore the manifest keys.
+The shell's services event writer announces each row's `name` (as `service`), `url`, `label`, `icon`, `display_name`, `system`, and `internal`; the minds side reads only the event. Its Share tab never lists an app announced `internal`, lists one announced `system` under its System group, and offers the rest up front.
 
 ## 4. The instances API
 
@@ -315,9 +318,9 @@ The vendored ttyd client carries a focus listener for `ttyd-focus`, a payload-fr
 ## 11. The embedder relay
 
 In the shell's embed module: a `message` listener that forwards any message whose `type` starts with `minds:` from a child frame in the workspace origin family to `window.parent` unchanged, and forwards any message from `window.parent` to every child frame the shell created, unchanged.
-The shell handles `minds:close-active-tab` itself and forwards it as well.
-A message from `window.parent` whose type an app's `message_handlers` registers is also posted once to the shell's `POST /api/embedder-messages` with the client's id, and the shell posts it on to that app (`docs/system/blueprint/desktop-interface/contracts.md` section 5.6).
-The shell inspects no payloads.
+The shell handles `minds:close-active-tab` and `minds:open-link` itself and forwards them as well; it opens an `open-link` URL inside the workspace, or, for an external link no app of the workspace takes, sends it back out with `minds:open-external` (`docs/system/blueprint/desktop-interface/contracts.md` section 5.6).
+A message from `window.parent` whose type an app's `message_handlers` registers is also posted once to the shell's `POST /api/embedder-messages` with the client's id, and the shell delivers it to that app by the handler's form: posted to its route, or shown as the page it builds from the message (section 5.6 there).
+The shell reads a payload only to fill a `show` handler's page and to take `open-link`'s URL.
 
 ## 12. `workspace-layout` and the op route
 

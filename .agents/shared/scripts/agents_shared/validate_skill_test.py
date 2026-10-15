@@ -32,6 +32,11 @@ packages = ["{package}"]
 """
 
 
+_ENTRY_MODULE = (
+    'def main() -> None:\n    pass\n\n\nif __name__ == "__main__":\n    main()\n'
+)
+
+
 def _write_skill(
     base: Path,
     name: str,
@@ -44,8 +49,8 @@ def _write_skill(
     """Build a skill directory on disk; return the skill path.
 
     With scripts, the skill is laid out the way the spec asks: a ``python/`` project
-    whose ``pyproject.toml`` names ``<name>-skill`` and its package, and a
-    ``scripts/run.py`` stub.
+    whose ``pyproject.toml`` names ``<name>-skill`` and its package, whose ``run``
+    module is run by path, and a ``scripts/run.py`` stub for a path called from outside.
     """
     skill = base / name
     skill.mkdir(parents=True)
@@ -64,6 +69,10 @@ def _write_skill(
         project = skill / "python"
         (project / package).mkdir(parents=True)
         (project / package / "__init__.py").write_text("")
+        (project / package / "run.py").write_text(_ENTRY_MODULE)
+        (project / package / "helpers.py").write_text(
+            "def helper() -> None:\n    pass\n"
+        )
         (project / "pyproject.toml").write_text(
             _PYPROJECT.format(project=f"{name}-skill", package=package)
         )
@@ -258,17 +267,51 @@ def test_check_runnable_without_scripts(tmp_path: Path) -> None:
 def test_check_runnable_checks_the_lock_then_runs_every_entry(tmp_path: Path) -> None:
     skill = _write_skill(tmp_path, "s", include_scripts=True)
     scripts = (skill / "scripts").resolve()
+    package = (skill / "python" / "s_skill").resolve()
     (scripts / "extra.py").write_text("")
     (scripts / "conftest.py").write_text("")
-    (skill / "python" / "s_skill" / "cli_test.py").write_text("")
+    (package / "cli_test.py").write_text(_ENTRY_MODULE)
+    # A guard nested inside a function does not make a module an entry point.
+    (package / "nested.py").write_text(
+        "def f() -> None:\n"
+        + "".join(f"    {line}\n" for line in _ENTRY_MODULE.splitlines())
+    )
     runner = _RecordingRunner()
 
     assert validate_skill.check_runnable(skill, runner=runner) is None
     assert runner.calls == [
         ["uv", "lock", "--check"],
+        ["uv", "run", "--no-sync", str(package / "run.py"), "--help"],
         ["uv", "run", "--no-sync", str(scripts / "extra.py"), "--help"],
         ["uv", "run", "--no-sync", str(scripts / "run.py"), "--help"],
     ]
+
+
+def test_check_runnable_refuses_a_module_shadowing_the_standard_library(
+    tmp_path: Path,
+) -> None:
+    skill = _write_skill(tmp_path, "s", include_scripts=True)
+    (skill / "python" / "s_skill" / "email.py").write_text("")
+    runner = _RecordingRunner()
+
+    error = validate_skill.check_runnable(skill, runner=runner)
+
+    entry = (skill / "python" / "s_skill" / "run.py").resolve()
+    assert error == (
+        f"{entry} runs by its own path, so its package's email would shadow the "
+        "standard-library module of that name; rename it"
+    )
+    assert runner.calls == [["uv", "lock", "--check"]]
+
+
+def test_check_runnable_reports_a_module_that_cannot_be_parsed(tmp_path: Path) -> None:
+    skill = _write_skill(tmp_path, "s", include_scripts=True)
+    (skill / "python" / "s_skill" / "broken.py").write_text("def broken(:\n")
+
+    error = validate_skill.check_runnable(skill, runner=_RecordingRunner())
+
+    assert error is not None
+    assert "broken.py cannot be parsed" in error
 
 
 def test_check_runnable_reports_a_stale_lock(tmp_path: Path) -> None:

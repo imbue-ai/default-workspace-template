@@ -350,6 +350,9 @@ def shared_browser_oom_score_adj(self_assigned: int) -> int:
 _NON_SERVICE_PROGRAM_BANDS: Final[dict[str, int]] = {
     "earlyoom": PROTECTED,
     "oom-tag-backstop": PROTECTED,
+    # Feeds earlyoom the container's cgroup headroom under runc; without it
+    # earlyoom cannot see the workspace's cap at all.
+    "publish_cgroup_meminfo": PROTECTED,
     "env-converge": PROTECTED,
     # A one-shot (autorestart=false) that registers the VM-resident owner-exec
     # service origin and exits; shedding it mid-run would leave the registration

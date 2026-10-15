@@ -47,7 +47,6 @@ import time
 import zipfile
 from collections.abc import Sequence
 from datetime import datetime, timezone
-from functools import lru_cache
 from typing import NamedTuple
 
 WORKSPACE_DIR = "/home/user/workspace"
@@ -299,7 +298,7 @@ def format_log_db_row(
     )
 
 
-def read_log_db(path: str) -> str:
+def read_log_db(path: str, max_bytes: int = MAX_READ_BYTES) -> str:
     """The newest allowlisted rows of a harness log db, rendered oldest-first, or a note.
 
     Opened read-only through a URI so a live harness keeps writing undisturbed;
@@ -348,7 +347,7 @@ def read_log_db(path: str) -> str:
     # line a fragment starting mid-timestamp, and unlike a text log this one is
     # being rendered here, so it can be cut where a reader would cut it.
     newest_first: list[str] = []
-    budget = MAX_READ_BYTES
+    budget = max_bytes
     for ts, ts_nanos, level, target, body in rows:
         # SQLite stores what it was given, not what the column was declared as, so a
         # bumped schema can hand back a NULL level or a ts that is not a number --
@@ -370,23 +369,6 @@ def read_log_db(path: str) -> str:
         budget -= cost
         newest_first.append(line)
     return "\n".join(reversed(newest_first))
-
-
-def select_agent_log_dbs(agent_id: str) -> list[str]:
-    """One agent's harness log databases, newest first.
-
-    Unlike the text logs these carry no recency filter: a db is written through
-    for the life of the harness rather than rotated, so its mtime describes the
-    last write and not the span it covers, and the rows carry their own times
-    anyway.
-    """
-    if not AGENTS_DIR:
-        return []
-    agent_dir = os.path.join(AGENTS_DIR, agent_id)
-    paths: set[str] = set()
-    for pattern in AGENT_LOG_DB_GLOBS:
-        paths.update(glob.glob(os.path.join(agent_dir, pattern)))
-    return sorted(paths, key=safe_mtime, reverse=True)
 
 
 def run_command(argv: Sequence[str], timeout: float) -> str:
@@ -419,68 +401,6 @@ def program_name_for_log(path: str) -> str:
     return name
 
 
-def select_log_files() -> list[str]:
-    """Every supervisord log file worth sending, newest first and capped.
-
-    Deliberately unfiltered by owner or stream: any program's log -- app or
-    service, user-created or built-in, stdout or stderr -- can carry the bug,
-    so all of them ride (the user consented via the logs checkbox, and every
-    member still passes the secret scan before it leaves).
-
-    Only logs written to inside ``LOG_RECENCY_WINDOW_SECONDS`` are sent: a
-    program that has been silent for over a day describes some earlier state of
-    the workspace, not the one the bug was filed from.
-    """
-    candidates = list(glob.glob(SUPERVISOR_LOG_DIR + "/*.log"))
-    cutoff = time.time() - LOG_RECENCY_WINDOW_SECONDS
-    candidates = [p for p in candidates if safe_mtime(p) >= cutoff]
-    candidates.sort(key=safe_mtime, reverse=True)
-    return candidates[:MAX_LOG_FILES]
-
-
-def build_metadata() -> dict[str, object]:
-    """The report's structured context: what this workspace is and how it is doing.
-
-    A json member rather than headed sections in a text blob, so a reader (or a
-    tool) gets fields instead of something to re-parse. Values that are
-    inherently command output -- df, meminfo, supervisorctl -- stay as their own
-    string fields rather than being given an invented schema; what matters is
-    that they are separately addressable instead of concatenated together.
-    """
-    return {
-        "workspace": {
-            "commit": run_command(
-                ["git", "-C", WORKSPACE_DIR, "log", "-1", "--format=%H %cI %s"],
-                GIT_TIMEOUT_SECONDS,
-            ),
-            "branch": run_command(
-                ["git", "-C", WORKSPACE_DIR, "rev-parse", "--abbrev-ref", "HEAD"],
-                GIT_TIMEOUT_SECONDS,
-            ),
-            "local_changes": run_command(
-                ["git", "-C", WORKSPACE_DIR, "status", "--short"], GIT_TIMEOUT_SECONDS
-            )
-            or "(clean)",
-        },
-        "host_health": {
-            "disk": run_command(["df", "-h"], DF_TIMEOUT_SECONDS),
-            # meminfo is head-ordered: MemTotal/MemFree/MemAvailable/Buffers/Cached
-            # lead the file, and the tail is Hugetlb/Vmalloc detail nobody reads.
-            "memory": read_head(MEMINFO_PATH, MAX_MEMINFO_LINES),
-            "uptime_seconds_up_and_idle": read_head(UPTIME_PATH, 2),
-            "loadavg": read_head(LOADAVG_PATH, 2),
-            "recent_memory_shed_events": read_tail(SHED_LEDGER, MAX_SHED_LINES),
-        },
-        "services": {
-            "status": run_command(
-                ["supervisorctl", "-c", SUPERVISORD_CONF, "status"],
-                SUPERVISORCTL_TIMEOUT_SECONDS,
-            ),
-            "log_lines_per_file": MAX_LINES_PER_LOG,
-        },
-    }
-
-
 def take_within_byte_budget(
     members: Sequence[tuple[str, str, float]], budget_bytes: int
 ) -> tuple[list[tuple[str, str, float]], int]:
@@ -505,149 +425,6 @@ def take_within_byte_budget(
         kept.append(member)
         spent += cost
     return kept, 0
-
-
-def collect_log_members() -> tuple[list[tuple[str, str, float]], int]:
-    """One member per log file, as ``(member name, content, mtime)``, and the budget's drop count.
-
-    Separate members rather than one concatenated file: the payload is an
-    archive, so there is no reason to make a reader split headed sections apart
-    again.
-    """
-    members = []
-    used_names: set[str] = set()
-    for path in select_log_files():
-        stem = safe_member_component(program_name_for_log(path))
-        member = unique_member_name(
-            "{}/{}.log".format(LOG_MEMBER_DIR, stem), used_names
-        )
-        members.append((member, read_tail(path, MAX_LINES_PER_LOG), safe_mtime(path)))
-    return take_within_byte_budget(members, MAX_LOG_CLASS_BYTES)
-
-
-def select_agent_log_files(agent_id: str) -> list[str]:
-    """One agent's harness log files, newest first, within the same recency window as the services'.
-
-    Ordered newest-first so the class byte budget spends itself on whatever was
-    written to most recently -- for a bug filed against a chat, that is the
-    harness that was running when it broke.
-    """
-    if not AGENTS_DIR:
-        return []
-    agent_dir = os.path.join(AGENTS_DIR, agent_id)
-    paths: set[str] = set()
-    for pattern in AGENT_LOG_GLOBS:
-        paths.update(glob.glob(os.path.join(agent_dir, pattern)))
-    cutoff = time.time() - LOG_RECENCY_WINDOW_SECONDS
-    recent = [path for path in paths if safe_mtime(path) >= cutoff]
-    recent.sort(key=safe_mtime, reverse=True)
-    return recent
-
-
-def capture_pane(target: str, timeout: float) -> str | None:
-    """One agent's tmux scrollback, or None when it could not be captured.
-
-    ``target`` is the pinned ``id@host-id.provider`` form from ``list_agents``.
-
-    ``--no-start`` for the same reason the host's ``mngr exec`` passes it: a bug
-    report asks a workspace what happened, it does not boot anything to find
-    out. An agent that is stopped therefore contributes no pane, which is
-    correct -- its pane no longer exists.
-    """
-    captured = run_mngr(["capture", target, "--full", "--no-start"], timeout)
-    if captured is None or not captured.strip():
-        return None
-    return "\n".join(captured.splitlines()[-MAX_PANE_LINES:])
-
-
-def collect_agent_log_db_members(
-    timeout: float,
-) -> tuple[list[tuple[str, str, float]], int]:
-    """Every agent's rendered harness log db, as ``(member name, content, mtime)``, and the drop count.
-
-    Separate from the harness log files, and scanned as its own class, because
-    the two fail differently. A log db is the harness's own TRACE stream and has
-    already been observed carrying credentials it wrote about itself; a stderr
-    log is what the harness chose to print. Sharing a class would mean one row
-    the allowlist did not anticipate costs the report ``app_server.log`` and
-    every agent's ``stderr.log`` too -- the logs most likely to explain the bug.
-    """
-    members: list[tuple[str, str, float]] = []
-    used_names: set[str] = set()
-    for agent in list_agents(timeout):
-        agent_dir_member = safe_member_component(agent.name)
-        for path in select_agent_log_dbs(agent.agent_id):
-            # Rendered to text under a ``.log`` member name: the db is packed for
-            # a reader, not for a sqlite client.
-            member = unique_member_name(
-                "{}/{}/{}.log".format(
-                    AGENT_LOG_MEMBER_DIR,
-                    agent_dir_member,
-                    safe_member_component(os.path.basename(path)),
-                ),
-                used_names,
-            )
-            members.append((member, read_log_db(path), safe_mtime(path)))
-    members.sort(key=lambda item: item[2], reverse=True)
-    return take_within_byte_budget(members, MAX_LOG_DB_CLASS_BYTES)
-
-
-def collect_agent_log_members(
-    timeout: float, is_pane_included: bool
-) -> tuple[list[tuple[str, str, float]], int]:
-    """The harness diagnostics for every agent, as ``(member name, content, mtime)``, and the drop count.
-
-    Agents run in tmux, not under supervisord, so none of this reaches the
-    service logs the other half collects: without it a report carries what a
-    chat *said* and nothing about why its harness misbehaved.
-
-    Every agent contributes, for the same reason every agent contributes a
-    transcript -- the chat a user filed from is rarely the only one that
-    matters. Log files are ordered newest-first before the class budget is
-    applied, so a quiet agent never crowds out the busy one; panes fill their own
-    budget so the two never compete (see ``MAX_PANE_CLASS_BYTES``).
-
-    ``is_pane_included`` carries the chats consent: the pane holds the rendered
-    conversation, so it rides only when the user asked for their chats too.
-
-    The two budgets' drop counts are summed: the note they feed says the archive
-    is short, and which of the two did the trimming is not something a reader
-    can act on.
-    """
-    log_members: list[tuple[str, str, float]] = []
-    pane_members: list[tuple[str, str, float]] = []
-    used_names: set[str] = set()
-    for agent in list_agents(timeout):
-        agent_dir_member = safe_member_component(agent.name)
-        for path in select_agent_log_files(agent.agent_id):
-            member = unique_member_name(
-                "{}/{}/{}".format(
-                    AGENT_LOG_MEMBER_DIR,
-                    agent_dir_member,
-                    safe_member_component(os.path.basename(path)),
-                ),
-                used_names,
-            )
-            log_members.append(
-                (member, read_tail(path, MAX_LINES_PER_LOG), safe_mtime(path))
-            )
-        if not is_pane_included:
-            continue
-        pane = capture_pane(agent.target, timeout)
-        if pane is not None:
-            member = unique_member_name(
-                "{}/{}/{}".format(
-                    AGENT_LOG_MEMBER_DIR, agent_dir_member, PANE_MEMBER_NAME
-                ),
-                used_names,
-            )
-            pane_members.append((member, pane, time.time()))
-    log_members.sort(key=lambda item: item[2], reverse=True)
-    kept_logs, dropped_logs = take_within_byte_budget(log_members, MAX_LOG_CLASS_BYTES)
-    kept_panes, dropped_panes = take_within_byte_budget(
-        pane_members, MAX_PANE_CLASS_BYTES
-    )
-    return kept_logs + kept_panes, dropped_logs + dropped_panes
 
 
 def safe_member_component(text: str) -> str:
@@ -694,26 +471,6 @@ def transcript_member_name(name: str, harness: str, used_names: set[str]) -> str
     return unique_member_name("{}/{}.jsonl".format(CHAT_MEMBER_DIR, stem), used_names)
 
 
-def run_mngr(args: Sequence[str], timeout: float) -> str | None:
-    """Stdout of a ``mngr`` subcommand, or None when it could not be run.
-
-    The workspace's own mngr is the source of truth for what agents exist and
-    what was said in them, so the collector asks it rather than re-deriving
-    either from the files under ~/.mngr. Any failure returns None and the
-    caller reports no transcript: a collector that guessed at mngr's state
-    would be the duplicate this exists to avoid.
-    """
-    try:
-        proc = subprocess.run(
-            [MNGR_BINARY, *args], capture_output=True, text=True, timeout=timeout
-        )
-    except Exception:
-        return None
-    if proc.returncode != 0:
-        return None
-    return proc.stdout
-
-
 class ListedAgent(NamedTuple):
     """One agent as mngr lists it, with the chat it is a segment of.
 
@@ -732,68 +489,6 @@ class ListedAgent(NamedTuple):
     chat_seq: int
 
 
-@lru_cache(maxsize=1)
-def _query_agents(timeout: float) -> tuple[ListedAgent, ...]:
-    """Ask mngr which agents exist, at most once per run.
-
-    Cached because it is the collector's most expensive call (see the fan-out
-    note below) and each half of a report needs the same answer. ``timeout``
-    here is most of the whole collection's budget, so asking three times is how
-    a slow mngr turns a trimmed report into no report at all.
-
-    A failed listing is cached too: retrying a wedged mngr is exactly what the
-    budget cannot afford. Returned as a tuple, so what is cached cannot be
-    mutated through a caller's copy.
-
-    Deliberately unfiltered by kind: any agent's conversation can carry the bug,
-    so all of them are asked for a transcript (an agent with none simply
-    contributes no member, which is how the primary services agent usually
-    drops out).
-
-    Scoped to the local provider on purpose: every agent inside a workspace is
-    the inner mngr's own, and asking the cloud providers baked into the
-    settings only makes mngr probe backends that cannot answer from inside a
-    container -- that probing, not the listing, is what used to cost the
-    collection most of its budget. The returned ``id@host-id.provider`` target
-    pins each later ``mngr event`` and ``mngr capture`` the same way, so they
-    skip the fan-out too (a bare id is only pinned when mngr's discovery event
-    stream already knows it, and a provider-scoped listing never writes that
-    stream). It is built from ids alone: the host's recorded name, which the
-    outer provider stamps, never enters it.
-
-    The pipe-delimited template is used rather than ``--format json``: inside a
-    workspace container mngr cannot reach the providers that back its hosts, and
-    the json path fails outright on that where the template still answers from
-    local state. A label the agent does not carry renders empty rather than
-    failing the listing, so the chat columns cost nothing in a workspace whose
-    agents have none.
-    """
-    listed = run_mngr(
-        [
-            "list",
-            "--provider",
-            "local",
-            "--format",
-            "{name}|{id}|{id}@{host.id}.{host.provider_name}|{labels.chat_id}|{labels.chat_seq}",
-        ],
-        timeout,
-    )
-    if listed is None:
-        return ()
-    agents: list[ListedAgent] = []
-    for line in listed.splitlines():
-        parts = line.split("|")
-        if len(parts) != 5:
-            continue
-        name, agent_id, target, chat_id, chat_seq = (p.strip() for p in parts)
-        if not name or not agent_id or not target:
-            continue
-        agents.append(
-            ListedAgent(name, agent_id, target, chat_id, parse_chat_seq(chat_seq))
-        )
-    return tuple(agents)
-
-
 def parse_chat_seq(raw: str) -> int:
     """One agent's position in its chat; 1 when the label is absent or unreadable.
 
@@ -804,18 +499,6 @@ def parse_chat_seq(raw: str) -> int:
         return int(raw)
     except ValueError:
         return 1
-
-
-def list_agents(timeout: float) -> list[ListedAgent]:
-    """Every agent mngr reports -- chat segment, worker, or the services agent.
-
-    The id is what names an agent's state directory, so it is asked for here
-    rather than derived: mngr owns the mapping from an agent to its own files.
-
-    One listing serves the whole report, so the harness logs, the log databases
-    and the chats all describe the same set of agents.
-    """
-    return list(_query_agents(timeout))
 
 
 def group_into_chats(agents: Sequence[ListedAgent]) -> list[list[ListedAgent]]:
@@ -833,51 +516,6 @@ def group_into_chats(agents: Sequence[ListedAgent]) -> list[list[ListedAgent]]:
         sorted(segments, key=lambda segment: segment.chat_seq)
         for segments in segments_by_chat.values()
     ]
-
-
-def fetch_transcript(target: str, timeout: float) -> str | None:
-    """One agent's conversation as raw JSONL, or None when it has none.
-
-    ``target`` is the pinned ``id@host-id.provider`` form from ``list_agents``,
-    so resolving it never fans out to the unreachable cloud providers.
-
-    ``mngr transcript`` rather than ``mngr event``: it writes the stream's ATIF
-    records verbatim, where the event reader overwrites each record's ``source``
-    -- which in ATIF names who spoke -- with the path the stream was read from,
-    losing the speaker of every line it attaches. It also finds the stream
-    itself, so the harness stays mngr's business rather than a list kept here
-    (an agent of type ``chat`` writes its events under ``claude/``), and the
-    converter's own stdout under ``logs/`` is already not what it reads.
-    """
-    events = run_mngr(["transcript", target, "--format", "jsonl"], timeout)
-    if events is None or not events.strip():
-        return None
-    return events
-
-
-def read_chat(
-    segments: Sequence[ListedAgent], timeout: float
-) -> tuple[str, str] | None:
-    """One chat's whole conversation and the harness it is running on, or None when it has none.
-
-    The segments arrive oldest first, so the conversation reads in the order it
-    was held, across whatever harnesses it passed through. Each segment keeps
-    its own stream header, which is what says where one harness took over. The
-    harness returned is the newest segment's: it is what the chat is on now.
-    """
-    conversation = []
-    harness = ""
-    for segment in segments:
-        events = fetch_transcript(segment.target, timeout)
-        if events is None:
-            continue
-        if not events.endswith("\n"):
-            events += "\n"
-        conversation.append(events)
-        harness = transcript_source(events)
-    if not conversation:
-        return None
-    return "".join(conversation), harness
 
 
 def transcript_source(events: str) -> str:
@@ -926,44 +564,6 @@ def newest_event_time(events: str) -> float:
     return newest
 
 
-def collect_transcript_members(timeout: float) -> list[tuple[str, str, float]]:
-    """The conversations to attach, as ``(member name, content, last-written epoch)``.
-
-    One member per CHAT, not per agent: handing a chat to another harness
-    retires one agent and starts another, so a conversation the user held in
-    one place is spread over several agents' streams. Attaching them separately
-    would leave a reader stitching a conversation back together, and would let
-    the selection below rank the halves against each other -- dropping the
-    beginning of the very conversation whose end it kept.
-
-    Every chat is a candidate -- the user's own, a background worker's, or the
-    services agent's. A bug is rarely about exactly one conversation, so every
-    chat written to inside the recency window rides along, newest first -- and
-    never fewer than the ``MIN_TRANSCRIPT_COUNT`` newest (all of them, when the
-    workspace holds fewer), so a report filed from a quiet workspace still
-    carries its recent history rather than nothing.
-    """
-    fetched = []
-    used_names: set[str] = set()
-    for segments in group_into_chats(list_agents(timeout)):
-        chat = read_chat(segments, timeout)
-        if chat is None:
-            continue
-        events, harness = chat
-        # Named for the segment the chat is live on: the name the user sees in
-        # the app, where the archived segments carry their retirement in theirs.
-        member = transcript_member_name(segments[-1].name, harness, used_names)
-        fetched.append((member, events, newest_event_time(events)))
-    if not fetched:
-        return []
-    fetched.sort(key=lambda item: item[2], reverse=True)
-    cutoff = time.time() - TRANSCRIPT_RECENCY_WINDOW_SECONDS
-    # Sorted newest first, so the in-window chats are a prefix: one slice keeps
-    # every recent chat and tops up to the floor from the newest of the rest.
-    recent_count = sum(1 for item in fetched if item[2] >= cutoff)
-    return fetched[: max(recent_count, MIN_TRANSCRIPT_COUNT)]
-
-
 def build_zip(members: Sequence[tuple[str, str, float]]) -> bytes:
     """Deflate the members into one archive, returned as raw zip bytes.
 
@@ -1001,58 +601,6 @@ def encode_zip(members: Sequence[tuple[str, str, float]]) -> str | None:
     if not members:
         return None
     return base64.b64encode(build_zip(list(members))).decode("ascii")
-
-
-def scan_targets(
-    target_paths: Sequence[str], timeout_seconds: float
-) -> dict[str, str | None]:
-    """Run the template's secret-scan gate over the staged files; path -> reason or None.
-
-    One invocation covers every file (several would multiply the scanners'
-    startup cost against a budget that cannot afford it) and findings are
-    attributed back to a file by the path in scan_secrets.sh's own finding
-    lines, which print a file target exactly as it was passed.
-
-    scan_secrets.sh exits 1 both for findings and for a scanner it could not run,
-    and the two can happen in the same run: one scanner can break while the other
-    flags a different file. So a malfunction marker is checked before any finding
-    line is read, and it disqualifies every target -- a file that only one of the
-    two mandatory scanners looked at has not been scanned. Anything else
-    ambiguous -- findings that match no target, or a nonzero exit with no marker
-    and no findings (including the gate script itself being absent) -- also drops
-    every file: a file must only be released on positive evidence that it is clean.
-    """
-    script = os.path.join(SCAN_GATE_DIR, "scan_secrets.sh")
-    config = os.path.join(SCAN_GATE_DIR, "betterleaks.toml")
-    argv = ["bash", script, "--config", config] + list(target_paths)
-    try:
-        proc = subprocess.run(
-            argv, capture_output=True, text=True, timeout=timeout_seconds
-        )
-    except Exception:
-        return {path: NOTE_SCANNER_UNAVAILABLE for path in target_paths}
-    if proc.returncode == 0:
-        return {path: None for path in target_paths}
-    # scan_secrets.sh reports on stderr, but stdout is folded in so that a
-    # failure printed anywhere still counts against the scan.
-    output = proc.stdout + "\n" + proc.stderr
-    if any(marker in output for marker in SCANNER_MALFUNCTION_MARKERS):
-        return {path: NOTE_SCANNER_UNAVAILABLE for path in target_paths}
-    if UNPARSEABLE_REPORT_MARKER in output:
-        return {path: NOTE_SECRETS_FOUND for path in target_paths}
-    finding_lines = [line for line in output.splitlines() if FINDING_MARKER in line]
-    if not finding_lines:
-        return {path: NOTE_SCANNER_UNAVAILABLE for path in target_paths}
-    verdicts = {}
-    for path in target_paths:
-        matched = [line for line in finding_lines if path in line]
-        verdicts[path] = NOTE_SECRETS_FOUND if matched else None
-    unattributed = [
-        line for line in finding_lines if not any(path in line for path in target_paths)
-    ]
-    if unattributed:
-        return {path: NOTE_SECRETS_FOUND for path in target_paths}
-    return verdicts
 
 
 def stage_for_scan(staging_dir: str, key: str, content: str) -> str | None:
@@ -1098,120 +646,621 @@ def stage_members(
     return staged
 
 
-def main(argv: Sequence[str]) -> None:
-    flags = set(argv)
-    scan_timeout_seconds = parse_scan_timeout(list(flags))
-    # Plain-words lines for the notes member: whenever something requested is
-    # not in the archive, one line here says so. The archive is the only
-    # channel back to the report.
-    notes: list[str] = []
-    # How many files each class's byte budget left out, said in the notes only
-    # for a class that actually ships: a class the scan then withholds sent
-    # nothing at all, and "it arrived minus one file" is the wrong thing to hand
-    # a reader who is holding none of it.
-    dropped_by_key: dict[str, int] = {}
+class Collector:
+    """One collection run, and the container paths and class budgets it reads with.
 
-    # The classes the archive is built from, each released or withheld on its
-    # own so one chat carrying a secret costs the report its conversations and
-    # not its logs. The label is what a note calls the class in plain words;
-    # members ride the archive in this order.
-    collected: list[tuple[str, str, list[tuple[str, str, float]]]] = []
-    if "--logs" in flags:
-        log_members, dropped_logs = collect_log_members()
-        dropped_by_key[WORKSPACE_LOGS_KEY] = dropped_logs
-        collected.append(
-            (
-                WORKSPACE_LOGS_KEY,
-                "workspace logs",
-                [
-                    (
-                        METADATA_MEMBER_NAME,
-                        json.dumps(build_metadata(), indent=2),
-                        time.time(),
-                    ),
-                    *log_members,
-                ],
+    Every argument defaults to the workspace's own. One instance is one run: mngr's
+    agent listing is asked for once and shared by every half of the report.
+    """
+
+    def __init__(
+        self,
+        *,
+        workspace_dir: str = WORKSPACE_DIR,
+        supervisord_conf: str = SUPERVISORD_CONF,
+        supervisor_log_dir: str = SUPERVISOR_LOG_DIR,
+        scan_gate_dir: str = SCAN_GATE_DIR,
+        mngr_binary: str = MNGR_BINARY,
+        agents_dir: str = AGENTS_DIR,
+        max_log_class_bytes: int = MAX_LOG_CLASS_BYTES,
+        max_pane_class_bytes: int = MAX_PANE_CLASS_BYTES,
+    ) -> None:
+        self.workspace_dir = workspace_dir
+        self.supervisord_conf = supervisord_conf
+        self.supervisor_log_dir = supervisor_log_dir
+        self.scan_gate_dir = scan_gate_dir
+        self.mngr_binary = mngr_binary
+        self.agents_dir = agents_dir
+        self.max_log_class_bytes = max_log_class_bytes
+        self.max_pane_class_bytes = max_pane_class_bytes
+        self._listed_agents: tuple[ListedAgent, ...] | None = None
+
+    def select_agent_log_dbs(self, agent_id: str) -> list[str]:
+        """One agent's harness log databases, newest first.
+
+        Unlike the text logs these carry no recency filter: a db is written through
+        for the life of the harness rather than rotated, so its mtime describes the
+        last write and not the span it covers, and the rows carry their own times
+        anyway.
+        """
+        if not self.agents_dir:
+            return []
+        agent_dir = os.path.join(self.agents_dir, agent_id)
+        paths: set[str] = set()
+        for pattern in AGENT_LOG_DB_GLOBS:
+            paths.update(glob.glob(os.path.join(agent_dir, pattern)))
+        return sorted(paths, key=safe_mtime, reverse=True)
+
+    def select_log_files(self) -> list[str]:
+        """Every supervisord log file worth sending, newest first and capped.
+
+        Deliberately unfiltered by owner or stream: any program's log -- app or
+        service, user-created or built-in, stdout or stderr -- can carry the bug,
+        so all of them ride (the user consented via the logs checkbox, and every
+        member still passes the secret scan before it leaves).
+
+        Only logs written to inside ``LOG_RECENCY_WINDOW_SECONDS`` are sent: a
+        program that has been silent for over a day describes some earlier state of
+        the workspace, not the one the bug was filed from.
+        """
+        candidates = list(glob.glob(self.supervisor_log_dir + "/*.log"))
+        cutoff = time.time() - LOG_RECENCY_WINDOW_SECONDS
+        candidates = [p for p in candidates if safe_mtime(p) >= cutoff]
+        candidates.sort(key=safe_mtime, reverse=True)
+        return candidates[:MAX_LOG_FILES]
+
+    def build_metadata(self) -> dict[str, object]:
+        """The report's structured context: what this workspace is and how it is doing.
+
+        A json member rather than headed sections in a text blob, so a reader (or a
+        tool) gets fields instead of something to re-parse. Values that are
+        inherently command output -- df, meminfo, supervisorctl -- stay as their own
+        string fields rather than being given an invented schema; what matters is
+        that they are separately addressable instead of concatenated together.
+        """
+        return {
+            "workspace": {
+                "commit": run_command(
+                    [
+                        "git",
+                        "-C",
+                        self.workspace_dir,
+                        "log",
+                        "-1",
+                        "--format=%H %cI %s",
+                    ],
+                    GIT_TIMEOUT_SECONDS,
+                ),
+                "branch": run_command(
+                    [
+                        "git",
+                        "-C",
+                        self.workspace_dir,
+                        "rev-parse",
+                        "--abbrev-ref",
+                        "HEAD",
+                    ],
+                    GIT_TIMEOUT_SECONDS,
+                ),
+                "local_changes": run_command(
+                    ["git", "-C", self.workspace_dir, "status", "--short"],
+                    GIT_TIMEOUT_SECONDS,
+                )
+                or "(clean)",
+            },
+            "host_health": {
+                "disk": run_command(["df", "-h"], DF_TIMEOUT_SECONDS),
+                # meminfo is head-ordered: MemTotal/MemFree/MemAvailable/Buffers/Cached
+                # lead the file, and the tail is Hugetlb/Vmalloc detail nobody reads.
+                "memory": read_head(MEMINFO_PATH, MAX_MEMINFO_LINES),
+                "uptime_seconds_up_and_idle": read_head(UPTIME_PATH, 2),
+                "loadavg": read_head(LOADAVG_PATH, 2),
+                "recent_memory_shed_events": read_tail(SHED_LEDGER, MAX_SHED_LINES),
+            },
+            "services": {
+                "status": run_command(
+                    ["supervisorctl", "-c", self.supervisord_conf, "status"],
+                    SUPERVISORCTL_TIMEOUT_SECONDS,
+                ),
+                "log_lines_per_file": MAX_LINES_PER_LOG,
+            },
+        }
+
+    def collect_log_members(self) -> tuple[list[tuple[str, str, float]], int]:
+        """One member per log file, as ``(member name, content, mtime)``, and the budget's drop count.
+
+        Separate members rather than one concatenated file: the payload is an
+        archive, so there is no reason to make a reader split headed sections apart
+        again.
+        """
+        members = []
+        used_names: set[str] = set()
+        for path in self.select_log_files():
+            stem = safe_member_component(program_name_for_log(path))
+            member = unique_member_name(
+                "{}/{}.log".format(LOG_MEMBER_DIR, stem), used_names
             )
-        )
-        # The pane needs the chats consent as well as this one: it is where a TUI
-        # harness renders the conversation, so its scrollback is chat content and
-        # not only diagnostics.
-        agent_log_members, dropped_agent_logs = collect_agent_log_members(
-            scan_timeout_seconds, is_pane_included="--transcript" in flags
-        )
-        if not agent_log_members:
-            notes.append("agent logs: " + NOTE_NO_AGENT_LOGS)
-        dropped_by_key[AGENT_LOGS_KEY] = dropped_agent_logs
-        collected.append((AGENT_LOGS_KEY, "agent logs", agent_log_members))
+            members.append(
+                (member, read_tail(path, MAX_LINES_PER_LOG), safe_mtime(path))
+            )
+        return take_within_byte_budget(members, self.max_log_class_bytes)
 
-        # Its own class, not part of the agent logs above: a harness log db is
-        # the harness's whole TRACE stream and has been observed carrying
-        # credentials the harness logged about itself, so a row the target
-        # allowlist did not anticipate must cost the report this class alone.
-        log_db_members, dropped_log_dbs = collect_agent_log_db_members(
-            scan_timeout_seconds
-        )
-        dropped_by_key[AGENT_LOG_DB_KEY] = dropped_log_dbs
-        collected.append((AGENT_LOG_DB_KEY, "agent log databases", log_db_members))
+    def select_agent_log_files(self, agent_id: str) -> list[str]:
+        """One agent's harness log files, newest first, within the same recency window as the services'.
 
-    if "--transcript" in flags:
-        chat_members = collect_transcript_members(scan_timeout_seconds)
-        if not chat_members:
-            notes.append("recent chats: " + NOTE_NO_CHAT_TRANSCRIPT)
-        collected.append((TRANSCRIPT_KEY, "recent chats", chat_members))
+        Ordered newest-first so the class byte budget spends itself on whatever was
+        written to most recently -- for a bug filed against a chat, that is the
+        harness that was running when it broke.
+        """
+        if not self.agents_dir:
+            return []
+        agent_dir = os.path.join(self.agents_dir, agent_id)
+        paths: set[str] = set()
+        for pattern in AGENT_LOG_GLOBS:
+            paths.update(glob.glob(os.path.join(agent_dir, pattern)))
+        cutoff = time.time() - LOG_RECENCY_WINDOW_SECONDS
+        recent = [path for path in paths if safe_mtime(path) >= cutoff]
+        recent.sort(key=safe_mtime, reverse=True)
+        return recent
 
-    # Nothing leaves the container unscanned, so a payload that cannot even be
-    # staged for the scanner is dropped exactly as one the scanner could not
-    # read. Each member stages one plaintext file, because the scanner has to
-    # read the content itself -- it cannot see inside the archive it is packed
-    # into afterwards.
-    staging_dir = tempfile.mkdtemp(prefix="bug-report-scan-")
-    withheld: dict[str, str] = {}
-    try:
-        staged_by_key: dict[str, list[str]] = {}
-        for key, _label, class_members in collected:
-            if not class_members:
+    def capture_pane(self, target: str, timeout: float) -> str | None:
+        """One agent's tmux scrollback, or None when it could not be captured.
+
+        ``target`` is the pinned ``id@host-id.provider`` form from ``list_agents``.
+
+        ``--no-start`` for the same reason the host's ``mngr exec`` passes it: a bug
+        report asks a workspace what happened, it does not boot anything to find
+        out. An agent that is stopped therefore contributes no pane, which is
+        correct -- its pane no longer exists.
+        """
+        captured = self.run_mngr(["capture", target, "--full", "--no-start"], timeout)
+        if captured is None or not captured.strip():
+            return None
+        return "\n".join(captured.splitlines()[-MAX_PANE_LINES:])
+
+    def collect_agent_log_db_members(
+        self,
+        timeout: float,
+    ) -> tuple[list[tuple[str, str, float]], int]:
+        """Every agent's rendered harness log db, as ``(member name, content, mtime)``, and the drop count.
+
+        Separate from the harness log files, and scanned as its own class, because
+        the two fail differently. A log db is the harness's own TRACE stream and has
+        already been observed carrying credentials it wrote about itself; a stderr
+        log is what the harness chose to print. Sharing a class would mean one row
+        the allowlist did not anticipate costs the report ``app_server.log`` and
+        every agent's ``stderr.log`` too -- the logs most likely to explain the bug.
+        """
+        members: list[tuple[str, str, float]] = []
+        used_names: set[str] = set()
+        for agent in self.list_agents(timeout):
+            agent_dir_member = safe_member_component(agent.name)
+            for path in self.select_agent_log_dbs(agent.agent_id):
+                # Rendered to text under a ``.log`` member name: the db is packed for
+                # a reader, not for a sqlite client.
+                member = unique_member_name(
+                    "{}/{}/{}.log".format(
+                        AGENT_LOG_MEMBER_DIR,
+                        agent_dir_member,
+                        safe_member_component(os.path.basename(path)),
+                    ),
+                    used_names,
+                )
+                members.append((member, read_log_db(path), safe_mtime(path)))
+        members.sort(key=lambda item: item[2], reverse=True)
+        return take_within_byte_budget(members, MAX_LOG_DB_CLASS_BYTES)
+
+    def collect_agent_log_members(
+        self, timeout: float, is_pane_included: bool
+    ) -> tuple[list[tuple[str, str, float]], int]:
+        """The harness diagnostics for every agent, as ``(member name, content, mtime)``, and the drop count.
+
+        Agents run in tmux, not under supervisord, so none of this reaches the
+        service logs the other half collects: without it a report carries what a
+        chat *said* and nothing about why its harness misbehaved.
+
+        Every agent contributes, for the same reason every agent contributes a
+        transcript -- the chat a user filed from is rarely the only one that
+        matters. Log files are ordered newest-first before the class budget is
+        applied, so a quiet agent never crowds out the busy one; panes fill their own
+        budget so the two never compete (see ``MAX_PANE_CLASS_BYTES``).
+
+        ``is_pane_included`` carries the chats consent: the pane holds the rendered
+        conversation, so it rides only when the user asked for their chats too.
+
+        The two budgets' drop counts are summed: the note they feed says the archive
+        is short, and which of the two did the trimming is not something a reader
+        can act on.
+        """
+        log_members: list[tuple[str, str, float]] = []
+        pane_members: list[tuple[str, str, float]] = []
+        used_names: set[str] = set()
+        for agent in self.list_agents(timeout):
+            agent_dir_member = safe_member_component(agent.name)
+            for path in self.select_agent_log_files(agent.agent_id):
+                member = unique_member_name(
+                    "{}/{}/{}".format(
+                        AGENT_LOG_MEMBER_DIR,
+                        agent_dir_member,
+                        safe_member_component(os.path.basename(path)),
+                    ),
+                    used_names,
+                )
+                log_members.append(
+                    (member, read_tail(path, MAX_LINES_PER_LOG), safe_mtime(path))
+                )
+            if not is_pane_included:
                 continue
-            staged = stage_members(staging_dir, key, class_members)
-            if staged is None:
-                withheld[key] = NOTE_SCANNER_UNAVAILABLE
-            else:
-                staged_by_key[key] = staged
+            pane = self.capture_pane(agent.target, timeout)
+            if pane is not None:
+                member = unique_member_name(
+                    "{}/{}/{}".format(
+                        AGENT_LOG_MEMBER_DIR, agent_dir_member, PANE_MEMBER_NAME
+                    ),
+                    used_names,
+                )
+                pane_members.append((member, pane, time.time()))
+        log_members.sort(key=lambda item: item[2], reverse=True)
+        kept_logs, dropped_logs = take_within_byte_budget(
+            log_members, self.max_log_class_bytes
+        )
+        kept_panes, dropped_panes = take_within_byte_budget(
+            pane_members, self.max_pane_class_bytes
+        )
+        return kept_logs + kept_panes, dropped_logs + dropped_panes
 
-        if staged_by_key:
-            targets = [path for paths in staged_by_key.values() for path in paths]
-            verdicts = scan_targets(targets, scan_timeout_seconds)
-            for key, paths in staged_by_key.items():
-                # A class made of several files is released only when every one
-                # of them is clean: one chat carrying a secret withholds the
-                # whole class rather than quietly shipping a partial set of
-                # conversations, which a reader could not tell from the full set.
-                reasons = [
-                    verdicts.get(path, NOTE_SCANNER_UNAVAILABLE) for path in paths
-                ]
-                reason = next((r for r in reasons if r is not None), None)
-                if reason is not None:
-                    withheld[key] = reason
-    finally:
-        shutil.rmtree(staging_dir, ignore_errors=True)
+    def run_mngr(self, args: Sequence[str], timeout: float) -> str | None:
+        """Stdout of a ``mngr`` subcommand, or None when it could not be run.
 
-    members: list[tuple[str, str, float]] = []
-    for key, label, class_members in collected:
-        if key in withheld:
-            notes.append("{}: {}".format(label, withheld[key]))
-            continue
-        dropped = dropped_by_key.get(key, 0)
-        if dropped:
-            notes.append("{}: {}".format(label, NOTE_TRIMMED_TO_BUDGET.format(dropped)))
-        members.extend(class_members)
+        The workspace's own mngr is the source of truth for what agents exist and
+        what was said in them, so the collector asks it rather than re-deriving
+        either from the files under ~/.mngr. Any failure returns None and the
+        caller reports no transcript: a collector that guessed at mngr's state
+        would be the duplicate this exists to avoid.
+        """
+        try:
+            proc = subprocess.run(
+                [self.mngr_binary, *args],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except Exception:
+            return None
+        if proc.returncode != 0:
+            return None
+        return proc.stdout
 
-    # The notes ride inside the archive itself, so a reader learns what was
-    # withheld from the same file that holds what was not. Collector-authored
-    # text only -- no workspace content -- so it is not itself scanned.
-    if notes:
-        members.append((NOTES_MEMBER_NAME, "\n".join(notes) + "\n", time.time()))
-    # Base64 because stdout is text; the host decodes the one line and stages
-    # the archive verbatim. Nothing prints when nothing was requested.
-    encoded = encode_zip(members)
-    if encoded is not None:
-        print(encoded)
+    def _query_agents(self, timeout: float) -> tuple[ListedAgent, ...]:
+        """Ask mngr which agents exist, at most once per run.
+
+        Cached because it is the collector's most expensive call (see the fan-out
+        note below) and each half of a report needs the same answer. ``timeout``
+        here is most of the whole collection's budget, so asking three times is how
+        a slow mngr turns a trimmed report into no report at all.
+
+        A failed listing is cached too: retrying a wedged mngr is exactly what the
+        budget cannot afford. Returned as a tuple, so what is cached cannot be
+        mutated through a caller's copy.
+
+        Deliberately unfiltered by kind: any agent's conversation can carry the bug,
+        so all of them are asked for a transcript (an agent with none simply
+        contributes no member, which is how the primary services agent usually
+        drops out).
+
+        Scoped to the local provider on purpose: every agent inside a workspace is
+        the inner mngr's own, and asking the cloud providers baked into the
+        settings only makes mngr probe backends that cannot answer from inside a
+        container -- that probing, not the listing, is what used to cost the
+        collection most of its budget. The returned ``id@host-id.provider`` target
+        pins each later ``mngr event`` and ``mngr capture`` the same way, so they
+        skip the fan-out too (a bare id is only pinned when mngr's discovery event
+        stream already knows it, and a provider-scoped listing never writes that
+        stream). It is built from ids alone: the host's recorded name, which the
+        outer provider stamps, never enters it.
+
+        The pipe-delimited template is used rather than ``--format json``: inside a
+        workspace container mngr cannot reach the providers that back its hosts, and
+        the json path fails outright on that where the template still answers from
+        local state. A label the agent does not carry renders empty rather than
+        failing the listing, so the chat columns cost nothing in a workspace whose
+        agents have none.
+        """
+        if self._listed_agents is not None:
+            return self._listed_agents
+        listed = self.run_mngr(
+            [
+                "list",
+                "--provider",
+                "local",
+                "--format",
+                "{name}|{id}|{id}@{host.id}.{host.provider_name}|{labels.chat_id}|{labels.chat_seq}",
+            ],
+            timeout,
+        )
+        if listed is None:
+            self._listed_agents = ()
+            return self._listed_agents
+        agents: list[ListedAgent] = []
+        for line in listed.splitlines():
+            parts = line.split("|")
+            if len(parts) != 5:
+                continue
+            name, agent_id, target, chat_id, chat_seq = (p.strip() for p in parts)
+            if not name or not agent_id or not target:
+                continue
+            agents.append(
+                ListedAgent(name, agent_id, target, chat_id, parse_chat_seq(chat_seq))
+            )
+        self._listed_agents = tuple(agents)
+        return self._listed_agents
+
+    def list_agents(self, timeout: float) -> list[ListedAgent]:
+        """Every agent mngr reports -- chat segment, worker, or the services agent.
+
+        The id is what names an agent's state directory, so it is asked for here
+        rather than derived: mngr owns the mapping from an agent to its own files.
+
+        One listing serves the whole report, so the harness logs, the log databases
+        and the chats all describe the same set of agents.
+        """
+        return list(self._query_agents(timeout))
+
+    def fetch_transcript(self, target: str, timeout: float) -> str | None:
+        """One agent's conversation as raw JSONL, or None when it has none.
+
+        ``target`` is the pinned ``id@host-id.provider`` form from ``list_agents``,
+        so resolving it never fans out to the unreachable cloud providers.
+
+        ``mngr transcript`` rather than ``mngr event``: it writes the stream's ATIF
+        records verbatim, where the event reader overwrites each record's ``source``
+        -- which in ATIF names who spoke -- with the path the stream was read from,
+        losing the speaker of every line it attaches. It also finds the stream
+        itself, so the harness stays mngr's business rather than a list kept here
+        (an agent of type ``chat`` writes its events under ``claude/``), and the
+        converter's own stdout under ``logs/`` is already not what it reads.
+        """
+        events = self.run_mngr(["transcript", target, "--format", "jsonl"], timeout)
+        if events is None or not events.strip():
+            return None
+        return events
+
+    def read_chat(
+        self, segments: Sequence[ListedAgent], timeout: float
+    ) -> tuple[str, str] | None:
+        """One chat's whole conversation and the harness it is running on, or None when it has none.
+
+        The segments arrive oldest first, so the conversation reads in the order it
+        was held, across whatever harnesses it passed through. Each segment keeps
+        its own stream header, which is what says where one harness took over. The
+        harness returned is the newest segment's: it is what the chat is on now.
+        """
+        conversation = []
+        harness = ""
+        for segment in segments:
+            events = self.fetch_transcript(segment.target, timeout)
+            if events is None:
+                continue
+            if not events.endswith("\n"):
+                events += "\n"
+            conversation.append(events)
+            harness = transcript_source(events)
+        if not conversation:
+            return None
+        return "".join(conversation), harness
+
+    def collect_transcript_members(
+        self, timeout: float
+    ) -> list[tuple[str, str, float]]:
+        """The conversations to attach, as ``(member name, content, last-written epoch)``.
+
+        One member per CHAT, not per agent: handing a chat to another harness
+        retires one agent and starts another, so a conversation the user held in
+        one place is spread over several agents' streams. Attaching them separately
+        would leave a reader stitching a conversation back together, and would let
+        the selection below rank the halves against each other -- dropping the
+        beginning of the very conversation whose end it kept.
+
+        Every chat is a candidate -- the user's own, a background worker's, or the
+        services agent's. A bug is rarely about exactly one conversation, so every
+        chat written to inside the recency window rides along, newest first -- and
+        never fewer than the ``MIN_TRANSCRIPT_COUNT`` newest (all of them, when the
+        workspace holds fewer), so a report filed from a quiet workspace still
+        carries its recent history rather than nothing.
+        """
+        fetched = []
+        used_names: set[str] = set()
+        for segments in group_into_chats(self.list_agents(timeout)):
+            chat = self.read_chat(segments, timeout)
+            if chat is None:
+                continue
+            events, harness = chat
+            # Named for the segment the chat is live on: the name the user sees in
+            # the app, where the archived segments carry their retirement in theirs.
+            member = transcript_member_name(segments[-1].name, harness, used_names)
+            fetched.append((member, events, newest_event_time(events)))
+        if not fetched:
+            return []
+        fetched.sort(key=lambda item: item[2], reverse=True)
+        cutoff = time.time() - TRANSCRIPT_RECENCY_WINDOW_SECONDS
+        # Sorted newest first, so the in-window chats are a prefix: one slice keeps
+        # every recent chat and tops up to the floor from the newest of the rest.
+        recent_count = sum(1 for item in fetched if item[2] >= cutoff)
+        return fetched[: max(recent_count, MIN_TRANSCRIPT_COUNT)]
+
+    def scan_targets(
+        self, target_paths: Sequence[str], timeout_seconds: float
+    ) -> dict[str, str | None]:
+        """Run the template's secret-scan gate over the staged files; path -> reason or None.
+
+        One invocation covers every file (several would multiply the scanners'
+        startup cost against a budget that cannot afford it) and findings are
+        attributed back to a file by the path in scan_secrets.sh's own finding
+        lines, which print a file target exactly as it was passed.
+
+        scan_secrets.sh exits 1 both for findings and for a scanner it could not run,
+        and the two can happen in the same run: one scanner can break while the other
+        flags a different file. So a malfunction marker is checked before any finding
+        line is read, and it disqualifies every target -- a file that only one of the
+        two mandatory scanners looked at has not been scanned. Anything else
+        ambiguous -- findings that match no target, or a nonzero exit with no marker
+        and no findings (including the gate script itself being absent) -- also drops
+        every file: a file must only be released on positive evidence that it is clean.
+        """
+        script = os.path.join(self.scan_gate_dir, "scan_secrets.sh")
+        config = os.path.join(self.scan_gate_dir, "betterleaks.toml")
+        argv = ["bash", script, "--config", config] + list(target_paths)
+        try:
+            proc = subprocess.run(
+                argv, capture_output=True, text=True, timeout=timeout_seconds
+            )
+        except Exception:
+            return {path: NOTE_SCANNER_UNAVAILABLE for path in target_paths}
+        if proc.returncode == 0:
+            return {path: None for path in target_paths}
+        # scan_secrets.sh reports on stderr, but stdout is folded in so that a
+        # failure printed anywhere still counts against the scan.
+        output = proc.stdout + "\n" + proc.stderr
+        if any(marker in output for marker in SCANNER_MALFUNCTION_MARKERS):
+            return {path: NOTE_SCANNER_UNAVAILABLE for path in target_paths}
+        if UNPARSEABLE_REPORT_MARKER in output:
+            return {path: NOTE_SECRETS_FOUND for path in target_paths}
+        finding_lines = [line for line in output.splitlines() if FINDING_MARKER in line]
+        if not finding_lines:
+            return {path: NOTE_SCANNER_UNAVAILABLE for path in target_paths}
+        verdicts = {}
+        for path in target_paths:
+            matched = [line for line in finding_lines if path in line]
+            verdicts[path] = NOTE_SECRETS_FOUND if matched else None
+        unattributed = [
+            line
+            for line in finding_lines
+            if not any(path in line for path in target_paths)
+        ]
+        if unattributed:
+            return {path: NOTE_SECRETS_FOUND for path in target_paths}
+        return verdicts
+
+    def run(self, argv: Sequence[str]) -> None:
+        flags = set(argv)
+        scan_timeout_seconds = parse_scan_timeout(list(flags))
+        # Plain-words lines for the notes member: whenever something requested is
+        # not in the archive, one line here says so. The archive is the only
+        # channel back to the report.
+        notes: list[str] = []
+        # How many files each class's byte budget left out, said in the notes only
+        # for a class that actually ships: a class the scan then withholds sent
+        # nothing at all, and "it arrived minus one file" is the wrong thing to hand
+        # a reader who is holding none of it.
+        dropped_by_key: dict[str, int] = {}
+
+        # The classes the archive is built from, each released or withheld on its
+        # own so one chat carrying a secret costs the report its conversations and
+        # not its logs. The label is what a note calls the class in plain words;
+        # members ride the archive in this order.
+        collected: list[tuple[str, str, list[tuple[str, str, float]]]] = []
+        if "--logs" in flags:
+            log_members, dropped_logs = self.collect_log_members()
+            dropped_by_key[WORKSPACE_LOGS_KEY] = dropped_logs
+            collected.append(
+                (
+                    WORKSPACE_LOGS_KEY,
+                    "workspace logs",
+                    [
+                        (
+                            METADATA_MEMBER_NAME,
+                            json.dumps(self.build_metadata(), indent=2),
+                            time.time(),
+                        ),
+                        *log_members,
+                    ],
+                )
+            )
+            # The pane needs the chats consent as well as this one: it is where a TUI
+            # harness renders the conversation, so its scrollback is chat content and
+            # not only diagnostics.
+            agent_log_members, dropped_agent_logs = self.collect_agent_log_members(
+                scan_timeout_seconds, is_pane_included="--transcript" in flags
+            )
+            if not agent_log_members:
+                notes.append("agent logs: " + NOTE_NO_AGENT_LOGS)
+            dropped_by_key[AGENT_LOGS_KEY] = dropped_agent_logs
+            collected.append((AGENT_LOGS_KEY, "agent logs", agent_log_members))
+
+            # Its own class, not part of the agent logs above: a harness log db is
+            # the harness's whole TRACE stream and has been observed carrying
+            # credentials the harness logged about itself, so a row the target
+            # allowlist did not anticipate must cost the report this class alone.
+            log_db_members, dropped_log_dbs = self.collect_agent_log_db_members(
+                scan_timeout_seconds
+            )
+            dropped_by_key[AGENT_LOG_DB_KEY] = dropped_log_dbs
+            collected.append((AGENT_LOG_DB_KEY, "agent log databases", log_db_members))
+
+        if "--transcript" in flags:
+            chat_members = self.collect_transcript_members(scan_timeout_seconds)
+            if not chat_members:
+                notes.append("recent chats: " + NOTE_NO_CHAT_TRANSCRIPT)
+            collected.append((TRANSCRIPT_KEY, "recent chats", chat_members))
+
+        # Nothing leaves the container unscanned, so a payload that cannot even be
+        # staged for the scanner is dropped exactly as one the scanner could not
+        # read. Each member stages one plaintext file, because the scanner has to
+        # read the content itself -- it cannot see inside the archive it is packed
+        # into afterwards.
+        staging_dir = tempfile.mkdtemp(prefix="bug-report-scan-")
+        withheld: dict[str, str] = {}
+        try:
+            staged_by_key: dict[str, list[str]] = {}
+            for key, _label, class_members in collected:
+                if not class_members:
+                    continue
+                staged = stage_members(staging_dir, key, class_members)
+                if staged is None:
+                    withheld[key] = NOTE_SCANNER_UNAVAILABLE
+                else:
+                    staged_by_key[key] = staged
+
+            if staged_by_key:
+                targets = [path for paths in staged_by_key.values() for path in paths]
+                verdicts = self.scan_targets(targets, scan_timeout_seconds)
+                for key, paths in staged_by_key.items():
+                    # A class made of several files is released only when every one
+                    # of them is clean: one chat carrying a secret withholds the
+                    # whole class rather than quietly shipping a partial set of
+                    # conversations, which a reader could not tell from the full set.
+                    reasons = [
+                        verdicts.get(path, NOTE_SCANNER_UNAVAILABLE) for path in paths
+                    ]
+                    reason = next((r for r in reasons if r is not None), None)
+                    if reason is not None:
+                        withheld[key] = reason
+        finally:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+
+        members: list[tuple[str, str, float]] = []
+        for key, label, class_members in collected:
+            if key in withheld:
+                notes.append("{}: {}".format(label, withheld[key]))
+                continue
+            dropped = dropped_by_key.get(key, 0)
+            if dropped:
+                notes.append(
+                    "{}: {}".format(label, NOTE_TRIMMED_TO_BUDGET.format(dropped))
+                )
+            members.extend(class_members)
+
+        # The notes ride inside the archive itself, so a reader learns what was
+        # withheld from the same file that holds what was not. Collector-authored
+        # text only -- no workspace content -- so it is not itself scanned.
+        if notes:
+            members.append((NOTES_MEMBER_NAME, "\n".join(notes) + "\n", time.time()))
+        # Base64 because stdout is text; the host decodes the one line and stages
+        # the archive verbatim. Nothing prints when nothing was requested.
+        encoded = encode_zip(members)
+        if encoded is not None:
+            print(encoded)
+
+
+def main(argv: Sequence[str]) -> None:
+    Collector().run(argv)

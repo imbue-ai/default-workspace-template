@@ -249,7 +249,7 @@ commit the agent started from (or last updated itself to). Resolve it with the
 shared script, never by hand:
 
 ```bash
-BASE_REF=$(uv run --no-sync .agents/shared/scripts/resolve_template_base.py)
+BASE_REF=$(uv run --no-sync .agents/shared/scripts/agents_shared/resolve_template_base.py)
 ```
 
 It walks HEAD's first-parent history for the NEWEST template-state marker:
@@ -1244,7 +1244,7 @@ retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
 
 - **Seed the `## Workspace` origin line if it is absent** -- exactly once per
   workspace, as the FIRST line under `## Workspace`. Resolve where the agent
-  started with `uv run --no-sync .agents/shared/scripts/resolve_template_base.py --origin`
+  started with `uv run --no-sync .agents/shared/scripts/agents_shared/resolve_template_base.py --origin`
   (its own `Initial workspace commit`; fall back to the first-parent root when
   that exits 1), and resolve its date/version/sha from that commit itself.
   **Use `git describe --tags --abbrev=0 --match 'minds-v*' "$CREATION"`

@@ -28,7 +28,7 @@ The two shapes:
 - **Preview (surface to the user).** Add ``--service-name`` to also register the
   instance as a service (served raw at its own browser origin), and
   ``--preview-service-name`` + ``--preview-title`` to wrap it in a labeled
-  "preview" frame (``preview_wrapper_server.py``) the user opens as a window. With
+  "preview" frame (``preview_wrapper_server``) the user opens as a window. With
   a wrapper, the inner service registers ``--internal`` -- only the frame is an
   app to open, so one preview adds one app to the launcher and the window list
   rather than two -- and the frame registers ``--preview-title`` as its display
@@ -44,7 +44,8 @@ services do this out of the box (``<PKG>_PORT`` / ``<PKG>_DATA_DIR``); an older
 service is retrofitted with the same one-liner when it is edited.
 
 Run via ``uv run --no-sync``: the entry imports this package from the root venv.
-The module itself imports only the standard library.
+The module itself imports only the standard library and the stdlib-only
+``forward_port`` it registers through.
 
 Usage:
     uv run --no-sync .agents/shared/scripts/serve_isolated_instance.py up --name <slug> --cwd <dir> \\
@@ -104,6 +105,8 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, NamedTuple, Sequence
 
+from workspace_bare_scripts import forward_port
+
 # State (detached pids, ports, registered service names) lives under the caller's
 # ``data/`` so it is gitignored and survives between the separate ``up`` and
 # ``down`` invocations. One instance per ``--name``; ``up`` tears down any stale
@@ -138,10 +141,6 @@ _HOST_PLACEHOLDER_KIND = "host"
 # still exists when the agent goes to read more of it.
 FAILED_LOG_SUFFIX = "-failed.log"
 
-# forward_port.py is stdlib-only (the supervisord program lines that register an
-# app run it under a plain python3), so no venv is needed here either.
-FORWARD_PORT_CMD = ("python3", "system/scripts/forward_port.py")
-
 # How to spell this script in a message an agent will copy: repo-root-relative,
 # like every other command it prints. The follow-up commands it names
 # (``refresh`` / ``down``) are sub-commands of *this* script, and the flows that
@@ -149,10 +148,9 @@ FORWARD_PORT_CMD = ("python3", "system/scripts/forward_port.py")
 # verb would not be runnable.
 _SELF_HINT = ".agents/shared/scripts/serve_isolated_instance.py"
 
-# The wrapper server's entry ships beside this script's entry and is stdlib-only,
-# so it runs under the same interpreter that runs this script.
-WRAPPER_SCRIPT = "preview_wrapper_server.py"
-_WRAPPER_SCRIPT_PATH = Path(__file__).resolve().parents[1] / WRAPPER_SCRIPT
+# The wrapper server ships in this package, so it runs as a module under the same
+# interpreter that runs this script.
+WRAPPER_MODULE = "agents_shared.preview_wrapper_server"
 
 # Boot budget: a fresh instance (first import + startup) runs alongside whatever
 # else is on the box, so give it a generous grace before declaring it dead.
@@ -298,10 +296,7 @@ def _reap_if_exited_child(pid: int) -> None:
 
 
 class Runner:
-    """Indirection over ``subprocess.run`` so tests can intercept commands."""
-
-    def run(self, argv: Sequence[str], **kwargs) -> subprocess.CompletedProcess:
-        return subprocess.run(list(argv), **kwargs)
+    """Indirection over signalling process groups, so tests can intercept it."""
 
     def kill_process_group(self, pid: int, sig: int = signal.SIGTERM) -> None:
         """Send ``sig`` to the whole process group led by ``pid``; a no-op if the
@@ -336,6 +331,32 @@ class Runner:
         except PermissionError:
             # The group exists but is not ours to signal -- still "alive".
             return True
+
+
+class Registry:
+    """Indirection over the workspace's app registry, so tests can record what is registered."""
+
+    def register(
+        self,
+        repo_root: Path,
+        service_name: str,
+        url: str,
+        *,
+        internal: bool,
+        display_name: str | None,
+    ) -> None:
+        forward_port.register(
+            forward_port.apps_file(repo_root),
+            service_name,
+            url,
+            # Short-lived preview windows; the generic monogram is fine.
+            is_icon_declined=True,
+            internal=internal,
+            display_name=display_name,
+        )
+
+    def remove(self, repo_root: Path, service_name: str) -> None:
+        forward_port.remove(forward_port.apps_file(repo_root), service_name)
 
 
 class ProbeResult(NamedTuple):
@@ -746,7 +767,7 @@ def _state_path(repo_root: Path, name: str) -> Path:
 
 
 def _register_service(
-    runner: Runner,
+    registry: Registry,
     repo_root: Path,
     service_name: str,
     port: int,
@@ -755,28 +776,16 @@ def _register_service(
     internal: bool = False,
     display_name: str | None = None,
 ) -> None:
-    argv = [
-        *FORWARD_PORT_CMD,
-        "--name",
-        service_name,
-        "--url",
-        f"http://localhost:{port}",
-        "--no-icon",  # short-lived preview windows; the generic monogram is fine
-    ]
-    if internal:
-        argv.append("--internal")
-    if display_name is not None:
-        argv.extend(["--display-name", display_name])
-    result = runner.run(
-        argv,
-        cwd=str(repo_root),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if getattr(result, "returncode", 0) != 0:
-        stderr = (getattr(result, "stderr", "") or "").strip()
-        raise InstanceError(f"{what} failed (exit {result.returncode}): {stderr}")
+    try:
+        registry.register(
+            repo_root,
+            service_name,
+            f"http://localhost:{port}",
+            internal=internal,
+            display_name=display_name,
+        )
+    except forward_port.RegistryError as exc:
+        raise InstanceError(f"{what} failed: {exc}") from exc
 
 
 def _kill_process_group_and_wait(
@@ -802,6 +811,7 @@ def _kill_process_group_and_wait(
 def _teardown(
     repo_root: Path,
     runner: Runner,
+    registry: Registry,
     *,
     pids: Sequence[int],
     services: Sequence[str],
@@ -811,8 +821,8 @@ def _teardown(
 
     Order: kill every detached server (by process group, escalating to SIGKILL),
     then deregister every registered service so the workspace stops routing at a
-    dead port. Deregistration is unchecked and runs for every service regardless,
-    so partial state still fully unwinds and re-runs are no-ops -- but a surviving
+    dead port. Deregistration runs for every service regardless, a failure only
+    warning, so partial state still fully unwinds and re-runs are no-ops -- but a surviving
     process is reported rather than swallowed, because the caller must not delete
     the record of a pid and port that are still in use.
     """
@@ -820,13 +830,12 @@ def _teardown(
         pid for pid in pids if not _kill_process_group_and_wait(runner, pid, sleeper)
     ]
     for service in services:
-        runner.run(
-            [*FORWARD_PORT_CMD, "--remove", "--name", service],
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        try:
+            registry.remove(repo_root, service)
+        except (forward_port.RegistryError, OSError) as exc:
+            sys.stderr.write(
+                f"warning: could not deregister service '{service}': {exc}\n"
+            )
     return survivors
 
 
@@ -847,6 +856,7 @@ def up(
     preview_title: str | None = None,
     inner_path: str = "/",
     runner: Runner,
+    registry: Registry,
     http: HttpClient,
     spawner: Spawner,
     sleeper: Callable[[float], None] = time.sleep,
@@ -891,7 +901,7 @@ def up(
     # Clear any stale instance for this name first so a re-run is clean. Booting
     # over one that could not be cleared would leave the old server holding its
     # port with nothing left recording its pid, so refuse instead.
-    if down(name, repo_root, runner=runner, sleeper=sleeper) != 0:
+    if down(name, repo_root, runner=runner, registry=registry, sleeper=sleeper) != 0:
         sys.stderr.write(
             f"up: refusing to boot '{name}' over an instance that could not be "
             f"cleared (see above). Resolve it, or remove "
@@ -956,7 +966,7 @@ def up(
         # 2. Register it as a service (own browser origin), if asked.
         if service_name is not None:
             _register_service(
-                runner,
+                registry,
                 repo_root,
                 service_name,
                 inner_port,
@@ -985,7 +995,8 @@ def up(
                         repo_root,
                         [
                             sys.executable,
-                            str(_WRAPPER_SCRIPT_PATH),
+                            "-m",
+                            WRAPPER_MODULE,
                             "--port",
                             str(wrapper_port),
                             "--inner-service",
@@ -1015,7 +1026,7 @@ def up(
                     log_path=wrapper_log_path,
                 )
             _register_service(
-                runner,
+                registry,
                 repo_root,
                 preview_service_name,
                 wrapper_port,
@@ -1074,7 +1085,7 @@ def up(
             f"up failed: {exc}\n{excerpt}tearing down partial instance...\n"
         )
         survivors = _teardown(
-            repo_root, runner, pids=pids, services=services, sleeper=sleeper
+            repo_root, runner, registry, pids=pids, services=services, sleeper=sleeper
         )
         if survivors:
             sys.stderr.write(
@@ -1114,6 +1125,7 @@ def down(
     repo_root: Path,
     *,
     runner: Runner,
+    registry: Registry,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> int:
     """Tear down the instance for ``name``: kill the server(s), deregister the
@@ -1141,7 +1153,7 @@ def down(
     pids = state.get("pids") or []
     services = state.get("services") or []
     survivors = _teardown(
-        repo_root, runner, pids=pids, services=services, sleeper=sleeper
+        repo_root, runner, registry, pids=pids, services=services, sleeper=sleeper
     )
     if survivors:
         sys.stderr.write(
@@ -1445,11 +1457,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             preview_title=args.preview_title,
             inner_path=args.inner_path,
             runner=Runner(),
+            registry=Registry(),
             http=HttpClient(),
             spawner=Spawner(),
         )
     if args.command == "down":
-        return down(args.name, repo_root, runner=Runner())
+        return down(args.name, repo_root, runner=Runner(), registry=Registry())
     if args.command == "refresh":
         return refresh(
             args.name,

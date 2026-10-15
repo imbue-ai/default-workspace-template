@@ -12,7 +12,7 @@ from pathlib import Path
 
 from agents_shared import resolve_template_base
 
-_SCRIPT = Path(__file__).resolve().parents[1] / "resolve_template_base.py"
+_SCRIPT = Path(__file__).resolve().with_name("resolve_template_base.py")
 
 
 def _git(repo: Path, *args: str) -> str:

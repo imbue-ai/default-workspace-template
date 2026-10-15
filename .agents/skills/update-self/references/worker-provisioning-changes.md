@@ -14,7 +14,8 @@ implies; the apply script runs the provisioner and the restart.
 
 A pinned-version bump in `setup_system.sh` or an installer it chains (e.g.
 `LATCHKEY_VERSION`) is **live-applicable**: the apply re-runs the idempotent
-provisioner before the restart, installing the new version. A hunk only a
+provisioner before the restart, installing the new version -- also when
+something the user built depends on it (see the last section). A hunk only a
 fresh image build reproduces is **rebuild-only**.
 
 ## `.mngr/**` settings
@@ -63,40 +64,44 @@ Cases, most clearly applyable first:
   creates). Flag it as needing a workspace recreate, like an image-level
   `Dockerfile` hunk; do not imply it is in effect.
 
-**Escape hatch (`stuck`).** If a provisioning change is not live-applicable
-**and** leaving the running workspace on the old provisioning would
-**genuinely break it** (not merely "won't take effect until the next create"),
-report `stuck` (Step 6), name the setting and why it breaks, and refuse the
-update so the live workspace is left untouched. A change that is simply
-deferred-until-rebuild is `done` plus a rebuild flag.
+**Escape hatch (`stuck`).** `stuck` has exactly one condition in this
+guide: leaving the running workspace on the old provisioning would **break
+it** (not merely "won't take effect until the next create"). Then report
+`stuck` (Step 6), name the setting and why it breaks. Every other finding
+here -- rebuild-only, deferred until a recreate, a dependent you cannot
+verify -- is `done` with the finding reported.
 
 ## A global-dependency bump with a dependent
 
 When a merge bumps a *global* dependency (a `setup_system.sh` or installer
-pin, or a `Dockerfile` toolchain pin), whether it is safe to apply live
-depends on **who consumes the new version**. Your worktree cannot validate the
-pair -- worktree isolation isolates the repo tree, not the host-global
-toolchain, so your env still has the old dep; do **not** globally install the
-new one to test, that mutates the toolchain the live workspace and other
-agents run on. Decide by the **provenance** of the dependent (origin, not
-directory: `git cat-file -e "$TARGET_REF":<path>` for its files).
+pin, or a `Dockerfile` toolchain pin), a provisioner pin goes live whoever
+consumes it: the apply re-runs the provisioner whenever a file it reads
+changed, with every pin taken from the merged tree, so no single pin can be
+held back. A `Dockerfile` pin is rebuild-only whoever consumes it, like any
+image-level hunk; the verdicts below are for a provisioner pin. What you decide is what the report says about each **dependent**
+of the new version. Your worktree cannot validate the pair -- worktree
+isolation isolates the repo tree, not the host-global toolchain, so your env
+still has the old dep; do **not** globally install the new one to test, that
+mutates the toolchain the live workspace and other agents run on. Decide by
+the **provenance** of the dependent (origin, not directory: `git cat-file -e
+"$TARGET_REF":<path>` for its files).
 
 - **Dependent is built-in code** (present in upstream at the target ref):
   **live-applicable** -- upstream tested that code against the bumped
   dependency together, the same "trust upstream's testing" basis the whole
   pulled-in set rides on. You do not run the bump yourself and do not
   re-validate the built-in; judge it safe and say so.
-- **Dependent is user-created** (absent from upstream): **unsafe to
-  hot-apply**. Upstream never tested that code against the new dependency and
-  you cannot either. Classify it **rebuild-only** -- the safe landing is a
-  workspace recreate, which provisions the new substrate and re-runs the user
-  code against it. If leaving it unapplied would break the running workspace,
-  that is `stuck`.
+- **Dependent is user-created** (absent from upstream): **applied live,
+  unverified in the worktree; the lead checks it after the apply** (SKILL.md
+  5b). Upstream never tested that code against the new version and you cannot
+  either, which is exactly what the lead's post-apply check is for. This is
+  `done`, never `stuck`.
 
 For a user-created dependent, **research the version change online** -- the
 dependency's release notes for the exact old -> new delta (breaking changes,
 removed flags, new minimum runtimes); do not rely on memory. For a built-in
 dependent the verdict is fixed by provenance, so there is nothing to research:
 the merged changelog entries are the what's-new. In either case **report the
-coupling** explicitly: which dependent, built-in or user-created, what you
-could and could not validate, and your apply / rebuild-only / `stuck` call.
+coupling** under Provisioning changes: which dependent, built-in or
+user-created, the version delta, what your research turned up, and what you
+could and could not validate.

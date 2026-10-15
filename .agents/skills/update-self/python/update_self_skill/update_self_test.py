@@ -1390,7 +1390,7 @@ def test_bootstrap_skill_ignores_untracked_build_artifacts(tmp_path, capsys) -> 
     # Importing the package drops __pycache__/*.pyc into the skill's python/update_self_skill/.
     # Those are untracked, so `git diff` ignores them and they must not register as a
     # spurious difference -- otherwise the "identical -> stay on the local flow"
-    # branch would be dead in every real checkout (where the module has been
+    # branch would be dead in every real checkout (where the package has been
     # imported at least once).
     repo = tmp_path / "repo"
     _init_repo_with_skill(repo, skill_body="STABLE FLOW\n")

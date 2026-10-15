@@ -5,12 +5,12 @@ backend-side, and these cases pin the exact same precedence (explicit detectors 
 ``is_meta``; the compaction chip is keyed off its flag, not its text).
 """
 
-import importlib.util
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
 
 import pytest
+from workspace_bare_scripts import message_chat
+from workspace_bare_scripts import run_in_background
 
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
@@ -22,7 +22,6 @@ from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.harnesses.message_display import format_secret_resolution_notice
 from imbue.chat.harnesses.message_display import is_non_turn_tail
 from imbue.chat.harnesses.message_display import split_background_task_reports
-from imbue.chat.harnesses.tool_output import _UV_RUN_PASSTHROUGH_FLAGS
 
 _SEED_BLOCK = f"<{SEED_CONTEXT_TAG}>\nthe conversation so far\n</{SEED_CONTEXT_TAG}>"
 
@@ -56,7 +55,7 @@ def test_a_seeded_chats_first_send_shows_the_words_and_hides_the_context_it_carr
 
 
 def test_a_seeded_chats_first_send_keeps_the_attachment_block_its_bubble_renders() -> None:
-    """The block the composer appends renders in the bubble (an inline image, a download link),
+    """The block the composer appends renders in the bubble (an inline image, a file link),
     so stripping the context block in front of the message must not take it off the end."""
     decision = classify_user_message(f"{_SEED_BLOCK}\nhere you go\n\nSee attachment here: ![a](/uploads/1/a.png)")
     assert decision is not None
@@ -338,23 +337,11 @@ def test_permission_resolution_reads_the_machine_tag_first() -> None:
     assert display.request_id == "evt-9"
 
 
-def _load_system_script(filename: str) -> Any:
-    """A standard-library-only module of ``system/scripts/``'s bare package, which this package does not depend on."""
-    script = Path(__file__).resolve().parents[5] / "scripts" / "workspace_bare_scripts" / filename
-    spec = importlib.util.spec_from_file_location(f"{script.stem}_for_tag_pin", script)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def test_the_messaging_scripts_browser_fleet_tag_is_the_one_this_classifier_strips() -> None:
     """``system/scripts/message_chat.py --browser-fleet`` wraps a nudge in the tag this module recognises; the script
     is standard-library only and cannot import this package, so its copy of the tag is pinned here."""
-    module = _load_system_script("message_chat.py")
-
-    assert module.BROWSER_FLEET_TAG == BROWSER_FLEET_TAG
-    decision = classify_user_message(module.wrap_browser_fleet_nudge("Browser b1 was handed back to you."))
+    assert message_chat.BROWSER_FLEET_TAG == BROWSER_FLEET_TAG
+    decision = classify_user_message(message_chat.wrap_browser_fleet_nudge("Browser b1 was handed back to you."))
     assert decision is not None
     assert decision.display is DisplayKind.CHIP
 
@@ -362,8 +349,7 @@ def test_the_messaging_scripts_browser_fleet_tag_is_the_one_this_classifier_stri
 def test_a_background_task_report_is_a_notice_showing_only_its_summary() -> None:
     """``system/scripts/run_in_background.py`` is standard-library only and cannot import this package,
     so its copy of the tag is pinned here by classifying a report it composed."""
-    module = _load_system_script("run_in_background.py")
-    report = module.compose_report(
+    report = run_in_background.compose_report(
         description="Wait for the background agent",
         command=["uv", "run", "create_worker.py", "await", "--name", "fix-login"],
         returncode=0,
@@ -371,7 +357,7 @@ def test_a_background_task_report_is_a_notice_showing_only_its_summary() -> None
         output_path=Path("data/.tasks/run-in-background/x/output.log"),
     )
 
-    assert module.BACKGROUND_TASK_REPORT_TAG == BACKGROUND_TASK_REPORT_TAG
+    assert run_in_background.BACKGROUND_TASK_REPORT_TAG == BACKGROUND_TASK_REPORT_TAG
     decision = classify_user_message(report)
     assert decision is not None
     assert decision.display is DisplayKind.NOTICE
@@ -380,17 +366,9 @@ def test_a_background_task_report_is_a_notice_showing_only_its_summary() -> None
     assert is_non_turn_tail(report) is False
 
 
-def test_the_uv_run_options_skipped_before_a_command_are_the_secrets_guards() -> None:
-    """The tool-output reader unwraps ``uv run`` past the options the secrets guard lets through; the guard
-    cannot import this package, so its copy of the set is pinned here."""
-    module = _load_system_script("agent_secrets_guard_check.py")
-
-    assert module._UV_RUN_PASSTHROUGH_FLAGS == _UV_RUN_PASSTHROUGH_FLAGS
-
-
 def _compose_report(description: str, command: Sequence[str] = ("make",), output: str = "built\n") -> str:
     """A report composed by the real ``run_in_background.py``, for a command that finished."""
-    return _load_system_script("run_in_background.py").compose_report(
+    return run_in_background.compose_report(
         description=description,
         command=command,
         returncode=0,

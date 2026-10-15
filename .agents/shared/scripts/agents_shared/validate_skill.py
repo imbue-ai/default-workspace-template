@@ -18,9 +18,11 @@ Runnability checks (only when the static checks pass and the skill has Python):
 
 - `uv lock --check` passes: the workspace lock includes the skill's
   dependencies, so `uv sync --all-packages` installs them.
-- `uv run --no-sync <entry> --help` exits 0 for every entry file at the top of
-  `scripts/`, so a broken import or a missing dependency is caught here rather
-  than only at scenario time. `--help` is a shallow import check: it exercises
+- `uv run --no-sync <entry> --help` exits 0 for every entry file -- each module of
+  the package with a top-level `if __name__ == "__main__":` block, and any stub at
+  the top of `scripts/` -- so a broken import or a missing dependency is caught here rather
+  than only at scenario time. A package with a module run by its path holds no
+  module named like a standard-library one, which that run would import instead. `--help` is a shallow import check: it exercises
   the top-level imports and argparse wiring, not imports done lazily inside
   subcommand bodies -- those are left to scenario testing.
 
@@ -31,6 +33,7 @@ stderr otherwise.
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import subprocess
 import sys
@@ -94,9 +97,63 @@ def _is_test_file(path: Path) -> bool:
     )
 
 
-def _entry_files(scripts_dir: Path) -> list[Path]:
-    """The entry points: every ``.py`` at the top of ``scripts/`` except tests."""
+def _is_main_guard(test: ast.expr) -> bool:
+    return (
+        isinstance(test, ast.Compare)
+        and isinstance(test.left, ast.Name)
+        and test.left.id == "__name__"
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.Eq)
+        and len(test.comparators) == 1
+        and isinstance(test.comparators[0], ast.Constant)
+        and test.comparators[0].value == "__main__"
+    )
+
+
+def is_entry_module(path: Path) -> bool:
+    """Whether ``path`` is run as a script: it has a top-level ``if __name__ == "__main__":``."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return any(
+        isinstance(node, ast.If) and _is_main_guard(node.test) for node in tree.body
+    )
+
+
+def package_entry_modules(project_dir: Path) -> list[Path]:
+    """The modules of a uv project's packages that run as scripts, tests excluded."""
+    return sorted(
+        module
+        for init in project_dir.glob("*/__init__.py")
+        for module in init.parent.glob("*.py")
+        if not _is_test_file(module) and is_entry_module(module)
+    )
+
+
+def _script_stubs(skill_dir: Path) -> list[Path]:
+    """Every ``.py`` at the top of ``scripts/`` except tests: stubs for a path called from outside."""
+    scripts_dir = skill_dir / "scripts"
+    if not scripts_dir.is_dir():
+        return []
     return sorted(path for path in scripts_dir.glob("*.py") if not _is_test_file(path))
+
+
+def stdlib_shadowing_modules(package_dir: Path) -> list[str]:
+    """The package's modules named like a standard-library module.
+
+    A module run by its own path has its package's directory first on ``sys.path``,
+    so such a sibling would be imported in place of the standard-library module.
+    """
+    return sorted(
+        module.stem
+        for module in package_dir.glob("*.py")
+        if module.stem in sys.stdlib_module_names
+    )
+
+
+def _entry_files(skill_dir: Path) -> list[Path]:
+    """The entry points: the package's modules that run as scripts, then the stubs."""
+    project_dir = skill_dir / "python"
+    modules = package_entry_modules(project_dir) if project_dir.is_dir() else []
+    return [*modules, *_script_stubs(skill_dir)]
 
 
 def _validate_python_project(skill_dir: Path, skill_name: str) -> str | None:
@@ -105,10 +162,7 @@ def _validate_python_project(skill_dir: Path, skill_name: str) -> str | None:
     A skill with no entry files in ``scripts/`` and no ``python/`` dir is OK.
     """
     project_dir = skill_dir / "python"
-    entries = (
-        _entry_files(skill_dir / "scripts") if (skill_dir / "scripts").is_dir() else []
-    )
-    if not entries and not project_dir.is_dir():
+    if not _script_stubs(skill_dir) and not project_dir.is_dir():
         return None
     pyproject = project_dir / "pyproject.toml"
     if not pyproject.is_file():
@@ -175,14 +229,13 @@ def check_runnable(skill_dir: Path, runner: CommandRunner = _run_via_uv) -> str 
     """Confirm the skill's dependencies are locked and every entry imports and builds its CLI.
 
     Runs ``uv lock --check`` and then ``uv run --no-sync <entry> --help`` for each
-    entry file in ``scripts/``, via ``runner`` (injectable for testing). Returns an
+    entry file, via ``runner`` (injectable for testing). Returns an
     error message on the first failure, otherwise ``None``. A skill with no
     ``python/`` project is trivially runnable.
     """
     project_dir = (skill_dir / "python").resolve()
     if not project_dir.is_dir():
         return None
-    scripts_dir = (skill_dir / "scripts").resolve()
     error = _run_checked(
         ["uv", "lock", "--check"],
         project_dir,
@@ -192,10 +245,21 @@ def check_runnable(skill_dir: Path, runner: CommandRunner = _run_via_uv) -> str 
     )
     if error is not None:
         return error
-    for entry in _entry_files(scripts_dir) if scripts_dir.is_dir() else []:
+    try:
+        entries = _entry_files(skill_dir.resolve())
+    except SyntaxError as exc:
+        return f"{exc.filename} cannot be parsed: {exc}"
+    for entry in entries:
+        is_module = (entry.parent / "__init__.py").is_file()
+        shadowing = stdlib_shadowing_modules(entry.parent) if is_module else []
+        if shadowing:
+            return (
+                f"{entry} runs by its own path, so its package's {', '.join(shadowing)} "
+                "would shadow the standard-library module of that name; rename it"
+            )
         error = _run_checked(
             ["uv", "run", "--no-sync", str(entry), "--help"],
-            scripts_dir,
+            entry.parent,
             runner,
             f"`uv run --no-sync {entry} --help` (its imports or dependencies may be broken; "
             "a ModuleNotFoundError for the skill's own package means it is not installed yet: "
@@ -276,3 +340,7 @@ def main() -> int:
         return 0
     print(f"invalid skill: {error}", file=sys.stderr)
     return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

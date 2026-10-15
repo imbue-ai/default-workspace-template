@@ -1,6 +1,6 @@
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, NoReturn
 
 import pytest
 from playwright.sync_api import Browser, BrowserContext, ViewportSize, sync_playwright
@@ -28,6 +28,19 @@ def browser_type_launch_args(
     if not FORTRESS_CHROMIUM_PATH.exists():
         return browser_type_launch_args
     return {**browser_type_launch_args, "executable_path": str(FORTRESS_CHROMIUM_PATH)}
+
+
+@pytest.fixture(scope="session")
+def playwright() -> NoReturn:
+    """Refuses pytest-playwright's session Playwright, which its `browser`, `context`
+    and `page` all stand on: its asyncio loop stays running in the worker until the
+    session ends, so every later browser test there fails. Fails only the test that
+    asks for it."""
+    pytest.fail(
+        "pytest-playwright's page, context and browser fixtures break every later "
+        "browser test in this worker; use `module_browser` from the root conftest.py",
+        pytrace=False,
+    )
 
 
 @pytest.fixture(scope="module")

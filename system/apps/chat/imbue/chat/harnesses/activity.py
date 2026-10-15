@@ -71,6 +71,19 @@ class HarnessActivityTracker(ABC):
     # shared ``active`` marker their hooks/extension flip.
     active_marker_filename: ClassVar[str | None] = ACTIVE_MARKER_FILENAME
 
+    # Filename of the marker the harness's mngr plugin holds while the agent's context is
+    # being compacted, or None when the harness writes none (its compactions show only
+    # through the chat's own requests).
+    compacting_marker_filename: ClassVar[str | None] = None
+
+    # Whether the harness runs a compaction as a turn of its own (codex), so a compaction the chat
+    # asked for reads as a running turn while it runs.
+    is_compaction_run_as_turn: ClassVar[bool] = False
+
+    # Filename of the record the harness's mngr plugin writes when a compaction finishes
+    # (``{"trigger": ..., "ended_at": ...}``), or None when the harness writes none.
+    last_compaction_filename: ClassVar[str | None] = None
+
     # Signals every harness caches. Declared at class level so a `build()`
     # classmethod (no __init__) can assign them with the type checker happy.
     _has_pending_tool_use: bool

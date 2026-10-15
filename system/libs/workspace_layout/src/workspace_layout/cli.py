@@ -600,8 +600,19 @@ def _listed_clients(inventory: _Answer) -> list[dict[str, Any]]:
 
 
 @pure
+def _app_link(app: Mapping[str, Any]) -> str:
+    """The link to write for an app: its address on the domain the workspace was last shared under, which opens it
+    from any client the workspace is shared with, else its port-less ``<label>.localhost`` address, which opens it
+    only from inside and outlasts any change of its port."""
+    share_url = app["share_url"]
+    if share_url is not None:
+        return share_url
+    return f"http://{app['label'] or app['name']}.localhost/"
+
+
+@pure
 def _listed_apps(inventory: _Answer) -> list[dict[str, Any]]:
-    """Every app a user can open, with where its windows are."""
+    """Every app a user can open, with the link to write for it and where its windows are."""
     windows_by_app: dict[str, list[dict[str, Any]]] = {}
     for desktop in inventory["desktops"]:
         for window in desktop["windows"]:
@@ -609,7 +620,7 @@ def _listed_apps(inventory: _Answer) -> list[dict[str, Any]]:
                 {**_listed(window, _LISTED_WINDOW_FIELDS), "desktop": desktop["id"]}
             )
     return [
-        {**_listed(app, _LISTED_APP_FIELDS), "windows": windows_by_app.get(app["name"], [])}
+        {**_listed(app, _LISTED_APP_FIELDS), "link": _app_link(app), "windows": windows_by_app.get(app["name"], [])}
         for app in inventory["apps"]
         if not app["internal"]
     ]
@@ -989,7 +1000,9 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_json_argument(p_desktops)
     p_desktops.set_defaults(func=_cmd_desktops)
 
-    p_list = subparsers.add_parser("list", help="List every app with its launch paths and windows, plus the desktops")
+    p_list = subparsers.add_parser(
+        "list", help="List every app with its link, launch paths and windows, plus the desktops"
+    )
     _add_json_argument(p_list)
     p_list.set_defaults(func=_cmd_list)
 

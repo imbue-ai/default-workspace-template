@@ -1880,3 +1880,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return EXIT_SSH_UNREACHABLE
+
+
+if __name__ == "__main__":
+    sys.exit(main())

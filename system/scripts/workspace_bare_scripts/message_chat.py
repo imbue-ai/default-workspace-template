@@ -627,6 +627,56 @@ def _validate_mode(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("--name and --label apply only with --create")
 
 
+def send(
+    chat_id: str,
+    text: str,
+    environ: Mapping[str, str] | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> int:
+    """Send ``text`` to the chat, through the chat app or else ``mngr message``; returns the exit code.
+
+    The codes are this script's: delivered, delivered but blocked on a dialog, failed, or
+    the chat is gone. What happened is printed, as the script prints it.
+    """
+    resolved_environ = os.environ if environ is None else environ
+    base_url = chat_app_url(resolved_environ, Path.cwd())
+    result = send_through_chat_app(
+        base_url, chat_id, text, uuid.uuid4().hex, clock, sleep
+    )
+    match result.outcome:
+        case Outcome.DELIVERED:
+            print(f"Sent to chat {chat_id} through the chat app")
+            return EXIT_DELIVERED
+        case Outcome.BLOCKED:
+            print(
+                f"Delivered to chat {chat_id}, but its input is blocked: {result.detail}",
+                file=sys.stderr,
+            )
+            return EXIT_DELIVERED_BUT_BLOCKED
+        case Outcome.REFUSED:
+            print(
+                f"The chat app refused the message for chat {chat_id}: {result.detail}",
+                file=sys.stderr,
+            )
+            return EXIT_FAILED
+        case Outcome.UNREACHABLE | Outcome.NOT_FOUND:
+            # The chat app cannot take this message, so mngr delivers it.
+            print(
+                f"Falling back to `mngr message` for chat {chat_id}: {result.detail}",
+                file=sys.stderr,
+            )
+            returncode = send_through_mngr(chat_id, text)
+            if returncode == EXIT_CHAT_GONE and result.outcome is Outcome.UNREACHABLE:
+                # Only the chat app knows which chats exist; the id names the chat's first agent,
+                # which is not the chat once a handoff has retired it. So mngr missing that agent
+                # means the chat is gone only when the chat app said it does not know it either.
+                return EXIT_FAILED
+            return returncode
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
 def main(
     argv: list[str] | None = None,
     environ: Mapping[str, str] | None = None,
@@ -641,48 +691,16 @@ def main(
     text = _read_message(parser, args, sys.stdin if stdin is None else stdin)
     if args.browser_fleet:
         text = wrap_browser_fleet_nudge(text)
-    base_url = chat_app_url(resolved_environ, Path.cwd())
     if args.create:
         request = CreateRequest(
             name=args.name,
             message=text,
             labels=_parse_labels(parser, args.label),
         )
-        return _create(base_url, request, clock, sleep)
-    result = send_through_chat_app(
-        base_url, args.chat_id, text, uuid.uuid4().hex, clock, sleep
-    )
-    match result.outcome:
-        case Outcome.DELIVERED:
-            print(f"Sent to chat {args.chat_id} through the chat app")
-            return EXIT_DELIVERED
-        case Outcome.BLOCKED:
-            print(
-                f"Delivered to chat {args.chat_id}, but its input is blocked: {result.detail}",
-                file=sys.stderr,
-            )
-            return EXIT_DELIVERED_BUT_BLOCKED
-        case Outcome.REFUSED:
-            print(
-                f"The chat app refused the message for chat {args.chat_id}: {result.detail}",
-                file=sys.stderr,
-            )
-            return EXIT_FAILED
-        case Outcome.UNREACHABLE | Outcome.NOT_FOUND:
-            # The chat app cannot take this message, so mngr delivers it.
-            print(
-                f"Falling back to `mngr message` for chat {args.chat_id}: {result.detail}",
-                file=sys.stderr,
-            )
-            returncode = send_through_mngr(args.chat_id, text)
-            if returncode == EXIT_CHAT_GONE and result.outcome is Outcome.UNREACHABLE:
-                # Only the chat app knows which chats exist; the id names the chat's first agent,
-                # which is not the chat once a handoff has retired it. So mngr missing that agent
-                # means the chat is gone only when the chat app said it does not know it either.
-                return EXIT_FAILED
-            return returncode
-        case _ as unreachable:
-            assert_never(unreachable)
+        return _create(
+            chat_app_url(resolved_environ, Path.cwd()), request, clock, sleep
+        )
+    return send(args.chat_id, text, resolved_environ, clock, sleep)
 
 
 def _create(

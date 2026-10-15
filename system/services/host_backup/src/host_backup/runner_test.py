@@ -18,7 +18,14 @@ from host_backup.config import (
     BackupConfig,
     RetentionSettings,
 )
-from host_backup.events import EVENTS_LOG_ROTATION_BYTES, TICK_TERMINAL_EVENT_TYPES
+from host_backup.events import (
+    EVENTS_LOG_ROTATION_BYTES,
+    TICK_TERMINAL_EVENT_TYPES,
+    BackupEventType,
+    make_event,
+    record_abandoned_tick,
+    write_event,
+)
 from host_backup.runner import (
     CONSECUTIVE_FAILURE_ALARM_THRESHOLD,
     ENV_RECORD_CAPTURE_TIMEOUT_SECONDS,
@@ -238,8 +245,9 @@ def test_every_way_a_tick_ends_emits_a_terminal_event(
 ) -> None:
     """Drive each way a tick can end and assert the endings match the terminal set.
 
-    Four come from `_run_one_tick`'s step helpers; the last comes from the loop's
-    outer handler, which is where a tick that raises ends up.
+    Four come from `_run_one_tick`'s step helpers; one comes from the loop's outer
+    handler, which is where a tick that raises ends up; and the last is recorded by
+    a restarted service for the tick its predecessor was killed in.
 
     `host-backup-now` waits for a member of TICK_TERMINAL_EVENT_TYPES, so a tick
     ending that emits something outside that set strands the caller until its
@@ -286,6 +294,15 @@ def test_every_way_a_tick_ends_emits_a_terminal_event(
     state.events_dir = tmp_path / "tick-error"
     _emit_tick_error(state, ValueError("boom"))
     observed.add(last_event_type(state.events_dir))
+
+    # The service restarted while a tick was running.
+    abandoned_dir = tmp_path / "abandoned"
+    write_event(
+        abandoned_dir,
+        make_event(BackupEventType.BACKUP_STARTED, tick_id="tick-killed"),
+    )
+    record_abandoned_tick(abandoned_dir)
+    observed.add(last_event_type(abandoned_dir))
 
     assert observed == TICK_TERMINAL_EVENT_TYPES
 

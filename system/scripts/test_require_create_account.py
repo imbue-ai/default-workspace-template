@@ -43,9 +43,9 @@ def _mngr_create_in_a_gated_project(
 ) -> subprocess.CompletedProcess[str]:
     """Run the real `mngr create` in a temp project carrying the committed gate entry.
 
-    The entry names the script by its project-relative path, so the script (with the bare
-    package its stub imports) is copied to that path inside the project; mngr runs the entry
-    from the project root, in this environment.
+    The entry names the script by its project-relative path, so the script is copied to that
+    path inside the project, with the package its entry stub imports beside it; mngr runs the
+    entry from the project root, in this environment.
     """
     if shutil.which("uv") is None:
         pytest.skip("uv is not on PATH")
@@ -55,10 +55,11 @@ def _mngr_create_in_a_gated_project(
     script_copy = project / _SCRIPT.relative_to(_SCRIPT.parents[2])
     script_copy.parent.mkdir(parents=True)
     shutil.copy(_SCRIPT, script_copy)
+    bare_package = Path(require_create_account.__file__).parent
     shutil.copytree(
-        _SCRIPT.with_name("workspace_bare_scripts"),
-        script_copy.with_name("workspace_bare_scripts"),
-        ignore=shutil.ignore_patterns("__pycache__"),
+        bare_package,
+        script_copy.parent / bare_package.name,
+        ignore=shutil.ignore_patterns("__pycache__", "*_test.py"),
     )
     (project / ".mngr" / "settings.toml").write_text(
         f"is_allowed_in_pytest = true\n\n[pre_command_scripts]\ncreate = [{_committed_pre_command_entry()!r}]\n"

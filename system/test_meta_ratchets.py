@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 import tomlkit
 from inline_snapshot import snapshot
+from vendor_testing import resolves_into_vendor
 
 _REPO_ROOT = Path(__file__).parents[1]
 
@@ -390,7 +391,7 @@ def _live_prose_files() -> list[Path]:
         # govern. Resolved rather than inferred from is_file(), which only
         # excluded this link back when its target path was stale and it
         # resolved to nothing.
-        if _VENDORED_DIR in path.resolve().parents:
+        if resolves_into_vendor(path, _REPO_ROOT):
             continue
         files.append(path)
     return files

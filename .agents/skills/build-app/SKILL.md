@@ -160,7 +160,7 @@ under `system/apps/<your-package>/` so they get an isolated window and origin.
 ## Step 1: Run the scaffolder (canonical path)
 
 ```bash
-uv run --no-sync .agents/skills/build-app/scripts/scaffold_flask_lib.py \
+uv run --no-sync .agents/skills/build-app/python/build_app_skill/scaffold_flask_lib.py \
     --name <service-name> \
     --description "<one-liner>" \
     --icon-file <path-to-svg> \
@@ -245,9 +245,13 @@ What gets generated:
   "Explain...", "Modify...") hand the clicked element to a chat as a
   `REF-<id>.json` attachment an agent can resolve
   (`.agents/shared/references/element-references.md`,
-  `docs/system/blueprint/element-reference-menu/`). Keep the script on
-  every page the app serves. An app that drops it always reopens at its
-  origin and gets the browser's own menu. The runner serves the two modules
+  `docs/system/blueprint/element-reference-menu/`). The connection also
+  opens the page's links where the workspace opens them, so write plain
+  `<a href>` links and no link handling of your own; a `window.open` to any
+  of the workspace's own addresses is routed the same way and returns `null`.
+  Keep the script on every page the app serves. An app that drops it always
+  reopens at its origin, gets the browser's own menu, and has its links
+  navigate its own window. The runner serves the two modules
   the script imports from its own origin at `/_static/app_contract.js` and
   `/_static/context_menu.js` (a module import is a fetch without cookies,
   which the forwarder refuses across origins); keep that route too.
@@ -472,15 +476,15 @@ Two cases, two patterns:
 ## Step 3: Verify
 
 Both paths use the same verification recipe. See
-[references/verify.md](references/verify.md) -- use `system/scripts/smoketest_app.py`:
+[references/verify.md](references/verify.md) -- use `system/scripts/workspace_scripts/smoketest_app.py`:
 
 ```bash
-uv run --no-sync system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>"
+uv run --no-sync system/scripts/workspace_scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>"
 ```
 
 Or with a visual screenshot:
 ```bash
-uv run --no-sync system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>" --screenshot /tmp/app.png
+uv run --no-sync system/scripts/workspace_scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>" --screenshot /tmp/app.png
 ```
 
 If verification surfaces something unexpected (connection refused,
@@ -540,9 +544,12 @@ its windows, and every desktop).
 ## Step 5: Finalize in the background (after the user confirms the working site)
 
 The foreground work stops at a usable, surfaced site. The thorough pass --
-extending Playwright coverage, the full test suite and ratchets, review gates
- -- runs in a **background harden worker**, never in the
-main agent. This is skeleton phase 7: the harden pass
+extending Playwright coverage, the full test suite and ratchets over the
+extended tests, review gates -- runs in a **background harden worker**, never
+in the main agent. The test gate AGENTS.md has you run through
+`system/scripts/run_in_background.py` checks the app against the tests it
+already has, so it is not this pass: run it anyway, since the worker may never
+be dispatched. This is skeleton phase 7: the harden pass
 (`.agents/shared/worker/references/harden-creation.md`), here the **crystallize**
 operation with the **app** type -- the scaffolded app is already on
 disk and the user confirmed it live, so nothing needs reconstructing and there
@@ -559,8 +566,8 @@ invalidate.)
 Reading the confirmation signal:
 
 - If the user keeps asking for changes, each one is a **cheap foreground
-  iteration that resets the clock** -- you have run no gates or thorough tests
-  yet, so pivots stay cheap. Do not hand off until their response is a
+  iteration that resets the clock** -- you have run no review gates or thorough
+  tests yet, so pivots stay cheap. Do not hand off until their response is a
   confirmation rather than a change request.
 - If the user starts asking for surface-level (cosmetic) tweaks, or pivots to a
   slightly unrelated task or follow-up, treat that as a sign the core is settled:
@@ -662,6 +669,16 @@ For the full program schema and logging knobs, see the shared
 
 Verification and gotchas references apply identically to this path.
 
+A wrapped tool's pages do not carry the shell page script, so a plain click
+on one of their links to a local service or another app navigates the tool's
+own window. If the tool can serve one more static file from its own origin
+and add a script to its pages (Jupyter's custom JS, a dev server's plugin
+hook), give it the contract: serve
+`system/apps/system_interface/imbue/system_interface/static/_static/app_contract.js`
+at `/_static/app_contract.js` and add
+`<script type="module">import { connectToShell } from "/_static/app_contract.js"; connectToShell({});</script>`
+to its pages. If it can do neither, leave it as it is.
+
 ## `forward_port.py` CLI reference
 
 Used by both paths (the scaffolder generates the call; the escape
@@ -759,10 +776,10 @@ Flags:
 
 ## The shared (public) URL
 
-If the workspace is shared, every registered service is also reachable at
-its own public origin -- the same prefix rule on the share hostname
-(`https://<name>.<workspace-share-host>/`) -- with caveats about where that
-hostname lives and why it isn't in `data/.state/apps.toml`. See
+Once the workspace has been shared, every registered service is also
+reachable at its own public origin -- the same prefix rule on the share
+domain (`https://<label>.<share-domain>/`) -- and
+`uv run --no-sync workspace-layout list` prints it as the app's `link`. See
 [references/public-url.md](references/public-url.md).
 
 ## Cleanup

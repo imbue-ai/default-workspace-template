@@ -1,12 +1,13 @@
 """Where the workspace's Python entry points are, and which interpreter each one runs under.
 
-An entry point is a top-level ``.py`` file in a scripts directory (``system/scripts``,
-``.agents/shared/scripts``, ``.agents/skills/<name>/scripts``) -- a thin stub that imports its
-package, which sits beside it (``system/scripts``, ``.agents/shared/scripts``) or in the skill's
-``python/`` project. Its tier is its package's: a stub into a bare package runs under the system
-``python3`` with no venv (stdlib only), any other stub runs from the root venv
-(``uv run --no-sync``). A few standalone stdlib scripts outside the scripts directories are bare
-too. See .agents/shared/references/running-python.md.
+An entry point is either a module of a package with a top-level ``if __name__ == "__main__":``
+block, run by its own path from the root venv (``uv run --no-sync``), or a stub: a top-level
+``.py`` file in a scripts directory (``system/scripts``, ``.agents/shared/scripts``,
+``.agents/skills/<name>/scripts``) that imports its package, kept where something outside the
+release calls a fixed path or the script runs with no venv. A stub's tier is its package's: a
+stub into a bare package runs under the system ``python3`` with no venv (stdlib only), any other
+stub runs from the root venv. A few standalone stdlib scripts outside the scripts directories
+are bare too. See .agents/shared/references/running-python.md.
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ import ast
 import tomllib
 from pathlib import Path
 
+from agents_shared.validate_skill import package_entry_modules
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SYSTEM_SCRIPTS = REPO_ROOT / "system" / "scripts"
 UPDATE_SELF_SCRIPTS = REPO_ROOT / ".agents" / "skills" / "update-self" / "scripts"
@@ -22,10 +25,14 @@ UPDATE_SELF_SCRIPTS = REPO_ROOT / ".agents" / "skills" / "update-self" / "script
 # The packages the system python3 runs: stdlib only, no venv.
 BARE_PACKAGES = frozenset({"workspace_bare_scripts", "update_self_skill"})
 
-# Bare scripts that are not package stubs: oom_priority's own entry scripts, and a
-# stdlib-only maintenance script.
+# Bare scripts that are not package stubs: oom_priority's own entry scripts, a
+# stdlib-only maintenance script, and the Datalib app's launcher (the app is not a
+# workspace member, and the launcher is its supervisord program).
 STANDALONE_BARE_DIRS = (REPO_ROOT / "system" / "services" / "oom_priority" / "bin",)
-STANDALONE_BARE_SCRIPTS = (REPO_ROOT / "catalog" / "build_catalog_from_export.py",)
+STANDALONE_BARE_SCRIPTS = (
+    REPO_ROOT / "catalog" / "build_catalog_from_export.py",
+    REPO_ROOT / "system" / "apps" / "datalib" / "launch_datalib_http.py",
+)
 
 # ``python -c`` source taking an entry's path: imports the entry the way running it would (its
 # directory first on sys.path) without running its __main__ block, then prints every top-level
@@ -52,6 +59,24 @@ def scripts_dirs(repo_root: Path = REPO_ROOT) -> list[Path]:
     ]
 
 
+def project_dirs(repo_root: Path = REPO_ROOT) -> list[Path]:
+    """The uv projects whose packages hold the workspace's scripts."""
+    return [
+        repo_root / "system" / "scripts",
+        repo_root / ".agents" / "shared" / "scripts",
+        *sorted((repo_root / ".agents" / "skills").glob("*/python")),
+    ]
+
+
+def module_entry_points(repo_root: Path = REPO_ROOT) -> list[Path]:
+    """The package modules run by their own path."""
+    return [
+        module
+        for directory in project_dirs(repo_root)
+        for module in package_entry_modules(directory)
+    ]
+
+
 def is_test_file(path: Path) -> bool:
     return (
         path.name.endswith("_test.py")
@@ -65,7 +90,8 @@ def entry_files(scripts_dir: Path) -> list[Path]:
 
 
 def all_entry_points() -> list[Path]:
-    """Every entry point, venv and bare: the scripts directories' and the standalone bare ones."""
+    """Every entry point, venv and bare: the scripts directories' stubs, the package modules run
+    by their own path, and the standalone bare ones."""
     entries = [
         entry for directory in scripts_dirs() for entry in entry_files(directory)
     ]
@@ -73,11 +99,15 @@ def all_entry_points() -> list[Path]:
         path for directory in STANDALONE_BARE_DIRS for path in entry_files(directory)
     ]
     entries += STANDALONE_BARE_SCRIPTS
+    entries += module_entry_points()
     return entries
 
 
 def project_dir(entry: Path) -> Path:
-    """The uv project an entry's package lives in: its own dir, or a skill's ``python/``."""
+    """The uv project an entry's package lives in: the package's parent for a module, else
+    the stub's own dir, or a skill's ``python/``."""
+    if (entry.parent / "__init__.py").is_file():
+        return entry.parent.parent
     skill_project = entry.parent.parent / "python"
     return (
         skill_project if (skill_project / "pyproject.toml").is_file() else entry.parent
