@@ -32,10 +32,6 @@
   a { color: inherit; }
   :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
 
-  /* Mock-only state switcher: one scrolling row so it never eats a phone screen. */
-  .mockbar { position: relative; z-index: 10; display: flex; gap: 6px; align-items: center; padding: 8px 12px; background: #fff7d6; color: #1d1b1a; border-bottom: 1px dashed #d8c06a; font-size: 12px; overflow-x: auto; white-space: nowrap; }
-  .mockbar button { font: inherit; border: 1px solid #d8c06a; background: #fff; color: #1d1b1a; border-radius: 999px; padding: 3px 10px; cursor: pointer; flex: none; }
-  .mockbar button[aria-pressed="true"] { background: #1d1b1a; color: #fff; border-color: #1d1b1a; }
 
   main { max-width: 760px; margin: 0 auto; padding: 28px 20px 48px; }
   @media (max-width: 600px) { main { padding: 18px 16px 40px; } }
@@ -44,16 +40,15 @@
   [data-show] { display: none !important; }
   body[data-state="offer"] [data-show~="offer"],
   body[data-state="waiting"] [data-show~="waiting"],
-  body[data-state="declined"] [data-show~="declined"],
-  body[data-state="connected"] [data-show~="connected"],
+    body[data-state="connected"] [data-show~="connected"],
   body[data-state="notjoined"] [data-show~="notjoined"],
   body[data-state="error"] [data-show~="error"],
   body[data-state="confirm"] [data-show~="confirm"],
-  body[data-state="removed"] [data-show~="removed"] { display: block !important; }
+  body[data-state="uninstalled"] [data-show~="uninstalled"],
+  body[data-state="loading"] [data-show~="loading"] { display: block !important; }
   body[data-state="offer"] .flex[data-show~="offer"],
   body[data-state="waiting"] .flex[data-show~="waiting"],
-  body[data-state="declined"] .flex[data-show~="declined"],
-  body[data-state="connected"] .flex[data-show~="connected"],
+    body[data-state="connected"] .flex[data-show~="connected"],
   body[data-state="notjoined"] .flex[data-show~="notjoined"],
   body[data-state="error"] .flex[data-show~="error"],
   body[data-state="confirm"] .flex[data-show~="confirm"] { display: flex !important; }
@@ -148,52 +143,41 @@
   .dialog p { margin: 0 0 16px; color: var(--muted); font-size: 14px; }
   @media (max-width: 600px) { .scrim { align-items: flex-end; padding: 0; } .dialog { max-width: none; border-radius: 16px 16px 0 0; padding: 22px 16px 28px; } }
 
-  /* Removed: just the link. */
+  .empty { color: var(--muted); font-size: 14px; padding: 6px 0 2px; }
+  .loadingline { color: var(--muted); font-size: 14px; padding: 40px 0; text-align: center; }
+  .msg .av img { width: 30px; height: 30px; border-radius: 50%; display: block; }
+  .rawlink { display: inline-flex; align-items: center; min-height: var(--tap); font-size: 12px; color: var(--muted); margin-left: 14px; }
+  .ftr { display: flex; align-items: center; }
+  /* Uninstalled: just the link. */
   .removed { max-width: 420px; margin: 18vh auto 0; text-align: center; padding: 0 20px; }
   .removed p { color: var(--muted); margin: 0 0 14px; }
   .removed .btn { width: 100%; max-width: 320px; }
   .removed .quiet { justify-content: center; }
 </style>
 </head>
-<body data-state="offer">
-<div class="mockbar" role="toolbar" aria-label="Mock states">
-  <b>Mock</b>
-  <button data-s="offer" aria-pressed="true">Not connected</button>
-  <button data-s="waiting" aria-pressed="false">Waiting</button>
-  <button data-s="declined" aria-pressed="false">Declined</button>
-  <button data-s="connected" aria-pressed="false">Connected</button>
-  <button data-s="notjoined" aria-pressed="false">Connected, not joined</button>
-  <button data-s="error" aria-pressed="false">Couldn't reach Discord</button>
-  <button data-s="confirm" aria-pressed="false">Uninstalling</button>
-  <button data-s="removed" aria-pressed="false">Uninstalled</button>
-</div>
+<body data-state="loading">
+<main data-show="loading offer waiting connected notjoined error confirm">
+  <p class="loadingline" data-show="loading" role="status">Loading</p>
 
-<main data-show="offer waiting declined connected notjoined error confirm">
   <!-- Before connecting: the pitch. -->
-  <div data-show="offer waiting declined confirm">
+  <div data-show="offer waiting confirm">
     <header class="hero">
-      <img alt="Imbue" src="https://cdn.discordapp.com/icons/1391837726583820409/4dd244f63f0b3d659f6c1358ed04ea6e.png?size=128">
+      <img id="server-icon" alt="Imbue" src="https://cdn.discordapp.com/icons/1391837726583820409/4dd244f63f0b3d659f6c1358ed04ea6e.png?size=128">
       <div>
         <h1>Talk to the Studio team</h1>
         <p class="lede">Questions, bugs, and what people are building.</p>
       </div>
     </header>
 
-    <div class="actions" data-show="offer declined confirm">
-      <div class="notice warn flex" data-show="declined" role="status">
-        <div>
-          <b>Request declined</b>
-          <div class="act"><button class="inline" data-go="waiting">Ask again</button></div>
-        </div>
-      </div>
+    <div class="actions" data-show="offer confirm">
       <div class="btnrow">
-        <a class="btn primary" id="join" href="https://discord.gg/pynvT9nJm" target="_blank" rel="noopener">Join on Discord</a>
-        <button class="btn secondary" id="connect" data-go="waiting">Connect with Studio</button>
+        <a class="btn primary join" id="join" href="#" target="_blank" rel="noopener">Join on Discord</a>
+        <button class="btn secondary" id="connect">Connect with Studio</button>
       </div>
-      <p class="note">Read-only. Only these three channels.</p>
+      <p class="note" id="note">Read-only. Only these three channels.</p>
       <ul class="quiet">
-        <li><a href="https://discord.com/channels/1391837726583820409/1553919346458370170" target="_blank" rel="noopener">Open Discord</a></li>
-        <li><button id="remove" data-go="confirm">Uninstall this app</button></li>
+        <li><a id="open-discord" class="open-discord" href="#" target="_blank" rel="noopener">Open Discord</a></li>
+        <li><button id="uninstall">Uninstall this app</button></li>
       </ul>
     </div>
 
@@ -202,13 +186,13 @@
         <span class="spinner" aria-hidden="true"></span>
         <div>
           <b>Approve in your Studio notifications</b>
-          <div class="act"><button class="inline" data-go="offer">Cancel</button></div>
+          <div class="act"><button class="inline" id="ask-again">Ask again</button> &nbsp; <button class="inline" id="cancel">Cancel</button></div>
         </div>
       </div>
     </div>
 
-    <div class="presence">
-      <span class="count"><span class="dot" aria-hidden="true"></span><span id="online-count">90</span>&nbsp;online now</span>
+    <div class="presence" id="presence" hidden>
+      <span class="count"><span class="dot" aria-hidden="true"></span><span id="online-count"></span>&nbsp;online now</span>
       <ul class="faces" id="faces" aria-label="Some of the people online now"></ul>
     </div>
   </div>
@@ -219,72 +203,34 @@
       <img alt="" src="https://cdn.discordapp.com/icons/1391837726583820409/4dd244f63f0b3d659f6c1358ed04ea6e.png?size=64">
       <div>
         <div class="title">Studio Discord</div>
-        <div class="who"><b>bowei</b> &middot; just now</div>
+        <div class="who"><b id="account-name"></b> &middot; <span id="updated">loading</span></div>
       </div>
     </div>
     <div class="pills">
       <button class="pill" id="refresh">Refresh</button>
-      <a class="pill" href="https://discord.com/channels/1391837726583820409/1553919346458370170" target="_blank" rel="noopener">Open Discord</a>
-      <button class="pill" id="disconnect" data-go="offer">Disconnect</button>
+      <a class="pill open-discord" href="#" target="_blank" rel="noopener">Open Discord</a>
+      <button class="pill" id="disconnect">Disconnect</button>
     </div>
   </div>
 
   <div class="notice flex" data-show="notjoined" style="margin-top:14px" role="status">
     <div>
       <b>Join to see messages here</b>
-      <div class="btnrow" style="margin-top:10px"><a class="btn primary" href="https://discord.gg/pynvT9nJm" target="_blank" rel="noopener">Join on Discord</a></div>
+      <div class="btnrow" style="margin-top:10px"><a class="btn primary join" href="#" target="_blank" rel="noopener">Join on Discord</a></div>
     </div>
   </div>
 
   <div class="notice warn flex" data-show="error" style="margin-top:14px" role="status">
     <div>
       <b>Couldn't reach Discord</b>
-      <p>Last loaded 2:10 PM.</p>
+      <p id="error-detail"></p>
       <div class="act"><button class="inline" id="retry">Try again</button></div>
     </div>
   </div>
 
-  <section class="chs" aria-labelledby="ch-h">
+  <section class="chs" aria-labelledby="ch-h" data-show="offer waiting connected error confirm">
     <h2 id="ch-h">Studio channels</h2>
-    <ul class="channels">
-      <li class="channel" id="ch-general" data-channel="general">
-        <a class="chrow" href="https://discord.com/channels/1391837726583820409/1553919346458370170" target="_blank" rel="noopener">
-          <span class="name"><span class="hash">#</span>general</span>
-          <span class="go"><span class="label">Open</span><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3h7v7M13 3 5 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-          <span class="desc">Say hi.</span>
-        </a>
-        <ul class="messages">
-          <li><a class="msg" href="#" target="_blank" rel="noopener"><span class="av" aria-hidden="true">SK</span><span><span class="meta"><b>Sam (Imbue team)</b><span>today at 2:14 PM</span></span><span class="text">Welcome to everyone who joined from the new workspaces this week. Post here if anything feels confusing in your first hour.</span></span></a></li>
-          <li><a class="msg" href="#" target="_blank" rel="noopener"><span class="av" aria-hidden="true">PR</span><span><span class="meta"><b>Priya</b><span>today at 11:02 AM</span></span><span class="text">Got my first app running. Is there a way to share it with a friend who doesn't have Studio?</span></span></a></li>
-          <li><a class="msg" href="#" target="_blank" rel="noopener"><span class="av" aria-hidden="true">JO</span><span><span class="meta"><b>Jordan</b><span>yesterday at 6:40 PM</span></span><span class="text">Yes, there's a Share button on each window. It gives them a link.</span></span></a></li>
-        </ul>
-        <a class="more" href="https://discord.com/channels/1391837726583820409/1553919346458370170" target="_blank" rel="noopener">More in Discord</a>
-      </li>
-      <li class="channel" id="ch-show" data-channel="show-and-tell">
-        <a class="chrow" href="https://discord.com/channels/1391837726583820409" target="_blank" rel="noopener">
-          <span class="name"><span class="hash">#</span>show-and-tell</span>
-          <span class="go"><span class="label">Open</span><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3h7v7M13 3 5 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-          <span class="desc">Show what you built.</span>
-        </a>
-        <ul class="messages">
-          <li><a class="msg" href="#" target="_blank" rel="noopener"><span class="av" aria-hidden="true">MW</span><span><span class="meta"><b>Mei</b><span>today at 9:31 AM</span></span><span class="text">Built a little dashboard that pulls my running log from Strava and charts weekly distance. Screenshot attached.</span></span></a></li>
-          <li><a class="msg" href="#" target="_blank" rel="noopener"><span class="av" aria-hidden="true">TH</span><span><span class="meta"><b>Theo</b><span>Monday at 4:12 PM</span></span><span class="text">My agent now summarizes my inbox every morning at 8. Took about twenty minutes of back and forth.</span></span></a></li>
-        </ul>
-        <a class="more" href="https://discord.com/channels/1391837726583820409" target="_blank" rel="noopener">More in Discord</a>
-      </li>
-      <li class="channel" id="ch-help" data-channel="help-and-bugs">
-        <a class="chrow" href="https://discord.com/channels/1391837726583820409" target="_blank" rel="noopener">
-          <span class="name"><span class="hash">#</span>help-and-bugs</span>
-          <span class="go"><span class="label">Open</span><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3h7v7M13 3 5 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-          <span class="desc">Questions and bugs.</span>
-        </a>
-        <ul class="messages">
-          <li><a class="msg" href="#" target="_blank" rel="noopener"><span class="av" aria-hidden="true">AL</span><span><span class="meta"><b>Alex</b><span>today at 1:05 PM</span><span>4 replies</span></span><span class="text"><b>Window goes blank after the laptop sleeps</b> &mdash; happens in the file viewer, refreshing fixes it.</span></span></a></li>
-          <li><a class="msg" href="#" target="_blank" rel="noopener"><span class="av" aria-hidden="true">RN</span><span><span class="meta"><b>Rin</b><span>yesterday at 3:22 PM</span><span>1 reply</span></span><span class="text"><b>How do I connect my Google Calendar?</b></span></span></a></li>
-        </ul>
-        <a class="more" href="https://discord.com/channels/1391837726583820409" target="_blank" rel="noopener">More in Discord</a>
-      </li>
-    </ul>
+    <ul class="channels" id="channels"></ul>
   </section>
 </main>
 
@@ -293,44 +239,19 @@
     <h3 id="rm-h">Uninstall Studio Discord?</h3>
     <p>Takes it off your desktop and disconnects Discord.</p>
     <div class="btnrow">
-      <button class="btn danger" id="confirm-remove" data-go="removed">Uninstall</button>
-      <button class="btn secondary" data-go="offer">Keep it</button>
+      <button class="btn danger" id="confirm-uninstall">Uninstall</button>
+      <button class="btn secondary" id="keep">Keep it</button>
     </div>
   </div>
 </div>
 
-<div class="removed" data-show="removed">
+<div class="removed" data-show="uninstalled">
   <p>Uninstalled.</p>
-  <a class="btn primary" href="https://discord.gg/pynvT9nJm" target="_blank" rel="noopener">Join on Discord</a>
-  <ul class="quiet"><li><button data-go="offer">Undo</button></li></ul>
+  <a class="btn primary join" href="#" target="_blank" rel="noopener">Join on Discord</a>
+  <ul class="quiet"><li><button id="undo">Undo</button></li></ul>
 </div>
 
-<script>
-  const SAMPLE = __WIDGET_SAMPLE__;
-  document.getElementById("online-count").textContent = SAMPLE.presence_count;
-  const STATUS = { online: ["var(--online)", "online"], idle: ["var(--idle)", "away"], dnd: ["var(--dnd)", "busy"] };
-  const faces = document.getElementById("faces");
-  for (const m of SAMPLE.members.slice(0, 8)) {
-    const [color, word] = STATUS[m.status] || STATUS.online;
-    const li = document.createElement("li");
-    li.title = `${m.name} (${word})`;
-    const img = document.createElement("img");
-    img.alt = `${m.name}, ${word}`;
-    img.src = m.avatar;
-    const dot = document.createElement("i");
-    dot.style.background = color;
-    li.append(img, dot);
-    faces.append(li);
-  }
-  function setState(s) {
-    document.body.dataset.state = s;
-    document.body.classList.toggle("connectedish", ["connected", "notjoined", "error"].includes(s));
-    for (const b of document.querySelectorAll(".mockbar button")) b.setAttribute("aria-pressed", String(b.dataset.s === s));
-    window.scrollTo(0, 0);
-  }
-  for (const b of document.querySelectorAll(".mockbar button")) b.addEventListener("click", () => setState(b.dataset.s));
-  for (const b of document.querySelectorAll("[data-go]")) b.addEventListener("click", () => setState(b.dataset.go));
-</script>
+<script type="module" src="/app.js"></script>
 __SHELL_PAGE_SCRIPT__
 </body>
 </html>
