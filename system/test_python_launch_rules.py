@@ -427,6 +427,11 @@ def test_scanning_skips_records_and_tests_but_reaches_living_contracts() -> None
     assert not any(
         "/changelog/" in path or path.endswith("CHANGELOG.md") for path in scanned
     )
+    assert (
+        "system/apps/chat/imbue/chat/harnesses/antigravity/fixtures/README.md"
+        not in scanned
+    )
+    assert not any("fixtures" in PurePosixPath(path).parts for path in scanned)
     assert not any(PurePosixPath(path).name.endswith("_test.py") for path in scanned)
     assert (
         "docs/system/blueprint/workspace-app-model/plan-workspace-app-model.md"
