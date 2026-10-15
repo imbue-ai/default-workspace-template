@@ -372,6 +372,26 @@ describe("the contract", () => {
     ]);
   });
 
+  it("greets a page that connects after its frame's load when it says its capabilities, then says shown", () => {
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    spy.mockClear();
+
+    messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: false, closeChord: false });
+    expect(spy.mock.calls.map((call) => call[0])).toEqual([
+      {
+        type: SHELL_HANDSHAKE,
+        clientId: CLIENT,
+        windowId: "win-1",
+        desktopId: "home",
+        app: "docs",
+        path: "/?doc=1",
+        canReportBug: false,
+      },
+      { type: SHELL_SHOWN },
+    ]);
+  });
+
   it("hands every loaded page a fresh handshake when the embedder's word on Report a bug changes", () => {
     const spy = spyOnFrame("win-1");
     load("win-1");
