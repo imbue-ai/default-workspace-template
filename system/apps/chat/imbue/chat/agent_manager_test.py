@@ -5457,6 +5457,7 @@ def test_status_mapping_follows_the_chat_row(
         # A turn the observe-reported lifecycle has not caught up with yet.
         ("WAITING", ActivityState.IDLE, True, False, False, False, "working"),
         ("RUNNING", ActivityState.TOOL_RUNNING, True, False, False, False, "working"),
+        ("WAITING", ActivityState.COMPACTING, False, False, False, False, "working"),
         ("UNKNOWN", ActivityState.IDLE, False, False, False, False, "working"),
         ("WAITING", ActivityState.IDLE, True, True, False, False, "waiting on a dialog"),
         ("WAITING", ActivityState.IDLE, False, False, True, False, "receiving a message"),

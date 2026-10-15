@@ -586,7 +586,7 @@ def restart_busy_reason(
     if (
         lifecycle_state != WAITING_LIFECYCLE_STATE
         or is_active_marker_present
-        or activity_state in (ActivityState.THINKING, ActivityState.TOOL_RUNNING)
+        or (activity_state is not None and is_working_activity_state(activity_state))
     ):
         return "working"
     return None
