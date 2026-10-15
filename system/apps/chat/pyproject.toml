@@ -51,6 +51,8 @@ dev = [
     # The shell, for the two-process fixture the e2e suite and the system tests boot (the
     # chat is framed by the shell, so a chat page can only be driven through it).
     "system-interface",
+    # The stdlib-only scripts whose copies of this package's wire constants the tests pin.
+    "workspace-scripts",
     "ruff~=0.12.8",
     # Used by check_no_type_errors in test_ratchets.py. Pinned to the version the source was
     # last verified clean against (see the system interface's pyproject).

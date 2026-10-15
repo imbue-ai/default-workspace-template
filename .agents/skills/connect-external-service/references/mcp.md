@@ -149,7 +149,7 @@ Never put a key in `mcp-servers.json`, on an `mcpc` command line (`--header`
 with a value), or in a command you run. Request it:
 
 ```bash
-python3 .agents/skills/connect-external-service/scripts/request_secret.py \
+uv run --no-sync .agents/skills/connect-external-service/scripts/request_secret.py \
   --file example --var EXAMPLE_API_KEY --rationale "The Example connector needs your API key to read your projects."
 ```
 

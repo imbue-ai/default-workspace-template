@@ -35,7 +35,7 @@ is not where worker bugs get fixed.
    the user told, stop the worker and any sub-workers it launched:
 
    ```bash
-   uv run .agents/skills/launch-task/scripts/create_worker.py stop --name <worker>
+   uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py stop --name <worker>
    ```
 
    Its branch, worktree, and transcript remain for inspection; only the

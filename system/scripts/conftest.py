@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from script_modules_testing import message_chat
+from workspace_bare_scripts import message_chat
 
 
 @pytest.fixture(autouse=True)

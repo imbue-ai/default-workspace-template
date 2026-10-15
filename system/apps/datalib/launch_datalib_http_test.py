@@ -3,8 +3,8 @@
 import tomllib
 from pathlib import Path
 
+import launch_datalib_http as launcher
 import pytest
-from datalib_launcher_testing import launcher
 
 _MANIFEST_PATH = Path(__file__).parent / "app.toml"
 _TOKEN = "0123abcd-._~XYZ"

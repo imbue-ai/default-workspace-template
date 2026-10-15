@@ -43,13 +43,13 @@ One sentence saying what is ready or what you need from them, in the user's
 terms (what they can now see, use, or decide), never the tool names or steps:
 
 ```bash
-python3 .agents/skills/notify-user/scripts/notify_user.py "The migration finished: 3 tables moved and verified."
+uv run --no-sync .agents/skills/notify-user/scripts/notify_user.py "The migration finished: 3 tables moved and verified."
 ```
 
 An optional `--title` becomes a prefix on the message (`Title: message`):
 
 ```bash
-python3 .agents/skills/notify-user/scripts/notify_user.py --title "Test run" "All 412 tests passed."
+uv run --no-sync .agents/skills/notify-user/scripts/notify_user.py --title "Test run" "All 412 tests passed."
 ```
 
 The script exits 0 when the app accepted the notification and non-zero when

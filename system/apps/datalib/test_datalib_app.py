@@ -8,13 +8,13 @@ import tomllib
 from pathlib import Path
 from typing import Final
 
+import launch_datalib_http as launcher
 import pytest
 from datalib_launcher_testing import (
     ENV_FAKE_DATALIB_HTTP_DIR,
     FAKE_DATALIB_HTTP_EXIT_STATUS,
     LAUNCHER_PATH,
     install_fake_datalib_http,
-    launcher,
     read_fake_datalib_http_argv,
     read_fake_datalib_http_environment,
     read_fake_datalib_http_oom_score_adj,

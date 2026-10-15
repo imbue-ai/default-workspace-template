@@ -18,7 +18,7 @@ default to the browser (row 6) unless they take it.
 One tool call, nothing else in it, output untouched, then end the turn:
 
 ```bash
-python3 .agents/skills/connect-external-service/scripts/request_secret.py \
+uv run --no-sync .agents/skills/connect-external-service/scripts/request_secret.py \
   --file example --var EXAMPLE_API_KEY --rationale "I need your Example API key to look up the part numbers you asked about."
 ```
 
@@ -51,7 +51,7 @@ The only way a value reaches a process:
 
 ```bash
 python3 system/scripts/with_secrets.py data/.secrets/example.env -- example-cli projects list
-python3 system/scripts/with_secrets.py data/.secrets/example.env -- uv run python scripts/pull_example.py
+python3 system/scripts/with_secrets.py data/.secrets/example.env -- uv run --no-sync python scripts/pull_example.py
 ```
 
 The wrapper loads the file's variables into the child's environment and execs the

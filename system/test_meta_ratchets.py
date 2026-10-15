@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 import tomlkit
 from inline_snapshot import snapshot
+from vendor_testing import resolves_into_vendor
 
 _REPO_ROOT = Path(__file__).parents[1]
 
@@ -163,6 +164,47 @@ def _find_bash_scripts_without_strict_mode() -> list[str]:
         if re.search(r"^#!/.*bash", content) and "set -euo pipefail" not in content:
             violations.append(rel)
     return sorted(violations)
+
+
+def _skill_python_dirs_without_a_pyproject(skills_root: Path) -> list[str]:
+    """Every ``<skill>/python`` dir with no ``pyproject.toml``.
+
+    The root workspace's ``.agents/skills/*/python`` member glob makes each one a uv
+    project, and uv refuses a glob-matched directory without a ``pyproject.toml``: one
+    such directory breaks every ``uv lock``, ``uv sync`` and ``uv run`` in the workspace.
+    """
+    return sorted(
+        str(project.relative_to(skills_root))
+        for project in skills_root.glob("*/python")
+        if project.is_dir() and not (project / "pyproject.toml").is_file()
+    )
+
+
+def test_every_skill_python_dir_has_a_pyproject() -> None:
+    missing = _skill_python_dirs_without_a_pyproject(_REPO_ROOT / ".agents" / "skills")
+    assert not missing, (
+        "These skill python/ dirs have no pyproject.toml, which breaks uv for the whole workspace. "
+        "Give each one (see .agents/shared/references/spec-summary.md, Packaging):\n"
+        + "\n".join(f"  - {m}" for m in missing)
+    )
+
+
+def test_a_python_dir_without_a_pyproject_is_caught_and_a_plain_scripts_dir_is_not(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "half-built-skill" / "python" / "half_built_skill_skill").mkdir(
+        parents=True
+    )
+    (tmp_path / "packaged-skill" / "python").mkdir(parents=True)
+    (tmp_path / "packaged-skill" / "python" / "pyproject.toml").write_text(
+        "[project]\n"
+    )
+    (tmp_path / "third-party-skill" / "scripts").mkdir(parents=True)
+    (tmp_path / "third-party-skill" / "scripts" / "run.py").write_text("print('hi')\n")
+
+    assert _skill_python_dirs_without_a_pyproject(tmp_path) == [
+        "half-built-skill/python"
+    ]
 
 
 def test_prevent_bash_without_strict_mode() -> None:
@@ -349,7 +391,7 @@ def _live_prose_files() -> list[Path]:
         # govern. Resolved rather than inferred from is_file(), which only
         # excluded this link back when its target path was stale and it
         # resolved to nothing.
-        if _VENDORED_DIR in path.resolve().parents:
+        if resolves_into_vendor(path, _REPO_ROOT):
             continue
         files.append(path)
     return files

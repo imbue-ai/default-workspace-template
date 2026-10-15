@@ -69,9 +69,8 @@ _LOCK_FILENAME: Final = "index.lock"
 def _index_lock(home: Path | None = None) -> Generator[None, None, None]:
     """Hold the index across the whole read-modify-write, against every writer.
 
-    A thread lock alone is not enough: the server is not the only process that mints
-    accounts -- `migrate_claude_auth.py` runs standalone and commits one, and boot's
-    `reconcile` removes every folder the index does not name. Two processes interleaving a
+    A thread lock alone is not enough: the server is not the only process that touches
+    the index -- boot's `reconcile` removes every folder the index does not name. Two processes interleaving a
     read-modify-write lose an account; one racing the sweep has its brand-new folder deleted
     out from under it.
     """

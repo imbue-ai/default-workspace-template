@@ -112,7 +112,7 @@ If the user asks you to read or act on anything outside this workspace on their 
 **If you are a chat agent, send a notification when a turn ends with something the user will want to know about or act on:** a finished deliverable, a result they were waiting for, or a question only they can answer. The user may have walked away the moment they sent the message; the notification (bell, badge, toast card, and a system banner when they are looking elsewhere) is what brings them back, and clicking it lands them in this chat.
 
 ```
-python3 .agents/skills/notify-user/scripts/notify_user.py "<one plain sentence saying what is ready or what you need from them>"
+uv run --no-sync .agents/skills/notify-user/scripts/notify_user.py "<one plain sentence saying what is ready or what you need from them>"
 ```
 
 Read the exit code -- when it is non-zero the notification did not go out, and your reply should say so. The `notify-user` skill has the full guidance on what to write.

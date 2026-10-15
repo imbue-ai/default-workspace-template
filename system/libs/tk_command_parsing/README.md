@@ -30,21 +30,21 @@ interpreted the way a shell would.
 - `uv_run.unwrap_uv_run(words) -> tuple[str, ...] | None` -- the program words a
   `uv run` command starts, past the uv options that leave it unchanged
   (`UV_RUN_PASSTHROUGH_FLAGS`: `--no-sync`, `--frozen`, `--quiet`). The
-  secrets guard (`system/scripts/agent_secrets_guard_check.py`) and the chat's
+  secrets guard (`system/scripts/workspace_bare_scripts/agent_secrets_guard_check.py`) and the chat's
   tk-lifecycle detection (`imbue.chat.harnesses.tool_output`) both use it, so
   they agree on which `uv run` forms they see through.
 
 ## Consumers
 
-- `system/scripts/agent_tk_standalone_check.py` -- the PreToolUse gate that blocks a
+- `system/scripts/workspace_bare_scripts/agent_tk_standalone_check.py` -- the PreToolUse gate that blocks a
   non-standalone `tk start`/`tk close`. It uses `parse_command` to split the
   Bash command into segments and inspect the verbs.
-- `system/scripts/agent_latchkey_request_check.py` -- the PreToolUse gate that blocks a
+- `system/scripts/workspace_bare_scripts/agent_latchkey_request_check.py` -- the PreToolUse gate that blocks a
   latchkey permission request that is batched, chained, or redirected. It reads
   each segment's words to find the ones that POST to the permission-requests
   host, and its `terminator` to allow a trailing `;` while still blocking a
   trailing `&`.
-- `system/scripts/agent_block_pipe_tail_head_check.py` -- the PreToolUse gate that
+- `system/scripts/workspace_bare_scripts/agent_block_pipe_tail_head_check.py` -- the PreToolUse gate that
   blocks a pipe into `head`/`tail` whose input would have to be regenerated. It
   groups the segments into pipelines by their `terminator` and inspects the
   words of each stage that feeds the pipe.

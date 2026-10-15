@@ -30,7 +30,7 @@
 # `is_secret_request_call()` / `find_secret_request()` in tool_output.py.
 #
 # Blocks via exit 2 with a stderr message the agent sees. The command parsing lives
-# in the sibling agent_latchkey_request_check.py, which shell-tokenizes with
+# in workspace_bare_scripts/agent_latchkey_request_check.py, which shell-tokenizes with
 # `shlex` so a rationale that mentions `&&` or `>` stays inside one quoted token.
 set -euo pipefail
 
@@ -47,7 +47,7 @@ command=$(echo "$input" | jq -r '.tool_input.command // empty')
 [[ "$command" == *"permission-requests"* || "$command" == *"request_secret.py"* ]] || exit 0
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
-checker="$script_dir/agent_latchkey_request_check.py"
+checker="$script_dir/agent_hook_check.py"
 
 # Whether the call runs the command in the background is a property of the tool
 # input, not of the command text, so it is read here and handed to the checker.
@@ -56,6 +56,6 @@ checker="$script_dir/agent_latchkey_request_check.py"
 # unbound-variable error under `set -u` on bash 3.2.)
 is_backgrounded=$(echo "$input" | jq -r '.tool_input.run_in_background // false')
 if [[ "$is_backgrounded" == "true" ]]; then
-    exec python3 "$checker" --backgrounded "$command"
+    exec python3 "$checker" latchkey_request --backgrounded "$command"
 fi
-exec python3 "$checker" "$command"
+exec python3 "$checker" latchkey_request "$command"

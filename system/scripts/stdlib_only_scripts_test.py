@@ -1,12 +1,10 @@
-"""The scripts documentation runs with a bare ``python3`` import only the standard library.
+"""The bare package, which the system ``python3`` runs, imports only the standard library.
 
 Inside a workspace ``python3`` is the system interpreter, which has none of the root venv's
-packages: a script that imports one runs fine under ``uv run`` and in these tests, and fails
-with ``ModuleNotFoundError`` the moment an agent or a supervisord program line calls it as
-documented. The list below is every script the docs, skills, prompts, program lines, and shell
-scripts invoke that way (``grep -rho "python3 system/scripts/[a-z_]*\\.py"``, and the shell
-scripts' ``python3 "$REPO_ROOT/system/scripts/<name>.py"`` spelling); a script may import a
-sibling script, which is then held to the same rule.
+packages: a module that imports one runs fine under ``uv run`` and in these tests, and fails
+with ``ModuleNotFoundError`` the moment an agent, a hook or a supervisord program line runs its
+entry script as documented. Every module of ``workspace_bare_scripts`` is held to that; the
+stdlib-only libraries the hook entry scripts put on ``sys.path`` count as standard library.
 """
 
 from __future__ import annotations
@@ -17,21 +15,14 @@ from pathlib import Path
 
 import pytest
 
-_SCRIPTS_DIR = Path(__file__).parent
+_BARE_PACKAGE_DIR = Path(__file__).parent / "workspace_bare_scripts"
+# The bare package itself, and the stdlib-only libraries hook entry scripts put on sys.path.
+_ALSO_ALLOWED = frozenset({"workspace_bare_scripts", "tk_command_parsing", "oom_priority"})
 
-_SCRIPTS_RUN_WITH_SYSTEM_PYTHON = (
-    "collect_bug_report_diagnostics.py",
-    "forward_port.py",
-    "install_mngr.py",
-    "list_mngr_plugins.py",
-    "message_chat.py",
-    "provision_backups.py",
-    "refresh_workspace_view.py",
-    "require_create_account.py",
-    "run_in_background.py",
-    "seed_welcome_chat.py",
-    "set_mngr_pin.py",
-    "tool_env.py",
+_BARE_MODULES = sorted(
+    path.name
+    for path in _BARE_PACKAGE_DIR.glob("*.py")
+    if not path.name.endswith("_test.py") and path.name != "__init__.py"
 )
 
 
@@ -58,7 +49,7 @@ def _modules_outside_the_stdlib(script: Path, checked: frozenset[Path] = frozens
     visited = checked | {script}
     offenders: set[str] = set()
     for module in _imported_top_level_modules(script):
-        if module in sys.stdlib_module_names:
+        if module in sys.stdlib_module_names or module in _ALSO_ALLOWED:
             continue
         sibling = script.parent / f"{module}.py"
         if not sibling.is_file():
@@ -71,17 +62,11 @@ def _modules_outside_the_stdlib(script: Path, checked: frozenset[Path] = frozens
     return offenders
 
 
-@pytest.mark.parametrize("script_name", _SCRIPTS_RUN_WITH_SYSTEM_PYTHON)
-def test_a_script_run_with_the_system_python_imports_only_the_standard_library(
-    script_name: str,
-) -> None:
-    script = _SCRIPTS_DIR / script_name
-    assert script.is_file(), (
-        f"{script_name} is listed but does not exist beside this test"
-    )
-    offenders = _modules_outside_the_stdlib(script)
+@pytest.mark.parametrize("module_name", _BARE_MODULES)
+def test_a_bare_module_imports_only_the_standard_library(module_name: str) -> None:
+    offenders = _modules_outside_the_stdlib(_BARE_PACKAGE_DIR / module_name)
     assert offenders == set(), (
-        f"{script_name} runs under the system python3, which cannot import {sorted(offenders)}; "
+        f"{module_name} runs under the system python3, which cannot import {sorted(offenders)}; "
         "use the standard library (tomllib, json, urllib) instead"
     )
 

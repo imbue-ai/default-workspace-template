@@ -7,7 +7,7 @@ program aborts -- a live failure on a legitimate edit, caused by a guard aimed a
 """
 
 import pytest
-from guard_testing import run_guard
+from workspace_scripts.guard_testing import run_guard
 
 # The two guards that inspect a command. The other two already gated on tool_name.
 _COMMAND_GUARDS = ("agent_block_pipe_tail_head.sh", "agent_prevent_commit_rewrite.sh")
