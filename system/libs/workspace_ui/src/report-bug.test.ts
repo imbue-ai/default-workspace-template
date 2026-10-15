@@ -14,9 +14,14 @@ afterEach(() => {
 describe("Report a bug", () => {
   it("asks the embedder to open its bug report", async () => {
     const posted: unknown[] = [];
-    window.addEventListener("message", (event) => posted.push(event.data));
-    openBugReport();
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(posted).toContainEqual(expect.objectContaining({ type: "minds:open-help" }));
+    const record = (event: MessageEvent): void => void posted.push(event.data);
+    window.addEventListener("message", record);
+    try {
+      openBugReport();
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(posted).toContainEqual(expect.objectContaining({ type: "minds:open-help" }));
+    } finally {
+      window.removeEventListener("message", record);
+    }
   });
 });

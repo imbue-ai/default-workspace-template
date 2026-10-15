@@ -10,8 +10,9 @@
  * which is longer than the drag it may become: the pixels a press spends reaching the drag
  * threshold have to be ones the shell can see.
  *
- * The shell side of the app contract lives here too: the handshake after every load, on a
- * desktop change, and to every page when the embedder's word on Report a bug changes,
+ * The shell side of the app contract lives here too: the handshake after every load, in answer to
+ * a page's ``shell:capabilities``, on a desktop change, and to every page when the embedder's word
+ * on Report a bug changes,
  * ``shell:shown`` and ``shell:hidden`` as visibility changes, the following rule
  * of plan section 4.6 after every desktops update and every layout load (``shell:navigate`` for a
  * page that declared navigation, a ``src`` reassignment otherwise; an independent window's page follows
@@ -584,6 +585,11 @@ export class LivePagesLayer implements PageDriver {
     if (page === undefined) return;
     page.isNavigationCapable = payload.navigation === true;
     page.isCloseChordCapable = payload.closeChord === true;
+    // A page says its capabilities as it connects, which can be after its frame's load (an app contract loaded by
+    // a dynamic import), when the load's greeting went unheard; so it is greeted, and told its visibility, again.
+    page.lastSentVisibility = null;
+    this.greet(page);
+    this.syncVisibility(page, this.isShown(page));
   }
 
   private takeLocation(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {

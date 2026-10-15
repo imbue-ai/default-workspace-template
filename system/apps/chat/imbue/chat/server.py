@@ -538,7 +538,7 @@ _DECLINED_SEND_FAILURE_KINDS: Final[frozenset[str]] = frozenset(
     {NOTHING_TO_COMPACT_SEND_FAILURE_KIND, COMPACT_UNAVAILABLE_SEND_FAILURE_KIND}
 )
 # The send failures whose reason is written for the person who has to act on it: the chat's declined /compact, and
-# mngr's classified harness refusals.
+# mngr's input_blocked and agent_unreachable harness refusals.
 _PEOPLE_WORDED_SEND_FAILURE_KINDS: Final[frozenset[str]] = _DECLINED_SEND_FAILURE_KINDS | {
     str(SendFailureKind.INPUT_BLOCKED),
     str(SendFailureKind.AGENT_UNREACHABLE),
@@ -767,10 +767,10 @@ def _send_to_chat(
             return _chat_not_found_response(str(chat_id))
         except SendFailedError as send_failure:
             # The harness said why it refused, in words written for the person who has to fix it
-            # ("the agent is in shell mode with an unsubmitted command"), for a kind mngr classified: the page
-            # shows it as written. The kind travels beside it so the chat can decide what to offer: trying again
-            # can clear a blocked input and cannot help when there is nothing left to talk to. An unclassified
-            # reason is not known to be written for people, and goes behind the page's details.
+            # ("the agent is in shell mode with an unsubmitted command") for an input_blocked or agent_unreachable
+            # kind: the page shows it as written. The kind travels beside it so the chat can decide what to offer:
+            # trying again can clear a blocked input and cannot help when there is nothing left to talk to. Any
+            # other reason is not known to be written for people, and goes behind the page's details.
             # A /compact the chat declines is its own refusal, not a failure.
             body = {"detail": send_failure.detail, "kind": send_failure.kind}
             if send_failure.kind in _PEOPLE_WORDED_SEND_FAILURE_KINDS:
