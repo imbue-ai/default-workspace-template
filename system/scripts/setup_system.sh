@@ -471,6 +471,13 @@ if [ -f "$setup_dir/install_earlyoom.sh" ]; then
 else
     bash "$setup_dir/default-workspace-template-install-earlyoom"
 fi
+# The agents' Claude and Codex plugins, pinned like the CLIs above (see
+# install_agent_plugins.sh).
+if [ -f "$setup_dir/install_agent_plugins.sh" ]; then
+    bash "$setup_dir/install_agent_plugins.sh"
+else
+    bash "$setup_dir/default-workspace-template-install-agent-plugins"
+fi
 # A host provisioned before the fork still has the apt earlyoom. Purging it
 # only touches /usr/bin/earlyoom: the fork lives at /usr/local/bin, which is
 # ahead of /usr/bin in PATH, so a rollback that reinstalls the package keeps

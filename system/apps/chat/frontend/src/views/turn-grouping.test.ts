@@ -4,14 +4,21 @@ import type {
   ToolResultEvent,
   AssistantMessageEvent,
   AgentSwitchEvent,
+  CompactionCause,
   UserMessageEvent,
 } from "../models/Response";
 import type { HandoffNode, StepNode, TimelineItem } from "./turn-grouping";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
-import { buildSections, hasOpenHandoffRequest, hasUserTurn } from "./turn-grouping";
+import {
+  buildSections,
+  hasOpenHandoffRequest,
+  hasUserTurn,
+  isTailTurnSettled,
+  liveCompactionOf,
+  type LiveCompaction,
+} from "./turn-grouping";
+import { landedCompaction, runningCompaction } from "./compaction-chips";
 import type { RequestResolution } from "./message-classification";
-
-// Event builders
 
 function userMsg(
   ts: string,
@@ -20,6 +27,16 @@ function userMsg(
   extra: Partial<UserMessageEvent> = {},
 ): UserMessageEvent {
   return { timestamp: ts, type: "user_message", event_id: id, source: "test", role: "user", content, ...extra };
+}
+
+/** A compaction's "Context was compacted" status event. */
+function compacted(ts: string, id: string, cause?: CompactionCause): UserMessageEvent {
+  return userMsg(ts, "Context was compacted", id, {
+    role: "system",
+    display: "status",
+    non_turn_tail: true,
+    ...(cause === undefined ? {} : { compaction_cause: cause }),
+  });
 }
 
 function assistantText(ts: string, text: string, id = `a-${ts}`): AssistantMessageEvent {
@@ -215,12 +232,12 @@ function closeOut(id: string, title?: string, summary?: string): string {
 
 /** Build the toolResults map from the event list (as ChatPanel does) and run.
  *  No enrichment argument -- structure and decoration both come from the walk. */
-function run(events: TranscriptEvent[], agentIsIdle = true) {
+function run(events: TranscriptEvent[], isTailSettled = true, liveCompaction: LiveCompaction | null = null) {
   const toolResults = new Map<string, ToolResultEvent>();
   for (const e of events) {
     if (e.type === "tool_result") toolResults.set(e.tool_call_id, e);
   }
-  return buildSections(events, toolResults, agentIsIdle);
+  return buildSections(events, toolResults, isTailSettled, liveCompaction);
 }
 
 function stepItems(items: TimelineItem[]): StepNode[] {
@@ -480,9 +497,7 @@ describe("historical input fallback", () => {
     expect(pending.title).toBe("Read the docs");
   });
 
-  // The fallback used to accept only claude's `Bash` and pi's `bash`, which was the last
-  // piece of harness knowledge in this file -- and it left agy (`run_command`, whose command
-  // lives under `CommandLine`) as the one harness with no fallback at all.
+  // agy's `run_command` keeps its command under `CommandLine`.
   it("recovers decoration from an agy-shaped tool call", () => {
     const agyMsg = (ts: string, command: string, callId: string): AssistantMessageEvent => ({
       ...tkMsg(ts, command, callId),
@@ -582,6 +597,51 @@ describe("narration and close-time ejection", () => {
     expect(steps[0].is_frontier).toBe(false);
     expect(steps[0].narration).toBeNull();
     expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["reply"]);
+  });
+
+  it("counts a compaction as settled, so the tail turn renders as it did when idle", () => {
+    expect(isTailTurnSettled("IDLE")).toBe(true);
+    expect(isTailTurnSettled("COMPACTING")).toBe(true);
+    expect(isTailTurnSettled("THINKING")).toBe(false);
+    expect(isTailTurnSettled("TOOL_RUNNING")).toBe(false);
+    expect(isTailTurnSettled(null)).toBe(false);
+    expect(isTailTurnSettled(undefined)).toBe(false);
+  });
+
+  // An idle compaction runs after the turn ended: the finished turn must not re-open with a
+  // spinning step and its closing prose demoted to narration.
+  it("keeps a finished turn settled while the agent compacts after it", () => {
+    const events = [
+      userMsg("t0", "go"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Do it")),
+      workMsg("t2", "Edit", "w1"),
+      result("t2", "w1", "ok"),
+      assistantText("t3", "All done.", "reply"),
+    ];
+    const compacting = run(events, isTailTurnSettled("COMPACTING"));
+    expect(compacting).toEqual(run(events, isTailTurnSettled("IDLE")));
+    const steps = stepItems(compacting[0].items);
+    expect(steps[0].is_frontier).toBe(false);
+    expect(compacting[0].trailing_reply.map((e) => e.event_id)).toEqual(["reply"]);
+  });
+
+  // A compaction inside a running turn hides the frontier only until the turn resumes.
+  it("restores the live frontier once a mid-turn compaction gives way to work", () => {
+    const events = [
+      userMsg("t0", "go"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Do it")),
+      assistantText("t2", "Looking into it now.", "narr"),
+    ];
+    const during = stepItems(run(events, isTailTurnSettled("COMPACTING"))[0].items);
+    expect(during).toHaveLength(1);
+    expect(during[0].is_frontier).toBe(false);
+    const resumed = run(events, isTailTurnSettled("TOOL_RUNNING"));
+    const steps = stepItems(resumed[0].items);
+    expect(steps[0].is_frontier).toBe(true);
+    expect(steps[0].narration).toBe("Looking into it now.");
+    expect(resumed[0].trailing_reply).toHaveLength(0);
   });
 
   it("treats prose before the first step as an ungrouped (leading) item", () => {
@@ -943,26 +1003,22 @@ describe("audit regressions", () => {
 
   // The post-auto-compaction status carries display: "status" and is the FIRST
   // event of a resumed session -- there is no section open yet. It must still
-  // render (as a status item in a fresh section), not be dropped.
-  it("renders a LEADING compaction status as an item in the opening section", () => {
-    const summary: UserMessageEvent = {
-      ...userMsg("t0", "Context was compacted", "cs1"),
-      display: "status",
-    };
+  // render (as a compaction in the opening section's inline stream), not be dropped.
+  it("renders a LEADING compaction status in the opening section's inline stream", () => {
+    const summary = compacted("t0", "cs1");
     const events = [summary, assistantText("t1", "continuing the work", "a1")];
     const sections = run(events);
     expect(sections.length).toBe(1);
     expect(sections[0].user_event).toBeNull();
-    expect(sections[0].items).toEqual([{ kind: "status", event: summary }]);
+    expect(sections[0].items).toEqual([
+      { kind: "ungrouped", key: "section-pre-ung-0", events: [landedCompaction(summary, false)] },
+    ]);
     expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["a1"]);
     expect(sections[0].trailing_status).toHaveLength(0);
   });
 
   it("keeps mid-session compaction inline within the section without opening a new section", () => {
-    const summary: UserMessageEvent = {
-      ...userMsg("t2", "Context was compacted", "cs2"),
-      display: "status",
-    };
+    const summary = compacted("t2", "cs2");
     const events = [
       userMsg("t0", "go"),
       assistantText("t1", "working", "a1"),
@@ -972,32 +1028,50 @@ describe("audit regressions", () => {
     const sections = run(events);
     expect(sections.length).toBe(1);
     expect(sections[0].user_event?.event_id).toBe("u-t0");
+    // The compaction joins the inline run it landed in, so its chips share that run's chip row.
     expect(sections[0].items).toEqual([
-      { kind: "ungrouped", key: "section-u-t0-ung-0", events: [events[1] as AssistantMessageEvent] },
-      { kind: "status", event: summary },
+      {
+        kind: "ungrouped",
+        key: "section-u-t0-ung-0",
+        events: [events[1] as AssistantMessageEvent, landedCompaction(summary, false)],
+      },
     ]);
     expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["a2"]);
     expect(sections[0].trailing_status).toHaveLength(0);
   });
 
+  // The agent's own compaction lands mid-turn, between two runs of tool calls: one run of parts.
+  it("puts a native compaction between the tool calls it landed between", () => {
+    const summary = compacted("t3", "cs-native", "native");
+    const events = [
+      userMsg("t0", "go"),
+      workMsg("t1", "Read", "w1"),
+      result("t1", "w1", "ok"),
+      summary,
+      workMsg("t4", "Edit", "w2"),
+      result("t4", "w2", "ok"),
+      assistantText("t5", "Done.", "reply"),
+    ];
+    const sections = run(events);
+    expect(sections).toHaveLength(1);
+    const ung = sections[0].items.filter((i) => i.kind === "ungrouped");
+    expect(ung).toHaveLength(1);
+    expect(ung[0].kind === "ungrouped" && ung[0].events.map((e) => e.event_id)).toEqual(["a-w1", "cs-native", "a-w2"]);
+    expect(sections[0].trailing_status).toHaveLength(0);
+  });
+
   it("preserves trailing reply and records trailing status when compaction occurs after assistant prose at turn end", () => {
-    const summary: UserMessageEvent = {
-      ...userMsg("t2", "Context was compacted", "cs3"),
-      display: "status",
-    };
+    const summary = compacted("t2", "cs3", "idle");
     const events = [userMsg("t0", "Hi", "u1"), assistantText("t1", "Hi Daniel", "a1"), summary];
     const sections = run(events);
     expect(sections.length).toBe(1);
     expect(sections[0].user_event?.event_id).toBe("u1");
     expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["a1"]);
-    expect(sections[0].trailing_status.map((e) => e.event_id)).toEqual(["cs3"]);
+    expect(sections[0].trailing_status).toEqual([landedCompaction(summary, true)]);
   });
 
   it("records trailing status under ProgressBlock without creating a new section or duplicating steps", () => {
-    const summary: UserMessageEvent = {
-      ...userMsg("t5", "Context was compacted", "cs4"),
-      display: "status",
-    };
+    const summary = compacted("t5", "cs4");
     const events = [
       userMsg("t0", "fix bug", "u1"),
       tkMsg("t1", "tk start s1", "k1"),
@@ -1018,11 +1092,23 @@ describe("audit regressions", () => {
     expect(sections[0].trailing_status.map((e) => e.event_id)).toEqual(["cs4"]);
   });
 
+  // With no reply to follow, a compaction at the end of a turn joins the turn's last chip run.
+  it("appends a compaction that follows no reply to the turn's last chip run", () => {
+    const summary = compacted("t3", "cs-tail", "idle");
+    const events = [userMsg("t0", "go"), workMsg("t1", "Read", "w1"), result("t1", "w1", "ok"), summary];
+    const sections = run(events);
+    expect(sections[0].trailing_status).toHaveLength(0);
+    expect(sections[0].items).toEqual([
+      {
+        kind: "ungrouped",
+        key: "section-u-t0-ung-0",
+        events: [events[1] as AssistantMessageEvent, landedCompaction(summary, true)],
+      },
+    ]);
+  });
+
   it("does not duplicate active or pending steps when compaction occurs", () => {
-    const summary: UserMessageEvent = {
-      ...userMsg("t5", "Context was compacted", "cs5"),
-      display: "status",
-    };
+    const summary = compacted("t5", "cs5");
     const events = [
       userMsg("t0", "fix bug", "u1"),
       tkMsg("t1", "tk create --step 'Step 1'\ntk create --step 'Step 2'\ntk create --step 'Step 3'", "tc"),
@@ -1038,13 +1124,117 @@ describe("audit regressions", () => {
       assistantText("t6", "Working on step 2", "reply"),
       summary,
     ];
-    const sections = run(events, /* agentIsIdle */ false);
+    const sections = run(events, /* isTailSettled */ false);
     expect(sections.length).toBe(1);
     const steps = stepItems(sections[0].items);
     // Steps must appear exactly once: cod-step-s1, cod-step-s2, and pending cod-step-s3
     expect(steps.map((s) => s.ticket_id)).toEqual(["cod-step-s1", "cod-step-s2", "cod-step-s3"]);
     expect(sections[0].trailing_reply).toHaveLength(0);
-    expect(sections[0].trailing_status.map((e) => e.event_id)).toEqual(["cs5"]);
+    // No reply to follow, so the compaction stays inline after the live step, ahead of the pending one.
+    expect(sections[0].trailing_status).toHaveLength(0);
+    expect(sections[0].items.map((i) => (i.kind === "step" ? i.step.ticket_id : i.kind))).toEqual([
+      "cod-step-s1",
+      "cod-step-s2",
+      "ungrouped",
+      "cod-step-s3",
+    ]);
+  });
+
+  it("marks the latest idle compaction as the Auto-compact notice's anchor, and no other", () => {
+    const events = [
+      userMsg("t0", "hello"),
+      assistantText("t1", "hi there", "a1"),
+      compacted("t2", "cs-old-idle", "idle"),
+      userMsg("t3", "more"),
+      assistantText("t4", "still here", "a2"),
+      compacted("t5", "cs-new-idle", "idle"),
+      userMsg("t6", "/compact"),
+      compacted("t7", "cs-manual", "manual"),
+    ];
+    const anchors = run(events)
+      .flatMap((s) => [...s.items.flatMap((i) => (i.kind === "ungrouped" ? i.events : [])), ...s.trailing_status])
+      .flatMap((part) => (part.type === "compaction" ? [[part.event_id, part.isNoticeAnchor] as const] : []));
+    expect(anchors).toEqual([
+      ["cs-old-idle", false],
+      ["cs-new-idle", true],
+      ["cs-manual", false],
+    ]);
+  });
+});
+
+describe("the compaction running now", () => {
+  it("is placed only while the agent compacts", () => {
+    expect(liveCompactionOf("COMPACTING", "idle")).toEqual({ cause: "idle" });
+    expect(liveCompactionOf("COMPACTING", undefined)).toEqual({ cause: null });
+    expect(liveCompactionOf("IDLE", "idle")).toBeNull();
+    expect(liveCompactionOf("THINKING", null)).toBeNull();
+    expect(liveCompactionOf(null, null)).toBeNull();
+  });
+
+  // idle: the sweep compacts after the turn's reply, so its start chip follows that reply.
+  it("follows the last turn's reply for an idle compaction", () => {
+    const events = [userMsg("t0", "Hi", "u1"), assistantText("t1", "Hi there", "a1")];
+    const sections = run(events, true, { cause: "idle" });
+    expect(sections).toHaveLength(1);
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["a1"]);
+    expect(sections[0].trailing_status).toEqual([runningCompaction("idle")]);
+  });
+
+  // manual: the typed /compact is a turn of its own, and the start chip stands under it.
+  it("stands under the /compact bubble for a compaction the user asked for", () => {
+    const events = [
+      userMsg("t0", "Hi", "u1"),
+      assistantText("t1", "Hi there", "a1"),
+      userMsg("t2", "/compact", "u-compact", { non_turn_tail: true }),
+      userMsg("t2", "/compact", "u-compact-expansion", { display: "hidden", non_turn_tail: true }),
+    ];
+    const sections = run(events, true, { cause: "manual" });
+    expect(sections.map((s) => s.user_event?.event_id)).toEqual(["u1", "u-compact"]);
+    expect(sections[1].items).toEqual([
+      { kind: "ungrouped", key: "section-u-compact-ung-0", events: [runningCompaction("manual")] },
+    ]);
+    expect(sections[1].trailing_status).toHaveLength(0);
+  });
+
+  // native: the agent compacts mid-turn, so the start chip joins the turn's last chip run.
+  it("joins the turn's last chip run for the agent's own compaction", () => {
+    const events = [userMsg("t0", "go"), workMsg("t1", "Read", "w1"), result("t1", "w1", "ok")];
+    const sections = run(events, true, { cause: "native" });
+    expect(sections[0].items).toEqual([
+      {
+        kind: "ungrouped",
+        key: "section-u-t0-ung-0",
+        events: [events[1] as AssistantMessageEvent, runningCompaction("native")],
+      },
+    ]);
+  });
+
+  // The marker can outlast the event by a poll: once the event is on the transcript, it alone shows.
+  it("gives way to the compaction's own event once that lands, whatever hidden lines follow it", () => {
+    const events = [
+      userMsg("t0", "Hi", "u1"),
+      assistantText("t1", "Hi there", "a1"),
+      userMsg("t2", "/compact", "u-compact", { non_turn_tail: true }),
+      compacted("t3", "cs-manual", "manual"),
+      userMsg("t2", "/compact", "u-compact-expansion", { display: "hidden", non_turn_tail: true }),
+    ];
+    const parts = run(events, true, { cause: "manual" }).flatMap((s) => [
+      ...s.items.flatMap((i) => (i.kind === "ungrouped" ? i.events : [])),
+      ...s.trailing_status,
+    ]);
+    expect(parts.map((part) => part.event_id)).toEqual(["cs-manual"]);
+  });
+
+  it("is placed again for a later compaction, after an earlier one's event", () => {
+    const events = [
+      userMsg("t0", "Hi", "u1"),
+      assistantText("t1", "Hi there", "a1"),
+      compacted("t2", "cs-earlier", "idle"),
+      userMsg("t3", "more", "u2"),
+      assistantText("t4", "sure", "a2"),
+    ];
+    const sections = run(events, true, { cause: "idle" });
+    expect(sections[1].trailing_status).toEqual([runningCompaction("idle")]);
   });
 });
 
@@ -1548,7 +1738,7 @@ describe("permission resolutions", () => {
   });
 
   it("attaches each verdict to its own card by request id, even when resolved out of order", () => {
-    // Regression for the verdict-swap bug: request A (Gmail) is created first,
+    // Request A (Gmail) is created first,
     // B (Slack) second, but B's verdict lands FIRST -- deny is fire-and-forget
     // on the frontend while grant can block on a real OAuth browser flow, so
     // denying the newer request while the older one's grant is still working
@@ -1585,9 +1775,8 @@ describe("permission resolutions", () => {
   });
 
   it("hides an id-less notification instead of guessing which card it resolves", () => {
-    // A notice recorded before Imbue Studio embedded ids attributes nothing: the
-    // arrival-order guess is what used to swap verdicts, and an embedded page
-    // recovers the verdict from the response log via the card's hydration
+    // A notice recorded before Imbue Studio embedded ids attributes nothing; an
+    // embedded page recovers the verdict from the response log via the card's hydration
     // query. The notice still acts as the turn boundary it is, with no bubble.
     const events = [
       userMsg("2026-05-01T01:00:00Z", "go"),

@@ -88,7 +88,7 @@ Every value is a string; an app that wants a boolean declares a preset such as `
 The app answers `200` with `{"path": "<a path under its origin>"}`.
 The shell holds the path to the window-path rule (contracts.md section 1) and refuses anything else.
 An app that answers `4xx` with `{"detail"}` has refused the launch, and the shell answers its caller `400` with `<app> refused the launch: <detail>`; an app that cannot be reached, times out (30 seconds), or answers anything else is a `502`, whose `detail` quotes the app's own `detail` whatever its status.
-Either answer also carries `user_facing_message`, the sentence the workspace's frontends show a person: the app's own `user_facing_message` when its answer carried one (a sentence it wrote for people and holds to its own tests), else `<display name> couldn't open that. Try again. If this persists, report a bug.`; the `detail` goes behind "See details".
+An app's failed answer may also carry `user_facing_message`, a sentence it wrote for people and holds to its own tests, and `reportable: true` when that sentence asks for a bug report; the shell passes both on as written and writes no sentence of its own. The workspace's frontend shows the app's sentence when there is one; otherwise it says `<display name> couldn't open that.` for a refusal, and adds `Try again. If this persists, report a bug.` for a `502`, with the `detail` behind "See details".
 
 A GET launch is the same resolution with no request: the path is `path` plus the presets and params as a query string, held to the window-path rule (a text over the 2048-character bound is a `400`).
 

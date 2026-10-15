@@ -40,12 +40,17 @@ HTTP_SERVICE_UNAVAILABLE: Final[int] = 503
 _RequestModel = TypeVar("_RequestModel", bound=BaseModel)
 
 
-def detail_response(message: str, status_code: int, user_facing_message: str | None = None) -> ResponseReturnValue:
+def detail_response(
+    message: str, status_code: int, user_facing_message: str | None = None, reportable: bool | None = None
+) -> ResponseReturnValue:
     """An error answer: ``detail`` is the developer's reason, which every caller reads; ``user_facing_message``, when
-    there is one, is the sentence the workspace's frontends show a person in its place."""
-    body = {"detail": message}
+    there is one, is the sentence the workspace's frontends show a person in its place, and ``reportable`` whether
+    that sentence asks for a bug report."""
+    body: dict[str, str | bool] = {"detail": message}
     if user_facing_message is not None:
         body["user_facing_message"] = user_facing_message
+        if reportable is not None:
+            body["reportable"] = reportable
     return jsonify(body), status_code
 
 

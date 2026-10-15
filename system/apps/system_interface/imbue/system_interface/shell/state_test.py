@@ -43,7 +43,6 @@ from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPost
 from imbue.system_interface.shell.launches import LaunchPostOutcome
-from imbue.system_interface.shell.launches import could_not_open_sentence
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.testing import BUILTIN_SHORTCUT_APPS_BEFORE_CHAT
@@ -240,9 +239,8 @@ def test_a_post_launch_to_a_stopped_stoppable_app_wakes_it_and_waits_for_it_to_a
     never_up = built.model_copy_update(
         to_update(built.field_ref().lifecycle, _launch_waking_manager(built, started.append, lambda: next(ticks)))
     )
-    with pytest.raises(LaunchUnavailableError, match="could not be brought up") as never_woken:
+    with pytest.raises(LaunchUnavailableError, match="could not be brought up"):
         never_up.launch_destination(entry, launch_path, {}, ClientId("c1"), DesktopId("home"), None)
-    assert never_woken.value.user_facing_message == could_not_open_sentence(entry.display_name)
     assert started == ["docs", "docs"] and len(posts) == 1
 
     # A manager that does not own the live apps (a preview's) wakes nothing: the post goes out as it is and fails
