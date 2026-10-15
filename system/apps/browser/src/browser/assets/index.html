@@ -78,7 +78,9 @@
   #crashoverlay .msg, #terminatedoverlay .msg, #stoppedoverlay .msg { font-size: 19px; line-height: 1.4; color: #fff; font-weight: 700; max-width: 90%; }
   #crashoverlay .sub, #terminatedoverlay .sub, #stoppedoverlay .sub { font-size: 14px; color: rgba(255, 255, 255, 0.75); max-width: 90%; }
   /* A stopped or crashed browser is not gone: the same cover, with the one action that brings it back. */
-  .startbrowser { padding: 8px 16px; background: #2b6cb0; border: none; color: #fff; border-radius: 4px; cursor: pointer; font-size: 14px; }
+  .coveractions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+  .startbrowser, .askagent, .reportbug { padding: 8px 16px; background: #2b6cb0; border: none; color: #fff; border-radius: 4px; cursor: pointer; font-size: 14px; }
+  .askagent, .reportbug { background: #3a3a3a; }
   .startbrowser:disabled { opacity: .6; cursor: default; }
   /* What a refused start said, under the cover's own sentence. */
   .refusaldetails { max-width: 90%; font-size: 12px; color: rgba(255, 255, 255, 0.6); }
@@ -168,7 +170,11 @@
     <div id="crashoverlay">
       <div class="msg">This browser stopped. Its tabs and sign-ins are kept.</div>
       <div class="sub"></div>
-      <button class="startbrowser">Start browser</button>
+      <div class="coveractions">
+        <button class="startbrowser">Start browser</button>
+        <button class="askagent hidden">Ask an agent to fix this</button>
+        <button class="reportbug hidden">Report a bug</button>
+      </div>
       <details class="refusaldetails hidden"><summary>See details</summary><pre></pre></details>
     </div>
     <div id="terminatedoverlay">
@@ -178,7 +184,11 @@
     <div id="stoppedoverlay">
       <div class="msg">This browser is stopped.</div>
       <div class="sub">Its tabs and sign-ins are kept. Start it to pick up where it left off.</div>
-      <button class="startbrowser">Start browser</button>
+      <div class="coveractions">
+        <button class="startbrowser">Start browser</button>
+        <button class="askagent hidden">Ask an agent to fix this</button>
+        <button class="reportbug hidden">Report a bug</button>
+      </div>
       <details class="refusaldetails hidden"><summary>See details</summary><pre></pre></details>
     </div>
     <div id="initoverlay">
@@ -462,16 +472,38 @@
     startButton.classList.add("hidden");
   }
 
+  // The refused start each cover is telling, which decides its "Ask an agent to fix this" and "Report a bug".
+  const shownRefusals = new Map();
+  // The shell connection and the contract's askAgentToFix, once the module at the end has loaded the contract; on a
+  // page no shell frames the connection never says it has one.
+  let shell = null;
+  let askAgentToFix = null;
+
   function resetStartControls(cover) {
     cover.querySelector(".startbrowser").disabled = false;
     cover.querySelector(".refusaldetails").classList.add("hidden");
     cover.querySelector(".refusaldetails").open = false;
+    shownRefusals.delete(cover);
+    syncFailureButtons(cover);
+  }
+
+  // Both buttons go through the shell framing the page, so each shows only once its handshake has
+  // said it can work: any shell for the agent, one whose embedder opens a bug report for the other.
+  function syncFailureButtons(cover) {
+    const refusal = shownRefusals.get(cover);
+    const askButton = cover.querySelector(".askagent");
+    askButton.classList.toggle("hidden", !refusal?.agentFix || shell === null || !shell.hasShell());
+    askButton.onclick = refusal?.agentFix ? () => askAgentToFix(shell, refusal.agentFix) : null;
+    const reportButton = cover.querySelector(".reportbug");
+    reportButton.classList.toggle("hidden", !refusal?.isReportable || shell === null || !shell.canReportBug());
+    reportButton.onclick = () => shell.reportBug();
   }
 
   const START_FALLBACK = "Couldn't start this browser. Try again. If this persists, report a bug.";
   const NOT_ANSWERED = "The browser didn't respond. Try again in a moment.";
   // A refused start is told on the cover, with the button back: the daemon's own sentence when it
-  // wrote one, else ours, and its status and reason behind "See details".
+  // wrote one, else ours, and its status and reason behind "See details". A refusal an agent can
+  // fix carries what to ask it (``ask_agent``).
   async function readStartRefusal(response) {
     let text = "";
     let body = null;
@@ -479,9 +511,12 @@
     const userFacing = body !== null && typeof body.user_facing_message === "string" ? body.user_facing_message : "";
     const reason = body !== null && typeof body.error === "string" ? body.error : text.slice(0, 2000);
     const isNotAnswered = response.status >= 502 && response.status <= 504;
+    const askAgent = body !== null && typeof body.ask_agent === "object" ? body.ask_agent : null;
     return {
       sentence: userFacing || (isNotAnswered ? NOT_ANSWERED : START_FALLBACK),
       details: ["HTTP " + response.status, reason.trim()].filter((line) => line !== "").join("\n"),
+      agentFix: askAgent === null ? null : { whatFailed: String(askAgent.what_failed), details: String(askAgent.details) },
+      isReportable: userFacing ? body.reportable === true : !isNotAnswered,
     };
   }
   function showStartRefused(cover, refusal) {
@@ -492,6 +527,8 @@
     const details = cover.querySelector(".refusaldetails");
     details.querySelector("pre").textContent = refusal.details;
     details.classList.toggle("hidden", refusal.details === "");
+    shownRefusals.set(cover, refusal);
+    syncFailureButtons(cover);
   }
   function startFrom(cover) {
     if (browserId === null) return;
@@ -501,7 +538,9 @@
         if (response.ok) return;
         showStartRefused(cover, await readStartRefusal(response));
       })
-      .catch((error) => showStartRefused(cover, { sentence: NOT_ANSWERED, details: String(error) }));
+      .catch((error) => showStartRefused(
+        cover, { sentence: NOT_ANSWERED, details: String(error), agentFix: null, isReportable: false },
+      ));
   }
   startButton.addEventListener("click", () => startFrom(stoppedOverlay));
   crashStartButton.addEventListener("click", () => startFrom(crashOverlay));
@@ -1242,48 +1281,51 @@ registerProcessor('pb', PB);`;
     connect(name);        // control/ownership
     connectStream();      // pixels
   }
-  boot();
-})();
-</script>
-<script type="module">
   // The workspace shell's app contract (docs/system/blueprint/desktop-interface/contracts.md
-  // section 7), imported from this page's own origin, which the daemon serves it from. The
-  // window's path says WHICH browser this page shows and its title is that browser's name; what
-  // the browser itself is looking at stays inside the streamed pixels. A session switch is a
-  // whole new stream, so this page declares no navigation capability and the shell reloads the
-  // frame to move it.
+  // section 7), imported from this page's own origin, which the daemon serves it from, by the
+  // module below (``shell`` and ``askAgentToFix``, declared beside the covers). The window's path
+  // says WHICH browser this page shows and its title is that browser's name; what the browser
+  // itself is looking at stays inside the streamed pixels. A session switch is a whole new
+  // stream, so this page declares no navigation capability and the shell reloads the frame to
+  // move it.
   function browserTitle(name) {
     const numbered = /^browser-([0-9]+)$/.exec(name);
     return numbered === null ? name : `Browser ${numbered[1]}`;
   }
   const session = new URLSearchParams(location.search).get("session");
   if (session) document.title = browserTitle(session);
-  if (window.parent !== window) {
-    import("/_static/app_contract.js")
-      .then(({ connectToShell }) => {
-        // The shell's close chord (Ctrl+W) closes this browser's current tab, not its window:
-        // the window-bound sweep would otherwise stop the whole browser. The browser is
-        // named by the page's own session parameter; the viewer's state above is closure-local.
-        const closeRemoteTab = () => {
-          if (session === null) return;
-          fetch(new URL("browsers/" + session + "/close-tab", document.baseURI), { method: "POST" })
-            .then(async (response) => {
-              if (response.ok) return;
-              let reason = "";
-              try { reason = (await response.json()).error || ""; } catch (_) {}
-              console.warn("[browser] close-tab refused (" + response.status + ")", reason);
-            })
-            .catch((error) => console.warn("[browser] close-tab request failed", error));
-        };
-        const connection = connectToShell({
-          capabilities: { navigation: false, closeChord: true },
-          onCloseRequest: closeRemoteTab,
-        });
-        window.addEventListener("focus", () => connection.focused());
-        if (session) connection.location(`/?session=${encodeURIComponent(session)}`, browserTitle(session));
+  // The shell's close chord (Ctrl+W) closes this browser's current tab, not its window: the
+  // window-bound sweep would otherwise stop the whole browser.
+  function closeRemoteTab() {
+    if (session === null) return;
+    fetch(new URL("browsers/" + session + "/close-tab", document.baseURI), { method: "POST" })
+      .then(async (response) => {
+        if (response.ok) return;
+        let reason = "";
+        try { reason = (await response.json()).error || ""; } catch (_) {}
+        console.warn("[browser] close-tab refused (" + response.status + ")", reason);
       })
-      .catch((error) => console.warn("[browser] could not load the shell contract", error));
+      .catch((error) => console.warn("[browser] close-tab request failed", error));
   }
+  window.connectViewerToShell = (contract) => {
+    askAgentToFix = contract.askAgentToFix;
+    shell = contract.connectToShell({
+      capabilities: { navigation: false, closeChord: true },
+      onCloseRequest: closeRemoteTab,
+      onHandshake: () => [stoppedOverlay, crashOverlay].forEach(syncFailureButtons),
+    });
+    window.addEventListener("focus", () => shell.focused());
+    if (session) shell.location(`/?session=${encodeURIComponent(session)}`, browserTitle(session));
+  };
+
+  boot();
+})();
+</script>
+<script type="module">
+  // A static import, not import(): the shell greets the page once, as the frame loads, and the
+  // load waits for this module but not for a dynamic import, which would hear no handshake.
+  import * as contract from "/_static/app_contract.js";
+  window.connectViewerToShell(contract);
 </script>
 </body>
 </html>

@@ -65,6 +65,7 @@ from flask import Flask, Response, jsonify, request, send_file
 from flask.typing import ResponseReturnValue
 from flask_sock import Sock
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import Field
 from simple_websocket import ConnectionClosed
@@ -81,6 +82,7 @@ from browser.errors import (
     InvalidStartUrlError,
     UnknownBrowserError,
 )
+from browser.install_gate import InstallGate
 from browser.loop_bridge import AsyncLoopBridge
 from browser.names import is_valid_browser_name
 from browser.oom_retag import start_oom_retagging
@@ -309,6 +311,7 @@ class _StartRefusal(FrozenModel):
     user_facing_message: str = Field(
         default="", description="What a person is told, where a person can have asked; '' when the reason is enough"
     )
+    is_reportable: bool = Field(default=False, description="Whether the sentence asks the person to report a bug")
 
 
 def _start_browser(name: str | None, raw_url: str | None) -> "LiveBrowser | _StartRefusal":
@@ -342,18 +345,33 @@ def _start_browser(name: str | None, raw_url: str | None) -> "LiveBrowser | _Sta
     except _STARTUP_ERRORS as e:
         logger.error("failed to register browser: {}", e)
         return _StartRefusal(
-            reason=f"Could not start browser: {e}", status=503, user_facing_message=_COULD_NOT_START_MESSAGE
+            reason=f"Could not start browser: {e}",
+            status=503,
+            user_facing_message=_COULD_NOT_START_MESSAGE,
+            is_reportable=True,
         )
 
 
-def _launch_refusal(reason: str, status: int, user_facing_message: str = "") -> Response:
+def _launch_refusal(reason: str, status: int, user_facing_message: str = "", is_reportable: bool = False) -> Response:
     """A refusal of the ``new`` launch path or of a relayed message, as the shell reads one (post-launch-paths plan
-    section 3.2): ``detail`` is the reason, passed on behind "See details", and ``user_facing_message``, when there
-    is one, the sentence the person is shown."""
-    body = {"detail": reason}
+    section 3.2): ``detail`` is the reason, passed on behind "See details", ``user_facing_message``, when there is
+    one, the sentence the person is shown, and ``reportable`` whether that sentence asks for a bug report."""
+    body: dict[str, object] = {"detail": reason}
     if user_facing_message:
         body["user_facing_message"] = user_facing_message
+    if is_reportable:
+        body["reportable"] = True
     return _error(body, status)
+
+
+@pure
+def _install_refusal_body(install: InstallGate) -> dict[str, object]:
+    """The viewer's Start refused for a browser not installed: the reason, the sentence, and for a failed install
+    what its "Ask an agent to fix this" hands an agent."""
+    body: dict[str, object] = {"error": install.reason, "user_facing_message": install.user_facing_message}
+    if install.agent_fix is not None:
+        body["ask_agent"] = install.agent_fix.model_dump(mode="json")
+    return body
 
 
 def new_browser() -> Response:
@@ -373,7 +391,7 @@ def new_browser() -> Response:
         return _launch_refusal("url: must be a string", 400)
     started = _start_browser(None, raw_url)
     if isinstance(started, _StartRefusal):
-        return _launch_refusal(started.reason, started.status, started.user_facing_message)
+        return _launch_refusal(started.reason, started.status, started.user_facing_message, started.is_reportable)
     return jsonify({"path": browser_page_path(BrowserName(started.browser_id))})
 
 
@@ -418,7 +436,7 @@ def open_url() -> Response:
         return _launch_refusal(str(e), 409)
     except _STARTUP_ERRORS as e:
         logger.error("could not open {} for the human: {}", url, e)
-        return _launch_refusal(f"Could not start the browser: {e}", 503, _LINK_NOT_OPENED_MESSAGE)
+        return _launch_refusal(f"Could not start the browser: {e}", 503, _LINK_NOT_OPENED_MESSAGE, is_reportable=True)
     page = browser_page_path(BrowserName(browser.browser_id))
     shell = ShellLayoutClient(shell_url=shell_base_url(), requester=None, timeout_seconds=_SHELL_SHOW_TIMEOUT_SECONDS)
     try:
@@ -580,7 +598,7 @@ def start_browser(browser_id: str) -> ResponseReturnValue:
         return jsonify({"error": "invalid browser name"}), 404
     install = deferred_install_ready()
     if not install.is_ready:
-        return _error({"error": install.reason, "user_facing_message": install.user_facing_message}, 503)
+        return _error(_install_refusal_body(install), 503)
     try:
         bridge.run(manager.start_browser(browser_id), timeout=_ROUTE_TIMEOUT)
     except UnknownBrowserError as e:

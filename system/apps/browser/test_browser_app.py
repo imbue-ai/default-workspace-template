@@ -32,7 +32,7 @@ def test_the_viewer_page_imports_the_app_contract_from_its_own_origin() -> None:
     response = runner.application.test_client().get("/")
 
     assert response.status_code == 200
-    assert 'import("/_static/app_contract.js")' in response.text
+    assert 'from "/_static/app_contract.js"' in response.text
     assert response.headers["Cache-Control"] == "no-store"
 
 
@@ -165,14 +165,6 @@ def test_close_tab_closes_the_shown_tab_of_a_running_browser_and_refuses_the_res
     assert still_launching.status_code == 409
     assert "not running" in still_launching.get_json()["error"]
     assert unknown.status_code == 404
-
-
-def test_the_viewer_module_script_reads_no_state_from_the_classic_script() -> None:
-    """The shell-contract block is a module: it cannot see the viewer closure's names."""
-    page = (Path(__file__).parent / "src" / "browser" / "assets" / "index.html").read_text()
-    module_block = page.split('<script type="module">', 1)[1].split("</script>", 1)[0]
-    assert "browserId" not in module_block
-    assert '"browsers/" + session + "/close-tab"' in module_block
 
 
 # ``POST /api/open-url``, the ``open:url`` message handler: a local page the human asked for
@@ -340,6 +332,7 @@ def test_a_launch_that_cannot_register_the_browser_says_it_could_not_start(monke
     assert launch.get_json() == {
         "detail": "Could not start browser: no free X display number for the browser",
         "user_facing_message": "Couldn't start the browser. Try again. If this persists, report a bug.",
+        "reportable": True,
     }
 
 

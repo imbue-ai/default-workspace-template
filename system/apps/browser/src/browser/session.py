@@ -70,7 +70,7 @@ from browser import manifest as fleet_manifest
 from browser.cdp_client import CdpClient
 from browser.cdp_proxy import BrowserProxy, ProxyServer
 from browser.errors import BrowserNotDrivableError, UnknownBrowserError
-from browser.install_gate import READY_GATE, InstallGate, fortress_unit_failed_this_boot, missing_install_gate
+from browser.install_gate import READY_GATE, InstallGate, fortress_unit_failure_this_boot, missing_install_gate
 from browser.names import first_free_numbered_browser_name, is_valid_browser_name
 from browser.oom_retag import notify_chromium_processes_expected
 from browser.primitives import APP_NAME, SESSION_QUERY_KEY
@@ -464,11 +464,11 @@ def deferred_install_ready() -> InstallGate:
     if os.environ.get("BROWSER_SKIP_INSTALL_CHECK") == "1":
         return READY_GATE  # host/CI testing without an installed Fortress
     if not os.access(_FORTRESS_EXECUTABLE, os.X_OK):
-        return missing_install_gate("Chromium", fortress_unit_failed_this_boot())
+        return missing_install_gate("Chromium", fortress_unit_failure_this_boot())
     # Headful needs the Xvfb display present; wait for its install too (headless
     # runs -- tests, bare dev boxes -- don't need it).
     if not _HEADLESS and shutil.which("Xvfb") is None:
-        return missing_install_gate("The virtual display", fortress_unit_failed_this_boot())
+        return missing_install_gate("The virtual display", fortress_unit_failure_this_boot())
     return READY_GATE
 
 
