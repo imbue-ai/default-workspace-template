@@ -1,10 +1,10 @@
 The workspace desktop says what failed in its own words, names apps as people know them, and offers the next step.
 
-- Toasts and dialog lines name what failed ("Docs couldn't be opened.", "This window couldn't be closed.", "Couldn't move this shortcut, so it's back where it was.") and end "Try again. If this persists, report a bug." with a "Report a bug" button; the shell's own reason sits behind "See details". Apps are named by their display name everywhere.
+- Toasts and dialog lines name what failed ("Docs couldn't be opened.", "This window couldn't be closed.", "Couldn't move this shortcut, so it's back where it was."). A failure with no reason of its own ends "Try again. If this persists, report a bug." and offers "Report a bug" where Imbue Studio opens one; the shell's reason sits behind "See details". Apps are named by their display name everywhere, and a launch says "<App> couldn't open that."
 
-- The shell's refusals carry a sentence for people: an app that is no longer in the workspace, a launch path it no longer offers, a window or desktop that has gone, the last desktop's delete, and a change that could not be saved (a full disk says so and offers an agent to free up space, and every failed save offers Try again).
+- The shell's refusals carry a sentence for people (`user_facing_message`, with `reportable` where it asks for a bug report): an app that is no longer in the workspace, a launch path it no longer offers, a window or desktop that has gone, the last desktop's delete, and a change that could not be saved (a full disk says so and offers an agent to free up space, and every failed save offers Try again). A failed launch carries no sentence of the shell's: the desktop words it.
 
-- The launcher and the phone's start sheet keep the typed text until a row runs, and show a failure under the field. Text sent into Chat that is refused leaves Chat's window where it was.
+- The launcher and the phone's start sheet keep the typed text until a row runs, and show a failure under the field ("Couldn't send that to Chat, so your text is still in the box."). Text sent into Chat that is refused leaves Chat's window where it was.
 
 - A failed startup read is told in the backdrop with Reload, and stays until a read succeeds.
 
