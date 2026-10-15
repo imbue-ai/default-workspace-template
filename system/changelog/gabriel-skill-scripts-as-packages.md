@@ -20,6 +20,8 @@ This release turns the workspace's scripts into packages. An existing workspace'
   - The plain-`uv run` check now covers script runs too: a `uv run <path>.py` with no `--no-sync` fails it, and so does a Python argv that starts `uv run` with a computed program and no `--no-sync` before it.
   - `system/test_meta_ratchets.py` requires a `pyproject.toml` in every skill `python/` dir. Without one, every `uv` command in the workspace fails.
 
+- The Datalib app's launcher, `system/apps/datalib/launch_datalib_http.py`, counts as a bare entry point, like oom_priority's own scripts: its supervisord program runs it under the system `python3`, so the `sys.path` insert it uses to import `oom_priority` is one of the counted import-path edits. Its tests import it by name instead of loading it from its file.
+
 - The bug-report collector runs as a `Collector` object that takes its container paths and class budgets as arguments. Its tests build one per test instead of loading a fresh copy of the module by path. What the collector collects is unchanged.
 
 - The supervisord program readers in `system/test_app_manifests.py` and `system/test_supervisord_layout.py` share one helper, `oom_priority.supervisord_testing.supervisord_commands`, instead of loading each other's test files by path. The root checks that skip vendored content share `system/vendor_testing.py`.
