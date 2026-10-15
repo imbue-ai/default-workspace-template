@@ -87,15 +87,23 @@ _DELIBERATE_SYNCS: tuple[tuple[str, str], ...] = (
 
 
 def _shell_command_string(words: list[str], shell_index: int) -> str | None:
-    """The command string a shell at ``shell_index`` runs (``-c``, ``-lc``, ``--login -c``), or None."""
-    for index in range(shell_index + 1, len(words)):
-        word = words[index]
+    """The command string a shell at ``shell_index`` runs (``-c``, ``-lc``, ``--login -c``), or None.
+
+    ``-o`` / ``-O`` take the next word as their value (``-o pipefail``, ``-euo pipefail``), so
+    the string is the first word after the options.
+    """
+    takes_command = False
+    arguments = iter(words[shell_index + 1 :])
+    for word in arguments:
+        if not word.startswith(("-", "+")):
+            return word if takes_command else None
         if word.startswith("--"):
             continue
-        if not word.startswith("-"):
-            return None
-        if "c" in word[1:]:
-            return words[index + 1] if index + 1 < len(words) else None
+        letters = word[1:]
+        if "c" in letters:
+            takes_command = True
+        for _ in range(letters.count("o") + letters.count("O")):
+            next(arguments, None)
     return None
 
 
@@ -319,6 +327,9 @@ def test_a_planted_uv_run_program_is_caught_in_any_form(tmp_path: Path) -> None:
     (dropins / "longopt.conf").write_text(
         '[program:longopt]\ncommand=bash --login -c "exec uv run longopt"\n'
     )
+    (dropins / "pipefail.conf").write_text(
+        '[program:pipefail]\ncommand=bash -euo pipefail -c "exec uv run pipefail"\n'
+    )
     (dropins / "fine.conf").write_text(
         "; never `command=uv run fine`: uv would stay resident as its parent\n"
         '[program:fine]\ncommand=bash -c "uv sync --all-packages --frozen && exec .venv/bin/fine"\n'
@@ -330,6 +341,7 @@ def test_a_planted_uv_run_program_is_caught_in_any_form(tmp_path: Path) -> None:
         "[program:direct",
         "[program:login",
         "[program:longopt",
+        "[program:pipefail",
         "[program:spaced",
         "[program:tagged",
     ]
