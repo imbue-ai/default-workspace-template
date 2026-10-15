@@ -253,7 +253,7 @@ _SHELL_STAND_IN_TEMPLATE: Final[str] = """<!doctype html>
 <script>
   window.shellMessages = [];
   const frame = document.getElementById("app");
-  frame.addEventListener("load", () => frame.contentWindow.postMessage({
+  const greet = () => frame.contentWindow.postMessage({
     type: "shell:handshake",
     clientId: "client-stand-in",
     windowId: "window-stand-in",
@@ -261,9 +261,12 @@ _SHELL_STAND_IN_TEMPLATE: Final[str] = """<!doctype html>
     app: "stand-in",
     path: "/",
     canReportBug: __CAN_REPORT_BUG__,
-  }, "*"));
+  }, "*");
+  frame.addEventListener("load", greet);
   window.addEventListener("message", (event) => {
-    if (event.source === frame.contentWindow) window.shellMessages.push(event.data);
+    if (event.source !== frame.contentWindow) return;
+    window.shellMessages.push(event.data);
+    if (event.data?.type === "shell:capabilities") greet();
   });
 </script>
 </body>
@@ -284,8 +287,8 @@ window.addEventListener("message", (event) => {
 
 def shell_stand_in_page(frame_url: str, can_report_bug: bool) -> str:
     """A page standing in for the workspace shell around one app page: it frames ``frame_url``, greets the frame with
-    a ``shell:handshake`` on every load, as the shell does, saying ``can_report_bug``, and keeps every message the
-    frame posts in ``window.shellMessages``."""
+    a ``shell:handshake`` on every load and in answer to each ``shell:capabilities``, as the shell does, saying
+    ``can_report_bug``, and keeps every message the frame posts in ``window.shellMessages``."""
     return _SHELL_STAND_IN_TEMPLATE.replace("__FRAME_URL__", html.escape(frame_url)).replace(
         "__CAN_REPORT_BUG__", json.dumps(can_report_bug)
     )
