@@ -4572,6 +4572,24 @@ def test_an_intake_for_a_chat_that_is_gone_asks_for_another_chat(client: FlaskCl
     )
 
 
+def test_an_intake_sent_to_a_chat_whose_account_was_signed_out_says_so_rather_than_asking_for_a_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id = "agent-00000000000000000000000000000749"
+    client, messenger = _client_with_account_labeled_chat(tmp_path, monkeypatch, agent_id, "signed-out-account-8813")
+
+    response = _intake(client, message="hi", target="chat", chat_id=agent_id, is_delivery_awaited=True)
+
+    assert response.status_code == 409
+    body = response.get_json()
+    assert body["kind"] == "account_signed_out"
+    assert body["user_facing_message"] == (
+        "You signed out of the account this chat runs on. Choose a provider to continue it on."
+    )
+    assert "reportable" not in body
+    assert messenger.sent == []
+
+
 def test_an_unexpected_exception_reads_as_something_going_wrong_with_the_exception_kept_as_detail(
     client: FlaskClient,
 ) -> None:

@@ -268,6 +268,8 @@ def _find_active_agent(chat_id: str) -> AgentInfo | None:
 CHAT_NOT_STARTED_SENTENCE: Final[str] = "This chat couldn't be started. Try again. If this persists, report a bug."
 # The kind a refusal for a chat the app does not know carries, so a page can offer a new chat in place of a retry.
 CHAT_GONE_KIND: Final[str] = "chat_gone"
+# What an intake (text sent from outside a chat page) says for a chat the app does not know.
+INTAKE_CHAT_GONE_SENTENCE: Final[str] = "That chat is no longer here. Pick another chat, or start a new one."
 # The kinds of the refusal before the agent list is read: still starting, or the list could not be read at all.
 CHAT_STARTING_KIND: Final[str] = "chat_starting"
 AGENT_LIST_UNREADABLE_KIND: Final[str] = "agent_list_unreadable"
@@ -1863,7 +1865,7 @@ def _resolve_intake_chat(agent_manager: AgentManager, intake: IntakeRequest) -> 
                 return refusal_response(
                     f"Chat '{intake.chat_id}' not found",
                     404,
-                    user_facing_message="That chat is no longer here. Pick another chat, or start a new one.",
+                    user_facing_message=INTAKE_CHAT_GONE_SENTENCE,
                     kind=CHAT_GONE_KIND,
                 )
             return _ResolvedIntakeChat(chat_id=parsed)
@@ -2002,14 +2004,17 @@ def _intake_into_listed_chat(state: ChatAppState, chat_id: ChatId, intake: Intak
 
 def _as_intake_refusal(send_refusal: Response) -> Response:
     """A refused send as the intake answers it: the send path's sentences talk about the composer, which a text sent
-    from outside a chat page never sat in, so they give way to the intake's own."""
+    from outside a chat page never sat in, so they give way to the intake's own, except for a signed-out account, whose
+    sentence names no composer."""
     body = send_refusal.get_json()
-    return refusal_response(
-        str(body["detail"]),
-        send_refusal.status_code,
-        user_facing_message="Chat couldn't take this. Try again. If this persists, report a bug.",
-        kind=body.get("kind"),
-    )
+    kind = body.get("kind")
+    if kind == CHAT_GONE_KIND:
+        sentence = INTAKE_CHAT_GONE_SENTENCE
+    elif kind == ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND and body.get("user_facing_message"):
+        sentence = str(body["user_facing_message"])
+    else:
+        sentence = "Chat couldn't take this. Try again. If this persists, report a bug."
+    return refusal_response(str(body["detail"]), send_refusal.status_code, user_facing_message=sentence, kind=kind)
 
 
 def _pending_intake_not_found_response(token: str) -> Response:
