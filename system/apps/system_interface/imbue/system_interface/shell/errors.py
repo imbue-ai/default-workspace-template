@@ -12,8 +12,6 @@ class RefusalKind(LowerCaseStrEnum):
     APP_UNAVAILABLE = auto()
     LAUNCH_PATH_GONE = auto()
     WINDOW_GONE = auto()
-    # A launch that opened nothing, with no sentence of the app's own for it: the frontend says what was asked.
-    LAUNCH_FAILED = auto()
     # A state file could not be written: the frontend offers to try the change again.
     OUT_OF_SPACE = auto()
     NOT_SAVED = auto()
@@ -30,13 +28,19 @@ NOT_SAVED_SENTENCE: Final[str] = "Your change could not be saved. Try again. If 
 class ShellError(Exception):
     """Base error for everything in the shell subpackage. The message is the developer's reason, which the log,
     agents, and "See details" read; ``user_facing_message``, when set, is the sentence a person is shown in its place,
-    and ``kind`` names the refusal for a frontend that words it itself."""
+    ``reportable`` whether that sentence asks for a bug report, and ``kind`` names the refusal for a frontend that
+    words it itself."""
 
     def __init__(
-        self, message: str = "", user_facing_message: str | None = None, kind: RefusalKind | None = None
+        self,
+        message: str = "",
+        user_facing_message: str | None = None,
+        kind: RefusalKind | None = None,
+        reportable: bool | None = None,
     ) -> None:
         self.user_facing_message = user_facing_message
         self.kind = kind
+        self.reportable = reportable
         super().__init__(message)
 
 
@@ -108,7 +112,12 @@ class DesktopValueError(ShellError, ValueError):
 
 
 class LaunchFailureError(ShellError):
-    """A launch that opened nothing."""
+    """A launch that opened nothing. The message is for the log and "See details". ``user_facing_message`` is a
+    sentence the app itself wrote for people about it, passed on as written, and ``reportable`` the app's own word on
+    whether that sentence asks for a bug report; both are None when the app gave none (the frontends word it then)."""
+
+    def __init__(self, message: str, user_facing_message: str | None = None, reportable: bool | None = None) -> None:
+        super().__init__(message, user_facing_message=user_facing_message, reportable=reportable)
 
 
 class LaunchRefusedError(LaunchFailureError, ValueError):
@@ -118,10 +127,7 @@ class LaunchRefusedError(LaunchFailureError, ValueError):
 
 class LaunchUnavailableError(LaunchFailureError, RuntimeError):
     """A POST launch could not be completed: the app could not be reached, timed out, or answered something other
-    than a page path (answered 502). Every one carries a sentence for people."""
-
-    def __init__(self, message: str, user_facing_message: str, kind: RefusalKind | None = None) -> None:
-        super().__init__(message, user_facing_message, kind)
+    than a page path (answered 502)."""
 
 
 class WindowNotFoundError(ShellError, LookupError):

@@ -1,22 +1,29 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
-import type { TranscriptEvent } from "../models/Response";
-import {
-  ActivityIndicator,
-  isWorkingActivityState,
-  labelForActivityState,
-  wakeUpSpinnerDeadline,
-} from "./ActivityIndicator";
+import type { CompactionCause, TranscriptEvent } from "../models/Response";
+import type { QueuedMessage } from "../models/Chats";
+import { ActivityIndicator, labelForActivityState, wakeUpSpinnerDeadline } from "./ActivityIndicator";
 import { notePermissionResolutions, resetShellPermissionResolutionsForTesting } from "./permission-card";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
 
 // The component reads the agent's server-derived state through the chats model; the
 // mock factory is hoisted, so the state it serves lives in a mutable holder.
-const agentState: { activity_state: string | null; harness: string } = { activity_state: null, harness: "claude" };
+const agentState: {
+  activity_state: string | null;
+  compaction_cause: CompactionCause | null;
+  harness: string;
+  queued_messages: QueuedMessage[];
+} = {
+  activity_state: null,
+  compaction_cause: null,
+  harness: "claude",
+  queued_messages: [],
+};
 const handoffState: { handoff: unknown } = { handoff: null };
 vi.mock("../models/Chats", () => ({
   getChatById: () => ({ active_agent: agentState, handoff: handoffState.handoff }),
+  getQueuedMessagesForChat: () => agentState.queued_messages,
 }));
 vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),
@@ -108,6 +115,29 @@ describe("labelForActivityState — fixed-label states", () => {
 
   it("returns 'Thinking…' for THINKING", () => {
     expect(labelForActivityState("THINKING", [userMsg("2026-04-28T01:00:00Z")])).toBe("Thinking…");
+  });
+
+  it("names a compaction, and the reply a queued message waits on behind it", () => {
+    expect(labelForActivityState("COMPACTING", [])).toBe("Compacting…");
+    expect(labelForActivityState("COMPACTING", [], false)).toBe("Compacting…");
+    expect(labelForActivityState("COMPACTING", [], true)).toBe("Compacting, then replying…");
+  });
+});
+
+describe("labelForActivityState — COMPACTING by cause", () => {
+  it.each([
+    ["manual", "Compacting as requested…", "Compacting as requested, then replying…"],
+    ["idle", "Compacting while idle…", "Compacting while idle, then replying…"],
+    ["native", "Compacting to free up context…", "Compacting to free up context, then replying…"],
+    [null, "Compacting…", "Compacting, then replying…"],
+  ] as const)("names cause %s, with and without a queued message", (cause, alone, queued) => {
+    expect(labelForActivityState("COMPACTING", [], false, cause)).toBe(alone);
+    expect(labelForActivityState("COMPACTING", [], true, cause)).toBe(queued);
+  });
+
+  it("ignores a cause outside COMPACTING", () => {
+    expect(labelForActivityState("THINKING", [], true, "idle")).toBe("Thinking…");
+    expect(labelForActivityState("IDLE", [], false, "manual")).toBe(null);
   });
 });
 
@@ -250,6 +280,8 @@ describe("ActivityIndicator — what the strip actually renders", () => {
   beforeEach(() => {
     resetShellPermissionResolutionsForTesting();
     agentState.activity_state = null;
+    agentState.compaction_cause = null;
+    agentState.queued_messages = [];
     vi.spyOn(m, "redraw").mockImplementation(() => undefined);
     vi.spyOn(Date, "now").mockReturnValue(NOW);
   });
@@ -308,6 +340,24 @@ describe("ActivityIndicator — what the strip actually renders", () => {
     expect(labelTextOf(strip)).toBe("Confirming permission changes…");
   });
 
+  it("shows a compaction on the strip, ahead of the wake-up caption", () => {
+    agentState.activity_state = "COMPACTING";
+    resolveReq1();
+    const strip = render();
+    expect((strip?.attrs as Record<string, unknown>)["data-state"]).toBe("COMPACTING");
+    expect(labelTextOf(strip)).toBe("Compacting…");
+    agentState.queued_messages = [{ queued_id: "q1", content: "next", timestamp: "2026-04-28T01:00:05Z" }];
+    expect(labelTextOf(render())).toBe("Compacting, then replying…");
+  });
+
+  it("names the active agent's compaction cause on the strip", () => {
+    agentState.activity_state = "COMPACTING";
+    agentState.compaction_cause = "idle";
+    expect(labelTextOf(render())).toBe("Compacting while idle…");
+    agentState.queued_messages = [{ queued_id: "q1", content: "next", timestamp: "2026-04-28T01:00:05Z" }];
+    expect(labelTextOf(render())).toBe("Compacting while idle, then replying…");
+  });
+
   it("lets a real turn outrank the wake-up caption", () => {
     // The verdict landed AND the agent is already working: the honest caption
     // wins, so the dot never competes with real activity.
@@ -315,25 +365,5 @@ describe("ActivityIndicator — what the strip actually renders", () => {
     resolveReq1();
     const strip = render();
     expect((strip?.attrs as Record<string, unknown>)["data-state"]).toBe("THINKING");
-  });
-});
-
-describe("isWorkingActivityState — stop-button visibility gate", () => {
-  it("treats THINKING / TOOL_RUNNING as an interruptible turn", () => {
-    expect(isWorkingActivityState("THINKING")).toBe(true);
-    expect(isWorkingActivityState("TOOL_RUNNING")).toBe(true);
-  });
-
-  it("treats IDLE as not working (nothing to interrupt)", () => {
-    expect(isWorkingActivityState("IDLE")).toBe(false);
-  });
-
-  it("treats null / undefined (no activity tracking) as not working", () => {
-    expect(isWorkingActivityState(null)).toBe(false);
-    expect(isWorkingActivityState(undefined)).toBe(false);
-  });
-
-  it("treats an unknown / future state value as not working", () => {
-    expect(isWorkingActivityState("SOMETHING_NEW")).toBe(false);
   });
 });

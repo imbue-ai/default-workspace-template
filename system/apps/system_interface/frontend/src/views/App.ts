@@ -18,7 +18,6 @@ import { elementReferenceRows } from "@imbue/workspace-ui/src/context_menu_rows"
 import { describeElement } from "@imbue/workspace-ui/src/element_reference";
 import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { fetchWallpapers, wallpaperBackgroundImage } from "../model/api";
-import { failureNotice } from "../model/failures";
 import type { FailureNotice } from "../model/failures";
 import { appShortcutOf, draftRowsOf, launchPathOf } from "../model/launch";
 import { SHELL_APP_NAME } from "../model/UpdateNotice";
@@ -139,8 +138,8 @@ interface AvatarChooserState {
   readonly loadError: FailureNotice | null;
 }
 
-/** What the avatar chooser says in place of its designs when they could not be read. */
-export const DESIGNS_NOT_LOADED_SENTENCE = "Avatar designs couldn't be loaded.";
+/** What failed when the avatar chooser could not read its designs, which it says in place of them. */
+const DESIGNS_NOT_LOADED = "Avatar designs couldn't be loaded";
 
 export interface AppAttrs {
   readonly store: DesktopStore;
@@ -809,7 +808,7 @@ export function App(): m.Component<AppAttrs> {
       .catch((error: unknown) => {
         console.warn("[si] could not list the avatar designs", error);
         if (avatarChooser === opened) {
-          avatarChooser = { designs: null, loadError: failureNotice(DESIGNS_NOT_LOADED_SENTENCE, error) };
+          avatarChooser = { designs: null, loadError: current.failureNotice(DESIGNS_NOT_LOADED, error) };
         }
       })
       .finally(() => m.redraw());
@@ -846,6 +845,7 @@ export function App(): m.Component<AppAttrs> {
       wallpapers,
       isDeleting: dialog.isDeleting,
       isOnlyDesktop: current.getState().desktops.length <= 1,
+      wordFailure: (whatFailed, error) => current.failureNotice(whatFailed, error),
       onSave: async (name, color, glyph, wallpaper) => {
         await current.updateDesktopSettings(desktop.id, name, color, glyph);
         if (!isSameWallpaper(wallpaper, desktop.wallpaper)) await current.setDesktopWallpaper(desktop.id, wallpaper);

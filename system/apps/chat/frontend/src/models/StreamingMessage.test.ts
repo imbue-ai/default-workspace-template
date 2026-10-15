@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { READ_NOT_ANSWERED } from "@imbue/workspace-ui/src/models/failure";
+import { notAnsweredSentence } from "@imbue/workspace-ui/src/models/failure";
 
 // Capture mithril's request/redraw via hoisted mocks so the test can control
 // when the snapshot fetch resolves without fighting mithril's overloaded types.
@@ -136,7 +136,7 @@ describe("snapshot retry after reconnect", () => {
       const chatId = `agent-${agentCounter++}`;
       mockRequest.mockRejectedValueOnce(Object.assign(new Error(String(null)), { code: 503, response: null }));
       await expect(loadSnapshotWithStream(chatId)).rejects.toThrow();
-      expect(getConversationLoadState(chatId).error).toBe(READ_NOT_ANSWERED);
+      expect(getConversationLoadState(chatId).error).toBe(notAnsweredSentence("read"));
 
       mockRequest.mockResolvedValueOnce({ events: [makeEvent("after-recovery", "backend answered")] });
       const deadSource = FakeEventSource.instances[FakeEventSource.instances.length - 1];

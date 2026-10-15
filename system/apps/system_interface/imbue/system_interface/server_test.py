@@ -527,14 +527,11 @@ def test_the_not_built_page_asks_an_agent_through_the_primary_text_action_and_op
     assert post.url == "http://localhost:7002/api/intake"
     assert post.body == {"target": "new_chat", "message": _NOT_BUILT_REPAIR_MESSAGE}
 
-    # A launch that fails answers as the launch route does: the sentence for people beside the app's own words.
+    # A launch that fails answers as the launch route does: the app's own words, and no sentence of the shell's, for
+    # the page to word.
     failed = client.post(NOT_BUILT_LAUNCH_PATH, json={"purpose": "repair_agent"})
     assert failed.status_code == 502
-    assert (
-        failed.get_json()["user_facing_message"]
-        == "Helper couldn't open that. Try again. If this persists, report a bug."
-    )
-    assert "boom" in failed.get_json()["detail"]
+    assert failed.get_json() == {"detail": "helper answered the launch with 500: boom"}
 
     terminal = client.post(NOT_BUILT_LAUNCH_PATH, json={"purpose": "terminal"})
     assert terminal.status_code == 200, terminal.get_json()
@@ -550,6 +547,7 @@ def test_the_not_built_page_offers_no_agent_without_an_app_to_ask_and_a_preview_
     preview, preview_posts = _not_built_shell(tmp_path / "preview", [], is_preview=True)
     refused = preview.test_client().post(NOT_BUILT_LAUNCH_PATH, json={"purpose": "repair_agent"})
     assert refused.status_code == 403
+    assert refused.get_json()["user_facing_message"] == refused.get_json()["detail"]
     assert posts == [] and preview_posts == []
 
 

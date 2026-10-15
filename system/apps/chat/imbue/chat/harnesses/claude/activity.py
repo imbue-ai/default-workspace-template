@@ -13,6 +13,8 @@ from imbue.chat.activity_state import resolve_is_agent_running
 from imbue.chat.harnesses.activity import HarnessActivityTracker
 from imbue.chat.harnesses.claude.activity_state import derive
 from imbue.chat.harnesses.startup_readiness import StartupReadyMarker
+from imbue.mngr_claude.claude_config import COMPACTING_MARKER_FILENAME
+from imbue.mngr_claude.claude_config import LAST_COMPACTION_FILENAME
 
 # Written by claude's SessionStart hook; mngr's launch command deletes it first. Kept in sync with
 # the ``session_started`` file mngr_claude's claude_config.py hook touches and plugin.py waits on.
@@ -27,6 +29,8 @@ class ClaudeActivityTracker(HarnessActivityTracker):
     plus the transcript tail. See :func:`derive`."""
 
     marker_filename: ClassVar[str] = "claude_process_started"
+    compacting_marker_filename: ClassVar[str | None] = COMPACTING_MARKER_FILENAME
+    last_compaction_filename: ClassVar[str | None] = LAST_COMPACTION_FILENAME
 
     def _derive_working(
         self, *, lifecycle_state: str, is_active_marker_present: bool, process_started_at: float | None

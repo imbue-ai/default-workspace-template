@@ -77,7 +77,7 @@ def test_the_not_built_page_asks_an_agent_and_frames_its_chat_and_a_terminal_ses
 
         ask.click()
         expect(page.locator("#ask-agent-failure-message")).to_have_text(
-            "Helper couldn't open that. Try again. If this persists, report a bug."
+            "Couldn't start an agent. Try again. If this persists, report a bug."
         )
         expect(page.locator("#ask-agent-failure-details")).to_contain_text("boom")
 

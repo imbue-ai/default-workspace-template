@@ -42,14 +42,20 @@ _RequestModel = TypeVar("_RequestModel", bound=BaseModel)
 
 
 def detail_response(
-    message: str, status_code: int, user_facing_message: str | None = None, kind: RefusalKind | None = None
+    message: str,
+    status_code: int,
+    user_facing_message: str | None = None,
+    reportable: bool | None = None,
+    kind: RefusalKind | None = None,
 ) -> ResponseReturnValue:
     """An error answer: ``detail`` is the developer's reason, which every caller reads; ``user_facing_message``, when
-    there is one, is the sentence the workspace's frontends show a person in its place, and ``kind`` names the
-    refusal for a frontend that words it itself."""
-    body = {"detail": message}
+    there is one, is the sentence the workspace's frontends show a person in its place, ``reportable`` whether that
+    sentence asks for a bug report, and ``kind`` names the refusal for a frontend that words it itself."""
+    body: dict[str, str | bool] = {"detail": message}
     if user_facing_message is not None:
         body["user_facing_message"] = user_facing_message
+        if reportable is not None:
+            body["reportable"] = reportable
     if kind is not None:
         body["kind"] = kind.value
     return jsonify(body), status_code

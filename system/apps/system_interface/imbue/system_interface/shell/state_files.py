@@ -95,4 +95,5 @@ def state_write_error(path: Path, error: OSError) -> ShellStateError:
         f"cannot write shell state file {path}: {error}",
         user_facing_message=OUT_OF_SPACE_SENTENCE if is_out_of_space else NOT_SAVED_SENTENCE,
         kind=RefusalKind.OUT_OF_SPACE if is_out_of_space else RefusalKind.NOT_SAVED,
+        reportable=not is_out_of_space,
     )

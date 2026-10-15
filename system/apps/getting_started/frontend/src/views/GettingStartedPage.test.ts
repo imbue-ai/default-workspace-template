@@ -28,17 +28,26 @@ const LOADED: TemplateCatalogState = {
   },
 };
 
-function render(catalog: TemplateCatalogState = LOADED): { root: HTMLElement; started: string[]; retries: number[] } {
+interface Rendered {
+  readonly root: HTMLElement;
+  readonly started: string[];
+  readonly retries: number[];
+  readonly bugReports: number[];
+}
+
+function render(catalog: TemplateCatalogState = LOADED, canReportBug = true): Rendered {
   const started: string[] = [];
   const retries: number[] = [];
+  const bugReports: number[] = [];
   const root = mountView(() =>
     m(GettingStartedPage, {
       catalog,
       onStartWithText: (text) => started.push(text),
       onRetryTemplates: () => retries.push(retries.length + 1),
+      connection: { canReportBug: () => canReportBug, reportBug: () => bugReports.push(bugReports.length + 1) },
     }),
   );
-  return { root, started, retries };
+  return { root, started, retries, bugReports };
 }
 
 function typeQuery(root: HTMLElement, query: string): void {
@@ -135,7 +144,14 @@ describe("the Getting Started page", () => {
     // Its next step is on the line: Try again fetches again, in place.
     failed.root.querySelector<HTMLElement>(".getting-started-templates-retry")!.click();
     expect(failed.retries).toEqual([1]);
-    expect(failed.root.querySelector(".getting-started-templates-report")!.textContent).toBe("Report a bug");
+    const report = failed.root.querySelector<HTMLElement>(".getting-started-templates-report")!;
+    expect(report.textContent).toBe("Report a bug");
+    report.click();
+    expect(failed.bugReports).toEqual([1]);
+    unmountViews();
+    // Where the shell says Imbue Studio opens no bug report, the line offers none.
+    const unreportable = render({ kind: "failed" }, false);
+    expect(unreportable.root.querySelector(".getting-started-templates-report")).toBeNull();
     unmountViews();
     const disabled = render({ kind: "disabled" });
     expect(disabled.root.querySelector('[data-section="templates"]')).toBeNull();

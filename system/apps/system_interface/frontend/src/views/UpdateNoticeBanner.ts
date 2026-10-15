@@ -13,8 +13,6 @@ import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { bannerClass } from "@imbue/workspace-ui/src/components/banner";
 import { DestroyConfirmDialog } from "@imbue/workspace-ui/src/DestroyConfirmDialog";
-import { fallbackSentence } from "@imbue/workspace-ui/src/models/failure";
-import { failureNotice } from "../model/failures";
 import type { FailureNotice } from "../model/failures";
 import {
   SHELL_APP_NAME,
@@ -36,8 +34,8 @@ const OPEN_NOTICE_TEXT_SUFFIX = "If something is not working, you can go back to
 export const SYSTEM_SERVICES_RESTART_DETAILS =
   "This update also changed the workspace's own setup, so after the files are restored an agent has to restart " +
   "the workspace to finish. This notice then offers to ask one.";
-export const ROLLBACK_FAILED_SENTENCE = fallbackSentence("Couldn't roll back");
-export const NOTICE_NOT_CLOSED_SENTENCE = fallbackSentence("Couldn't close this notice");
+const ROLLBACK_FAILED = "Couldn't roll back";
+const NOTICE_NOT_CLOSED = "Couldn't close this notice";
 /** What an agent asked to finish a rollback is told. */
 export const FINISH_ROLLBACK_REQUEST =
   "The rollback of the last workspace update has restored its files, and the update had changed the workspace's own " +
@@ -118,14 +116,19 @@ export function UpdateNoticeBanner(): m.Component<UpdateNoticeBannerAttrs> {
   // goes once the notice moves on (a rollback's progress or outcome arriving from another window).
   let errorState: string | null = null;
 
-  async function run(verb: () => Promise<void>, notice: UpdateNotice, failedSentence: string): Promise<void> {
+  async function run(
+    store: DesktopStore,
+    verb: () => Promise<void>,
+    notice: UpdateNotice,
+    whatFailed: string,
+  ): Promise<void> {
     isRequestInFlight = true;
     error = null;
     m.redraw();
     try {
       await verb();
     } catch (caught) {
-      error = failureNotice(failedSentence, caught);
+      error = store.failureNotice(whatFailed, caught);
       errorState = stateKey(notice);
     } finally {
       isRequestInFlight = false;
@@ -154,7 +157,7 @@ export function UpdateNoticeBanner(): m.Component<UpdateNoticeBannerAttrs> {
             sm: true,
             extra: "update-notice-close",
             disabled: isRequestInFlight,
-            onclick: () => void run(confirmUpdate, notice, NOTICE_NOT_CLOSED_SENTENCE),
+            onclick: () => void run(store, confirmUpdate, notice, NOTICE_NOT_CLOSED),
           },
           "Close",
         ),
@@ -180,7 +183,7 @@ export function UpdateNoticeBanner(): m.Component<UpdateNoticeBannerAttrs> {
           variant: "primary",
           extra: "update-notice-confirm",
           disabled: isRequestInFlight,
-          onclick: () => void run(confirmUpdate, notice, NOTICE_NOT_CLOSED_SENTENCE),
+          onclick: () => void run(store, confirmUpdate, notice, NOTICE_NOT_CLOSED),
         },
         "Everything seems good",
       ),
@@ -195,7 +198,7 @@ export function UpdateNoticeBanner(): m.Component<UpdateNoticeBannerAttrs> {
     return `${capitalized(touchedText(state, notice))} ${verb} updated ${ago}. ${OPEN_NOTICE_TEXT_SUFFIX}`;
   }
 
-  function dialog(state: DesktopState, notice: UpdateNotice): m.Children {
+  function dialog(store: DesktopStore, state: DesktopState, notice: UpdateNotice): m.Children {
     if (!isDialogOpen) return null;
     const apps = touchedText(state, notice);
     return m(DestroyConfirmDialog, {
@@ -212,7 +215,7 @@ export function UpdateNoticeBanner(): m.Component<UpdateNoticeBannerAttrs> {
       confirmLabel: "Roll back",
       onConfirm() {
         isDialogOpen = false;
-        void run(rollbackUpdate, notice, ROLLBACK_FAILED_SENTENCE);
+        void run(store, rollbackUpdate, notice, ROLLBACK_FAILED);
       },
       onCancel() {
         isDialogOpen = false;
@@ -241,7 +244,7 @@ export function UpdateNoticeBanner(): m.Component<UpdateNoticeBannerAttrs> {
           ]),
           m("span", { class: "flex flex-none items-center gap-1.5" }, verbs(vnode.attrs.store, notice)),
         ]),
-        dialog(state, notice),
+        dialog(vnode.attrs.store, state, notice),
       ];
     },
   };

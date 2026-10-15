@@ -12,8 +12,6 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { MODAL_LABEL_CLASS, MODAL_MESSAGE_CLASS, Modal } from "@imbue/workspace-ui/src/components/Modal";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
-import { fallbackSentence } from "@imbue/workspace-ui/src/models/failure";
-import { failureNotice } from "../model/failures";
 import type { FailureNotice } from "../model/failures";
 import type { Desktop, Wallpaper, WallpaperListing } from "../model/records";
 import { FailureLine } from "./FailureLine";
@@ -21,8 +19,8 @@ import { SQUIGGLE_GLYPHS, squiggleMarkup } from "./squiggles";
 
 /** Why the only desktop cannot be deleted, on its disabled Delete. */
 export const ONLY_DESKTOP_REASON = "You can't delete your only desktop. Add another one first.";
-export const SETTINGS_NOT_SAVED_SENTENCE = fallbackSentence("These settings couldn't be saved");
-export const DESKTOP_NOT_DELETED_SENTENCE = fallbackSentence("This desktop couldn't be deleted");
+const SETTINGS_NOT_SAVED = "These settings couldn't be saved";
+const DESKTOP_NOT_DELETED = "This desktop couldn't be deleted";
 
 // The palette is exactly the glyphs' own signature colors, so every desktop colour belongs to
 // the family the squiggles were drawn in.
@@ -39,6 +37,8 @@ export interface DesktopSettingsDialogAttrs {
   readonly isDeleting: boolean;
   /** Whether this is the workspace's only desktop, which cannot be deleted. */
   readonly isOnlyDesktop: boolean;
+  /** A failed save or delete as the dialog's line says it: what failed, a sentence stem, then the reason. */
+  readonly wordFailure: (whatFailed: string, error: unknown) => FailureNotice;
   readonly onSave: (name: string, color: string, glyph: number, wallpaper: Wallpaper | null) => Promise<void>;
   readonly onDelete: () => Promise<void>;
   readonly onCancel: () => void;
@@ -74,7 +74,7 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
     try {
       await attrs.onSave(chosen, color, glyphIndex, resolvedWallpaper(attrs.wallpapers));
     } catch (e) {
-      error = failureNotice(SETTINGS_NOT_SAVED_SENTENCE, e);
+      error = attrs.wordFailure(SETTINGS_NOT_SAVED, e);
       isSaving = false;
     }
     m.redraw();
@@ -88,7 +88,7 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
     try {
       await attrs.onDelete();
     } catch (e) {
-      error = failureNotice(DESKTOP_NOT_DELETED_SENTENCE, e);
+      error = attrs.wordFailure(DESKTOP_NOT_DELETED, e);
       isDeleting = false;
     }
     m.redraw();

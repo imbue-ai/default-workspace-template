@@ -1,0 +1,1 @@
+The shed-notice SessionStart hook now starts Python only when the shed ledger names the agent (`bin/claude_shed_notice_hook.sh`), so the usual case adds no Python startup to the time before a new chat can take its first message.

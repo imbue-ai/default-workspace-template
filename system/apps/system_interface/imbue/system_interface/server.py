@@ -560,7 +560,7 @@ def _not_built_launch() -> ResponseReturnValue:
     path, and the app's display name. 404 when no app offers it; a launch's own failures answer as the launch
     route's do. A preview refuses, since either would act on the live workspace."""
     if get_state().is_preview:
-        return detail_response(PREVIEW_REFUSAL_DETAIL, HTTP_FORBIDDEN)
+        return detail_response(PREVIEW_REFUSAL_DETAIL, HTTP_FORBIDDEN, user_facing_message=PREVIEW_REFUSAL_DETAIL)
     purpose = parse_request_body(NotBuiltLaunchRequest).purpose
     shell = _shell()
     entries = shell.inventory.entries()

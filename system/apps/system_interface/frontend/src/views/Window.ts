@@ -88,6 +88,7 @@ export function appGoneNotice(onClose: () => void): FailureNotice {
     message: "This app is no longer part of this workspace.",
     details: null,
     actions: [{ label: "Close window", run: onClose }],
+    isReportable: false,
   };
 }
 

@@ -17,6 +17,7 @@ would mean two places to edit for one harness, which is how the split drifts.
 
 from collections.abc import Callable
 from enum import StrEnum
+from enum import auto
 from pathlib import Path
 from typing import Final
 
@@ -85,6 +86,7 @@ from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
 from imbue.chat.harnesses.startup_readiness import StartupReadyMarker
+from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 
 
@@ -108,6 +110,18 @@ class PopupAction(StrEnum):
     # The harness can launch fast: the chat app turns fast mode off after the workspace's
     # configured number of user turns.
     FAST_MODE_LIMIT = "fast_mode_limit"
+
+
+class ComposerCompactHandling(UpperCaseStrEnum):
+    """What the chat does with a ``/compact`` sent from the composer. Backend-only."""
+
+    # Sent as typed, like any other message.
+    SENT_AS_TEXT = auto()
+    # Sent as typed, and the harness runs it as its own compact command (Claude).
+    FORWARDED_TO_HARNESS = auto()
+    # Never sent: the chat asks mngr to compact the agent instead, as the idle sweep does. For a
+    # harness that would otherwise hand the text to the model as prose (Codex, Pi).
+    REQUESTED_FROM_MNGR = auto()
 
 
 class HarnessPopup(FrozenModel):
@@ -238,11 +252,10 @@ _CODEX_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
 # Pi slash commands the chat declines to send. pi is driven through its lifecycle
 # extension's inbox rather than by typing into the pane, so these would reach the
 # model as literal prose; the ones that switch or discard a session (/new, /resume,
-# /fork, /clone, /compact, /quit) would also strand the chat's view of the
-# conversation if they ever did run. The notice points them at the terminal.
+# /fork, /clone, /quit) would also strand the chat's view of the conversation if they
+# ever did run. The notice points them at the terminal.
 _PI_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
     "/clone",
-    "/compact",
     "/fork",
     "/llama",
     "/name",
@@ -342,6 +355,15 @@ class HarnessSpec(FrozenModel):
     # How the chat app asks this harness one question on a chat's account, outside the chat (a new
     # chat's name). None for a harness that cannot yet: its chats keep the name they were minted with.
     one_shot_completion_class: type[OneShotCompletion] | None = None
+    # Whether mngr can compact this harness's context (the autocompact plugin's request), which is
+    # what makes the chat's idle compaction setting meaningful for it. Shipped on the catalog.
+    supports_compaction: bool = False
+    # Whether the harness's interrupt (the stop button) cancels a compaction in progress. Where it
+    # does not, the page hides the stop button while the chat is compacting. Shipped on the catalog.
+    can_interrupt_compaction: bool = False
+    # What a /compact sent from the composer does; unless it is sent as text, the chat shows the
+    # compaction it starts.
+    composer_compact_handling: ComposerCompactHandling = ComposerCompactHandling.SENT_AS_TEXT
 
 
 HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
@@ -373,6 +395,11 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             _MODEL_BAR_POPUP_WITH_FAST,
             _CLAUDE_FAST_MODE_LIMIT_POPUP,
         ),
+        supports_compaction=True,
+        # The stop button presses the cancel chord (M-q, ``chat:cancel``: the action Escape takes in
+        # the Chat context) even with no turn in flight, which cancels a compaction.
+        can_interrupt_compaction=True,
+        composer_compact_handling=ComposerCompactHandling.FORWARDED_TO_HARNESS,
     ),
     HarnessType.CODEX: HarnessSpec(
         name=HarnessType.CODEX,
@@ -410,6 +437,9 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             _MODEL_BAR_POPUP_WITH_FAST,
             _FAST_MODE_LIMIT_POPUP,
         ),
+        supports_compaction=True,
+        can_interrupt_compaction=False,
+        composer_compact_handling=ComposerCompactHandling.REQUESTED_FROM_MNGR,
     ),
     HarnessType.PI_CODING: HarnessSpec(
         name=HarnessType.PI_CODING,
@@ -437,6 +467,9 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             ),
             _MODEL_BAR_POPUP,
         ),
+        supports_compaction=True,
+        can_interrupt_compaction=False,
+        composer_compact_handling=ComposerCompactHandling.REQUESTED_FROM_MNGR,
     ),
     # opencode is LAUNCH-ONLY: its mngr plugin can create and run an agent, but it has no
     # transcript watcher, activity tracker, model resolver or catalog of its own. It is

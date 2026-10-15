@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import type { SecretResolution } from "./message-classification";
 import type { SecretCardHandlers, SecretCardState } from "./secret-card";
-import { CHANGE_NOT_ANSWERED } from "@imbue/workspace-ui/src/models/failure";
+import { notAnsweredSentence } from "@imbue/workspace-ui/src/models/failure";
 import {
   SECRET_STATUS_RETRY_DELAY_MS,
   SecretStatusCache,
@@ -301,7 +301,10 @@ describe("submit and decline", () => {
       ok: false,
       detail: "Request secret-1 is not pending",
     });
-    expect(await declineSecret("secret-1", "")).toEqual({ ok: false, detail: CHANGE_NOT_ANSWERED });
-    expect(await submitSecret("secret-1", { SVC_TOKEN: "t" })).toEqual({ ok: false, detail: CHANGE_NOT_ANSWERED });
+    expect(await declineSecret("secret-1", "")).toEqual({ ok: false, detail: notAnsweredSentence("change") });
+    expect(await submitSecret("secret-1", { SVC_TOKEN: "t" })).toEqual({
+      ok: false,
+      detail: notAnsweredSentence("change"),
+    });
   });
 });

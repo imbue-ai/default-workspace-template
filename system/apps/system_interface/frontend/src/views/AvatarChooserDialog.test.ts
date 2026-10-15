@@ -65,7 +65,12 @@ describe("AvatarChooserDialog", () => {
     const onRetry = vi.fn();
     const failed = render({
       designs: null,
-      loadError: { message: "Avatar designs couldn't be loaded.", details: "HTTP 500", actions: [] },
+      loadError: {
+        message: "Avatar designs couldn't be loaded.",
+        details: "HTTP 500",
+        actions: [],
+        isReportable: false,
+      },
       onRetry,
     });
     expect(failed.querySelector(".avatar-designs-failure-message")?.textContent).toBe(

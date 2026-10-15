@@ -125,7 +125,7 @@ def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
         case _:
             logger.opt(exception=error).error("Failed to serve a shell request")
             status = HTTP_INTERNAL_ERROR
-    return detail_response(str(error), status, error.user_facing_message, error.kind)
+    return detail_response(str(error), status, error.user_facing_message, reportable=error.reportable, kind=error.kind)
 
 
 def _answer_layout_value_error(error: InvalidLayoutValueError) -> ResponseReturnValue:
@@ -148,7 +148,7 @@ PREVIEW_REFUSAL_DETAIL: Final[str] = "This is a preview of a proposed change; it
 
 def _refuse_if_preview() -> ResponseReturnValue | None:
     if get_state().is_preview:
-        return detail_response(PREVIEW_REFUSAL_DETAIL, HTTP_FORBIDDEN)
+        return detail_response(PREVIEW_REFUSAL_DETAIL, HTTP_FORBIDDEN, user_facing_message=PREVIEW_REFUSAL_DETAIL)
     return None
 
 

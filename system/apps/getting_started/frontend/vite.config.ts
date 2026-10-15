@@ -11,16 +11,6 @@ export default defineConfig({
   },
   plugins: [tailwindcss()],
   root: ".",
-  resolve: {
-    alias: {
-      // The Imbue Studio embed contract, which the page's "Report a bug" sends through (the shell relays it to the
-      // chrome), fetched from the mngr commit pyproject.toml pins as the shell's and the chat's are.
-      "@minds/embed-contract": path.resolve(
-        __dirname,
-        "../../../vendor/mngr-assets/apps/minds/imbue/minds/desktop_client/static/embed_contract.js",
-      ),
-    },
-  },
   build: {
     // Inside the Python package, where the app serves it from.
     outDir: path.resolve(__dirname, "../src/getting_started/static"),

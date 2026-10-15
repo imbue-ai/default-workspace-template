@@ -29,6 +29,8 @@ function bootstrap(): void {
     onHandshake: (received) => {
       handshake = received;
       connection.location(PAGE_PATH, PAGE_TITLE);
+      // The handshake says whether Report a bug can work, which the page's failure line reads.
+      m.redraw();
     },
   });
   window.addEventListener("focus", () => connection.focused());
@@ -45,6 +47,7 @@ function bootstrap(): void {
         catalog: getTemplateCatalogState(),
         onStartWithText: (text) => connection.startWithText(text),
         onRetryTemplates: retryTemplateCatalog,
+        connection,
       }),
   });
 }

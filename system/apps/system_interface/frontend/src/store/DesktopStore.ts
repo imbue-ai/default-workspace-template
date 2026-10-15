@@ -25,10 +25,10 @@ import {
 } from "@imbue/workspace-ui/src/links";
 import { StalePlacementsSaveError } from "../model/api";
 import { FOCUS_CHAT } from "@imbue/workspace-ui/src/embed";
-import { READ_NOT_ANSWERED, fallbackSentence, joinDetails } from "@imbue/workspace-ui/src/models/failure";
-import { HttpError } from "@imbue/workspace-ui/src/models/http";
+import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
+import type { Failure, FailureMessage } from "@imbue/workspace-ui/src/models/failure";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
-import { failureNotice, noticeOf, refusalKindOf, reportBugAction, stoppedSentence } from "../model/failures";
+import { noticeOf, refusalKindOf, stoppedSentence } from "../model/failures";
 import type { FailureNotice } from "../model/failures";
 import {
   NO_DRAFT_APP_REASON,
@@ -210,9 +210,8 @@ export const OTHER_WORKSPACE_LINK_NOTICE = "That link belongs to another workspa
 export const SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE =
   "It opened on your desktop. Reopen the main Imbue Studio window to see it.";
 
-/** What a startup read of the desktops and apps that failed with no sentence of its own says, in the backdrop. */
-export const BOOT_READ_FAILED_SENTENCE =
-  "This workspace's desktops couldn't be loaded. Reload the window to try again.";
+/** What failed when the startup read of the desktops and apps did, as the backdrop says it. */
+export const BOOT_READ_WHAT_FAILED = "This workspace's desktops couldn't be loaded";
 
 /** What an agent asked to free up space is told. */
 export const FREE_SPACE_REQUEST =
@@ -233,10 +232,10 @@ interface AskedFor {
   readonly retry?: () => void;
 }
 
-/** How a launch's failure is told: the sentence for a launch that failed with no sentence of the app's own, and
- *  where it goes (a toast unless a surface reports it itself). */
+/** How a launch's failure is told: what failed, as a sentence stem for ``failureSentence`` (by default that the app
+ *  couldn't open what was asked), and where it goes (a toast unless a surface reports it itself). */
 interface LaunchFailureCopy {
-  readonly fallback?: string;
+  readonly whatFailed?: string;
   readonly report?: FailureReport;
 }
 
@@ -253,6 +252,8 @@ export interface PageDriver {
   requestClose(windowId: string): void;
   /** Whether the window's page declared it owns the close chord (``closeChord: true``). */
   ownsCloseChord(windowId: string): boolean;
+  /** Send every page that has loaded its handshake again, for a change it carries. */
+  greetAll(): void;
 }
 
 /** What the shell asks the embedding chrome for when a window is pulled out (the pull-out-window spec). */
@@ -465,6 +466,8 @@ export class DesktopStore {
   private canPopOut = false;
   /** Whether the embedder opens external links outside the workspace for it; off until it says so. */
   private canOpenLinksOutside = false;
+  /** Whether the embedder opens its bug report (its ``opensHelp``); off until it says so. */
+  private canReportBug = false;
   /** The detached set as last reported to the embedder, serialized, so a redraw reports nothing new. */
   private lastReportedDetached: string | null = null;
   /** Solo mode's first layout load is still owed: the one load that may re-detach the solo window. */
@@ -480,7 +483,7 @@ export class DesktopStore {
    *  whose own connection most likely went down with the shell's. */
   private isHiddenSinceConnect = false;
   /** Why the startup read of the desktops and apps failed, shown in the backdrop until a read succeeds. */
-  private bootFailure: FailureNotice | null = null;
+  private bootFailure: Failure | null = null;
   /** The notes a refusal leaves on screen (plan-phone-interface.md's toasts). */
   readonly toasts: ToastQueue;
 
@@ -503,18 +506,36 @@ export class DesktopStore {
     this.toasts.show(message);
   }
 
-  /** ``noticeOf``, its "Report a bug" opening this store's bug report. */
-  private notice(message: string, details: string | null, actions: readonly ToastAction[] = []): FailureNotice {
-    return noticeOf(message, details, actions, this.reportBug);
+  /** ``told`` as a surface shows it: ``actions``, then "Report a bug" where it asks for one and the embedder opens a
+   *  bug report. */
+  private noticeOf(told: FailureMessage, actions: readonly ToastAction[] = []): FailureNotice {
+    return noticeOf(told, actions, this.canReportBug ? this.reportBug : null);
   }
 
-  /** ``failureNotice``, its "Report a bug" opening this store's bug report. */
-  private failure(fallback: string, error: unknown, actions: readonly ToastAction[] = []): FailureNotice {
-    return failureNotice(fallback, error, actions, this.reportBug);
+  /** A sentence of the desktop's own that asks for no bug report, with ``actions``. */
+  private plainNotice(message: string, actions: readonly ToastAction[] = []): FailureNotice {
+    return this.noticeOf({ message, details: null, isReportable: false }, actions);
   }
 
-  private toastNotice(notice: FailureNotice): void {
-    this.toasts.show(notice.message, { details: notice.details, actions: notice.actions });
+  /** ``error`` in ``failureSentence``'s words for ``whatFailed`` (a sentence stem naming what failed), as a surface
+   *  shows it: ``actions``, then "Report a bug" where the sentence asks for one. */
+  failureNotice(whatFailed: string, error: unknown, actions: readonly ToastAction[] = []): FailureNotice {
+    return this.noticeOf(failureSentence(describeRequestFailure(error), whatFailed), actions);
+  }
+
+  /**
+   * Show ``notice`` in a toast. A call site whose retry is the control just pressed asks for a plain note; any other
+   * shows one that stays, with its details and buttons, and so does any notice that asks for a bug report or carries
+   * a button, which a note that leaves on its own cannot hold.
+   */
+  private toastNotice(notice: FailureNotice, { isLasting }: { readonly isLasting: boolean }): void {
+    if (!isLasting && !notice.isReportable && notice.actions.length === 0) {
+      // A plain note has no room for the details, so they go to the log rather than nowhere.
+      if (notice.details !== null) console.warn(`[si] ${notice.message}`, notice.details);
+      this.toast(notice.message);
+      return;
+    }
+    this.toasts.show(notice.message, { isLasting: true, details: notice.details, actions: notice.actions });
   }
 
   /** What users call the app, or "This app" for one this window no longer knows. */
@@ -523,70 +544,60 @@ export class DesktopStore {
   }
 
   /**
-   * The notice for ``error``, a failure of a request this window built from the apps and desktops it held, whose
-   * surface's own sentence for it is ``fallback``. A refusal for an app or a launch path that went in the meantime
-   * names them as this window last knew them; a launch that failed with no sentence of the app's own says
-   * ``fallback``; a launch into a window that has gone re-reads the desktops, so a second try finds the window as it
-   * is now; a change that could not be saved offers to try again (and, on a full disk, an agent to free up space).
+   * The notice for ``error``, a failure of a request this window built from the apps and desktops it held, in
+   * ``failureSentence``'s words for ``whatFailed``. A refusal for an app or a launch path that went in the meantime
+   * names them as this window last knew them; a launch into a window that has gone re-reads the desktops, so a second
+   * try finds the window as it is now; a change that could not be saved offers to try again (and, on a full disk, an
+   * agent to free up space).
    */
-  private noticeFor(fallback: string, error: unknown, asked: AskedFor = {}): FailureNotice {
+  private noticeFor(whatFailed: string, error: unknown, asked: AskedFor = {}): FailureNotice {
+    const failure = describeRequestFailure(error);
     const tryAgain: ToastAction[] = asked.retry === undefined ? [] : [{ label: "Try again", run: asked.retry }];
-    const details = describeRequestFailure(error).details;
     const app = asked.app === undefined ? undefined : appByName(this.state, asked.app);
-    switch (refusalKindOf(error)) {
+    switch (refusalKindOf(failure)) {
       case "app_unavailable":
         if (app === undefined) break;
-        return this.notice(
-          `${app.display_name} isn't available in this workspace right now, so nothing was changed.`,
-          details,
-        );
+        return this.noticeOf({
+          message: `${app.display_name} isn't available in this workspace right now, so nothing was changed.`,
+          details: failure.details,
+          isReportable: false,
+        });
       case "launch_path_gone":
         if (app === undefined || asked.launchLabel === undefined) break;
-        return this.notice(
-          `${app.display_name} no longer offers “${asked.launchLabel}”, so nothing was changed.`,
-          details,
-        );
-      case "launch_failed":
-        return this.notice(fallback, details);
+        return this.noticeOf({
+          message: `${app.display_name} no longer offers “${asked.launchLabel}”, so nothing was changed.`,
+          details: failure.details,
+          isReportable: false,
+        });
       case "window_gone":
         void this.refreshInventory();
         break;
       case "out_of_space":
-        return this.failure(fallback, error, [
+        return this.noticeOf(failureSentence(failure, whatFailed), [
           { label: "Ask an agent to free up space", run: () => void this.startWithText(FREE_SPACE_REQUEST) },
           ...tryAgain,
         ]);
       case "not_saved":
-        return this.failure(fallback, error, tryAgain);
+        return this.noticeOf(failureSentence(failure, whatFailed), tryAgain);
       case null:
         break;
     }
-    return this.failure(fallback, error);
+    return this.noticeOf(failureSentence(failure, whatFailed));
   }
 
-  /** Tell the user, in a toast, that what they asked for failed with ``error`` (see ``noticeFor``). */
-  private toastFailure(fallback: string, error: unknown, asked: AskedFor = {}): void {
-    this.toastNotice(this.noticeFor(fallback, error, asked));
+  /** Tell the user, in a toast, that what they asked for failed with ``error`` (see ``noticeFor`` and
+   *  ``toastNotice``). */
+  private toastFailure(whatFailed: string, error: unknown, options: AskedFor & { readonly isLasting: boolean }): void {
+    this.toastNotice(this.noticeFor(whatFailed, error, options), options);
   }
 
-  /** Why the startup read of the desktops and apps failed, while no read has succeeded since; null otherwise. */
+  /** Why the startup read of the desktops and apps failed, while no read has succeeded since, with Reload, the only
+   *  retry; null otherwise. */
   getBootFailure(): FailureNotice | null {
-    return this.bootFailure;
-  }
-
-  /** The startup read's failure as the backdrop says it: the shell's own sentence, or that the workspace did not
-   *  answer, else that the desktops couldn't be loaded; reloading the window is the retry. */
-  private bootFailureNotice(error: unknown): FailureNotice {
-    const failure = describeRequestFailure(error, "read");
-    const isOwnSentence = failure.isUserFacing || failure.message === READ_NOT_ANSWERED;
-    const reload: ToastAction = { label: "Reload", run: () => this.deps.reloadInterface() };
-    return isOwnSentence
-      ? this.notice(failure.message, failure.details, [reload])
-      : {
-          message: BOOT_READ_FAILED_SENTENCE,
-          details: joinDetails([failure.details, failure.isReportable ? null : failure.message]),
-          actions: [reload],
-        };
+    if (this.bootFailure === null) return null;
+    return this.noticeOf(failureSentence(this.bootFailure, BOOT_READ_WHAT_FAILED), [
+      { label: "Reload", run: () => this.deps.reloadInterface() },
+    ]);
   }
 
   /** The one window this shell shows alone, or null for the whole desktop. */
@@ -609,6 +620,24 @@ export class DesktopStore {
   /** The embedder said whether it opens external links for the workspace (``minds:embedder-capabilities``). */
   setCanOpenLinksOutside(canOpenLinksOutside: boolean): void {
     this.canOpenLinksOutside = canOpenLinksOutside;
+  }
+
+  /** Whether "Report a bug" can work: the embedder opens its bug report. The pages learn it from their handshake. */
+  getCanReportBug(): boolean {
+    return this.canReportBug;
+  }
+
+  /** The embedder said whether it opens its bug report (``opensHelp`` in ``minds:embedder-capabilities``). It says
+   *  so once, after the pages may have loaded, so a change is handed to every page in a fresh handshake. */
+  setCanReportBug(canReportBug: boolean): void {
+    if (this.canReportBug === canReportBug) return;
+    this.canReportBug = canReportBug;
+    this.pageDriver?.greetAll();
+  }
+
+  /** A page's ``shell:report-bug``: the bug report opens, where the embedder opens one. */
+  reportBugFromPage(): void {
+    if (this.canReportBug) this.reportBug();
   }
 
   /** Whether a window move in progress has pulled ``windowId`` out of the chrome's window (it is hidden meanwhile). */
@@ -729,18 +758,16 @@ export class DesktopStore {
     const sentence = stoppedSentence(app);
     const askedThrough = freeTextRowsOf(openableApps(this.state))[0]?.app.name ?? null;
     if (askedThrough === null || askedThrough === app.name) {
-      return {
+      return this.noticeOf({
         message: `${sentence} If this persists, report a bug.`,
         details: null,
-        actions: [reportBugAction(this.reportBug)],
-      };
+        isReportable: true,
+      });
     }
     const request = `${app.display_name} (${app.name}) isn't running in this workspace. Please start it again.`;
-    return {
-      message: sentence,
-      details: null,
-      actions: [{ label: "Ask an agent to start it", run: () => void this.startWithText(request) }],
-    };
+    return this.plainNotice(sentence, [
+      { label: "Ask an agent to start it", run: () => void this.startWithText(request) },
+    ]);
   }
 
   /** Whether this shell can stop and start the app: supervised, not critical, not inside a critical program, and
@@ -996,7 +1023,7 @@ export class DesktopStore {
       inventory = await this.deps.api.fetchInventory();
     } catch (error) {
       console.warn("[si] could not read the inventory", error);
-      this.bootFailure = this.bootFailureNotice(error);
+      this.bootFailure = describeRequestFailure(error, "read");
       this.notifyListeners();
       return;
     }
@@ -1259,7 +1286,7 @@ export class DesktopStore {
       target.launchPath.id,
       freeTextParams(target.launchPath, text),
       { kind: "window", windowId: target.window.id },
-      { fallback: fallbackSentence(whatFailed) },
+      { whatFailed },
     );
     // A refused draft leaves the window where it was: nothing in it changed.
     if (launched === null) return false;
@@ -1296,7 +1323,7 @@ export class DesktopStore {
     try {
       relay = await this.deps.api.relayEmbedderMessage(type, this.deps.clientId, payload, sender);
     } catch (error) {
-      this.toastFailure(fallbackSentence(this.relayWhatFailed(type, error)), error);
+      this.toastFailure(this.relayWhatFailed(type, error), error, { isLasting: false });
       return false;
     }
     if (relay.deliveries.some((delivery) => delivery.has_no_desktop_window)) {
@@ -1404,7 +1431,8 @@ export class DesktopStore {
     try {
       reported = await this.deps.api.reportWindowLocation(found.desktop.id, windowId, this.deps.clientId, path, title);
     } catch (error) {
-      this.toastFailure(fallbackSentence("This window couldn't be moved"), error);
+      // Lasting: the page moved its own window, so nothing the user pressed retries it.
+      this.toastFailure("This window couldn't be moved", error, { isLasting: true });
       return false;
     }
     this.applyOwnNavigation(found, reported);
@@ -1446,7 +1474,8 @@ export class DesktopStore {
     try {
       await this.deps.api.selectAvatar(design);
     } catch (error) {
-      this.toastFailure(fallbackSentence("Couldn't change the avatar"), error, {
+      this.toastFailure("Couldn't change the avatar", error, {
+        isLasting: false,
         retry: () => void this.selectAvatar(design),
       });
     }
@@ -1466,11 +1495,11 @@ export class DesktopStore {
       if (this.entryPushes !== entryPushesBefore) return;
       this.dispatch({ type: "entries_updated", entries: record.entries });
     } catch (error) {
-      const asked = { retry: () => void this.setEntryPresentation(app, presentation) };
+      const asked = { isLasting: false, retry: () => void this.setEntryPresentation(app, presentation) };
       const whatFailed = `Couldn't change how ${this.displayNameOf(app)} shows in the taskbar`;
       // A push that landed meanwhile is the shell's newer word, and stands.
       if (this.entryPushes !== entryPushesBefore) {
-        this.toastFailure(fallbackSentence(whatFailed), error, asked);
+        this.toastFailure(whatFailed, error, asked);
         return;
       }
       const others = Object.fromEntries(Object.entries(this.state.entries).filter(([name]) => name !== app));
@@ -1478,7 +1507,7 @@ export class DesktopStore {
         type: "entries_updated",
         entries: previous === undefined ? others : { ...others, [app]: previous },
       });
-      this.toastFailure(fallbackSentence(`${whatFailed}, so it's back as it was`), error, asked);
+      this.toastFailure(`${whatFailed}, so it's back as it was`, error, asked);
     }
   }
 
@@ -1574,7 +1603,8 @@ export class DesktopStore {
       this.takeDesktop(created);
       await this.switchDesktop(created.id);
     } catch (error) {
-      this.toastFailure(fallbackSentence("Couldn't create a new desktop"), error, {
+      this.toastFailure("Couldn't create a new desktop", error, {
+        isLasting: false,
         retry: () => void this.createDesktop(name, color, glyph),
       });
     }
@@ -1632,7 +1662,8 @@ export class DesktopStore {
       const whatFailed = isTakenOff
         ? "Couldn't add this shortcut, so it's been taken off again"
         : "Couldn't add this shortcut";
-      this.toastFailure(fallbackSentence(whatFailed), error, {
+      this.toastFailure(whatFailed, error, {
+        isLasting: false,
         app,
         launchLabel: this.launchLabelOf(app, launch),
         retry: () => void this.addShortcut(app, launch, mode),
@@ -1645,7 +1676,8 @@ export class DesktopStore {
     try {
       this.takeDesktop(await this.deps.api.setDesktopShortcut(desktopId, shortcut));
     } catch (error) {
-      this.toastFailure(fallbackSentence("Couldn't change this shortcut"), error, {
+      this.toastFailure("Couldn't change this shortcut", error, {
+        isLasting: false,
         app: shortcut.target.app,
         launchLabel: this.launchLabelOf(shortcut.target.app, shortcut.target.launch),
         retry: () => void this.setShortcut(desktopId, shortcut),
@@ -1689,7 +1721,7 @@ export class DesktopStore {
       this.takeDesktop(await this.deps.api.moveDesktopShortcut(desktop.id, app, launch, cell));
     } catch (error) {
       this.withShortcutCells(changes.map((entry) => ({ ...entry, cell: entry.storedCell })));
-      this.toastFailure(fallbackSentence("Couldn't move this shortcut, so it's back where it was"), error);
+      this.toastFailure("Couldn't move this shortcut, so it's back where it was", error, { isLasting: false });
     }
   }
 
@@ -1724,7 +1756,7 @@ export class DesktopStore {
         this.desktopsRevision === revision && now !== null && findShortcut(now, app, launch) === undefined;
       if (isPutBack) this.takeDesktop({ ...now, shortcuts: [...now.shortcuts, removed] });
       const whatFailed = isPutBack ? "Couldn't remove this shortcut, so it's back" : "Couldn't remove this shortcut";
-      this.toastFailure(fallbackSentence(whatFailed), error, { retry: () => void this.removeShortcut(app, launch) });
+      this.toastFailure(whatFailed, error, { isLasting: false, retry: () => void this.removeShortcut(app, launch) });
     }
   }
 
@@ -1744,7 +1776,7 @@ export class DesktopStore {
         this.toast(STILL_CONNECTING_NOTICE);
         return;
       case "unavailable":
-        this.toastNotice(this.unavailableNotice(app, launch, run.reason));
+        this.toastNotice(this.unavailableNotice(app, launch, run.reason), { isLasting: false });
         return;
     }
   }
@@ -1759,11 +1791,11 @@ export class DesktopStore {
         : [];
     switch (reason.kind) {
       case "app_gone":
-        return this.notice("This shortcut's app is no longer part of this workspace.", null, removal);
+        return this.plainNotice("This shortcut's app is no longer part of this workspace.", removal);
       case "launch_gone":
-        return this.notice(`${reason.displayName} can no longer open this shortcut.`, null, removal);
+        return this.plainNotice(`${reason.displayName} can no longer open this shortcut.`, removal);
       case "no_desktop":
-        return this.notice("Choose a desktop in the tray, then try again.", null);
+        return this.plainNotice("Choose a desktop in the tray, then try again.");
     }
   }
 
@@ -1787,7 +1819,7 @@ export class DesktopStore {
     const app = appByName(this.state, appName);
     const launchPath = app === undefined ? null : launchPathOf(app, launchId);
     if (app === undefined || launchPath === null) {
-      report(this.notice(`${this.displayNameOf(appName)} changed while this menu was open. Try again.`, null));
+      report(this.plainNotice(`${this.displayNameOf(appName)} changed while this menu was open. Try again.`));
       return null;
     }
     return { app, launchPath };
@@ -1798,7 +1830,7 @@ export class DesktopStore {
    *  ``report`` when the surface that ran the row shows it (the launcher, under its field), else to a toast; answers
    *  whether the row ran. */
   async runLaunchRow(appName: string, launchId: string, report?: FailureReport): Promise<boolean> {
-    const toReport = report ?? ((notice: FailureNotice) => this.toastNotice(notice));
+    const toReport = report ?? ((notice: FailureNotice) => this.toastNotice(notice, { isLasting: false }));
     const found = this.launchOf(appName, launchId, toReport);
     if (found === null) return false;
     if (launchRowKindOf(found.app, found.launchPath) === "focus") {
@@ -1819,12 +1851,12 @@ export class DesktopStore {
    *  which keeps the text in its field), else in a toast. A send the shell refused leaves the pinned window where it
    *  was. */
   async runFreeText(appName: string, launchId: string, text: string, report?: FailureReport): Promise<boolean> {
-    const toReport = report ?? ((notice: FailureNotice) => this.toastNotice(notice));
+    const toReport = report ?? ((notice: FailureNotice) => this.toastNotice(notice, { isLasting: false }));
     const found = this.launchOf(appName, launchId, toReport);
     if (found === null) return false;
     const disabledReason = textRowDisabledReason(found.launchPath, text);
     if (disabledReason !== null) {
-      toReport(this.notice(disabledReason, null));
+      toReport(this.plainNotice(disabledReason));
       return false;
     }
     const params = freeTextParams(found.launchPath, text);
@@ -1837,10 +1869,10 @@ export class DesktopStore {
         params,
         { kind: "window", windowId: pinned.id },
         {
-          fallback:
+          whatFailed:
             report === undefined
-              ? fallbackSentence(`Couldn't send that to ${name}`)
-              : `Couldn't send that to ${name}. Your text is still in the box — try again.`,
+              ? `Couldn't send that to ${name}`
+              : `Couldn't send that to ${name}, so your text is still in the box`,
           report,
         },
       );
@@ -1902,7 +1934,8 @@ export class DesktopStore {
         isMinimized,
       });
     } catch (error) {
-      this.toastFailure(fallbackSentence(`${this.displayNameOf(app)} couldn't be opened`), error, {
+      this.toastFailure(`${this.displayNameOf(app)} couldn't be opened`, error, {
+        isLasting: false,
         app,
         retry: () => void this.openWindowAt(app, path, ifPresent),
       });
@@ -1949,14 +1982,15 @@ export class DesktopStore {
         isMinimized,
       });
     } catch (error) {
-      const fallback = copy.fallback ?? fallbackSentence(`${this.displayNameOf(app)} couldn't be opened`);
       const asked: AskedFor = {
         app,
         launchLabel: this.launchLabelOf(app, launchId),
         retry: () => void this.launchAt(app, launchId, params, target, copy),
       };
-      const notice = this.noticeFor(fallback, error, asked);
-      if (copy.report === undefined) this.toastNotice(notice);
+      const notice = this.noticeFor(copy.whatFailed ?? `${this.displayNameOf(app)} couldn't open that`, error, asked);
+      // Lasting: a launch from a page's draft has already let go of the text it carried, so pressing again is no
+      // retry, and an app's own reason waits behind "See details".
+      if (copy.report === undefined) this.toastNotice(notice, { isLasting: true });
       else copy.report(notice);
       return null;
     }
@@ -1989,7 +2023,8 @@ export class DesktopStore {
     try {
       await this.deps.api.closeWindow(found.desktop.id, windowId);
     } catch (error) {
-      this.toastFailure(fallbackSentence("This window couldn't be closed"), error, {
+      this.toastFailure("This window couldn't be closed", error, {
+        isLasting: false,
         retry: () => void this.closeWindow(windowId),
       });
       return;
@@ -2182,7 +2217,9 @@ export class DesktopStore {
     try {
       await this.deps.api.quitApp(appName);
     } catch (error) {
-      this.toastFailure(fallbackSentence(`${this.displayNameOf(appName)} couldn't be quit`), error, {
+      // Lasting: Quit closed the app's windows before the stop failed, so no window is left to Quit from again.
+      this.toastFailure(`${this.displayNameOf(appName)} couldn't be quit`, error, {
+        isLasting: true,
         app: appName,
         retry: () => void this.quitApp(appName),
       });
@@ -2637,8 +2674,7 @@ export function chooseInitialDesktopId(
 
 /** The first app a refused relay names as not having taken the message, from the shell's answer; null with none. */
 function undeliveredAppOf(error: unknown): string | null {
-  if (!(error instanceof HttpError)) return null;
-  const deliveries = error.body?.deliveries;
+  const deliveries = describeRequestFailure(error).body?.deliveries;
   if (!Array.isArray(deliveries)) return null;
   for (const delivery of deliveries as unknown[]) {
     if (typeof delivery !== "object" || delivery === null) continue;

@@ -115,6 +115,7 @@ describe("Window", () => {
         message: "Docs isn't running.",
         details: null,
         actions: [{ label: "Ask an agent to start it", run: askAgent }],
+        isReportable: false,
       },
     });
     const placeholder = element.querySelector("[data-stopped-app]") as HTMLElement;
