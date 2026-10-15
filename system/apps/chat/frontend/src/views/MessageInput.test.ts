@@ -964,10 +964,13 @@ describe("MessageInput send failure notice", () => {
     expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello", expect.stringMatching(/^m-/));
   });
 
-  it("does not send when the restart itself fails", async () => {
-    mocks.sendMessage.mockRejectedValueOnce("nope");
+  it("does not send when the restart itself fails, and shows none of the send's details under it", async () => {
+    mocks.sendMessage.mockRejectedValueOnce(
+      Object.assign(new Error("{}"), { code: 500, response: { detail: "the send's own reason" } }),
+    );
     const component = MessageInput();
     const after = await typeAndSend(component, "agent-1", "hello");
+    expect(renderedText(after)).toContain("the send's own reason");
     mocks.sendMessage.mockClear();
     mocks.interruptAgent.mockRejectedValueOnce("restart refused");
 
@@ -975,8 +978,9 @@ describe("MessageInput send failure notice", () => {
     (force!.attrs!.onclick as () => void)();
     await flushAsync();
     expect(mocks.sendMessage).not.toHaveBeenCalled();
-    const shown = component.view!({ attrs: { chatId: "agent-1" } } as never);
-    expect(renderedText(shown)).toContain("restart refused");
+    const shown = renderedText(component.view!({ attrs: { chatId: "agent-1" } } as never));
+    expect(shown).toContain("restart refused");
+    expect(shown).not.toContain("the send's own reason");
   });
 });
 
