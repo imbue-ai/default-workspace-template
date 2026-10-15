@@ -6,4 +6,6 @@ Chat failures without a reason of their own use the workspace's shared sentences
 
 - A declined `/compact`, and a send mngr refused because the agent's input is blocked or the agent cannot be reached, carry their reason as a sentence written for people, so the composer shows it as written rather than asking for a bug report.
 
+- The chat list passes a chat page's "Ask an agent to fix this" (`shell:start-with-text`) and "Report a bug" (`shell:report-bug`) up to the desktop, and hands it the desktop's word on whether a bug report can open, so a chat's failures can offer both.
+
 - Creating a chat, the empty chat list's new chat, reading or applying a message sent from the launcher, and the secret card's submit and decline now read failures through the shared reader.

@@ -40,10 +40,18 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   this way shows `failureText` (an `HttpError`'s `message`, and
   `describeRequestError`): the server's own reason, else our sentence. The status and the
   server's own text go behind "See details" (`src/components/SeeDetails.ts`,
-  which `NoticeDialog` draws from its `details`). "Report a bug"
-  (`src/report-bug.ts`) opens Imbue Studio's bug report, and is offered only
-  where the embedder said `opensHelp` in its capabilities (`embedderOpensHelp`
-  in `src/embed.ts`).
+  which `NoticeDialog` draws from its `details`).
+- A failure's two buttons, both through the shell that frames the page
+  (`src/components/FailureButtons.ts`): `AskAgentToFixButton` starts a chat
+  that asks an agent to fix the failure (`askAgentToFix` in
+  `src/app_contract.ts`, one task text for every caller: what failed, the
+  details verbatim, and what to do), and renders nothing where no shell frames
+  the page; `ReportBugButton` asks the shell to open Imbue Studio's bug report
+  (`shell:report-bug`), and renders only where the shell's handshake said
+  `canReportBug` (the embedder's `opensHelp`, which only the shell hears; it
+  hands every page a fresh handshake when that changes). Each reads the
+  connection as it renders, so the page redraws on a handshake. The shell's own
+  toasts open the report directly (`src/report-bug.ts`).
 - `src/app_contract.ts`: an app page's side of the browser-side contract
   (contracts.md section 10 of the workspace app model, extended by section 7
   of the desktop interface's contracts.md), which the shell's frontend also
@@ -51,7 +59,24 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   its own origin, and which follows the link clicks and script popups of a
   page a shell frames (its handshake has arrived) by one rule
   (desktop-interface contracts.md section 7, "Link rule"),
-  so no app carries link code of its own; `src/element_reference.ts`, `src/context_menu_rows.ts`, and
+  so no app carries link code of its own. A page without Mithril (the
+  terminal's and the browser's server-rendered pages) builds its failure
+  buttons from the same module:
+
+  ```js
+  import("/_static/app_contract.js").then(({ connectToShell, askAgentToFix }) => {
+    const connection = connectToShell({ onHandshake: showFailureButtons });
+    function showFailureButtons() {
+      askButton.hidden = !connection.hasShell();
+      reportButton.hidden = !connection.canReportBug();
+    }
+    askButton.onclick = () =>
+      askAgentToFix(connection, { whatFailed: "The terminal couldn't start", details: output });
+    reportButton.onclick = () => connection.reportBug();
+  });
+  ```
+
+  `src/element_reference.ts`, `src/context_menu_rows.ts`, and
   `src/context_menu.ts`: the element context menu
   (`docs/system/blueprint/element-reference-menu/`): the JSON description of
   a right-clicked element under a random `REF-<id>`, the menu's rows (the
