@@ -32,7 +32,7 @@ params = [{name = "url", label = "Start page", required = false}]
 [preview]
 command = ["browser-service"]
 ports = ["main", "cdp"]
-env = {BROWSER_PORT = "{port:main}", BROWSER_CDP_PROXY_PORT = "{port:cdp}", BROWSER_MANIFEST_PATH = "{copy:data}/instances.json", BROWSER_PROFILE_ROOT = "{scratch}/profiles", DISPLAY = ":99"}
+env = {BROWSER_PORT = "{port:main}", BROWSER_CDP_PROXY_PORT = "{port:cdp}", BROWSER_MANIFEST_PATH = "{copy:data}/instances.json", DISPLAY = ":99"}
 copies = {data = "data/.apps/browser"}
 
 # Xvfb exists only to give Chromium a display; it is the browser's wiring.
