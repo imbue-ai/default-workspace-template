@@ -4,7 +4,7 @@ Failure toasts on the workspace desktop can now be read and acted on.
 
 - A failed launch names the app by its display name: an app's refusal reads "Docs couldn't open that.", and an app that could not answer reads "Docs couldn't open that. Try again. If this persists, report a bug.", with the app's reason behind "See details"; an app's own sentence for people is shown as written, however long. The shell now passes the app's reason on for any status and writes no sentence of its own. A window that could not open names its app by its display name too.
 
-- Failures no longer read "Could not close the window: <the shell's reason>": the reason goes behind "See details", and a request that got no answer says so on its own.
+- Failures no longer read "Could not close the window: <the shell's reason>": the reason goes behind "See details" on a toast that stays, and to the browser console under a plain note, and a request that got no answer says so on its own.
 
 - App pages can offer "Report a bug" too: the shell tells each page in its handshake whether the desktop app opens its bug report, tells pages already open again when the desktop app says so after they loaded, and opens the bug report when a page asks with `shell:report-bug`.
 
