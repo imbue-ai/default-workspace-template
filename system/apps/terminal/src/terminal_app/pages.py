@@ -110,8 +110,9 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   <p id="ended-cause" hidden></p>
   <div class="actions">
     <button type="button" id="ended-retry" hidden>Try again</button>
-    <button type="button" id="ended-ask" hidden>Ask an agent</button>
+    <button type="button" id="ended-ask" hidden>Ask an agent to fix this</button>
     <button type="button" id="ended-new" hidden>Start a new terminal</button>
+    <button type="button" id="ended-report" hidden>Report a bug</button>
   </div>
   <details id="ended-details" hidden><summary>See details</summary><pre id="ended-details-text"></pre></details>
 </div>
@@ -139,10 +140,14 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   const endedRetry = document.getElementById("ended-retry");
   const endedAsk = document.getElementById("ended-ask");
   const endedNew = document.getElementById("ended-new");
+  const endedReport = document.getElementById("ended-report");
   const keys = document.getElementById("keys");
   const ctrlKey = keys.querySelector("[data-ctrl]");
   let current = config.session;
+  // The shell connection and the contract's askAgentToFix, once the module at the end has loaded the contract; on a
+  // page no shell frames the connection never says it has one.
   let connection = null;
+  let askAgentToFix = null;
 
   function coordinate(host) {
     const labels = host.split(".");
@@ -173,7 +178,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   const NOT_STARTED = {
     message: "This terminal couldn't start. Try again. If this persists, report a bug.",
     cause: "",
-    actions: ["retry", "ask"],
+    actions: ["retry", "ask", "report"],
   };
   const ENDINGS = {
     "not-started": NOT_STARTED,
@@ -184,23 +189,32 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
       actions: ["new"],
     },
   };
+  let endedActions = [];
   let endedDetail = "";
 
   function showEnding(ending, detail) {
     frame.hidden = true;
     keys.hidden = true;
     empty.hidden = true;
+    endedActions = ending.actions;
     endedDetail = detail;
     document.getElementById("ended-message").textContent = ending.message;
     const cause = document.getElementById("ended-cause");
     cause.textContent = ending.cause;
     cause.hidden = ending.cause === "";
-    endedRetry.hidden = !ending.actions.includes("retry");
-    endedAsk.hidden = !ending.actions.includes("ask") || connection === null;
-    endedNew.hidden = !ending.actions.includes("new");
+    endedRetry.hidden = !endedActions.includes("retry");
+    endedNew.hidden = !endedActions.includes("new");
+    syncShellButtons();
     document.getElementById("ended-details-text").textContent = detail;
     document.getElementById("ended-details").hidden = detail === "";
     ended.hidden = false;
+  }
+
+  // The two buttons that go through the shell show once its handshake says they can work: the agent with any shell,
+  // the bug report where the shell's embedder opens one.
+  function syncShellButtons() {
+    endedAsk.hidden = !endedActions.includes("ask") || connection === null || !connection.hasShell();
+    endedReport.hidden = !endedActions.includes("report") || connection === null || !connection.canReportBug();
   }
 
   function showEnded(kind, detail) {
@@ -215,10 +229,9 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     frame.src = frame.src;
   });
   endedAsk.addEventListener("click", () => {
-    connection?.startWithText(
-      `The terminal ${current} in this workspace couldn't start. tmux said:\n${endedDetail}\n\nPlease find out why and fix it.`,
-    );
+    askAgentToFix(connection, { whatFailed: `The terminal ${current} couldn't start`, details: endedDetail || null });
   });
+  endedReport.addEventListener("click", () => connection.reportBug());
   endedNew.addEventListener("click", async () => {
     endedNew.disabled = true;
     try {
@@ -230,7 +243,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
         {
           message: "A new terminal couldn't be opened. Try again. If this persists, report a bug.",
           cause: "",
-          actions: ["new"],
+          actions: ["new", "report"],
         },
         String(error?.message ?? error),
       );
@@ -385,18 +398,22 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     show(config.page);
   }
 
-  if (window.parent !== window) {
-    import("__CONTRACT_PATH__")
-      .then(({ connectToShell }) => {
-        connection = connectToShell({
-          capabilities: { navigation: true, closeChord: false },
-          onNavigate: navigate,
-          onShown: focusPty,
-        });
-        if (current !== null) connection.location(pathFor(current), document.title);
-      })
-      .catch((error) => console.warn("[terminal] could not load the shell contract", error));
-  }
+  window.connectTerminalToShell = (contract) => {
+    askAgentToFix = contract.askAgentToFix;
+    connection = contract.connectToShell({
+      capabilities: { navigation: true, closeChord: false },
+      onNavigate: navigate,
+      onShown: focusPty,
+      onHandshake: syncShellButtons,
+    });
+    if (current !== null) connection.location(pathFor(current), document.title);
+  };
+</script>
+<script type="module">
+  // A static import, not import(): the shell greets the page once, as the frame loads, and the load waits for this
+  // module but not for a dynamic import, which would hear no handshake. The page above works without it.
+  import * as contract from "__CONTRACT_PATH__";
+  window.connectTerminalToShell(contract);
 </script>
 </body>
 </html>
@@ -428,28 +445,44 @@ _FAILURE_PAGE_TEMPLATE: Final[str] = """<!doctype html>
 <p class="failure-message">__MESSAGE__</p>
 <div class="actions">
   <button type="button" data-action="retry"__RETRY_HIDDEN__>Try again</button>
-  <button type="button" data-action="ask" hidden>Ask an agent</button>
+  <button type="button" data-action="ask" hidden>Ask an agent to fix this</button>
+  <button type="button" data-action="report" hidden>Report a bug</button>
 </div>
 <details><summary>See details</summary><pre>__DETAILS__</pre></details>
 <script type="application/json" id="terminal-failure">__CONFIG__</script>
-<script type="module">
-  const config = JSON.parse(document.getElementById("terminal-failure").textContent);
+<script>
   document.querySelector('[data-action="retry"]').addEventListener("click", () => location.reload());
+</script>
+<script type="module">
+  // A static import, not import(): the shell greets the page once, as the frame loads, and the load waits for this
+  // module but not for a dynamic import, which would hear no handshake.
+  import { askAgentToFix, connectToShell } from "__CONTRACT_PATH__";
+  const config = JSON.parse(document.getElementById("terminal-failure").textContent);
   const ask = document.querySelector('[data-action="ask"]');
-  if (config.agent_request !== null && window.parent !== window) {
-    import("__CONTRACT_PATH__")
-      .then(({ connectToShell }) => {
-        const connection = connectToShell({});
-        ask.addEventListener("click", () => connection.startWithText(config.agent_request));
-        ask.hidden = false;
-      })
-      .catch((error) => console.warn("[terminal] could not load the shell contract", error));
+  const report = document.querySelector('[data-action="report"]');
+  const connection = connectToShell({ onHandshake: syncShellButtons });
+  // Each shows once the shell's handshake says it can work: the agent with any shell, the bug report where the
+  // shell's embedder opens one.
+  function syncShellButtons() {
+    ask.hidden = config.agent_fix === null || !connection.hasShell();
+    report.hidden = !config.is_reportable || !connection.canReportBug();
   }
+  ask.addEventListener("click", () =>
+    askAgentToFix(connection, { whatFailed: config.agent_fix.what_failed, details: config.agent_fix.details }),
+  );
+  report.addEventListener("click", () => connection.reportBug());
 </script>
 </body>
 </html>
 """
 _FAILURE_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"__(MESSAGE|RETRY_HIDDEN|DETAILS|CONFIG|CONTRACT_PATH)__")
+
+
+class AgentFix(FrozenModel):
+    """What "Ask an agent to fix this" hands an agent: the app contract's ``AgentFixRequest``."""
+
+    what_failed: str = Field(description="A sentence stem saying what failed")
+    details: str = Field(description="What went wrong underneath it, verbatim")
 
 
 class PageFailure(FrozenModel):
@@ -458,7 +491,8 @@ class PageFailure(FrozenModel):
     message: str = Field(description="Our sentence")
     details: str = Field(description="The raw reason, behind See details")
     is_retryable: bool = Field(description="Whether a Try again (a reload) can help")
-    agent_request: str | None = Field(description="What Ask an agent sends the agent; None for no such button")
+    agent_fix: AgentFix | None = Field(description="What an agent is asked to fix; None where none can")
+    is_reportable: bool = Field(description="Whether the sentence asks the person to report a bug")
     status: int = Field(description="The HTTP status the page is answered with")
 
 
@@ -472,15 +506,18 @@ def page_failure(error: TerminalAppError, raw_session: str) -> PageFailure:
                 message=f"There is no terminal named {raw_session}. Open a terminal from the launcher.",
                 details=details,
                 is_retryable=False,
-                agent_request=None,
+                agent_fix=None,
+                is_reportable=False,
                 status=HTTP_NOT_FOUND,
             )
         case TmuxCommandError():
+            # Every agent runs in this same tmux server, so none could answer while it does not.
             return PageFailure(
                 message="Terminals aren't responding in this workspace right now. Try again in a moment.",
                 details=details,
                 is_retryable=True,
-                agent_request=None,
+                agent_fix=None,
+                is_reportable=False,
                 status=HTTP_INTERNAL_ERROR,
             )
         case TerminalStoreVersionError():
@@ -489,7 +526,12 @@ def page_failure(error: TerminalAppError, raw_session: str) -> PageFailure:
                 "software (for example before an update was rolled back).",
                 details=details,
                 is_retryable=False,
-                agent_request=_agent_request("can't read the saved terminals: they were written by a newer version", details),
+                agent_fix=AgentFix(
+                    what_failed="The Terminal app can't open terminals: this workspace's saved terminals were "
+                    "written by a newer version of the app",
+                    details=details,
+                ),
+                is_reportable=False,
                 status=HTTP_INTERNAL_ERROR,
             )
         case TerminalStoreError():
@@ -497,7 +539,12 @@ def page_failure(error: TerminalAppError, raw_session: str) -> PageFailure:
                 message="This workspace's saved terminals can't be read, so terminals can't open.",
                 details=details,
                 is_retryable=False,
-                agent_request=_agent_request("can't read the saved terminals", details),
+                agent_fix=AgentFix(
+                    what_failed="The Terminal app can't open terminals: it can't read this workspace's saved "
+                    "terminals",
+                    details=details,
+                ),
+                is_reportable=False,
                 status=HTTP_INTERNAL_ERROR,
             )
         case _:
@@ -505,20 +552,20 @@ def page_failure(error: TerminalAppError, raw_session: str) -> PageFailure:
                 message="This terminal couldn't be opened. Try again. If this persists, report a bug.",
                 details=details,
                 is_retryable=True,
-                agent_request=None,
+                agent_fix=None,
+                is_reportable=True,
                 status=HTTP_INTERNAL_ERROR,
             )
 
 
 @pure
-def _agent_request(problem: str, details: str) -> str:
-    return f"The Terminal app in this workspace {problem}, so terminals can't open. It said:\n{details}\n\nPlease find out why and fix it."
-
-
-@pure
 def render_failure_page(failure: PageFailure) -> str:
+    config = {
+        "agent_fix": None if failure.agent_fix is None else failure.agent_fix.model_dump(mode="json"),
+        "is_reportable": failure.is_reportable,
+    }
     # `</` cannot appear inside a script element's text, whatever the JSON quoting says.
-    encoded = json.dumps({"agent_request": failure.agent_request}).replace("</", "<\\/")
+    encoded = json.dumps(config).replace("</", "<\\/")
     values = {
         "MESSAGE": html.escape(failure.message),
         "RETRY_HIDDEN": "" if failure.is_retryable else " hidden",

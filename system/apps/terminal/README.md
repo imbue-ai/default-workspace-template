@@ -9,7 +9,9 @@ like every Python app with a manifest):
   on 7681 (`pages.py`): `/?session=<name>` frames the session's ttyd page from the
   pty origin, reports its path and the session's title to the shell through the app
   contract (the shell's built module, served from this origin at
-  `/_static/app_contract.js`), re-points the frame on `shell:navigate`,
+  `/_static/app_contract.js` and imported statically by a module script of its own, since
+  the shell's handshake comes as the frame loads and the load does not wait for a dynamic
+  import), re-points the frame on `shell:navigate`,
   and passes the shell's `ttyd-focus` grant on to ttyd. On a phone-sized page (the shell's rule: at most 500px one way and 1000px the other),
   with a coarse pointer (a phone; never a mouse-driven desktop window), it shows a key strip under the frame (Esc, Tab, a one-shot Ctrl, the arrows) that
   posts `{type: "terminal:key", key, ctrl}` and `{type: "terminal:ctrl", armed}` into
@@ -29,9 +31,13 @@ like every Python app with a manifest):
   `system/scripts/forward_port.py`, and waits for `SIGTERM`.
 - A load of a terminal window's page (`GET /`) that fails is answered with a page of
   the wrapper's own rather than the JSON the APIs answer (`page_failure`): a name no
-  terminal can have, tmux not answering (with Try again), and saved terminals that
-  cannot be read or were written by a newer version (with Ask an agent), the raw
-  reason behind "See details".
+  terminal can have, tmux not answering (with Try again, and no agent: every agent
+  runs in that same tmux server), saved terminals that cannot be read or were written
+  by a newer version (with "Ask an agent to fix this", the contract's `askAgentToFix`,
+  handed the failure and its reason), and any other failure (with Try again and
+  "Report a bug", the contract's `reportBug`), the raw reason behind "See details".
+  Each button through the shell shows only once the shell's handshake says it can
+  work: the agent with any shell, the bug report where Imbue Studio opens one.
 - `terminal-pty` (`pty_main.py`) is ttyd itself, on its own internal origin
   (`system/apps/terminal_pty/app.toml`, port 7683), framed by the wrapper. It writes
   the ttyd dispatch scripts into `data/.state/terminal/commands/` (`dispatch.py`):
@@ -48,9 +54,10 @@ like every Python app with a manifest):
   and the base64 of tmux's text or the folder) and holds the pane; the script added
   to ttyd's page posts it to the wrapper as `{type: "terminal:ended", kind, detail}`,
   and the wrapper shows the reason in place of ttyd's "Connection Closed", with Try
-  again and Ask an agent (the contract's `startWithText`) for a terminal that could
-  not start, or Start a new terminal (a `POST /new` from the page, then the window
-  moves to it) for one that closed, and tmux's text behind "See details". The user's
+  again, "Ask an agent to fix this" (the contract's `askAgentToFix`, with tmux's text)
+  and "Report a bug" for a terminal that could not start, or Start a new terminal (a
+  `POST /new` from the page, then the window moves to it, with "Report a bug" if that
+  fails) for one that closed, and tmux's text behind "See details". The user's
   own exit prints nothing, so ttyd's overlay, which reconnects, stays its answer. It decompresses the OSC 52-capable
   ttyd web client the `imbue-mngr-ttyd` package ships, adds the script in `pty_page.py`
   before its closing body tag, and serves it via `ttyd -I`, falling back to
