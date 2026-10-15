@@ -48,7 +48,9 @@ rather than in a browser alert (a create or a move the server refuses opens
 the page's own dialog, a file whose contents cannot be loaded says so in place
 of the editor with a Try again, a failed upload's row says why, and a file too
 deep for a window of its own is told rather than asked of the shell), each with
-the server's status and text behind "See details"; a toolbox toggle that hides "system files" (any path
+the server's status and text behind "See details", and a "Report a bug" (the app
+contract's `reportBug`) where the sentence asks for a bug report and the shell's
+handshake says Imbue Studio opens one; a toolbox toggle that hides "system files" (any path
 whose name, or any segment of a search result's path, starts with `.`) by
 default, with the choice kept in the browser's localStorage; the `?path=`
 redirect (a rooted path on this origin, honoured before anything renders); a
@@ -68,7 +70,8 @@ The viewer speaks the app contract every app speaks (desktop-interface
 contracts.md section 7), so its links follow the contract's link rule too:
 `assets/shell.js`, ours rather than dufs's, imports the contract module the
 shell builds and connects, and the patched scripts act through that connection
-(`window.mindsShell`). Every other app serves the module at
+(`window.mindsShell`), and hear each handshake as a `minds-shell-handshake` event
+on the window. Every other app serves the module at
 `/_static/app_contract.js`; the viewer cannot add a route to dufs, but dufs
 serves the filesystem root, so the script imports the module from its path in
 the workspace, which dufs revalidates on every load like any file. The "not

@@ -4,6 +4,8 @@ The File Viewer tells failures in the page rather than in browser alerts.
 
 - A file whose contents cannot be loaded says so in place of the editor ("This file is no longer there..." for a missing file), with Try again.
 
+- A failure whose sentence asks for a bug report offers Report a bug, where Imbue Studio can open its bug report.
+
 - A failed upload's row says why: "Upload failed — this folder is read-only", "Upload failed", or "Upload interrupted", also after a retry that fails.
 
 - A file too deep to open in a window of its own is told in the page instead of a desktop error.

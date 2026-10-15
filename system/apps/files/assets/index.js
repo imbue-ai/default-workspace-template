@@ -880,6 +880,8 @@ function showLoadFailure(err) {
     : "This file couldn't be opened. Try again. If this persists, report a bug.";
   $failure.querySelector(".load-failure-details-text").textContent = failureDetails(err);
   $failure.querySelector(".load-failure-retry").onclick = loadEditorContents;
+  $failure.querySelector(".report-bug").dataset.reportable = String(err.status !== 404);
+  syncReportBugButtons();
   $failure.classList.remove("hidden");
 }
 
@@ -1201,6 +1203,20 @@ function failureDetails(err) {
 
 const FALLBACK_CAUSE = "Try again. If this persists, report a bug.";
 
+// minds patch: a failure whose sentence asks for a bug report offers "Report a bug", which asks the shell framing the
+// page to open Imbue Studio's (the app contract's ``reportBug``). It shows only once the shell's handshake has said
+// Imbue Studio opens one here, so shell.js announces each handshake.
+function syncReportBugButtons() {
+  const canReportBug = window.mindsShell !== undefined && window.mindsShell.canReportBug();
+  for (const $button of document.querySelectorAll(".report-bug")) {
+    $button.classList.toggle("hidden", !canReportBug || $button.dataset.reportable !== "true");
+  }
+}
+window.addEventListener("minds-shell-handshake", syncReportBugButtons);
+for (const $button of document.querySelectorAll(".report-bug")) {
+  $button.addEventListener("click", () => window.mindsShell.reportBug());
+}
+
 /**
  * minds patch: tell a failure in the page's own dialog: our sentence, a cause where one is known (else the fallback
  * ending; "" for none), and what the server said behind "See details".
@@ -1212,6 +1228,8 @@ function showNotice({ message, cause, details }) {
   const $cause = $notice.querySelector(".notice-cause");
   $cause.textContent = cause ?? FALLBACK_CAUSE;
   $cause.classList.toggle("hidden", $cause.textContent === "");
+  $notice.querySelector(".report-bug").dataset.reportable = String(cause === null);
+  syncReportBugButtons();
   $notice.querySelector(".notice-details-text").textContent = details ?? "";
   $notice.querySelector(".notice-details").classList.toggle("hidden", !details);
   $notice.querySelector(".notice-close").onclick = () => $notice.close();
