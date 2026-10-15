@@ -61,19 +61,21 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   (desktop-interface contracts.md section 7, "Link rule"),
   so no app carries link code of its own. A page without Mithril (the
   terminal's and the browser's server-rendered pages) builds its failure
-  buttons from the same module:
+  buttons from the same module, in a `<script type="module">` (a dynamic
+  `import()` works too: the shell greets a page again when it connects, even
+  after its frame's `load`):
 
   ```js
-  import("/_static/app_contract.js").then(({ connectToShell, askAgentToFix }) => {
-    const connection = connectToShell({ onHandshake: showFailureButtons });
-    function showFailureButtons() {
-      askButton.hidden = !connection.hasShell();
-      reportButton.hidden = !connection.canReportBug();
-    }
-    askButton.onclick = () =>
-      askAgentToFix(connection, { whatFailed: "The terminal couldn't start", details: output });
-    reportButton.onclick = () => connection.reportBug();
-  });
+  import { connectToShell, askAgentToFix } from "/_static/app_contract.js";
+
+  const connection = connectToShell({ onHandshake: showFailureButtons });
+  function showFailureButtons() {
+    askButton.hidden = !connection.hasShell();
+    reportButton.hidden = !connection.canReportBug();
+  }
+  askButton.onclick = () =>
+    askAgentToFix(connection, { whatFailed: "The terminal couldn't start", details: output });
+  reportButton.onclick = () => connection.reportBug();
   ```
 
   `src/element_reference.ts`, `src/context_menu_rows.ts`, and

@@ -1145,6 +1145,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           await interruptAgent(recovery.chatId);
         } catch (err) {
           actionFailureDetail = describeRequestError(err);
+          actionFailureDetails = null;
           actionFailureInFlight = null;
           m.redraw();
           return;
