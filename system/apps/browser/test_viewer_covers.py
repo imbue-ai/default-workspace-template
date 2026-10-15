@@ -64,11 +64,12 @@ def _wait_until(page: Page, is_done: Callable[[], bool]) -> None:
     pytest.fail("the viewer did not do what was expected")
 
 
-def _open_viewer(
-    context: BrowserContext, first_lifecycle: str, contract_source: str | None = None
+def _open_page(
+    context: BrowserContext, page_url: str, first_lifecycle: str, contract_source: str | None
 ) -> tuple[Page, _Sockets]:
-    """Open the viewer, served the app contract ``contract_source`` (none when None); its first control socket is told
-    the browser is ``first_lifecycle``, later ones nothing."""
+    """Open ``page_url`` with the viewer served at its own address and the app contract ``contract_source`` (none when
+    None), leaving the shell stand-in's address to its own route; the viewer's first control socket is told the
+    browser is ``first_lifecycle``, later ones nothing."""
     sockets = _Sockets()
 
     def answer(route: Route) -> None:
@@ -76,6 +77,8 @@ def _open_viewer(
             route.fulfill(status=200, content_type="text/html", body=_VIEWER_PATH.read_text())
         elif route.request.url == _CONTRACT_URL and contract_source is not None:
             route.fulfill(status=200, content_type="text/javascript", body=contract_source)
+        elif route.request.url == _SHELL_URL:
+            route.fallback()
         else:
             route.fulfill(status=404, body="")
 
@@ -88,43 +91,28 @@ def _open_viewer(
     page = context.new_page()
     page.route_web_socket(_CAST_URL, cast)
     page.route_web_socket(_STREAM_URL, lambda socket: sockets.streams.append(socket))
-    page.goto(_VIEWER_URL)
+    page.goto(page_url)
     _wait_until(page, lambda: len(sockets.casts) == 1 and len(sockets.streams) == 1)
     return page, sockets
+
+
+def _open_viewer(
+    context: BrowserContext, first_lifecycle: str, contract_source: str | None = None
+) -> tuple[Page, _Sockets]:
+    """Open the viewer on its own, served the app contract ``contract_source`` (none when None)."""
+    return _open_page(context, _VIEWER_URL, first_lifecycle, contract_source)
 
 
 def _open_framed_viewer(
     context: BrowserContext, first_lifecycle: str, can_report_bug: bool
 ) -> tuple[Page, Frame, _Sockets]:
     """Open the viewer inside a stand-in for the shell, which greets it saying ``can_report_bug``; answers the stand-in,
-    the viewer frame, and its sockets as ``_open_viewer`` drives them."""
+    the viewer frame once it has had its handshake, and its sockets."""
     contract_source = built_app_contract_source()
     stand_in = shell_stand_in_page(_VIEWER_URL, can_report_bug)
     context.route(_SHELL_URL, lambda route: route.fulfill(status=200, content_type="text/html", body=stand_in))
-    sockets = _Sockets()
-
-    def answer(route: Route) -> None:
-        if route.request.url == _VIEWER_URL:
-            route.fulfill(status=200, content_type="text/html", body=_VIEWER_PATH.read_text())
-        elif route.request.url == _CONTRACT_URL:
-            route.fulfill(status=200, content_type="text/javascript", body=contract_source)
-        elif route.request.url != _SHELL_URL:
-            route.fulfill(status=404, body="")
-        else:
-            route.fallback()
-
-    def cast(socket: WebSocketRoute) -> None:
-        sockets.casts.append(socket)
-        if len(sockets.casts) == 1:
-            socket.send(_control(first_lifecycle))
-
-    context.route("**/*", answer)
     context.add_init_script(SHELL_HANDSHAKE_COUNTER_SCRIPT)
-    page = context.new_page()
-    page.route_web_socket(_CAST_URL, cast)
-    page.route_web_socket(_STREAM_URL, lambda socket: sockets.streams.append(socket))
-    page.goto(_SHELL_URL)
-    _wait_until(page, lambda: len(sockets.casts) == 1 and len(sockets.streams) == 1)
+    page, sockets = _open_page(context, _SHELL_URL, first_lifecycle, contract_source)
     viewer = page.frame(url=_VIEWER_URL)
     assert viewer is not None
     viewer.wait_for_function("window.shellHandshakes > 0")
