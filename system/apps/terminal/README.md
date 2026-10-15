@@ -9,9 +9,7 @@ like every Python app with a manifest):
   on 7681 (`pages.py`): `/?session=<name>` frames the session's ttyd page from the
   pty origin, reports its path and the session's title to the shell through the app
   contract (the shell's built module, served from this origin at
-  `/_static/app_contract.js` and imported statically by a module script of its own, since
-  the shell's handshake comes as the frame loads and the load does not wait for a dynamic
-  import), re-points the frame on `shell:navigate`,
+  `/_static/app_contract.js`), re-points the frame on `shell:navigate`,
   and passes the shell's `ttyd-focus` grant on to ttyd. On a phone-sized page (the shell's rule: at most 500px one way and 1000px the other),
   with a coarse pointer (a phone; never a mouse-driven desktop window), it shows a key strip under the frame (Esc, Tab, a one-shot Ctrl, the arrows) that
   posts `{type: "terminal:key", key, ctrl}` and `{type: "terminal:ctrl", armed}` into

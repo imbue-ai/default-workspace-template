@@ -119,9 +119,7 @@ background agent, which is its own chat -- or the human).
   cross-origin module import carries no cookie and the forwarder refuses it),
   which the viewer imports to report `/?session=<name>` and `Browser N` as its
   location; it declares no navigation capability, since a session switch is a
-  whole new stream, so the shell reloads the frame to move it. The import is a
-  static one, in its own module script: the shell sends its handshake as the frame
-  loads, and the load waits for a static import but not for a dynamic one.
+  whole new stream, so the shell reloads the frame to move it.
 - **One window, so pop-ups are tabs**: the stream shows a single browser window, and the
   window guardian (`window_guardian.py`) closes any other (Ctrl+N, a tab dragged out). A page's
   `window.open` pop-up -- the shape of most "Sign in with ..." buttons -- opens as a tab in

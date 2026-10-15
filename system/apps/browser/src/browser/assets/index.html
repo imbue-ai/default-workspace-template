@@ -1322,8 +1322,6 @@ registerProcessor('pb', PB);`;
 })();
 </script>
 <script type="module">
-  // A static import, not import(): the shell greets the page once, as the frame loads, and the
-  // load waits for this module but not for a dynamic import, which would hear no handshake.
   import * as contract from "/_static/app_contract.js";
   window.connectViewerToShell(contract);
 </script>

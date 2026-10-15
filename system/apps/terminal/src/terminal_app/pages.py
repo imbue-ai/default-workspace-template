@@ -410,8 +410,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   };
 </script>
 <script type="module">
-  // A static import, not import(): the shell greets the page once, as the frame loads, and the load waits for this
-  // module but not for a dynamic import, which would hear no handshake. The page above works without it.
+  // The page above works without this module.
   import * as contract from "__CONTRACT_PATH__";
   window.connectTerminalToShell(contract);
 </script>
@@ -454,8 +453,6 @@ _FAILURE_PAGE_TEMPLATE: Final[str] = """<!doctype html>
   document.querySelector('[data-action="retry"]').addEventListener("click", () => location.reload());
 </script>
 <script type="module">
-  // A static import, not import(): the shell greets the page once, as the frame loads, and the load waits for this
-  // module but not for a dynamic import, which would hear no handshake.
   import { askAgentToFix, connectToShell } from "__CONTRACT_PATH__";
   const config = JSON.parse(document.getElementById("terminal-failure").textContent);
   const ask = document.querySelector('[data-action="ask"]');
