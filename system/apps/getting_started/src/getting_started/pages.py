@@ -18,6 +18,7 @@ from flask import send_from_directory
 from flask.typing import ResponseReturnValue
 from werkzeug.exceptions import NotFound
 
+from app_manifest.content_security_policy import attach_document_policy
 from app_manifest.registry import APP_CONTRACT_ROUTE
 from getting_started.template_catalog import TemplateCatalogAvailability
 from getting_started.template_catalog import TemplateCatalogStore
@@ -43,6 +44,7 @@ _NOT_BUILT_PAGE: Final[str] = (
 
 def build_pages_blueprint(static_directory: Path, catalog: TemplateCatalogStore, contract_path: Path) -> Blueprint:
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
+    attach_document_policy(blueprint)
 
     @blueprint.get("/")
     def page() -> ResponseReturnValue:

@@ -60,6 +60,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
+from app_manifest.content_security_policy import attach_document_policy
 from app_manifest.registry import APP_CONTRACT_ROUTE, SHELL_APP_CONTRACT_PATH
 from flask import Flask, Response, jsonify, request, send_file
 from flask.typing import ResponseReturnValue
@@ -160,6 +161,8 @@ application.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": 25}
 # is why clipboard rides HTTP, not the stream socket). Bound it so a giant paste is
 # rejected before it's read into memory rather than wedging Chromium.
 application.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
+# The viewer page runs its audio playback as an AudioWorklet module built from a blob: URL.
+attach_document_policy(application, {"script-src": "'self' blob:", "worker-src": "'self' blob:"})
 sock = Sock(application)
 
 # Init gate: cleared at import, set when startup restore finishes (always, even on

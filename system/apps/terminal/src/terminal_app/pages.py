@@ -17,6 +17,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
+from app_manifest.content_security_policy import attach_document_policy
 from app_manifest.primitives import AppName
 from app_manifest.registry import APP_CONTRACT_ROUTE, read_origin_label
 from flask import Blueprint, Response, jsonify, request, send_file
@@ -392,6 +393,7 @@ def build_pages_blueprint(
     the page refreshes from, the health probe, and
     the app contract module at ``contract_path`` (the shell's build output, served from this origin)."""
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
+    attach_document_policy(blueprint)
 
     def session_page(name: TmuxSessionName) -> SessionPage:
         listed = next((terminal for terminal in source.list_terminals() if terminal.name == name), None)

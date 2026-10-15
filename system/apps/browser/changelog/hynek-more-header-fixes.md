@@ -1,0 +1,1 @@
+The browser viewer page now carries a `Content-Security-Policy`: its inline scripts by hash, scripts and worklets from its own origin or a `blob:` URL (the audio playback worklet), fetches and sockets only to the service, no plugins.

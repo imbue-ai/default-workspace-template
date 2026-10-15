@@ -19,6 +19,7 @@ from typing import Final
 from typing import assert_never
 from uuid import uuid4
 
+from app_manifest.content_security_policy import attach_document_policy
 from app_manifest.primitives import AppName
 from app_manifest.registry import read_origin_label
 from app_manifest.registry_location import registry_path
@@ -2302,6 +2303,7 @@ def create_application(state: ChatAppState) -> Flask:
     # No static folder: Flask would otherwise add a /static/<path> route beside the document route.
     application = Flask(__name__, static_folder=None)
     attach_state(application, state)
+    attach_document_policy(application)
     # The handoff borrows the watchers and the send path from here; wired where the routes
     # are, so a manager built by a test that never assembles the app refuses to hand off.
     state.agent_manager.set_handoff_capabilities(_build_handoff_capabilities(state))

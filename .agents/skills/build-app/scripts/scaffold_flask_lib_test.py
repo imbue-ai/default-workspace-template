@@ -19,7 +19,9 @@ writes, asserting only what holds whatever this machine is listening on.
 from __future__ import annotations
 
 import ast
+import base64
 import configparser
+import hashlib
 import importlib.util
 import subprocess
 import sys
@@ -491,6 +493,13 @@ def test_the_runner_serves_the_shell_modules_and_nothing_else(
     page = client.get("/")
     assert page.status_code == 200
     assert b'from "/_static/context_menu.js"' in page.data
+    # The page's policy admits its one inline script by the hash of the body as served, and nothing inline beyond it.
+    body = page.get_data(as_text=True).split('<script type="module">', 1)[1].split("</script>", 1)[0]
+    digest = base64.b64encode(hashlib.sha256(body.encode()).digest()).decode()
+    policy = page.headers["Content-Security-Policy"]
+    assert f"script-src 'self' 'sha256-{digest}';" in policy
+    assert policy.startswith("default-src 'self'; ")
+    assert "Content-Security-Policy" not in client.get("/health").headers
 
 
 def test_the_runner_does_not_use_reloader() -> None:

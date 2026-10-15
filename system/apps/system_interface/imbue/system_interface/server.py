@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from typing import Any
 from typing import Final
 
+from app_manifest.content_security_policy import attach_document_policy
 from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import CONTEXT_MENU_ROUTE
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
@@ -794,6 +795,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     # static assets explicitly below.
     application = Flask(__name__, static_folder=None)
     attach_state(application, state)
+    attach_document_policy(application)
     application.register_error_handler(Exception, handle_unhandled_exception)
     sock = build_sock(application)
 

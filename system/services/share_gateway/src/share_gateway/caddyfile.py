@@ -16,6 +16,12 @@ Certificate Transparency reach nothing.
 The certificate covers ``<domain>`` and ``*.<domain>`` only, so service
 origins are one label deep on a share (deeper sub-origins are a deferred
 follow-up, gated on wildcard-of-wildcard SANs).
+
+Every response caddy sends for the share, a proxied service's or its own,
+also carries the browser hardening headers (``Strict-Transport-Security``,
+``X-Content-Type-Options``) and no ``Server`` header: the relay is SNI
+passthrough and never sees a response, so caddy is the one place they can be
+set for every service alike.
 """
 
 import tomllib
@@ -104,6 +110,30 @@ def build_frame_ancestors_policy(workspace_domain: str, chrome_origin: str) -> s
     return " ".join(sources)
 
 
+# One year, the value scanners (and the browser preload lists) expect.
+_HSTS_MAX_AGE_SECONDS = 31_536_000
+
+
+def _render_hardening_headers(indent: str) -> str:
+    """The ``header`` block stamping the hardening headers on every response of one route list.
+
+    Rendered once per route list: ``handle_errors`` runs a handler chain of
+    its own, so the site-level block never reaches the 502 loading page.
+    """
+    lines = [
+        "# Deferred so it runs after the backend's response headers are copied",
+        "# in: the backend's Server header is removed rather than re-added, and",
+        "# one Strict-Transport-Security value is sent rather than two.",
+        "header {",
+        f'    Strict-Transport-Security "max-age={_HSTS_MAX_AGE_SECONDS}; includeSubDomains"',
+        "    X-Content-Type-Options nosniff",
+        "    -Server",
+        "    defer",
+        "}",
+    ]
+    return "\n".join(f"{indent}{line}" for line in lines)
+
+
 def render_caddyfile(
     workspace_domain: str,
     apps: list[RegisteredApp],
@@ -117,6 +147,8 @@ def render_caddyfile(
     """Render the full Caddyfile for one shared workspace."""
     gateway_backend = f"127.0.0.1:{gateway_port}"
     frame_ancestors = build_frame_ancestors_policy(workspace_domain, chrome_origin)
+    site_hardening_headers = _render_hardening_headers(indent="    ")
+    error_hardening_headers = _render_hardening_headers(indent="        ")
 
     # One matcher per registered service, keyed on its unguessable label host.
     # The matcher id is derived from the (unique) service name; the Host it
@@ -178,6 +210,8 @@ https://*.{workspace_domain}:{https_port} {{
     # applies (multiple CSP headers compose by intersection).
     header Content-Security-Policy "frame-ancestors {frame_ancestors}"
 
+{site_hardening_headers}
+
     # Health probe, reachable at EVERY workspace origin (not just the auth
     # label) and never auth-gated, so the chrome can probe a workspace it has
     # any origin for. The gateway applies CORS for the chrome origin itself.
@@ -192,6 +226,7 @@ https://*.{workspace_domain}:{https_port} {{
     # starts it. The parker's own 503 is a backend answer, not a caddy error,
     # and passes through as it does locally.
     handle_errors 502 {{
+{error_hardening_headers}
         rewrite * /_auth/loading
         reverse_proxy {gateway_backend}
     }}

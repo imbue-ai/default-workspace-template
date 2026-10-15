@@ -410,6 +410,13 @@ The starter `runner.py` has just `GET /` (a placeholder HTML page)
 and `GET /health` (returns `{"status": "ok"}`). Replace the
 placeholder with your real routes.
 
+Keep the starter's `Content-Security-Policy` (`CONTENT_SECURITY_POLICY` and the
+`after_request` that sets it) on every page: the app is reachable from the
+internet once the workspace is shared. Put scripts in files the app serves rather
+than inline; an inline `<script>` you do keep needs its `inline_script_source`
+added to `script-src`, and a third-party script, font or API needs its origin
+added to the matching directive, never `'unsafe-inline'` or `*` for scripts.
+
 Use **sync handlers** (`def`, not `async def`). Flask handlers are
 sync `def`, and the starter runs on the threaded Werkzeug server
 (`run_simple(..., threaded=True)`), so concurrent requests are handled

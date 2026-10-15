@@ -5,6 +5,8 @@ from pathlib import Path
 from urllib.parse import parse_qs
 from urllib.parse import urlsplit
 
+import base64
+import hashlib
 import json
 
 import jwt
@@ -20,6 +22,7 @@ from share_gateway.handoff import SingleUseJtiRegistry
 from share_gateway.identity import IDENTITY_HEADER
 from share_gateway.identity import RequesterIdentity
 from share_gateway.materials import ShareMaterials
+from share_gateway.server import PAGE_CONTENT_SECURITY_POLICY
 from share_gateway.server import PendingLoginRegistry
 from share_gateway.server import build_gateway_app
 from share_gateway.server import forwarded_client_ip
@@ -553,6 +556,30 @@ def test_loading_and_healthz_endpoints(tmp_path: Path) -> None:
     loading = harness.client.get("/_auth/loading")
     assert loading.status_code == 503
     assert "refresh" in loading.get_data(as_text=True)
+
+
+def _inline_style_hash(html: str) -> str:
+    style = html.split("<style>", 1)[1].split("</style>", 1)[0]
+    return base64.b64encode(hashlib.sha256(style.encode("utf-8")).digest()).decode("ascii")
+
+
+def test_gateway_pages_carry_a_policy_admitting_exactly_their_stylesheet(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    _install_session(harness.client, "bob@example.com")
+
+    loading = harness.client.get("/_auth/loading")
+    forbidden = harness.client.get("/_auth/verify", headers=_verify_headers(host=f"unknown-00000000.{_DOMAIN}"))
+
+    assert forbidden.status_code == 403
+    for page in (loading, forbidden):
+        policy = page.headers["Content-Security-Policy"]
+        assert policy == PAGE_CONTENT_SECURITY_POLICY
+        # The hash is the page's actual stylesheet, so a browser enforcing the
+        # policy still renders the page as styled.
+        assert f"'sha256-{_inline_style_hash(page.get_data(as_text=True))}'" in policy
+        assert "default-src 'none'" in policy
+        assert "'unsafe-inline'" not in policy
+    assert "Content-Security-Policy" not in harness.client.get("/_health").headers
 
 
 def test_verify_hands_the_owner_the_identity_record(tmp_path: Path) -> None:
