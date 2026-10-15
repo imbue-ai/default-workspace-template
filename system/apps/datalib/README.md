@@ -78,7 +78,7 @@ screen runs inside `datalib-http` and has to finish after the window closes.
 
 ## Tests
 
-`uv run pytest system/apps/datalib` from the repo root.
+`uv run --no-sync pytest system/apps/datalib` from the repo root.
 `launch_datalib_http_test.py` pins the token handling and the registered
 manifest copy; `test_datalib_app.py` runs the launcher as a process, through
 the real `forward_port.py` and around a fake `datalib-http`
