@@ -352,7 +352,7 @@ def _start_browser(name: str | None, raw_url: str | None) -> "LiveBrowser | _Sta
         )
 
 
-def _launch_refusal(reason: str, status: int, user_facing_message: str = "", is_reportable: bool = False) -> Response:
+def _launch_refusal(reason: str, status: int, user_facing_message: str, is_reportable: bool) -> Response:
     """A refusal of the ``new`` launch path or of a relayed message, as the shell reads one (post-launch-paths plan
     section 3.2): ``detail`` is the reason, passed on behind "See details", ``user_facing_message``, when there is
     one, the sentence the person is shown, and ``reportable`` whether that sentence asks for a bug report."""
@@ -385,13 +385,20 @@ def new_browser() -> Response:
     """
     body = request.get_json(force=True, silent=True)
     if not isinstance(body, dict):
-        return _launch_refusal("the launch body must be a JSON object", 400)
+        return _launch_refusal(
+            "the launch body must be a JSON object", 400, user_facing_message="", is_reportable=False
+        )
     raw_url = body.get(START_URL_PARAM)
     if raw_url is not None and not isinstance(raw_url, str):
-        return _launch_refusal("url: must be a string", 400)
+        return _launch_refusal("url: must be a string", 400, user_facing_message="", is_reportable=False)
     started = _start_browser(None, raw_url)
     if isinstance(started, _StartRefusal):
-        return _launch_refusal(started.reason, started.status, started.user_facing_message, started.is_reportable)
+        return _launch_refusal(
+            started.reason,
+            started.status,
+            user_facing_message=started.user_facing_message,
+            is_reportable=started.is_reportable,
+        )
     return jsonify({"path": browser_page_path(BrowserName(started.browser_id))})
 
 
@@ -410,33 +417,43 @@ def open_url() -> Response:
         return _launch_refusal(
             "The browser is still restoring its saved browsers; try again in a moment.",
             503,
-            _LINK_WHILE_RESTORING_MESSAGE,
+            user_facing_message=_LINK_WHILE_RESTORING_MESSAGE,
+            is_reportable=False,
         )
     body = request.get_json(force=True, silent=True)
     if not isinstance(body, dict):
-        return _launch_refusal("the message body must be a JSON object", 400)
+        return _launch_refusal(
+            "the message body must be a JSON object", 400, user_facing_message="", is_reportable=False
+        )
     raw_url = body.get(START_URL_PARAM)
     if not isinstance(raw_url, str):
-        return _launch_refusal("url: must be a string", 400)
+        return _launch_refusal("url: must be a string", 400, user_facing_message="", is_reportable=False)
     try:
         url = LocalHttpUrl(raw_url)
     except InvalidStartUrlError as e:
-        return _launch_refusal(f"url: {e}", 400)
+        return _launch_refusal(f"url: {e}", 400, user_facing_message="", is_reportable=False)
     raw_client_id = body.get("client_id")
     try:
         client_id = ClientId(raw_client_id if isinstance(raw_client_id, str) else "")
     except InvalidLayoutValueError as e:
-        return _launch_refusal(f"client_id: {e}", 400)
+        return _launch_refusal(f"client_id: {e}", 400, user_facing_message="", is_reportable=False)
     install = deferred_install_ready()
     if not install.is_ready:
-        return _launch_refusal(install.reason, 503, install.user_facing_message)
+        return _launch_refusal(
+            install.reason, 503, user_facing_message=install.user_facing_message, is_reportable=False
+        )
     try:
         browser = bridge.run(manager.open_url_for_human(str(url)), timeout=_ROUTE_TIMEOUT)
     except FleetFullError as e:
-        return _launch_refusal(str(e), 409)
+        return _launch_refusal(str(e), 409, user_facing_message="", is_reportable=False)
     except _STARTUP_ERRORS as e:
         logger.error("could not open {} for the human: {}", url, e)
-        return _launch_refusal(f"Could not start the browser: {e}", 503, _LINK_NOT_OPENED_MESSAGE, is_reportable=True)
+        return _launch_refusal(
+            f"Could not start the browser: {e}",
+            503,
+            user_facing_message=_LINK_NOT_OPENED_MESSAGE,
+            is_reportable=True,
+        )
     page = browser_page_path(BrowserName(browser.browser_id))
     shell = ShellLayoutClient(shell_url=shell_base_url(), requester=None, timeout_seconds=_SHELL_SHOW_TIMEOUT_SECONDS)
     try:
@@ -444,7 +461,10 @@ def open_url() -> Response:
     except ShellOpError as e:
         logger.warning("Opened {} in browser {} but could not show its window: {}", url, browser.browser_id, e)
         return _launch_refusal(
-            f"The browser has the page, but its window could not be shown: {e}", 502, _LINK_WINDOW_NOT_SHOWN_MESSAGE
+            f"The browser has the page, but its window could not be shown: {e}",
+            502,
+            user_facing_message=_LINK_WINDOW_NOT_SHOWN_MESSAGE,
+            is_reportable=False,
         )
     return jsonify({"browser": browser.browser_id, "window_id": shown.window_id, "shown": shown.shown})
 

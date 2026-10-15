@@ -612,7 +612,7 @@ def test_close_releases_a_queued_waiter(monkeypatch: pytest.MonkeyPatch) -> None
 
         task = asyncio.create_task(waiter())
         await asyncio.sleep(0.05)
-        await browser.close()
+        await browser.close(is_program_stopping=False)
         assert await task == "closed"
         assert browser._wait_queue == []
 
@@ -694,7 +694,7 @@ def test_close_broadcasts_closed_before_teardown(monkeypatch: pytest.MonkeyPatch
 
     async def go() -> None:
         session = bsession.LiveBrowser(browser_id="alex-smith")
-        await session.close()
+        await session.close(is_program_stopping=False)
         assert any(m.get("type") == "closed" and m.get("browser_id") == "alex-smith" for m in casts)
 
     asyncio.run(go())
@@ -1172,7 +1172,7 @@ def test_shutdown_checkpoints_every_browser_before_closing_any(monkeypatch: pyte
     # would report afterwards, so a save that ran after it would show.
     events: list[str] = []
 
-    async def fake_close(self: bsession.LiveBrowser, is_program_stopping: bool = False) -> None:
+    async def fake_close(self: bsession.LiveBrowser, is_program_stopping: bool) -> None:
         events.append(f"close:{self.browser_id}")
         self._cdp = None
         self._last_known_tabs = ["https://after-close.example"]

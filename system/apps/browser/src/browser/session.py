@@ -1900,7 +1900,7 @@ class LiveBrowser(MutableModel):
         self._lease_touched_at = time.monotonic()
         self._granted_at = 0.0
 
-    async def close(self, is_program_stopping: bool = False) -> None:
+    async def close(self, is_program_stopping: bool) -> None:
         """End the browser. ``is_program_stopping``: the browser program itself is stopping, and the browser comes
         back with it, so its viewers are told it is stopping rather than closed."""
         self._closed = True
@@ -2142,7 +2142,8 @@ class BrowserSessionManager(MutableModel):
                 # queues -- so the viewer sees the launch_failed message and then the
                 # socket tears down deterministically, not only on its own disconnect.
                 session._broadcast({"type": "launch_failed", "browser_id": session.browser_id})
-                await session.close()  # don't leak a half-started Chromium; pushes the sentinel
+                # Don't leak a half-started Chromium; pushes the sentinel.
+                await session.close(is_program_stopping=False)
                 return
         # A new RUNNING browser is a topology change worth persisting promptly (create);
         # restore defers to its reconcile instead (persist=False).
