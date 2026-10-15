@@ -26,8 +26,8 @@ from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 from pydantic import Field
 from pydantic import SecretStr
-from workspace_bare_scripts import message_chat
 from werkzeug.test import TestResponse
+from workspace_bare_scripts import message_chat
 
 from imbue.chat.accounts import INDEX_VERSION
 from imbue.chat.accounts import account_dir
