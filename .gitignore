@@ -326,6 +326,10 @@ system/apps/system_interface/frontend/src/assets/*.png
 # so the user can make their own notification script
 system/scripts/notify_user.local.sh
 
+# The Datalib app's program, copied in from system/apps/datalib/datalib.conf by
+# the datalib skill's install script the first time datalib is used.
+system/supervisord.conf.d/datalib.conf
+
 # Test output files (slow tests, coverage summaries)
 **/.test_output/
 

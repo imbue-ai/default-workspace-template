@@ -1,14 +1,12 @@
 /**
  * What the chat page says about a failed request: the sentences on screen and what goes behind "See details". Each
- * surface names what failed; the server's own sentence (its ``user_facing_message``) is shown as written when it
- * wrote one, a request nothing answered gets the surface's can't-tell sentence, and anything else gets the fallback
- * "<what failed>. Try again. If this persists, report a bug." with the server's text behind the details.
+ * surface names what failed and ``failureSentence`` words it; a surface whose request nothing answered may say what
+ * that leaves unknown in its own words ("can't tell whether the agent stopped") in place of the general sentence.
  */
 
-import { fallbackSentence, joinDetails, notAnsweredSentence } from "@imbue/workspace-ui/src/models/failure";
-import type { RequestKind } from "@imbue/workspace-ui/src/models/failure";
+import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
+import type { Failure, RequestKind } from "@imbue/workspace-ui/src/models/failure";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
-import type { RequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 
 export interface FailureLines {
   /** The paragraphs on screen, in order; empty entries are dropped. */
@@ -19,47 +17,38 @@ export interface FailureLines {
   readonly isReportable: boolean;
 }
 
-/** Everything a failure carries that is not already the visible sentence. */
-export function detailsBehind(failure: RequestFailure): string | null {
-  return failure.isUserFacing || failure.isNotAnswered || failure.isReportable
-    ? failure.details
-    : joinDetails([failure.message, failure.details]);
+export interface FailureLinesOptions {
+  readonly requestKind?: RequestKind;
+  /** The surface's own sentence for a request nothing answered. */
+  readonly notAnswered?: string;
 }
 
-/**
- * ``error`` told the plain way: the server's own sentence when it wrote one, ``notAnswered`` when nothing answered,
- * else ``whatFailed`` followed by the fallback ending, with the server's text behind the details.
- */
+/** ``error`` worded by ``failureSentence`` with ``whatFailed`` as its stem, or ``notAnswered`` when nothing answered. */
 export function plainFailureLines(
   error: unknown,
   whatFailed: string,
-  options: { requestKind?: RequestKind; notAnswered?: string } = {},
+  options: FailureLinesOptions = {},
 ): FailureLines {
-  const requestKind = options.requestKind ?? "change";
-  return plainFailureLinesOf(describeRequestFailure(error, requestKind), whatFailed, {
-    ...options,
-    requestKind,
-  });
+  return plainFailureLinesOf(describeRequestFailure(error, options.requestKind ?? "change"), whatFailed, options);
 }
 
 /** ``plainFailureLines`` for a failure already read. */
 export function plainFailureLinesOf(
-  failure: RequestFailure,
+  failure: Failure,
   whatFailed: string,
-  options: { requestKind?: RequestKind; notAnswered?: string } = {},
+  options: FailureLinesOptions = {},
 ): FailureLines {
-  const requestKind = options.requestKind ?? "change";
-  if (failure.isNotAnswered) {
-    return {
-      body: [options.notAnswered ?? notAnsweredSentence(requestKind)],
-      details: failure.details,
-      isReportable: false,
-    };
+  if (failure.cause === "not_answered" && options.notAnswered !== undefined) {
+    return { body: [options.notAnswered], details: failure.details, isReportable: false };
   }
-  if (failure.isUserFacing) {
-    return { body: [failure.message], details: failure.details, isReportable: failure.isReportable };
-  }
-  return { body: [fallbackSentence(whatFailed)], details: detailsBehind(failure), isReportable: true };
+  const told = failureSentence(failure, whatFailed);
+  return { body: [told.message], details: told.details, isReportable: told.isReportable };
+}
+
+/** The non-empty ``lines`` of a "See details" text, joined; null when every one is empty. */
+export function joinDetailLines(lines: readonly (string | null)[]): string | null {
+  const kept = lines.map((line) => (line ?? "").trim()).filter((line) => line !== "");
+  return kept.length === 0 ? null : kept.join("\n");
 }
 
 /** The one-paragraph sentence of ``plainFailureLines``, for a surface with room for a single line. */

@@ -13,6 +13,8 @@ import type {
   WindowOpenRequest,
 } from "../model/api";
 import { StalePlacementsSaveError } from "../model/api";
+import { readFailure } from "@imbue/workspace-ui/src/models/failure";
+import { HttpError } from "@imbue/workspace-ui/src/models/http";
 import type {
   AppRecord,
   AvatarCatalog,
@@ -67,8 +69,7 @@ export class FakeDesktopApi implements DesktopApi {
   relayDeliveries: MessageDelivery[] = [];
   /** What every window open answers of whether the client has only pop-outs open. */
   hasNoDesktopWindow = false;
-  /** A refusal every route raises while set: a bare reason, or the error itself (an ``HttpError``, as the REST
-   *  helper throws one). */
+  /** A refusal every route raises while set: the reason of a 400 the shell answers, or the error itself. */
   refusal: string | Error | null = null;
   /** The page a POST launch path answers (as the app would); a GET launch path's page is built from its path. */
   postLaunchAnswer = "/launched";
@@ -108,7 +109,11 @@ export class FakeDesktopApi implements DesktopApi {
   private windowCounter = 0;
 
   private refuse(): void {
-    if (this.refusal !== null) throw typeof this.refusal === "string" ? new Error(this.refusal) : this.refusal;
+    if (this.refusal === null) return;
+    if (typeof this.refusal !== "string") throw this.refusal;
+    throw new HttpError(
+      readFailure({ status: 400, body: { detail: this.refusal }, rawText: null, requestKind: "change" }),
+    );
   }
 
   private stamp(): string {

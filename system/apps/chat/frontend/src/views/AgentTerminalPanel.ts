@@ -12,7 +12,8 @@ import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { postJson } from "@imbue/workspace-ui/src/models/http";
-import { REPORT_A_BUG_LABEL, openBugReport } from "@imbue/workspace-ui/src/report-bug";
+import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { getShellConnection } from "../shellConnection";
 import { plainFailureLines, plainFailureSentence } from "./failure-lines";
 import type { FailureLines } from "./failure-lines";
 import { getChatById } from "../models/Chats";
@@ -133,17 +134,12 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
               "Start agent",
             ),
             startError?.isReportable === true
-              ? m(
-                  "button",
-                  {
-                    type: "button",
-                    class:
-                      "agent-terminal-report-bug cursor-pointer text-(length:--font-size-row) text-secondary " +
-                      "underline-offset-2 hover:underline",
-                    onclick: openBugReport,
-                  },
-                  REPORT_A_BUG_LABEL,
-                )
+              ? m(ReportBugButton, {
+                  connection: getShellConnection(),
+                  variant: "ghost",
+                  sm: true,
+                  extra: "agent-terminal-report-bug",
+                })
               : null,
           ],
         );

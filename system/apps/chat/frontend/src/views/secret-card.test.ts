@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import type { SecretResolution } from "./message-classification";
 import type { SecretCardHandlers, SecretCardState } from "./secret-card";
-import { CHANGE_NOT_ANSWERED } from "@imbue/workspace-ui/src/models/failure";
+import { notAnsweredSentence } from "@imbue/workspace-ui/src/models/failure";
+import { framePageInShell } from "../shellConnectionFixture";
 import {
   SECRET_STATUS_RETRY_DELAY_MS,
   SecretStatusCache,
@@ -195,6 +196,7 @@ describe("renderSecretCard", () => {
   });
 
   it("shows the last error under the inputs, its details collapsed", () => {
+    const shell = framePageInShell(true);
     const root = renderToDom(
       details,
       null,
@@ -215,7 +217,9 @@ describe("renderSecretCard", () => {
       "Imbue Studio couldn't save these values in this workspace. Try again. If this persists, report a bug.",
     );
     expect(root.querySelector(".see-details-text")?.textContent).toContain("disk full");
-    expect(Array.from(root.querySelectorAll("button")).some((b) => b.textContent === "Report a bug")).toBe(true);
+    (root.querySelector(".report-bug") as HTMLElement).click();
+    expect(shell.posted("shell:report-bug")).toHaveLength(1);
+    shell.release();
   });
 
   it("offers to ask the agent again for a request that can't be answered any more", () => {
@@ -317,7 +321,7 @@ describe("status hydration", () => {
 });
 
 describe("submit and decline", () => {
-  it("keeps the route's own reason behind the details, and never says whether an unanswered answer went through", async () => {
+  it("names what failed for a refusal, its reason behind the details, and never says whether an unanswered answer went through", async () => {
     vi.stubGlobal(
       "fetch",
       vi
@@ -333,13 +337,16 @@ describe("submit and decline", () => {
     const refused = await submitSecret("secret-1", { SVC_TOKEN: "t" });
     expect(refused).toMatchObject({
       ok: false,
-      lines: { body: ["These values couldn't be saved. Try again. If this persists, report a bug."] },
+      lines: { body: ["These values couldn't be saved."], isReportable: false },
     });
     expect(refused.ok === false && refused.lines.details).toContain("Request secret-1 is not pending");
-    expect(await declineSecret("secret-1", "")).toMatchObject({ ok: false, lines: { body: [CHANGE_NOT_ANSWERED] } });
+    expect(await declineSecret("secret-1", "")).toMatchObject({
+      ok: false,
+      lines: { body: [notAnsweredSentence("change")] },
+    });
     expect(await submitSecret("secret-1", { SVC_TOKEN: "t" })).toMatchObject({
       ok: false,
-      lines: { body: [CHANGE_NOT_ANSWERED] },
+      lines: { body: [notAnsweredSentence("change")] },
     });
   });
 });

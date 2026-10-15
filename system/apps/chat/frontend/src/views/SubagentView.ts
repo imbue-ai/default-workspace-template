@@ -4,8 +4,9 @@ import type { TranscriptEvent, SubagentMetadata } from "../models/Response";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
-import { REPORT_A_BUG_LABEL, openBugReport } from "@imbue/workspace-ui/src/report-bug";
+import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { openChatPage } from "../shell";
+import { getShellConnection } from "../shellConnection";
 import { plainFailureLinesOf, plainFailureSentence } from "./failure-lines";
 import type { FailureLines } from "./failure-lines";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
@@ -190,7 +191,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
       m("p", { class: "message-list-error-text text-danger text-center" }, plainFailureSentence(failure)),
       m("div", { class: "flex items-center gap-2" }, [
         m(Button, { sm: true, extra: "message-list-reload", onclick: () => load(attrs) }, "Try again"),
-        failure.isReportable ? m(Button, { sm: true, onclick: openBugReport }, REPORT_A_BUG_LABEL) : null,
+        failure.isReportable ? m(ReportBugButton, { connection: getShellConnection(), sm: true }) : null,
       ]),
       m("div", { class: "text-secondary" }, m(SeeDetails, { details: failure.details })),
     ]);

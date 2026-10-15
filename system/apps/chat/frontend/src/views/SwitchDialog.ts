@@ -18,10 +18,10 @@ import m from "mithril";
 import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
+import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
+import type { Failure } from "@imbue/workspace-ui/src/models/failure";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
-import type { RequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { describeSwitchFailure } from "./composer-failures";
-import { detailsBehind } from "./failure-lines";
 import { fetchAccountModelOptions } from "../models/AccountModelOptions";
 import { getChatById } from "../models/Chats";
 import type { ChatSnapshot, TransitionKind } from "../models/Chats";
@@ -60,7 +60,7 @@ interface OpenDialog {
   /** The target account's pickable models, once fetched; null while loading. */
   options: CatalogModelOption[] | null;
   /** Why the models could not be fetched, when they could not be; null otherwise. */
-  optionsError: RequestFailure | null;
+  optionsError: Failure | null;
   modelId: string;
   effort: string | null;
   fast: boolean;
@@ -241,8 +241,12 @@ function renderPicker(dialog: OpenDialog): m.Children {
         ? `${harness} will keep its current model`
         : `${harness} will start on its default model`;
     return m("div", { class: "switch-dialog-models-failed text-(length:--font-size-helper) text-secondary" }, [
-      m("p", `Couldn't load the list of models. ${fallback}, and you can change it once it's running.`),
-      m(SeeDetails, { details: detailsBehind(dialog.optionsError) }),
+      m(
+        "p",
+        `${failureSentence(dialog.optionsError, "Couldn't load the list of models").message} ` +
+          `${fallback}, and you can change it once it's running.`,
+      ),
+      m(SeeDetails, { details: dialog.optionsError.details }),
     ]);
   }
   if (dialog.options.length === 0) {

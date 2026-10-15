@@ -46,9 +46,10 @@ import { renderMarkdown } from "../markdown";
 import { providerMark } from "./providerMarks";
 import { removeAccountDialog } from "./removeAccountDialog";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
-import { notAnsweredSentence } from "@imbue/workspace-ui/src/models/failure";
+import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
-import { REPORT_A_BUG_LABEL, openBugReport } from "@imbue/workspace-ui/src/report-bug";
+import { getShellConnection } from "../shellConnection";
 import { plainFailureLines, plainFailureSentence } from "./failure-lines";
 import * as css from "./providerSignInStyles";
 import type { Lane, LaneMethod, UnpickableReason } from "../models/Providers";
@@ -1087,16 +1088,14 @@ interface ChooserFailure {
 const SIGN_IN_FAILED_WITH_NO_REASON =
   "The sign-in didn't complete. Try again, or try another way in. If this persists, report a bug.";
 
-/** A refused or unanswered sign-in request: the server's own reason where it gave one, else our sentence. */
+/** A refused or unanswered sign-in request: the server's own sentence where it wrote one, else ours. */
 function signInFailure(e: unknown): ChooserFailure {
   const failure = describeRequestFailure(e);
-  if (failure.isNotAnswered) {
-    return { message: notAnsweredSentence("change"), details: failure.details, isReportable: false };
+  const told = failureSentence(failure, "The sign-in didn't complete. Try again, or try another way in");
+  if (failure.cause !== "user_facing" && told.isReportable) {
+    return { message: SIGN_IN_FAILED_WITH_NO_REASON, details: told.details, isReportable: true };
   }
-  if (failure.isReportable && !failure.isUserFacing) {
-    return { message: SIGN_IN_FAILED_WITH_NO_REASON, details: failure.details, isReportable: true };
-  }
-  return { message: failure.message, details: failure.details, isReportable: failure.isReportable };
+  return told;
 }
 
 function failureMark(failure: ChooserFailure | null): m.Children {
@@ -1105,6 +1104,6 @@ function failureMark(failure: ChooserFailure | null): m.Children {
 
 function reportBugButton(failure: ChooserFailure | null): m.Children {
   return failure?.isReportable === true
-    ? m(Button, { variant: "secondary", onclick: openBugReport }, REPORT_A_BUG_LABEL)
+    ? m(ReportBugButton, { connection: getShellConnection(), variant: "secondary" })
     : null;
 }

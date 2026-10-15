@@ -20,7 +20,8 @@ import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { postJson } from "@imbue/workspace-ui/src/models/http";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { describeRequestErrorKind, describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
-import { REPORT_A_BUG_LABEL, openBugReport } from "@imbue/workspace-ui/src/report-bug";
+import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { getShellConnection } from "../shellConnection";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import { mintMessageId, sendMessage } from "../models/Response";
 import { describeSendFailure } from "./composer-failures";
@@ -440,7 +441,7 @@ export function renderSecretCard(
                   "Ask the agent again",
                 )
               : null,
-            state.error.isReportable ? m(Button, { sm: true, onclick: openBugReport }, REPORT_A_BUG_LABEL) : null,
+            state.error.isReportable ? m(ReportBugButton, { connection: getShellConnection(), sm: true }) : null,
           ]),
         ])
       : null,

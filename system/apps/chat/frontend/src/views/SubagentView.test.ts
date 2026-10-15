@@ -12,6 +12,7 @@ vi.mock("../shell", () => ({ openChatPage, openSubagentView: vi.fn() }));
 import m from "mithril";
 
 import { SubagentView } from "./SubagentView";
+import { framePageInShell } from "../shellConnectionFixture";
 
 const ATTRS = { chatId: "agent-1", agentId: "agent-1", subagentSessionId: "session-1" };
 
@@ -63,6 +64,7 @@ describe("the side conversation view", () => {
   });
 
   it("says a load that failed couldn't be done, keeps the server text behind See details, and loads again", async () => {
+    const shell = framePageInShell(true);
     const request = vi
       .spyOn(m, "request")
       .mockRejectedValue(rejection(500, { detail: "Could not read the session file" }));
@@ -72,10 +74,22 @@ describe("the side conversation view", () => {
       "This conversation couldn't be loaded. Try again. If this persists, report a bug.",
     );
     expect(root.querySelector(".see-details-text")?.textContent).toContain("Could not read the session file");
-    expect(root.textContent).toContain("Report a bug");
+    (root.querySelector(".report-bug") as HTMLElement).click();
+    expect(shell.posted("shell:report-bug")).toHaveLength(1);
+    shell.release();
 
     (root.querySelector(".message-list-reload") as HTMLElement).click();
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("offers no Report a bug where the shell said Imbue Studio cannot open one", async () => {
+    const shell = framePageInShell(false);
+    vi.spyOn(m, "request").mockRejectedValue(rejection(500, { detail: "Could not read the session file" }));
+    const root = await mounted();
+
+    expect(root.querySelector(".message-list-error-text")?.textContent).toContain("If this persists, report a bug.");
+    expect(root.querySelector(".report-bug")).toBeNull();
+    shell.release();
   });
 });

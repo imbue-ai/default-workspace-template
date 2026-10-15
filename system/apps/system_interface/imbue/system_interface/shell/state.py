@@ -105,7 +105,6 @@ from imbue.system_interface.shell.identity import visiting_user_id
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.inventory import DEFAULT_SHARE_DOMAIN_PATH
 from imbue.system_interface.shell.launches import LaunchPoster
-from imbue.system_interface.shell.launches import could_not_open_sentence
 from imbue.system_interface.shell.launches import post_launch
 from imbue.system_interface.shell.launches import resolve_launch_destination
 from imbue.system_interface.shell.placements import PlacementStore
@@ -327,10 +326,7 @@ class ShellState(MutableModel):
         if launch_path.method is LaunchPathMethod.POST and not entry.is_running and self.lifecycle.is_enabled:
             is_stoppable = stoppable_program_of(entry, self.inventory.entries()) is not None
             if is_stoppable and not self.lifecycle.wake_and_wait(entry):
-                raise LaunchUnavailableError(
-                    f"{entry.row.name} is stopped and could not be brought up for the launch",
-                    could_not_open_sentence(entry.display_name),
-                )
+                raise LaunchUnavailableError(f"{entry.row.name} is stopped and could not be brought up for the launch")
         return resolve_launch_destination(
             entry, launch_path, params, client_id, desktop_id, window_path, self.launch_poster
         )

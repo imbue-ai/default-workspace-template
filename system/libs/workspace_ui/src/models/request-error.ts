@@ -1,13 +1,4 @@
-import {
-  GATEWAY_STATUSES,
-  asksForBugReport,
-  fallbackSentence,
-  joinDetails,
-  nonEmptyString,
-  notAnsweredSentence,
-  type Failure,
-  type RequestKind,
-} from "./failure";
+import { failureText, readFailure, type Failure, type RequestKind } from "./failure";
 import { HttpError } from "./http";
 
 /**
@@ -25,105 +16,42 @@ import { HttpError } from "./http";
  */
 const UNINFORMATIVE_MESSAGES: ReadonlySet<string> = new Set(["null", "undefined", "[object Object]"]);
 
-/** The fallback for a failed request that carries no reason. */
-export const REQUEST_FALLBACK_MESSAGE = fallbackSentence("The workspace couldn't do that");
-
-/** A failure as ``describeRequestFailure`` reads it: the server's own sentence, when it gave one, is ``message``. */
-export interface RequestFailure extends Failure {
-  /** The server's sentence was written for people, so it stands on its own rather than after what failed. */
-  readonly isUserFacing: boolean;
-  /** Nothing answered (a gateway status, a dropped connection, a timeout), so nothing says whether the request was
-   *  carried out. */
-  readonly isNotAnswered: boolean;
-  /** The route's name for the case (its body's ``kind``); null when it named none. */
-  readonly kind: string | null;
-}
-
 function informativeMessage(value: unknown): string | null {
   const message = typeof value === "string" ? value.trim() : "";
   return message !== "" && !UNINFORMATIVE_MESSAGES.has(message) ? message : null;
 }
 
-/**
- * Read a failed request -- a mithril `m.request` rejection, an ``HttpError``, or an error a caller threw -- as what to
- * show and what goes behind "See details".
- *
- * A mithril rejection carries (when available) the parsed response body, the HTTP status as `code`, and a `message`
- * that is the raw body text. The server's own `detail` is shown as written; a status with no reason reads as a
- * fallback of ours, with the status and any raw text behind the details.
- */
-export function describeRequestFailure(error: unknown, requestKind: RequestKind = "change"): RequestFailure {
-  if (error instanceof HttpError) {
-    return {
-      message: error.message,
-      details: error.details,
-      isReportable: error.isReportable,
-      isUserFacing: error.isUserFacing,
-      isNotAnswered: error.isNotAnswered,
-      kind: error.kind,
-    };
-  }
-  const fallback: RequestFailure = {
-    message: REQUEST_FALLBACK_MESSAGE,
-    details: null,
-    isReportable: true,
-    isUserFacing: false,
-    isNotAnswered: false,
-    kind: null,
-  };
-  if (error === null || error === undefined) return fallback;
-  if (typeof error === "string") {
-    const text = error.trim();
-    return text === "" ? fallback : { ...fallback, message: text, isReportable: false };
-  }
-  const err = error as {
-    response?: { user_facing_message?: unknown; detail?: unknown; error?: unknown; kind?: unknown } | null;
-    message?: unknown;
-    code?: unknown;
-  };
-  const message = informativeMessage(err.message);
-
-  // Not a request's rejection: an error a caller threw, whose message is its own.
-  if (typeof err.code !== "number") {
-    return message === null ? fallback : { ...fallback, message, isReportable: false };
-  }
-
-  const userFacing = nonEmptyString(err.response?.user_facing_message);
-  const reason = nonEmptyString(err.response?.detail) ?? nonEmptyString(err.response?.error);
-  const kind = nonEmptyString(err.response?.kind);
-  const status = err.code === 0 ? null : `HTTP ${err.code}`;
-  if (userFacing !== null) {
-    return {
-      message: userFacing,
-      details: joinDetails([status, reason]),
-      isReportable: asksForBugReport(userFacing),
-      isUserFacing: true,
-      isNotAnswered: false,
-      kind,
-    };
-  }
-  if (reason !== null) {
-    return { message: reason, details: status, isReportable: false, isUserFacing: false, isNotAnswered: false, kind };
-  }
-  // The body's raw text (mithril's `message`), behind the details. Code 0 is mithril's "no HTTP response at all": a
-  // connection refused or dropped, or its own timeout, so nothing says whether the request was carried out.
-  const details = joinDetails([status, message]);
-  if (err.code === 0 || GATEWAY_STATUSES.has(err.code)) {
-    return {
-      message: notAnsweredSentence(requestKind),
-      details,
-      isReportable: false,
-      isUserFacing: false,
-      isNotAnswered: true,
-      kind: null,
-    };
-  }
-  return { ...fallback, details };
+/** A failure no request answered with: an error the code threw, whose message is developer text. */
+function thrownFailure(message: string | null, requestKind: RequestKind): Failure {
+  const fields = { requestKind, status: null, details: message, kind: null, body: null };
+  return message === null ? { ...fields, cause: "no_reason" } : { ...fields, cause: "reason", reason: message };
 }
 
-/** The sentence ``describeRequestFailure`` shows for ``error``; always non-empty. */
-export function describeRequestError(error: unknown, kind: RequestKind = "change"): string {
-  return describeRequestFailure(error, kind).message;
+/**
+ * Read a failed request -- a mithril `m.request` rejection, an ``HttpError``, or an error a caller threw -- the way
+ * ``readFailure`` reads a REST answer. ``requestKind`` says whether the request asked for a change; an ``HttpError``
+ * already knows from its method, which a caller's ``requestKind`` overrides (a POST that only reads).
+ *
+ * A mithril rejection carries (when available) the parsed response body, the HTTP status as `code` (0 when nothing
+ * answered), and a `message` that is the raw body text.
+ */
+export function describeRequestFailure(error: unknown, requestKind?: RequestKind): Failure {
+  if (error instanceof HttpError) {
+    return requestKind === undefined ? error.failure : { ...error.failure, requestKind };
+  }
+  const kind = requestKind ?? "change";
+  if (error === null || error === undefined) return thrownFailure(null, kind);
+  if (typeof error === "string") return thrownFailure(informativeMessage(error), kind);
+  const err = error as { response?: unknown; message?: unknown; code?: unknown };
+  const message = informativeMessage(err.message);
+  if (typeof err.code !== "number") return thrownFailure(message, kind);
+  return readFailure({ status: err.code, body: err.response, rawText: message, requestKind: kind });
+}
+
+/** ``failureText`` for ``error``: the server's own words, for a surface not yet worded with ``failureSentence``;
+ *  always non-empty. */
+export function describeRequestError(error: unknown, requestKind?: RequestKind): string {
+  return failureText(describeRequestFailure(error, requestKind));
 }
 
 /**
@@ -152,7 +80,6 @@ export function describeRequestErrorKind(error: unknown): SendFailureKind {
   if (error === null || typeof error !== "object") {
     return "unknown";
   }
-  const kind =
-    error instanceof HttpError ? error.kind : (error as { response?: { kind?: unknown } | null }).response?.kind;
-  return typeof kind === "string" && KNOWN_SEND_FAILURE_KINDS.has(kind) ? (kind as SendFailureKind) : "unknown";
+  const kind = describeRequestFailure(error).kind;
+  return kind !== null && KNOWN_SEND_FAILURE_KINDS.has(kind) ? (kind as SendFailureKind) : "unknown";
 }

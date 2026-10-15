@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { READ_NOT_ANSWERED } from "@imbue/workspace-ui/src/models/failure";
 
 // Mithril is mocked: request is driven per-test, redraw is a no-op spy. This
 // keeps the store unit-testable without a DOM or a real network.
@@ -674,7 +673,7 @@ describe("snapshot load state", () => {
     mockRequest.mockRejectedValueOnce(proxyUnavailableError());
     await expect(fetchEvents(agent)).rejects.toThrow();
     expect(getConversationLoadState(agent).phase).toBe("error");
-    expect(getConversationLoadState(agent).error?.message).toBe(READ_NOT_ANSWERED);
+    expect(getConversationLoadState(agent).error?.cause).toBe("not_answered");
   });
 
   it("prefers the server's own detail when the body has one", async () => {
@@ -683,7 +682,7 @@ describe("snapshot load state", () => {
       Object.assign(new Error("{}"), { code: 404, response: { detail: "Agent 'x' not found" } }),
     );
     await expect(fetchEvents(agent)).rejects.toThrow();
-    expect(getConversationLoadState(agent).error?.message).toBe("Agent 'x' not found");
+    expect(getConversationLoadState(agent).error).toMatchObject({ cause: "reason", reason: "Agent 'x' not found" });
   });
 
   it("reads as loading while the fetch is in flight, so nothing reports an empty transcript", async () => {

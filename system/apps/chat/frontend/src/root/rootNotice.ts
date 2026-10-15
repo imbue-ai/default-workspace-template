@@ -6,11 +6,11 @@
  */
 
 import m from "mithril";
+import type { ShellConnection } from "@imbue/workspace-ui/src/app_contract";
 import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
-import { REPORT_A_BUG_ENDING } from "@imbue/workspace-ui/src/models/failure";
+import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
-import { reportBugAction } from "@imbue/workspace-ui/src/report-bug";
-import { detailsBehind } from "../views/failure-lines";
+import { reportBugActions } from "../views/failure-actions";
 import type { FailureLines } from "../views/failure-lines";
 
 export interface RootNotice {
@@ -32,11 +32,16 @@ function closeRootNotice(): void {
   m.redraw();
 }
 
+export interface RootNoticeViewAttrs {
+  /** The root's connection to the shell, null before it connects. */
+  readonly connection: Pick<ShellConnection, "canReportBug" | "reportBug"> | null;
+}
+
 /** Mounted once by the chat root, over everything else. */
-export function RootNoticeView(): m.Component {
+export function RootNoticeView(): m.Component<RootNoticeViewAttrs> {
   const dialog = makeNoticeDialog();
   return {
-    view() {
+    view(vnode) {
       const notice = current;
       if (notice === null) return null;
       const retry = notice.retry;
@@ -47,7 +52,7 @@ export function RootNoticeView(): m.Component {
         dismissLabel: retry === null ? "OK" : "Cancel",
         onDismiss: closeRootNotice,
         actions: [
-          ...(notice.lines.isReportable ? [reportBugAction()] : []),
+          ...reportBugActions(vnode.attrs.connection, notice.lines.isReportable),
           ...(retry === null
             ? []
             : [
@@ -69,7 +74,7 @@ export function RootNoticeView(): m.Component {
 export function describeRunVerbFailure(error: unknown, title: string, isRestart: boolean): FailureLines {
   const failure = describeRequestFailure(error);
   const named = `"${title}"`;
-  if (failure.isNotAnswered) {
+  if (failure.cause === "not_answered") {
     return {
       body: [
         `The workspace didn't answer, so Imbue Studio can't tell whether ${named} ${isRestart ? "restarted" : "stopped"}.`,
@@ -79,43 +84,42 @@ export function describeRunVerbFailure(error: unknown, title: string, isRestart:
     };
   }
   if (failure.kind === "chat_gone") {
-    return { body: [failure.message], details: failure.details, isReportable: false };
+    return { body: [failureSentence(failure).message], details: failure.details, isReportable: false };
   }
   const lead = isRestart
-    ? `Couldn't restart ${named}. It's still stopped.`
-    : `Couldn't stop ${named}. It's still running.`;
-  if (failure.isUserFacing) {
-    return { body: [lead, failure.message], details: failure.details, isReportable: failure.isReportable };
+    ? `Couldn't restart ${named}. It's still stopped`
+    : `Couldn't stop ${named}. It's still running`;
+  if (failure.cause === "user_facing") {
+    return {
+      body: [`${lead}.`, failure.userFacingMessage],
+      details: failure.details,
+      isReportable: failure.isReportable,
+    };
   }
-  return { body: [`${lead} ${REPORT_A_BUG_ENDING}`], details: detailsBehind(failure), isReportable: true };
+  const told = failureSentence(failure, lead);
+  return { body: [told.message], details: told.details, isReportable: told.isReportable };
 }
 
 /** A Delete chat from the list, refused or unanswered. */
 export function describeDeleteFailure(error: unknown, title: string): FailureLines {
   const failure = describeRequestFailure(error);
   const named = `"${title}"`;
-  if (failure.isNotAnswered) {
+  if (failure.cause === "not_answered") {
     return {
       body: [`The workspace didn't answer, so Imbue Studio can't tell whether ${named} was deleted.`],
       details: failure.details,
       isReportable: false,
     };
   }
-  if (failure.isUserFacing) {
-    return { body: [failure.message], details: failure.details, isReportable: failure.isReportable };
-  }
-  return {
-    body: [`Couldn't delete ${named}. It's still here. ${REPORT_A_BUG_ENDING}`],
-    details: detailsBehind(failure),
-    isReportable: true,
-  };
+  const told = failureSentence(failure, `Couldn't delete ${named}. It's still here`);
+  return { body: [told.message], details: told.details, isReportable: told.isReportable };
 }
 
 /** A message sent from outside a chat (the launcher, a desktop draft) that the chat would not take, or that got no
  *  answer; ``isDrafted`` when it was put back in the chat's composer. */
 export function describeIntakeApplyFailure(error: unknown, isDrafted: boolean): FailureLines {
   const failure = describeRequestFailure(error);
-  if (failure.isNotAnswered) {
+  if (failure.cause === "not_answered") {
     return {
       body: ["The workspace didn't answer, so Imbue Studio can't tell whether your message reached this chat."],
       details: failure.details,
@@ -127,9 +131,9 @@ export function describeIntakeApplyFailure(error: unknown, isDrafted: boolean): 
       isDrafted
         ? "Your message couldn't be sent to this chat. It's in the box below."
         : "Your message couldn't be sent to a chat.",
-      failure.isUserFacing ? failure.message : null,
+      failure.cause === "user_facing" ? failure.userFacingMessage : null,
     ],
-    details: detailsBehind(failure),
-    isReportable: failure.isReportable,
+    details: failure.details,
+    isReportable: failure.cause === "user_facing" && failure.isReportable,
   };
 }

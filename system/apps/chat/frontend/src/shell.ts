@@ -14,6 +14,7 @@ import type { CreatedChat } from "./models/Chats";
 import type { ModelIdentity } from "./models/ModelSettings";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
+import { getShellConnection, setShellConnection } from "./shellConnection";
 import { currentPresenceState, reportFocusChange, reportPresence, startPresenceReporting } from "./presence";
 import type { ChatPageEmbedApi } from "./embedApi";
 import { setCompactFromRoot } from "./compactLayout";
@@ -25,7 +26,6 @@ export function subagentViewPath(key: string): string {
   return `/${key}`;
 }
 
-let connection: ShellConnection | null = null;
 let lastHandshake: ShellHandshake | null = null;
 
 /** The shell's last handshake to this page (or the root's, handed down), null before one. */
@@ -87,7 +87,8 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     if (isPresenceReported) reportPresence("hidden");
     m.redraw();
   };
-  connection = connectToShell({ onHandshake, onShown, onHidden });
+  const connection = connectToShell({ onHandshake, onShown, onHidden });
+  setShellConnection(connection);
   if (connection.isFramed) {
     // The chat root frames chat pages from this same origin and drives them by calling in
     // rather than by messaging (of the shell's messages, only the handshake comes down as one);
@@ -122,7 +123,7 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     window.addEventListener("focus", reportFocusChange);
     window.addEventListener("blur", reportFocusChange);
   }
-  window.addEventListener("focus", () => connection?.focused());
+  window.addEventListener("focus", () => connection.focused());
   reportChatLocation(chatId, options.path);
   return connection;
 }
@@ -138,7 +139,7 @@ function reportChatLocation(chatId: string, path: string): void {
     if (title === reportedTitle) return;
     reportedTitle = title;
     if (title !== "") document.title = title;
-    connection?.location(path, title);
+    getShellConnection()?.location(path, title);
   };
   report();
   addChatsUpdatedListener(report);
@@ -157,13 +158,13 @@ export async function startChatOnAccount(
   pick: ModelIdentity | null = null,
 ): Promise<void> {
   const created: CreatedChat = await createChat("", accountId, message, pick);
-  connection?.openPath(rootPathFor(created.chatId), "focus");
+  getShellConnection()?.openPath(rootPathFor(created.chatId), "focus");
   m.redraw();
 }
 
 /** Bring up the chat page of ``chatId``: a subagent view's way back to the chat it came from. */
 export function openChatPage(chatId: string): void {
-  connection?.openPath(rootPathFor(chatId), "focus");
+  getShellConnection()?.openPath(rootPathFor(chatId), "focus");
 }
 
 /**
@@ -173,5 +174,5 @@ export function openChatPage(chatId: string): void {
  */
 export function openSubagentView(chatId: string, sessionId: string): void {
   const key = `${chatId}.${getChatById(chatId)?.active_agent.agent_id ?? chatId}.${sessionId}`;
-  connection?.openPath(subagentViewPath(key), "focus");
+  getShellConnection()?.openPath(subagentViewPath(key), "focus");
 }

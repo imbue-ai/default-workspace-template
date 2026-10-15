@@ -33,6 +33,7 @@ import m from "mithril";
 import type { ChatSnapshot } from "../models/Chats";
 import { chatSnapshotFixture, handoffStateFixture } from "../models/chatSnapshotFixture";
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
+import { framePageInShell } from "../shellConnectionFixture";
 
 const ATTRS = { chatId: "agent-1", url: "http://localhost/terminal/", title: "terminal" };
 
@@ -105,6 +106,7 @@ describe("the agent terminal's liveness gate", () => {
       "fetch",
       vi.fn(async () => ({ ok: false, status: 500, text: async () => body, json: async () => JSON.parse(body) })),
     );
+    const shell = framePageInShell(true);
     const root = mountPanel();
     await settle();
 
@@ -114,7 +116,9 @@ describe("the agent terminal's liveness gate", () => {
     expect(root.querySelector(".agent-terminal-stopped")).not.toBeNull();
     expect(root.querySelector(".agent-terminal-start-error")?.textContent).toBe(sentence);
     expect(root.querySelector(".see-details-text")?.textContent).toContain("no such agent");
-    expect(root.querySelector(".agent-terminal-report-bug")).not.toBeNull();
+    (root.querySelector(".agent-terminal-report-bug") as HTMLElement).click();
+    expect(shell.posted("shell:report-bug")).toHaveLength(1);
+    shell.release();
 
     // A retry from the button that fails again keeps reporting, not silently resetting.
     (root.querySelector(".agent-terminal-start") as HTMLElement).click();

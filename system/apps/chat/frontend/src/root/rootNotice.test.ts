@@ -29,6 +29,7 @@ vi.mock("../models/Chats", async (importOriginal) => ({
 }));
 
 import m from "mithril";
+import { readFailure } from "@imbue/workspace-ui/src/models/failure";
 import { HttpError } from "@imbue/workspace-ui/src/models/http";
 import { isDeleting, rowMenuRows } from "./ChatRail";
 import type { ChatRow } from "./rows";
@@ -52,11 +53,20 @@ function select(key: string): void {
   row.onSelect();
 }
 
-async function rendered(): Promise<HTMLElement> {
+/** A connection whose shell can open the bug report, recording each time it is asked to. */
+function reportingConnection(canReportBug: boolean): { canReportBug: () => boolean; reportBug: () => void } {
+  return { canReportBug: () => canReportBug, reportBug: vi.fn() };
+}
+
+async function rendered(connection = reportingConnection(true)): Promise<HTMLElement> {
   await new Promise((resolve) => setTimeout(resolve, 0));
   const root = document.createElement("div");
-  m.render(root, m(RootNoticeView));
+  m.render(root, m(RootNoticeView, { connection }));
   return root;
+}
+
+function httpError(status: number, body: unknown): HttpError {
+  return new HttpError(readFailure({ status, body, rawText: JSON.stringify(body), requestKind: "change" }));
 }
 
 function button(root: HTMLElement, label: string): HTMLElement | undefined {
@@ -76,31 +86,40 @@ describe("the chat list's failed verbs", () => {
 
   it("tells a refused Stop chat plainly, with the command output behind See details, and tries it again", async () => {
     verbs.stopChat.mockRejectedValue(
-      new HttpError(500, "Failed to stop agent 'plan': mngr exited with code 1", "HTTP 500", false),
+      httpError(500, { detail: "Failed to stop agent 'plan': mngr exited with code 1" }),
     );
     select("stop");
-    const root = await rendered();
+    const connection = reportingConnection(true);
+    const root = await rendered(connection);
 
     expect(root.textContent).toContain(
       `Couldn't stop "Plan the trip". It's still running. Try again. If this persists, report a bug.`,
     );
     expect(root.querySelector(".see-details-text")?.textContent).toContain("mngr exited with code 1");
-    expect(button(root, "Report a bug")).toBeDefined();
+    button(root, "Report a bug")!.click();
+    expect(connection.reportBug).toHaveBeenCalledTimes(1);
     button(root, "Try again")!.click();
     expect(verbs.stopChat).toHaveBeenCalledTimes(2);
   });
 
+  it("offers Report a bug only where the shell said Imbue Studio can open one", async () => {
+    verbs.stopChat.mockRejectedValue(
+      httpError(500, { detail: "Failed to stop agent 'plan': mngr exited with code 1" }),
+    );
+    select("stop");
+    const root = await rendered(reportingConnection(false));
+
+    expect(root.textContent).toContain("If this persists, report a bug.");
+    expect(button(root, "Report a bug")).toBeUndefined();
+  });
+
   it("says a chat that is gone is gone, with nothing to try again", async () => {
     verbs.stopChat.mockRejectedValue(
-      new HttpError(
-        404,
-        "This chat is no longer here.",
-        "HTTP 404\nChat 'agent-1' not found",
-        false,
-        true,
-        false,
-        "chat_gone",
-      ),
+      httpError(404, {
+        detail: "Chat 'agent-1' not found",
+        user_facing_message: "This chat is no longer here.",
+        kind: "chat_gone",
+      }),
     );
     select("stop");
     const root = await rendered();
@@ -111,9 +130,7 @@ describe("the chat list's failed verbs", () => {
   });
 
   it("says a delete nothing answered may have run, offers no retry, and keeps the row marked until the list updates", async () => {
-    verbs.destroyChat.mockRejectedValue(
-      new HttpError(502, "The workspace didn't answer.", "HTTP 502", false, false, true),
-    );
+    verbs.destroyChat.mockRejectedValue(httpError(502, null));
     select("delete");
     const root = await rendered();
 
@@ -129,14 +146,12 @@ describe("the chat list's failed verbs", () => {
 
   it("shows a half-done delete's own sentence and unmarks a refused one", async () => {
     verbs.destroyChat.mockRejectedValue(
-      new HttpError(
-        500,
-        "This chat was only partly deleted: its agent is gone, but its conversation could not be removed. If the chat " +
-          "comes back later, delete it again.",
-        "HTTP 500",
-        false,
-        true,
-      ),
+      httpError(500, {
+        detail: "the agent was destroyed but its record could not be removed",
+        user_facing_message:
+          "This chat was only partly deleted: its agent is gone, but its conversation could not be removed. If the " +
+          "chat comes back later, delete it again.",
+      }),
     );
     select("delete");
     const root = await rendered();
@@ -149,7 +164,7 @@ describe("the chat list's failed verbs", () => {
 describe("a message from outside a chat that the chat would not take", () => {
   it("says the message is in the chat's box when it was refused, with the refusal behind See details", async () => {
     const { describeIntakeApplyFailure } = await import("./rootNotice");
-    const refused = new HttpError(400, "A pick names one of the chats that can take a message", "HTTP 400", false);
+    const refused = httpError(400, { detail: "A pick names one of the chats that can take a message" });
     const lines = describeIntakeApplyFailure(refused, true);
     expect(lines.body).toEqual(["Your message couldn't be sent to this chat. It's in the box below.", null]);
     expect(lines.details).toContain("A pick names one of the chats");
@@ -157,7 +172,7 @@ describe("a message from outside a chat that the chat would not take", () => {
 
   it("does not claim where the message went when nothing answered", async () => {
     const { describeIntakeApplyFailure } = await import("./rootNotice");
-    const unanswered = new HttpError(504, "The workspace didn't answer.", "HTTP 504", false, false, true);
+    const unanswered = httpError(504, null);
     expect(describeIntakeApplyFailure(unanswered, false).body).toEqual([
       "The workspace didn't answer, so Imbue Studio can't tell whether your message reached this chat.",
     ]);

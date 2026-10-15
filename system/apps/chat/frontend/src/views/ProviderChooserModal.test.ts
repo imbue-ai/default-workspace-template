@@ -58,6 +58,7 @@ import m from "mithril";
 import { closeProviderChooser, isProviderChooserOpen, openProviderChooser } from "../models/Providers";
 import type { UnpickableReason } from "../models/Providers";
 import { PASTE_STEP_LABEL, ProviderChooserModal } from "./ProviderChooserModal";
+import { framePageInShell } from "../shellConnectionFixture";
 import { ACCOUNT_FAILING_NOTE, ACCOUNT_NEUTRAL_NOTE } from "./providerSignInStyles";
 
 /** Render into a real element, not just call `view()`.
@@ -679,14 +680,17 @@ describe("a failure on the chooser's screens", () => {
   it("says the providers couldn't be loaded, with the status behind See details", async () => {
     state.loaded = false;
     loadLanes.mockRejectedValue(rejection(500, null));
+    const shell = framePageInShell(true);
 
     const { root } = await mounted();
 
     expect(root.textContent).toContain(
       "Couldn't load the list of providers. Try again. If this persists, report a bug.",
     );
-    expect(root.textContent).toContain("Report a bug");
     expect(root.querySelector(".see-details-text")?.textContent).toBe("HTTP 500");
+    (root.querySelector(".report-bug") as HTMLElement).click();
+    expect(shell.posted("shell:report-bug")).toHaveLength(1);
+    shell.release();
   });
 
   it("says the workspace didn't answer when the provider list got a gateway answer", async () => {
@@ -704,8 +708,10 @@ describe("a failure on the chooser's screens", () => {
       rejection(400, {
         detail: "Timed out waiting for the sign-in details.",
         user_facing_message: "Imbue Studio couldn't start the sign-in. Try again. If this persists, report a bug.",
+        reportable: true,
       }),
     );
+    const shell = framePageInShell(true);
     const { root, draw } = await mounted();
 
     (root.querySelector('[data-e2e="lane-anthropic"]') as HTMLElement).click();
@@ -718,6 +724,7 @@ describe("a failure on the chooser's screens", () => {
     expect(root.querySelector(".see-details-text")?.textContent).toContain(
       "Timed out waiting for the sign-in details.",
     );
+    shell.release();
   });
 
   it("words a sign-in refused with no reason itself, never as the rejection's own text", async () => {

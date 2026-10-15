@@ -2,8 +2,10 @@ import m from "mithril";
 import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
 import type { NoticeAction } from "@imbue/workspace-ui/src/components/NoticeDialog";
 import type { SendFailureKind } from "@imbue/workspace-ui/src/models/request-error";
-import { reportBugAction } from "@imbue/workspace-ui/src/report-bug";
+import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import { startChatOnAccount } from "../shell";
+import { getShellConnection } from "../shellConnection";
+import { reportBugActions } from "./failure-actions";
 import {
   describeCancelSwitchFailure,
   describeLaunchFailure,
@@ -29,6 +31,7 @@ import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
 import { stageElementReferences } from "../models/elementReferences";
 import { drainToComposer, getEventsForChat, interruptAgent, mintMessageId, sendMessage } from "../models/Response";
+import type { SendStatus } from "../models/Response";
 import { cancelHandoff, switchChat } from "../models/Handoffs";
 import {
   getPendingPick,
@@ -75,7 +78,7 @@ import {
   launchChat,
   whenChatRegistered,
 } from "../models/Chats";
-import { isWorkingActivityState } from "./ActivityIndicator";
+import { COMPACTING_STATE, isWorkingActivityState } from "../models/activityState";
 import { harnessLabel } from "./harness-labels";
 import { handoffComposerPlaceholder } from "./handoff-phase";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
@@ -113,6 +116,20 @@ const MESSAGE_TEXT_KEY_PREFIX = "message-text:";
 const KINDS_NOTHING_HERE_CAN_CLEAR: ReadonlySet<SendFailureKind> = new Set(["account_signed_out", "chat_gone"]);
 // Kinds of refused send whose cause the agent's terminal shows.
 const KINDS_THE_TERMINAL_SHOWS: ReadonlySet<SendFailureKind> = new Set(["input_blocked", "not_ready", "unknown"]);
+// The kinds of the server's refusal of a /compact it declines to run: before the agent has anything
+// to compact, and while it is busy or stopped.
+const DECLINED_COMPACT_SEND_FAILURE_KINDS: ReadonlySet<string | null> = new Set([
+  "nothing_to_compact",
+  "compact_unavailable",
+]);
+
+/** Drop the "Sending…" bubble of a /compact the server ran as a compaction: no transcript turn will
+ *  arrive to retire it, and the compaction's own status and chips show what the send did. */
+function dropOutgoingOfRequestedCompaction(chatId: string, outgoingId: string, status: SendStatus | null): void {
+  if (status === "compaction_requested") {
+    dropOutgoing(chatId, outgoingId);
+  }
+}
 
 function messageTextKey(chatId: string): string {
   return `${MESSAGE_TEXT_KEY_PREFIX}${chatId}`;
@@ -166,7 +183,7 @@ export function raiseNewChatFailure(chatId: string, error: unknown, retry: () =>
     title: "Couldn't start a new chat",
     describe: describeNewChatFailure,
     error,
-    retry: describeRequestFailure(error).isNotAnswered ? undefined : retry,
+    retry: describeRequestFailure(error).cause === "not_answered" ? undefined : retry,
   });
 }
 
@@ -365,9 +382,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   // /logout would run the harness's own auth flow inside the agent's terminal
   // (or reach the model as prose), bypassing the managed agent-auth surface.
   let interceptedAuthCommand: string | null = null;
-  // A slash command the chat declines to deliver, because it would change the agent's terminal
-  // rather than start a turn. It still works from that terminal, which the notice says.
-  let declinedSlashCommand: { command: string; body: string | null } | null = null;
+  // A message the chat declines to deliver: a slash command that would change the agent's terminal
+  // rather than start a turn (it still works from that terminal, which the notice says), or a
+  // /compact the server declined to run (nothing to compact yet, or the agent is busy or stopped).
+  // Only a slash command offers Source view, where it can still be typed.
+  let declinedSend: { title: string; body: string; isSourceViewOffered: boolean } | null = null;
   // Why the last send or interrupt failed, in the harness's own words, shown as a notice.
   // Component state like the notices above, NOT module state: every open chat panel mounts its
   // own MessageInput, and a module-level value would raise the notice in all of them at once.
@@ -547,7 +566,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         isCancelSwitchInFlight = false;
         // The notices name a command typed for the previous agent, so they must not follow the
         // user to the next one.
-        declinedSlashCommand = null;
+        declinedSend = null;
         interceptedAuthCommand = null;
         // Safe to drop: the failed message was put back in that agent's composer when the send
         // failed, so nothing is lost by closing its notice unanswered.
@@ -626,7 +645,13 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             if (match.popup.action === "open_auth") {
               interceptedAuthCommand = match.command;
             } else {
-              declinedSlashCommand = { command: match.command, body: match.popup.notice_body ?? null };
+              declinedSend = {
+                title: `${match.command} can't be sent from chat`,
+                body:
+                  match.popup.notice_body ??
+                  "Chat doesn't take this command. Say what you want in your own words instead, and the agent will do it.",
+                isSourceViewOffered: true,
+              };
             }
             m.redraw();
             return null;
@@ -752,30 +777,41 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // "Sending…" until the create lands, and the send goes out then. A create that
           // fails rejects here and the message goes back to the composer like any failed send.
           await whenChatRegistered(chatId);
-          await sendMessage(chatId, finalText, messageId);
+          const status = await sendMessage(chatId, finalText, messageId);
           // The send resolved: the message is now real (committed, queued, or held for the
           // agent the chat is switching to), so its "Sending…" bubble is removed by the arriving
           // transcript turn, queued snapshot, or held-send snapshot (see OutgoingMessages).
+          dropOutgoingOfRequestedCompaction(chatId, outgoingId, status);
           noteOutgoingAccepted(chatId, outgoingId);
         } catch (err) {
-          // The send genuinely failed (the backend confirms delivery before
-          // resolving, so a rejection means the message was NOT accepted). Drop the
-          // optimistic bubble and handle failure the original way: restore the
-          // text/attachments to the composer, then surface a popup.
-          const detail = describeRequestError(err);
-          console.error(`Failed to send message to chat ${chatId}: ${detail}`);
+          // A refusal means the message was NOT accepted: the chat app answers a send only once the
+          // agent has it. A /compact the server declined to run gets the declined-command notice
+          // rather than the failure notice, since retrying at once cannot change it.
+          const failure = describeRequestFailure(err);
+          const isDeclined = DECLINED_COMPACT_SEND_FAILURE_KINDS.has(failure.kind);
+          if (!isDeclined) {
+            console.error(`Failed to send message to chat ${chatId}: ${describeRequestError(err)}`);
+          }
           dropOutgoing(chatId, outgoingId);
           // Back in the composer immediately: the recovery record is closure state, so a reload
           // would take the message with it (contract A1a). A repeat send removes that copy once
           // it has landed.
           restoreFailedMessageToComposer(chatId, sentText, sentAttachments);
           catchUpOnSignedOutAccount(err);
-          // Actions only if they are still on the agent that failed -- this catch runs after an
+          // Notices only if they are still on the agent that failed -- this catch runs after an
           // await, so they may have switched and the switch-clear has already gone by.
           if (currentChatId === chatId) {
-            clearActionFailureNotice();
-            noteSendFailure(err);
-            actionFailureRecovery = { chatId, text: sentText, sentText: finalText, attachments: sentAttachments };
+            if (isDeclined) {
+              declinedSend = {
+                title: "/compact wasn't sent",
+                body: failureSentence(failure).message,
+                isSourceViewOffered: false,
+              };
+            } else {
+              clearActionFailureNotice();
+              noteSendFailure(err);
+              actionFailureRecovery = { chatId, text: sentText, sentText: finalText, attachments: sentAttachments };
+            }
           }
           m.redraw();
         }
@@ -848,7 +884,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             clearActionFailureNotice();
             actionFailureTitle = `Couldn't switch to ${harnessLabel(target.harness)}`;
             actionFailure = describeSwitchFailure(err, harnessLabel(target.harness), true);
-            isActionFailureUnanswered = describeRequestFailure(err).isNotAnswered;
+            isActionFailureUnanswered = describeRequestFailure(err).cause === "not_answered";
             if (isRefusedForNewChat(err)) {
               actionFailureActions = [
                 {
@@ -883,13 +919,16 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           const { returned_block } = await cancelHandoff(chatId);
           prependToComposer(chatId, returned_block);
         } catch (err) {
-          const detail = describeRequestError(err);
-          console.error(`Failed to cancel the switch of chat ${chatId}: ${detail}`);
+          console.error(`Failed to cancel the switch of chat ${chatId}: ${describeRequestError(err)}`);
           clearActionFailureNotice();
           if (isNothingToCancel(err)) {
             // Nothing failed: the switch finished or was called off before the press arrived.
             actionFailureTitle = "Nothing to cancel";
-            actionFailure = { body: [detail], details: null, isReportable: false };
+            actionFailure = {
+              body: [failureSentence(describeRequestFailure(err)).message],
+              details: null,
+              isReportable: false,
+            };
           } else {
             actionFailureTitle = "Couldn't cancel the switch";
             actionFailure = describeCancelSwitchFailure(err);
@@ -906,7 +945,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // Not while a notice is open: this rAF lands after mithril has mounted the notice and
           // focused its OK button, so refocusing the composer would steal it -- leaving a modal
           // the keyboard cannot dismiss, and an Enter that re-sends the just-restored text.
-          if (actionFailure === null) {
+          if (actionFailure === null && declinedSend === null) {
             focusMessageTextarea();
           }
         });
@@ -1006,7 +1045,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       }
 
       function dismissDeclinedCommandNotice(): void {
-        declinedSlashCommand = null;
+        declinedSend = null;
         m.redraw();
       }
 
@@ -1097,13 +1136,14 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       /** Tell a refused or unanswered send, with what the buttons need to know about it. */
       function noteSendFailure(error: unknown): void {
         const failure = describeRequestFailure(error);
-        actionFailureTitle = "Couldn't send your message";
+        actionFailureTitle =
+          failure.cause === "not_answered" ? "Your message may not have been sent" : "Couldn't send your message";
         actionFailure = describeSendFailure(error);
         // The reason can change between attempts -- a blocked input can become an agent that is gone -- and the
         // buttons follow the kind, so it is read with the text every time.
         actionFailureKind = describeRequestErrorKind(error);
         actionFailureServerKind = failure.kind;
-        isActionFailureUnanswered = failure.isNotAnswered;
+        isActionFailureUnanswered = failure.cause === "not_answered";
         actionFailureActions =
           actionFailureKind === "chat_gone" ? [{ label: "Start a new chat", run: startNewChatInsteadOfGoneOne }] : [];
       }
@@ -1197,7 +1237,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         const outgoingId = addOutgoing(recovery.chatId, recovery.text, messageId);
         try {
           await whenChatRegistered(recovery.chatId);
-          await sendMessage(recovery.chatId, recovery.sentText, messageId);
+          const status = await sendMessage(recovery.chatId, recovery.sentText, messageId);
+          dropOutgoingOfRequestedCompaction(recovery.chatId, outgoingId, status);
           noteOutgoingAccepted(recovery.chatId, outgoingId);
           // Landed, so take the restored copy back out of the composer.
           clearRestoredMessage(recovery.chatId, recovery.text, recovery.attachments);
@@ -1363,7 +1404,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                   },
                 ]
               : []),
-            ...(failure.isReportable ? [reportBugAction()] : []),
+            ...reportBugActions(getShellConnection(), failure.isReportable),
             ...(isForceable
               ? [
                   {
@@ -1430,20 +1471,17 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       }
 
       function renderDeclinedCommandNotice(
-        declined: { command: string; body: string | null },
+        declined: { title: string; body: string; isSourceViewOffered: boolean },
         onTurnOnSourceView: (() => void) | undefined,
       ): m.Children {
         return m(declinedCommandNotice, {
-          title: `${declined.command} can't be sent from chat`,
-          body: [
-            declined.body ??
-              "Chat doesn't take this command. Say what you want in your own words instead, and the agent will do it.",
-          ],
+          title: declined.title,
+          body: [declined.body],
           dismissLabel: "OK",
           onDismiss: dismissDeclinedCommandNotice,
           // The command still works in the agent's own terminal, a switch away.
           actions:
-            onTurnOnSourceView === undefined
+            onTurnOnSourceView === undefined || !declined.isSourceViewOffered
               ? []
               : [
                   {
@@ -1536,8 +1574,13 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       // above the input, read straight off the backend-derived activity state. While the
       // chat switches harness the turn in progress is the switch's own (the summary it asked
       // for), so the button is the switch's cancel instead, for as long as that is possible.
-      const isAgentWorking = isWorkingActivityState(chat?.active_agent.activity_state ?? null);
-      const isStopButtonVisible = isAgentWorking && !isInterruptInFlight && handoff === null;
+      const activityState = chat?.active_agent.activity_state ?? null;
+      const isAgentWorking = isWorkingActivityState(activityState);
+      const isUninterruptibleCompaction =
+        activityState === COMPACTING_STATE &&
+        getHarnessCatalog(chat?.active_agent.harness)?.can_interrupt_compaction === false;
+      const isStopButtonVisible =
+        isAgentWorking && !isInterruptInFlight && handoff === null && !isUninterruptibleCompaction;
       const isCancelSwitchVisible = handoff !== null && isHandoffCancellable(handoff);
       // Read straight off the backend's queue snapshot -- the frontend holds no queued state.
       const hasQueuedMessages = (chat?.active_agent.queued_messages ?? []).length > 0;
@@ -1550,9 +1593,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         { class: "message-input mx-auto w-full max-w-[calc(var(--width-message-column)+2*var(--radius-xl))]" },
         [
           interceptedAuthCommand !== null ? renderAuthCommandNotice(interceptedAuthCommand) : null,
-          declinedSlashCommand !== null
-            ? renderDeclinedCommandNotice(declinedSlashCommand, vnode.attrs.onTurnOnSourceView)
-            : null,
+          declinedSend !== null ? renderDeclinedCommandNotice(declinedSend, vnode.attrs.onTurnOnSourceView) : null,
           actionFailure !== null ? renderActionFailureNotice(actionFailure, vnode.attrs.onTurnOnSourceView) : null,
           switchTarget !== null ? renderSwitchStrip(switchTarget) : null,
           blockingNotice,

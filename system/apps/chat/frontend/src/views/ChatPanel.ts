@@ -57,6 +57,7 @@ import { uploadFilesToComposer } from "../models/ComposerAttachments";
 import { MessageInput, raiseNewChatFailure } from "./MessageInput";
 import { isAgentProcessDead } from "./agentLiveness";
 import { startChatOnAccount } from "../shell";
+import { getShellConnection } from "../shellConnection";
 import { getSelectedAccount, openProviderChooser } from "../models/Providers";
 import { destroyChat, startChat } from "../root/verbs";
 import { ModelProviderMenu } from "./ModelProviderMenu";
@@ -79,12 +80,12 @@ import { renderHeldSends } from "./HeldSendView";
 import { HandoffFailedNotice } from "./HandoffFailedNotice";
 import { renderHandoffTailNode } from "./handoff-node";
 import { SwitchDialog } from "./SwitchDialog";
-import { hasOpenHandoffRequest } from "./turn-grouping";
+import { hasOpenHandoffRequest, isTailTurnSettled, liveCompactionOf } from "./turn-grouping";
+import { closeRunningCompactionChips } from "./compaction-chips";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
-import { joinDetails } from "@imbue/workspace-ui/src/models/failure";
-import { REPORT_A_BUG_LABEL, openBugReport } from "@imbue/workspace-ui/src/report-bug";
-import { detailsBehind, plainFailureLines, plainFailureLinesOf, plainFailureSentence } from "./failure-lines";
+import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { joinDetailLines, plainFailureLines, plainFailureLinesOf, plainFailureSentence } from "./failure-lines";
 import type { FailureLines } from "./failure-lines";
 
 function getChatTerminalUrl(chatId: string): string {
@@ -352,7 +353,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     return m("div", { class: `${extraClass} flex flex-col items-center gap-1 text-center` }, [
       m("p", { class: "text-danger text-sm" }, plainFailureSentence(lines)),
       m("div", { class: "text-secondary" }, m(SeeDetails, { details: lines.details })),
-      lines.isReportable ? m(Button, { sm: true, onclick: openBugReport }, REPORT_A_BUG_LABEL) : null,
+      lines.isReportable ? m(ReportBugButton, { connection: getShellConnection(), sm: true }) : null,
     ]);
   }
 
@@ -572,7 +573,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     const agent = getChatById(chatId)?.active_agent;
     const screenDetails = screenLoading
       ? null
-      : joinDetails([
+      : joinDetailLines([
           screenContent,
           screenError === null ? null : `Could not read the agent's terminal: ${screenError}`,
         ]);
@@ -671,7 +672,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         m("p", { class: "message-list-error-text text-danger text-center" }, plainFailureSentence(lines)),
         m("div", { class: "flex items-center gap-2" }, [
           m(Button, { sm: true, extra: "message-list-reload", onclick: () => reloadAfterFailure(chatId) }, "Refresh"),
-          lines.isReportable ? m(Button, { sm: true, onclick: openBugReport }, REPORT_A_BUG_LABEL) : null,
+          lines.isReportable ? m(ReportBugButton, { connection: getShellConnection(), sm: true }) : null,
         ]),
         m("div", { class: "text-secondary" }, m(SeeDetails, { details: lines.details })),
       ]);
@@ -707,9 +708,9 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 "div",
                 { class: "basis-full text-secondary" },
                 m(SeeDetails, {
-                  details: joinDetails([
-                    load.error.isUserFacing ? load.error.message : null,
-                    detailsBehind(load.error),
+                  details: joinDetailLines([
+                    load.error.cause === "user_facing" ? load.error.userFacingMessage : null,
+                    load.error.details,
                   ]),
                 }),
               ),
@@ -729,7 +730,10 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     }
 
     const chat = getChatById(chatId);
-    const agentIsIdle = chat?.active_agent.activity_state === "IDLE";
+    const activityState = chat?.active_agent.activity_state;
+    const agentIsIdle = activityState === "IDLE";
+    const tailTurnSettled = isTailTurnSettled(activityState);
+    const liveCompaction = liveCompactionOf(activityState, chat?.active_agent.compaction_cause);
 
     // A new chat starts on fast mode; once it has run the workspace's turn limit,
     // switch it to standard speed. Checked here because this is where the loaded
@@ -739,17 +743,18 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     // Memoize the turn-grouping -> rows pipeline. buildSections walks the entire
     // held transcript, so recomputing it on every scroll-driven redraw is the
     // dominant scroll cost on a long conversation. Its output depends only on the
-    // held events and the idle flag -- captured by the render version (bumped on
-    // any data mutation) plus the idle flag -- so a scroll-only redraw reuses the
-    // cached rows. The grouping (steps, decoration, skill expansions, auth-error
-    // hiding) is produced by the same functions on the same inputs, so the
-    // rendered structure is identical to recomputing.
-    const renderKey = `${chatId}|${getRenderVersion(chatId)}|${agentIsIdle ? 1 : 0}`;
+    // held events, the settled flag and the running compaction -- captured by the
+    // render version (bumped on any data mutation) plus those two -- so a
+    // scroll-only redraw reuses the cached rows.
+    const renderKey =
+      `${chatId}|${getRenderVersion(chatId)}|${tailTurnSettled ? 1 : 0}|` +
+      `${liveCompaction === null ? "-" : (liveCompaction.cause ?? "unknown")}`;
     if (renderKey !== rowsCacheKey) {
       // Both structure and decoration come from the transcript walk; there is no
       // side-channel enrichment. The same pipeline feeds the subagent view, so a
       // subagent's "View conversation" renders an identical progress timeline.
-      cachedRows = buildConversationRows(chatId, events, agentIsIdle);
+      if (liveCompaction === null) closeRunningCompactionChips();
+      cachedRows = buildConversationRows(chatId, events, tailTurnSettled, liveCompaction);
       rowsCacheKey = renderKey;
     }
     const rows = cachedRows;

@@ -11,13 +11,14 @@ import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
-import { REPORT_A_BUG_LABEL, openBugReport } from "@imbue/workspace-ui/src/report-bug";
+import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { getChatById } from "../models/Chats";
 import type { ChatSnapshot, HandoffState } from "../models/Chats";
 import { retryHandoff } from "../models/Handoffs";
 import { getAccounts } from "../models/Providers";
 import type { ProviderAccount } from "../models/Providers";
 import { startChatOnAccount } from "../shell";
+import { getShellConnection } from "../shellConnection";
 import { raiseNewChatFailure } from "./MessageInput";
 import { harnessLabel } from "./harness-labels";
 import { plainFailureLines, plainFailureSentence } from "./failure-lines";
@@ -145,7 +146,7 @@ export function HandoffFailedNotice(): m.Component<{ chatId: string }> {
                 m("p", { class: "handoff-retry-error text-sm text-danger" }, plainFailureSentence(retryError)),
                 m("div", { class: "text-secondary" }, m(SeeDetails, { details: retryError.details })),
                 retryError.isReportable
-                  ? m(Button, { sm: true, extra: "self-start", onclick: openBugReport }, REPORT_A_BUG_LABEL)
+                  ? m(ReportBugButton, { connection: getShellConnection(), sm: true, extra: "self-start" })
                   : null,
               ])
             : null,

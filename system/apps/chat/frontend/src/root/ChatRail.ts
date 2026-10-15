@@ -189,7 +189,7 @@ function deleteChat(row: ChatRow): void {
   m.redraw();
   destroyChat(row.chatId).catch((error: unknown) => {
     const failure = describeRequestFailure(error);
-    if (failure.isNotAnswered) {
+    if (failure.cause === "not_answered") {
       // The delete may have run: the row stays marked until the next list update says whether the chat is still
       // there.
       unmarkOnNextUpdate(row.chatId);
@@ -200,7 +200,7 @@ function deleteChat(row: ChatRow): void {
     raiseRootNotice({
       title: "Couldn't delete the chat",
       lines: describeDeleteFailure(error, row.title),
-      retry: failure.isNotAnswered || failure.isUserFacing ? null : () => deleteChat(row),
+      retry: failure.cause === "not_answered" || failure.cause === "user_facing" ? null : () => deleteChat(row),
     });
   });
 }

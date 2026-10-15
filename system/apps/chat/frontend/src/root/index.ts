@@ -286,7 +286,7 @@ async function applyIntake(token: string, pickedChatId: string | null, intake: P
     const chatId = pickedChatId ?? intake.chatId;
     // A refusal means the message went nowhere, so it goes into the chat's composer to be sent again; with no answer
     // it may have arrived, so it is not put there too.
-    const isDrafted = !failure.isNotAnswered && chatId !== null;
+    const isDrafted = failure.cause !== "not_answered" && chatId !== null;
     settleIntake(chatId ?? selectedChatId);
     if (isDrafted && chatId !== null) draftInto(chatId, intake.message);
     raiseRootNotice({
@@ -436,7 +436,7 @@ const ChatRoot: m.Component = {
               onPick: pickFor,
               onDismiss: dismissPick,
             }),
-        m(RootNoticeView),
+        m(RootNoticeView, { connection }),
       ],
     );
   },

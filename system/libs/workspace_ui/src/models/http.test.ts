@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CHANGE_NOT_ANSWERED, READ_NOT_ANSWERED } from "./failure";
-import { HttpError, REST_FALLBACK_MESSAGE, getJson, postJson } from "./http";
+import { HttpError, getJson, postJson } from "./http";
 
 function answering(status: number, body: unknown, contentType = "application/json"): void {
   const text = body === undefined ? null : typeof body === "string" ? body : JSON.stringify(body);
@@ -28,55 +27,74 @@ describe("postJson", () => {
     expect(await postJson<void>("/api/x", {})).toBeUndefined();
   });
 
-  it("throws the server's detail with the status a caller can tell refusals apart by", async () => {
-    answering(409, { detail: "the stored layout is newer" });
-    const failure = await failureOf(postJson("/api/x", {}));
-    expect(failure).toMatchObject({ status: 409, message: "the stored layout is newer", details: "HTTP 409" });
-    expect(failure.isUserFacing).toBe(false);
-  });
-
-  it("shows a sentence written for people on its own, with the developer's detail behind the details", async () => {
-    const couldNotOpen = "Chat couldn't open that. Try again. If this persists, report a bug.";
-    answering(502, { detail: "chat answered the launch with 500: boom", user_facing_message: couldNotOpen });
-    const failure = await failureOf(postJson("/api/x", {}));
-    expect(failure).toMatchObject({
-      message: couldNotOpen,
+  it("reads a sentence the server wrote for people as such, its developer detail behind the details", async () => {
+    answering(502, {
+      detail: "chat answered the launch with 500: boom",
+      user_facing_message: "Chat couldn't read its agent list. If this persists, report a bug.",
+      reportable: true,
+      kind: "launch_failed",
+    });
+    const { failure } = await failureOf(postJson("/api/x", {}));
+    expect(failure).toEqual({
+      cause: "user_facing",
+      userFacingMessage: "Chat couldn't read its agent list. If this persists, report a bug.",
+      reason: "chat answered the launch with 500: boom",
+      isReportable: true,
+      requestKind: "change",
+      status: 502,
       details: "HTTP 502\nchat answered the launch with 500: boom",
-      isUserFacing: true,
-      // It asks for a bug report, so the surface offers the button.
-      isReportable: true,
+      kind: "launch_failed",
+      body: expect.objectContaining({ kind: "launch_failed" }),
     });
   });
 
-  it("answers a refusal with no reason with the fallback, the body behind the details", async () => {
-    answering(500, "<html>Internal Server Error</html>", "text/html");
-    const failure = await failureOf(postJson("/api/x", {}));
-    expect(failure).toMatchObject({
-      status: 500,
-      message: REST_FALLBACK_MESSAGE,
-      details: "HTTP 500\n<html>Internal Server Error</html>",
-      isReportable: true,
-    });
+  it("reads the server's detail as its reason, with the status a caller can tell refusals apart by", async () => {
+    answering(409, { detail: "the stored layout is newer" });
+    const error = await failureOf(postJson("/api/x", {}));
+    expect(error.status).toBe(409);
+    // The message stays the server's reason, for the screens not yet worded with failureSentence.
+    expect(error.message).toBe("the stored layout is newer");
+    expect(error.failure).toMatchObject({ cause: "reason", reason: "the stored layout is newer" });
+    expect(error.failure.details).toBe("HTTP 409\nthe stored layout is newer");
   });
 
-  it("never says a change was not made when a gateway answered or nothing did", async () => {
+  it("reads a gateway status that carries a JSON reason as the server's own answer, not as no answer", async () => {
+    answering(503, { detail: "Agent 'x' is not ready to receive messages yet" });
+    expect((await failureOf(postJson("/api/x", {}))).failure.cause).toBe("reason");
+  });
+
+  it("reads a proxy's plain-text gateway status, and a dropped connection, as no answer", async () => {
     answering(504, "Backend timed out", "text/plain");
     const gateway = await failureOf(postJson("/api/x", {}));
-    expect(gateway).toMatchObject({ message: CHANGE_NOT_ANSWERED, details: "HTTP 504\nBackend timed out" });
+    expect(gateway.failure).toMatchObject({ cause: "not_answered", details: "HTTP 504\nBackend timed out" });
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
         throw new TypeError("Failed to fetch");
       }),
     );
-    const unanswered = await failureOf(postJson("/api/x", {}));
-    expect(unanswered).toMatchObject({ status: 0, message: CHANGE_NOT_ANSWERED, details: "Failed to fetch" });
+    const dropped = await failureOf(postJson("/api/x", {}));
+    expect(dropped.status).toBe(0);
+    expect(dropped.failure).toMatchObject({ cause: "not_answered", details: "Failed to fetch" });
+  });
+
+  it("reads a refusal with no reason as such, the body behind the details", async () => {
+    answering(500, "<html>Internal Server Error</html>", "text/html");
+    const error = await failureOf(postJson("/api/x", {}));
+    expect(error.failure).toMatchObject({
+      cause: "no_reason",
+      details: "HTTP 500\n<html>Internal Server Error</html>",
+      body: null,
+    });
   });
 });
 
 describe("getJson", () => {
-  it("words a read nothing answered as a read", async () => {
+  it("knows a failed GET only read", async () => {
     answering(503, undefined);
-    expect(await failureOf(getJson("/api/x"))).toMatchObject({ message: READ_NOT_ANSWERED, details: "HTTP 503" });
+    expect((await failureOf(getJson("/api/x"))).failure).toMatchObject({
+      cause: "not_answered",
+      requestKind: "read",
+    });
   });
 });

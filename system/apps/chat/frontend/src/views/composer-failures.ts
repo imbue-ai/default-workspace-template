@@ -3,10 +3,10 @@
  * mounting the composer.
  */
 
-import { REPORT_A_BUG_ENDING } from "@imbue/workspace-ui/src/models/failure";
+import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import { describeRequestErrorKind, describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import type { SendFailureKind } from "@imbue/workspace-ui/src/models/request-error";
-import { detailsBehind, plainFailureLines } from "./failure-lines";
+import { plainFailureLines } from "./failure-lines";
 import type { FailureLines } from "./failure-lines";
 
 export const SEND_NOT_ANSWERED =
@@ -14,8 +14,6 @@ export const SEND_NOT_ANSWERED =
 export const SEND_TO_GONE_CHAT =
   "This chat is no longer here -- it was deleted. Your message is still in the box, so you can paste it into a new chat.";
 const SEND_REFUSED = "Your message wasn't delivered. Your text is back in the box, so nothing was lost.";
-const SEND_REFUSED_WITH_NO_REASON =
-  "Your message wasn't delivered. Your text is back in the box. Try again. If this persists, report a bug.";
 
 /** What a send refused for a reason mngr classified means for the user, where the server said nothing of its own. */
 function sendFailureKindLine(kind: SendFailureKind): string | null {
@@ -33,20 +31,25 @@ function sendFailureKindLine(kind: SendFailureKind): string | null {
 export function describeSendFailure(error: unknown): FailureLines {
   const failure = describeRequestFailure(error);
   const kind = describeRequestErrorKind(error);
-  if (failure.isNotAnswered) return { body: [SEND_NOT_ANSWERED], details: failure.details, isReportable: false };
-  if (kind === "chat_gone") return { body: [SEND_TO_GONE_CHAT], details: failure.details, isReportable: false };
-  if (failure.isUserFacing) {
-    return { body: [failure.message], details: failure.details, isReportable: failure.isReportable };
+  if (failure.cause === "not_answered") {
+    return { body: [SEND_NOT_ANSWERED], details: failure.details, isReportable: false };
   }
-  if (failure.isReportable)
-    return { body: [SEND_REFUSED_WITH_NO_REASON], details: failure.details, isReportable: true };
-  return { body: [SEND_REFUSED, sendFailureKindLine(kind)], details: detailsBehind(failure), isReportable: false };
+  if (kind === "chat_gone") return { body: [SEND_TO_GONE_CHAT], details: failure.details, isReportable: false };
+  const told = failureSentence(failure, "Your message wasn't delivered. Your text is back in the box");
+  if (failure.cause === "user_facing") {
+    return { body: [told.message], details: told.details, isReportable: told.isReportable };
+  }
+  return {
+    body: [told.isReportable ? told.message : SEND_REFUSED, sendFailureKindLine(kind)],
+    details: told.details,
+    isReportable: told.isReportable,
+  };
 }
 
 /** A first send whose launch of its chat was refused or got no answer: nothing was sent, and the text is back. */
 export function describeLaunchFailure(error: unknown): FailureLines {
   const failure = describeRequestFailure(error);
-  if (failure.isNotAnswered) {
+  if (failure.cause === "not_answered") {
     return {
       body: [
         "The workspace didn't answer, so Imbue Studio can't tell whether this chat started. Your message is back in " +
@@ -56,38 +59,47 @@ export function describeLaunchFailure(error: unknown): FailureLines {
       isReportable: false,
     };
   }
-  if (failure.isUserFacing && !failure.isReportable) {
+  if (failure.cause === "user_facing" && !failure.isReportable) {
     return {
-      body: [failure.message, "Your message is back in the box."],
+      body: [failure.userFacingMessage, "Your message is back in the box."],
       details: failure.details,
       isReportable: false,
     };
   }
-  return {
-    body: [
-      "This chat couldn't be started. Your message is back in the box. Try again. If this persists, report a bug.",
-    ],
-    details: detailsBehind(failure),
-    isReportable: true,
-  };
+  if (failure.cause === "user_facing") {
+    return {
+      body: [
+        "This chat couldn't be started. Your message is back in the box. Try again. If this persists, report a bug.",
+      ],
+      details: failure.details,
+      isReportable: true,
+    };
+  }
+  const told = failureSentence(failure, "This chat couldn't be started. Your message is back in the box");
+  return { body: [told.message], details: told.details, isReportable: told.isReportable };
 }
 
 /** A switch of this chat to ``target`` that was refused or got no answer; ``isSendPath`` when a message rode it. */
 export function describeSwitchFailure(error: unknown, target: string, isSendPath: boolean): FailureLines {
   const failure = describeRequestFailure(error);
-  const backInTheBox = isSendPath ? " Your message is back in the box." : "";
-  if (failure.isNotAnswered) {
+  const backInTheBox = isSendPath ? ". Your message is back in the box" : "";
+  if (failure.cause === "not_answered") {
     return {
       body: [`The workspace didn't answer, so Imbue Studio can't tell whether this chat moved to ${target}.`],
       details: failure.details,
       isReportable: false,
     };
   }
-  const stillThere = `This chat couldn't be moved to ${target}. It's still running where it was.${backInTheBox}`;
-  if (failure.isUserFacing) {
-    return { body: [stillThere, failure.message], details: failure.details, isReportable: failure.isReportable };
+  const stillThere = `This chat couldn't be moved to ${target}. It's still running where it was${backInTheBox}`;
+  if (failure.cause === "user_facing") {
+    return {
+      body: [`${stillThere}.`, failure.userFacingMessage],
+      details: failure.details,
+      isReportable: failure.isReportable,
+    };
   }
-  return { body: [`${stillThere} ${REPORT_A_BUG_ENDING}`], details: detailsBehind(failure), isReportable: true };
+  const told = failureSentence(failure, stillThere);
+  return { body: [told.message], details: told.details, isReportable: told.isReportable };
 }
 
 /** A cancel of a running switch that was refused. A refusal says why in its own words (the switch is too far along,

@@ -1,109 +1,91 @@
 import { describe, expect, it } from "vitest";
 
-import { CHANGE_NOT_ANSWERED, READ_NOT_ANSWERED } from "./failure";
+import { notAnsweredSentence, readFailure } from "./failure";
 import { HttpError } from "./http";
-import { REQUEST_FALLBACK_MESSAGE, describeRequestError, describeRequestFailure } from "./request-error";
+import { describeRequestError, describeRequestFailure } from "./request-error";
 
-// Every case here is a shape mithril actually rejects with; the point of the
-// helper is that none of them can reach a user as a bare "null" or a status number.
+const FALLBACK = "The workspace couldn't do that. Try again. If this persists, report a bug.";
+
+/** A rejection the way mithril builds one: its message the raw body text, the status as ``code``, the parsed body
+ *  (null when it could not be read) as ``response``. */
+function rejection(code: number, response: unknown, rawText: string): Error {
+  return Object.assign(new Error(rawText), { code, response });
+}
+
 describe("describeRequestFailure", () => {
-  it("prefers the server's own detail, with the status behind the details", () => {
-    const error = Object.assign(new Error("{}"), {
-      code: 404,
-      response: { detail: "Agent 'x' not found", kind: "chat_gone" },
-    });
-    expect(describeRequestFailure(error)).toEqual({
-      message: "Agent 'x' not found",
-      details: "HTTP 404",
-      isReportable: false,
-      isUserFacing: false,
-      isNotAnswered: false,
-      kind: "chat_gone",
-    });
-  });
-
-  it("shows a sentence the server wrote for people in place of its detail", () => {
-    const error = Object.assign(new Error("{}"), {
-      code: 502,
-      response: { detail: "chat answered the launch with 503", user_facing_message: "Chat is still starting." },
-    });
-    expect(describeRequestFailure(error)).toEqual({
-      message: "Chat is still starting.",
-      details: "HTTP 502\nchat answered the launch with 503",
-      isReportable: false,
-      isUserFacing: true,
-      isNotAnswered: false,
-      kind: null,
-    });
-  });
-
-  it("offers a bug report for a server's sentence that asks for one", () => {
-    const error = Object.assign(new Error("{}"), {
-      code: 500,
-      response: {
-        detail: "Internal server error: boom",
-        user_facing_message: "Something went wrong in this chat. Try again. If this persists, report a bug.",
-      },
-    });
-    expect(describeRequestFailure(error).isReportable).toBe(true);
-  });
-
-  it("answers a status with no reason with the fallback, and keeps the status and raw text for the details", () => {
-    const error = Object.assign(new Error('{"oops": true}'), { code: 500, response: { oops: true } });
-    expect(describeRequestFailure(error)).toEqual({
-      message: REQUEST_FALLBACK_MESSAGE,
-      details: 'HTTP 500\n{"oops": true}',
-      isReportable: true,
-      isUserFacing: false,
-      isNotAnswered: false,
-      kind: null,
-    });
-  });
-
-  it("never claims what a gateway status or a dropped connection did, and words a read apart from a change", () => {
-    // A proxy's gateway status with its plain-text body as mithril's message, which goes behind the details. The
-    // proxy may have sent it after the request arrived.
-    const gateway = Object.assign(new Error("Backend connection lost"), { code: 502, response: null });
-    expect(describeRequestFailure(gateway).message).toBe(CHANGE_NOT_ANSWERED);
-    expect(describeRequestFailure(gateway).details).toBe("HTTP 502\nBackend connection lost");
-    expect(describeRequestFailure(gateway, "read").message).toBe(READ_NOT_ANSWERED);
-    // Code 0 is mithril's "no HTTP response at all", and its own timeout is the same: nothing says whether the
-    // request was carried out.
-    const unanswered = Object.assign(new Error(String(null)), { code: 0, response: null });
-    expect(describeRequestFailure(unanswered)).toEqual({
-      message: CHANGE_NOT_ANSWERED,
-      details: null,
-      isReportable: false,
-      isUserFacing: false,
-      isNotAnswered: true,
-      kind: null,
-    });
-    const timedOut = Object.assign(new Error("Request timed out"), { code: 0 });
-    expect(describeRequestFailure(timedOut, "read").message).toBe(READ_NOT_ANSWERED);
-    expect(describeRequestFailure(timedOut, "read").details).toBe("Request timed out");
-  });
-
-  it("passes an HttpError through as the REST helper read it", () => {
-    const error = new HttpError(409, "the stored layout is newer", "HTTP 409", false);
-    expect(describeRequestFailure(error)).toEqual({
-      message: "the stored layout is newer",
-      details: "HTTP 409",
-      isReportable: false,
-      isUserFacing: false,
-      isNotAnswered: false,
-      kind: null,
-    });
-  });
-
-  it("keeps the message of an error a caller threw, which carries no status", () => {
-    expect(describeRequestError(new Error("Chat creation returned no chat id"))).toBe(
-      "Chat creation returned no chat id",
+  it("reads a mithril rejection by the same precedence as the REST helper", () => {
+    const userFacing = rejection(
+      502,
+      { detail: "chat answered the launch with 503", user_facing_message: "Chat is still starting." },
+      "{}",
     );
+    expect(describeRequestFailure(userFacing)).toMatchObject({
+      cause: "user_facing",
+      userFacingMessage: "Chat is still starting.",
+      isReportable: false,
+      details: "HTTP 502\nchat answered the launch with 503",
+    });
+    const reason = rejection(404, { detail: "Agent 'x' not found", kind: "chat_gone" }, "{}");
+    expect(describeRequestFailure(reason)).toMatchObject({
+      cause: "reason",
+      reason: "Agent 'x' not found",
+      kind: "chat_gone",
+      details: "HTTP 404\nAgent 'x' not found",
+    });
+    expect(describeRequestFailure(rejection(503, { detail: "not ready yet" }, "{}")).cause).toBe("reason");
+    expect(describeRequestFailure(rejection(500, { oops: true }, '{"oops": true}'))).toMatchObject({
+      cause: "no_reason",
+      details: 'HTTP 500\n{"oops": true}',
+    });
+  });
+
+  it("reads a proxy's plain-text gateway status, a dropped connection and a timeout as no answer", () => {
+    // Mithril's message for a body it could not parse is the word "null", which goes nowhere.
+    const gateway = rejection(502, null, "Backend connection lost");
+    expect(describeRequestFailure(gateway)).toMatchObject({
+      cause: "not_answered",
+      details: "HTTP 502\nBackend connection lost",
+    });
+    expect(describeRequestFailure(rejection(0, null, String(null)))).toMatchObject({
+      cause: "not_answered",
+      status: 0,
+      details: null,
+    });
+    expect(describeRequestFailure(rejection(0, undefined, "Request timed out"), "read")).toMatchObject({
+      cause: "not_answered",
+      requestKind: "read",
+      details: "Request timed out",
+    });
+  });
+
+  it("passes an HttpError through as the REST helper read it, taking the caller's word on what it asked for", () => {
+    const error = new HttpError(readFailure({ status: 504, body: null, rawText: "", requestKind: "change" }));
+    expect(describeRequestFailure(error)).toBe(error.failure);
+    expect(describeRequestFailure(error, "read")).toEqual({ ...error.failure, requestKind: "read" });
+    expect(describeRequestError(error, "read")).toBe(notAnsweredSentence("read"));
+  });
+
+  it("reads the message of an error the code threw as a reason, with no status", () => {
+    expect(describeRequestFailure(new Error("Chat creation returned no chat id"))).toMatchObject({
+      cause: "reason",
+      reason: "Chat creation returned no chat id",
+      status: null,
+      details: "Chat creation returned no chat id",
+    });
+  });
+});
+
+describe("describeRequestError", () => {
+  it("keeps the server's own words for a screen not yet worded, never prefixing an unanswered request", () => {
+    expect(describeRequestError(rejection(0, null, "null"))).toBe(notAnsweredSentence("change"));
+    expect(describeRequestError(rejection(409, { detail: "busy" }, "{}"))).toBe("busy");
+    expect(describeRequestError(new Error("Upload failed (HTTP 500)"))).toBe("Upload failed (HTTP 500)");
+    expect(describeRequestError(rejection(500, null, "null"))).toBe(FALLBACK);
   });
 
   it("never returns an empty sentence, whatever it is handed", () => {
-    expect(describeRequestError(undefined)).toBe(REQUEST_FALLBACK_MESSAGE);
-    expect(describeRequestError({})).toBe(REQUEST_FALLBACK_MESSAGE);
-    expect(describeRequestError("   ")).toBe(REQUEST_FALLBACK_MESSAGE);
+    expect(describeRequestError(undefined)).toBe(FALLBACK);
+    expect(describeRequestError({})).toBe(FALLBACK);
+    expect(describeRequestError("   ")).toBe(FALLBACK);
   });
 });
