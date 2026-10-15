@@ -19,6 +19,7 @@ follow-up, gated on wildcard-of-wildcard SANs).
 """
 
 import tomllib
+from collections.abc import Sequence
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -26,11 +27,14 @@ from urllib.parse import urlsplit
 class RegisteredApp:
     """One ``[[apps]]`` row from ``data/.state/apps.toml``."""
 
-    def __init__(self, name: str, label: str, backend_host: str, backend_port: int) -> None:
+    def __init__(self, name: str, label: str, backend_host: str, backend_port: int, is_grantable: bool) -> None:
         self.name = name
         self.label = label
         self.backend_host = backend_host
         self.backend_port = backend_port
+        # Whether a per-service grant may admit a visitor to this app; an
+        # internal app is reachable only through a workspace-level grant.
+        self.is_grantable = is_grantable
 
 
 def parse_registered_apps(apps_toml_text: str) -> list[RegisteredApp]:
@@ -53,13 +57,28 @@ def parse_registered_apps(apps_toml_text: str) -> list[RegisteredApp]:
         parsed = urlsplit(url)
         if not parsed.hostname or not parsed.port:
             continue
-        apps.append(RegisteredApp(name=name, label=label, backend_host=parsed.hostname, backend_port=parsed.port))
+        # A missing key or a literal ``false`` is grantable; any other value reads as internal.
+        is_grantable = entry.get("internal", False) is False
+        apps.append(
+            RegisteredApp(
+                name=name,
+                label=label,
+                backend_host=parsed.hostname,
+                backend_port=parsed.port,
+                is_grantable=is_grantable,
+            )
+        )
     return apps
 
 
-def build_label_to_name(apps: list[RegisteredApp]) -> dict[str, str]:
+def build_label_to_name(apps: Sequence[RegisteredApp]) -> dict[str, str]:
     """Map each registered service's origin label back to its service name (grants are keyed by name)."""
     return {app.label: app.name for app in apps}
+
+
+def build_grantable_service_names(apps: Sequence[RegisteredApp]) -> frozenset[str]:
+    """The names of the registered services a per-service grant may admit a visitor to."""
+    return frozenset(app.name for app in apps if app.is_grantable)
 
 
 def read_registered_apps(apps_toml_path: Path) -> list[RegisteredApp]:

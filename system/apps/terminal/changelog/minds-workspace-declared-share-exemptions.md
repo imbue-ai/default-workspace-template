@@ -1,0 +1,1 @@
+The manifest declares `system = true`: it is part of the workspace itself rather than an app built on it, so the minds Share tab lists it under its collapsed System group instead of offering it up front. It can still be shared on its own from there.

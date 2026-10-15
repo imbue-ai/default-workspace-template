@@ -1,6 +1,6 @@
 import subprocess
 import threading
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
@@ -117,7 +117,7 @@ class _CliListener(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def _listening(location: str) -> Iterator[tuple[int, list[str]]]:
+def _listening(location: str) -> Generator[tuple[int, list[str]], None, None]:
     received: list[str] = []
     handler = type("_RecordingCliListener", (_CliListener,), {"received": received, "location": location})
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)

@@ -571,7 +571,9 @@ def _newest_rotated_events_log(events_dir: Path) -> Path | None:
             "Cannot list rotated backup events logs in {}: {}", events_dir, e
         )
         return None
-    return max(rotated, key=lambda child: child.name, default=None)
+    if not rotated:
+        return None
+    return max(rotated, key=lambda child: child.name)
 
 
 def find_inflight_tick_id(events_path: Path) -> str | None:

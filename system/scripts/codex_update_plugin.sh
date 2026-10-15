@@ -30,15 +30,8 @@ if ! command -v codex &>/dev/null; then
     exit "$STRICT"
 fi
 
-export GIT_TERMINAL_PROMPT=0
-export GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=5'
-# The marketplace source and plugin enablement live in mngr config_overrides,
-# so a config rewrite cannot strand the cached Git marketplace. Upgrade also
-# fetches the initial snapshot for a newly provisioned home.
-if ! codex plugin marketplace upgrade imbue-code-guardian; then
-    echo "warning: could not refresh code-guardian; attempting the cached marketplace" >&2
-fi
-
+# The marketplace source (the local copy install_agent_plugins.sh pins) and the
+# plugin enablement live in mngr config_overrides, so this needs no network.
 if ! codex plugin add imbue-code-guardian@imbue-code-guardian; then
     echo "warning: code-guardian installation failed; this Codex agent may lack review skills and Stop checks" >&2
     exit "$STRICT"

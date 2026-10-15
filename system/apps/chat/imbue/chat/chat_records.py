@@ -14,7 +14,7 @@ import os
 import shutil
 from abc import ABC
 from abc import abstractmethod
-from collections.abc import Iterator
+from collections.abc import Generator
 from datetime import datetime
 from pathlib import Path
 from typing import Final
@@ -452,7 +452,7 @@ class FileChatRecordStore(ChatRecordStore):
         return self.root / chat_id
 
     @contextlib.contextmanager
-    def _chat_lock(self, chat_id: ChatId) -> Iterator[None]:
+    def _chat_lock(self, chat_id: ChatId) -> Generator[None, None, None]:
         chat_dir = self._chat_dir(chat_id)
         chat_dir.mkdir(parents=True, exist_ok=True)
         with (chat_dir / _LOCK_FILENAME).open("w") as handle:

@@ -11,7 +11,7 @@ without `unittest.mock` or runtime attribute patching.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -69,7 +69,7 @@ def _fake_chat_agent() -> AgentInfo:
 def _client(
     claude_auth_service: ClaudeAuthService | None = None,
     auth_flows: AuthFlowService | None = None,
-) -> Iterator[FlaskClient]:
+) -> Generator[FlaskClient, None, None]:
     """Build a Flask test client, injecting the auth collaborators into the app state.
 
     Each argument left as None gets a default production instance -- fine for

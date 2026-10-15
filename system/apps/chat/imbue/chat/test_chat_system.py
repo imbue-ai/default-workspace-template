@@ -8,7 +8,7 @@ the real writer, the real event file, and the chat's real follower of it.
 import os
 import shutil
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -22,6 +22,8 @@ from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import prepare_isolated_mngr_host_dir
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
+from imbue.mngr.api.observe import is_observe_writer_running
+from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.polling import wait_for
 
 
@@ -30,7 +32,9 @@ def _agent_events(client: FlaskClient) -> dict[str, Any]:
 
 
 @contextmanager
-def _running_observer(host_dir: Path, work_dir: Path, log_path: Path) -> Iterator[subprocess.Popen[bytes]]:
+def _running_observer(
+    host_dir: Path, work_dir: Path, log_path: Path
+) -> Generator[subprocess.Popen[bytes], None, None]:
     """Run ``mngr observe --quiet`` over ``host_dir`` from an empty work dir until the block ends.
 
     The work dir carries no project-local mngr settings, so the observer reads only the
@@ -54,6 +58,13 @@ def _running_observer(host_dir: Path, work_dir: Path, log_path: Path) -> Iterato
                     process.wait(timeout=10)
 
 
+def _observe_processes() -> str:
+    """Every ``mngr observe`` process on the machine, for a failure to name what still holds the lock."""
+    listing = subprocess.run(["ps", "-eo", "pid=,args="], capture_output=True, text=True, timeout=10).stdout
+    return "\n".join(line.strip() for line in listing.splitlines() if "mngr observe" in line)
+
+
+@pytest.mark.flaky
 @pytest.mark.timeout(180)
 def test_chat_lists_what_the_real_observer_reports_and_rides_out_its_restart(tmp_path: Path) -> None:
     """The chat boots before its observer, lists agents once the observer's opening snapshot lands,
@@ -89,7 +100,12 @@ def test_chat_lists_what_the_real_observer_reports_and_rides_out_its_restart(tmp
 
         # The observer is gone. Nothing changes under the follower's directory watch, so the
         # outage is noticed by the fallback poll (ten seconds); the list stays served meanwhile.
-        wait_for(lambda: "exited" in _agent_events(client)["detail"], timeout=30.0)
+        is_exit_noticed = poll_until(lambda: "exited" in _agent_events(client)["detail"], timeout=30.0)
+        assert is_exit_noticed, (
+            f"the chat never reported the observer's exit; its last detail: {_agent_events(client)['detail']!r}; "
+            f"a process still holds the observe lock: {is_observe_writer_running(host_dir)}; "
+            f"observe processes alive: {_observe_processes()!r}; see {observer_log}"
+        )
         assert not _agent_events(client)["is_stream_healthy"]
         assert client.get("/api/chats").status_code == 200
 

@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from playwright.sync_api import Dialog
 from playwright.sync_api import Frame
 from playwright.sync_api import FrameLocator
 from playwright.sync_api import Locator
@@ -44,6 +45,8 @@ from imbue.chat.testing import FIXTURE_SESSION_ID
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import RunningWorkspace
 from imbue.chat.testing import SummaryWritingMngrMessenger
+from imbue.chat.testing import get_json
+from imbue.chat.testing import is_chat_frontend_built
 from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.testing import running_workspace
 from imbue.mngr.utils.polling import wait_for
@@ -66,9 +69,7 @@ def _playwright_browsers_installed() -> bool:
 
 def _frontends_built() -> bool:
     """Whether both bundles exist: the chat page (``static/chat.html``) and the shell that frames it."""
-    return (Path(__file__).parent / "static" / "chat.html").is_file() and (
-        SHELL_STATIC_DIRECTORY / "index.html"
-    ).is_file()
+    return is_chat_frontend_built() and (SHELL_STATIC_DIRECTORY / "index.html").is_file()
 
 
 pytestmark = [
@@ -149,13 +150,8 @@ def e2e_server(tmp_path: Path) -> Generator[RunningWorkspace, None, None]:
         yield server
 
 
-def _get_json(url: str) -> Any:
-    with urllib.request.urlopen(url, timeout=5) as response:
-        return json.loads(response.read())
-
-
 def _desktops(server: RunningWorkspace) -> list[dict[str, Any]]:
-    return list(_get_json(f"{server.shell_url}/api/desktops")["desktops"])
+    return list(get_json(f"{server.shell_url}/api/desktops")["desktops"])
 
 
 def _chat_windows(server: RunningWorkspace, desktop_id: str = _HOME_DESKTOP_ID) -> list[dict[str, Any]]:
@@ -203,7 +199,7 @@ def _wait_for_client_on_desktop(server: RunningWorkspace, client_id: str, deskto
     wait_for(
         lambda: any(
             client["id"] == client_id and client["active_desktop"] == desktop_id
-            for client in _get_json(f"{server.shell_url}/api/clients")["clients"]
+            for client in get_json(f"{server.shell_url}/api/clients")["clients"]
         ),
         timeout=15.0,
         poll_interval=0.1,
@@ -712,6 +708,79 @@ def test_a_minimized_chat_preserves_its_scroll_window(tmp_path: Path, page: Page
         )
 
 
+_TRANSCRIPT_AT_BOTTOM_JS = (
+    "() => { const el = document.querySelector('.transcript-scroll'); "
+    "return el.scrollHeight - el.scrollTop - el.clientHeight <= 1; }"
+)
+
+# The transcript's largest distance from its bottom over a run of animation frames: one reading can land
+# between a frame that pulls the transcript up and the pin that puts it back.
+_MAX_TRANSCRIPT_BOTTOM_GAP_JS = """
+async () => {
+  const el = document.querySelector('.transcript-scroll');
+  let maxGapPx = 0;
+  for (let frame = 0; frame < 30; frame++) {
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    maxGapPx = Math.max(maxGapPx, el.scrollHeight - el.scrollTop - el.clientHeight);
+  }
+  return maxGapPx;
+}
+"""
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_the_transcript_reaches_its_bottom_whatever_the_composer_height(tmp_path: Path, page: Page) -> None:
+    """A draft that grows the composer leaves the transcript at its bottom, the wheel can still reach that
+    bottom, and when the composer shrinks back the transcript keeps following new messages."""
+    events = _make_long_conversation_events(150)
+    with _running_e2e_server(tmp_path, session_events=events) as server:
+        page.set_viewport_size({"width": 1200, "height": 900})
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        frame = _chat_frame(page)
+        frame.wait_for_function(
+            "() => { const el = document.querySelector('.transcript-scroll'); "
+            "return el && el.scrollHeight > el.clientHeight * 2 "
+            "&& el.scrollHeight - el.scrollTop - el.clientHeight <= 1; }",
+            timeout=15000,
+        )
+        textarea = chat.locator(".message-input-textbox")
+        transcript = chat.locator(".transcript-scroll")
+
+        textarea.fill("\n".join(f"draft line {line}" for line in range(12)))
+        expect(chat.locator(".message-input-row")).to_have_attribute("data-stacked", "")
+        frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
+        assert frame.evaluate(_MAX_TRANSCRIPT_BOTTOM_GAP_JS) <= 1, "a tall composer pulled the transcript off its bottom"
+        last_reply_box = _box(chat.locator(".message-assistant", has_text="reply-149"))
+        assert last_reply_box["bottom"] <= _box(chat.locator(".message-input-box"))["top"]
+
+        transcript.hover()
+        page.mouse.wheel(0, -600)
+        page.wait_for_timeout(300)
+        page.mouse.wheel(0, 5000)
+        frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
+        assert frame.evaluate(_MAX_TRANSCRIPT_BOTTOM_GAP_JS) <= 1, "the transcript would not stay at its bottom"
+
+        textarea.fill("")
+        expect(chat.locator(".message-input-row")).not_to_have_attribute("data-stacked", "")
+        with open(server.session_file, "a") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "type": "user",
+                        "uuid": "long-u-after-shrink",
+                        "timestamp": "2026-01-01T00:02:00Z",
+                        "message": {"role": "user", "content": "arrived-after-the-composer-shrank"},
+                    }
+                )
+                + "\n"
+            )
+        expect(chat.locator(".message-user", has_text="arrived-after-the-composer-shrank")).to_be_attached(
+            timeout=_TRIGGER_TIMEOUT_MS
+        )
+        frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
+
+
 # watching
 
 
@@ -724,7 +793,7 @@ def test_a_chat_page_watches_its_chat_only_while_shown_and_focused(e2e_server: R
 
     def wait_for_watcher_count(count: int, described: str) -> None:
         wait_for(
-            lambda: len(_get_json(watchers_url)["watched_by"]) == count,
+            lambda: len(get_json(watchers_url)["watched_by"]) == count,
             timeout=15.0,
             poll_interval=0.1,
             error_message=f"the watchers route never showed {described}",
@@ -965,7 +1034,12 @@ def test_a_first_message_sent_with_nothing_signed_in_waits_in_the_chat_composer(
     """A message sent from the launcher with nothing signed in raises no dialog: it waits in the new chat's disabled
     composer while the chat asks for a provider, ready to send once one is signed in."""
     dialogs: list[str] = []
-    page.on("dialog", lambda dialog: (dialogs.append(dialog.message), dialog.dismiss()))
+
+    def record_and_dismiss(dialog: Dialog) -> None:
+        dialogs.append(dialog.message)
+        dialog.dismiss()
+
+    page.on("dialog", record_and_dismiss)
     with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
         _land(page, server)
         page.locator("[data-launcher-field] textarea").fill("Plan my week")

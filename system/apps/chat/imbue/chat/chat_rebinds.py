@@ -29,6 +29,7 @@ from imbue.chat.accounts import Account
 from imbue.chat.accounts import AccountError
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.chat_autocompact import ChatAutocompactState
 from imbue.chat.chat_handoffs import deliver_held_send
 from imbue.chat.chat_handoffs import failure_notice
 from imbue.chat.chat_handoffs import joined_blocks
@@ -98,6 +99,12 @@ def rebind_cancel_refused_detail(target_label: str) -> str:
 def relabel_account_command(mngr_binary: str, agent_id: str, account_id: str) -> list[str]:
     """The ``mngr label`` that records the new account on the agent. Pure argv assembly, like the manager's builders."""
     return [mngr_binary, "label", agent_id, "--label", f"account={account_id}"]
+
+
+@pure
+def relabel_autocompact_command(mngr_binary: str, agent_id: str, state: ChatAutocompactState) -> list[str]:
+    """The ``mngr label`` that records a chat's idle compaction setting on its agent."""
+    return [mngr_binary, "label", agent_id, "--label", state.label]
 
 
 @pure

@@ -233,9 +233,10 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   // misclassify the initial fill's giant clamp as a user scroll.
   let lastNativeInputAtMs = Number.NEGATIVE_INFINITY;
   const pendingEchoTops: number[] = [];
-  // Last observed scrollHeight, to recognize the browser's own clamp of
-  // scrollTop after content shrank (no user intent; must not be reduced).
-  let lastScrollHeightPx = 0;
+  // Last observed maximum scrollTop, to recognize the browser's own clamp of
+  // scrollTop after the maximum dropped: content shrank, or the viewport grew
+  // (the composer under it got shorter). No user intent; must not be reduced.
+  let lastMaxScrollTopPx = 0;
 
   // fill
   let fillInFlight = false;
@@ -803,16 +804,16 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     if (echoIndex !== -1) {
       pendingEchoTops.splice(0, echoIndex + 1);
       scrollTopPx = topPx;
-      lastScrollHeightPx = element.scrollHeight;
+      lastMaxScrollTopPx = element.scrollHeight - element.clientHeight;
       trace?.record("scroll-echo", { topPx });
       return;
     }
     // The browser clamping scrollTop after content shrank (a spacer eased down,
-    // rows collapsed) carries no user intent: sync bookkeeping, don't reduce.
-    const scrollHeightNow = element.scrollHeight;
-    const isShrinkClamp =
-      scrollHeightNow < lastScrollHeightPx && Math.abs(topPx - (scrollHeightNow - element.clientHeight)) <= 1;
-    lastScrollHeightPx = scrollHeightNow;
+    // rows collapsed) or the viewport grew carries no user intent: sync
+    // bookkeeping, don't reduce.
+    const maxScrollTopNowPx = element.scrollHeight - element.clientHeight;
+    const isShrinkClamp = maxScrollTopNowPx < lastMaxScrollTopPx && Math.abs(topPx - maxScrollTopNowPx) <= 1;
+    lastMaxScrollTopPx = maxScrollTopNowPx;
     if (isShrinkClamp) {
       pendingEchoTops.length = 0;
       scrollTopPx = topPx;
@@ -964,7 +965,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     if (isVisible()) {
       viewportHeightPx = element.clientHeight;
     }
-    lastScrollHeightPx = element.scrollHeight;
+    lastMaxScrollTopPx = element.scrollHeight - element.clientHeight;
     listResizeObserver = new ResizeObserver(() => {
       m.redraw();
     });

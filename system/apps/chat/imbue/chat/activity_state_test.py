@@ -2,8 +2,10 @@ from typing import Any
 
 import pytest
 
+from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import is_non_turn_tail_event
 from imbue.chat.activity_state import is_transcript_tail_stale
+from imbue.chat.activity_state import is_working_activity_state
 from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
 from imbue.chat.activity_state import resolve_is_agent_running
 
@@ -71,3 +73,16 @@ def test_is_transcript_tail_stale(
     tail_event_at: float | None, process_started_at: float | None, expected: bool
 ) -> None:
     assert is_transcript_tail_stale(tail_event_at=tail_event_at, process_started_at=process_started_at) is expected
+
+
+@pytest.mark.parametrize(
+    "activity_state, expected",
+    [
+        pytest.param(ActivityState.IDLE, False, id="idle"),
+        pytest.param(ActivityState.THINKING, True, id="thinking"),
+        pytest.param(ActivityState.TOOL_RUNNING, True, id="tool_running"),
+        pytest.param(ActivityState.COMPACTING, True, id="compacting"),
+    ],
+)
+def test_is_working_activity_state(activity_state: ActivityState, expected: bool) -> None:
+    assert is_working_activity_state(activity_state) is expected

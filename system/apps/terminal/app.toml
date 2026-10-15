@@ -6,6 +6,9 @@ icon = "icon.svg"
 critical = true
 priority = "terminal"
 launcher_rank = 40
+# Part of the workspace itself rather than an app built on it, so the Share tab tucks it under its System group
+# rather than offering it up front.
+system = true
 # A terminal lives as long as a window shows it: the shell posts every closed window here and
 # the app collects what no window shows (docs/system/specs/window-bound-resources.md).
 window_closed_path = "/api/window-closed"

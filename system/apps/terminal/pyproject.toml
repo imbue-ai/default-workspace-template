@@ -22,7 +22,7 @@ dev = [
     "imbue-mngr",
     "httpx>=0.27",
     # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
-    "ty==0.0.24",
+    "ty==0.0.85",
 ]
 
 [project.scripts]

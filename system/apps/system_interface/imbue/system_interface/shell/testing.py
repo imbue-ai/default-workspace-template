@@ -5,7 +5,7 @@ import queue
 import shutil
 import subprocess
 from collections.abc import Callable
-from collections.abc import Iterator
+from collections.abc import Generator
 from collections.abc import Mapping
 from collections.abc import Sequence
 from contextlib import contextmanager
@@ -76,6 +76,7 @@ def registry_row_toml(
     program: str | None = None,
     is_critical: bool = False,
     is_internal: bool = False,
+    is_system: bool = False,
     default_shortcut: tuple[str, str] | None = None,
     display_name: str | None = None,
     label: str = "",
@@ -109,6 +110,7 @@ def registry_row_toml(
         f'display_name = "{display_name if display_name is not None else name.capitalize()}"',
         f"critical = {'true' if is_critical else 'false'}",
         f"internal = {'true' if is_internal else 'false'}",
+        f"system = {'true' if is_system else 'false'}",
         f"stop_when_no_windows = {'true' if stop_when_no_windows else 'false'}",
     ]
     if program is not None:
@@ -191,6 +193,7 @@ def builtin_rows_toml_before_chat() -> tuple[str, ...]:
         registry_row_toml(
             "getting-started",
             "http://localhost:7400",
+            is_system=True,
             display_name="Getting Started",
             launcher_rank=15,
             default_shortcut=("open", "focus"),
@@ -206,6 +209,7 @@ def builtin_rows_toml_before_chat() -> tuple[str, ...]:
         registry_row_toml(
             "browser",
             "http://localhost:7500",
+            is_system=True,
             launcher_rank=30,
             default_shortcut=("new", "focus"),
             launch_paths=[("new", "Browser", "/new")],
@@ -215,6 +219,7 @@ def builtin_rows_toml_before_chat() -> tuple[str, ...]:
             "terminal",
             TEST_TERMINAL_URL,
             is_critical=True,
+            is_system=True,
             launcher_rank=40,
             default_shortcut=("new", "new"),
             launch_paths=[("new", "Terminal", "/new")],
@@ -229,6 +234,7 @@ def builtin_chat_row_toml() -> str:
         "chat",
         "http://localhost:7800",
         is_critical=True,
+        is_system=True,
         launcher_rank=10,
         default_shortcut=("root", "new"),
         launch_paths=[("root", "Chat", "/"), ("new", "New Chat", "/api/chats/intake")],
@@ -519,7 +525,7 @@ _WORKSPACE_ROOT: Final[PurePosixPath] = PurePosixPath("/home/user/workspace")
 
 
 @contextmanager
-def running_file_viewer(root: Path) -> Iterator[str]:
+def running_file_viewer(root: Path) -> Generator[str, None, None]:
     """Run dufs over ``root`` as the File Viewer's program line runs it over ``/``, with the shell's built app contract
     module at its workspace path under ``root``, where the viewer's pages import it; yields its loopback URL."""
     assert DUFS_BINARY is not None, "dufs is not installed"

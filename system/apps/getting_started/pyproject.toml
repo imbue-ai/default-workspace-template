@@ -26,7 +26,7 @@ dev = [
     "inline-snapshot>=0.13",
     "ruff~=0.12.8",
     # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
-    "ty==0.0.24",
+    "ty==0.0.85",
 ]
 
 [project.scripts]

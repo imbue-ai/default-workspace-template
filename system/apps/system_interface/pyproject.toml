@@ -54,11 +54,10 @@ dev = [
     # ratchet holds that).
     "chat",
     "ruff~=0.12.8",
-    # Used by check_no_type_errors in test_ratchets.py. Pinned to 0.0.24 because
-    # that is the version the source was last verified clean against (mngr's own
-    # uv.lock); newer versions surface stricter checks that don't
-    # match what this code was reviewed under.
-    "ty==0.0.24",
+    # Used by check_no_type_errors in test_ratchets.py. Pinned exactly because each
+    # ty release adds checks, so a new version is adopted together with the fixes it
+    # asks for.
+    "ty==0.0.85",
 ]
 
 [project.scripts]
