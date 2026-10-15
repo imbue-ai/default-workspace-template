@@ -1,1 +1,1 @@
-The shared frontend library's failure reader now says whether a request got no answer and which case a route named (see `system/libs/workspace_ui/changelog/gabriel-err-copy-w1-chat.md`), for the chat app's plainer failure messages (see `system/apps/chat/changelog/gabriel-err-copy-w1-chat.md`).
+The shared frontend library's send-refusal kinds gain the chat app's signed-out and deleted-chat cases (see `system/libs/workspace_ui/changelog/gabriel-err-copy-w1-chat.md`), for the chat app's plainer failure messages (see `system/apps/chat/changelog/gabriel-err-copy-w1-chat.md`).
