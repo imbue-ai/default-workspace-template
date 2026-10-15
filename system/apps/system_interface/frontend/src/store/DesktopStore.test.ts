@@ -3,7 +3,7 @@ import { cascadeFrame } from "../geometry/frames";
 import { placementOf } from "../geometry/stack";
 import { getPresentUsers, resetPresenceForTesting } from "../model/Presence";
 import { TOAST_DURATION_MS } from "../model/Toasts";
-import { CHANGE_NOT_ANSWERED, readFailure } from "@imbue/workspace-ui/src/models/failure";
+import { notAnsweredSentence, readFailure } from "@imbue/workspace-ui/src/models/failure";
 import { HttpError } from "@imbue/workspace-ui/src/models/http";
 import { activeFocusedWindowId, activePlacements, isLayoutDirty } from "../reducers/desktopState";
 import { STILL_CONNECTING_NOTICE, resolveLaunchRun } from "../reducers/shortcuts";
@@ -86,7 +86,10 @@ function notices(): string[] {
 
 function makeStore(
   redraw: () => void = () => undefined,
-  extra: Pick<StoreDependencies, "popOut" | "soloWindowId" | "isSoloReopened" | "outsideLinks" | "reportBug"> = {},
+  extra: Pick<
+    StoreDependencies,
+    "popOut" | "soloWindowId" | "isSoloReopened" | "outsideLinks" | "reportBug" | "canReportBug"
+  > = {},
 ): DesktopStore {
   const store = new DesktopStore({
     clientId: CLIENT,
@@ -645,7 +648,7 @@ describe("opening", () => {
     expect(await store.openWindowAt("docs", "/x", "focus")).toBeNull();
     api.refusal = null;
     await store.runLaunch("gone", "new", "new");
-    expect(notices()).toEqual(["Could not open docs.", "Cannot open: gone is not registered"]);
+    expect(notices()).toEqual(["Could not open Docs.", "Cannot open: gone is not registered"]);
   });
 
   it("opens a page's shell:open on the posting window's app and desktop", async () => {
@@ -798,8 +801,8 @@ describe("failure toasts", () => {
     return new HttpError(readFailure({ status, body, rawText, requestKind: "change" }));
   }
 
-  async function storeReportingBugs(reportBug: () => void): Promise<DesktopStore> {
-    const store = makeStore(() => undefined, { reportBug });
+  async function storeReportingBugs(reportBug: () => void, isOpeningHelp: boolean): Promise<DesktopStore> {
+    const store = makeStore(() => undefined, { reportBug, canReportBug: () => isOpeningHelp });
     await store.start(NO_LINK);
     return store;
   }
@@ -821,8 +824,7 @@ describe("failure toasts", () => {
 
   it("words a launch the app could not answer as the fallback, which offers Report a bug", async () => {
     const reportBug = vi.fn();
-    const store = await storeReportingBugs(reportBug);
-    store.setCanReportBug(true);
+    const store = await storeReportingBugs(reportBug, true);
     api.refusal = refusedWith(502, { detail: "docs answered the launch with 500: boom" });
     await store.runLaunch("docs", "new", "new");
 
@@ -838,7 +840,7 @@ describe("failure toasts", () => {
   });
 
   it("offers no Report a bug while the embedder has not said it opens one", async () => {
-    const store = await storeReportingBugs(vi.fn());
+    const store = await storeReportingBugs(vi.fn(), false);
     api.refusal = refusedWith(502, { detail: "docs answered the launch with 500: boom" });
     await store.runLaunch("docs", "new", "new");
     expect(store.toasts.current()[0]).toMatchObject({
@@ -848,8 +850,7 @@ describe("failure toasts", () => {
   });
 
   it("shows an app's own sentence as written, and offers Report a bug only when the app asks for one", async () => {
-    const store = await storeReportingBugs(vi.fn());
-    store.setCanReportBug(true);
+    const store = await storeReportingBugs(vi.fn(), true);
     api.refusal = refusedWith(502, {
       detail: "docs answered the launch with 503: still loading",
       user_facing_message: "Docs is still starting. Try again in a few seconds.",
@@ -875,26 +876,42 @@ describe("failure toasts", () => {
     api.refusal = refusedWith(504, null, "Backend timed out");
     await store.runLaunch("docs", "new", "new");
     expect(store.toasts.current()[0]).toMatchObject({
-      message: CHANGE_NOT_ANSWERED,
+      message: notAnsweredSentence("change"),
       details: "HTTP 504\nBackend timed out",
       actions: [],
     });
   });
 
-  it("leaves a plain note where the control just pressed is the retry", async () => {
+  it("leaves a plain note where the control just pressed is the retry, its reason in the log", async () => {
     const store = await startedStore();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    api.refusal = refusedWith(409, { detail: "Window win-1 is pinned and cannot be closed" });
+    await store.closeWindow("win-1");
+    expect(store.toasts.current()).toMatchObject([
+      { message: "Could not close the window.", details: null, actions: [], isLasting: false },
+    ]);
+    expect(warn).toHaveBeenCalledWith(
+      "[si] Could not close the window.",
+      "HTTP 409\nWindow win-1 is pinned and cannot be closed",
+    );
+    warn.mockRestore();
+    vi.advanceTimersByTime(TOAST_DURATION_MS);
+    expect(notices()).toEqual([]);
+  });
+
+  it("keeps a failure that asks for a bug report up with its details, wherever it happened", async () => {
+    const store = await storeReportingBugs(vi.fn(), true);
     api.refusal = refusedWith(500, "<html>Internal Server Error</html>", "<html>Internal Server Error</html>");
     await store.closeWindow("win-1");
+    vi.advanceTimersByTime(TOAST_DURATION_MS);
     expect(store.toasts.current()).toMatchObject([
       {
         message: "Could not close the window. Try again. If this persists, report a bug.",
-        details: null,
-        actions: [],
-        isLasting: false,
+        details: "HTTP 500\n<html>Internal Server Error</html>",
+        isLasting: true,
       },
     ]);
-    vi.advanceTimersByTime(TOAST_DURATION_MS);
-    expect(notices()).toEqual([]);
+    expect(store.toasts.current()[0].actions.map((action) => action.label)).toEqual(["Report a bug"]);
   });
 });
 

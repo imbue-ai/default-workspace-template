@@ -33,7 +33,7 @@ export interface Toast {
 export const TOAST_DURATION_MS = 5000;
 
 /** How many lasting toasts stay on screen at once; a newer one drops the oldest. */
-export const MAX_LASTING_TOASTS = 3;
+const MAX_LASTING_TOASTS = 3;
 
 /** The toasts on screen, oldest first; a plain one leaves after ``durationMs``, every one when dismissed. A toast
  *  that says the same as one already up (message and details) replaces it rather than stacking. */

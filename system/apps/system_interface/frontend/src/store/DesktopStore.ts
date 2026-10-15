@@ -298,6 +298,8 @@ export interface StoreDependencies {
   readonly outsideLinks?: OutsideLinkOpener;
   /** Open the bug report a failure's "Report a bug" asks for; absent opens none. */
   readonly reportBug?: () => void;
+  /** Whether the embedder opens that bug report (its ``opensHelp``); absent reads false. */
+  readonly canReportBug?: () => boolean;
   /** The one window this shell shows edge to edge (a pulled-out window's own desktop window), else null. */
   readonly soloWindowId?: string | null;
   /** Whether the chrome reopened the solo window's desktop window (a session restore, a reopen of the app, a
@@ -423,13 +425,12 @@ export class DesktopStore {
   private readonly popOut: PopOutBridge;
   private readonly outsideLinks: OutsideLinkOpener;
   private readonly reportBug: () => void;
+  private readonly canReportBug: () => boolean;
   private readonly soloWindowId: string | null;
   /** Whether the embedder can pull a window out; off until it says so (an older chrome, a plain browser). */
   private canPopOut = false;
   /** Whether the embedder opens external links outside the workspace for it; off until it says so. */
   private canOpenLinksOutside = false;
-  /** Whether the embedder opens its bug report for a failure's "Report a bug"; off until it says so. */
-  private canReportBug = false;
   /** The detached set as last reported to the embedder, serialized, so a redraw reports nothing new. */
   private lastReportedDetached: string | null = null;
   /** Solo mode's first layout load is still owed: the one load that may re-detach the solo window. */
@@ -453,6 +454,7 @@ export class DesktopStore {
     this.popOut = deps.popOut ?? NULL_POP_OUT_BRIDGE;
     this.outsideLinks = deps.outsideLinks ?? NULL_OUTSIDE_LINK_OPENER;
     this.reportBug = deps.reportBug ?? (() => undefined);
+    this.canReportBug = deps.canReportBug ?? (() => false);
     this.soloWindowId = deps.soloWindowId ?? null;
     this.isSoloFirstLayoutPending = this.soloWindowId !== null;
     this.appsLoaded = new Promise((resolve) => {
@@ -468,13 +470,13 @@ export class DesktopStore {
 
   /**
    * Tell the user that what they asked for failed with ``error``, in ``failureSentence``'s words for ``whatFailed``
-   * (a sentence stem naming it). A call site whose retry is the control just pressed shows a plain note; any other
-   * shows one that stays, with the status and the server's own text behind "See details" and, when the sentence asks
-   * for one and the embedder opens a bug report, "Report a bug".
+   * (a sentence stem naming it). A call site whose retry is the control just pressed asks for a plain note; any other,
+   * and any failure that asks for a bug report, shows one that stays, with the status and the server's own text
+   * behind "See details" and, when the embedder opens a bug report, "Report a bug".
    */
   private toastFailure(whatFailed: string, error: unknown, { isLasting }: { readonly isLasting: boolean }): void {
     const told = failureSentence(describeRequestFailure(error), whatFailed);
-    if (!isLasting) {
+    if (!isLasting && !told.isReportable) {
       // A plain note has no room for the details, so they go to the log rather than nowhere.
       if (told.details !== null) console.warn(`[si] ${told.message}`, told.details);
       this.toast(told.message);
@@ -483,7 +485,7 @@ export class DesktopStore {
     this.toasts.show(told.message, {
       isLasting: true,
       details: told.details,
-      actions: told.isReportable && this.canReportBug ? [{ label: REPORT_A_BUG_LABEL, run: this.reportBug }] : [],
+      actions: told.isReportable && this.canReportBug() ? [{ label: REPORT_A_BUG_LABEL, run: this.reportBug }] : [],
     });
   }
 
@@ -507,11 +509,6 @@ export class DesktopStore {
   /** The embedder said whether it opens external links for the workspace (``minds:embedder-capabilities``). */
   setCanOpenLinksOutside(canOpenLinksOutside: boolean): void {
     this.canOpenLinksOutside = canOpenLinksOutside;
-  }
-
-  /** The embedder said whether it opens its bug report (``minds:embedder-capabilities``). */
-  setCanReportBug(canReportBug: boolean): void {
-    this.canReportBug = canReportBug;
   }
 
   /** Whether a window move in progress has pulled ``windowId`` out of the chrome's window (it is hidden meanwhile). */
@@ -1699,7 +1696,9 @@ export class DesktopStore {
         isMinimized,
       });
     } catch (error) {
-      this.toastFailure(`Could not open ${app}`, error, { isLasting: false });
+      this.toastFailure(`Could not open ${appByName(this.state, app)?.display_name ?? app}`, error, {
+        isLasting: false,
+      });
       return null;
     }
     this.takeOpened(desktopId, outcome.window, outcome.isNew, isMinimized);

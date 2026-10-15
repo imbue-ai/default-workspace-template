@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { MAX_LASTING_TOASTS, TOAST_DURATION_MS, ToastQueue } from "./Toasts";
+import { TOAST_DURATION_MS, ToastQueue } from "./Toasts";
 
 let queue: ToastQueue;
 
@@ -42,7 +42,7 @@ describe("ToastQueue", () => {
 
   it("holds at most three lasting notes, dropping the oldest, and never drops a plain one for them", () => {
     queue.show("A plain note.");
-    for (let index = 1; index <= MAX_LASTING_TOASTS + 1; index += 1) {
+    for (let index = 1; index <= 4; index += 1) {
       queue.show(`Lasting ${index}.`, { isLasting: true });
     }
     expect(messages()).toEqual(["A plain note.", "Lasting 2.", "Lasting 3.", "Lasting 4."]);
