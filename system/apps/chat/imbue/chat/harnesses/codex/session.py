@@ -26,6 +26,7 @@ from imbue.chat.harnesses.codex.model import codex_models_to_options
 from imbue.chat.harnesses.codex.model import get_codex_model_options_path
 from imbue.chat.harnesses.codex.model import read_codex_model_options
 from imbue.chat.harnesses.codex.model import write_codex_model_options
+from imbue.chat.harnesses.interrupt import IsCompactionInFlight
 from imbue.chat.harnesses.interrupt import PressChord
 from imbue.chat.harnesses.interrupt import RestartProcess
 from imbue.chat.harnesses.interrupt import SettleActivity
@@ -213,11 +214,13 @@ class CodexHarnessSession(AgentHarnessSession):
         restart_process: RestartProcess,
         settle_activity: SettleActivity,
         press_chord: PressChord,
+        is_compaction_in_flight: IsCompactionInFlight,
     ) -> str:
         """One native ``turn/interrupt`` on the running turn, then an authoritative per-id
         settle: every non-committed owned message returns to the composer in send order,
         while a message that committed before the interrupt stays Delivered (contract
-        Interrupt + A4). The restart/chord capabilities go unused -- the daemon stays up.
+        Interrupt + A4). The restart/chord/compaction capabilities go unused -- the daemon
+        stays up, and its interrupt cannot cancel a compaction.
         With no live connection there is nothing running and nothing parked. The dot is
         settled via ``settle_activity`` like every other harness's stop: it normally
         clears when the rollout's turn_aborted marker lands, but a daemon dying

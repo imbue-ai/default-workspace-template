@@ -1,0 +1,24 @@
+# The Datalib app: datalib's own web UI (the Manage screen and the Add/Edit
+# source wizard served by datalib-http) over the store the datalib skill
+# writes. datalib-http admits a browser only once it has seen the API token,
+# so launch_datalib_http.py registers a copy of this file whose launch path
+# carries the token as a preset, and a window opens at `/?token=...`.
+name = "datalib"
+display_name = "Datalib"
+icon = "icon.svg"
+critical = false
+# A sync started from the Manage screen runs inside datalib-http and has to
+# finish after the window closes, so the shell must not stop the program.
+stop_when_no_windows = false
+priority = "user"
+program = "datalib"
+
+[default_shortcut]
+launch = "ui"
+mode = "focus"
+
+# Keep this table last: launch_datalib_http.py appends the token preset to it.
+[[launch_paths]]
+id = "ui"
+label = "Datalib"
+path = "/"

@@ -707,7 +707,9 @@ export function createMenu(options: MenuOptions): Menu {
       {
         type: "button",
         role: "menuitem",
-        class: menuRowClass({ extra: TONE_CLASS.default }),
+        // The open row keeps the hover's fill once the pointer moves into its flyout, so it still
+        // reads as the row the flyout belongs to.
+        class: menuRowClass({ extra: isOpen ? `${TONE_CLASS.default} bg-fill-hover` : TONE_CLASS.default }),
         // The chevron is decoration to a screen reader, so the row says out loud that it is a
         // disclosure.
         "aria-haspopup": "true",
