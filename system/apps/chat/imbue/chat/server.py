@@ -22,6 +22,8 @@ from typing import assert_never
 from uuid import uuid4
 
 from app_manifest.primitives import AppName
+from app_manifest.registry import APP_CONTRACT_ROUTE
+from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import read_origin_label
 from app_manifest.registry_location import registry_path
 from flask import Flask
@@ -203,13 +205,40 @@ CHAT_DOCUMENT_FILENAME: Final[str] = "chat.html"
 ROOT_DOCUMENT_FILENAME: Final[str] = "root.html"
 
 
-# What the chat origin answers when the bundle is missing: the shell's placeholder carries the
-# repair story, and a chat frame is never the page a reader is looking at on its own.
-_CHAT_NOT_BUILT_HTML: Final[str] = (
-    '<!doctype html><html><head><meta charset="utf-8"><title>Chat</title></head>'
-    "<body><p>Chat isn't available in this workspace right now. Restart the workspace. "
-    "If this persists, report a bug.</p></body></html>"
-)
+def _chat_not_built_page() -> Response:
+    """What the chat origin answers when its bundle is missing. With no frontend code of its own, the page asks the
+    shell for "Report a bug" through the shell's built app contract, which this origin serves; the button stays hidden
+    until the shell's handshake says Imbue Studio opens a bug report here. No agent is offered: starting one opens
+    this same chat page."""
+    root_path = (request.script_root or "").rstrip("/")
+    contract_url = json.dumps(f"{root_path}{APP_CONTRACT_ROUTE}").replace("<", "\\u003c")
+    page = (
+        '<!doctype html><html><head><meta charset="utf-8"><title>Chat</title></head>'
+        '<body style="font-family: system-ui, sans-serif; padding: 2rem">'
+        "<p>Chat isn't available in this workspace right now. Restart the workspace. "
+        "If this persists, report a bug.</p>"
+        '<button type="button" id="report-bug" hidden>Report a bug</button>'
+        # A static import, so the module runs before the frame's load event, which is when the shell greets it.
+        '<script type="module">'
+        f"import {{ connectToShell }} from {contract_url};"
+        'const button = document.getElementById("report-bug");'
+        "const connection = connectToShell({ onHandshake: () => { button.hidden = !connection.canReportBug(); } });"
+        "button.onclick = () => connection.reportBug();"
+        "</script>"
+        "</body></html>"
+    )
+    return document_response(page, is_frontend_built=False)
+
+
+def _serve_app_contract() -> Response:
+    """The shell's built app contract module, served from this origin for the not-built page (a module import
+    across origins is a fetch without cookies, which the forwarder refuses); 404 when the shell is not built either."""
+    if not SHELL_APP_CONTRACT_PATH.is_file():
+        error = ErrorResponse(
+            detail=f"the workspace shell's frontend is not built: {SHELL_APP_CONTRACT_PATH} is missing"
+        )
+        return json_response(error.model_dump(), status_code=404)
+    return send_file(SHELL_APP_CONTRACT_PATH.absolute(), mimetype="text/javascript")
 
 
 def _not_part_of_chat_page() -> Response:
@@ -2263,7 +2292,7 @@ def _root_document() -> Response:
     document_path = get_state().static_directory / ROOT_DOCUMENT_FILENAME
     if not document_path.exists():
         _loguru_logger.warning("Served the chat not-built placeholder: no chat root bundle at {}", document_path)
-        return document_response(_CHAT_NOT_BUILT_HTML, is_frontend_built=False)
+        return _chat_not_built_page()
     root_path = (request.script_root or "").rstrip("/")
     html_content = _inject_workspace_meta_tags(document_path.read_text(), root_path)
     return document_response(html_content, is_frontend_built=True)
@@ -2281,7 +2310,7 @@ def _chat_document(key: str) -> Response:
     document_path = get_state().static_directory / CHAT_DOCUMENT_FILENAME
     if not document_path.exists():
         _loguru_logger.warning("Served the chat not-built placeholder: no chat bundle at {}", document_path)
-        return document_response(_CHAT_NOT_BUILT_HTML, is_frontend_built=False)
+        return _chat_not_built_page()
     config: Config = get_state().config
     root_path = (request.script_root or "").rstrip("/")
     with_workspace_tags = _inject_workspace_meta_tags(document_path.read_text(), root_path)
@@ -2457,6 +2486,7 @@ def create_application(state: ChatAppState) -> Flask:
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
     application.add_url_rule("/assets/<path:filename>", view_func=_serve_asset, methods=["GET"])
     application.add_url_rule("/api/health", view_func=_health_endpoint, methods=["GET"])
+    application.add_url_rule(APP_CONTRACT_ROUTE, view_func=_serve_app_contract, methods=["GET"])
     sock.route("/api/ws")(_ws_endpoint)
     application.add_url_rule("/plugins/<basename>", view_func=_serve_static_file, methods=["GET"])
     application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])

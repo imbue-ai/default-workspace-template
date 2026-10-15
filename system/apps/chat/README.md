@@ -91,6 +91,11 @@ observe`, its own supervised service) writes, and serves:
   after the restart. `agent_events` (`{"is_stream_healthy", "detail"}`) says
   whether lifecycle events are actually reaching this instance; `status` stays
   `ok` either way.
+- `GET /_static/app_contract.js`: the shell's built app contract module, for the
+  page `/` and the chat pages answer when this app's frontend is not built. That
+  page has no frontend code of its own; it imports the module to offer "Report a
+  bug" through the shell, shown only when the shell's handshake says Imbue Studio
+  can open one. `404` when the shell's frontend is not built either.
 - Agent-authored files by their absolute on-disk path (`file_serving.py`), so a
   chat's markdown can show an image the agent wrote.
 
