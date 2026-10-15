@@ -215,8 +215,8 @@ APP_OWNED_LABEL_KEYS: Final[frozenset[str]] = frozenset(
 # create that takes this long has hung past every readiness budget in the template.
 CHAT_CREATION_WAIT_TIMEOUT_SECONDS: Final[float] = 300.0
 
-# What a switch refused for a chat that cannot move to the picked account says; the dialog offers a new chat there.
 NO_USABLE_NAME_CHARACTERS_SENTENCE: Final[str] = "Pick a name with at least one letter or number."
+# What a switch refused for a chat that cannot move to the picked account says; the dialog offers a new chat there.
 CANNOT_MOVE_TO_ACCOUNT_SENTENCE: Final[str] = (
     "This chat can't be moved to that account. Start a new chat on it instead."
 )
