@@ -10,13 +10,14 @@
  * which is longer than the drag it may become: the pixels a press spends reaching the drag
  * threshold have to be ones the shell can see.
  *
- * The shell side of the app contract lives here too: the handshake after every load and on a
- * desktop change, ``shell:shown`` and ``shell:hidden`` as visibility changes, the following rule
+ * The shell side of the app contract lives here too: the handshake after every load, on a
+ * desktop change, and to every page when the embedder's word on Report a bug changes,
+ * ``shell:shown`` and ``shell:hidden`` as visibility changes, the following rule
  * of plan section 4.6 after every desktops update and every layout load (``shell:navigate`` for a
  * page that declared navigation, a ``src`` reassignment otherwise; an independent window's page follows
  * this client's own stored path, which arrives with the layout), and the pages' own
  * ``shell:capabilities``, ``shell:location``, ``shell:focused``, ``shell:open``, ``shell:start-with-text``,
- * ``shell:message``, and ``shell:open-link``. Messages cross through ``relay.ts``.
+ * ``shell:message``, ``shell:open-link``, and ``shell:report-bug``. Messages cross through ``relay.ts``.
  *
  * The phone layout mounts differently (plan-phone-interface.md): under the ``shown`` policy only the shown
  * window's page lives, laid over the whole host, plus the pages it keeps (the pinned chat window's, created
@@ -36,6 +37,7 @@ import {
   SHELL_NAVIGATE,
   SHELL_OPEN,
   SHELL_OPEN_LINK,
+  SHELL_REPORT_BUG,
   SHELL_SHOWN,
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
@@ -151,6 +153,7 @@ export class LivePagesLayer implements PageDriver {
     setChildFrameMessageHandler(SHELL_DRAFT_TEXT, (frame, payload) => this.takeDraftText(frame, payload));
     setChildFrameMessageHandler(SHELL_MESSAGE, (frame, payload) => this.takeMessage(frame, payload));
     setChildFrameMessageHandler(SHELL_OPEN_LINK, (frame, payload) => this.takeOpenLink(frame, payload));
+    setChildFrameMessageHandler(SHELL_REPORT_BUG, (frame) => this.takeReportBug(frame));
     // Focusable, so the shell has somewhere of its own to put the document's focus (``takeFocusFromOtherPages``).
     this.host.tabIndex = -1;
     this.store.setPageDriver(this);
@@ -231,6 +234,12 @@ export class LivePagesLayer implements PageDriver {
   private pointPageAt(page: LivePage, app: AppRecord, path: string): void {
     page.lastReportedPath = path;
     page.frame.setAttribute("src", windowPageUrl(app, path, this.options.host, this.options.protocol));
+  }
+
+  greetAll(): void {
+    for (const page of this.pages.values()) {
+      if (page.greetedDesktopId !== null) this.greet(page);
+    }
   }
 
   requestClose(windowId: string): void {
@@ -553,6 +562,7 @@ export class LivePagesLayer implements PageDriver {
       desktopId,
       app: page.app,
       path,
+      canReportBug: this.store.getCanReportBug(),
     });
     page.greetedDesktopId = desktopId;
   }
@@ -657,6 +667,12 @@ export class LivePagesLayer implements PageDriver {
       return;
     }
     void this.store.openLink(url, window.location.host, page.app);
+  }
+
+  /** ``shell:report-bug`` from a page: the bug report opens, where the embedder opens one; the frame has to be one the
+   *  shell created. */
+  private takeReportBug(frame: HTMLIFrameElement): void {
+    if (this.pageOfFrame(frame) !== undefined) this.store.reportBugFromPage();
   }
 
   private takeOpen(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {

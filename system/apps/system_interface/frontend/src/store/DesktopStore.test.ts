@@ -86,10 +86,7 @@ function notices(): string[] {
 
 function makeStore(
   redraw: () => void = () => undefined,
-  extra: Pick<
-    StoreDependencies,
-    "popOut" | "soloWindowId" | "isSoloReopened" | "outsideLinks" | "reportBug" | "canReportBug"
-  > = {},
+  extra: Pick<StoreDependencies, "popOut" | "soloWindowId" | "isSoloReopened" | "outsideLinks" | "reportBug"> = {},
 ): DesktopStore {
   const store = new DesktopStore({
     clientId: CLIENT,
@@ -701,6 +698,7 @@ describe("windows", () => {
       reloadApp: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: () => false,
+      greetAll: () => undefined,
     });
     await store.closeFocusedWindow();
     expect(requested).toEqual([]);
@@ -717,6 +715,7 @@ describe("windows", () => {
       reloadApp: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: () => false,
+      greetAll: () => undefined,
     });
     await store.closeFocusedWindow();
     expect(requested).toEqual(["win-1"]);
@@ -731,6 +730,7 @@ describe("windows", () => {
       reloadApp: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: (id) => id === "win-1",
+      greetAll: () => undefined,
     });
     await store.closeFocusedWindow();
     expect(requested).toEqual(["win-1"]);
@@ -775,6 +775,7 @@ describe("windows", () => {
       reloadApp: (app) => void reloaded.push(`app:${app}`),
       requestClose: () => undefined,
       ownsCloseChord: () => false,
+      greetAll: () => undefined,
     });
     socket.deliver().onLayoutOp({ op: "refresh", args: { window: "win-1" }, requester: "" });
     socket.deliver().onLayoutOp({ op: "refresh", args: { app: "docs" }, requester: "" });
@@ -802,7 +803,8 @@ describe("failure toasts", () => {
   }
 
   async function storeReportingBugs(reportBug: () => void, isOpeningHelp: boolean): Promise<DesktopStore> {
-    const store = makeStore(() => undefined, { reportBug, canReportBug: () => isOpeningHelp });
+    const store = makeStore(() => undefined, { reportBug });
+    store.setCanReportBug(isOpeningHelp);
     await store.start(NO_LINK);
     return store;
   }
@@ -2812,6 +2814,7 @@ describe("the phone layout", () => {
       reloadApp: () => undefined,
       requestClose: () => undefined,
       ownsCloseChord: () => false,
+      greetAll: () => undefined,
     });
     socket.deliver().onConnected();
     socket.deliver().onConnected();

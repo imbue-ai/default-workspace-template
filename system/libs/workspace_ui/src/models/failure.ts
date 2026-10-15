@@ -72,6 +72,9 @@ export const DEFAULT_WHAT_FAILED = "The workspace couldn't do that";
 
 const REPORT_A_BUG_ENDING = "Try again. If this persists, report a bug.";
 
+/** The button a sentence that asks for a bug report carries, where Imbue Studio can open one. */
+export const REPORT_A_BUG_LABEL = "Report a bug";
+
 // How much of a body that is not a reason (an error page, a proxy's plain text) "See details" quotes.
 const RAW_BODY_LIMIT = 2000;
 

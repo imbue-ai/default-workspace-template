@@ -31,7 +31,7 @@ import { startPresenceHeartbeat } from "./model/Presence";
 import { initEmbedderRelay } from "./relay";
 import { reloadInterface } from "./reload";
 import { DesktopStore } from "./store/DesktopStore";
-import { canReportBug, openBugReport } from "@imbue/workspace-ui/src/report-bug";
+import { openBugReport } from "@imbue/workspace-ui/src/report-bug";
 import { ShellSocket } from "./store/socket";
 import { followRenderModes } from "./theme/metrics";
 import { App, BACKDROP_AREA_ATTRIBUTE } from "./views/App";
@@ -109,7 +109,6 @@ function bootstrap(): void {
           popOut: popOutBridge,
           outsideLinks,
           reportBug: openBugReport,
-          canReportBug,
           soloWindowId: solo?.windowId ?? null,
           isSoloReopened: solo?.isReopened ?? false,
         });
@@ -140,6 +139,7 @@ function bootstrap(): void {
   setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) => {
     desktopStore.setCanPopOut(message.canPopOut === true);
     desktopStore.setCanOpenLinksOutside(message.opensExternalLinks === true);
+    desktopStore.setCanReportBug(message.opensHelp === true);
   });
   setEmbedderMessageHandler(REATTACH_WINDOW, (message) => {
     const windowId = message.windowId;

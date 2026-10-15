@@ -24,9 +24,8 @@ import {
   externalLinkMessageType,
 } from "@imbue/workspace-ui/src/links";
 import { StalePlacementsSaveError } from "../model/api";
-import { DEFAULT_WHAT_FAILED, failureSentence } from "@imbue/workspace-ui/src/models/failure";
+import { DEFAULT_WHAT_FAILED, REPORT_A_BUG_LABEL, failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
-import { REPORT_A_BUG_LABEL } from "@imbue/workspace-ui/src/report-bug";
 import {
   NO_DRAFT_APP_REASON,
   NO_TEXT_APP_REASON,
@@ -216,6 +215,8 @@ export interface PageDriver {
   requestClose(windowId: string): void;
   /** Whether the window's page declared it owns the close chord (``closeChord: true``). */
   ownsCloseChord(windowId: string): boolean;
+  /** Send every page that has loaded its handshake again, for a change it carries. */
+  greetAll(): void;
 }
 
 /** What the shell asks the embedding chrome for when a window is pulled out (the pull-out-window spec). */
@@ -298,8 +299,6 @@ export interface StoreDependencies {
   readonly outsideLinks?: OutsideLinkOpener;
   /** Open the bug report a failure's "Report a bug" asks for; absent opens none. */
   readonly reportBug?: () => void;
-  /** Whether the embedder opens that bug report (its ``opensHelp``); absent reads false. */
-  readonly canReportBug?: () => boolean;
   /** The one window this shell shows edge to edge (a pulled-out window's own desktop window), else null. */
   readonly soloWindowId?: string | null;
   /** Whether the chrome reopened the solo window's desktop window (a session restore, a reopen of the app, a
@@ -425,12 +424,13 @@ export class DesktopStore {
   private readonly popOut: PopOutBridge;
   private readonly outsideLinks: OutsideLinkOpener;
   private readonly reportBug: () => void;
-  private readonly canReportBug: () => boolean;
   private readonly soloWindowId: string | null;
   /** Whether the embedder can pull a window out; off until it says so (an older chrome, a plain browser). */
   private canPopOut = false;
   /** Whether the embedder opens external links outside the workspace for it; off until it says so. */
   private canOpenLinksOutside = false;
+  /** Whether the embedder opens its bug report (its ``opensHelp``); off until it says so. */
+  private canReportBug = false;
   /** The detached set as last reported to the embedder, serialized, so a redraw reports nothing new. */
   private lastReportedDetached: string | null = null;
   /** Solo mode's first layout load is still owed: the one load that may re-detach the solo window. */
@@ -454,7 +454,6 @@ export class DesktopStore {
     this.popOut = deps.popOut ?? NULL_POP_OUT_BRIDGE;
     this.outsideLinks = deps.outsideLinks ?? NULL_OUTSIDE_LINK_OPENER;
     this.reportBug = deps.reportBug ?? (() => undefined);
-    this.canReportBug = deps.canReportBug ?? (() => false);
     this.soloWindowId = deps.soloWindowId ?? null;
     this.isSoloFirstLayoutPending = this.soloWindowId !== null;
     this.appsLoaded = new Promise((resolve) => {
@@ -485,7 +484,7 @@ export class DesktopStore {
     this.toasts.show(told.message, {
       isLasting: true,
       details: told.details,
-      actions: told.isReportable && this.canReportBug() ? [{ label: REPORT_A_BUG_LABEL, run: this.reportBug }] : [],
+      actions: told.isReportable && this.canReportBug ? [{ label: REPORT_A_BUG_LABEL, run: this.reportBug }] : [],
     });
   }
 
@@ -509,6 +508,24 @@ export class DesktopStore {
   /** The embedder said whether it opens external links for the workspace (``minds:embedder-capabilities``). */
   setCanOpenLinksOutside(canOpenLinksOutside: boolean): void {
     this.canOpenLinksOutside = canOpenLinksOutside;
+  }
+
+  /** Whether "Report a bug" can work: the embedder opens its bug report. The pages learn it from their handshake. */
+  getCanReportBug(): boolean {
+    return this.canReportBug;
+  }
+
+  /** The embedder said whether it opens its bug report (``opensHelp`` in ``minds:embedder-capabilities``). It says
+   *  so once, after the pages may have loaded, so a change is handed to every page in a fresh handshake. */
+  setCanReportBug(canReportBug: boolean): void {
+    if (this.canReportBug === canReportBug) return;
+    this.canReportBug = canReportBug;
+    this.pageDriver?.greetAll();
+  }
+
+  /** A page's ``shell:report-bug``: the bug report opens, where the embedder opens one. */
+  reportBugFromPage(): void {
+    if (this.canReportBug) this.reportBug();
   }
 
   /** Whether a window move in progress has pulled ``windowId`` out of the chrome's window (it is hidden meanwhile). */
