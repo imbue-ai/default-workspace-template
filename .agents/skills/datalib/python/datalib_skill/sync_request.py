@@ -1,11 +1,10 @@
-#!/usr/bin/env python3
 """Ask the running Datalib app to sync, and wait for a sync it was asked for.
 
 Usage, from the repo root::
 
-    python3 .agents/skills/datalib/scripts/sync_request.py open slack/ingest
+    uv run --no-sync .agents/skills/datalib/python/datalib_skill/sync_request.py open slack/ingest
     python3 system/scripts/run_in_background.py --description "Sync Slack into datalib" -- \\
-        python3 .agents/skills/datalib/scripts/sync_request.py wait <request-id>...
+        uv run --no-sync .agents/skills/datalib/python/datalib_skill/sync_request.py wait <request-id>...
 
 ``open`` files the sync with ``datalib-http`` and prints one request id per line. The sync then
 runs inside that server, which supervisord runs independently of any chat, so stopping or handing
@@ -14,8 +13,6 @@ prints how; under ``run_in_background.py`` that output is what wakes the agent.
 
 ``wait`` exits the way ``datalib-dag`` does for the same outcomes: 0 when every request is done,
 2 when one failed, 130 when one was stopped; 1 when the server could not be asked.
-
-Standard library only: it runs under a plain ``python3``.
 """
 
 from __future__ import annotations

@@ -13,9 +13,9 @@ from pathlib import Path
 
 import pytest
 
-_SCRIPT = Path(__file__).parent / "install_datalib.sh"
-# .agents/skills/datalib/scripts/install_datalib_test.py -> the repository root.
-_REPO_ROOT = Path(__file__).resolve().parents[4]
+_SKILL_DIR = Path(__file__).resolve().parents[2]
+_SCRIPT = _SKILL_DIR / "scripts" / "install_datalib.sh"
+_REPO_ROOT = _SKILL_DIR.parents[2]
 _PROGRAM_SOURCE = _REPO_ROOT / "system/apps/datalib/datalib.conf"
 _DOCS = (
     "agent_user.md",

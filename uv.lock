@@ -33,6 +33,7 @@ members = [
     "caretaker",
     "chat",
     "connect-external-service-skill",
+    "datalib-skill",
     "default-workspace-template",
     "env-converge",
     "getting-started",
@@ -990,6 +991,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/93/77/8df9eb486495979bccecd1062e2eaf435250e84437040295b57d09048b0b/cryptography-49.0.0-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:42b0684e0e40cf26122427802486f6d93aea593612603a94fbf260c7eb1e9c1b", size = 4967968, upload-time = "2026-06-12T20:02:12.524Z" },
     { url = "https://files.pythonhosted.org/packages/c2/e6/f60198ea8d9dfa15fff9ed4ca02ce362f6eadd9ba757dcc50634c4257b63/cryptography-49.0.0-cp39-abi3-win_amd64.whl", hash = "sha256:026ac7423e6fa66872d3bf889be5974507da3944f866f704fa200eadacd00001", size = 3785547, upload-time = "2026-06-12T20:02:26.847Z" },
 ]
+
+[[package]]
+name = "datalib-skill"
+version = "0.1.0"
+source = { editable = ".agents/skills/datalib/python" }
 
 [[package]]
 name = "default-workspace-template"

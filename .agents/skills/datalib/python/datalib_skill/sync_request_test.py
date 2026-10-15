@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import threading
 from collections.abc import Iterator
@@ -12,11 +11,7 @@ from typing import Any
 
 import pytest
 
-_SCRIPT = Path(__file__).parent / "sync_request.py"
-_spec = importlib.util.spec_from_file_location("sync_request", _SCRIPT)
-assert _spec is not None and _spec.loader is not None
-sync_request = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(sync_request)
+from datalib_skill import sync_request
 
 _TOKEN = "token.0123_abc~"
 

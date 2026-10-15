@@ -11,6 +11,7 @@ Each skill's Python now lives in its own uv project, `.agents/skills/<name>/pyth
   - `claude_p.py` lives at `python/use_ai_integration_skill/claude_p.py`.
   - update-self's apply refreshes the open views with `uv run --no-sync`.
   - These run from their modules: `.agents/shared/scripts/agents_shared/validate_skill.py`, `.agents/shared/scripts/agents_shared/resolve_template_base.py`, `.agents/skills/build-app/python/build_app_skill/scaffold_flask_lib.py` and `.agents/skills/migrate-workspace/python/migrate_workspace_skill/migrate_workspace.py`.
+  - `datalib`'s `sync_request.py` runs from its module, `.agents/skills/datalib/python/datalib_skill/sync_request.py`, with `uv run --no-sync` instead of `python3`.
 
 - **`validate_skill.py`** now requires:
   - a `python/pyproject.toml` naming `<name>-skill` and `<name_with_underscores>_skill` whenever the skill has Python;
