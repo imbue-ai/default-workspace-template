@@ -1179,6 +1179,7 @@ def test_a_send_whose_agent_cannot_be_started_is_not_called_not_ready(tmp_path: 
     assert body["user_facing_message"] == (
         "This chat's agent couldn't be started. Try again. If this persists, report a bug."
     )
+    assert body["reportable"] is True
     assert "no such agent" in body["detail"]
     assert started == [agent_info.name]
 
@@ -4529,6 +4530,7 @@ def test_before_the_agent_list_is_read_a_send_is_told_the_workspace_is_still_sta
 
     assert body["kind"] == "chat_starting"
     assert body["user_facing_message"] == "This workspace is still starting up. Try again in a few seconds."
+    assert "reportable" not in body
 
 
 def test_a_failed_first_listing_with_no_observer_is_told_apart_from_the_start_up_wait(
@@ -4547,6 +4549,7 @@ def test_a_failed_first_listing_with_no_observer_is_told_apart_from_the_start_up
     assert response.get_json()["user_facing_message"] == (
         "Chat couldn't load this workspace's chats. Restart the workspace. If this persists, report a bug."
     )
+    assert response.get_json()["reportable"] is True
 
 
 def test_an_intake_before_the_agent_list_is_read_says_chat_is_still_starting() -> None:
@@ -4579,6 +4582,7 @@ def test_an_unexpected_exception_reads_as_something_going_wrong_with_the_excepti
     assert response.get_json() == {
         "detail": "Internal server error: boom in the route",
         "user_facing_message": "Something went wrong in this chat. Try again. If this persists, report a bug.",
+        "reportable": True,
     }
 
 

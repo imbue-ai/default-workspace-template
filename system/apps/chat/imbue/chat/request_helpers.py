@@ -28,6 +28,8 @@ _LOOPBACK_CLIENT_HOSTS: Final[frozenset[str]] = frozenset({"127.0.0.1", "::1", "
 UNEXPECTED_FAILURE_SENTENCE: Final[str] = (
     "Something went wrong in this chat. Try again. If this persists, report a bug."
 )
+# How a sentence for people that asks for a bug report ends.
+_REPORT_A_BUG_ENDING: Final[str] = "If this persists, report a bug."
 
 
 def json_response(content: Any, status_code: int = 200) -> Response:
@@ -40,11 +42,14 @@ def refusal_response(
     detail: str, status_code: int, user_facing_message: str | None = None, kind: str | None = None
 ) -> Response:
     """A refusal's answer. ``detail`` is the developer's reason, which scripts and logs read; ``user_facing_message``,
-    when given, is the sentence a page shows in its place (the details keep ``detail``); ``kind`` names the case for a
-    page that offers different controls per case."""
-    body: dict[str, str] = {"detail": detail}
+    when given, is the sentence a page shows in its place (the details keep ``detail``), with ``reportable: true``
+    when it asks for a bug report, so the page offers the button for one; ``kind`` names the case for a page that
+    offers different controls per case."""
+    body: dict[str, str | bool] = {"detail": detail}
     if user_facing_message is not None:
         body["user_facing_message"] = user_facing_message
+        if user_facing_message.endswith(_REPORT_A_BUG_ENDING):
+            body["reportable"] = True
     if kind is not None:
         body["kind"] = kind
     return json_response(body, status_code=status_code)
