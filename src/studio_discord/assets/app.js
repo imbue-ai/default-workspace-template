@@ -105,10 +105,7 @@ function renderChannels(channels, withMessages) {
         row.append(el("p", { class: "empty" }, channel.kind === "forum" ? "No posts yet." : "No messages yet."));
       }
       const footer = el("div", { class: "ftr" });
-      footer.append(
-        el("a", { class: "more", href: channel.url, target: "_blank", rel: "noopener" }, "More in Discord"),
-        el("a", { class: "rawlink", href: `/raw/${channel.id}`, title: "What Discord returned, unprocessed" }, "Raw"),
-      );
+      footer.append(el("a", { class: "rawlink", href: `/raw/${channel.id}`, title: "What Discord returned, unprocessed" }, "Raw"));
       row.append(footer);
     }
     list.append(row);
@@ -122,6 +119,15 @@ async function call(method, path) {
 
 async function loadMessages() {
   $("#updated").textContent = "loading";
+  $("#refresh").classList.add("busy");
+  try {
+    await readMessages();
+  } finally {
+    $("#refresh").classList.remove("busy");
+  }
+}
+
+async function readMessages() {
   let data;
   try {
     data = await call("GET", "/api/messages");
