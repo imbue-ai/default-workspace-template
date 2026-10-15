@@ -179,7 +179,6 @@ function deleteFromMenu(attrs: RowMenuContext, row: ChatRow): void {
   const next = attrs.rows.find(
     (candidate) => candidate.chatId !== row.chatId && !deletingChatIds.has(candidate.chatId),
   );
-  deletingChatIds.add(row.chatId);
   if (row.chatId === attrs.selectedChatId && next !== undefined) attrs.onPick(next.chatId);
   deleteChat(row);
 }
