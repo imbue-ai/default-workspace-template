@@ -15,11 +15,11 @@ def _message(message_id: str, when: str, text: str = "hi") -> dict[str, object]:
     }
 
 
-def test_text_channel_shows_the_newest_few_first_with_links_to_discord() -> None:
+def test_text_channel_shows_the_newest_few_oldest_first_like_discord() -> None:
     kept = {"items": {str(i): _message(str(i), f"2026-10-0{i}T10:00:00+00:00") for i in range(1, 6)}}
     items = views.channel_items(GENERAL, kept)
-    assert [i["id"] for i in items] == ["5", "4", "3"]
-    first = items[0]
+    assert [i["id"] for i in items] == ["3", "4", "5"]
+    first = items[-1]
     assert first["author"] == "Ana"
     assert first["attachments"] == 2
     assert first["avatar"] == "https://cdn.discordapp.com/avatars/7/abc.png?size=64"
@@ -79,3 +79,43 @@ def test_invite_prefers_the_live_catalog_then_the_widget_then_the_last_known() -
     assert invite.choose(live, widget, now) == "https://discord.gg/live"
     assert invite.choose(expired, widget, now) == "https://discord.com/invite/widget"
     assert invite.choose(None, None, now) == config.LAST_KNOWN_INVITE
+
+
+def test_forum_lists_the_newest_few_posts_newest_first_like_discord() -> None:
+    def thread(i: int) -> dict[str, object]:
+        return {
+            "id": f"t{i}",
+            "kind": "thread",
+            "thread": {
+                "id": f"t{i}",
+                "name": f"post {i}",
+                "message_count": 0,
+                "thread_metadata": {"create_timestamp": f"2026-10-0{i}T10:00:00+00:00"},
+            },
+        }
+
+    kept = {"items": {f"thread:t{i}": thread(i) for i in range(1, 6)}}
+    assert [i["id"] for i in views.channel_items(HELP, kept)] == ["t5", "t4", "t3"]
+
+
+def test_a_post_with_a_fresh_reply_rises_like_in_discord() -> None:
+    def thread(i: int, last: str | None) -> dict[str, object]:
+        t: dict[str, object] = {
+            "id": f"t{i}",
+            "name": f"post {i}",
+            "message_count": 1,
+            "thread_metadata": {"create_timestamp": f"2026-10-0{i}T10:00:00+00:00"},
+        }
+        if last:
+            t["last_message_id"] = last
+        return {"id": f"t{i}", "kind": "thread", "thread": t}
+
+    # 1560000000000000000 is a Discord id made on 2026-10-14, after both posts were opened.
+    kept = {"items": {"a": thread(1, "1560000000000000000"), "b": thread(2, None)}}
+    items = views.channel_items(HELP, kept)
+    assert [i["id"] for i in items] == ["t1", "t2"]
+    assert items[0]["time"].startswith("2026-10-1")
+
+
+def test_snowflake_time() -> None:
+    assert views.snowflake_time("175928847299117063") == "2016-04-30T11:18:25+00:00"

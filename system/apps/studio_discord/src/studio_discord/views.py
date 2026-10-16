@@ -1,5 +1,6 @@
 """Turns what Discord returned into what the window shows. Pure functions; no I/O."""
 
+from datetime import UTC, datetime
 from typing import Any
 
 from studio_discord import config
@@ -34,6 +35,15 @@ def message_item(channel_id: str, message: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_DISCORD_EPOCH_MS = 1420070400000
+
+
+def snowflake_time(snowflake: str) -> str:
+    """The moment a Discord id was made (ids carry their own timestamp)."""
+    milliseconds = (int(snowflake) >> 22) + _DISCORD_EPOCH_MS
+    return datetime.fromtimestamp(milliseconds / 1000, UTC).isoformat(timespec="seconds")
+
+
 def post_item(thread: dict[str, Any], authors: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """A forum post (a thread). The opening message, when Discord sent it, gives the author and text."""
     first = authors.get(thread["id"])
@@ -42,7 +52,10 @@ def post_item(thread: dict[str, Any], authors: dict[str, dict[str, Any]]) -> dic
         "id": thread["id"],
         "author": _name(first["author"]) if first else None,
         "avatar": avatar_url(first["author"]) if first else None,
-        "time": metadata.get("create_timestamp"),
+        # Latest activity, which is what Discord's forum list sorts by and shows.
+        "time": snowflake_time(thread["last_message_id"])
+        if thread.get("last_message_id")
+        else metadata.get("create_timestamp"),
         "title": thread.get("name") or "Untitled post",
         "text": plain_text(first) if first else "",
         "attachments": len(first.get("attachments", [])) if first else 0,
@@ -56,7 +69,10 @@ def _sort_key(item: dict[str, Any]) -> str:
 
 
 def channel_items(channel: config.Channel, kept: dict[str, Any]) -> list[dict[str, Any]]:
-    """The newest few records kept for a channel, shaped for the window, newest first."""
+    """The newest few records kept for a channel, in the order Discord shows them.
+
+    A forum lists its posts newest first; a text channel reads top to bottom, newest last.
+    """
     records = list(kept.get("items", {}).values())
     if channel.kind == "forum":
         threads = [r for r in records if r.get("kind") == "thread"]
@@ -65,7 +81,8 @@ def channel_items(channel: config.Channel, kept: dict[str, Any]) -> list[dict[st
     else:
         items = [message_item(channel.id, r) for r in records]
     items.sort(key=_sort_key, reverse=True)
-    return items[: config.MESSAGES_PER_CHANNEL]
+    newest = items[: config.MESSAGES_PER_CHANNEL]
+    return newest if channel.kind == "forum" else newest[::-1]
 
 
 def channel_view(channel: config.Channel, raw: dict[str, Any] | None, kept: dict[str, Any]) -> dict[str, Any]:

@@ -84,10 +84,15 @@ function renderItem(item) {
   return row;
 }
 
+// Once connected, the forum (questions and bugs) leads: it is where a new user most likely needs us.
+function connectedOrder(channels) {
+  return [...channels.filter((c) => c.kind === "forum"), ...channels.filter((c) => c.kind !== "forum")];
+}
+
 function renderChannels(channels, withMessages) {
   const list = $("#channels");
   list.replaceChildren();
-  for (const channel of channels) {
+  for (const channel of withMessages ? connectedOrder(channels) : channels) {
     const row = el("li", { class: "channel", id: `ch-${channel.name}`, "data-channel-id": channel.id });
     const head = el("a", { class: "chrow", href: channel.url, target: "_blank", rel: "noopener" });
     const name = el("span", { class: "name" });
