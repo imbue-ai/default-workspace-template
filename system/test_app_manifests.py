@@ -436,9 +436,9 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert sorted(
         (manifest.launcher_rank, manifest.name) for manifest in by_name.values() if manifest.launcher_rank is not None
     ) == [(10, "chat"), (15, "getting-started"), (20, "files"), (30, "browser"), (40, "terminal"), (50, "system-monitor")]
-    # Every seeded shortcut opens a new window of its app; the one browser is focused instead
-    # (docs/system/specs/window-bound-resources.md section 3.1).
-    for name, mode in (("chat", "new"), ("terminal", "new"), ("files", "new"), ("browser", "focus")):
+    # The terminal's and the file viewer's seeded shortcuts open a new window of their app; the chat's and the
+    # browser's focus the one there is instead (docs/system/specs/window-bound-resources.md section 3.1).
+    for name, mode in (("chat", "focus"), ("terminal", "new"), ("files", "new"), ("browser", "focus")):
         assert by_name[name].default_shortcut is not None
         assert by_name[name].default_shortcut.mode == mode, name
     # The desktop interface's launch paths (desktop-interface contracts.md section 2; the POST ones are the
