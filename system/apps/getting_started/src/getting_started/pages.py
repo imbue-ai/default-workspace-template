@@ -1,8 +1,10 @@
-"""The app's routes on its own origin: the page, the health probe, the template catalog, and the contract module.
+"""The app's routes on its own origin: the page, the health probe, the template catalog, the chat import card's
+state, and the contract module.
 
 The page is the frontend's built document (``static/index.html``); its bundle is served under ``/assets``. The
 catalog route answers the freshest copy the store holds, with each drawing resolved to a URL (``catalog`` is null
-when no catalog URL is configured, and a 503 says nothing could be loaded). The contract module the page speaks to
+when no catalog URL is configured, and a 503 says nothing could be loaded). The chat import routes answer what the
+import-chats skill has imported and record that the user put its card away. The contract module the page speaks to
 the shell with is the shell's build output, served from this origin (desktop-interface contracts.md section 7).
 """
 
@@ -19,6 +21,7 @@ from flask.typing import ResponseReturnValue
 from werkzeug.exceptions import NotFound
 
 from app_manifest.registry import APP_CONTRACT_ROUTE
+from getting_started.chat_import import ChatImportStore
 from getting_started.template_catalog import TemplateCatalogAvailability
 from getting_started.template_catalog import TemplateCatalogStore
 from getting_started.template_catalog import catalog_wire_json
@@ -26,6 +29,8 @@ from getting_started.template_catalog import catalog_wire_json
 BLUEPRINT_NAME: Final[str] = "getting_started_pages"
 HEALTH_PATH: Final[str] = "/api/health"
 TEMPLATES_CATALOG_PATH: Final[str] = "/api/templates-catalog"
+CHAT_IMPORT_PATH: Final[str] = "/api/chat-import"
+CHAT_IMPORT_DISMISS_PATH: Final[str] = "/api/chat-import/dismiss"
 PAGE_DOCUMENT_FILENAME: Final[str] = "index.html"
 
 HTTP_NOT_FOUND: Final[int] = 404
@@ -41,7 +46,9 @@ _NOT_BUILT_PAGE: Final[str] = (
 )
 
 
-def build_pages_blueprint(static_directory: Path, catalog: TemplateCatalogStore, contract_path: Path) -> Blueprint:
+def build_pages_blueprint(
+    static_directory: Path, catalog: TemplateCatalogStore, chat_import: ChatImportStore, contract_path: Path
+) -> Blueprint:
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
 
     @blueprint.get("/")
@@ -84,6 +91,15 @@ def build_pages_blueprint(static_directory: Path, catalog: TemplateCatalogStore,
                 )
             case _ as unreachable:
                 assert_never(unreachable)
+
+    @blueprint.get(CHAT_IMPORT_PATH)
+    def chat_import_state() -> ResponseReturnValue:
+        return jsonify(chat_import.wire_json())
+
+    @blueprint.post(CHAT_IMPORT_DISMISS_PATH)
+    def dismiss_chat_import() -> ResponseReturnValue:
+        chat_import.dismiss()
+        return jsonify(chat_import.wire_json())
 
     @blueprint.get(APP_CONTRACT_ROUTE)
     def app_contract() -> ResponseReturnValue:

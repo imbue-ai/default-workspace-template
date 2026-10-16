@@ -1,15 +1,17 @@
 # getting-started
 
 The Getting Started app: the ways into the workspace, on one page a window of the desktop
-frames at the app's own origin (`docs/system/blueprint/launcher-and-getting-started/`).
-Top to bottom: a search field over its own content; "Start something", eight intents two to
-a row (four at first, the rest behind "See more"), each with a seeded first message; "Start
-from a template", the published template catalog by shelf, with a detail page (the drawing,
-the write-up, what the template needs, its repository) whose two actions adopt the template
-into this workspace or have a new workspace made from it. Every tile and both actions start a
-chat through one contract message, `shell:start-with-text`, which the desktop runs as its
-launcher's primary text action; the page names no app, and the Getting Started window stays
-where it is while the chat comes up beside it.
+frames at the app's own origin (`docs/system/blueprint/launcher-and-getting-started/`). Top
+to bottom: a search field over its own content; "Bring in your chats", a card offering to
+copy the user's Claude and ChatGPT conversations into the workspace (until it is put away);
+"Start something", eight intents two to a row (four at first, the rest behind "See more"),
+each with a seeded first message; "Start from a template", the published template catalog by
+shelf, with a detail page (the drawing, the write-up, what the template needs, its
+repository) whose two actions adopt the template into this workspace or have a new workspace
+made from it. Every tile and both actions start a chat through one contract message,
+`shell:start-with-text`, which the desktop runs as its launcher's primary text action; the
+page names no app, and the Getting Started window stays where it is while the chat comes up
+beside it.
 
 It runs as the `getting-started` supervisord program (`system/supervisord.conf.d/getting-started.conf`)
 from its own uv tool environment (`system/scripts/build_workspace.sh`), serving on
@@ -24,6 +26,16 @@ from its own uv tool environment (`system/scripts/build_workspace.sh`), serving 
   so nothing outside the workspace changes), reused for six hours, and kept as a last good
   copy under `data/.state/getting-started/template_catalog.json`; `{"catalog": null}` when
   no URL is configured, a 503 when nothing could ever be loaded.
+- `GET /api/chat-import`: the "Bring in your chats" card's state, `{"is_dismissed", "sources"}`:
+  each source the `import-chats` skill recorded in `data/.skills/import-chats/status.json`
+  (`state`, `conversations`, `updated_at`, `detail`, and a running import's `fetched` of
+  `to_fetch`), with an import whose sync process is gone, or whose record has not been
+  rewritten for two minutes (a running sync rewrites it every ten seconds), answered as
+  `failed`. The page fetches it on load and on focus, and polls it while a source is
+  importing. The card's import, update and resume actions each start a chat
+  (`shell:start-with-text`) that the skill matches on.
+- `POST /api/chat-import/dismiss`: puts the card away for good ("Not now" or "Hide"),
+  recorded in `data/.state/getting-started/chat_import.json`.
 - `GET /_static/app_contract.js`: the shell's browser-side contract module, served from this
   origin as every app serves it.
 
