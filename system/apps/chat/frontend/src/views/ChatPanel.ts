@@ -76,7 +76,7 @@ import { renderHeldSends } from "./HeldSendView";
 import { HandoffFailedNotice } from "./HandoffFailedNotice";
 import { renderHandoffTailNode } from "./handoff-node";
 import { SwitchDialog } from "./SwitchDialog";
-import { hasOpenHandoffRequest, isTailTurnSettled, liveCompactionOf } from "./turn-grouping";
+import { hasLandedLiveSwitch, hasOpenHandoffRequest, isTailTurnSettled, liveCompactionOf } from "./turn-grouping";
 import { closeRunningCompactionChips } from "./compaction-chips";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 
@@ -645,9 +645,14 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
           { kind: "spacer", height: plan.bottomPadPx },
         ]),
         // A switch the transcript does not show yet (draining, or restarting in place) gets its
-        // node here; once the summary request is on the stream the rows carry it. Spread rather
-        // than a hole: the list is keyed.
-        ...[renderHandoffTailNode(chatId, hasOpenHandoffRequest(events, chat?.handoff ?? null))].filter(
+        // node here; once the summary request or the landed switch is on the stream the rows carry
+        // it. Spread rather than a hole: the list is keyed.
+        ...[
+          renderHandoffTailNode(
+            chatId,
+            hasOpenHandoffRequest(events, chat?.handoff ?? null) || hasLandedLiveSwitch(events, chat?.handoff ?? null),
+          ),
+        ].filter(
           (node) => node !== null,
         ),
         ...renderQueuedMessages(chatId),

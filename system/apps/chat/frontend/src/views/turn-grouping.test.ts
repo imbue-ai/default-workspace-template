@@ -11,6 +11,7 @@ import type { HandoffNode, StepNode, TimelineItem } from "./turn-grouping";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
 import {
   buildSections,
+  hasLandedLiveSwitch,
   hasOpenHandoffRequest,
   hasUserTurn,
   isTailTurnSettled,
@@ -1922,6 +1923,20 @@ describe("agent switches", () => {
     expect(after.map((s) => s.user_event?.event_id ?? null)).toEqual(["u-t1", "u-t5"]);
     expect(handoffNodeOf(after[0].items[0]).switch).toBeNull();
     expect(after[1].trailing_reply.map((e) => e.event_id)).toEqual(["a-t6"]);
+  });
+
+  it("reports the live switch as landed once its marker is on the transcript, while the chat still delivers", () => {
+    const live = handoffStateFixture({ phase: "switching", started_at: "2026-09-16T00:44:10.000Z" });
+    const before: TranscriptEvent[] = [userMsg("2026-09-16T00:44:00.000Z", "do the thing")];
+    expect(hasLandedLiveSwitch(before, live)).toBe(false);
+    // The marker is stamped when the retiring agent was archived, after the switch began.
+    const landed = [...before, agentSwitch("2026-09-16T00:45:00.000Z", "sw2")];
+    expect(hasLandedLiveSwitch(landed, live)).toBe(true);
+    expect(hasLandedLiveSwitch([...landed, assistantText("2026-09-16T00:45:30.000Z", "hi")], live)).toBe(true);
+    // An earlier switch's marker says nothing about the one running now.
+    const earlier = [agentSwitch("2026-09-16T00:40:00.000Z", "sw1"), ...before];
+    expect(hasLandedLiveSwitch(earlier, live)).toBe(false);
+    expect(hasLandedLiveSwitch(landed, null)).toBe(false);
   });
 
   it("tells the live switch's request from an earlier one that was called off, by when the switch began", () => {

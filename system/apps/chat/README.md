@@ -231,8 +231,10 @@ successor's opening bubble), one handoff node in the transcript shows the switch
 progress ("Handing off to Codex...", then "Handed off from Claude Code to Codex",
 expandable to the summary turn and the handoff prompt, with a rule under it
 once the switch has landed; a fresh start, which asked for no summary and sent
-no prompt, leaves no node once it has landed), the activity strip and the placeholder say
-what is happening, and for a handoff the Stop button is "Cancel switch" until
+no prompt, shows no node at all, and its activity strip says only that the chat is
+starting on the target), the activity strip and the placeholder say
+what is happening, the model chip names the target (the picked model, else the
+harness) until the switch lands, and for a handoff the Stop button is "Cancel switch" until
 the old agent is stopped; a failed start or a model pick the successor cannot
 take shows its reason over the composer with a retry (on any signed-in account
 after a handoff, on the same harness and lane after a rebind) and "Start a new
