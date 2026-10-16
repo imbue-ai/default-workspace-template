@@ -2,6 +2,9 @@
   "offload-modal.toml": {
     "image_id": "im-NzuQqjFVF3voLONt6JITgY"
   },
+  "offload-modal-system-interface.toml": {
+    "image_id": "im-SAWfiA8TVJTiMkS1WpUKo7"
+  },
   "offload-modal-chat.toml": {
     "image_id": "im-1wl8dVJh6mFUmV6fsqOC2j"
   }
