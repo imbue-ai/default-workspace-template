@@ -1,0 +1,44 @@
+[project]
+name = "studio-discord"
+version = "0.1.0"
+description = "Join and read the Imbue Studio Discord from inside Imbue Studio"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "flask>=3.0",
+    "werkzeug>=3.0",
+]
+
+[project.scripts]
+studio-discord = "studio_discord.server:main"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1",
+    "pytest>=8",
+    "pytest-timeout>=2.3",
+    "ruff>=0.4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/studio_discord"]
+
+[tool.pytest.ini_options]
+testpaths = ["src"]
+python_files = ["*_test.py"]
+addopts = ["--timeout=30"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["F", "I", "UP006", "UP007"]
+
+[tool.pyright]
+pythonVersion = "3.11"
+include = ["src", "install.py"]

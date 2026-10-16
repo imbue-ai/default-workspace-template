@@ -37,6 +37,15 @@ Built-in apps:
   workspace folder, run from its program line with a vendored, patched frontend.
 - `browser/` - The live browser: a fleet of Chromium browsers streamed to the
   UI by its daemon (`browser-service`).
+- `studio_discord/` - Studio Discord: joins people to the Imbue Studio Discord and
+  shows its Studio channels inside Studio, read-only, through the user's own
+  connected Discord account. A git subtree of its own repo
+  ([boweiliu/studio-discord](https://github.com/boweiliu/studio-discord)), which
+  holds its history and runs its tests; change it there, then bring the change
+  here with `git subtree pull --prefix=system/apps/studio_discord <repo> main
+  --squash`. It reaches the workspace only over HTTP
+  (`studio_discord/docs/studio-contract.md`); the workspace registers its window
+  from its program line. Served on port 8086 by the `studio-discord` tool.
 - `datalib/` - The Datalib app: datalib's web UI (`datalib-http`) over the store
   the `datalib` skill writes. Not announced to users yet: its program is not in
   `system/supervisord.conf.d/` until that skill's install script copies it there,

@@ -26,8 +26,10 @@ pytestmark = pytest.mark.xdist_group(name="meta_ratchets")
 # system_interface and chat run their own pytest config (the root config ignores
 # them) and carry the mngr-monorepo-style test_ratchets.py rather than the
 # dwt-standard test_<name>_ratchets.py set, so they are exempt from the meta
-# checks here.
-_META_EXEMPT_PROJECTS = frozenset({"system_interface", "chat"})
+# checks here. studio_discord is a vendored git subtree of its own repo
+# (boweiliu/studio-discord), whose suite and checks run there; a ratchets file
+# here would import the workspace's code into a repo that deliberately has none.
+_META_EXEMPT_PROJECTS = frozenset({"system_interface", "chat", "studio_discord"})
 
 
 def _get_all_project_dirs() -> list[Path]:

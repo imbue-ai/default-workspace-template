@@ -97,7 +97,9 @@ members = ["system/libs/*", "system/services/*", "system/apps/*"]
 # and a vendored frontend around the dufs binary its program line runs.
 # system/apps/datalib is likewise a manifest and a standard-library launcher around the
 # datalib-http binary.
-exclude = ["system/libs/workspace_ui", "system/apps/terminal_pty", "system/apps/files", "system/apps/datalib"]
+# system/apps/studio_discord is a vendored subtree of its own repo (boweiliu/studio-discord), with its own
+# lockfile and test suite run there; build_workspace.sh installs it as a tool like any app with a manifest.
+exclude = ["system/libs/workspace_ui", "system/apps/terminal_pty", "system/apps/files", "system/apps/datalib", "system/apps/studio_discord"]
 
 [tool.uv.sources]
 bootstrap = { workspace = true }
@@ -171,6 +173,8 @@ markers = [
 addopts = [
     "--timeout=10",
     "--ignore=system/vendor/tk",
+    # A vendored subtree; its suite runs in its own repo (boweiliu/studio-discord).
+    "--ignore=system/apps/studio_discord",
     # system/apps/system_interface and system/apps/chat have their own pytest config (coverage,
     # slow-test reporting, ratchets) that conflicts with the root config; each is run from
     # inside its own dir.
@@ -185,7 +189,7 @@ addopts = [
 
 [tool.ruff]
 target-version = "py311"
-exclude = ["system/vendor/tk", "system/apps/system_interface", "system/apps/chat"]
+exclude = ["system/vendor/tk", "system/apps/system_interface", "system/apps/chat", "system/apps/studio_discord"]
 
 [tool.ruff.lint]
 select = ["F", "I", "UP006", "UP007"]

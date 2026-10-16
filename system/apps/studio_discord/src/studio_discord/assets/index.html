@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Studio Discord</title>
+<style>
+  :root {
+    --ink: #1d1b1a; --muted: #625c57; --line: #e5e0d9; --bg: #fbfaf8; --raised: #ffffff; --soft: #f1ede7;
+    --accent: #4f5bd5; --accent-ink: #ffffff; --link: #4450c9;
+    --online: #1f8f4e; --idle: #b7860b; --dnd: #c8323a;
+    --danger: #b3261e; --warn-bg: #fff4e5; --warn-line: #e8b56a;
+    --focus: #4f5bd5;
+    --tap: 40px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #ece8e3; --muted: #a9a29a; --line: #34302c; --bg: #191716; --raised: #221f1d; --soft: #2c2926;
+      --accent: #4f5bd5; --accent-ink: #ffffff; --link: #9aa2ff;
+      --online: #3bbf73; --idle: #e0b13d; --dnd: #ef6a70;
+      --danger: #d8463d; --warn-bg: #2e2416; --warn-line: #8a6a33;
+      --focus: #9aa2ff;
+    }
+  }
+  @media (max-width: 600px) { :root { --tap: 44px; } }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; font: 15px/1.5 ui-sans-serif, system-ui, sans-serif; color: var(--ink); background: var(--bg); }
+  @media (max-width: 600px) { body { font-size: 16px; } }
+  a { color: inherit; }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
+
+
+  main { max-width: 760px; margin: 0 auto; padding: 28px 20px 48px; }
+  @media (max-width: 600px) { main { padding: 18px 16px 40px; } }
+
+  /* Which blocks each state shows. */
+  [data-show] { display: none !important; }
+  body[data-state="offer"] [data-show~="offer"],
+  body[data-state="waiting"] [data-show~="waiting"],
+    body[data-state="connected"] [data-show~="connected"],
+  body[data-state="notjoined"] [data-show~="notjoined"],
+  body[data-state="error"] [data-show~="error"],
+  body[data-state="confirm"] [data-show~="confirm"],
+  body[data-state="uninstalled"] [data-show~="uninstalled"],
+  body[data-state="loading"] [data-show~="loading"] { display: block !important; }
+  body[data-state="offer"] .flex[data-show~="offer"],
+  body[data-state="waiting"] .flex[data-show~="waiting"],
+    body[data-state="connected"] .flex[data-show~="connected"],
+  body[data-state="notjoined"] .flex[data-show~="notjoined"],
+  body[data-state="error"] .flex[data-show~="error"],
+  body[data-state="confirm"] .flex[data-show~="confirm"] { display: flex !important; }
+
+  /* Pitch (before connecting). */
+  .hero { display: flex; gap: 16px; align-items: center; }
+  .hero img { width: 56px; height: 56px; border-radius: 16px; flex: none; }
+  h1 { font-size: 24px; line-height: 1.2; margin: 0 0 4px; text-wrap: balance; }
+  .lede { margin: 0; color: var(--muted); }
+  @media (max-width: 600px) {
+    .hero { align-items: flex-start; gap: 12px; }
+    .hero img { width: 44px; height: 44px; border-radius: 12px; }
+    h1 { font-size: 21px; }
+  }
+
+  .actions { margin-top: 22px; }
+  .btnrow { display: flex; gap: 10px; flex-wrap: wrap; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; font: inherit; font-weight: 600; border-radius: 10px; padding: 10px 18px; border: 1px solid transparent; cursor: pointer; text-decoration: none; }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); }
+  .btn.secondary { background: var(--raised); border-color: var(--line); color: var(--ink); }
+  .btn.danger { background: var(--danger); color: #fff; }
+  @media (max-width: 600px) { .btnrow { flex-direction: column; } .btnrow .btn { width: 100%; } }
+  .note { font-size: 13px; color: var(--muted); margin: 10px 0 0; }
+  .quiet { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-wrap: wrap; column-gap: 20px; }
+  .quiet a, .quiet button { display: inline-flex; align-items: center; min-height: var(--tap); font: inherit; font-size: 14px; color: var(--muted); background: none; border: 0; padding: 0; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+  @media (max-width: 600px) { .quiet { flex-direction: column; } }
+
+  .notice { gap: 12px; align-items: flex-start; background: var(--raised); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; }
+  .notice.warn { background: var(--warn-bg); border-color: var(--warn-line); border-left-color: var(--warn-line); }
+  .notice b { display: block; }
+  .notice p { margin: 2px 0 0; font-size: 14px; color: var(--muted); }
+  .notice .act { margin-top: 2px; }
+  .notice .inline { display: inline-flex; align-items: center; min-height: var(--tap); font: inherit; font-size: 14px; color: var(--link); background: none; border: 0; padding: 0; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+  .spinner { width: 18px; height: 18px; margin-top: 3px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent); animation: spin .9s linear infinite; flex: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+
+  .presence { display: flex; align-items: center; gap: 10px 12px; margin: 22px 0 0; flex-wrap: wrap; }
+  .count { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 14px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--online); display: inline-block; }
+  .faces { display: flex; list-style: none; margin: 0; padding: 0; }
+  .faces li { position: relative; margin-left: -8px; }
+  .faces li:first-child { margin-left: 0; }
+  .faces img { width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--bg); display: block; background: var(--soft); }
+  .faces i { position: absolute; right: -1px; bottom: -1px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--bg); }
+
+  /* Connected: a slim bar instead of the pitch. */
+  .topbar { flex-wrap: nowrap; align-items: center; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+  .topbar .id { display: flex; align-items: center; gap: 10px; margin-right: auto; min-width: 0; }
+  .topbar .id img { width: 28px; height: 28px; border-radius: 8px; flex: none; }
+  .topbar .id .title { font-weight: 700; font-size: 17px; line-height: 1.2; }
+  .topbar .id .who { font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; align-items: center; column-gap: 6px; }
+  .topbar .id .who .linkish { font: inherit; font-size: 13px; color: var(--muted); background: none; border: 0; padding: 0; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+  .topbar .id > div { min-width: 0; }
+  .topbar .id .who .keep { white-space: nowrap; }
+  @media (max-width: 600px) {
+    .topbar .id .who .keep { flex-basis: 100%; }
+    .topbar .id .who .sep { display: none; }
+    .topbar .id .who .linkish { display: inline-flex; align-items: center; min-height: 32px; }
+  }
+  .pills { display: flex; gap: 6px; flex: none; }
+  .iconbtn { display: inline-grid; place-items: center; width: var(--tap); height: var(--tap); border-radius: 999px; border: 1px solid var(--line); background: var(--raised); color: var(--ink); cursor: pointer; padding: 0; }
+  .iconbtn svg { width: 16px; height: 16px; }
+  .iconbtn.busy svg { animation: spin .9s linear infinite; }
+  @media (prefers-reduced-motion: reduce) { .iconbtn.busy svg { animation: none; } }
+  .pill { white-space: nowrap; display: inline-flex; align-items: center; min-height: var(--tap); padding: 0 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--raised); color: var(--ink); font: inherit; font-size: 14px; text-decoration: none; cursor: pointer; }
+
+  /* Channels. */
+  section.chs { margin-top: 30px; }
+  .connectedish section.chs { margin-top: 14px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+  .connectedish h2 { display: none; }
+  .channels { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+  .connectedish .channels { border-top: 0; }
+  .channel { border-bottom: 1px solid var(--line); padding: 4px 0 8px; }
+  a.chrow { display: grid; grid-template-columns: 1fr auto; column-gap: 12px; align-items: center; min-height: 56px; padding: 8px 0; text-decoration: none; }
+  .chrow .name { font-weight: 700; font-size: 17px; line-height: 1.25; }
+  .chrow .name .hash { color: var(--muted); font-weight: 500; margin-right: 2px; }
+  .chrow .desc { grid-column: 1; color: var(--muted); font-size: 13px; }
+  .chrow .go { grid-column: 2; grid-row: 1 / span 2; color: var(--link); font-size: 14px; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; }
+  .chrow:hover .go .label { text-decoration: underline; }
+  @media (max-width: 600px) { .chrow .go .label { display: none; } .chrow .go svg { width: 18px; height: 18px; } }
+
+  .messages { list-style: none; margin: 0; padding: 0; display: none; }
+  body[data-state="connected"] .messages, body[data-state="error"] .messages { display: block; }
+  a.msg { display: grid; grid-template-columns: 30px 1fr; gap: 10px; padding: 10px 8px; margin: 0 -8px; border-radius: 10px; text-decoration: none; }
+  a.msg:hover { background: var(--soft); }
+  .msg .av { width: 30px; height: 30px; border-radius: 50%; background: var(--soft); display: grid; place-items: center; font-size: 12px; font-weight: 600; color: var(--muted); }
+  a.msg:hover .av { background: var(--line); }
+  .msg .meta { font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; column-gap: 8px; }
+  .msg .meta b { color: var(--ink); font-weight: 600; }
+  .msg .meta span { white-space: nowrap; }
+  .msg .text { display: block; overflow-wrap: anywhere; font-size: 15px; line-height: 1.45; }
+
+  /* Remove confirmation: a centred dialog on wide screens, a bottom sheet on a phone. */
+  .scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, .42); display: none; align-items: center; justify-content: center; padding: 16px; }
+  body[data-state="confirm"] .scrim { display: flex; }
+  .dialog { background: var(--raised); color: var(--ink); border-radius: 14px; max-width: 420px; width: 100%; padding: 22px; box-shadow: 0 10px 40px rgba(0,0,0,.25); }
+  .dialog h3 { margin: 0 0 6px; font-size: 18px; }
+  .dialog p { margin: 0 0 16px; color: var(--muted); font-size: 14px; }
+  @media (max-width: 600px) { .scrim { align-items: flex-end; padding: 0; } .dialog { max-width: none; border-radius: 16px 16px 0 0; padding: 22px 16px 28px; } }
+
+  .empty { color: var(--muted); font-size: 14px; padding: 6px 0 2px; }
+  .loadingline { color: var(--muted); font-size: 14px; padding: 40px 0; text-align: center; }
+  .msg .av img { width: 30px; height: 30px; border-radius: 50%; display: block; }
+  .rawlink { display: inline-flex; align-items: center; min-height: 32px; font-size: 12px; color: var(--muted); text-underline-offset: 3px; }
+  @media (max-width: 600px) { .rawlink { min-height: var(--tap); } }
+  .ftr { display: flex; justify-content: flex-end; margin-top: -4px; }
+  /* Uninstalled: just the link. */
+  .removed { max-width: 420px; margin: 18vh auto 0; text-align: center; padding: 0 20px; }
+  .removed p { color: var(--muted); margin: 0 0 14px; }
+  .removed .btn { width: 100%; max-width: 320px; }
+  .removed .quiet { justify-content: center; }
+</style>
+</head>
+<body data-state="loading">
+<main data-show="loading offer waiting connected notjoined error confirm">
+  <p class="loadingline" data-show="loading" role="status">Loading</p>
+
+  <!-- Before connecting: the pitch. -->
+  <div data-show="offer waiting confirm">
+    <header class="hero">
+      <img id="server-icon" alt="Imbue" src="https://cdn.discordapp.com/icons/1391837726583820409/4dd244f63f0b3d659f6c1358ed04ea6e.png?size=128">
+      <div>
+        <h1>Talk to the Studio team</h1>
+        <p class="lede">Questions, bugs, and what people are building.</p>
+      </div>
+    </header>
+
+    <div class="actions" data-show="offer confirm">
+      <div class="btnrow">
+        <a class="btn primary join" id="join" href="#" target="_blank" rel="noopener">Join on Discord</a>
+        <button class="btn secondary" id="connect">Connect with Studio</button>
+      </div>
+      <p class="note" id="note">Read-only. Only these three channels.</p>
+      <ul class="quiet">
+        <li><a id="open-discord" class="open-discord" href="#" target="_blank" rel="noopener">Open Discord</a></li>
+        <li><button id="uninstall">Uninstall this app</button></li>
+      </ul>
+    </div>
+
+    <div class="actions" data-show="waiting">
+      <div class="notice flex" data-show="waiting" role="status">
+        <span class="spinner" aria-hidden="true"></span>
+        <div>
+          <b>Approve in your Studio notifications</b>
+          <div class="act"><button class="inline" id="ask-again">Ask again</button> &nbsp; <button class="inline" id="cancel">Cancel</button></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="presence" id="presence" hidden>
+      <span class="count"><span class="dot" aria-hidden="true"></span><span id="online-count"></span>&nbsp;online now</span>
+      <ul class="faces" id="faces" aria-label="Some of the people online now"></ul>
+    </div>
+  </div>
+
+  <!-- Connected: slim bar; the messages are the page. -->
+  <div class="topbar flex" data-show="connected notjoined error">
+    <div class="id">
+      <img alt="" src="https://cdn.discordapp.com/icons/1391837726583820409/4dd244f63f0b3d659f6c1358ed04ea6e.png?size=64">
+      <div>
+        <div class="title">Studio Discord</div>
+        <div class="who"><b id="account-name"></b><span>&middot;</span><span id="updated">loading</span><span class="keep"><span class="sep">&middot; </span><button class="linkish" id="disconnect">Disconnect</button></span></div>
+      </div>
+    </div>
+    <div class="pills">
+      <button class="iconbtn" id="refresh" aria-label="Refresh" title="Refresh"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.7-4M13.5 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <a class="pill open-discord" href="#" target="_blank" rel="noopener">Open Discord</a>
+    </div>
+  </div>
+
+  <div class="notice flex" data-show="notjoined" style="margin-top:14px" role="status">
+    <div>
+      <b>Join to see messages here</b>
+      <div class="btnrow" style="margin-top:10px"><a class="btn primary join" href="#" target="_blank" rel="noopener">Join on Discord</a></div>
+    </div>
+  </div>
+
+  <div class="notice warn flex" data-show="error" style="margin-top:14px" role="status">
+    <div>
+      <b>Couldn't reach Discord</b>
+      <p id="error-detail"></p>
+      <div class="act"><button class="inline" id="retry">Try again</button></div>
+    </div>
+  </div>
+
+  <section class="chs" aria-labelledby="ch-h" data-show="offer waiting connected error confirm">
+    <h2 id="ch-h">Studio channels</h2>
+    <ul class="channels" id="channels"></ul>
+  </section>
+</main>
+
+<div class="scrim" role="dialog" aria-modal="true" aria-labelledby="rm-h">
+  <div class="dialog">
+    <h3 id="rm-h">Uninstall Studio Discord?</h3>
+    <p>Takes it off your desktop and disconnects Discord.</p>
+    <div class="btnrow">
+      <button class="btn danger" id="confirm-uninstall">Uninstall</button>
+      <button class="btn secondary" id="keep">Keep it</button>
+    </div>
+  </div>
+</div>
+
+<div class="removed" data-show="uninstalled">
+  <p>Uninstalled.</p>
+  <a class="btn primary join" href="#" target="_blank" rel="noopener">Join on Discord</a>
+  <ul class="quiet"><li><button id="undo">Undo</button></li></ul>
+</div>
+
+<script type="module" src="/app.js"></script>
+__SHELL_PAGE_SCRIPT__
+</body>
+</html>

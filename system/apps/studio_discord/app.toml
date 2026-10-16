@@ -1,0 +1,19 @@
+# The app's manifest, read by the workspace's own registration step (system/scripts/forward_port.py --manifest),
+# which the workspace runs before starting this app. See docs/studio-contract.md.
+name = "studio-discord"
+display_name = "Studio Discord"
+icon = "icon.svg"
+priority = "user"
+program = "studio-discord"
+# Only answers requests (no background work), so the shell may stop it when no window shows it.
+stop_when_no_windows = true
+
+# Puts the icon on every new desktop.
+[default_shortcut]
+launch = "open"
+mode = "focus"
+
+# How a workspace boots a throwaway preview: a free port, over a scratch copy of the data.
+[preview]
+env = {STUDIO_DISCORD_PORT = "{port:main}", STUDIO_DISCORD_HOST = "{host}", STUDIO_DISCORD_DATA_DIR = "{copy:data}"}
+copies = {data = "data/.apps/studio-discord"}
