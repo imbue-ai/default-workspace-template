@@ -30,7 +30,10 @@
 #
 #   --setting-sources user   Does NOT load this repo's .claude/settings.json, so
 #                            none of the workspace's project hooks or plugins load
-#                            for it. It also means project skills are NOT discovered,
+#                            for it -- in particular the SessionStart venv sync
+#                            (session_start_sync.sh), which would rewrite the venv
+#                            underneath the agent that spawned us. It also means
+#                            project skills are NOT discovered,
 #                            which is why the instructions are fed in as the prompt
 #                            rather than invoked as a slash command.
 #   --allowed-tools          Read-only. The plan comes back on stdout; the child has

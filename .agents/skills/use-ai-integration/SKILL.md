@@ -31,7 +31,7 @@ recently used one), for both its resolver and the `claude -p` it launches.
 Either way, use its resolver rather than reading a path yourself:
 
 ```bash
-uv run python -c "from claude_p import read_workspace_ai_credentials; print('keyed' if read_workspace_ai_credentials().api_key else 'keyless')"
+uv run --no-sync python -c "from claude_p import read_workspace_ai_credentials; print('keyed' if read_workspace_ai_credentials().api_key else 'keyless')"
 ```
 
 **Keyed setups snapshot the key at setup time.** When the check says `keyed`,
@@ -42,7 +42,7 @@ already resolves that file first, so callers using it get this for free. Run
 once while setting up:
 
 ```bash
-uv run python -c "from claude_p import write_anthropic_env_snapshot; print(write_anthropic_env_snapshot())"
+uv run --no-sync python -c "from claude_p import write_anthropic_env_snapshot; print(write_anthropic_env_snapshot())"
 ```
 
 Only the key + base URL go in the snapshot -- NEVER `CLAUDE_CODE_OAUTH_TOKEN`

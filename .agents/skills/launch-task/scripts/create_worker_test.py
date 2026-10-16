@@ -1,6 +1,6 @@
 """Tests for ``create_worker.py``.
 
-Run via: ``uv run pytest .agents/skills/launch-task/scripts/create_worker_test.py``
+Run via: ``uv run --no-sync pytest .agents/skills/launch-task/scripts/create_worker_test.py``
 
 The ``launch`` tests inject a recording ``Runner`` so no real ``mngr``
 processes are spawned. We assert on (a) the exact argv lists launch hands to

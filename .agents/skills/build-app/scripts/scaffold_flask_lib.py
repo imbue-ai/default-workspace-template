@@ -687,9 +687,9 @@ def _validate_manifest(repo_root: Path, package: str) -> None:
     # scaffolded app never registers a manifest its readers would skip.
     manifest_path = f"system/apps/{package}/app.toml"
     _run_checked(
-        ["uv", "run", "app-manifest", "validate-manifest", manifest_path],
+        ["uv", "run", "--no-sync", "app-manifest", "validate-manifest", manifest_path],
         repo_root,
-        f"uv run app-manifest validate-manifest {manifest_path}",
+        f"uv run --no-sync app-manifest validate-manifest {manifest_path}",
     )
 
 

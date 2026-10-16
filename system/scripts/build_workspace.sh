@@ -59,7 +59,7 @@ git config --global --add safe.directory "$REPO_ROOT"
 # with both a pyproject.toml and an app.toml manifest) as its own tool from its
 # own pyproject, so no app runs from the root venv and one app's pins never
 # constrain another's. The manifest is the discriminator: an app with a
-# pyproject but no manifest runs `uv run <name>` from the root venv, and both
+# pyproject but no manifest runs `.venv/bin/<name>` from the root venv, and both
 # forms are supported. Each tool also gets the mngr plugins
 # system/config/mngr_plugins.toml assigns to it -- `mngr` for the mngr tool,
 # an app's manifest name for that app's -- as extras, so it can parse

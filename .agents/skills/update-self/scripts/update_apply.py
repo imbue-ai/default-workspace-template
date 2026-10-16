@@ -1523,7 +1523,7 @@ def apply_update(
         # reported but does not un-apply the update.
         try:
             converge = runner.run(
-                ["uv", "run", "env-converge", "upgrade"],
+                ["uv", "run", "--no-sync", "env-converge", "upgrade"],
                 cwd=str(repo_root),
                 capture_output=True,
                 text=True,
@@ -1532,7 +1532,7 @@ def apply_update(
             )
         except (subprocess.TimeoutExpired, OSError) as exc:
             converge = subprocess.CompletedProcess(
-                ["uv", "run", "env-converge", "upgrade"],
+                ["uv", "run", "--no-sync", "env-converge", "upgrade"],
                 returncode=124,
                 stdout="",
                 stderr=(
@@ -1544,7 +1544,7 @@ def apply_update(
         if getattr(converge, "returncode", 0) != 0:
             stderr = (getattr(converge, "stderr", "") or "").strip()
             sys.stderr.write(
-                f"warning: `uv run env-converge upgrade` failed (exit "
+                f"warning: `uv run --no-sync env-converge upgrade` failed (exit "
                 f"{converge.returncode}): {stderr}\nThe update is applied; re-run it "
                 "once the cause is fixed so the pinned apt snapshot advances.\n"
             )

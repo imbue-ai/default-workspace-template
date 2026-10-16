@@ -76,5 +76,5 @@ with sync_playwright() as p:
     browser.close()
 ```
 
-Run with `uv run python /tmp/verify_<name>.py`.
+Run with `uv run --no-sync python /tmp/verify_<name>.py`.
 

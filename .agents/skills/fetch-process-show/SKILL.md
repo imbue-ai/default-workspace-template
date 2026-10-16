@@ -95,7 +95,7 @@ combined operation.
   failure, surface a specific cause AND propose 1-2 concrete alternatives before
   asking the user to choose.
 
-Keep validation code simple -- inline bash, `uv run python -c`, or short scripts
+Keep validation code simple -- inline bash, `uv run --no-sync python -c`, or short scripts
 under `data/.tasks/fetch-process-show/$SLUG/` if substantive.
 
 ## The sample loop (skeleton phase 5)

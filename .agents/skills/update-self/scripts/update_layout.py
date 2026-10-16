@@ -113,7 +113,7 @@ MNGR_PLUGIN_KEY = "mngr"
 # ``app.toml`` manifest is a Python app that runs from its own uv tool
 # environment (see build_workspace.sh); the manifest names it and says whether
 # it is critical (a snapshot-and-rollback target in the apply). An app with a
-# pyproject but no manifest runs ``uv run <name>`` from the root venv.
+# pyproject but no manifest runs ``.venv/bin/<name>`` from the root venv.
 APPS_DIR = "system/apps"
 
 MANIFEST_FILENAME = "app.toml"

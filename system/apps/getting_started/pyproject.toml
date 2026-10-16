@@ -80,7 +80,7 @@ fail_under = 80
 default-flags=["report"]
 default-flags-tui=["report"]
 default-flags-ide=["report"]
-format-command="uv run ruff format --force-exclude --config pyproject.toml --stdin-filename {filename}"
+format-command="uv run --no-sync ruff format --force-exclude --config pyproject.toml --stdin-filename {filename}"
 
 [tool.ruff]
 line-length = 119

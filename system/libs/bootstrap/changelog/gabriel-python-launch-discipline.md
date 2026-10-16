@@ -1,0 +1,1 @@
+`bootstrap` is started from `.venv/bin` by its window after a `--frozen` sync instead of under `uv run`, and runs the env-converge fast phase with `uv run --no-sync`. It execs supervisord with the workspace venv first on `PATH` and `VIRTUAL_ENV` set, as `uv run` used to leave it, so supervisord's programs still resolve their entry points (a user-built app's included) in the venv.

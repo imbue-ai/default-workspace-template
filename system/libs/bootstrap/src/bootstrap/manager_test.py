@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -33,6 +34,7 @@ from bootstrap.manager import (
     _read_update_marker_dri_agent,
     _recover_interrupted_update,
     _set_container_timezone,
+    _supervisord_environment,
     _wake_update_dri_agent,
     _write_update_recovery_cron_entry,
     main,
@@ -405,6 +407,39 @@ def test_update_recovery_cron_entry_tolerates_an_unwritable_target(
     # This runs on the path to supervisord; a boot that reaches the services is
     # worth more than the guard.
     _write_update_recovery_cron_entry(target_dir=tmp_path / "missing")
+
+
+# _supervisord_environment
+
+
+def _write_executable(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n")
+    path.chmod(0o755)
+
+
+def test_supervisords_programs_resolve_bare_entry_points_in_the_workspace_venv(
+    tmp_path: Path,
+) -> None:
+    venv = tmp_path / "workspace" / ".venv"
+    tool_bin = tmp_path / "root" / ".local" / "bin"
+    # A user-built app exists only as the venv's console script; a built-in one
+    # also has a tool copy on the inherited PATH.
+    _write_executable(venv / "bin" / "user-app")
+    _write_executable(venv / "bin" / "chat-app")
+    _write_executable(tool_bin / "chat-app")
+    _write_executable(tool_bin / "uv")
+
+    environment = _supervisord_environment(
+        {"PATH": str(tool_bin), "MNGR_HOST_DIR": "/home/user/.mngr"}, venv
+    )
+
+    path = environment["PATH"]
+    assert shutil.which("user-app", path=path) == str(venv / "bin" / "user-app")
+    assert shutil.which("chat-app", path=path) == str(venv / "bin" / "chat-app")
+    assert shutil.which("uv", path=path) == str(tool_bin / "uv")
+    assert environment["VIRTUAL_ENV"] == str(venv)
+    assert environment["MNGR_HOST_DIR"] == "/home/user/.mngr"
 
 
 # _apply_container_timezone

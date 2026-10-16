@@ -111,7 +111,7 @@ omit = [
 default-flags=["report"]
 default-flags-tui=["report"]
 default-flags-ide=["report"]
-format-command="uv run ruff format --force-exclude --config pyproject.toml --stdin-filename {filename}"
+format-command="uv run --no-sync ruff format --force-exclude --config pyproject.toml --stdin-filename {filename}"
 
 # Makes this directory ty's project (test_no_type_errors runs ty from here). ty
 # skips a pyproject.toml with no [tool.ty] table and keeps searching upward, so

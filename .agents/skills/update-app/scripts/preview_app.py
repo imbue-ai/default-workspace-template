@@ -16,7 +16,7 @@ One preview per app at a time: a preview of the same app from a different worktr
 (another pass) is refused rather than hijacked. ``--with`` boots sibling previews
 from the same worktree first, so a shell preview can frame them.
 
-Run from the repo root via ``uv run python3`` (it imports the manifest library from
+Run from the repo root through ``uv run`` (it imports the manifest library from
 the root venv):
 
     uv run python3 .agents/skills/update-app/scripts/preview_app.py up \\
@@ -78,8 +78,14 @@ SHELL_APP_NAME = "system_interface"
 
 # Every app's tool runs from the repo root; a worktree's app runs from the worktree root
 # through its own environment, which is what makes the preview serve the worktree's code
-# rather than the live tool's.
-LAUNCHER = ("uv", "run")
+# rather than the live tool's. Like a supervisord program, it syncs that environment
+# --frozen and then execs the app from it, so no uv process stays resident as its parent.
+LAUNCHER = (
+    "bash",
+    "-c",
+    'uv sync --all-packages --frozen && export VIRTUAL_ENV="$PWD/.venv" PATH="$PWD/.venv/bin:$PATH" && exec "$@"',
+    "bash",
+)
 
 # An app that declares ``[[secrets]]`` runs under the wrapper, which is the only reader
 # of its secret files; the preview does the same. The worktree has no ``data/``, so the

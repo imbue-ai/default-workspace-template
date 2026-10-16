@@ -91,7 +91,7 @@ bundle or to the shared library rebuilds them all:
 
 ```bash
 git worktree add -b "mngr/update-$SLUG" "data/.tasks/critical-live/update-$SLUG" HEAD
-cd "data/.tasks/critical-live/update-$SLUG" && uv sync --all-packages \
+cd "data/.tasks/critical-live/update-$SLUG" && uv sync --all-packages --frozen \
   && (cd system && npm ci && npm run build)
 ```
 
@@ -209,7 +209,8 @@ Then edit, and refresh the preview in place:
   ```
 
 - **Backend round:** additionally re-boot the preview's process on its existing
-  ports.
+  ports. The re-boot syncs the worktree `--frozen`, so after changing a
+  dependency run `uv lock` in the worktree first.
 
   ```bash
   uv run python3 .agents/skills/update-app/scripts/preview_app.py refresh --app <name>

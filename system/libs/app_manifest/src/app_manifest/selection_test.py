@@ -20,18 +20,18 @@ from app_manifest.testing import write_repo_file
 from app_manifest.testing import write_supervisord_dropin
 
 _ALWAYS_RUN = " ".join(
-    ("uv", "run", "pytest", *sorted({*ALWAYS_RUN_GUARDS, "system/test_layout.py"}))
+    ("uv", "run", "--no-sync", "pytest", *sorted({*ALWAYS_RUN_GUARDS, "system/test_layout.py"}))
 )
-_FULL_ROOT = "uv run pytest"
-_BAND_CHECK = "uv run pytest system/services/oom_priority/bin/oom_tag_service_test.py"
+_FULL_ROOT = "uv run --no-sync pytest"
+_BAND_CHECK = "uv run --no-sync pytest system/services/oom_priority/bin/oom_tag_service_test.py"
 _CHAT_WHOLE_WITHOUT_BROWSER = (
-    "(cd system/apps/chat && uv run pytest --deselect imbue/chat/test_ratchets.py::test_no_type_errors)"
+    "(cd system/apps/chat && uv run --no-sync pytest --deselect imbue/chat/test_ratchets.py::test_no_type_errors)"
 )
 _CHAT_WHOLE_WITH_BROWSER = (
-    "(cd system/apps/chat && uv run pytest -m '' --deselect imbue/chat/test_ratchets.py::test_no_type_errors)"
+    "(cd system/apps/chat && uv run --no-sync pytest -m '' --deselect imbue/chat/test_ratchets.py::test_no_type_errors)"
 )
-_CHAT_TYPE_CHECK = "(cd system/apps/chat && uv run ty check)"
-_CHAT_BROWSER_AND_FRONTEND = "(cd system/apps/chat && uv run pytest --no-cov -m 'browser or frontend')"
+_CHAT_TYPE_CHECK = "(cd system/apps/chat && uv run --no-sync ty check)"
+_CHAT_BROWSER_AND_FRONTEND = "(cd system/apps/chat && uv run --no-sync pytest --no-cov -m 'browser or frontend')"
 _FRONTEND_BUILD = ["(cd system && npm ci)", "(cd system && npm run build)"]
 
 
@@ -81,9 +81,9 @@ def test_a_shared_library_change_runs_its_suite_and_every_transitive_consumer(
     assert _command_lines(selection) == [
         _ALWAYS_RUN,
         # notes reaches corelib only through midlib.
-        "uv run pytest system/apps/notes",
-        "uv run pytest system/libs/corelib",
-        "uv run pytest system/libs/midlib",
+        "uv run --no-sync pytest system/apps/notes",
+        "uv run --no-sync pytest system/libs/corelib",
+        "uv run --no-sync pytest system/libs/midlib",
         # Reached through a library, the chat app runs without its browser tests.
         _CHAT_WHOLE_WITHOUT_BROWSER,
         _CHAT_TYPE_CHECK,
@@ -94,7 +94,7 @@ def test_a_shared_library_change_runs_its_suite_and_every_transitive_consumer(
 def test_a_shared_library_test_change_runs_only_the_librarys_own_suite(workspace: Path) -> None:
     selection = _select(workspace, ["system/libs/corelib/src/corelib/core_test.py"])
 
-    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/libs/corelib"]
+    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run --no-sync pytest system/libs/corelib"]
 
 
 @pytest.mark.parametrize(
@@ -117,23 +117,23 @@ def test_a_package_the_root_project_depends_on_runs_the_full_root_suite(
     assert f"{path} (full root suite)" in render_selection(selection)
     # A test file is run by nothing that depends on its package.
     test_only = _select(workspace, ["system/libs/midlib/src/midlib/core_test.py"])
-    assert _command_lines(test_only) == [_ALWAYS_RUN, "uv run pytest system/libs/midlib"]
+    assert _command_lines(test_only) == [_ALWAYS_RUN, "uv run --no-sync pytest system/libs/midlib"]
 
 
 def test_a_consumer_change_does_not_run_what_it_consumes(workspace: Path) -> None:
     selection = _select(workspace, ["system/apps/notes/src/notes/core.py"])
 
-    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/apps/notes"]
+    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run --no-sync pytest system/apps/notes"]
 
 
 @pytest.mark.parametrize(
     ("path", "expected_runs"),
     [
-        ("system/apps/notes/src/notes/core.py", [_ALWAYS_RUN, "uv run pytest system/apps/notes"]),
+        ("system/apps/notes/src/notes/core.py", [_ALWAYS_RUN, "uv run --no-sync pytest system/apps/notes"]),
         # Reaches notes through midlib.
         (
             "system/libs/midlib/src/midlib/core.py",
-            [_ALWAYS_RUN, "uv run pytest system/apps/notes", "uv run pytest system/libs/midlib"],
+            [_ALWAYS_RUN, "uv run --no-sync pytest system/apps/notes", "uv run --no-sync pytest system/libs/midlib"],
         ),
         # Outside every package: the full root suite collects every root-collected app's tests.
         ("system/scripts/forward_port.py", [_FULL_ROOT]),
@@ -156,13 +156,13 @@ def test_without_the_shells_built_modules_a_run_that_reaches_no_app_builds_nothi
 
     selection = _select(workspace, ["system/libs/corelib/src/corelib/core_test.py"])
 
-    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/libs/corelib"]
+    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run --no-sync pytest system/libs/corelib"]
 
 
 def test_a_skill_change_runs_only_that_skills_suite(workspace: Path) -> None:
     selection = _select(workspace, [".agents/skills/refresh/scripts/refresh.py"])
 
-    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest .agents/skills/refresh"]
+    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run --no-sync pytest .agents/skills/refresh"]
     assert selection.paths[0].classes == (ChangedPathClass.SKILL,)
 
 
@@ -190,7 +190,7 @@ def test_a_changed_test_file_outside_every_package_runs_only_itself(workspace: P
 
     assert _command_lines(selection) == [
         _ALWAYS_RUN,
-        "uv run pytest system/scripts/forward_port_test.py",
+        "uv run --no-sync pytest system/scripts/forward_port_test.py",
     ]
 
 
@@ -205,7 +205,7 @@ def test_the_full_root_suite_replaces_the_root_collected_runs_but_not_the_own_ro
     lines = _command_lines(selection)
     assert _FULL_ROOT in lines
     assert _ALWAYS_RUN not in lines
-    assert "uv run pytest system/libs/midlib" not in lines
+    assert "uv run --no-sync pytest system/libs/midlib" not in lines
     assert _CHAT_WHOLE_WITH_BROWSER in lines
 
 
@@ -217,7 +217,7 @@ def test_a_supervisord_block_runs_the_app_it_starts_and_the_band_check(workspace
 
     assert _command_lines(selection) == [
         _ALWAYS_RUN,
-        "uv run pytest system/apps/notes",
+        "uv run --no-sync pytest system/apps/notes",
         _BAND_CHECK,
     ]
     assert selection.paths[0].classes == (ChangedPathClass.WIRING,)
@@ -244,7 +244,7 @@ def test_a_named_test_file_inside_a_selected_whole_suite_runs_only_there(workspa
         ["system/supervisord.conf.d/fetcher.conf", "system/services/oom_priority/bin/oom_tag_service.py"],
     )
 
-    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/services/oom_priority"]
+    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run --no-sync pytest system/services/oom_priority"]
 
 
 def test_documentation_alone_selects_nothing(workspace: Path) -> None:
@@ -330,7 +330,7 @@ def test_agent_prose_an_app_manifest_references_runs_that_app(workspace: Path) -
 
     selection = _select(workspace, [".agents/shared/references/notes-guide.md"])
 
-    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/apps/notes"]
+    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run --no-sync pytest system/apps/notes"]
     assert selection.paths[0].classes == (
         ChangedPathClass.GUARD,
         ChangedPathClass.MANIFEST_REFERENCE,
@@ -408,7 +408,7 @@ def test_a_changed_test_file_of_the_app_runs_alone_with_every_marker(workspace: 
     assert _command_lines(selection) == [
         *_FRONTEND_BUILD,
         _ALWAYS_RUN,
-        "(cd system/apps/chat && uv run pytest --no-cov -m '' imbue/chat/test_e2e.py)",
+        "(cd system/apps/chat && uv run --no-sync pytest --no-cov -m '' imbue/chat/test_e2e.py)",
     ]
 
 
@@ -421,10 +421,10 @@ def test_a_frontend_change_with_a_new_browser_test_runs_that_file_once_and_not_t
 
     lines = _command_lines(selection)
     assert (
-        "(cd system/apps/chat && uv run pytest --no-cov -m 'browser or frontend' --ignore=imbue/chat/test_e2e.py)"
+        "(cd system/apps/chat && uv run --no-sync pytest --no-cov -m 'browser or frontend' --ignore=imbue/chat/test_e2e.py)"
         in lines
     )
-    assert "(cd system/apps/chat && uv run pytest --no-cov -m '' imbue/chat/test_e2e.py)" in lines
+    assert "(cd system/apps/chat && uv run --no-sync pytest --no-cov -m '' imbue/chat/test_e2e.py)" in lines
     assert _CHAT_WHOLE_WITH_BROWSER not in lines
     assert _CHAT_TYPE_CHECK not in lines
 
@@ -439,7 +439,7 @@ def test_an_app_reached_through_a_library_and_its_frontend_adds_only_its_browser
     lines = _command_lines(selection)
     # The default run already holds the frontend-marked tests.
     assert _CHAT_WHOLE_WITHOUT_BROWSER in lines
-    assert "(cd system/apps/chat && uv run pytest --no-cov -m browser)" in lines
+    assert "(cd system/apps/chat && uv run --no-sync pytest --no-cov -m browser)" in lines
     assert _CHAT_BROWSER_AND_FRONTEND not in lines
     assert lines[-1] == _CHAT_TYPE_CHECK
 
@@ -468,7 +468,7 @@ def test_a_frontend_change_to_an_app_the_root_suite_runs_runs_its_whole_suite(
         *_FRONTEND_BUILD,
         "(cd system && npm test --workspace=apps/notes/frontend)",
         _ALWAYS_RUN,
-        "uv run pytest system/apps/notes",
+        "uv run --no-sync pytest system/apps/notes",
     ]
 
 
@@ -490,9 +490,9 @@ def test_a_frontend_change_does_not_reach_the_python_consumers_of_the_apps_packa
     frontend = _select(workspace, ["system/apps/chat/frontend/src/main.ts"])
     backend = _select(workspace, ["system/apps/chat/imbue/chat/server.py"])
 
-    assert "uv run pytest system/apps/shelf" not in _command_lines(frontend)
+    assert "uv run --no-sync pytest system/apps/shelf" not in _command_lines(frontend)
     assert _CHAT_BROWSER_AND_FRONTEND in _command_lines(frontend)
-    assert "uv run pytest system/apps/shelf" in _command_lines(backend)
+    assert "uv run --no-sync pytest system/apps/shelf" in _command_lines(backend)
 
 
 def test_a_path_an_app_manifest_references_runs_that_app_and_the_references_tests(
@@ -512,8 +512,8 @@ def test_a_path_an_app_manifest_references_runs_that_app_and_the_references_test
 
     expected = [
         _ALWAYS_RUN,
-        "uv run pytest .agents/skills/refresh",
-        "uv run pytest system/apps/notes",
+        "uv run --no-sync pytest .agents/skills/refresh",
+        "uv run --no-sync pytest system/apps/notes",
     ]
     assert _command_lines(from_reference) == expected
     assert from_reference.paths[0].classes == (
@@ -528,9 +528,9 @@ def test_an_upgraded_lock_entry_runs_the_members_that_depend_on_it(workspace: Pa
 
     assert _command_lines(selection) == [
         _ALWAYS_RUN,
-        "uv run pytest system/apps/notes",
-        "uv run pytest system/libs/corelib",
-        "uv run pytest system/libs/midlib",
+        "uv run --no-sync pytest system/apps/notes",
+        "uv run --no-sync pytest system/libs/corelib",
+        "uv run --no-sync pytest system/libs/midlib",
         _CHAT_WHOLE_WITHOUT_BROWSER,
         _CHAT_TYPE_CHECK,
     ]
@@ -556,8 +556,8 @@ def test_a_lock_that_only_adds_packages_runs_nothing_beyond_the_adder(workspace:
 
     assert _command_lines(selection) == [
         _ALWAYS_RUN,
-        "uv run pytest system/apps/notes",
-        "uv run pytest system/libs/midlib",
+        "uv run --no-sync pytest system/apps/notes",
+        "uv run --no-sync pytest system/libs/midlib",
     ]
 
 
@@ -573,7 +573,7 @@ def test_the_full_root_suite_names_only_the_paths_that_brought_it_in(workspace: 
         workspace, ["uv.lock", "unknown.bin"], (selection_lock("2.0"), selection_lock("2.1"))
     )
 
-    full_root = next(command for command in selection.commands if command.argv == ("uv", "run", "pytest"))
+    full_root = next(command for command in selection.commands if command.argv == ("uv", "run", "--no-sync", "pytest"))
     # The lock's upgrade reached only its dependents; the unknown file is why the full root runs.
     assert [reason.path for reason in full_root.reasons] == ["unknown.bin"]
     assert _CHAT_WHOLE_WITHOUT_BROWSER in _command_lines(selection)
