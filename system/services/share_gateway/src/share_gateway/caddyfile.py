@@ -5,7 +5,8 @@ relay bytes into its local HTTPS port), asks the gateway's ``/_auth/verify``
 about every request (forward_auth), and routes by Host: each registered
 service's unguessable ``<label>.<domain>`` origin to that service's local
 backend, the dedicated ``auth-<rand>.<domain>`` label to the gateway's public
-``/_auth/*`` surface (the login callback), and unknown-but-plausible service
+``/_auth/*`` surface (the login callback) and the ``/_agent/*`` surface
+(visiting agents), and unknown-but-plausible service
 origins to the gateway's auto-retrying loading page, which a registered service
 caddy cannot reach gets too (the moment between an app stopping and the shell
 parking its port, or between the shell releasing the port and the app binding
@@ -81,6 +82,9 @@ def build_grantable_service_names(apps: Sequence[RegisteredApp]) -> frozenset[st
     return frozenset(app.name for app in apps if app.is_grantable)
 
 
+APPS_TOML_PATH = Path("data/.state/apps.toml")
+
+
 def read_registered_apps(apps_toml_path: Path) -> list[RegisteredApp]:
     if not apps_toml_path.exists():
         return []
@@ -128,7 +132,14 @@ def render_caddyfile(
             f"""\
     @{matcher} host {app.label}.{workspace_domain}
     handle @{matcher} {{
-        reverse_proxy {app.backend_host}:{app.backend_port}
+        reverse_proxy {app.backend_host}:{app.backend_port} {{
+            # A visiting agent's admission token rides the Authorization header
+            # for the gateway alone; the service never sees it, as it never
+            # sees the session cookie. No app reads an inbound Authorization
+            # header over the share, and owner-exec's signature headers are
+            # separate and untouched.
+            header_up -Authorization
+        }}
     }}
 """
         )
@@ -204,6 +215,12 @@ https://*.{workspace_domain}:{https_port} {{
     @auth host {auth_label}.{workspace_domain}
     handle @auth {{
         handle /_auth/* {{
+            reverse_proxy {gateway_backend}
+        }}
+        # The visiting-agent surface (join, orientation, invites, the grant
+        # list): the gateway authenticates each request itself, by session
+        # cookie or bearer admission token.
+        handle /_agent/* {{
             reverse_proxy {gateway_backend}
         }}
         handle {{

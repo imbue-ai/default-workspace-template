@@ -3,7 +3,10 @@
 Every request to a shared origin passes through ``/_auth/verify`` (session
 cookie verified, identity re-checked against the grants file, Origin policy
 enforced, session cookie stripped from what the service sees, the verified
-identity handed on as ``X-Imbue-Identity``). Visitors without a session are
+identity handed on as ``X-Imbue-Identity``). A visiting agent presents a bearer
+admission token instead of a cookie; ``admit_agent`` resolves it against the
+agent grants and the agent's scope, and the identity handed on names the agent
+rather than an account. Visitors without a session are
 bounced to the accounts broker and land back on ``/_auth/callback``, which
 verifies the broker's handoff token and sets the workspace session cookie. A
 callback whose nonce or token no longer verifies (a reopened link, a slow
@@ -39,8 +42,11 @@ from share_gateway.handoff import JwksCache
 from share_gateway.handoff import SingleUseJtiRegistry
 from share_gateway.handoff import verify_handoff_token
 from share_gateway.hostnames import service_for_host
+from share_gateway.identity import AgentIdentity
 from share_gateway.identity import IDENTITY_HEADER
 from share_gateway.identity import RequesterIdentity
+from share_gateway.identity import bearer_token_from_headers
+from share_gateway.identity import render_agent_identity_header
 from share_gateway.identity import render_identity_header
 from share_gateway.log import log
 from share_gateway.materials import ShareMaterials
@@ -168,6 +174,10 @@ def build_gateway_app(
     # service registered while shared is recognized without rebuilding the app.
     # Grants are keyed by service name, not label.
     get_registered_apps: Callable[[], Sequence[RegisteredApp]],
+    # Resolves a bearer admission token to the visiting agent's identity when
+    # its scope admits the named service; None answers 403. Absent (older
+    # callers, tests of the human path), every bearer request is refused.
+    admit_agent: Callable[[str, str | None], AgentIdentity | None] | None = None,
 ) -> Flask:
     app = Flask(__name__)
     workspace_domain = materials.workspace_domain
@@ -261,7 +271,8 @@ def build_gateway_app(
         is_websocket_upgrade = request.headers.get("X-Forwarded-Upgrade", "").lower() == "websocket"
 
         origin_header = request.headers.get("Origin")
-        if not is_request_origin_allowed(
+        bearer_token = bearer_token_from_headers(request.headers.get("Authorization"))
+        if bearer_token is None and not is_request_origin_allowed(
             method,
             origin_header,
             is_websocket_upgrade,
@@ -282,6 +293,28 @@ def build_gateway_app(
             return Response(status=200)
 
         cookie_header = request.headers.get("Cookie", "")
+
+        # A visiting agent presents its admission token as a bearer header. It
+        # is never ambient, so the Origin policy above is moot for it (the
+        # policy guards browsers' automatically attached cookies); the token
+        # alone is checked, against the agent grants rather than the human
+        # ones, and the agent's scope decides which origins it may reach.
+        if bearer_token is not None:
+            if admit_agent is None:
+                _log_denied("bearer token presented but agent access is not configured", host)
+                return Response("authentication required", status=401, mimetype="text/plain")
+            agent_identity = admit_agent(bearer_token, service_name)
+            if agent_identity is None:
+                _log_denied("bearer token is not a valid admission token for this origin", host)
+                return Response("forbidden", status=403, mimetype="text/plain")
+            return Response(
+                status=200,
+                headers={
+                    "X-Share-Filtered-Cookie": strip_session_cookie(cookie_header),
+                    IDENTITY_HEADER: render_agent_identity_header(agent_identity),
+                },
+            )
+
         identity = verify_session_from_cookies(signing_secret, request.cookies, workspace_domain)
         if identity is None:
             accept_header = request.headers.get("Accept", "")

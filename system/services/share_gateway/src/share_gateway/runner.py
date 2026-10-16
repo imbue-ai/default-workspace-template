@@ -26,11 +26,13 @@ Same watch idiom as the other material-gated services: inotify when available,
 10-second mtime polling as the fallback.
 """
 
+import os
 import signal
 import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -43,9 +45,23 @@ from werkzeug.serving import BaseWSGIServer
 from werkzeug.serving import make_server
 
 from share_gateway import materials as materials_module
+from share_gateway.agent_access import LastSeenStore
+from share_gateway.agent_access import default_agent_access_paths
+from share_gateway.agent_access import reconcile as reconcile_agent_access
+from share_gateway.agent_audit import events_dir_from_environ
+from share_gateway.agent_grants import AGENT_ACCESS_STATE_DIR
+from share_gateway.agent_grants import AgentGrantsError
+from share_gateway.agent_grants import utc_now as agent_access_now
+from share_gateway.agent_orientation import SKILLS_INDEX_CACHE_PATH
+from share_gateway.agent_routes import AgentAccessContext
+from share_gateway.agent_routes import register_agent_routes
+from share_gateway.agent_workspace import HOST_KEY_PUBLIC_PATH
+from share_gateway.agent_workspace import read_workspace_coordinates
 from share_gateway.assignment import RelayAssignment
 from share_gateway.assignment import load_assignment
-from share_gateway.log import log as _log
+from share_gateway.caddyfile import APPS_TOML_PATH
+from share_gateway.caddyfile import RegisteredApp
+from share_gateway.caddyfile import build_grantable_service_names
 from share_gateway.caddyfile import read_registered_apps
 from share_gateway.caddyfile import render_caddyfile
 from share_gateway.certs import CertProvisioningError
@@ -53,16 +69,18 @@ from share_gateway.certs import ensure_share_certificate
 from share_gateway.frpc_config import render_frpc_toml
 from share_gateway.handoff import JwksCache
 from share_gateway.handoff import SingleUseJtiRegistry
+from share_gateway.identity import AgentIdentity
+from share_gateway.log import log as _log
 from share_gateway.materials import ShareMaterials
 from share_gateway.materials import discard_signing_secret
 from share_gateway.materials import load_or_create_auth_label
 from share_gateway.materials import load_or_create_signing_secret
 from share_gateway.materials import read_share_materials
 from share_gateway.materials import record_share_domain
+from share_gateway.retry_state import ProvisioningRetryState
 from share_gateway.retry_state import STATUS_HALTED
 from share_gateway.retry_state import STATUS_RETRYING
 from share_gateway.retry_state import STATUS_UP
-from share_gateway.retry_state import ProvisioningRetryState
 from share_gateway.retry_state import ShareStackStartError
 from share_gateway.retry_state import remove_gateway_status
 from share_gateway.retry_state import utc_now
@@ -71,7 +89,6 @@ from share_gateway.server import PendingLoginRegistry
 from share_gateway.server import build_gateway_app
 
 POLL_INTERVAL_SECONDS = 10
-APPS_TOML_PATH = Path("data/.state/apps.toml")
 _CADDY_ADMIN_URL = "http://localhost:2019"
 _RENEWAL_CHECK_INTERVAL = timedelta(hours=24)
 
@@ -266,6 +283,7 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
     auth_label = load_or_create_auth_label(materials_module.AUTH_LABEL_FILE)
     stack = ShareStack(materials, auth_label, assignment)
     signing_secret = load_or_create_signing_secret(materials_module.SIGNING_SECRET_FILE, materials.relay_token)
+    agent_access = _build_agent_access_context(materials.workspace_domain)
     app = build_gateway_app(
         materials=materials,
         grants_path=materials_module.GRANTS_FILE,
@@ -274,6 +292,16 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
         jti_registry=SingleUseJtiRegistry(),
         pending_logins=PendingLoginRegistry(),
         auth_label=auth_label,
+        get_registered_apps=lambda: read_registered_apps(APPS_TOML_PATH),
+        admit_agent=build_agent_admitter(agent_access, lambda: read_registered_apps(APPS_TOML_PATH)),
+    )
+    register_agent_routes(
+        app,
+        context=agent_access,
+        workspace_domain=materials.workspace_domain,
+        auth_label=auth_label,
+        signing_secret=signing_secret,
+        share_grants_path=materials_module.GRANTS_FILE,
         get_registered_apps=lambda: read_registered_apps(APPS_TOML_PATH),
     )
     stack.gateway_server = make_server("127.0.0.1", materials_module.GATEWAY_PORT, app, threaded=True)
@@ -415,9 +443,58 @@ def _tick_running_stack(stack: ShareStack) -> ShareStack | None:
     return stack
 
 
+def _build_agent_access_context(workspace_domain: str) -> AgentAccessContext:
+    paths = default_agent_access_paths(events_dir_from_environ(os.environ))
+    coordinates = read_workspace_coordinates(
+        os.environ, HOST_KEY_PUBLIC_PATH, fallback_display_name=workspace_domain.split(".", 1)[0]
+    )
+    return AgentAccessContext(
+        paths=paths,
+        coordinates=coordinates,
+        repo_root=Path.cwd(),
+        environ=os.environ,
+        last_seen=LastSeenStore(AGENT_ACCESS_STATE_DIR / "last_seen.json"),
+        skills_cache_path=SKILLS_INDEX_CACHE_PATH,
+        now=agent_access_now,
+    )
+
+
+def build_agent_admitter(
+    context: AgentAccessContext, get_registered_apps: Callable[[], list[RegisteredApp]]
+) -> Callable[[str, str | None], AgentIdentity | None]:
+    """The gateway's bearer check: the token's grant must exist, be unexpired, and admit the named service."""
+
+    def admit(token: str, service_name: str | None) -> AgentIdentity | None:
+        try:
+            grant = context.grant_for_token(token)
+        except AgentGrantsError as exc:
+            _log(f"Agent access is misconfigured; refusing every bearer request: {exc}")
+            return None
+        if grant is None:
+            return None
+        grantable = sorted(build_grantable_service_names(get_registered_apps()))
+        if not grant.admits_service(service_name, grantable):
+            return None
+        context.last_seen.touch(grant.agent_id, context.now(), time.monotonic())
+        return AgentIdentity(agent_id=grant.agent_id, agent_name=grant.name, granter=grant.granter)
+
+    return admit
+
+
+def _reconcile_agent_access_at_start() -> None:
+    """Prune expired grants and invites and re-assert the authorized_keys lines from the grants file."""
+    paths = default_agent_access_paths(events_dir_from_environ(os.environ))
+    try:
+        if reconcile_agent_access(paths, agent_access_now()):
+            _log("Reconciled the visiting-agent grants and their authorized_keys lines")
+    except (AgentGrantsError, OSError) as exc:
+        _log(f"Could not reconcile the visiting-agent grants: {exc}")
+
+
 def main() -> None:
     _log(f"Watching {materials_module.MATERIALS_FILE} for share materials")
     materials_module.SECRETS_DIR.mkdir(parents=True, exist_ok=True)
+    _reconcile_agent_access_at_start()
 
     inotify_fd = _try_setup_inotify([materials_module.MATERIALS_FILE, APPS_TOML_PATH])
     stack: ShareStack | None = None
