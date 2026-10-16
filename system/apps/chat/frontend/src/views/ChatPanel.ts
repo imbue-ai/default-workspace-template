@@ -652,9 +652,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
             chatId,
             hasOpenHandoffRequest(events, chat?.handoff ?? null) || hasLandedLiveSwitch(events, chat?.handoff ?? null),
           ),
-        ].filter(
-          (node) => node !== null,
-        ),
+        ].filter((node) => node !== null),
         ...renderQueuedMessages(chatId),
         // The messages the chat app holds while the chat switches harness, then this page's
         // own not-yet-delivered sends.

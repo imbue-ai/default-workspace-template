@@ -190,7 +190,13 @@ describe("the handoff node", () => {
       expect(renderHandoffTailNode("agent-a", false)).toBeNull();
     }
     state.chat = chatWith(
-      handoffStateFixture({ phase: "failed", is_fresh_start: true, held_sends: [], error: "boom", failed_step: "start" }),
+      handoffStateFixture({
+        phase: "failed",
+        is_fresh_start: true,
+        held_sends: [],
+        error: "boom",
+        failed_step: "start",
+      }),
     );
     m.render(ROOT(), renderHandoffTailNode("agent-a", false));
     expect(ROOT().textContent).toContain("Could not hand off to Codex");
