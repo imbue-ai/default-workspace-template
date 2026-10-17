@@ -1,0 +1,30 @@
+# The Memory & disk app: how much memory and disk the workspace is using, which chats, code
+# checkers, and apps hold the memory, and which programs the memory guard stopped in the last
+# 24 hours. Its one page polls /api/stats, which reads /proc and the workspace's own records
+# at most every few seconds; it writes nothing to disk. It declares no launch path, so the
+# desktop offers the synthesized ``open`` at its root; its shortcut focuses the one window it is
+# for.
+name = "system-monitor"
+display_name = "Memory & disk"
+icon = "icon.svg"
+description = "How much memory and disk the workspace is using, what is holding the memory, and what the memory guard stopped."
+api_schema_path = "/api/schema"
+critical = false
+# The shell stops it a minute after no window shows it and starts it again on the next request,
+# so it costs nothing while unseen. Its one background job, recording the memory graph's last
+# 10 minutes, stops with it, so after a reopen the graph starts over.
+stop_when_no_windows = true
+priority = "system-monitor"
+# After the terminal (40): the last of the built-ins on the desktop and in the launcher.
+launcher_rank = 50
+# It reports on the workspace itself, so the Share tab lists it under its System group.
+system = true
+
+[default_shortcut]
+launch = "open"
+mode = "focus"
+
+# A preview serves the page on a free port. The app keeps nothing under data/.apps/, so there is
+# nothing to copy.
+[preview]
+env = {SYSTEM_MONITOR_PORT = "{port:main}", SYSTEM_MONITOR_HOST = "{host}"}

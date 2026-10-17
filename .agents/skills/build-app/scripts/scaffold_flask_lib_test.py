@@ -23,12 +23,13 @@ import configparser
 import importlib.util
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
 import scaffold_flask_lib
 from app_manifest.manifest import load_manifest
-from app_manifest.primitives import MAX_DISPLAY_NAME_LENGTH
+from app_manifest.primitives import MAX_APP_DESCRIPTION_LENGTH, MAX_DISPLAY_NAME_LENGTH
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH, SHELL_CONTEXT_MENU_PATH
 
 _SCRIPT = Path(__file__).resolve().parent / "scaffold_flask_lib.py"
@@ -240,7 +241,7 @@ def test_the_scaffold_writes_the_port_it_picked(tmp_path: Path) -> None:
     }
     runner = (root / "system/apps/news/src/news/runner.py").read_text()
     assert runner == scaffold_flask_lib._lib_runner(
-        "news", "news", _DESCRIPTION, program_port
+        "news", "news", _DESCRIPTION, program_port, scaffold_flask_lib._display_name(_DESCRIPTION, None)
     )
     assert program_port >= scaffold_flask_lib.LOWEST_AUTO_PORT
     assert program_port not in {8080, 8081}
@@ -333,6 +334,23 @@ def test_write_lib_writes_a_manifest_the_library_accepts(tmp_path: Path) -> None
     assert manifest.priority == "user"
     assert manifest.program == "inbox-status"
     assert manifest.default_shortcut is None
+    assert manifest.description == "inbox status dashboard"
+    assert manifest.api_schema_path == "/api/schema"
+    assert (lib_dir / "src" / "inbox_status" / "runner_test.py").exists()
+
+
+def test_the_manifest_and_the_pyproject_keep_a_description_with_quotes_and_characters_outside_the_basic_plane(
+    tmp_path: Path,
+) -> None:
+    description = 'notes, "quoted", with a clef \U0001d11e and an accent \u00e9'
+
+    lib_dir = scaffold_flask_lib._write_lib(
+        tmp_path, "notes", description, "Notes", 8081, [], _ICON
+    )
+
+    assert load_manifest(lib_dir / "app.toml").description == description
+    pyproject = tomllib.loads((lib_dir / "pyproject.toml").read_text())
+    assert pyproject["project"]["description"] == description
 
 
 def _test_function_names(source: str) -> frozenset[str]:
@@ -384,6 +402,16 @@ def test_display_name_refuses_what_the_manifest_would_not_take(candidate: str) -
         scaffold_flask_lib._display_name("description", candidate)
 
 
+@pytest.mark.parametrize("candidate", ["", "   ", "two\nlines", "x" * 201])
+def test_a_description_the_manifest_would_refuse_is_refused_before_anything_is_written(candidate: str) -> None:
+    with pytest.raises(SystemExit):
+        scaffold_flask_lib._check_description(candidate)
+
+
+def test_the_description_limit_matches_the_library() -> None:
+    assert scaffold_flask_lib.MAX_APP_DESCRIPTION_LENGTH == MAX_APP_DESCRIPTION_LENGTH
+
+
 def test_the_display_name_limit_matches_the_library() -> None:
     # The scaffold runs in its own PEP 723 environment and cannot import the
     # library, so it carries its own copy of the limit.
@@ -392,7 +420,7 @@ def test_the_display_name_limit_matches_the_library() -> None:
 
 def test_the_runner_page_connects_to_the_shell_and_installs_the_element_menu() -> None:
     source = scaffold_flask_lib._lib_runner(
-        "inbox-status", "inbox_status", "inbox status dashboard", 8081
+        "inbox-status", "inbox_status", "inbox status dashboard", 8081, "inbox status dashboard"
     )
     assert 'from "/_static/app_contract.js"' in source
     assert 'from "/_static/context_menu.js"' in source
@@ -466,7 +494,7 @@ def test_the_runner_serves_the_shell_modules_and_nothing_else(
 ) -> None:
     """The scaffolded app answers the two shell-built modules from its own origin, and 404s any other name."""
     source = scaffold_flask_lib._lib_runner(
-        "inbox-status", "inbox_status", "inbox status dashboard", 8081
+        "inbox-status", "inbox_status", "inbox status dashboard", 8081, "inbox status dashboard"
     )
     runner = tmp_path / "runner.py"
     runner.write_text(source)
@@ -491,11 +519,18 @@ def test_the_runner_serves_the_shell_modules_and_nothing_else(
     page = client.get("/")
     assert page.status_code == 200
     assert b'from "/_static/context_menu.js"' in page.data
+    document = client.get("/api/schema").get_json()
+    assert document["info"] == {
+        "title": "inbox status dashboard",
+        "version": "1.0",
+        "description": "inbox status dashboard",
+    }
+    assert set(document["paths"]) == {"/", "/_static/{basename}", "/health"}
 
 
 def test_the_runner_does_not_use_reloader() -> None:
     source = scaffold_flask_lib._lib_runner(
-        "inbox-status", "inbox_status", "inbox status dashboard", 8081
+        "inbox-status", "inbox_status", "inbox status dashboard", 8081, "inbox status dashboard"
     )
     assert "use_reloader=False" in source
 
@@ -514,7 +549,7 @@ def test_the_runner_module_evaluates_its_environment_reads(tmp_path: Path) -> No
     """The runner reads its port and data dir from the environment at import; a
     runner whose imports do not cover that read crashes before serving anything."""
     source = scaffold_flask_lib._lib_runner(
-        "inbox-status", "inbox_status", "inbox status dashboard", 8081
+        "inbox-status", "inbox_status", "inbox status dashboard", 8081, "inbox status dashboard"
     )
     namespace: dict[str, object] = {"__name__": "inbox_status.runner"}
 

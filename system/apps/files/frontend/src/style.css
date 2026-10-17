@@ -1,0 +1,23 @@
+@import "tailwindcss" source(none);
+/* The design system shared with every other frontend of the workspace (see system/libs/workspace_ui). What follows
+   is the Files app's own: the colours its icons are drawn in. */
+@import "@imbue/workspace-ui/src/base.css";
+
+@source "./**/*.ts";
+
+:root {
+  --files-folder: #8db7e0;
+  --files-folder-back: #6c9dcf;
+  --files-family-image: #2f8f6b;
+  --files-family-video: #7a5bc7;
+  --files-family-audio: #c9507f;
+  --files-family-pdf: #d0412f;
+  --files-family-archive: #9a6f2c;
+  --files-family-code: #4a6fa5;
+  --files-family-data: #5f6f86;
+  --files-family-text: #6b6b6b;
+  --files-family-document: #2f62b5;
+  --files-family-spreadsheet: #23855a;
+  --files-family-presentation: #d26a2a;
+  --files-family-other: #8c8c8c;
+}

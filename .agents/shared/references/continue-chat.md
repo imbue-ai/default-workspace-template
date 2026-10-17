@@ -2,7 +2,7 @@ You are continuing the chat "${title}" (chat id ${chat_id}). It ran on ${predece
 
 ${summary}
 
-Your predecessors in this chat, oldest first (archived, stopped, kept for their transcripts; never message or start them):
+${background_tasks}Your predecessors in this chat, oldest first (archived, stopped, kept for their transcripts; never message or start them):
 ${predecessors}
 
 Read a predecessor's transcript with `mngr transcript <agent id>` or the find-transcripts skill when the summary leaves you unsure. `mngr list --include 'labels.chat_id == "${chat_id}"'` lists every agent of this chat.

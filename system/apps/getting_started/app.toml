@@ -5,12 +5,14 @@
 # focuses the one window it is for, as the browser's does.
 name = "getting-started"
 display_name = "Getting Started"
+description = "The ways into the workspace: things to start, and the published templates to adapt."
+api_schema_path = "/api/schema"
 icon = "icon.svg"
 critical = false
 # One static page: the shell stops it once no window shows it (and never before the first visit).
 stop_when_no_windows = true
 priority = "getting-started"
-# Between the chat (10) and the file viewer (20): this rank orders the desktop's seeded shortcuts as
+# Between the chat (10) and Files (20): this rank orders the desktop's seeded shortcuts as
 # well as the launcher's apps, and the chat leads both.
 launcher_rank = 15
 # Part of the workspace itself rather than an app built on it, so the Share tab tucks it under its System group

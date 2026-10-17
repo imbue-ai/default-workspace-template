@@ -2,12 +2,14 @@ from datetime import datetime
 from enum import auto
 from pathlib import Path
 
+from chat_background_tasks.markers import TaskSource
 from pydantic import Field
 from pydantic import SecretStr
 
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.background_tasks import BackgroundTask
 from imbue.chat.chat_autocompact import ChatAutocompactState
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_seed import SeedTurn
@@ -80,6 +82,18 @@ class AgentListItem(FrozenModel):
     id: str = Field(description="The agent's unique identifier")
     name: str = Field(description="The agent's human-readable name")
     state: str = Field(description="The agent's lifecycle state")
+    chat_id: ChatId = Field(
+        description="The chat the agent belongs to: its own id unless it is a later agent of a chat"
+    )
+    is_busy: bool = Field(
+        description=(
+            "Whether the agent will resume on its own: it has a turn in flight, or it is its chat's active "
+            "agent and the chat has a pending background task"
+        )
+    )
+    background_tasks: tuple[BackgroundTask, ...] = Field(
+        description="The chat's pending background tasks, oldest first; empty unless the agent is the chat's active agent"
+    )
 
 
 class AgentListResponse(FrozenModel):
@@ -323,6 +337,13 @@ class AgentStateItem(FrozenModel):
             "for this agent."
         ),
     )
+    is_turn_closing: bool = Field(
+        default=False,
+        description=(
+            "Whether the transcript has ended the agent's turn while its harness still marks one open (its "
+            "turn-end hooks are running, and may yet record a background task): busy and working, with no activity"
+        ),
+    )
     model_choice: ModelChoice | None = Field(
         default=None,
         description=(
@@ -519,6 +540,20 @@ class HandoffRetryResponse(FrozenModel):
     phase: HandoffPhase = Field(description="The phase the chat is in when the route answers")
 
 
+class BackgroundTaskSnapshot(FrozenModel):
+    """One pending background task as the chat pages show it."""
+
+    id: str = Field(description="The task's id within its source")
+    source: TaskSource = Field(description="Who recorded it: run_in_background, or harness (the harness's own)")
+    harness: str = Field(description="The harness that recorded a harness task; '' otherwise")
+    kind: str = Field(description="The harness's type for a harness task; '' otherwise")
+    description: str = Field(description="What the task is, as its writer described it")
+    started_at: str = Field(
+        description="When the task started (ISO 8601, UTC); for a harness task, when its turn-end hook first "
+        "recorded it, at the end of the turn that started it"
+    )
+
+
 class ActiveAgentSnapshot(FrozenModel):
     """The agent-level facts about a chat's active agent that the chat pages render."""
 
@@ -542,6 +577,12 @@ class ActiveAgentSnapshot(FrozenModel):
             "harness had not finished starting. The Connecting sub-state of Sending (contract A1)."
         )
     )
+    is_busy: bool = Field(
+        description="Whether the agent will resume on its own: a turn is in flight, or a pending background task"
+    )
+    background_tasks: tuple[BackgroundTaskSnapshot, ...] = Field(
+        description="The chat's pending background tasks, oldest first"
+    )
 
 
 class ChatSnapshot(FrozenModel):
@@ -551,7 +592,7 @@ class ChatSnapshot(FrozenModel):
     title: str = Field(description="The name the user sees (the ``display_name`` label, else the mngr name)")
     name: str = Field(description="The chat's canonical mngr name")
     project: str | None = Field(description="The project the chat was created in, or None")
-    status: ChatStatus = Field(description="The chat's status: working, idle, attention, stopped, or error")
+    status: ChatStatus = Field(description="The chat's status")
     labels: dict[str, str] = Field(description="The active agent's mngr labels")
     agent_ids: tuple[str, ...] = Field(description="Every agent of the chat, in order; the last is the active one")
     handoff: HandoffState | None = Field(

@@ -28,8 +28,28 @@
   animation: chat-rail-pulse 1.6s ease-in-out infinite;
 }
 
+/* A chat waiting on a background task wears a dashed accent ring that turns slowly: alive, but
+   not working. The strip's wait line (views/BackgroundTasksLine.ts) wears the same ring. Reduced
+   motion holds it still. */
+@keyframes chat-rail-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.chat-rail-dot--dashed {
+  width: 10px;
+  height: 10px;
+  margin: -1px;
+  border: 1.5px dashed var(--color-accent);
+  background: transparent;
+  box-sizing: border-box;
+  animation: chat-rail-spin 6s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .chat-rail-dot--pulse {
+  .chat-rail-dot--pulse,
+  .chat-rail-dot--dashed {
     animation: none;
   }
 }

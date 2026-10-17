@@ -175,9 +175,9 @@ their own registered origin (`chat-<rand>.<domain>`), framed by the shell, so a
 workspace-level grant admits the chat origin directly and a `[services.chat]`
 grant narrows a visitor to it. A visitor holding only a per-app grant reaches
 that app's origin and nothing else -- not the shell, so not the tabs the shell
-arranges; the origin's own pages (a chat at `/<agent-id>`, the file viewer's
+arranges; the origin's own pages (a chat at `/<agent-id>`, the Files app's
 listing) are what they see, and a `[services.files]` grant admits only the
-file viewer. Whether an app declares `system` (part of the workspace itself,
+Files app. Whether an app declares `system` (part of the workspace itself,
 which the Imbue Studio Share tab lists under its System group) makes no
 difference here. Nothing here is configured per app: caddy re-renders its
 routes from the registry, so the chat origin (like every app's) is claimed and
@@ -273,7 +273,8 @@ the same gateway:
   its caller.
 - **Orientation.** `GET /_agent/primer` renders
   `.agents/shared/references/visiting-agents.md` with the skills index, the
-  apps, the connected accounts and granted permissions (read through latchkey,
+  apps (each with the one-line purpose and the API-description address its
+  manifest declares, `description` and `api_schema_path`), the connected accounts and granted permissions (read through latchkey,
   cached a minute), and the recent changes filled in, cut to the agent's scope;
   `GET /_agent/skills` is the index (name, description, path, a content hash
   per skill and when it last changed, computed once per HEAD commit); `GET

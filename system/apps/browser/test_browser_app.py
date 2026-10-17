@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from app_manifest.manifest import load_manifest
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
+from app_schema.testing import assert_api_schema_describes_app
 from browser import runner
 from browser import session as bsession
 from browser.primitives import APP_NAME
@@ -26,6 +27,12 @@ def test_the_daemon_names_itself_after_its_manifest() -> None:
     assert [(handler.type, handler.path, handler.show) for handler in manifest.message_handlers] == [
         ("open:url", runner.OPEN_URL_PATH, None)
     ]
+
+
+def test_the_daemon_describes_its_api_the_way_its_manifest_says() -> None:
+    assert_api_schema_describes_app(
+        runner.application.test_client(), _APP_MANIFEST_PATH
+    )
 
 
 def test_the_viewer_page_imports_the_app_contract_from_its_own_origin() -> None:

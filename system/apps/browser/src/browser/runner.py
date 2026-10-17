@@ -61,6 +61,7 @@ from types import FrameType
 from typing import Any
 
 from app_manifest.registry import APP_CONTRACT_ROUTE, SHELL_APP_CONTRACT_PATH
+from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH, register_api_schema_route
 from flask import Flask, Response, jsonify, request, send_file
 from flask.typing import ResponseReturnValue
 from flask_sock import Sock
@@ -154,7 +155,11 @@ _WS_CLOSE_TERMINATED = 4001
 bridge = AsyncLoopBridge()
 manager = BrowserSessionManager()
 
+APP_DISPLAY_NAME = "Browser"
+APP_DESCRIPTION = "Live Chromium browsers inside the workspace, each driven by one chat or by the person, with pages to watch them."
+
 application = Flask(__name__, static_folder=None)
+register_api_schema_route(application, DEFAULT_API_SCHEMA_PATH, title=APP_DISPLAY_NAME, description=APP_DESCRIPTION)
 application.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": 25}
 # Clipboard paste-in bodies carry raw image bytes over HTTP (the WS proxy's ~1 MiB cap
 # is why clipboard rides HTTP, not the stream socket). Bound it so a giant paste is
@@ -419,6 +424,7 @@ def cancel_pending_url(browser_id: str) -> ResponseReturnValue:
 
 
 def health() -> Response:
+    """Whether the daemon is up, and whether it is still starting its browsers."""
     return jsonify({"status": "ok", "initializing": not _init_done.is_set()})
 
 
@@ -500,6 +506,7 @@ def create_browser() -> Response:
 
 
 def close_browser(browser_id: str) -> ResponseReturnValue:
+    """Close a browser for good: its Chromium exits, its profile is deleted, and its name is retired."""
     if (gate := _require_ready()) is not None:
         return gate
     # Validate the name before it reaches manager.close / forget_profile_dir, which build a
@@ -562,6 +569,7 @@ def start_browser(browser_id: str) -> ResponseReturnValue:
 
 
 def release_browser(browser_id: str) -> Response:
+    """Give up the calling agent's (``X-Mngr-Agent-Id``) control of a browser, so the next in line takes it."""
     if (gate := _require_ready()) is not None:
         return gate
     agent_id, _ = _agent_identity()

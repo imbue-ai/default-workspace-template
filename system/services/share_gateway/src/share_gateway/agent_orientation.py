@@ -326,16 +326,21 @@ def render_apps_table(
             continue
         if app_names is not None and app.name not in app_names:
             continue
+        share_origin = f"https://{app.label}.{workspace_domain}"
         rows.append(
             [
                 app.name,
+                app.description or "(no description)",
                 f"http://{app.backend_host}:{app.backend_port}",
-                f"https://{app.label}.{workspace_domain}",
+                share_origin,
+                f"{share_origin}{app.api_schema_path}" if app.api_schema_path else "(none)",
             ]
         )
     if not rows:
         return "No apps are registered right now."
-    return _markdown_table(("App", "Inside the workspace", "Over the share"), rows)
+    return _markdown_table(
+        ("App", "What it is for", "Inside the workspace", "Over the share", "API description"), rows
+    )
 
 
 def render_changes_summary(feed: dict[str, object]) -> str:

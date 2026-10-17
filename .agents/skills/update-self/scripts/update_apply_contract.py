@@ -462,10 +462,12 @@ class RunStatus:
     would otherwise misread:
 
     * ``worker_agent_name`` -- the background worker the lead has handed the
-      merge to (``run-status delegate``). The lead's own chat sits idle while
-      it waits on that worker, and idle is what the app reads as "waiting for
-      the user"; naming the worker lets the app read its liveness instead.
-      Cleared by the verdict (and by the next run's ``start``).
+      merge to (``run-status delegate``). The lead ends its turn while it waits
+      on that worker, but its poll runs through ``run_in_background.py``, so
+      its chat reads busy, not "waiting for the user"; naming the worker lets
+      the app read the worker's liveness as well, which is all it has where the
+      busy state cannot be read. Cleared by the verdict (and by the next run's
+      ``start``).
     * ``is_holding``/``hold_detail`` -- the run has stopped to ask the user
       something (``run-status hold``), and what; cleared by ``run-status resume``.
     * ``apply_phase``/``apply_updated_at`` -- the apply is landing, and its last

@@ -82,6 +82,29 @@ const STROKE_PATHS = {
   edit: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/>',
   "folder-plus":
     '<path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  // The Files app's chrome: its view switcher, history arrows, shortcuts, and the verbs of its menus. All lucide.
+  "layout-grid":
+    '<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>',
+  list: '<path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M3 6h.01"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M8 6h13"/>',
+  columns: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="M15 3v18"/>',
+  plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  upload:
+    '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  // A laptop struck through: a computer that is not answering.
+  "laptop-off": '<rect x="4" y="5" width="16" height="10.5" rx="1.5"/><path d="M2 19h20"/><path d="m2 2 20 20"/>',
+  "panel-left": '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  ellipsis: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+  folder:
+    '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  house:
+    '<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  inbox:
+    '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  "file-plus":
+    '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M9 15h6"/><path d="M12 18v-6"/>',
+  copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
   settings:
     '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
 } as const;
@@ -111,6 +134,26 @@ export function icon(name: IconName, opts: IconOptions = {}): string {
   );
 }
 
+let badgeMaskCount = 0;
+
+/** `name` with `badge` small at its bottom-right corner, hanging past it, in the same colour and weight, the icon
+ *  cut away in a circle around it so the two never touch. */
+export function badgedIcon(name: IconName, badge: IconName, opts: IconOptions = {}): string {
+  const dims = opts.size === undefined ? "" : ` width="${opts.size}" height="${opts.size}"`;
+  const cls = opts.className ? ` class="${opts.className}"` : "";
+  const mask = `icon-badge-${(badgeMaskCount += 1)}`;
+  return (
+    `<svg xmlns="${XMLNS}"${cls}${dims} viewBox="0 0 24 24" fill="none" stroke="currentColor" ` +
+    `stroke-width="${opts.strokeWidth ?? 2}" stroke-linecap="round" stroke-linejoin="round" overflow="visible" aria-hidden="true">` +
+    // The badge is 9/16 of the icon and hangs a little past its bottom-right corner. The icon is cut away in a
+    // square there whose edges fall on whole pixels at 16px (9px in, 8px down), clipped rather than masked,
+    // so the lines it crosses end sharp; a round cut, or a mask, leaves their ends blurred.
+    `<clipPath id="${mask}"><path clip-rule="evenodd" d="M-4-4h36v36h-36zM13.5 12h24v24h-24z"/></clipPath>` +
+    `<g clip-path="url(#${mask})">${STROKE_PATHS[name]}</g>` +
+    `<g transform="translate(15 13.5) scale(0.5625)" stroke-width="2.6">${STROKE_PATHS[badge]}</g></svg>`
+  );
+}
+
 /** Solid square "stop / interrupt" glyph (filled, not stroked). */
 export function stopIcon(size = 14): string {
   return (
@@ -126,6 +169,17 @@ export function warningIcon(size = 26): string {
     `<circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/>` +
     `<path d="M12 8v4.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>` +
     `<circle cx="12" cy="16" r="0.9" fill="currentColor"/></svg>`
+  );
+}
+
+/** A filled disc with a white exclamation, in the current colour: something needs a look. */
+export function alertDotIcon(size = 12, className = ""): string {
+  const cls = className === "" ? "" : ` class="${className}"`;
+  return (
+    `<svg xmlns="${XMLNS}"${cls} width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true">` +
+    `<circle cx="12" cy="12" r="11" fill="currentColor"/>` +
+    `<path d="M12 6.8v6" stroke="#fff" stroke-width="2.8" stroke-linecap="round"/>` +
+    `<circle cx="12" cy="17" r="1.6" fill="#fff"/></svg>`
   );
 }
 

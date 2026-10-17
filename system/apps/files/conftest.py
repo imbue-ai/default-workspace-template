@@ -1,157 +1,250 @@
-"""A stand-in for dufs serving the vendored frontend, for the file viewer's browser tests.
+"""A stand-in for the Files server over a temporary folder, serving the Files build, for Files' browser tests.
 
-It answers the reads `dufs --allow-all` answers for a small fixed tree: a folder's listing
-and a file's editor page are `assets/index.html` with dufs's two placeholders filled (the
-listing JSON base64-encoded, as dufs 0.46 encodes it), a file's plain GET is its content, and
-the assets are served under dufs's assets prefix. Writes never reach it: every page's `fetch`
-is stubbed to record the non-GET requests dufs makes and answer them as dufs would.
+It answers what `dufs --allow-all --assets static/ <root>` answers, as far as the frontend asks: a folder's page and a
+file's `?view` / `?edit` page are `static/index.html` with dufs's two placeholders filled (the page data
+base64-encoded, as dufs 0.46 encodes it), `?json` is a folder's listing, `?q=` a search under it, a file's plain GET
+its bytes (a `Range` honoured), the build is served under dufs's assets prefix, and PUT, MKCOL, MOVE, and DELETE
+change the folder for real, so a test reads the outcome off the disk. ``/__files/api/connections`` answers with
+what a test puts in the ``connections`` fixture and records what is asked of it.
 """
 
 import base64
 import http.server
 import json
+import shutil
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs
+from urllib.parse import quote
+from urllib.parse import unquote
+from urllib.parse import urlsplit
 
 import pytest
-from playwright.sync_api import Browser, BrowserContext, Page
+from playwright.sync_api import Browser
+from playwright.sync_api import BrowserContext
+from playwright.sync_api import Page
 
-ASSETS_DIRECTORY = Path(__file__).parent / "assets"
+STATIC_DIRECTORY = Path(__file__).parent / "static"
 ASSETS_PREFIX = "/__dufs_v0.46.0__/"
-WORKSPACE = "/home/user/workspace"
 
-_SEPT_21 = 1790000000000
-_SEPT_27 = 1790500000000
-_OCT_3 = 1791000000000
-
-# Each folder's listing in the order dufs sends it (it sorts server-side).
-LISTINGS: dict[str, list[dict[str, Any]]] = {
-    WORKSPACE: [
-        {"path_type": "Dir", "name": ".git", "mtime": _SEPT_21, "size": 12},
-        {"path_type": "Dir", "name": "data", "mtime": _SEPT_27, "size": 3},
-        {"path_type": "File", "name": ".env", "mtime": _SEPT_21, "size": 96},
-        {"path_type": "File", "name": "README.md", "mtime": _OCT_3, "size": 1289},
-        {"path_type": "File", "name": "notes.txt", "mtime": _SEPT_27, "size": 5120},
-    ],
-}
-
-# What a search of the workspace folder finds: names are paths relative to the folder searched.
-SEARCH_RESULTS: list[dict[str, Any]] = [
-    {"path_type": "File", "name": ".git/notes-ref", "mtime": _SEPT_21, "size": 41},
-    {
-        "path_type": "File",
-        "name": "data/notes/ideas.md",
-        "mtime": _SEPT_27,
-        "size": 611,
-    },
-    {"path_type": "File", "name": "notes.txt", "mtime": _SEPT_27, "size": 5120},
-]
-
-FILES: dict[str, str] = {
-    f"{WORKSPACE}/README.md": "# workspace\n",
-    f"{WORKSPACE}/notes.txt": "notes\n",
-}
+# dufs offers a file's text for editing below this size, when it decodes.
+_EDITABLE_LIMIT = 4 * 1024 * 1024
 
 _CONTENT_TYPES = {
     ".css": "text/css; charset=utf-8",
     ".html": "text/html; charset=utf-8",
     ".ico": "image/x-icon",
-    ".js": "application/javascript; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".png": "image/png",
+    ".txt": "text/plain; charset=utf-8",
+    ".md": "text/plain; charset=utf-8",
+    ".json": "application/json",
 }
 
-_FETCH_STUB = """
-(() => {
-  const pageFetch = window.fetch.bind(window);
-  window.fetch = async (input, init = {}) => {
-    const method = (init.method || "GET").toUpperCase();
-    if (method === "GET") return pageFetch(input, init);
-    const headers = init.headers || {};
-    await window.recordFetch({
-      method,
-      url: new URL(String(input), location.href).href,
-      destination: headers.Destination ?? null,
-      body: typeof init.body === "string" ? init.body : null,
-    });
-    // HEAD is dufs's does-the-destination-exist probe before a move: nothing is there.
-    return new Response(null, { status: method === "HEAD" ? 404 : 201 });
-  };
-})();
-"""
 
-
-def _index_data(path: str, query: dict[str, list[str]]) -> dict[str, Any]:
-    href = "/" + path.strip("/")
-    common = {
-        "href": href,
-        "uri_prefix": "/",
-        "allow_upload": True,
-        "allow_delete": True,
-        "auth": False,
-        "user": None,
-    }
-    if href in FILES:
-        kind = "View" if "view" in query else "Edit"
-        return {**common, "kind": kind, "editable": True}
-    if "q" in query:
-        paths = SEARCH_RESULTS if href == WORKSPACE else []
-    else:
-        paths = LISTINGS.get(href, [])
+def _path_item(path: Path, name: str) -> dict[str, Any]:
+    is_dir = path.is_dir()
     return {
-        **common,
-        "kind": "Index",
-        "allow_search": True,
-        "allow_archive": True,
-        "dir_exists": True,
-        "paths": paths,
+        "path_type": "Dir" if is_dir else "File",
+        "name": name,
+        "mtime": int(path.stat().st_mtime * 1000),
+        "size": len(list(path.iterdir())) if is_dir else path.stat().st_size,
     }
 
 
-class _DufsStandInHandler(http.server.BaseHTTPRequestHandler):
-    def do_GET(self) -> None:
-        url = urlsplit(self.path)
-        path = unquote(url.path)
-        query = parse_qs(url.query, keep_blank_values=True)
-        if path.startswith(ASSETS_PREFIX):
-            asset = ASSETS_DIRECTORY / path.removeprefix(ASSETS_PREFIX)
-            if not asset.is_file():
-                self.send_error(404)
+def _is_text(path: Path) -> bool:
+    if path.stat().st_size > _EDITABLE_LIMIT:
+        return False
+    try:
+        path.read_bytes().decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+class Connections:
+    """What the stand-in says is shared from the user's computers, and the requests for more it was sent."""
+
+    def __init__(self) -> None:
+        self.listed: dict[str, Any] = {"devices": [], "shares": []}
+        self.requests: list[dict[str, Any]] = []
+
+
+def _make_handler(root: Path, connections: Connections) -> type[http.server.BaseHTTPRequestHandler]:
+    def on_disk(url_path: str) -> Path:
+        return root / unquote(url_path).lstrip("/")
+
+    def page_data(url_path: str, query: dict[str, list[str]]) -> dict[str, Any]:
+        target = on_disk(url_path)
+        common = {
+            "href": unquote(url_path),
+            "uri_prefix": "/",
+            "allow_upload": True,
+            "allow_delete": True,
+            "auth": False,
+            "user": None,
+        }
+        if target.is_file():
+            kind = "Edit" if "edit" in query else "View"
+            return {**common, "kind": kind, "editable": _is_text(target)}
+        if "q" in query:
+            needle = query["q"][0].lower()
+            paths = [
+                _path_item(found, str(found.relative_to(target)))
+                for found in sorted(target.rglob("*"))
+                if needle in found.name.lower()
+            ]
+        else:
+            paths = [_path_item(child, child.name) for child in sorted(target.iterdir())] if target.is_dir() else []
+        return {
+            **common,
+            "kind": "Index",
+            "allow_search": True,
+            "allow_archive": True,
+            "dir_exists": target.is_dir(),
+            "paths": paths,
+        }
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            url = urlsplit(self.path)
+            if url.path == "/__files/api/connections":
+                self._send(200, json.dumps(connections.listed).encode(), "application/json")
                 return
-            self._send(
-                asset.read_bytes(),
-                _CONTENT_TYPES.get(asset.suffix, "application/octet-stream"),
+            query = parse_qs(url.query, keep_blank_values=True)
+            if url.path.startswith(ASSETS_PREFIX):
+                asset = STATIC_DIRECTORY / url.path.removeprefix(ASSETS_PREFIX)
+                if asset.is_file():
+                    self._send(
+                        200,
+                        asset.read_bytes(),
+                        _CONTENT_TYPES.get(asset.suffix, "application/octet-stream"),
+                    )
+                else:
+                    self._send(404, b"Not Found", "text/plain")
+                return
+            target = on_disk(url.path)
+            if "json" in query:
+                self._send(
+                    200,
+                    json.dumps(page_data(url.path, query)).encode(),
+                    "application/json",
+                )
+                return
+            if target.is_file() and "view" not in query and "edit" not in query:
+                self._send_file(target)
+                return
+            if not target.exists() and not url.path.endswith("/"):
+                self._send(
+                    404,
+                    (STATIC_DIRECTORY / "404.html").read_bytes(),
+                    _CONTENT_TYPES[".html"],
+                )
+                return
+            data = base64.b64encode(json.dumps(page_data(url.path, query)).encode()).decode()
+            page = (
+                (STATIC_DIRECTORY / "index.html")
+                .read_text()
+                .replace("__ASSETS_PREFIX__", ASSETS_PREFIX)
+                .replace("__INDEX_DATA__", data)
             )
-            return
-        if path in FILES and "edit" not in query and "view" not in query:
-            self._send(FILES[path].encode(), "text/plain; charset=utf-8")
-            return
-        data = json.dumps(_index_data(path, query)).encode()
-        page = (
-            (ASSETS_DIRECTORY / "index.html")
-            .read_text()
-            .replace("__ASSETS_PREFIX__", ASSETS_PREFIX)
-            .replace("__INDEX_DATA__", base64.b64encode(data).decode())
-        )
-        self._send(page.encode(), _CONTENT_TYPES[".html"])
+            self._send(200, page.encode(), _CONTENT_TYPES[".html"])
 
-    def _send(self, body: bytes, content_type: str) -> None:
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-cache")
-        self.end_headers()
-        self.wfile.write(body)
+        def do_HEAD(self) -> None:
+            url = urlsplit(self.path)
+            # dufs answers any path ending in a slash as a folder, there or not.
+            found = url.path.endswith("/") or on_disk(url.path).exists()
+            self.send_response(200 if found else 404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
 
-    def log_message(self, format: str, *args: Any) -> None:
-        pass
+        def do_POST(self) -> None:
+            length = int(self.headers.get("Content-Length") or 0)
+            connections.requests.append(json.loads(self.rfile.read(length)))
+            self._send(200, b'{"requested": true}', "application/json")
+
+        def do_PUT(self) -> None:
+            target = on_disk(urlsplit(self.path).path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            length = int(self.headers.get("Content-Length") or 0)
+            target.write_bytes(self.rfile.read(length))
+            self._send(201, b"", "text/plain")
+
+        def do_MKCOL(self) -> None:
+            on_disk(urlsplit(self.path).path).mkdir(parents=True)
+            self._send(201, b"", "text/plain")
+
+        def do_MOVE(self) -> None:
+            source = on_disk(urlsplit(self.path).path)
+            destination = on_disk(urlsplit(self.headers["Destination"]).path)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            source.rename(destination)
+            self._send(201, b"", "text/plain")
+
+        def do_DELETE(self) -> None:
+            target = on_disk(urlsplit(self.path).path)
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+            self._send(200, b"", "text/plain")
+
+        def _send_file(self, target: Path) -> None:
+            body = target.read_bytes()
+            content_type = _CONTENT_TYPES.get(target.suffix, "application/octet-stream")
+            ranged = self.headers.get("Range")
+            if ranged is not None and ranged.startswith("bytes="):
+                start, _, end = ranged.removeprefix("bytes=").partition("-")
+                self._send(206, body[int(start) : int(end) + 1], content_type)
+                return
+            self._send(200, body, content_type)
+
+        def _send(self, status: int, body: bytes, content_type: str) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: Any) -> None:
+            pass
+
+    return Handler
 
 
 @pytest.fixture
-def dufs_origin() -> Iterator[str]:
-    """The origin of a running dufs stand-in serving the vendored frontend."""
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _DufsStandInHandler)
+def files_root(tmp_path: Path) -> Path:
+    """The folder the stand-in serves as the filesystem root: a small tree of folders, text, an image, and a dotfile."""
+    root = tmp_path / "root"
+    (root / "projects" / "app").mkdir(parents=True)
+    (root / "projects" / "app" / "main.py").write_text('print("hi")\n')
+    (root / "photos").mkdir()
+    (root / "photos" / "sunset.png").write_bytes(
+        base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+        )
+    )
+    (root / "notes.txt").write_text("first line\nsecond line\n")
+    (root / "README.md").write_text("# hello\n")
+    (root / ".env").write_text("SECRET=1\n")
+    return root
+
+
+@pytest.fixture
+def connections() -> Connections:
+    return Connections()
+
+
+@pytest.fixture
+def files_origin(files_root: Path, connections: Connections) -> Iterator[str]:
+    """The origin of a running dufs stand-in over `files_root`."""
+    if not (STATIC_DIRECTORY / "index.html").is_file():
+        pytest.fail("Files is not built: run `npm run build` at system/ first")
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _make_handler(files_root, connections))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -162,34 +255,19 @@ def dufs_origin() -> Iterator[str]:
         thread.join()
 
 
-@pytest.fixture
-def fetch_calls() -> list[dict[str, Any]]:
-    """The non-GET requests the pages' dufs frontend made, in order."""
-    return []
+OpenFilesPage = Callable[..., Page]
 
 
 @pytest.fixture
-def open_files_page(
-    module_browser: Browser, dufs_origin: str, fetch_calls: list[dict[str, Any]]
-) -> Iterator[Callable[[str, int, int], Page]]:
-    """Open a path of the dufs stand-in in a fresh page of the given viewport size.
-
-    Times render in UTC, so a listing's timestamps read the same on every machine.
-    """
+def open_files_page(module_browser: Browser, files_origin: str) -> Iterator[OpenFilesPage]:
+    """Open a path of the stand-in in a fresh page, desktop-sized unless a size is given. Times render in UTC."""
     contexts: list[BrowserContext] = []
 
-    def record_fetch(call: dict[str, Any]) -> None:
-        fetch_calls.append(call)
-
-    def open_page(path: str, width: int, height: int) -> Page:
-        context = module_browser.new_context(
-            viewport={"width": width, "height": height}, timezone_id="UTC"
-        )
+    def open_page(path: str, width: int = 1200, height: int = 760) -> Page:
+        context = module_browser.new_context(viewport={"width": width, "height": height}, timezone_id="UTC")
         contexts.append(context)
-        context.expose_function("recordFetch", record_fetch)
-        context.add_init_script(_FETCH_STUB)
         page = context.new_page()
-        page.goto(dufs_origin + path)
+        page.goto(files_origin + quote(path, safe="/?=&"))
         return page
 
     yield open_page

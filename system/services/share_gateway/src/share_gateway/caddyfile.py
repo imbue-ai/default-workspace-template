@@ -28,7 +28,16 @@ from urllib.parse import urlsplit
 class RegisteredApp:
     """One ``[[apps]]`` row from ``data/.state/apps.toml``."""
 
-    def __init__(self, name: str, label: str, backend_host: str, backend_port: int, is_grantable: bool) -> None:
+    def __init__(
+        self,
+        name: str,
+        label: str,
+        backend_host: str,
+        backend_port: int,
+        is_grantable: bool,
+        description: str = "",
+        api_schema_path: str = "",
+    ) -> None:
         self.name = name
         self.label = label
         self.backend_host = backend_host
@@ -36,6 +45,10 @@ class RegisteredApp:
         # Whether a per-service grant may admit a visitor to this app; an
         # internal app is reachable only through a workspace-level grant.
         self.is_grantable = is_grantable
+        # What the app's manifest says it is for, and where on its origin it
+        # describes its API (contracts.md section 2); both empty when undeclared.
+        self.description = description
+        self.api_schema_path = api_schema_path
 
 
 def parse_registered_apps(apps_toml_text: str) -> list[RegisteredApp]:
@@ -60,6 +73,8 @@ def parse_registered_apps(apps_toml_text: str) -> list[RegisteredApp]:
             continue
         # A missing key or a literal ``false`` is grantable; any other value reads as internal.
         is_grantable = entry.get("internal", False) is False
+        description = entry.get("description", "")
+        api_schema_path = entry.get("api_schema_path", "")
         apps.append(
             RegisteredApp(
                 name=name,
@@ -67,6 +82,8 @@ def parse_registered_apps(apps_toml_text: str) -> list[RegisteredApp]:
                 backend_host=parsed.hostname,
                 backend_port=parsed.port,
                 is_grantable=is_grantable,
+                description=description if isinstance(description, str) else "",
+                api_schema_path=api_schema_path if isinstance(api_schema_path, str) else "",
             )
         )
     return apps

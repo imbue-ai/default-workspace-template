@@ -184,6 +184,7 @@ def build_test_state(
     static_directory: Path | None = None,
     presence_directory: Path | None = None,
     agent_events_path: Path | None = None,
+    background_tasks_root: Path | None = None,
     profiles: ProfileResolver | None = None,
     wallpaper_files_directory: Path | None = None,
     launch_poster: LaunchPoster | None = None,
@@ -205,7 +206,8 @@ def build_test_state(
     test fills itself, and ``wallpaper_files_directory`` the directory the workspace's own wallpaper
     files are read from (one under the state directory by default). The avatar's catalog lives under
     the state directory, and its mood is read from ``agent_events_path`` (a file under the state
-    directory by default, absent until a test writes it).
+    directory by default, absent until a test writes it) and the background task markers under
+    ``background_tasks_root`` (a directory under the state directory by default, so no test reads the real chats').
     ``presence_directory`` is where the presence files go (a fresh temp directory by default), and ``profiles``
     the resolver that names and pictures each account (one that can reach no connector by default, so no test
     fetches anything unless it says so). ``launch_poster`` answers the POST launches the shell would otherwise make
@@ -241,6 +243,9 @@ def build_test_state(
         agent_events_path=agent_events_path
         if agent_events_path is not None
         else state_directory / "agent-events.jsonl",
+        background_tasks_root=background_tasks_root
+        if background_tasks_root is not None
+        else state_directory / "background-tasks",
         repo_root=repo_root if repo_root is not None else _fresh_shell_state_directory(),
         profiles=resolved_profiles,
         launch_poster=launch_poster,

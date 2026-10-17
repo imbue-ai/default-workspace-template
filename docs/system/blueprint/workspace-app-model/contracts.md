@@ -29,6 +29,8 @@ Parsed by the `app_manifest` library (section 14) with pydantic, `extra = "forbi
 |---|---|---|---|---|
 | `name` | string | yes | | An app name (section 1). Must equal the `--name` passed at registration. |
 | `display_name` | string | yes | | Non-empty, at most 64 characters. What users see. |
+| `description` | string | no | absent | One non-empty line, at most 200 characters: what the app is for, in the person's terms. Shown wherever the app is described to an agent (the visiting-agent primer's apps table). |
+| `api_schema_path` | string | no | absent | A path under the app's origin (the launch path rule: rooted, no query string, nothing to escape) that answers an OpenAPI 3.1 document describing the app's HTTP API, built from its routes by `app_schema.api_schema.register_api_schema_route` (`/api/schema` by convention). Absent when the app serves no API of its own (ttyd, datalib-http). An app that declares it also declares `description`, which the document carries as its own; the app's tests assert both, and that every route's view has a docstring (the operation's summary), with `app_schema.testing.assert_api_schema_describes_app`. |
 | `icon` | string | unless `internal` | | Path relative to the manifest, `.svg`, validated by `forward_port.py`'s `validate_icon` at registration. |
 | `instances` | bool | no | `false` | `true` exposes the instances API. |
 | `instances_url` | string | no | the app URL | `http://127.0.0.1:<port>` or `http://localhost:<port>`; where the shell reaches the instances API. Only allowed with `instances = true`. |
@@ -62,8 +64,9 @@ Built-in manifests:
 | `getting-started` | false | `getting-started` | `{launch = "open", mode = "focus"}`; also `launcher_rank = 5` | none; the shell synthesizes `open` at `/` | `getting-started --no-register --state-dir {scratch}/state` over `GETTING_STARTED_PORT = "{port:main}"` and `GETTING_STARTED_HOST = "{host}"` (unregistered: it neither re-points the live row nor opens the first-visit window), health `/api/health` |
 | `files` | false | `files` | `{launch = "new", mode = "new"}` | `new` ("New File Viewer" at `/home/user/workspace/`, param `path` optional) | the convention |
 | `browser` | false | `browser` | `{launch = "new", mode = "focus"}`; also `window_closed_path = "/api/window-closed"` | `new` ("New Browser" at `/new`, param `url` optional) | the convention |
+| `system-monitor` | false | `system-monitor` | `{launch = "open", mode = "focus"}`; also `launcher_rank = 50` | none; the shell synthesizes `open` at `/` | `SYSTEM_MONITOR_PORT = "{port:main}"` and `SYSTEM_MONITOR_HOST = "{host}"`, no copies (it stores nothing) |
 
-The chat, terminal, browser, and Getting Started declare `system = true`.
+The chat, terminal, browser, Getting Started, and Memory & disk declare `system = true`.
 
 Every built-in except the shell and the terminal's pty points `icon` at an `icon.svg` beside its manifest; those two are `internal` and have none.
 
@@ -78,6 +81,8 @@ Each `[[apps]]` row:
 |---|---|---|
 | `name`, `url`, `label`, `icon`, `internal`, `program` | the registration (`name`, `icon`, `internal`, and `program` from the manifest when one is given) | `label` is the unguessable origin label, minted at first registration, and is never an identifier. |
 | `display_name` | manifest, or `--display-name` | Absent unless one was given; the shell then uses `name`. |
+| `description` | manifest | Absent unless the manifest declares one. |
+| `api_schema_path` | manifest | Absent unless the manifest declares one; the share gateway's primer links `https://<label>.<domain><api_schema_path>` for the app. |
 | `instances` | manifest | Absent reads as `false`. |
 | `instances_url` | manifest | Absent reads as `url`. |
 | `critical` | manifest | Absent reads as `false`. |
@@ -363,7 +368,7 @@ The minds chrome does not forward a deep link's query to the shell frame; that l
 - `system/scripts/build_workspace.sh` loops over the manifest directories.
 - The update apply reinstalls the tool of every manifest app whose directory changed in the merge (excluding paths under `frontend/` and `static/`), and of every manifest app when a shared backend manifest changed, and snapshots the tool directory of every `critical` app before it does.
 - `system/apps/*` is in the root workspace's member glob, so one lockfile covers the tree, a pre-manifest app's `{ workspace = true }` source in the root pyproject resolves, and a user-built app needs no root-pyproject edit; `uv sync --all-packages` therefore also installs the manifest apps into the root venv, unused, which uv's shared cache makes nearly free. Membership and the tool environments answer different questions: the lock keeps every environment on the same versions, and a tool environment keeps its app running while the root venv is rewritten or broken.
-- The `app_manifest` and `app_instances` libraries are workspace members that apps depend on by path, so a tool install pulls them in editable.
+- The `app_manifest` and `app_schema` libraries are workspace members that apps depend on by path, so a tool install pulls them in editable.
 - Services run from the root venv under `uv run <name>`.
 
 ## 15. Memory priority

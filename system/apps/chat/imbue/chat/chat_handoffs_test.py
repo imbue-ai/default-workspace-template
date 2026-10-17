@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from chat_background_tasks.markers import TaskSource
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from pydantic import Field
 from pydantic import PrivateAttr
@@ -18,6 +19,7 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_manager import _account_binding_args
 from imbue.chat.agent_manager import _build_chat_create_command
+from imbue.chat.background_tasks import BackgroundTask
 from imbue.chat.chat_autocompact import ChatAutocompactState
 from imbue.chat.chat_handoffs import HandoffCancelledError
 from imbue.chat.chat_handoffs import HandoffDeps
@@ -345,6 +347,7 @@ def _runner(workspace: _FakeWorkspace, **overrides: Any) -> HandoffRunner:
         apply_model=workspace.apply_model,
         drain_to_composer=workspace.drain_to_composer,
         ensure_watcher=workspace.ensure_watcher,
+        get_background_tasks=lambda chat_id: (),
         stop_agent=workspace.stop_agent,
         destroy_agent=workspace.destroy_agent,
         note_agent_renamed=workspace.note_agent_renamed,
@@ -644,6 +647,45 @@ def test_the_prompt_names_an_earlier_predecessor_by_the_archival_name_it_was_giv
     assert f"- seq 2: {archived_agent_name(2, 'Chat-1', second)}, id {second}" in prompt
     assert archived_agent_name(1, "Chat-1", first) not in prompt
     assert successor in workspace.agents
+
+
+def test_the_prompt_says_which_waited_on_tasks_the_switch_stopped_and_which_still_report(tmp_path: Path) -> None:
+    """The switch stops the retiring agent, which ends its background tasks. Claude's own end unreported; a command
+    started through the runner still reports to the chat, saying how it ended. The successor is told which is which,
+    so it restarts what was lost and waits for what is coming."""
+    workspace, _, _ = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
+    tasks = (
+        BackgroundTask(
+            source=TaskSource.HARNESS,
+            id="bg-1",
+            description="Run the test suite",
+            started_at="2026-10-08T12:00:00+00:00",
+            pid=1,
+            harness="claude",
+            kind="shell",
+            command="pytest -q",
+        ),
+        BackgroundTask(
+            source=TaskSource.RUN_IN_BACKGROUND,
+            id="task-1",
+            description="Rebuild the worker image",
+            started_at="2026-10-08T12:01:00+00:00",
+            pid=2,
+            command="docker build -t worker . | tee build.log",
+        ),
+    )
+
+    _runner(workspace, get_background_tasks=lambda chat_id: tasks).run(workspace.chat_id, "h-1")
+
+    prompt = workspace.delivered_prompt()
+    assert (
+        "| Task | Started by | Command | Started | What happens now |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        "| Run the test suite | Claude Code's own background shell | `pytest -q` | 2026-10-08 12:00 UTC "
+        "| Ended with no report. Start it again if it is still needed. |\n"
+        "| Rebuild the worker image | run_in_background.py | `docker build -t worker . \\| tee build.log` "
+        "| 2026-10-08 12:01 UTC | Its report, saying how it ended, arrives in this chat as a message. |\n"
+    ) in prompt
 
 
 def test_the_prompt_leaves_out_a_seeded_chats_seed_segment(tmp_path: Path) -> None:

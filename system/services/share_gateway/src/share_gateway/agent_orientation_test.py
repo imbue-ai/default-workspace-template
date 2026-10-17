@@ -20,7 +20,16 @@ from share_gateway.testing import make_workspace_repo
 
 _APPS = [
     RegisteredApp("owner-exec", "owner-exec-ex111111", "127.0.0.1", 8793, is_grantable=False),
-    RegisteredApp("chat", "chat-ch111111", "127.0.0.1", 8010, is_grantable=True),
+    RegisteredApp(
+        "chat",
+        "chat-ch111111",
+        "127.0.0.1",
+        8010,
+        is_grantable=True,
+        description="The chats with the workspace's agents.",
+        api_schema_path="/api/schema",
+    ),
+    RegisteredApp("ttyd", "ttyd-tt111111", "127.0.0.1", 7683, is_grantable=True),
 ]
 
 _PRIMER_TEMPLATE = """# Visiting {{workspace_name}} ({{workspace_id}})
@@ -160,7 +169,14 @@ def test_render_primer_fills_every_placeholder_and_cuts_exec_text_for_app_scope(
     assert "Visiting Research Lab (agent-1)" in full
     assert "Exec paragraph." in full
     assert "| build-app | Build an app, in quotes | .agents/skills/build-app/SKILL.md |" in full
-    assert "| chat | http://127.0.0.1:8010 | https://chat-ch111111.alpha.example.com |" in full
+    assert (
+        "| chat | The chats with the workspace's agents. | http://127.0.0.1:8010 | "
+        "https://chat-ch111111.alpha.example.com | https://chat-ch111111.alpha.example.com/api/schema |"
+    ) in full
+    assert (
+        "| ttyd | (no description) | http://127.0.0.1:7683 | https://ttyd-tt111111.alpha.example.com | (none) |"
+        in full
+    )
     assert "owner-exec" not in full
     assert "ACCOUNTS" in full and "Initial workspace commit" in full and "{{" not in full
     assert "exec-only" not in full

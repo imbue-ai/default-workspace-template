@@ -212,11 +212,13 @@ def _existing_wallpaper(wallpaper: Wallpaper | None) -> Wallpaper | None:
 
 
 def list_desktops() -> ResponseReturnValue:
+    """Every desktop of the workspace, with its windows and shortcuts."""
     shell = _shell()
     return jsonify(DesktopsListing(desktops=tuple(shell.desktop_views(shell.list_desktops()))).model_dump(mode="json"))
 
 
 def create_desktop() -> ResponseReturnValue:
+    """Add a desktop with a name, a colour, and a glyph."""
     body = parse_request_body(DesktopMetadataRequest)
     shell = _shell()
     desktop = shell.create_desktop(body.name, body.color, body.glyph)
@@ -224,6 +226,7 @@ def create_desktop() -> ResponseReturnValue:
 
 
 def update_desktop_settings(desktop_id: str) -> ResponseReturnValue:
+    """Rename a desktop or change its colour or glyph."""
     body = parse_request_body(DesktopSettingsRequest)
     shell = _shell()
     desktop = shell.desktops.update_settings(desktop_id, body.name, body.color, body.glyph)
@@ -232,6 +235,7 @@ def update_desktop_settings(desktop_id: str) -> ResponseReturnValue:
 
 
 def set_desktop_wallpaper(desktop_id: str) -> ResponseReturnValue:
+    """Set a desktop's wallpaper to a bundled or uploaded image, or back to the default."""
     body = parse_request_body(DesktopWallpaperRequest)
     shell = _shell()
     desktop = shell.desktops.set_wallpaper(desktop_id, _existing_wallpaper(body.wallpaper))
@@ -240,11 +244,13 @@ def set_desktop_wallpaper(desktop_id: str) -> ResponseReturnValue:
 
 
 def delete_desktop(desktop_id: str) -> ResponseReturnValue:
+    """Remove a desktop and answer the one its clients fall back to; the last desktop cannot be removed."""
     outcome = _shell().delete_desktop(desktop_id)
     return jsonify({"fallback_desktop_id": str(outcome.fallback_desktop_id)})
 
 
 def set_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
+    """Put a shortcut to an app's launch path in a cell of a desktop's grid."""
     body = parse_request_body(DesktopShortcutRequest)
     shell = _shell()
     shortcut = DesktopShortcut(target=_validated_target(shell, body.target), mode=body.mode, cell=body.cell)
@@ -254,6 +260,7 @@ def set_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
 
 
 def move_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
+    """Move a desktop's shortcut to another cell."""
     body = parse_request_body(ShortcutMoveRequest)
     shell = _shell()
     desktop = shell.desktops.move_shortcut(desktop_id, body.app, body.launch, body.cell)
@@ -262,6 +269,7 @@ def move_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
 
 
 def remove_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
+    """Take a shortcut off a desktop."""
     body = parse_request_body(ShortcutRemoveRequest)
     shell = _shell()
     desktop = shell.desktops.remove_shortcut(desktop_id, body.app, body.launch)
@@ -273,6 +281,7 @@ def remove_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
 
 
 def open_window(desktop_id: str) -> ResponseReturnValue:
+    """Open a window of an app at a path on a desktop, or answer the one already at that path; 201 when it is new."""
     body = parse_request_body(WindowOpenRequest)
     shell = _shell()
     outcome = shell.open_window(desktop_id, body)
@@ -289,11 +298,13 @@ def open_window(desktop_id: str) -> ResponseReturnValue:
 
 
 def close_window(desktop_id: str, window_id: str) -> ResponseReturnValue:
+    """Close a window on every client."""
     _shell().close_window(desktop_id, WindowId(window_id))
     return "", HTTP_NO_CONTENT
 
 
 def report_window_location(desktop_id: str, window_id: str) -> ResponseReturnValue:
+    """Record where a window's page is now (its path and title), as the page reports it through the app contract."""
     body = parse_request_body(WindowLocationReport)
     window = _shell().report_window_location(desktop_id, WindowId(window_id), body.client_id, body.path, body.title)
     return jsonify(_shell().window_view(window).model_dump(mode="json"))
@@ -327,12 +338,14 @@ def _layout_view(shell: ShellState, desktop: Desktop, client_id: ClientId) -> De
 
 
 def get_placements(desktop_id: str) -> ResponseReturnValue:
+    """Where one client (``?client=``) has placed a desktop's windows: frames, order, minimized and popped-out state."""
     client_id = ClientId(request.args.get("client", ""))
     shell = _shell()
     return jsonify(_layout_view(shell, shell.get_desktop(desktop_id), client_id).model_dump(mode="json"))
 
 
 def save_placements(desktop_id: str) -> ResponseReturnValue:
+    """Save one client's placement of a desktop's windows; a stale save (an older layout) is refused."""
     body = parse_request_body(PlacementsSaveRequest)
     saved = _shell().save_browser_placements(desktop_id, body)
     # The stamp is spelled as the read route spells it, so the window compares like with like.
@@ -371,12 +384,14 @@ def arrive_client(client_id: str) -> ResponseReturnValue:
 
 
 def list_wallpapers_route() -> ResponseReturnValue:
+    """The wallpapers a desktop can wear: the bundled ones and the images in the workspace's wallpaper folder."""
     return jsonify(
         {"wallpapers": [wallpaper_listing_wire_json(listing) for listing in list_wallpapers(_wallpaper_directories())]}
     )
 
 
 def serve_wallpaper(kind: str, name: str) -> ResponseReturnValue:
+    """One wallpaper image, bundled or from the wallpaper folder."""
     try:
         wallpaper = Wallpaper(kind=WallpaperKind(kind), name=WallpaperName(name))
     except ValueError as e:

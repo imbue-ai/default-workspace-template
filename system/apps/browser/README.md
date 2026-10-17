@@ -20,7 +20,9 @@ background agent, which is its own chat -- or the human).
   chats and Imbue Studio hosts use), while browsers created by older builds keep their
   random english names. Closing a browser retires its name and deletes its
   profile, which is what frees the number for a later create; the fleet starts
-  empty and there is no default browser.
+  empty and there is no default browser. The daemon describes its own HTTP API at
+  `GET /api/schema` (the manifest's `api_schema_path`), an OpenAPI document built
+  from its routes by `system/libs/app_schema`.
 - **Ownership** is one locked, compare-and-set state machine per browser. Agents
   never preempt each other -- a second agent waits in a FIFO queue
   (monitor-and-wait). The human can take control from the UI at any time, which

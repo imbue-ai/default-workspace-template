@@ -56,12 +56,12 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         'label = "files-abcd1234"\n'
         f'icon = "{APP_ICON_MARKUP.replace(chr(34), chr(92) + chr(34))}"\n'
         'program = "files"\n'
-        'display_name = "File Viewer"\n'
+        'display_name = "Files"\n'
         "critical = false\n"
         "stop_when_no_windows = true\n"
         'priority = "files"\n'
         'default_shortcut = {launch = "new", mode = "focus"}\n'
-        'launch_paths = [{id = "new", label = "New File Viewer", path = "/", params = ["path"], text_param = "path"}, {id = "recent", label = "Recent", path = "/recent"}, {id = "draft", label = "Draft", path = "/api/intake", method = "POST", params = ["message"], presets = {target = "current_chat"}, draft_param = "message"}]\n'
+        'launch_paths = [{id = "new", label = "Files", path = "/", params = ["path"], text_param = "path"}, {id = "recent", label = "Recent", path = "/recent"}, {id = "draft", label = "Draft", path = "/api/intake", method = "POST", params = ["message"], presets = {target = "current_chat"}, draft_param = "message"}]\n'
         "launcher_rank = 20\n"
         'pin = {path = "/", style = "avatar", scope = "independent", default_mode = "floating"}\n'
         'window_closed_path = "/api/window-closed"\n'
@@ -80,7 +80,7 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         ("minds:focus-chat", "/api/focus-chat", None, ()),
         ("open:file", None, "{path}?view", ("{path}", "{path}/")),
     ]
-    assert row.display_name == "File Viewer"
+    assert row.display_name == "Files"
     assert row.priority == "files"
     assert row.default_shortcut is not None
     assert row.default_shortcut.launch == "new"
@@ -88,7 +88,7 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         (launch_path.id, launch_path.label, launch_path.path, launch_path.params, launch_path.text_param)
         for launch_path in row.launch_paths
     ] == [
-        ("new", "New File Viewer", "/", ("path",), "path"),
+        ("new", "Files", "/", ("path",), "path"),
         ("recent", "Recent", "/recent", (), None),
         ("draft", "Draft", "/api/intake", ("message",), None),
     ]

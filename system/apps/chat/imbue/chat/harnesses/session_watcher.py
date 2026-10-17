@@ -41,6 +41,9 @@ IsAliveCallback = Callable[[], bool]
 # ``harnesses.claude.queue_tracker``).
 QueueSnapshotCallback = Callable[[list[dict[str, Any]]], None]
 
+# Called with the ids of the agent's own background tasks its harness has reported as over.
+FinishedTasksCallback = Callable[[tuple[str, ...]], None]
+
 
 class TranscriptReader(ABC):
     """The read side of one agent's transcript: what a chat transcript's segments are made of.
@@ -143,6 +146,13 @@ class AgentSessionWatcher(TranscriptReader, ABC):
 
     def set_queue_snapshot_callback(self, callback: QueueSnapshotCallback) -> None:
         """Register the sink that receives each new queued-message snapshot. No-op by default."""
+
+    def set_finished_tasks_callback(self, callback: FinishedTasksCallback) -> None:
+        """Register the sink that receives the ids of harness-native background tasks as they end.
+
+        No-op by default: only a harness whose transcript records the end of its own background
+        tasks (Claude's ``<task-notification>``) calls it.
+        """
 
     def get_queued_messages(self) -> list[dict[str, Any]]:
         """The current queued-message snapshot; empty for a harness with no populator."""

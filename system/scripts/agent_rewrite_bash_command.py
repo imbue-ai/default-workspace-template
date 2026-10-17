@@ -157,6 +157,38 @@ def build_rewritten_command(command: str) -> str:
     return prefix + command
 
 
+def original_command(rewritten: str) -> str:
+    """``rewritten`` without the prefixes ``build_rewritten_command`` put in front of it.
+
+    The identity is read back from the command rather than resolved again: it names
+    the agent as it was when the command ran, and a rename since (a chat's automatic
+    name lands during its first turn) would not match.
+    """
+    oom_prefix = build_oom_tag_prefix()
+    identity = _identity_in_prefix(rewritten)
+    if identity is not None:
+        identity_prefix = build_commit_identity_prefix(*identity)
+        if rewritten.startswith(identity_prefix + oom_prefix):
+            rewritten = rewritten[len(identity_prefix) :]
+    return rewritten.removeprefix(oom_prefix)
+
+
+def _identity_in_prefix(command: str) -> tuple[str, str] | None:
+    """The ``(author_name, author_email)`` an identity prefix at the front of ``command``
+    exports, or None when it starts with none."""
+    if not command.startswith("export GIT_AUTHOR_NAME="):
+        return None
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";")
+    lexer.whitespace_split = True
+    try:
+        tokens = [lexer.get_token() for _ in range(6)]
+    except ValueError:
+        return None
+    if None in tokens or tokens[5] != ";":
+        return None
+    return tokens[1].partition("=")[2], tokens[3].partition("=")[2]
+
+
 def build_hook_output(
     tool_input: dict, command: str, *, emit_allow_decision: bool
 ) -> dict:

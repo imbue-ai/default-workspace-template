@@ -48,7 +48,8 @@ Never run `latchkey auth` yourself.
 ## Apps
 
 Every app runs on a loopback port inside the workspace and has its own origin over the share.
-Each will describe its own API at a well-known path on its origin (a follow-up; until then, its README under `system/apps/<name>/` is the description).
+An app with an HTTP API describes it at the address in the last column: an OpenAPI document of its routes, which is the way to learn what the app can do before reading its code under `system/apps/<name>/`.
+Over the share, fetch it with your admission token, as you reach the app itself.
 
 {{apps_table}}
 

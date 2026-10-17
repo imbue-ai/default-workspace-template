@@ -8,6 +8,9 @@ README for details.
 - `app_manifest/` - The app manifest (`system/apps/<package>/app.toml`) and
   app registry (`data/.state/apps.toml`) models every app is described by,
   and the `app-manifest validate-manifest` command.
+- `app_schema/` - An app's self-description: the OpenAPI document of its HTTP
+  API, built from its Flask routes and served at the path its manifest names
+  in `api_schema_path`, and the assertion an app's tests make about it.
 - `workspace_layout/` - The shell's layout routes as one typed client the
   apps share, and the agent-facing `uv run --no-sync workspace-layout` command that
   reads and arranges the desktop.
@@ -20,6 +23,8 @@ README for details.
   automation-agent waker (see the manage-scheduled-tasks skill).
 - `bootstrap/` - First-boot setup; then launches supervisord, which supervises
   the apps and services.
+- `chat_background_tasks/` - The marker files recording the background tasks
+  each chat waits on, and their readers.
 - `github_sync/` - The opt-in GitHub auto-push wiring (a git hook, not a
   daemon; see the github-sync skill).
 - `mngr_cli_contract/` - Shared validator that checks mngr CLI argvs against

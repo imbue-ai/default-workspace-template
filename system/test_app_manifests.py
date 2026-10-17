@@ -29,7 +29,16 @@ _MANIFEST_FLAG = re.compile(r"--manifest\s+(\S+)")
 # The apps the template ships. Only these are checked: a workspace built from the
 # template may carry user-built apps (with a manifest whose priority is ``user``,
 # or with no manifest at all), and this suite runs there too.
-_BUILT_IN_APP_PACKAGES = ("browser", "chat", "files", "getting_started", "system_interface", "terminal", "terminal_pty")
+_BUILT_IN_APP_PACKAGES = (
+    "browser",
+    "chat",
+    "files",
+    "getting_started",
+    "system_interface",
+    "system_monitor",
+    "terminal",
+    "terminal_pty",
+)
 
 
 def _built_in_manifest_paths() -> list[Path]:
@@ -373,9 +382,9 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["terminal"].critical is True
     assert by_name["files"].critical is False
     assert by_name["browser"].critical is False
-    # The stop-when-no-windows spec, section 4.2: the file viewer and Getting Started stop once no window shows
-    # them; the browser keeps running, since agents drive its browsers with no window; and the critical ones
-    # (which the manifest refuses the field on) never stop.
+    # The stop-when-no-windows spec, section 4.2: Files, Getting Started, and Memory & disk stop once no
+    # window shows them; the browser keeps running, since agents drive its browsers with no window; and the
+    # critical ones (which the manifest refuses the field on) never stop.
     assert {name: manifest.stop_when_no_windows for name, manifest in by_name.items()} == {
         "system_interface": False,
         "chat": False,
@@ -384,6 +393,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "files": True,
         "browser": False,
         "getting-started": True,
+        "system-monitor": True,
     }
     # Where the minds Share tab lists each built-in: never for an internal one, under its System group for the
     # interfaces the workspace is built out of, and up front for the rest.
@@ -398,6 +408,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "files": "app",
         "browser": "system",
         "getting-started": "system",
+        "system-monitor": "system",
     }
     # Getting Started (launcher-and-getting-started plan section 3.6): one window is what it is for, so its shortcut
     # focuses it like the browser's; it declares no launch path, so the desktop synthesizes ``open`` at its root.
@@ -412,10 +423,19 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     # Its preview (update-app's preview_app.py) boots unregistered, so it neither re-points the live row nor opens
     # the first-visit window.
     assert by_name["getting-started"].preview.command[:2] == ("getting-started", "--no-register")
+    # Memory & disk: one polling page, focused like Getting Started, with its own band so it is shed after every
+    # user service.
+    assert by_name["system-monitor"].critical is False
+    assert by_name["system-monitor"].program == "system-monitor"
+    assert by_name["system-monitor"].priority == "system-monitor"
+    assert by_name["system-monitor"].launch_paths == ()
+    assert by_name["system-monitor"].default_shortcut is not None
+    assert by_name["system-monitor"].default_shortcut.launch == "open"
+    assert by_name["system-monitor"].default_shortcut.mode == "focus"
     # One order for the built-ins: the desktop seeds its shortcuts in it and the launcher lists its apps in it.
     assert sorted(
         (manifest.launcher_rank, manifest.name) for manifest in by_name.values() if manifest.launcher_rank is not None
-    ) == [(10, "chat"), (15, "getting-started"), (20, "files"), (30, "browser"), (40, "terminal")]
+    ) == [(10, "chat"), (15, "getting-started"), (20, "files"), (30, "browser"), (40, "terminal"), (50, "system-monitor")]
     # Every seeded shortcut opens a new window of its app; the one browser is focused instead
     # (docs/system/specs/window-bound-resources.md section 3.1).
     for name, mode in (("chat", "new"), ("terminal", "new"), ("files", "new"), ("browser", "focus")):

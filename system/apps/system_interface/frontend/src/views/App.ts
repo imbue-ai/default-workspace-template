@@ -61,7 +61,7 @@ import { SNAP_PREVIEW_ATTRIBUTE, applySnapPreviewStyle } from "./SnapPreview";
 import { PhoneLayout, phoneMountPolicy } from "./phone/PhoneLayout";
 import { SoloView } from "./SoloView";
 import { Taskbar } from "./Taskbar";
-import { Toasts } from "./Toast";
+import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
 import type { WindowControl } from "./TitleBar";
 import { UpdateNoticeBanner } from "./UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "./UpdateStalenessBanner";

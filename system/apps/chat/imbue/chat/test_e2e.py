@@ -12,6 +12,8 @@ document.
 from __future__ import annotations
 
 import json
+import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -33,6 +35,7 @@ from playwright.sync_api import ViewportSize
 from playwright.sync_api import expect
 
 from imbue.chat.accounts import account_dir
+from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.auto_open import chat_root_path
 from imbue.chat.harnesses.harness_type import HarnessType
@@ -48,16 +51,19 @@ from imbue.chat.testing import SummaryWritingMngrMessenger
 from imbue.chat.testing import get_json
 from imbue.chat.testing import is_chat_frontend_built
 from imbue.chat.testing import is_e2e_browser_installed
+from imbue.chat.testing import remove_background_task_marker
 from imbue.chat.testing import running_workspace
+from imbue.chat.testing import seed_agent_state
+from imbue.chat.testing import write_background_task_marker
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import DEFAULT_STATIC_DIRECTORY as SHELL_STATIC_DIRECTORY
 from imbue.system_interface.shell.desktops import DEFAULT_DESKTOP_NAME
 from imbue.system_interface.shell.desktops import slugify_desktop_name
 from imbue.system_interface.shell.testing import DUFS_BINARY
-from imbue.system_interface.shell.testing import file_viewer_registry_row
+from imbue.system_interface.shell.testing import files_registry_row
 from imbue.system_interface.shell.testing import message_handling_app
 from imbue.system_interface.shell.testing import registry_row_toml
-from imbue.system_interface.shell.testing import running_file_viewer
+from imbue.system_interface.shell.testing import running_files
 from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.testing import serve_app
 
@@ -129,6 +135,7 @@ def _running_e2e_server(
     session_events: list[dict[str, Any]] | None = None,
     is_account_signed_in: bool = True,
     additional_agents: Sequence[tuple[str, str]] = (),
+    background_tasks_root: Path | None = None,
     extra_rows: Sequence[str] = (),
 ) -> AbstractContextManager[RunningWorkspace]:
     """The two-server workspace, the shell and the chat each on a free port of their own."""
@@ -139,6 +146,7 @@ def _running_e2e_server(
         session_events=session_events,
         additional_agents=additional_agents,
         is_account_signed_in=is_account_signed_in,
+        background_tasks_root=background_tasks_root,
         extra_rows=extra_rows,
     )
 
@@ -330,6 +338,56 @@ def test_chat_transcript_area_is_pure_white(e2e_server: RunningWorkspace, page: 
     assert shell_bg not in ("#ffffff", "#fff", "rgb(255, 255, 255)"), (
         f"shared shell --color-bg should stay off-white, got {shell_bg}"
     )
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_chat_waiting_on_background_tasks_shows_the_wait_in_the_list_and_the_strip(
+    tmp_path: Path, page: Page
+) -> None:
+    """Between turns with tasks pending, the list draws the dashed ring and the strip the wait line, which opens
+    into one row per task; reduced motion holds the ring still, and the wait goes when the tasks do."""
+    with _running_e2e_server(tmp_path, background_tasks_root=tmp_path / "background_tasks") as server:
+        manager = server.chat_state.agent_manager
+        agent = manager.get_agent_by_id(FIXTURE_AGENT_ID)
+        assert agent is not None
+        seed_agent_state(
+            manager,
+            FIXTURE_AGENT_ID,
+            name=agent.name,
+            state="WAITING",
+            labels=agent.labels,
+            activity_state=ActivityState.IDLE,
+        )
+        reader = manager._background_tasks
+        assert reader is not None
+        write_background_task_marker(reader, FIXTURE_AGENT_ID, "build", os.getpid(), "Rebuild the worker image")
+        write_background_task_marker(reader, FIXTURE_AGENT_ID, "migrate", os.getpid(), "Migrate the schema")
+        manager._background_tasks_poller.start()
+        _open_fixture_chat(page, server)
+
+        row = _chat_root(page).locator(f'.chat-rail-row[data-chat-id="{FIXTURE_AGENT_ID}"]')
+        expect(row).to_have_attribute("data-status", "background", timeout=15000)
+        ring = row.locator(".chat-rail-dot")
+        expect(ring).to_have_class(re.compile(r"chat-rail-dot--dashed"))
+        assert ring.evaluate("e => getComputedStyle(e).animationName") == "chat-rail-spin"
+        assert ring.evaluate("e => getComputedStyle(e).borderTopStyle") == "dashed"
+
+        wait_line = _chat(page).locator(".background-tasks-line__summary")
+        expect(wait_line).to_contain_text("Waiting on 2 background tasks", timeout=15000)
+        expect(_chat(page).locator(".background-tasks-line__task")).to_have_count(0)
+        wait_line.click()
+        expect(_chat(page).locator(".background-tasks-line__description")).to_have_text(
+            ["Rebuild the worker image", "Migrate the schema"]
+        )
+        page.screenshot(path=str(tmp_path / "background-wait.png"))
+
+        page.emulate_media(reduced_motion="reduce")
+        assert ring.evaluate("e => getComputedStyle(e).animationName") == "none"
+
+        remove_background_task_marker(reader, FIXTURE_AGENT_ID, "build")
+        remove_background_task_marker(reader, FIXTURE_AGENT_ID, "migrate")
+        expect(row).to_have_attribute("data-status", "idle", timeout=15000)
+        expect(_chat(page).locator(".background-tasks-line")).to_have_count(0)
 
 
 @pytest.mark.timeout(60, func_only=False)
@@ -1631,7 +1689,7 @@ def _question_and_reply_events(uuid_prefix: str, question: str, reply: str) -> l
 
 
 # A reply that links a file of the workspace and a service running in it (the workspace link routing plan), served
-# with the real File Viewer (dufs over a folder of the test's own) and a stand-in for the app that opens URLs.
+# with the real Files (dufs over a folder of the test's own) and a stand-in for the app that opens URLs.
 _LINKED_FILE_HREF = "/notes/plan%201.md"
 _LINKED_SERVICE_URL = "http://localhost:3000/preview"
 _OPEN_URL_HANDLER_PATH = "/api/open-url"
@@ -1669,10 +1727,10 @@ def _bring_the_chat_over(page: Page, server: RunningWorkspace, client_id: str, c
 
 @pytest.mark.skipif(DUFS_BINARY is None, reason="dufs is not installed (the workspace image installs it)")
 @pytest.mark.timeout(120, func_only=False)
-def test_a_replys_file_link_opens_in_the_file_viewer_and_its_local_link_goes_to_the_app_that_opens_urls(
+def test_a_replys_file_link_opens_in_files_and_its_local_link_goes_to_the_app_that_opens_urls(
     tmp_path: Path, page: Page
 ) -> None:
-    """Clicking a reply's file link opens the file on its view page in a File Viewer window, and clicking it again
+    """Clicking a reply's file link opens the file on its view page in a Files window, and clicking it again
     (with a modifier) raises that window rather than opening another; a middle click on a local address sends it,
     with the client, to the app registered for ``open:url``. The chat never navigates and no browser window
     opens."""
@@ -1681,11 +1739,11 @@ def test_a_replys_file_link_opens_in_the_file_viewer_and_its_local_link_goes_to_
     (root / "notes" / "plan 1.md").write_text("# The plan\n")
     opened_urls: list[dict[str, Any]] = []
     with (
-        running_file_viewer(root) as viewer_url,
+        running_files(root) as files_url,
         serve_app(message_handling_app(opened_urls, _OPEN_URL_HANDLER_PATH, 200)) as url_opener,
     ):
         rows = (
-            file_viewer_registry_row(viewer_url),
+            files_registry_row(files_url),
             registry_row_toml("browser", url_opener.http_url, message_handlers=[("open:url", _OPEN_URL_HANDLER_PATH)]),
         )
         with _running_e2e_server(tmp_path, session_events=_LINKING_SESSION_EVENTS, extra_rows=rows) as server:
@@ -1700,7 +1758,7 @@ def test_a_replys_file_link_opens_in_the_file_viewer_and_its_local_link_goes_to_
                 lambda: [window["path"] for window in _app_windows(server, "files")] == ["/notes/plan%201.md?view"],
                 timeout=15.0,
                 poll_interval=0.1,
-                error_message="no File Viewer window opened on the linked file's view page",
+                error_message="no Files window opened on the linked file's view page",
             )
             (viewer,) = _app_windows(server, "files")
             client_id = _client_id(page)
@@ -1775,16 +1833,15 @@ _FOLDER_LINK_SESSION_EVENTS = _question_and_reply_events(
 
 @pytest.mark.skipif(DUFS_BINARY is None, reason="dufs is not installed (the workspace image installs it)")
 @pytest.mark.timeout(120, func_only=False)
-def test_a_folder_link_raises_the_file_viewer_window_that_reached_the_folder_through_its_own_listing(
+def test_a_folder_link_raises_the_files_window_that_reached_the_folder_through_its_own_listing(
     tmp_path: Path, page: Page
 ) -> None:
-    """A File Viewer window that walked into a folder through dufs's own listing is at the path as dufs spells it;
-    a chat link to that folder spells it the shell's way, and the two must agree so the link raises that window
+    """A Files window that walked into a folder through its own listing is at the path as Files spells it; a chat link to that folder spells it the shell's way, and the two must agree so the link raises that window
     rather than opening a second one."""
     root = tmp_path / "viewer-root"
     (root / _ODD_FOLDER_NAME).mkdir(parents=True)
-    with running_file_viewer(root) as viewer_url:
-        rows = (file_viewer_registry_row(viewer_url),)
+    with running_files(root) as files_url:
+        rows = (files_registry_row(files_url),)
         with _running_e2e_server(tmp_path, session_events=_FOLDER_LINK_SESSION_EVENTS, extra_rows=rows) as server:
             _open_fixture_chat_with_shell(page, server)
             client_id = _client_id(page)
@@ -1794,16 +1851,16 @@ def test_a_folder_link_raises_the_file_viewer_window_that_reached_the_folder_thr
                 lambda: len(_app_windows(server, "files")) == 1,
                 timeout=15.0,
                 poll_interval=0.1,
-                error_message="the File Viewer window never opened",
+                error_message="the Files window never opened",
             )
             (viewer,) = _app_windows(server, "files")
             listing = page.frame_locator(f'iframe[data-live-page="{viewer["id"]}"]')
-            listing.get_by_role("link", name=_ODD_FOLDER_NAME, exact=True).click()
+            listing.locator(f'[data-entry-path="/{_ODD_FOLDER_NAME}/"]').dblclick()
             wait_for(
                 lambda: _app_windows(server, "files")[0]["path"] != "/",
                 timeout=15.0,
                 poll_interval=0.1,
-                error_message="the File Viewer window never reported the folder it walked into",
+                error_message="the Files window never reported the folder it walked into",
             )
             listed_path = _app_windows(server, "files")[0]["path"]
 

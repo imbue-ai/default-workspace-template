@@ -50,6 +50,8 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   `imbue/system_interface/static/`; `/assets/<path>` for its bundle.
 - `/api/health`: `{"status", "is_frontend_built"}`, the probe the update
   apply and the preview flow poll.
+- `GET /api/schema`: the OpenAPI document of the shell's routes, built from its
+  url map (`system/libs/app_schema`); the manifest's `api_schema_path`.
 - `/_static/app_contract.js` and `/_static/context_menu.js`: the browser-side
   contract module and the element context menu module (sources in
   `system/libs/workspace_ui/src/app_contract.ts` and `context_menu.ts`), built
@@ -116,8 +118,10 @@ and the profile cache.
   avatar) is on its client record.
 - **The avatar** (`avatar/`): the bundled and registered designs, the
   workspace's selection, the rendered image routes, and the status reader,
-  which folds mngr's agents event file into a mood (working when any agent
-  but the services agent is running) and pushes `avatar_status` on change.
+  which folds mngr's agents event file and the chats' background task markers
+  into a mood (working when any agent but the services agent is running, or
+  any chat is busy on a background task that will wake its agent) and pushes
+  `avatar_status` on change.
 - **State files**: a fresh workspace gets one desktop, `Home`, seeded from
   every registered app's default shortcut (its `default_shortcut`, else, for
   an app a program runs, its first launch path taking no text, or its first
@@ -373,7 +377,8 @@ fresh install lands on its `Home` desktop with the Getting Started window
 open, placed there once by that app for the first client that connects.
 
 A refused operation (an open, a close, a shortcut move) says so in a toast at
-the foot of the screen (`views/Toast.ts`) rather than a browser alert.
+the foot of the screen (the shared toasts of `system/libs/workspace_ui`) rather
+than a browser alert.
 
 ### The phone layout
 

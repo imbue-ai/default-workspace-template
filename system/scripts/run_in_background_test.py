@@ -9,6 +9,7 @@ reaches the ``fake_mngr`` fixture, never the real ``mngr``.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import secrets
 import shlex
@@ -20,6 +21,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from chat_background_tasks import markers
+from chat_background_tasks.markers import BackgroundTask, TaskSource
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 from script_modules_testing import run_in_background
@@ -509,3 +512,272 @@ def test_long_output_keeps_its_start_and_end_and_points_at_the_full_file() -> No
     assert "middle line" not in report
     assert f"omitted; the whole output is in {output_path}" in report
     assert len(report) < run_in_background.MAX_INLINE_OUTPUT_CHARS + 2000
+
+
+def _wait_until(condition: Any, what: str) -> None:
+    deadline = time.monotonic() + _DELIVERY_DEADLINE_SECONDS
+    while not condition():
+        assert time.monotonic() < deadline, what
+        time.sleep(0.1)
+
+
+def _marker_gone(root: Path, chat_id: str) -> bool:
+    chat_dir = markers.chat_dir(root, chat_id)
+    return not chat_dir.is_dir() or not any(chat_dir.iterdir())
+
+
+@pytest.mark.usefixtures("fake_mngr")
+def test_the_chat_is_busy_from_before_the_caller_returns_until_the_report_lands(
+    fake_chat_app: Any, background_task_markers: Path, tmp_path: Path
+) -> None:
+    command = _python_command("import time; time.sleep(2)")
+
+    started = _start_runner(
+        tmp_path, _agent_env(MNGR_AGENT_ID=_CHAT_ID), "Build  the\nsite", *command
+    )
+
+    assert started.returncode == 0, started.stderr
+    [task] = markers.list_live_tasks(background_task_markers, _CHAT_ID)
+    assert task.source == TaskSource.RUN_IN_BACKGROUND
+    assert task.id == f"{_task_dir_from(started.stdout, tmp_path).name}-{task.pid}"
+    assert task.description == "Build the site"
+    _wait_for_posts(fake_chat_app, 1)
+    _wait_until(
+        lambda: _marker_gone(background_task_markers, _CHAT_ID),
+        "the marker outlived the delivered report",
+    )
+
+
+@pytest.mark.usefixtures("fake_mngr")
+def test_a_named_chat_carries_the_wait_and_gets_the_report(
+    fake_chat_app: Any, background_task_markers: Path, tmp_path: Path
+) -> None:
+    worker_chat_id = "agent-fedcba9876543210fedcba9876543210"
+
+    started = _start_runner(
+        tmp_path,
+        _agent_env(MNGR_AGENT_ID=_CHAT_ID),
+        "Wait for the worker",
+        *_python_command("import time; time.sleep(2)"),
+        options=("--chat-id", worker_chat_id),
+    )
+
+    assert started.returncode == 0, started.stderr
+    assert markers.is_busy(background_task_markers, worker_chat_id)
+    assert not markers.is_busy(background_task_markers, _CHAT_ID)
+    [(path, _)] = _wait_for_posts(fake_chat_app, 1)
+    assert path == f"/api/chats/{worker_chat_id}/message"
+
+
+@pytest.mark.usefixtures("fake_mngr")
+def test_a_report_given_up_on_takes_its_marker_with_it(
+    fake_chat_app: Any, background_task_markers: Path, tmp_path: Path
+) -> None:
+    # The chat app does not know the chat and mngr has no agent by its id, so it is gone and the
+    # runner gives up on the first send.
+    fake_chat_app.answers = [(404, {"detail": "no such chat"})]
+
+    started = _start_runner(
+        tmp_path,
+        _agent_env(MNGR_AGENT_ID=_CHAT_ID),
+        "Say hello",
+        *_python_command("print('hello')"),
+    )
+
+    assert started.returncode == 0, started.stderr
+    runner_log = _task_dir_from(started.stdout, tmp_path) / "runner.log"
+    _wait_until(lambda: "Gave up" in runner_log.read_text(), "the runner never gave up")
+    _wait_until(
+        lambda: _marker_gone(background_task_markers, _CHAT_ID),
+        "the marker outlived the given-up report",
+    )
+
+
+def test_a_killed_runner_leaves_a_marker_no_reader_counts(
+    background_task_markers: Path, tmp_path: Path
+) -> None:
+    """What the memory shedder does: the runner dies with no chance to remove its marker."""
+    started = _start_runner(
+        tmp_path, _agent_env(MNGR_AGENT_ID=_CHAT_ID), "Wait a while", "sleep", "60"
+    )
+    assert started.returncode == 0, started.stderr
+    [task] = markers.list_live_tasks(background_task_markers, _CHAT_ID)
+
+    # The runner leads a session of its own, with its command in it.
+    os.killpg(task.pid, signal.SIGKILL)
+
+    _wait_until(
+        lambda: not markers.is_busy(background_task_markers, _CHAT_ID),
+        "a dead runner's marker still counts",
+    )
+
+
+@pytest.mark.usefixtures("fake_mngr")
+def test_keeping_the_host_awake_touches_the_callers_activity_file_while_the_command_runs(
+    fake_chat_app: Any, tmp_path: Path
+) -> None:
+    state_dir = tmp_path / "agent-state"
+    activity_file = state_dir / "activity" / "agent"
+
+    started = _start_runner(
+        tmp_path,
+        _agent_env(MNGR_AGENT_ID=_CHAT_ID, MNGR_AGENT_STATE_DIR=str(state_dir)),
+        "Stay up",
+        *_python_command("import time; time.sleep(2)"),
+        options=("--keep-host-awake",),
+    )
+
+    assert started.returncode == 0, started.stderr
+    # The runner creates the file before it writes it, so its existence alone can be read empty.
+    _wait_until(
+        lambda: activity_file.exists() and activity_file.read_text() != "",
+        "the activity file was never touched",
+    )
+    assert json.loads(activity_file.read_text())["source"] == "run_in_background"
+    _wait_for_posts(fake_chat_app, 1)
+
+
+@pytest.mark.usefixtures("fake_mngr")
+def test_without_the_flag_the_activity_file_is_left_alone(
+    fake_chat_app: Any, tmp_path: Path
+) -> None:
+    state_dir = tmp_path / "agent-state"
+
+    started = _start_runner(
+        tmp_path,
+        _agent_env(MNGR_AGENT_ID=_CHAT_ID, MNGR_AGENT_STATE_DIR=str(state_dir)),
+        "Stay up",
+        *_python_command("print('done')"),
+    )
+
+    assert started.returncode == 0, started.stderr
+    _wait_for_posts(fake_chat_app, 1)
+    assert not (state_dir / "activity" / "agent").exists()
+
+
+def test_the_runners_marker_is_where_and_what_the_reader_expects(
+    background_task_markers: Path,
+) -> None:
+    """The runner keeps its own copy of the marker layout; the reader must find what it writes."""
+    chat_id = "agent-with/odd chars"
+    task_id = "20261008T100000Z-abc123"
+    path = run_in_background.marker_path(os.environ, chat_id, task_id)
+    run_in_background.write_marker(
+        path, task_id, "Build the site", ["npm", "run", "build -- --watch"], os.getpid()
+    )
+
+    [task] = markers.list_live_tasks(background_task_markers, chat_id)
+    assert path == markers.chat_dir(background_task_markers, chat_id) / task.file_name
+    assert (task.source, task.id, task.description, task.command, task.pid) == (
+        TaskSource.RUN_IN_BACKGROUND,
+        task_id,
+        "Build the site",
+        "npm run 'build -- --watch'",
+        os.getpid(),
+    )
+    assert run_in_background.MARKER_ROOT_ENV == markers.MARKER_ROOT_ENV
+    assert run_in_background.DEFAULT_MARKER_ROOT == markers.DEFAULT_MARKER_ROOT
+
+
+@pytest.mark.usefixtures("fake_mngr")
+def test_two_runs_sharing_a_task_dir_each_keep_the_chat_busy_until_their_own_report(
+    fake_chat_app: Any, background_task_markers: Path, tmp_path: Path
+) -> None:
+    task_dir = tmp_path / "shared-task"
+    options = ("--task-dir", str(task_dir))
+    environ = _agent_env(MNGR_AGENT_ID=_CHAT_ID)
+    quick = _start_runner(
+        tmp_path,
+        environ,
+        "Quick one",
+        *_python_command("import time; time.sleep(1)"),
+        options=options,
+    )
+    slow = _start_runner(
+        tmp_path,
+        environ,
+        "Slow one",
+        *_python_command("import time; time.sleep(6)"),
+        options=options,
+    )
+    assert quick.returncode == 0, quick.stderr
+    assert slow.returncode == 0, slow.stderr
+
+    _wait_for_posts(fake_chat_app, 1)
+    _wait_until(
+        lambda: len(markers.list_live_tasks(background_task_markers, _CHAT_ID)) == 1,
+        "the quick run's marker outlived its report",
+    )
+    [pending] = markers.list_live_tasks(background_task_markers, _CHAT_ID)
+    assert pending.description == "Slow one"
+
+
+@pytest.mark.usefixtures("fake_mngr")
+def test_a_new_run_clears_its_chats_markers_from_runners_that_died(
+    fake_chat_app: Any, background_task_markers: Path, tmp_path: Path, exited_pid: int
+) -> None:
+    chat_dir = markers.chat_dir(background_task_markers, _CHAT_ID)
+    markers.write_marker(
+        background_task_markers,
+        _CHAT_ID,
+        BackgroundTask(
+            source=TaskSource.RUN_IN_BACKGROUND,
+            id="killed-earlier",
+            description="Killed for memory",
+            started_at="2026-10-08T09:00:00+00:00",
+            pid=exited_pid,
+        ),
+    )
+
+    started = _start_runner(
+        tmp_path,
+        _agent_env(MNGR_AGENT_ID=_CHAT_ID),
+        "Wait a while",
+        *_python_command("import time; time.sleep(2)"),
+    )
+
+    assert started.returncode == 0, started.stderr
+    [task] = markers.read_markers(chat_dir)
+    assert [path.name for path in chat_dir.iterdir()] == [
+        f"run_in_background-{_task_dir_from(started.stdout, tmp_path).name}-{task.pid}.json"
+    ]
+    _wait_for_posts(fake_chat_app, 1)
+
+
+def test_the_runner_finds_the_main_checkout_as_the_reader_does(
+    tmp_path: Path, main_checkout_and_worktree: tuple[Path, Path]
+) -> None:
+    main, worktree = main_checkout_and_worktree
+
+    for checkout in (worktree, main, tmp_path):
+        assert run_in_background.main_checkout(checkout) == markers.main_checkout(
+            checkout
+        )
+    assert run_in_background.main_checkout(worktree) == main.resolve()
+
+
+@pytest.mark.skipif(
+    not Path("/proc/self/stat").exists(),
+    reason="needs Linux's /proc/<pid>/stat for a process's start time",
+)
+def test_a_process_whose_name_is_not_utf8_still_has_a_start_time(
+    tmp_path: Path,
+) -> None:
+    """The kernel names a process after the file it ran, byte for byte, so a recycled pid can
+    belong to a process whose ``/proc/<pid>/stat`` is not UTF-8."""
+    oddly_named = os.fsencode(tmp_path) + b"/py\xffthon"
+    os.symlink(os.path.realpath(sys.executable), oddly_named)
+    process = subprocess.Popen([oddly_named, "-c", "import time; time.sleep(30)"])
+    try:
+        comm = Path(f"/proc/{process.pid}/comm")
+        deadline = time.monotonic() + 10
+        while not comm.read_bytes().startswith(b"py\xff"):
+            assert time.monotonic() < deadline, "the process never took its name"
+            time.sleep(0.05)
+        assert markers.process_start_time(process.pid) != ""
+        assert run_in_background.process_start_time(
+            process.pid
+        ) == markers.process_start_time(process.pid)
+    finally:
+        process.kill()
+        process.wait()

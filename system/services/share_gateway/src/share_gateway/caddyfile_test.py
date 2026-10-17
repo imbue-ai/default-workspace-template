@@ -86,6 +86,27 @@ label = "orphan-99999999"
     assert parse_registered_apps("not toml [[") == []
 
 
+def test_parse_registered_apps_carries_the_description_and_the_api_schema_path() -> None:
+    (described, bare) = parse_registered_apps(
+        """
+[[apps]]
+name = "notes"
+url = "http://localhost:5001"
+label = "notes-11111111"
+description = "Keeps the person's notes."
+api_schema_path = "/api/schema"
+
+[[apps]]
+name = "ttyd"
+url = "http://localhost:5002"
+label = "ttyd-22222222"
+description = 7
+"""
+    )
+    assert (described.description, described.api_schema_path) == ("Keeps the person's notes.", "/api/schema")
+    assert (bare.description, bare.api_schema_path) == ("", "")
+
+
 def test_every_registered_row_but_an_internal_one_is_grantable() -> None:
     apps = parse_registered_apps(
         """

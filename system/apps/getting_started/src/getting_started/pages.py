@@ -19,12 +19,16 @@ from flask.typing import ResponseReturnValue
 from werkzeug.exceptions import NotFound
 
 from app_manifest.registry import APP_CONTRACT_ROUTE
+from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
+from app_schema.api_schema import register_api_schema_route
 from getting_started.template_catalog import TemplateCatalogAvailability
 from getting_started.template_catalog import TemplateCatalogStore
 from getting_started.template_catalog import catalog_wire_json
 
 BLUEPRINT_NAME: Final[str] = "getting_started_pages"
 HEALTH_PATH: Final[str] = "/api/health"
+APP_DISPLAY_NAME: Final[str] = "Getting Started"
+APP_DESCRIPTION: Final[str] = "The ways into the workspace: things to start, and the published templates to adapt."
 TEMPLATES_CATALOG_PATH: Final[str] = "/api/templates-catalog"
 PAGE_DOCUMENT_FILENAME: Final[str] = "index.html"
 
@@ -43,9 +47,11 @@ _NOT_BUILT_PAGE: Final[str] = (
 
 def build_pages_blueprint(static_directory: Path, catalog: TemplateCatalogStore, contract_path: Path) -> Blueprint:
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
+    register_api_schema_route(blueprint, DEFAULT_API_SCHEMA_PATH, title=APP_DISPLAY_NAME, description=APP_DESCRIPTION)
 
     @blueprint.get("/")
     def page() -> ResponseReturnValue:
+        """The Getting Started page: things to start, and the published templates to adapt."""
         document = static_directory / PAGE_DOCUMENT_FILENAME
         if not document.is_file():
             return Response(_NOT_BUILT_PAGE, mimetype="text/html", headers={"Cache-Control": "no-store"})
@@ -55,6 +61,7 @@ def build_pages_blueprint(static_directory: Path, catalog: TemplateCatalogStore,
 
     @blueprint.get("/assets/<path:filename>")
     def asset(filename: str) -> ResponseReturnValue:
+        """One file of the page's built bundle, by name."""
         # Existence and safety are both left to ``send_from_directory``: the filename arrives with any ``..``
         # segments intact, and a missing asset is a plain 404.
         try:
@@ -64,10 +71,12 @@ def build_pages_blueprint(static_directory: Path, catalog: TemplateCatalogStore,
 
     @blueprint.get(HEALTH_PATH)
     def health() -> ResponseReturnValue:
+        """Whether the app is up, and whether its page has been built."""
         return jsonify({"status": "ok", "is_frontend_built": (static_directory / PAGE_DOCUMENT_FILENAME).is_file()})
 
     @blueprint.get(TEMPLATES_CATALOG_PATH)
     def templates_catalog() -> ResponseReturnValue:
+        """The published template catalog as last fetched (null when none is configured; 503 when none could be loaded)."""
         reading = catalog.read()
         match reading.availability:
             case TemplateCatalogAvailability.DISABLED:
@@ -87,6 +96,7 @@ def build_pages_blueprint(static_directory: Path, catalog: TemplateCatalogStore,
 
     @blueprint.get(APP_CONTRACT_ROUTE)
     def app_contract() -> ResponseReturnValue:
+        """The app contract module: how the page talks to the shell framing it."""
         if not contract_path.is_file():
             return (
                 jsonify({"detail": f"the workspace shell's frontend is not built: {contract_path} is missing"}),

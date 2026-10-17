@@ -104,6 +104,10 @@ def _notify_superseded_in_other_chats(filed: FiledSecretRequest) -> None:
 
 
 def file_request() -> Response:
+    """File a request for secret values (``file``, ``variables``, ``rationale``) from a chat, for the person to answer.
+
+    An agent's ``request_secret.py`` posts it; the chat shows the person a card, and the filed request is answered.
+    """
     payload = parse_json_object_body()
     if isinstance(payload, Response):
         return payload
@@ -136,6 +140,7 @@ def file_request() -> Response:
 
 
 def get_request(request_id: str) -> Response:
+    """One secret request as filed: pending, stored, declined, or superseded."""
     request = get_state().secret_requests.get(request_id)
     if request is None:
         return _error_response(f"No secret request with id {request_id!r}", 404)
@@ -143,6 +148,7 @@ def get_request(request_id: str) -> Response:
 
 
 def submit(request_id: str) -> Response:
+    """Answer a secret request with the values (``values``, by variable name); they are written to the secrets file."""
     refusal = _refusal_on_a_secondary_chat()
     if refusal is not None:
         return refusal
@@ -168,6 +174,7 @@ def submit(request_id: str) -> Response:
 
 
 def decline(request_id: str) -> Response:
+    """Decline a secret request, with an optional ``note`` for the agent."""
     refusal = _refusal_on_a_secondary_chat()
     if refusal is not None:
         return refusal

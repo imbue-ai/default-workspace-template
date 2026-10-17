@@ -55,9 +55,11 @@ from imbue.chat.harnesses.claude.session_files import expected_session_file
 from imbue.chat.harnesses.claude.session_files import find_session_file
 from imbue.chat.harnesses.claude.session_parser import QueueSignal
 from imbue.chat.harnesses.claude.session_parser import QueueSignalKind
+from imbue.chat.harnesses.claude.session_parser import finished_task_id
 from imbue.chat.harnesses.claude.session_parser import parse_line_detail
 from imbue.chat.harnesses.claude.session_parser import parse_lines
 from imbue.chat.harnesses.claude.session_parser import parse_queue_signals
+from imbue.chat.harnesses.session_watcher import FinishedTasksCallback
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
 from imbue.chat.harnesses.transcript_store import EventSource
 from imbue.chat.harnesses.transcript_store import StoreBackedTranscriptLoader
@@ -527,6 +529,11 @@ class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
         self._queue_tracker = ClaudeQueueTracker.build()
         self._last_broadcast_queue_snapshot: list[dict[str, Any]] = []
         self._queue_snapshot_callback: Callable[[list[dict[str, Any]]], None] | None = None
+        # Background tasks the ledger has reported as over since the last emit cycle, handed to
+        # the callback after that cycle's events, so the turn a task's end starts is folded in
+        # before the chat stops waiting on the task.
+        self._finished_task_ids: list[str] = []
+        self._finished_tasks_callback: FinishedTasksCallback | None = None
 
     def _watch_paths(self) -> tuple[Path, ...]:
         # The projects tree (recursive: every session file and subagent dir under it wakes
@@ -552,8 +559,21 @@ class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
 
     def _feed_queue_locked(self, decoded_line: str, process_epoch_started_at: float | None) -> None:
         queue_signal = parse_queue_signals(decoded_line)
-        if queue_signal is not None and not _is_dead_epoch_enqueue(queue_signal, process_epoch_started_at):
+        if queue_signal is None:
+            return
+        if queue_signal.kind == QueueSignalKind.ENQUEUE:
+            task_id = finished_task_id(queue_signal.content)
+            if task_id is not None:
+                self._finished_task_ids.append(task_id)
+        if not _is_dead_epoch_enqueue(queue_signal, process_epoch_started_at):
             self._queue_tracker.consume(queue_signal)
+
+    def _after_broadcast(self) -> None:
+        with self._lock:
+            finished_task_ids = tuple(self._finished_task_ids)
+            self._finished_task_ids.clear()
+        if finished_task_ids and self._finished_tasks_callback is not None:
+            self._finished_tasks_callback(finished_task_ids)
 
     def is_main_session_event(self, event: dict[str, Any]) -> bool:
         """True if an event belongs to a main session rather than a subagent session.
@@ -588,6 +608,9 @@ class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
     def set_queue_snapshot_callback(self, callback: Callable[[list[dict[str, Any]]], None]) -> None:
         """Register the sink the watcher pushes each new queued-message snapshot to."""
         self._queue_snapshot_callback = callback
+
+    def set_finished_tasks_callback(self, callback: FinishedTasksCallback) -> None:
+        self._finished_tasks_callback = callback
 
     def get_queued_messages(self) -> list[dict[str, Any]]:
         with self._lock:

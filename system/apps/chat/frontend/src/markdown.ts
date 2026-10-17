@@ -32,7 +32,7 @@ export function renderMarkdown(source: string): string {
  * Give each message link the target the workspace opens it at, and keep a click on it from replacing the conversation.
  *
  * An absolute path names a file of the workspace (see the show-files-in-chat skill), so it becomes that file's
- * ``file:`` URL, which the app contract hands to the shell to open in the File Viewer, as it does a local URL; every
+ * ``file:`` URL, which the app contract hands to the shell to open in Files, as it does a local URL; every
  * other link keeps its real target, so hovering it and copying its address show where it goes, and opens in a new
  * browsing context should nothing route it (a chat opened on its own). Anything else (a relative path, a fragment,
  * another scheme) cannot open anything, so it is unwrapped to its text.

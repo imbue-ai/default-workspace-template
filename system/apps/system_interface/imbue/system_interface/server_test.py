@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+from app_schema.testing import assert_api_schema_describes_app
 from flask import Flask
 from flask.testing import FlaskClient
 from workspace_layout.primitives import ClientId
@@ -1039,3 +1040,7 @@ def test_a_move_reported_before_its_page_heard_an_ops_move_is_not_recorded_and_i
     finally:
         shell.broadcaster.unregister(client_queue)
         shell.broadcaster.unregister(other_queue)
+
+
+def test_the_shell_describes_its_api_the_way_its_manifest_says(client: FlaskClient) -> None:
+    assert_api_schema_describes_app(client, Path(__file__).resolve().parents[2] / "app.toml")

@@ -166,6 +166,17 @@ requests can go back to `true`. The field is read at registration, so the
 restart in step 2 is what applies it; `uv run app-manifest validate-manifest
 system/apps/<package>/app.toml` checks the file.
 
+An app with an `api_schema_path` in its manifest describes its own API there:
+an OpenAPI document built from its routes on every request, which is what a
+visiting agent reads instead of the code (`build-app`, "The app describes its
+own API"). A route the change adds is listed on its own; what the change owes
+the document is a docstring on each new or changed view (its first paragraph is
+the operation's summary, in the user's terms), a `route_models` entry for a route
+that validates a JSON body or answers a pydantic model, and an updated
+`description` in `app.toml` when the change moves what the app is for. The
+app's own test (`runner_test.py` in a scaffolded app) fails when the document
+and the manifest disagree or a view has no docstring, so run it with the change.
+
 ### 2. Apply it so it actually takes effect
 
 The scaffolded web runner runs with `use_reloader=False`, and daemons

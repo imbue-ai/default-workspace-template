@@ -1,5 +1,5 @@
 #!/bin/bash
-# Install the pinned dufs static binary (the workspace's file-viewer server,
+# Install the pinned dufs static binary (the workspace's Files server,
 # https://github.com/sigoden/dufs) from its GitHub release. Idempotent and
 # version-gated like install_owner_exec.sh: a binary already at the pinned
 # version is left in place.
@@ -7,10 +7,10 @@
 # dufs publishes no checksum assets, so the per-arch tarball sha256s are pinned
 # here, recorded from the release at pin time; a version bump must update both.
 #
-# A version bump must ALSO re-vendor system/apps/files/assets/ from the new
-# tag and re-apply its marked "minds patch" blocks (see that directory's
-# README): the vendored frontend is served via --assets and must come from the
-# same release as the binary.
+# A version bump must ALSO be checked against the Files frontend
+# (system/apps/files/frontend/, served via --assets): it relies on dufs's page
+# placeholders (__INDEX_DATA__, __ASSETS_PREFIX__), its `?json` listing shape,
+# and its WebDAV verbs, all described in that frontend's src/models/dufs.ts.
 set -euo pipefail
 
 DUFS_VERSION="v0.46.0"

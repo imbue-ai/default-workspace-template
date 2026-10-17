@@ -2035,3 +2035,37 @@ def test_a_loader_reads_the_same_transcript_as_the_watcher_without_watching(tmp_
     assert loader.get_event_detail(tool_result["event_id"]) == watcher.get_event_detail(tool_result["event_id"])
     assert loader.get_subagent_metadata("nobody") is None
     loader.close()
+
+
+def _task_notification(task_id: str, status: str) -> str:
+    return (
+        f"<task-notification>\n<task-id>{task_id}</task-id>\n<status>{status}</status>\n"
+        f"<summary>Background command finished</summary>\n</task-notification>"
+    )
+
+
+def test_a_task_the_ledger_reports_over_is_handed_on_after_the_cycles_events(tmp_path: Path) -> None:
+    """The enqueue of a task's completion notice is the one record of its end an interrupted or failed turn
+    cannot lose. Its id goes to the callback after the cycle's events, so the turn the notice starts is
+    folded in before the chat stops waiting on the task."""
+    agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
+    collected: list[dict[str, Any]] = []
+    handed_on: list[tuple[tuple[str, ...], int]] = []
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, collected)
+    watcher.set_finished_tasks_callback(lambda task_ids: handed_on.append((task_ids, len(collected))))
+    watcher._prime()
+
+    records = [
+        _queue_enqueue_record(_task_notification("bg-done", "completed"), "test-session"),
+        _queue_enqueue_record(_task_notification("bg-still-going", "running"), "test-session"),
+        _queue_enqueue_record("a message the user queued", "test-session"),
+        _user_event(1, _task_notification("bg-done", "completed")),
+    ]
+    session_file.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+    watcher._emit_cycle()
+
+    assert len(collected) == 1
+    assert handed_on == [(("bg-done",), 1)]
+
+    watcher._emit_cycle()
+    assert len(handed_on) == 1
