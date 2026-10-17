@@ -1,3 +1,4 @@
+import subprocess
 import threading
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from imbue.imbue_common.model_update import to_update
 from screen.chrome_args import STRIPPED_FROM_PLAYWRIGHT
 from screen.chrome_args import launch_args
 from screen.chrome_launcher import ChromiumLaunchRequest
+from screen.chrome_launcher import ChromiumProcess
 from screen.chrome_launcher import SINGLETON_NAMES
 from screen.chrome_launcher import SubprocessChromiumLauncher
 from screen.chrome_launcher import clear_stale_singleton
@@ -117,3 +119,22 @@ def test_a_missing_executable_is_refused_before_anything_is_spawned(tmp_path: Pa
     )
     with pytest.raises(ChromiumStartError, match="not found"):
         launcher.launch(request)
+
+
+def test_kill_escalates_to_sigkill_and_reaps_a_chromium_that_ignores_sigterm(tmp_path: Path) -> None:
+    # A stand-in Chromium that shrugs off SIGTERM, so only the SIGKILL ends it.
+    process = subprocess.Popen(
+        ["bash", "-c", "trap '' TERM; while :; do sleep 0.05; done"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    handle = ChromiumProcess(
+        http_endpoint="http://127.0.0.1:1", pid=process.pid, process=process, profile_dir=tmp_path, kill_wait_seconds=0.3
+    )
+    assert handle.is_alive()
+    handle.kill()
+    # Reaped, not left as a zombie: the exit status is already collected.
+    assert process.returncode is not None
+    assert not handle.is_alive()
+    handle.kill()

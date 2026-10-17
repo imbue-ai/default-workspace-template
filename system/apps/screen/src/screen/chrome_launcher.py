@@ -148,6 +148,20 @@ def read_devtools_port(profile_dir: Path) -> int | None:
         return None
 
 
+def kill_and_reap(process: subprocess.Popen[bytes], wait_seconds: float) -> None:
+    """SIGKILL a Chromium and wait for it, so its exit is collected rather than left as a zombie in the service's
+    process table (nothing polls the handle once the fleet drops it)."""
+    try:
+        process.kill()
+    except OSError as e:
+        logger.debug("Killing Chromium (pid {}) was ignored ({})", process.pid, e)
+        return
+    try:
+        process.wait(timeout=wait_seconds)
+    except subprocess.TimeoutExpired:
+        logger.warning("Chromium (pid {}) did not exit within {:.1f}s of SIGKILL", process.pid, wait_seconds)
+
+
 class ChromiumProcess(ChromiumHandleInterface):
     """A launched Fortress process."""
 
@@ -155,6 +169,9 @@ class ChromiumProcess(ChromiumHandleInterface):
 
     process: subprocess.Popen[bytes] = Field(frozen=True, description="The browser process")
     profile_dir: Path = Field(frozen=True, description="The profile it runs on")
+    kill_wait_seconds: float = Field(
+        default=_KILL_WAIT_SECONDS, frozen=True, description="How long a kill waits on SIGTERM, then on SIGKILL"
+    )
 
     def is_alive(self) -> bool:
         return self.process.poll() is None
@@ -164,11 +181,17 @@ class ChromiumProcess(ChromiumHandleInterface):
             return
         try:
             self.process.terminate()
-            self.process.wait(timeout=_KILL_WAIT_SECONDS)
-        except subprocess.TimeoutExpired:
-            self.process.kill()
         except OSError as e:
             logger.debug("Ending Chromium was ignored ({})", e)
+            return
+        try:
+            self.process.wait(timeout=self.kill_wait_seconds)
+            return
+        except subprocess.TimeoutExpired:
+            logger.debug(
+                "Chromium (pid {}) ignored SIGTERM for {:.1f}s; killing it", self.process.pid, self.kill_wait_seconds
+            )
+        kill_and_reap(self.process, self.kill_wait_seconds)
 
 
 class SubprocessChromiumLauncher(ChromiumLauncherInterface):
@@ -232,10 +255,7 @@ class SubprocessChromiumLauncher(ChromiumLauncherInterface):
                     profile_dir=request.profile_dir,
                 )
             self.pause.wait(_PORT_POLL_SECONDS)
-        try:
-            process.kill()
-        except OSError as e:
-            logger.debug("Killing a Chromium that never published its port was ignored ({})", e)
+        kill_and_reap(process, _KILL_WAIT_SECONDS)
         raise ChromiumStartError(f"Chromium did not publish a debug port within {PORT_WAIT_SECONDS:.0f}s")
 
 
