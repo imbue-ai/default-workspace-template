@@ -309,29 +309,29 @@ class Browser(MutableModel):
             self.focus_and_foreground(remaining[-1])
 
     def tab_list(self) -> list[dict[str, Any]]:
-        """The tabs as ``GET /browsers`` lists them, in the order the agent's ``tab-select`` indexes."""
+        """The tabs as ``GET /browsers`` lists them, in the order the agent's ``tab-select`` indexes, the one in
+        front marked active."""
         try:
             targets = self.page_targets()
         except (BrowserNotDrivableError, CdpError) as e:
             logger.debug("The tab list of {} was skipped ({})", self.name, e)
             return []
-        with self._lock:
-            active = self._active_target_id
+        active = self.shown_target(targets)
         return [
             {"index": index, "title": target.title, "url": target.url, "active": target.target_id == active}
             for index, target in enumerate(targets)
         ]
 
     def refresh_tabs(self) -> tuple[list[str], int]:
-        """The restorable tab URLs and the active index, for the manifest; when Chromium cannot answer the last
-        known list stands, since a failed query is no evidence the browser has no tabs."""
+        """The restorable tab URLs and the index of the one in front, for the manifest; when Chromium cannot answer
+        the last known list stands, since a failed query is no evidence the browser has no tabs."""
         try:
             targets = self.page_targets()
         except (BrowserNotDrivableError, CdpError) as e:
             logger.debug("The tabs of {} kept their last known list ({})", self.name, e)
             return list(self.last_known_tabs), self.last_known_active_tab
+        active_target = self.shown_target(targets)
         with self._lock:
-            active_target = self._active_target_id
             urls: list[str] = []
             active = 0
             for target in targets:

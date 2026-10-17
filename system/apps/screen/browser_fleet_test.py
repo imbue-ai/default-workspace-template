@@ -319,6 +319,26 @@ def test_the_manifest_is_checkpointed_with_the_live_tabs(tmp_path: Path) -> None
     assert entry.stopped is False
 
 
+def test_a_tab_the_human_switched_to_inside_chromium_is_the_active_one_listed_and_saved(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+    harness.stack_up()
+    harness.connector.clients.append(
+        FakeCdpClient(
+            targets=[
+                CdpTarget(target_id="t1", url="https://a.example"),
+                CdpTarget(target_id="t2", url="https://b.example"),
+            ]
+        )
+    )
+    browser = harness.running_browser()
+    browser.focus_and_foreground("t1")
+    # The human clicks the second tab in Chromium itself: no CDP command of the fleet's records it.
+    harness.cdp().shown_target_id = "t2"
+    assert [tab["url"] for tab in browser.tab_list() if tab["active"]] == ["https://b.example"]
+    harness.fleet.checkpoint()
+    assert harness.manifest().browsers[0].active_tab == 1
+
+
 def test_restore_relaunches_the_browser_the_user_had_running_and_keeps_a_stopped_one_stopped(tmp_path: Path) -> None:
     harness = _Harness(tmp_path, max_browsers=2)
     harness.store.write(
