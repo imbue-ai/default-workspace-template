@@ -18,6 +18,7 @@ from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
+from screen.errors import InvalidScreenSizeError
 from screen.identity import AGENT_ID_HEADER
 from screen.identity import AGENT_NAME_HEADER
 from screen.primitives import APP_NAME
@@ -269,13 +270,40 @@ def shot(quality: int, out_path: Path | None) -> None:
     _out(str(target))
 
 
+@pure
+def parse_size_argument(value: str) -> tuple[int, int]:
+    """``WxH`` as the command takes it."""
+    width_text, separator, height_text = value.lower().partition("x")
+    if not separator or not width_text.isdigit() or not height_text.isdigit():
+        raise InvalidScreenSizeError(f"a size is WIDTHxHEIGHT, such as 1280x720, not {value!r}")
+    return int(width_text), int(height_text)
+
+
 @main.command()
 @click.argument("size", required=False)
 def size(size: str | None) -> None:
-    """Print the Screen's size (WxH@rate); setting it lands with the sizing change."""
+    """Print the Screen's size (WxH@rate), or set it to SIZE (WxH; rounded down to 16 px, within 640x480 and 1920x1080)."""
     if size is not None:
-        _err("setting the size is not available yet; the Screen follows the controller's window")
-        raise SystemExit(EXIT_ERROR)
+        try:
+            width, height = parse_size_argument(size)
+        except InvalidScreenSizeError as e:
+            _err(str(e))
+            raise SystemExit(EXIT_USAGE) from e
+        answer = request_service(
+            "POST", "/api/screen-size", {"width": width, "height": height}, is_identity_required=False
+        )
+        if answer.status == HTTP_CONFLICT:
+            _err(_detail(answer, "the Screen is not running"))
+            raise SystemExit(EXIT_BUSY)
+        if answer.status != 200:
+            _err(_detail(answer, f"size failed ({answer.status})"))
+            raise SystemExit(EXIT_ERROR)
+        applied = answer.body.get("screen_size")
+        if not isinstance(applied, dict):
+            _err("the service answered no size")
+            raise SystemExit(EXIT_ERROR)
+        _out(f"{applied.get('width')}x{applied.get('height')}@{applied.get('rate')}")
+        return
     answer = request_service("GET", "/api/state", None, is_identity_required=False)
     if answer.status != 200:
         _err(_detail(answer, f"state failed ({answer.status})"))

@@ -46,11 +46,14 @@ export class InputRelay {
   constructor(
     private readonly socket: NekoSocket,
     private readonly stage: HTMLElement,
+    /** Called once per input event sent; the viewer throttles it into the service's input clock. */
+    private readonly onInput: () => void = () => undefined,
   ) {
     this.keyboard.onkeydown = (keysym) => {
       if (!this.isEnabled) return true;
       this.flushMove();
       socket.send("control/keydown", { keysym });
+      this.onInput();
       return false;
     };
     this.keyboard.onkeyup = (keysym) => {
@@ -100,6 +103,7 @@ export class InputRelay {
     if (this.pendingMove === null) return;
     this.socket.send("control/move", this.pendingMove);
     this.pendingMove = null;
+    this.onInput();
   }
 
   private onButton(event: MouseEvent, isDown: boolean): void {
@@ -112,6 +116,7 @@ export class InputRelay {
     this.flushMove();
     // X button numbers: 1 left, 2 middle, 3 right.
     this.socket.send(isDown ? "control/buttondown" : "control/buttonup", { code: event.button + 1 });
+    this.onInput();
   }
 
   private onWheel(event: WheelEvent): void {
@@ -131,6 +136,7 @@ export class InputRelay {
     if (dx || dy) {
       this.flushMove();
       this.socket.send("control/scroll", { delta_x: dx, delta_y: dy, control_key: event.ctrlKey });
+      this.onInput();
     }
   }
 }

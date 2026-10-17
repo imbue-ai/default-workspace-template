@@ -5,6 +5,7 @@ import io
 import json
 import threading
 import time
+from collections.abc import Callable
 from collections.abc import Sequence
 from datetime import datetime
 from datetime import timedelta
@@ -25,6 +26,7 @@ from imbue.imbue_common.pure import pure
 from screen.broadcast import ViewerBroadcaster
 from screen.control import ScreenControl
 from screen.data_types import AcquireStatus
+from screen.data_types import AddedMode
 from screen.data_types import ChromiumView
 from screen.data_types import ControlView
 from screen.data_types import Controller
@@ -35,11 +37,13 @@ from screen.data_types import RequestIdentity
 from screen.data_types import ScreenSize
 from screen.data_types import ScreenState
 from screen.data_types import XWindow
+from screen.errors import DisplayModeError
 from screen.errors import NekoError
 from screen.errors import ScreenNotRunningError
 from screen.errors import WindowToolError
 from screen.identity import display_name_for_identity
 from screen.interfaces import AgentMessengerInterface
+from screen.interfaces import DisplayModesInterface
 from screen.interfaces import NekoInterface
 from screen.interfaces import ProcessLauncherInterface
 from screen.interfaces import WindowToolsInterface
@@ -49,6 +53,12 @@ from screen.primitives import DEFAULT_TITLE
 from screen.primitives import NekoSessionId
 from screen.primitives import VIDEO_ID_WATCH
 from screen.primitives import XWindowId
+from screen.profiles import ProfileInputs
+from screen.profiles import choose_video_id
+from screen.sizing import MODES_RECORD_FILENAME
+from screen.sizing import ModesLedger
+from screen.sizing import decide_mode_addition
+from screen.sizing import quantize_screen_size
 from screen.stack import ScreenStack
 
 # How long a disconnected human session is kept before the reaper deletes it (spec section 6.3).
@@ -125,12 +135,14 @@ class ScreenService(MutableModel):
     state_dir: Path = Field(frozen=True, description="data/.state/screen")
     neko: NekoInterface = Field(frozen=True, description="neko's REST client")
     window_tools: WindowToolsInterface = Field(frozen=True, description="wmctrl and xdotool on the display")
+    display_modes: DisplayModesInterface = Field(frozen=True, description="xrandr on the display")
     launcher: ProcessLauncherInterface = Field(frozen=True, description="How ``screen run`` starts a command")
     messenger: AgentMessengerInterface = Field(frozen=True, description="Wakes queued agents")
     broadcaster: ViewerBroadcaster = Field(default_factory=ViewerBroadcaster, description="The viewers' event fan-out")
     is_event_subscription_enabled: bool = Field(
         default=True, frozen=True, description="Whether to follow neko's WebSocket (off under a fake neko)"
     )
+    clock: Callable[[], float] = Field(default=time.monotonic, frozen=True, description="The monotonic clock")
 
     title: str = Field(default=DEFAULT_TITLE, description="The frontmost window's title")
     video_id: str = Field(default=VIDEO_ID_WATCH, description="The profile every viewer selects")
@@ -144,6 +156,8 @@ class ScreenService(MutableModel):
     _subscriber: NekoEventSubscriber | None = PrivateAttr(default=None)
     _secrets: NekoSecrets | None = PrivateAttr(default=None)
     _last_host_id: str | None = PrivateAttr(default=None)
+    _last_input_at: float | None = PrivateAttr(default=None)
+    _modes_ledger: ModesLedger | None = PrivateAttr(default=None)
     _projected_host_id: str | None = PrivateAttr(default=None)
     _projection_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _pending_projection: ControlView | None = PrivateAttr(default=None)
@@ -159,7 +173,9 @@ class ScreenService(MutableModel):
             on_changed=self._on_control_changed,
             on_handoff_request=self._on_handoff_request,
             record_path=self.state_dir / "control.json",
+            clock=self.clock,
         )
+        self._modes_ledger = ModesLedger(path=self.state_dir / MODES_RECORD_FILENAME)
 
     def attach_stack(self, stack: ScreenStack) -> None:
         self._stack = stack
@@ -173,6 +189,11 @@ class ScreenService(MutableModel):
     def control(self) -> ScreenControl:
         assert self._control is not None, "the lease is built with the service"
         return self._control
+
+    @property
+    def modes_ledger(self) -> ModesLedger:
+        assert self._modes_ledger is not None, "the ledger is built with the service"
+        return self._modes_ledger
 
     def start(self) -> None:
         """Restore the lease, take over a stack a previous service life left running, and start the clocks."""
@@ -239,8 +260,11 @@ class ScreenService(MutableModel):
             self._secrets = None
             self._last_host_id = None
             self._projected_host_id = None
+            self._last_input_at = None
             self.screen_size = None
             self.title = DEFAULT_TITLE
+        # The X server is gone, and with it every mode added to it.
+        self.modes_ledger.clear()
         reason = self.stack.stop_reason or "the stack stopped"
         if self.control.view().controller != Controller.NOBODY or self.control.view().waiting:
             self.control.abandon(reason)
@@ -255,7 +279,11 @@ class ScreenService(MutableModel):
             )
             self._subscriber = subscriber
             subscriber.start()
+        # A start is activity: the first minute streams at ``watch`` rather than at the idle rate.
+        with self._lock:
+            self._last_input_at = self.clock()
         self._request_projection(self.control.view())
+        self.refresh_profile()
 
     def set_api_token(self, token: SecretStr | None) -> None:
         self.neko.set_api_token(token)
@@ -331,6 +359,7 @@ class ScreenService(MutableModel):
 
     def _on_control_changed(self, view: ControlView) -> None:
         self._request_projection(view)
+        self.refresh_profile()
         self._broadcast_state()
 
     def _on_handoff_request(self, agent_name: str, reason: str) -> None:
@@ -416,6 +445,47 @@ class ScreenService(MutableModel):
 
     def touch(self, agent_id: AgentId) -> None:
         self.control.touch(agent_id)
+        self._note_input_now()
+
+    # input and the profile (spec section 8.1)
+
+    def is_controller_session(self, session_id: NekoSessionId) -> bool:
+        view = self.control.view()
+        return view.controller == Controller.HUMAN and view.human_session_id == session_id
+
+    def note_input(self, session_id: NekoSessionId) -> bool:
+        """A viewer's input relay reports activity; believed for a session the service minted."""
+        if self.known_session(session_id) is None:
+            return False
+        self._note_input_now()
+        return True
+
+    def _note_input_now(self) -> None:
+        with self._lock:
+            self._last_input_at = self.clock()
+        self.refresh_profile()
+
+    def profile_inputs(self) -> ProfileInputs:
+        with self._lock:
+            last_input_at = self._last_input_at
+        return ProfileInputs(
+            controller=self.control.view().controller,
+            seconds_since_input=None if last_input_at is None else max(0.0, self.clock() - last_input_at),
+        )
+
+    def refresh_profile(self) -> str:
+        """Re-choose the video id from the aggregate state; a change is announced to every viewer. A stack that is
+        not running has no encoder to choose for, so the id rests at ``watch`` until the next start."""
+        chosen = (
+            choose_video_id(self.profile_inputs()) if self.stack.lifecycle == Lifecycle.RUNNING else VIDEO_ID_WATCH
+        )
+        with self._lock:
+            is_changed = chosen != self.video_id
+            self.video_id = chosen
+        if is_changed:
+            self.broadcaster.broadcast({"type": "profile", "video_id": chosen})
+            self._broadcast_state()
+        return chosen
 
     # what neko tells the service
 
@@ -477,6 +547,7 @@ class ScreenService(MutableModel):
             self.control.sweep()
             if self.stack.lifecycle == Lifecycle.RUNNING:
                 self.poll_title()
+                self.refresh_profile()
 
     def poll_title(self) -> None:
         try:
@@ -494,6 +565,30 @@ class ScreenService(MutableModel):
     def _require_running(self) -> None:
         if self.stack.lifecycle != Lifecycle.RUNNING:
             raise ScreenNotRunningError("the Screen is not running")
+
+    def set_screen_size(self, width: int, height: int) -> ScreenSize:
+        """Resize the display (spec section 7.2): quantize and clamp, add the RANDR mode when the server lacks it,
+        then have neko select it. Answers the size that stands afterwards."""
+        self._require_running()
+        requested = quantize_screen_size(width, height)
+        with self._lock:
+            current = self.screen_size
+        if current is not None and (current.width, current.height) == (requested.width, requested.height):
+            return current
+        addition = decide_mode_addition(self.display_modes.query(), requested)
+        if addition is not None:
+            self.display_modes.add_mode(addition)
+            self.modes_ledger.append(
+                AddedMode(name=addition.modeline.name, width=requested.width, height=requested.height)
+            )
+        try:
+            applied = self.neko.set_screen_size(requested)
+        except NekoError as e:
+            raise DisplayModeError(f"neko refused the size {requested.width}x{requested.height}: {e}") from e
+        with self._lock:
+            self.screen_size = applied
+        self._broadcast_state()
+        return applied
 
     def screenshot(self, quality: int, is_png: bool) -> bytes:
         self._require_running()

@@ -11,6 +11,7 @@ from pathlib import Path
 from flask.testing import FlaskClient
 from simple_websocket import Client as WebSocketClient
 
+from mock_display_modes_test import FakeDisplayModes
 from mock_neko_test import FakeNeko
 from mock_supervisor_test import FakeSupervisor
 from mock_window_tools_test import FakeWindowTools
@@ -22,6 +23,7 @@ from screen.primitives import XWindowId
 from screen.service import ScreenService
 from screen.service import is_session_reapable
 from screen.serving import serve_in_background
+from testing import ManualClock
 from testing import start_service_stack
 from testing import wait_until
 
@@ -365,3 +367,136 @@ def test_lease_checkpoint_is_written_under_the_state_dir(
     record = json.loads((tmp_path / "state" / "control.json").read_text())
     assert record["controller"] == "AGENT"
     assert record["owner_agent_id"] == "chat-a"
+
+
+def _controlling_session(client: FlaskClient, service: ScreenService) -> dict:
+    session = _session(client, _IDENTITY)
+    assert client.post("/api/control/take", json={"session_id": session["session_id"]}).status_code == 200
+    return session
+
+
+def test_the_controllers_size_report_adds_a_mode_and_resizes_through_neko(
+    client: FlaskClient, service: ScreenService, fake_neko: FakeNeko, fake_display_modes: FakeDisplayModes
+) -> None:
+    start_service_stack(service)
+    session = _controlling_session(client, service)
+    answer = client.post("/api/screen-size", json={"width": 1437, "height": 791, "session_id": session["session_id"]})
+    assert answer.status_code == 200
+    assert answer.get_json() == {
+        "applied": True,
+        "reason": None,
+        "screen_size": {"width": 1424, "height": 784, "rate": 60},
+    }
+    assert [addition.modeline.name for addition in fake_display_modes.added] == ["1424x784_60"]
+    assert fake_display_modes.added[0].output == "DUMMY0"
+    assert "size:1424x784" in fake_neko.calls
+    assert client.get("/api/state").get_json()["screen_size"] == {"width": 1424, "height": 784, "rate": 60}
+    recorded = json.loads((service.state_dir / "modes.json").read_text())
+    assert recorded["modes"] == [{"name": "1424x784_60", "width": 1424, "height": 784}]
+
+
+def test_a_seeded_size_adds_no_mode_and_the_same_size_again_is_a_no_op(
+    client: FlaskClient, service: ScreenService, fake_neko: FakeNeko, fake_display_modes: FakeDisplayModes
+) -> None:
+    start_service_stack(service)
+    session = _controlling_session(client, service)
+    body = {"width": 1280, "height": 720, "session_id": session["session_id"]}
+    assert client.post("/api/screen-size", json=body).get_json()["applied"] is True
+    assert fake_display_modes.added == []
+    assert fake_neko.calls.count("size:1280x720") == 1
+    assert client.post("/api/screen-size", json=body).get_json()["applied"] is True
+    assert fake_neko.calls.count("size:1280x720") == 1
+
+
+def test_a_non_controllers_size_report_is_ignored(
+    client: FlaskClient, service: ScreenService, fake_neko: FakeNeko
+) -> None:
+    start_service_stack(service)
+    _controlling_session(client, service)
+    watcher = _session(client, _VISITOR)
+    answer = client.post("/api/screen-size", json={"width": 1280, "height": 720, "session_id": watcher["session_id"]})
+    assert answer.status_code == 200
+    assert answer.get_json()["applied"] is False
+    assert answer.get_json()["reason"] == "not the controller"
+    assert not any(call.startswith("size:") for call in fake_neko.calls)
+
+
+def test_a_size_request_with_no_session_is_the_commands_and_is_applied(
+    client: FlaskClient, service: ScreenService, fake_neko: FakeNeko
+) -> None:
+    start_service_stack(service)
+    answer = client.post("/api/screen-size", json={"width": 1024, "height": 768})
+    assert answer.get_json()["screen_size"] == {"width": 1024, "height": 768, "rate": 60}
+    assert "size:1024x768" in fake_neko.calls
+
+
+def test_size_requests_are_validated_and_need_a_running_stack(client: FlaskClient, service: ScreenService) -> None:
+    assert client.post("/api/screen-size", json={"width": "wide", "height": 720}).status_code == 400
+    assert client.post("/api/screen-size", json={"width": 0, "height": 720}).status_code == 400
+    assert client.post("/api/screen-size", json={"width": 1280, "height": 720}).status_code == 409
+    start_service_stack(service)
+    assert client.post("/api/screen-size", json={"width": 1280, "height": 720}).status_code == 200
+
+
+def test_the_modes_record_is_cleared_when_the_stack_ends(
+    client: FlaskClient, service: ScreenService, fake_display_modes: FakeDisplayModes
+) -> None:
+    start_service_stack(service)
+    client.post("/api/screen-size", json={"width": 1024, "height": 768})
+    assert (service.state_dir / "modes.json").exists()
+    service.stack.stop("the test ended it")
+    assert not (service.state_dir / "modes.json").exists()
+
+
+def test_the_profile_follows_input_and_the_lease(
+    client: FlaskClient, service: ScreenService, manual_clock: ManualClock
+) -> None:
+    start_service_stack(service)
+    # A start counts as activity, so a fresh Screen streams at watch.
+    assert client.get("/api/state").get_json()["video_id"] == "watch"
+    session = _controlling_session(client, service)
+    assert client.post("/api/input-seen", json={"session_id": session["session_id"]}).status_code == 204
+    assert client.get("/api/state").get_json()["video_id"] == "control"
+    manual_clock.advance(11)
+    assert service.refresh_profile() == "watch"
+    manual_clock.advance(50)
+    assert service.refresh_profile() == "idle"
+    assert client.post("/api/input-seen", json={"session_id": session["session_id"]}).status_code == 204
+    assert client.get("/api/state").get_json()["video_id"] == "control"
+    # An agent's lease is never idle, and its commands count as input.
+    client.post("/api/control/return", json={"session_id": session["session_id"]})
+    acquired = client.post("/api/control/acquire", headers=_AGENT_A, json={})
+    assert acquired.get_json()["ok"] is True
+    manual_clock.advance(600)
+    assert service.refresh_profile() == "watch"
+    client.post("/api/control/release", headers=_AGENT_A)
+    manual_clock.advance(61)
+    assert service.refresh_profile() == "idle"
+
+
+def test_input_seen_needs_a_known_session(client: FlaskClient, service: ScreenService) -> None:
+    start_service_stack(service)
+    assert client.post("/api/input-seen", json={}).status_code == 400
+    assert client.post("/api/input-seen", json={"session_id": "nope"}).status_code == 404
+
+
+def test_a_profile_change_is_announced_on_the_events_socket(
+    app, service: ScreenService, client: FlaskClient, manual_clock: ManualClock
+) -> None:
+    start_service_stack(service)
+    with serve_in_background("127.0.0.1", 0, app) as server:
+        port = server.socket.getsockname()[1]
+        socket_client = WebSocketClient.connect(f"ws://127.0.0.1:{port}/api/ws")
+        try:
+            assert json.loads(socket_client.receive(timeout=5))["type"] == "state"
+            manual_clock.advance(61)
+            assert service.refresh_profile() == "idle"
+            seen: list[dict] = []
+            while not any(document.get("type") == "profile" for document in seen):
+                message = socket_client.receive(timeout=5)
+                assert message is not None
+                seen.append(json.loads(message))
+            profile = next(document for document in seen if document["type"] == "profile")
+            assert profile["video_id"] == "idle"
+        finally:
+            socket_client.close()

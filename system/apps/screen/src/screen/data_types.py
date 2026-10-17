@@ -11,6 +11,7 @@ from screen.primitives import DisplayName
 from screen.primitives import NekoSessionId
 from screen.primitives import NekoToken
 from screen.primitives import XWindowId
+from screen.xorg_config import Modeline
 
 
 class Lifecycle(UpperCaseStrEnum):
@@ -70,6 +71,36 @@ class ScreenSize(FrozenModel):
     width: int = Field(description="Width in pixels")
     height: int = Field(description="Height in pixels")
     rate: int = Field(description="Refresh rate in Hz")
+
+
+class AddedMode(FrozenModel):
+    """A RANDR mode the service added this stack life (spec section 7.2)."""
+
+    name: str = Field(description="The mode's name, ``<width>x<height>_60``")
+    width: int = Field(description="Width in pixels")
+    height: int = Field(description="Height in pixels")
+
+
+class DisplayModes(FrozenModel):
+    """What ``xrandr --query`` reported: the connected output and the mode names it advertises."""
+
+    output: str | None = Field(description="The connected output the modes belong to, or None when there is none")
+    mode_names: tuple[str, ...] = Field(description="Every mode name listed under that output")
+
+
+class ModeAddition(FrozenModel):
+    """A mode the server must learn before neko can select it."""
+
+    output: str = Field(description="The output to add the mode to")
+    modeline: Modeline = Field(description="The CVT modeline to create")
+
+
+class ModesRecord(FrozenModel):
+    """``modes.json``: every mode added since the stack started."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    modes: tuple[AddedMode, ...] = Field(default=(), description="The added modes, in order")
 
 
 class QueuedAgent(FrozenModel):

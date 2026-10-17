@@ -181,6 +181,17 @@ class NekoClient(NekoInterface):
         )
         return ScreenSize.model_validate(response.json())
 
+    def set_screen_size(self, size: ScreenSize) -> ScreenSize:
+        response = self._request(
+            "POST",
+            "/api/room/screen",
+            self._admin_headers(),
+            {"width": size.width, "height": size.height, "rate": size.rate},
+            None,
+            _REQUEST_TIMEOUT_SECONDS,
+        )
+        return ScreenSize.model_validate(response.json())
+
     def list_sessions(self) -> list[NekoSessionRecord]:
         response = self._request("GET", "/api/sessions", self._admin_headers(), None, None, _REQUEST_TIMEOUT_SECONDS)
         return parse_session_records(response.json())

@@ -5,6 +5,7 @@ import pytest
 from flask import Flask
 from flask.testing import FlaskClient
 
+from mock_display_modes_test import FakeDisplayModes
 from mock_messenger_test import RecordingLauncher
 from mock_messenger_test import RecordingMessenger
 from mock_neko_test import FakeNeko
@@ -14,6 +15,7 @@ from screen.proxy import NekoProxy
 from screen.routes import build_app
 from screen.service import ScreenService
 from screen.stack import ScreenStack
+from testing import ManualClock
 
 
 @pytest.fixture
@@ -32,18 +34,35 @@ def recording_messenger() -> RecordingMessenger:
 
 
 @pytest.fixture
+def fake_display_modes() -> FakeDisplayModes:
+    return FakeDisplayModes()
+
+
+@pytest.fixture
+def manual_clock() -> ManualClock:
+    return ManualClock()
+
+
+@pytest.fixture
 def service(
-    tmp_path: Path, fake_supervisor: FakeSupervisor, fake_neko: FakeNeko, recording_messenger: RecordingMessenger
+    tmp_path: Path,
+    fake_supervisor: FakeSupervisor,
+    fake_neko: FakeNeko,
+    fake_display_modes: FakeDisplayModes,
+    recording_messenger: RecordingMessenger,
+    manual_clock: ManualClock,
 ) -> Iterator[ScreenService]:
-    """A service over fakes whose stack starts at once, with no event subscription."""
+    """A service over fakes whose stack starts at once, with no event subscription, on a clock the test moves."""
     built = ScreenService(
         repo_root=tmp_path,
         state_dir=tmp_path / "state",
         neko=fake_neko,
         window_tools=FakeWindowTools(),
+        display_modes=fake_display_modes,
         launcher=RecordingLauncher(),
         messenger=recording_messenger,
         is_event_subscription_enabled=False,
+        clock=manual_clock,
     )
     stack = ScreenStack(
         supervisor=fake_supervisor,

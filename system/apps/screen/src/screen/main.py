@@ -23,6 +23,7 @@ from screen.service import ScreenService
 from screen.serving import app_url_port
 from screen.serving import serve_in_background
 from screen.serving import wait_for_shutdown_signal
+from screen.sizing import XrandrDisplayModes
 from screen.stack import ScreenStack
 from screen.supervisor import SupervisorctlClient
 from screen.windows import DisplayWindowTools
@@ -53,6 +54,7 @@ def build_service(arguments: ScreenServiceArguments) -> ScreenService:
         state_dir=arguments.state_dir,
         neko=neko,
         window_tools=DisplayWindowTools(),
+        display_modes=XrandrDisplayModes(),
         launcher=DetachedProcessLauncher(working_directory=repo_root),
         messenger=ChatAgentMessenger(repo_root=repo_root),
     )

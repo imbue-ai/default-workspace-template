@@ -22,6 +22,7 @@ from app_manifest.registry import CONTEXT_MENU_ROUTE
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import SHELL_CONTEXT_MENU_PATH
 from screen.data_types import Lifecycle
+from screen.errors import DisplayModeError
 from screen.errors import InvalidRunCommandError
 from screen.errors import NekoError
 from screen.errors import ScreenError
@@ -232,6 +233,45 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
             return _error(f"{AGENT_ID_HEADER} header required", HTTP_BAD_REQUEST)
         reason = str(_json_body().get("reason", "")).strip() or "human verification needed"
         return jsonify(service.handoff(agent_id, agent_name, reason))
+
+    # sizing and the profile's input clock
+
+    @app.post("/api/screen-size")
+    def screen_size() -> ResponseReturnValue:
+        body = _json_body()
+        width, height = body.get("width"), body.get("height")
+        if not (isinstance(width, int) and isinstance(height, int) and width > 0 and height > 0):
+            return _error("width and height must be positive integers", HTTP_BAD_REQUEST)
+        if service.stack.lifecycle != Lifecycle.RUNNING:
+            return _error("the Screen is not running", HTTP_CONFLICT)
+        session_id = _session_id_from_body()
+        current = service.screen_size
+        # A viewer's report counts only while its session controls the Screen; a report with no session (the
+        # ``screen size`` command) is the controller's by definition (spec sections 7.2 and 17).
+        if session_id is not None and not service.is_controller_session(session_id):
+            return jsonify(
+                {
+                    "applied": False,
+                    "reason": "not the controller",
+                    "screen_size": current.model_dump() if current is not None else None,
+                }
+            )
+        try:
+            applied = service.set_screen_size(width, height)
+        except ScreenNotRunningError as e:
+            return _error(str(e), HTTP_CONFLICT)
+        except DisplayModeError as e:
+            return _error(str(e), HTTP_BAD_GATEWAY)
+        return jsonify({"applied": True, "reason": None, "screen_size": applied.model_dump()})
+
+    @app.post("/api/input-seen")
+    def input_seen() -> ResponseReturnValue:
+        session_id = _session_id_from_body()
+        if session_id is None:
+            return _error("session_id is required", HTTP_BAD_REQUEST)
+        if not service.note_input(session_id):
+            return _error("no such session", HTTP_NOT_FOUND)
+        return Response(status=HTTP_NO_CONTENT)
 
     # the display
 

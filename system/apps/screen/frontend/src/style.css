@@ -66,6 +66,16 @@
   background: #e0df2a;
 }
 
+.screen-button--mute {
+  min-width: 5.5rem;
+  min-height: 2rem;
+  font-weight: 600;
+}
+
+.screen-button--mute[aria-pressed="true"] {
+  background: #2c3540;
+}
+
 .screen-stage {
   position: relative;
   flex: 1;

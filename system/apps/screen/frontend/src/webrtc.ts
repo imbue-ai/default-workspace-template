@@ -16,6 +16,8 @@ export class NekoStream {
   private failures = 0;
   private retryTimer = 0;
   private videoId = "watch";
+  private isAudioEnabled = false;
+  private isReleased = false;
   private connectInfo: ConnectInfo = { ice_servers: [], candidates: [], expires_at: null };
 
   constructor(
@@ -40,20 +42,27 @@ export class NekoStream {
       else this.pending.push(candidate);
     });
     socket.on("signal/close", () => {
-      if (this.pc) this.onPeerState("failed");
+      // neko echoes a close the viewer asked for; only an unasked one is a failure to recover from.
+      if (this.pc && !this.isReleased) this.onPeerState("failed");
     });
   }
 
-  /** Ask neko for a peer with the announced video profile; audio stays off (spec section 8.3). */
+  /** Ask neko for a peer with the announced video profile; audio stays off until unmuted (spec section 8.3). */
   request(videoId: string, connectInfo: ConnectInfo): void {
     this.videoId = videoId;
     this.connectInfo = connectInfo;
     this.pending = [];
+    this.isReleased = false;
     this.onStatus("connecting");
     this.socket.send("signal/request", {
       video: { selector: { id: videoId, type: "exact" } },
-      audio: { disabled: true },
+      audio: { disabled: !this.isAudioEnabled },
     });
+  }
+
+  /** Whether a peer is up or being set up. */
+  get hasPeer(): boolean {
+    return this.pc !== null;
   }
 
   selectVideo(videoId: string): void {
@@ -61,8 +70,29 @@ export class NekoStream {
     if (this.pc) this.socket.send("signal/video", { selector: { id: videoId, type: "exact" } });
   }
 
+  /** Audio for this session alone: neko unpauses the track for an enabled session (spec section 8.3). */
+  setAudioEnabled(isEnabled: boolean): void {
+    this.isAudioEnabled = isEnabled;
+    this.video.muted = !isEnabled;
+    if (this.pc) this.socket.send("signal/audio", { disabled: !isEnabled });
+  }
+
+  /** Close the media on purpose (the viewer is hidden, spec section 8.2): neko drops this peer and, with the last
+   *  one, the encoder; the socket and the session stay. */
+  release(): void {
+    if (!this.pc) return;
+    this.isReleased = true;
+    window.clearTimeout(this.retryTimer);
+    this.socket.send("signal/close");
+    this.pc.close();
+    this.pc = null;
+    this.video.srcObject = null;
+    this.onStatus("idle");
+  }
+
   close(): void {
     window.clearTimeout(this.retryTimer);
+    this.isReleased = true;
     this.pc?.close();
     this.pc = null;
     this.video.srcObject = null;

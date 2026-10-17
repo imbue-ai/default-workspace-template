@@ -103,6 +103,13 @@ class FakeNeko(NekoInterface):
         self._require_token()
         return self.size
 
+    def set_screen_size(self, size: ScreenSize) -> ScreenSize:
+        self._require_token()
+        with self._lock:
+            self.calls.append(f"size:{size.width}x{size.height}")
+            self.size = size
+        return size
+
     def list_sessions(self) -> list[NekoSessionRecord]:
         self._require_token()
         with self._lock:
