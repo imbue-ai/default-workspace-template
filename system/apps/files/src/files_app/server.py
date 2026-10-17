@@ -149,6 +149,7 @@ def create_app(
     dufs_url: str,
     gateway: Gateway | None,
     static_directory: Path,
+    agent_id: str,
     synced_root: Path = SYNCED_FOLDERS,
     client: httpx.Client | None = None,
 ) -> Flask:
@@ -191,7 +192,7 @@ def create_app(
         if gateway is None:
             return _json({"devices": [], "shares": []})
         try:
-            listed = list_connections(gateway, synced_root)
+            listed = list_connections(gateway, agent_id, synced_root)
         except (httpx.HTTPError, ValueError) as error:
             # ValueError: an answer from the gateway that is not the JSON it should be.
             logger.warning("Couldn't read the shares through the gateway: {}", error)

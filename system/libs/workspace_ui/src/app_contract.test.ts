@@ -89,6 +89,7 @@ describe("connectToShell", () => {
       desktopId: "home",
       app: "chat",
       path: "/?chat=agent-1",
+      opensLocalFiles: false,
     });
     expect(handlers.onShown).toHaveBeenCalledTimes(1);
     expect(handlers.onHidden).toHaveBeenCalledTimes(1);
@@ -115,7 +116,17 @@ describe("connectToShell", () => {
       desktopId: "home",
       app: "",
       path: "",
+      opensLocalFiles: false,
     });
+  });
+
+  it("reads whether the embedder opens its file picker, and anything but true as no", () => {
+    const parent = framed();
+    const onHandshake = vi.fn();
+    connection = connectToShell({ onHandshake });
+    deliver({ ...HANDSHAKE, opensLocalFiles: true }, parent);
+    deliver({ ...HANDSHAKE, opensLocalFiles: "yes" }, parent);
+    expect(onHandshake.mock.calls.map((call) => call[0].opensLocalFiles)).toEqual([true, false]);
   });
 
   it("announces its capabilities to the parent once, before anything else", () => {

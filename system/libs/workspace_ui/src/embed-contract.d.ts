@@ -40,6 +40,9 @@ declare module "@minds/embed-contract" {
   export const OPEN_LINK: "minds:open-link";
   export const OPEN_EXTERNAL: "minds:open-external";
   export const MAX_OPEN_LINK_URL_LENGTH: number;
+  // Sharing a file or folder from the user's computer (contract v9). Probed like the ones above.
+  export const OPEN_LOCAL_FILES: "minds:open-local-files";
+  export const OPEN_LOCAL_FILES_ACK: "minds:open-local-files-ack";
 
   export const REQUEST_ID_PATTERN: RegExp;
   export const AGENT_ID_PATTERN: RegExp;

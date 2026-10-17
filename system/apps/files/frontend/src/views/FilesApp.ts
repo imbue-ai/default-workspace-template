@@ -24,7 +24,9 @@ import {
   shareAt,
   shareBadgeOf,
   type ShareBadge,
-  stuckSyncOf,
+  syncNoticeOf,
+  syncStatusOf,
+  type SyncNotice,
   targetOf,
   type Connections,
   type Share,
@@ -128,9 +130,13 @@ function mark(kind: string, label: string, body: m.Children, extra: string): m.V
   return m("span.files-share-mark", { "data-mark": kind, "aria-label": label, class: `flex shrink-0 ${extra}` }, body);
 }
 
-/** A filled disc with an exclamation: the share needs a look. */
-function stuckMark(): m.Vnode {
-  return mark("stuck", "Not caught up", m.trust(alertDotIcon(12)), "text-warning");
+/** A filled disc with an exclamation: the share's sync stopped and needs a look. */
+function failedMark(): m.Vnode {
+  return mark("failed", "Sync stopped", m.trust(alertDotIcon(12)), "text-warning");
+}
+
+function syncingMark(): m.Vnode {
+  return mark("syncing", "Syncing", m("span.spinner.spinner--sm"), "text-faint");
 }
 
 function readOnlyMark(): m.Vnode {
@@ -148,7 +154,8 @@ function unreachableMark(): m.Vnode {
 
 function shareRow(app: FilesController, connections: Connections, share: Share): SidebarRow {
   const target = targetOf(share);
-  const isUnreachable = !share.is_reachable || share.sync_state === "unknown";
+  const status = syncStatusOf(share);
+  const isUnreachable = !share.is_reachable || status?.kind === "unknown";
   return {
     key: `share:${share.device}:${share.path}`,
     label: labelOf(share),
@@ -160,7 +167,8 @@ function shareRow(app: FilesController, connections: Connections, share: Share):
     isFile: share.kind === "file",
     badges: [
       share.access === "read" ? readOnlyMark() : null,
-      share.sync_state === "behind" ? stuckMark() : null,
+      status?.kind === "failed" ? failedMark() : null,
+      status?.kind === "copying" || status?.kind === "syncing" ? syncingMark() : null,
       isUnreachable ? unreachableMark() : null,
     ],
     onOpen: share.kind === "file" ? () => app.openPage(target, "view") : undefined,
@@ -224,8 +232,12 @@ function Sidebar(): m.Component<{ app: FilesController; floating: boolean }> {
       if (shareRows.length > 0) {
         connectedBody = shareRows.map((row) => sidebarRow(app, row, row.key === current));
       } else {
-        const empty = model.connectionsError ?? (connections === null ? "Looking…" : NOTHING_CONNECTED);
-        connectedBody = m("div.files-connected-empty", { class: "px-2 py-1 type-helper text-faint" }, empty);
+        // With the connect entry below, an empty list needs no word on how to share.
+        const empty =
+          model.connectionsError ??
+          (connections === null ? "Looking…" : app.opensLocalFiles ? null : NOTHING_CONNECTED);
+        connectedBody =
+          empty === null ? null : m("div.files-connected-empty", { class: "px-2 py-1 type-helper text-faint" }, empty);
       }
       return m(
         "nav.files-sidebar",
@@ -253,6 +265,25 @@ function Sidebar(): m.Component<{ app: FilesController; floating: boolean }> {
                 ),
               ]),
               connectedBody,
+              app.opensLocalFiles
+                ? m(
+                    "button.files-connect",
+                    {
+                      type: "button",
+                      "data-action": "connect",
+                      class:
+                        "flex h-7 w-full shrink-0 cursor-pointer items-center gap-2 rounded-md px-2 text-left text-(length:--font-size-row) text-faint hover:bg-fill-hover hover:text-primary",
+                      onclick: () => {
+                        app.isSidebarOpen = false;
+                        app.connectLocal();
+                      },
+                    },
+                    [
+                      m.trust(icon("plus", { size: 16, className: "shrink-0" })),
+                      m("span", { class: "truncate" }, "Connect a file or folder…"),
+                    ],
+                  )
+                : null,
             ]),
           ]),
           resizeHandle(app),
@@ -433,7 +464,7 @@ function FolderBody(): m.Component<{ app: FilesController }> {
       const state = model.folderState(model.folder);
       const entries = model.shownEntries();
       const search = model.search;
-      const stuck = stuckSyncOf(model.connections, model.folder);
+      const notice = syncNoticeOf(model.connections, model.folder);
       let empty: m.Children = null;
       if (search !== null) {
         if (search.status === "error") empty = message("Search failed", search.error ?? "");
@@ -448,8 +479,8 @@ function FolderBody(): m.Component<{ app: FilesController }> {
         empty = message("Couldn't open this folder", state.error ?? "", () => void model.load(model.folder));
       } else if (!state.exists) {
         empty = message("This folder doesn't exist", "It may have been moved or deleted.");
-      } else if (stuck !== null && entries.length === 0) {
-        empty = m("div.files-stuck-sync", { role: "status" }, message(stuck.title, stuck.detail));
+      } else if (notice !== null && entries.length === 0) {
+        empty = m("div.files-sync-notice", { role: "status" }, message(notice.title, notice.detail));
       } else if (entries.length === 0) {
         empty = message(
           "This folder is empty",
@@ -457,7 +488,7 @@ function FolderBody(): m.Component<{ app: FilesController }> {
         );
       }
       return m("div", { class: "min-h-full" }, [
-        stuck !== null && entries.length > 0 ? stuckBanner(stuck) : null,
+        notice !== null && !notice.isOnlyWhenEmpty && entries.length > 0 ? syncBanner(notice) : null,
         search === null
           ? null
           : m(
@@ -475,10 +506,10 @@ function FolderBody(): m.Component<{ app: FilesController }> {
   };
 }
 
-/** A strip above a copy's entries saying it has fallen behind its computer. */
-export function stuckBanner(stuck: { title: string; detail: string }): m.Vnode {
+/** A strip above a copy's entries saying its sync stopped. */
+export function syncBanner(notice: SyncNotice): m.Vnode {
   return m(
-    "div.files-stuck-sync",
+    "div.files-sync-notice",
     {
       role: "status",
       class: "mx-3 mt-3 flex items-start gap-2 rounded-lg bg-warning-surface/50 px-3 py-2 type-helper",
@@ -486,8 +517,8 @@ export function stuckBanner(stuck: { title: string; detail: string }): m.Vnode {
     [
       m.trust(alertDotIcon(14, "mt-0.5 shrink-0 text-warning")),
       m("div", [
-        m("div", { class: "font-medium text-primary" }, stuck.title),
-        m("div", { class: "text-secondary" }, stuck.detail),
+        m("div", { class: "font-medium text-primary" }, notice.title),
+        m("div", { class: "text-secondary" }, notice.detail),
       ]),
     ],
   );

@@ -1,13 +1,13 @@
 """What the user has shared with this workspace from their computers, and how each item reaches it.
 
 A share is a file-sharing permission the workspace holds on a device (``minds-file-server-read-<device id>:<path>``,
-and ``-write-`` beside it when the user allowed changes; a device that predates per-device grants names no device id). A shared folder may also be synced: Imbue Studio then keeps a copy
-of it at ``~/synced_folders/<device id>/<path>``, two-way with write access and one-way (from the computer) with read
-only. The workspace learns nothing from the sync itself, so whether a copy has kept up is read off both sides: the
-names in the copy against the names on the computer, when the computer answers.
+and ``-write-`` beside it when the user allowed changes; a device that predates per-device grants names no device id).
+A shared folder may also be synced: Imbue Studio then keeps a copy of it at ``~/synced_folders/<device id>/<path>``,
+two-way with write access and one-way (from the computer) with read only, and says how each sync stands when asked.
 """
 
 import re
+import urllib.parse
 import xml.etree.ElementTree as ElementTree
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
@@ -30,14 +30,11 @@ SYNCED_FOLDERS: Final[Path] = Path("/home/user/synced_folders")
 # A device id never holds a ``:`` or a ``/``, and a path starts with ``/``, so the two names cannot be mistaken.
 _RULE: Final[re.Pattern[str]] = re.compile(r"^minds-file-server-(read|write)-(?:([^:/]+):)?(/.*)$")
 
-# Names a sync leaves behind on purpose, so their absence from the copy is not a sign it has fallen behind.
-_NOT_SYNCED_NAMES: Final[frozenset[str]] = frozenset({".DS_Store", ".git", ".localized"})
-
 Access = Literal["read", "write"]
 Kind = Literal["folder", "file", "unknown"]
-# ``current``: the copy holds what the computer holds; ``behind``: it does not; ``unknown``: the computer did not
-# answer. Only a synced share has one.
-SyncState = Literal["current", "behind", "unknown"]
+# A sync as Imbue Studio reports it (``GET /api/v1/agents/<agent id>/folder-syncs``), passed on as it came: its
+# ``state``, ``message``, ``bytes_done`` and ``bytes_total``, ``has_finished_first_copy``, ``last_synced_at``, ...
+FolderSync = dict[str, object]
 
 
 class Device(FrozenModel):
@@ -53,8 +50,9 @@ class Share(FrozenModel):
     access: Access
     kind: Kind
     is_reachable: bool
+    # Where the copy is, when there is one; a copy with no ``sync`` is one whose computer did not say how it stands.
     synced_copy: str | None
-    sync_state: SyncState | None
+    sync: FolderSync | None
 
 
 class Connections(FrozenModel):
@@ -106,35 +104,64 @@ def list_on_device(
         return None
 
 
-def _names_in_copy(copy: Path) -> set[str]:
-    return {child.name for child in copy.iterdir() if not child.is_symlink()} - _NOT_SYNCED_NAMES
+def folder_syncs(gateway: Gateway, agent_id: str, device: str) -> dict[str, FolderSync] | None:
+    """The syncs Imbue Studio on a device keeps for this workspace, by the path each copies on the computer; None when
+    it did not say (asleep, closed, or a Studio that does not report them)."""
+    if agent_id == "":
+        return None
+    path = f"minds-api-proxy/api/v1/agents/{urllib.parse.quote(agent_id, safe='')}/folder-syncs"
+    try:
+        response = gateway.request("GET", path, device=device)
+    except httpx.HTTPError as error:
+        logger.debug("{} did not say how its syncs stand: {}", device, error)
+        return None
+    if response.status_code != 200:
+        logger.debug("{} answered {} for its syncs", device, response.status_code)
+        return None
+    try:
+        syncs = response.json().get("syncs", [])
+    except ValueError as error:
+        logger.warning("{} sent its syncs in a shape that does not parse: {}", device, error)
+        return None
+    return {
+        sync["local_path"]: sync
+        for sync in syncs
+        if isinstance(sync, dict) and isinstance(sync.get("local_path"), str) and sync.get("activity") == "ACTIVE"
+    }
 
 
 def describe_share(
-    gateway: Gateway, device: str, has_device_paths: bool, path: str, access: Access, synced_root: Path
+    gateway: Gateway,
+    device: str,
+    has_device_paths: bool,
+    path: str,
+    access: Access,
+    syncs: dict[str, FolderSync] | None,
+    synced_root: Path,
 ) -> Share:
+    remote = list_on_device(gateway, device, has_device_paths, path, depth=0)
+    sync = None if syncs is None else syncs.get(path)
     copy = synced_root / device / path.lstrip("/")
-    is_synced = copy.is_dir()
-    remote = list_on_device(gateway, device, has_device_paths, path, depth=1 if is_synced else 0)
+    if sync is not None:
+        # Studio names the copy by its absolute path once it knows the workspace's home, and by ``~/...`` before.
+        reported = sync.get("workspace_path")
+        is_absolute = isinstance(reported, str) and reported.startswith("/")
+        synced_copy: str | None = f"{str(reported).rstrip('/')}/" if is_absolute else f"{copy}/"
+    else:
+        # With no word from the computer, a copy on disk is still a copy, of a sync whose state is unknown.
+        synced_copy = f"{copy}/" if syncs is None and copy.is_dir() else None
     if remote is None or len(remote) == 0:
-        kind: Kind = "folder" if is_synced else "unknown"
+        kind: Kind = "folder" if synced_copy is not None else "unknown"
     else:
         kind = "folder" if remote[0].is_folder else "file"
-    sync_state: SyncState | None = None
-    if is_synced:
-        if remote is None:
-            sync_state = "unknown"
-        else:
-            on_computer = {entry.name for entry in remote[1:]} - _NOT_SYNCED_NAMES
-            sync_state = "current" if on_computer <= _names_in_copy(copy) else "behind"
     return Share(
         device=device,
         path=path,
         access=access,
         kind=kind,
         is_reachable=remote is not None,
-        synced_copy=f"{copy}/" if is_synced else None,
-        sync_state=sync_state,
+        synced_copy=synced_copy,
+        sync=sync,
     )
 
 
@@ -161,8 +188,9 @@ def _listed_devices(gateway: Gateway) -> list[tuple[str, str]]:
     ]
 
 
-def list_connections(gateway: Gateway, synced_root: Path = SYNCED_FOLDERS) -> Connections:
-    """Every share on every device, each probed on its device at once, since a sleeping computer answers slowly."""
+def list_connections(gateway: Gateway, agent_id: str, synced_root: Path = SYNCED_FOLDERS) -> Connections:
+    """Every share on every device, each probed on its device at once, since a sleeping computer answers slowly.
+    ``agent_id`` is any agent of this workspace, which Imbue Studio files the workspace's syncs under."""
     listed = _listed_devices(gateway)
     granted = {device: device_permissions(gateway, device) for device, _name in listed}
     with_device_paths = devices_with_device_paths(granted.values())
@@ -178,11 +206,15 @@ def list_connections(gateway: Gateway, synced_root: Path = SYNCED_FOLDERS) -> Co
     exact = [(device, path, access) for (device, path), access in sorted(named.items())]
     ambiguous = [share for share in unnamed if share[1] not in named_paths]
 
-    def describe(share: tuple[str, str, Access]) -> Share:
-        device, path, access = share
-        return describe_share(gateway, device, device in with_device_paths, path, access, synced_root)
-
     with ThreadPoolExecutor(max_workers=8) as pool:
+        asked = {device: pool.submit(folder_syncs, gateway, agent_id, device) for device, _name in listed}
+        syncs_by_device = {device: future.result() for device, future in asked.items()}
+
+        def describe(share: tuple[str, str, Access]) -> Share:
+            device, path, access = share
+            syncs = syncs_by_device.get(device)
+            return describe_share(gateway, device, device in with_device_paths, path, access, syncs, synced_root)
+
         # Both batches are submitted before either is read, so every probe runs at once.
         described_exact = pool.map(describe, exact)
         described_ambiguous = pool.map(describe, ambiguous)

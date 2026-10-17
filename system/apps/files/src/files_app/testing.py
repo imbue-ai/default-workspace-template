@@ -42,7 +42,8 @@ def propfind_body(folder: str, children: list[tuple[str, bool, int]]) -> bytes:
 class FakeComputer:
     """The user's computer as the gateway reaches it: the permissions it granted, the folders it holds, and every
     request it was sent. It grants per device when a permission names it, and then serves its files under its id
-    alone; otherwise with no id alone, as the gateway refuses a path no grant matches."""
+    alone; otherwise with no id alone, as the gateway refuses a path no grant matches. Its Imbue Studio reports
+    ``syncs`` when given them, and is one that predates reporting them when not."""
 
     def __init__(
         self,
@@ -50,12 +51,14 @@ class FakeComputer:
         folders: dict[str, list[tuple[str, bool, int]]],
         is_awake: bool = True,
         is_writable: bool = True,
+        syncs: list[dict[str, Any]] | None = None,
     ):
         self.permissions = permissions
         self.folders = folders
         self.files: dict[str, bytes] = {}
         self.is_awake = is_awake
         self.is_writable = is_writable
+        self.syncs = syncs
         self.requests: list[httpx.Request] = []
 
     def handle(self, request: httpx.Request) -> httpx.Response:
@@ -65,6 +68,12 @@ class FakeComputer:
             return httpx.Response(200, json={"devices": [{"device_id": DEVICE, "hostname": "Kims-Mac.local"}]})
         if path == "/permissions/self":
             return httpx.Response(200, json={"rules": [{"latchkey-self": list(self.permissions)}]})
+        if path.startswith("/minds-api-proxy/api/v1/agents/") and path.endswith("/folder-syncs"):
+            if not self.is_awake:
+                return httpx.Response(502, text="device unreachable")
+            if self.syncs is None:
+                return httpx.Response(404)
+            return httpx.Response(200, json={"device_id": DEVICE, "syncs": self.syncs})
         prefix = "/minds-api-proxy/api/v1/files"
         if not path.startswith(prefix):
             return httpx.Response(404)
