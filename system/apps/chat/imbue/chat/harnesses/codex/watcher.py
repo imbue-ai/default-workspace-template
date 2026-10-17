@@ -21,8 +21,9 @@ lines and reflected into the model-bar state file (the watcher's alone: an archi
 bar is nobody's to update), live suppression of ``user_message`` events (the subscribed
 ledger owns the live user-turn handoff -- the A3b chip-out-then-turn ordering -- so the file
 reader must not broadcast a competing copy; the events stay in the store for the read
-paths), and synthetic "Interrupted." results for tool calls a user interrupt left open
-(codex never persists one, so the card would spin forever).
+paths), synthetic "Interrupted." results for tool calls a user interrupt left open
+(codex never persists one, so the card would spin forever), and each model response's token
+usage, stamped onto that response's last assistant event once its ``token_count`` lands.
 """
 
 from __future__ import annotations
@@ -40,6 +41,7 @@ from imbue.chat.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
 from imbue.chat.harnesses.codex.session_parser import SETTINGS_CHANGED_SINCE_TURN_KEY
 from imbue.chat.harnesses.codex.session_parser import SOURCE as _SOURCE
 from imbue.chat.harnesses.codex.session_parser import THINKING_SOURCE_MARKER_TYPE
+from imbue.chat.harnesses.codex.session_parser import TOKEN_USAGE_MARKER_TYPE
 from imbue.chat.harnesses.codex.session_parser import parse_line_detail
 from imbue.chat.harnesses.codex.session_parser import parse_lines
 from imbue.chat.harnesses.codex.session_parser import parse_reasoning_detail
@@ -141,6 +143,12 @@ class CodexTranscriptLoader(StoreBackedTranscriptLoader):
     # attach to the NEXT assistant event (a reasoning item precedes its output in the
     # rollout). Cleared once attached, and on rotation.
     _pending_thinking_source: tuple[Path, int, int] | None
+    # The newest assistant event appended since the last token_count: the one the next
+    # token_count measures. Cleared by that token_count, by a user turn or turn start (a new
+    # measurement window), and on rotation.
+    _unmeasured_event_id: str | None
+    # The running session total the previous token_count reported, to recognise a repeat.
+    _previous_total_usage: dict[str, Any] | None
 
     @classmethod
     def build_loader(cls, agent_info: AgentInfo) -> "CodexTranscriptLoader":
@@ -165,6 +173,8 @@ class CodexTranscriptLoader(StoreBackedTranscriptLoader):
         # selected model lying.
         self._turn_state = {}
         self._pending_thinking_source = None
+        self._unmeasured_event_id = None
+        self._previous_total_usage = None
 
     # base hooks
 
@@ -181,6 +191,7 @@ class CodexTranscriptLoader(StoreBackedTranscriptLoader):
             self._current_path = target
             self._byte_offset = 0
             self._pending_thinking_source = None
+            self._unmeasured_event_id = None
 
         try:
             size = target.stat().st_size
@@ -216,9 +227,15 @@ class CodexTranscriptLoader(StoreBackedTranscriptLoader):
                 if event.get("type") == THINKING_SOURCE_MARKER_TYPE:
                     self._pending_thinking_source = (target, byte_offset, byte_len) if event.get("readable") else None
                     continue
+                if event.get("type") == TOKEN_USAGE_MARKER_TYPE:
+                    self._apply_token_usage_locked(event)
+                    continue
                 if event.get("type") == "assistant_message" and self._pending_thinking_source is not None:
                     event["has_thinking"] = True
-                self._ingest_locked(_LANE, event, (target, byte_offset, byte_len))
+                if event.get("type") == "assistant_message":
+                    self._keep_stamped_usage_locked(event)
+                is_new = self._ingest_locked(_LANE, event, (target, byte_offset, byte_len))
+                self._track_measurement_window_locked(event, is_new)
                 if event.get("type") == "assistant_message" and self._pending_thinking_source is not None:
                     self._store.set_thinking_source(event["event_id"], self._pending_thinking_source)
                     self._pending_thinking_source = None
@@ -245,6 +262,63 @@ class CodexTranscriptLoader(StoreBackedTranscriptLoader):
 
     def _reflect_effective_model(self, model: Any, effort: Any) -> None:
         """Hand the effective per-turn model to the model bar. A loader has no bar to update."""
+
+    # token usage
+
+    def _track_measurement_window_locked(self, event: dict[str, Any], is_new: bool) -> None:
+        """Follow which assistant event the next ``token_count`` measures.
+
+        A response can emit several assistant events (message text, then tool calls); the
+        usage lands on the last of them alone, so summing the chat's usage reproduces codex's
+        own session total. A re-serialised copy of an older event is not new and leaves the
+        window alone, and a turn's failure message is not a model response. A user turn
+        (compaction's status line included) or a turn start opens a new window.
+        """
+        event_type = event.get("type")
+        if event_type == "assistant_message":
+            if is_new and event.get("stop_reason") != "error":
+                self._unmeasured_event_id = event["event_id"]
+        elif event_type == "user_message" or (
+            event_type == SPECIAL_EVENT_TYPE and event.get("kind") == SpecialEventKind.TURN_STARTED.value
+        ):
+            self._unmeasured_event_id = None
+        else:
+            # tool results and the other turn markers fall inside a response's window
+            pass
+
+    def _apply_token_usage_locked(self, marker: dict[str, Any]) -> None:
+        """Stamp one ``token_count``'s usage onto the assistant event it measures.
+
+        Codex writes a ``token_count`` again, unchanged, partway through the next response; its
+        running total equals the previous one's, so it measures nothing and leaves the window
+        open. Any other ``token_count`` closes the window, whether or not it carries usage. The
+        stamp is an in-place supersession, so a client already holding the event is re-sent it.
+        """
+        total_usage = marker.get("total_usage")
+        if total_usage is not None and total_usage == self._previous_total_usage:
+            return
+        self._previous_total_usage = total_usage
+        event_id = self._unmeasured_event_id
+        self._unmeasured_event_id = None
+        usage = marker.get("usage")
+        if event_id is None or usage is None:
+            return
+        held = self._store.get_event(event_id)
+        if held is None:
+            return
+        self._ingest_locked(_LANE, {**held, "usage": usage})
+
+    def _keep_stamped_usage_locked(self, event: dict[str, Any]) -> None:
+        """Carry an already-stamped usage onto a re-serialised copy of the same event.
+
+        Codex re-serialises history with the same ids, and a copy parses with no usage of its
+        own, so without this the copy would supersede the stamped event and erase its usage.
+        """
+        if event.get("usage") is not None:
+            return
+        held = self._store.get_event(event["event_id"])
+        if held is not None and held.get("usage") is not None:
+            event["usage"] = held["usage"]
 
     # codex plumbing
 
