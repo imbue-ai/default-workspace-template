@@ -30,7 +30,7 @@ demand and the `screen-watch` event listener ends them together.
 - `POST /api/session`: a neko session for the requester's identity (`X-Imbue-Identity`;
   a header-less request is the owner): the service logs the human in to neko with the
   user password and a display name from the identity and answers
-  `{"session_id", "token", "name"}`; the viewer uses the token under `/neko/`.
+  `{"session_id", "token", "name", "is_owner"}`; the viewer uses the token under `/neko/`.
 - `POST /api/control/take` and `POST /api/control/return`, body `{"session_id"}`: the
   human verbs for that session.
 - `POST /api/control/acquire` (body `{"reclaim"}`), `/release`, `/handoff` (body

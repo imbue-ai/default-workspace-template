@@ -509,7 +509,8 @@ class ScreenService(MutableModel):
         self.window_tools.activate_window(window_id)
 
     def run_command(self, command: Sequence[str]) -> int:
-        """Start a command on the Screen; starts the stack first when it is down (spec section 9.2)."""
+        """Start a command on the Screen, which must be running: the ``/api/run`` route starts the stack and waits
+        for it first (spec section 9.2)."""
         if self.stack.lifecycle != Lifecycle.RUNNING:
             raise ScreenNotRunningError("the Screen is not running yet")
         return self.launcher.launch(command)
