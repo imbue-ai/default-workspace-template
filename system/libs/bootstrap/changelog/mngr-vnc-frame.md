@@ -1,0 +1,1 @@
+The README's account of the deferred first-boot installs now names the Screen's stack and the pinned neko binary beside Fortress: both install through the env.d unit `system/scripts/env.d/2000-screen.sh`, which replaced `1000-playwright-fortress.sh`, and the Screen service answers `installing` until that unit is satisfied.
