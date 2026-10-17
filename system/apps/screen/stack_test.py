@@ -2,6 +2,7 @@ import stat
 import threading
 from pathlib import Path
 
+import pytest
 import yaml
 from pydantic import SecretStr
 
@@ -89,6 +90,39 @@ def test_installing_is_reported_until_the_unit_is_satisfied(
     assert lifecycles[installing_index + 1] == Lifecycle.STARTING
     assert lifecycles[-1] == Lifecycle.RUNNING
     assert len(adopted) == 1 and adopted[0].is_admin is True
+
+
+# The starter is meant to die of the planted error, which pytest would otherwise report as an unhandled thread exception.
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_a_starter_that_dies_unexpectedly_does_not_pin_the_lifecycle_at_starting(
+    tmp_path: Path, fake_supervisor: FakeSupervisor, fake_neko: FakeNeko
+) -> None:
+    checks: list[str | None] = ["first"]
+
+    def install_check() -> str | None:
+        if checks:
+            checks.pop()
+            raise ZeroDivisionError("a bug in the start")
+        return None
+
+    stack = ScreenStack(
+        supervisor=fake_supervisor,
+        neko=fake_neko,
+        state_dir=tmp_path / "state",
+        runtime_dir=tmp_path / "runtime",
+        display_socket_path=tmp_path / "x11" / "X99",
+        install_check=install_check,
+        on_lifecycle_changed=lambda: None,
+        on_running=lambda _secrets, _session: None,
+        set_api_token=fake_neko.set_api_token,
+    )
+    assert stack.ensure_started() == Lifecycle.STARTING
+    starter = stack._starter
+    assert starter is not None
+    starter.join(timeout=5.0)
+    assert stack.lifecycle == Lifecycle.STARTING
+    assert stack.ensure_started() == Lifecycle.STARTING
+    assert wait_until(lambda: stack.lifecycle == Lifecycle.RUNNING), stack.stop_reason
 
 
 def test_stop_ends_the_members_neko_first(service: ScreenService, fake_supervisor: FakeSupervisor) -> None:

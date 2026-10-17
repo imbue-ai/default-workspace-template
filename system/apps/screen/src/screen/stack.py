@@ -160,12 +160,15 @@ class ScreenStack(MutableModel):
     def ensure_started(self) -> Lifecycle:
         """Start the group unless it is running or coming up; answers the lifecycle as it stands."""
         with self._lock:
-            if self.lifecycle in (Lifecycle.RUNNING, Lifecycle.STARTING, Lifecycle.INSTALLING):
+            if self.lifecycle == Lifecycle.RUNNING:
                 return self.lifecycle
             # A starter that was told to abort is winding down and touches nothing more; one that was not is a
             # start in flight.
             if self._starter is not None and self._starter.is_alive() and not self._abort_start.is_set():
                 return self.lifecycle
+            if self.lifecycle != Lifecycle.STOPPED:
+                # The starter died of an error it did not expect (its traceback went to stderr); the start is over.
+                logger.warning("The Screen's starter ended while the stack was {}; starting afresh", self.lifecycle)
             # Callers see the start at once, before the thread has run.
             self.lifecycle = Lifecycle.STARTING
             self.stop_reason = None
