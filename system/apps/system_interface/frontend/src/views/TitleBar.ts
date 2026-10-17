@@ -1,8 +1,9 @@
 /**
  * A window's title bar (concepts.md section 2.7), left to right: the app icon, the title,
  * Refresh, the window menu (three dots, right after it), then at the right edge minimize,
- * maximize (restore when maximized), and close. Resting on the maximize control opens the
- * window's size menu, which the window menu opens under Move and resize too.
+ * maximize (fullscreen and restore when maximized: the state control cycles on from maximized to
+ * the whole viewport, the Screen spec's L2 layer), and close. Resting on the maximize control
+ * opens the window's size menu, which the window menu opens under Move and resize too.
  * It is the drag handle (``data-drag-handle``);
  * a double click toggles maximize. A pinned window keeps its close control too, so the
  * habit of reaching for it holds; the desktop answers it by minimizing the window.
@@ -23,7 +24,7 @@ const TITLE_ACTION_GLYPH_SIZE = 12;
  *  at a control's size it reads as mud. 20 in a 36 bar leaves 8 above and below. */
 const APP_GLYPH_SIZE = 20;
 
-export type WindowControl = "minimize" | "maximize" | "restore" | "close" | "menu" | "refresh";
+export type WindowControl = "minimize" | "maximize" | "fullscreen" | "restore" | "close" | "menu" | "refresh";
 
 export interface TitleBarAttrs {
   readonly title: string;
@@ -140,6 +141,9 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
               }),
           m("span", { class: "flex-1" }),
           control("minimize", "Minimize", glyph("minimize", CONTROL_GLYPH_SIZE), false, onControl),
+          isMaximized
+            ? control("fullscreen", "Fullscreen", glyph("fullscreen", CONTROL_GLYPH_SIZE), false, onControl)
+            : null,
           isMaximized
             ? control("restore", "Restore", glyph("restore", CONTROL_GLYPH_SIZE), false, onControl, sizing)
             : control("maximize", "Maximize", glyph("maximize", CONTROL_GLYPH_SIZE), false, onControl, sizing),

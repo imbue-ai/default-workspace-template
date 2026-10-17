@@ -55,11 +55,12 @@ Subcommands:
                                         window, else open a new one.
     focus <window>                      Restore and raise a window.
     minimize <window>                   Put a window out of sight (its frame is kept).
-    restore <window>                    Bring a minimized or maximized window back to its frame.
+    restore <window>                    Bring a minimized, maximized, or fullscreen window back to its frame.
     maximize <window>                   Fill the backdrop with a window.
     place <window> --state S | --frame x,y,w,h
-                                        Snap a window to a half (snapped-left, snapped-right) or maximize it
-                                        (maximized), or set its frame.
+                                        Snap a window to a half (snapped-left, snapped-right), maximize it
+                                        (maximized), fill the whole viewport with it, taskbar and title bar
+                                        gone (fullscreen), or set its frame.
     close <window>                      Close a window for everyone.
     navigate <window> <path>            Point a window at another path under its app.
     refresh <window> | --app <name>     Reload one window's page, or every page of an app.
@@ -75,7 +76,7 @@ A *desktop* is a named, shared collection of *windows*: each window is one page 
 named by its app and the path under the app's origin it is at (``chat`` at ``/?chat=<id>``,
 ``terminal`` at ``/?session=<name>``, ``files`` at ``/home/user/workspace/data/notes/``). Windows
 and desktops are shared by everyone; where each window sits on a screen (its frame, whether it
-is minimized or maximized) is one client's own *placement*. Every browser *client* has one
+is minimized, maximized, or fullscreen) is one client's own *placement*. Every browser *client* has one
 active desktop.
 
 A window is named by its id (``win-<hex>``, from ``desktops`` or the ``open`` that made it), by
@@ -151,7 +152,7 @@ _EXTERNAL_URL_PREFIXES: Final[tuple[str, ...]] = ("https://", "http://")
 _IF_PRESENT_CHOICES: Final[tuple[str, ...]] = ("focus", "new")
 _SELF_WINDOW: Final[str] = "self"
 _SHORTCUT_MODES: Final[tuple[str, ...]] = ("focus", "new")
-_STATE_FLAGS: Final[tuple[str, ...]] = ("snapped-left", "snapped-right", "maximized")
+_STATE_FLAGS: Final[tuple[str, ...]] = ("snapped-left", "snapped-right", "maximized", "fullscreen")
 
 # The retired spellings, refused by name with the form to use instead, so an agent
 # working from an old note is told what to type rather than waiting on a registration that
@@ -167,8 +168,8 @@ _RETIRED_PREFIXES: Final[tuple[str, ...]] = (
 )
 # The retired verbs, each with its replacement.
 RETIRED_VERBS: Final[Mapping[str, str]] = {
-    "split": "'place' sets where a window sits (--state snapped-left|snapped-right|maximized, or --frame x,y,w,h); 'open' puts a new window on the desktop",
-    "move": "'place' sets where a window sits (--state snapped-left|snapped-right|maximized, or --frame x,y,w,h)",
+    "split": "'place' sets where a window sits (--state snapped-left|snapped-right|maximized|fullscreen, or --frame x,y,w,h); 'open' puts a new window on the desktop",
+    "move": "'place' sets where a window sits (--state snapped-left|snapped-right|maximized|fullscreen, or --frame x,y,w,h)",
     "rename": "a title belongs to the app that owns the page: the chat's POST /api/chats/<id>/rename (the terminal offers no rename route yet)",
     "delete": "close the window with 'close'; a terminal or the browser is ended by its app once no window shows it, and a chat only by the chat's own destroy route",
     "stop": "the app's own route stops what backs a page (the chat's stop route, the browser's POST /browsers/<name>/stop)",
@@ -1092,10 +1093,15 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_window_verb(subparsers, "maximize", "Fill the backdrop with a window", "maximized")
     _add_window_verb(subparsers, "close", "Close a window for everyone", "closed")
 
-    p_place = subparsers.add_parser("place", help="Snap a window to a half or maximize it, or set its frame")
+    p_place = subparsers.add_parser(
+        "place", help="Snap a window to a half, maximize it, fill the viewport with it, or set its frame"
+    )
     p_place.add_argument("window", help="A window id (win-<hex>), 'self', 'pinned', or an app name")
     p_place.add_argument(
-        "--state", choices=_STATE_FLAGS, default=None, help="Snap to the left or right half, or maximize"
+        "--state",
+        choices=_STATE_FLAGS,
+        default=None,
+        help="Snap to the left or right half, maximize, or fill the viewport",
     )
     p_place.add_argument("--zone", default=None, help=argparse.SUPPRESS)
     p_place.add_argument(

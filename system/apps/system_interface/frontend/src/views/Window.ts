@@ -12,6 +12,12 @@
  * (``pointer-events: none``, inherited from the windows layer) and only the title bar, the
  * handles, the shield, and the placeholders take a press. It reads no metric from the DOM and
  * attaches no gesture listener.
+ *
+ * A fullscreen window (the Screen spec, section 12) draws no title bar, no handles, and no corner
+ * or shadow: it fills the viewport, and a strip at its top edge (``data-fullscreen-strip``) shows on
+ * hover with Exit fullscreen and, where the chrome can do it, Immersive. The strip's hot zone is the
+ * one part of it that takes the pointer at rest, as thin as a resize edge; the controls hang below
+ * it while it or they are hovered.
  */
 
 import m from "mithril";
@@ -19,9 +25,11 @@ import type { PixelRect, ResizeEdge } from "../geometry/frames";
 import { RESIZE_EDGES } from "../geometry/frames";
 import { windowChromeZIndex } from "../geometry/stacking";
 import type { AppRecord, WindowRecord, WindowState } from "../model/records";
+import { glyph } from "./glyphs";
 import { rectStyle } from "./pixelStyle";
 import { TitleBar } from "./TitleBar";
 import type { WindowControl } from "./TitleBar";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
 
 // The handles' sizes are theme tokens (contracts.md section 11): an edge is a strip of
 // --desk-resize-edge overhanging the border by --desk-resize-overhang, inset from the corners,
@@ -37,6 +45,25 @@ const EDGE_CLASS: Readonly<Record<ResizeEdge, string>> = {
   se: "-right-(--desk-resize-overhang) -bottom-(--desk-resize-overhang) size-(--desk-resize-corner) cursor-nwse-resize",
   sw: "-bottom-(--desk-resize-overhang) -left-(--desk-resize-overhang) size-(--desk-resize-corner) cursor-nesw-resize",
 };
+
+/** What the fullscreen strip says and offers of immersive mode (the Screen integration spec, section 5); null
+ *  when the chrome cannot do it, which hides the control. */
+export interface ImmersiveControls {
+  readonly isOn: boolean;
+  readonly isKeyboardLocked: boolean;
+  /** Asked straight from the click: the chrome needs the gesture's activation for its fullscreen request. */
+  readonly onEnter: () => void;
+  readonly onLeave: () => void;
+}
+
+/** What the strip says of the keys while the window is fullscreen (the Screen spec, section 12). */
+export function fullscreenStripHint(immersive: ImmersiveControls | null): string {
+  if (immersive === null) return "";
+  if (!immersive.isOn) return "Press Immersive to send every key";
+  return immersive.isKeyboardLocked ? "Every key reaches this window" : "Immersive, without the keyboard lock";
+}
+
+const STRIP_GLYPH_SIZE = 14;
 
 export interface WindowAttrs {
   readonly window: WindowRecord;
@@ -58,6 +85,8 @@ export interface WindowAttrs {
    *  the stopped placeholder. A stoppable app's window keeps its page, which the shell's parker answers with a
    *  loading page until the app is up. */
   readonly isStopped: boolean;
+  /** Immersive mode's state and verbs for the fullscreen strip; null hides its control. */
+  readonly immersive: ImmersiveControls | null;
   readonly onRaise: () => void;
   readonly onControl: (control: WindowControl, event: MouseEvent) => void;
   readonly onToggleMaximize: () => void;
@@ -78,12 +107,72 @@ export function stoppedPlaceholder(app: AppRecord | undefined): m.Vnode {
   );
 }
 
+function stripControl(name: string, label: string, markup: string, onClick: () => void): m.Vnode {
+  return m(
+    Button,
+    {
+      variant: "ghost",
+      sm: true,
+      extra: "fullscreen-control gap-1",
+      "data-fullscreen-control": name,
+      "aria-label": label,
+      onclick: (event: MouseEvent) => {
+        event.stopPropagation();
+        onClick();
+      },
+    },
+    [m.trust(markup), label],
+  );
+}
+
+/** The strip a fullscreen window shows on hover at its top edge. */
+function fullscreenStrip(attrs: WindowAttrs): m.Vnode {
+  const immersive = attrs.immersive;
+  return m(
+    "div",
+    {
+      "data-fullscreen-strip": "",
+      // The hot zone: as thin as a resize edge, and the one part of the chrome over the page that takes the
+      // pointer at rest. The controls below it belong to the same group, so they stay while hovered.
+      class: "fullscreen-strip group pointer-events-auto absolute inset-x-0 top-0 h-(--desk-resize-edge)",
+    },
+    m(
+      "div",
+      {
+        "data-fullscreen-strip-controls": "",
+        class:
+          "hidden h-(--desk-title-bar-height) items-center gap-2 border-b border-default bg-surface px-2 " +
+          "text-primary group-focus-within:flex group-hover:flex",
+      },
+      [
+        m(
+          "span",
+          { "data-fullscreen-hint": "", class: "min-w-0 truncate text-(length:--font-size-row) text-secondary" },
+          fullscreenStripHint(immersive),
+        ),
+        m("span", { class: "flex-1" }),
+        immersive === null
+          ? null
+          : immersive.isOn
+            ? stripControl("leave-immersive", "Leave immersive", glyph("exit-fullscreen", STRIP_GLYPH_SIZE), () =>
+                immersive.onLeave(),
+              )
+            : stripControl("immersive", "Immersive", glyph("fullscreen", STRIP_GLYPH_SIZE), () => immersive.onEnter()),
+        stripControl("exit-fullscreen", "Exit fullscreen", glyph("exit-fullscreen", STRIP_GLYPH_SIZE), () =>
+          attrs.onControl("fullscreen", new MouseEvent("click")),
+        ),
+      ],
+    ),
+  );
+}
+
 export function Window(): m.Component<WindowAttrs> {
   return {
     view(vnode) {
       const attrs = vnode.attrs;
       const { window, app, title, rect, state, stackIndex, isFocused, isTouch, isStopped } = attrs;
-      const isResizable = !isTouch;
+      const isFullscreen = state === "FULLSCREEN";
+      const isResizable = !isTouch && !isFullscreen;
       return m(
         "div",
         {
@@ -108,21 +197,24 @@ export function Window(): m.Component<WindowAttrs> {
               "data-window-frame": "",
               // No border: the shadow is what separates a window from the backdrop, and a line
               // around it only competes. Focus is the title bar's, which changes colour with it.
+              // A fullscreen window has no backdrop around it to be separated from.
               class:
-                "window-frame flex h-full w-full flex-col overflow-hidden rounded-(--desk-window-radius) " +
-                "shadow-(--desk-window-shadow)",
+                "window-frame flex h-full w-full flex-col overflow-hidden " +
+                (isFullscreen ? "" : "rounded-(--desk-window-radius) shadow-(--desk-window-shadow)"),
             },
             [
-              m(TitleBar, {
-                title,
-                app,
-                state,
-                isFocused,
-                isMenuOpen: attrs.isMenuOpen,
-                sizeMenuTrigger: attrs.sizeMenuTrigger,
-                onControl: attrs.onControl,
-                onDoubleClick: attrs.onToggleMaximize,
-              }),
+              isFullscreen
+                ? fullscreenStrip(attrs)
+                : m(TitleBar, {
+                    title,
+                    app,
+                    state,
+                    isFocused,
+                    isMenuOpen: attrs.isMenuOpen,
+                    sizeMenuTrigger: attrs.sizeMenuTrigger,
+                    onControl: attrs.onControl,
+                    onDoubleClick: attrs.onToggleMaximize,
+                  }),
               // Transparent and inert like the root: the live page sits under this chrome in the stacking
               // order, shows through here, and takes the pointer; only the shield and the placeholders catch
               // a press.

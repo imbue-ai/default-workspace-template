@@ -1,4 +1,5 @@
-/** The strip above the stage (spec section 4.2): who has control, Take control, Give control back, the queue. */
+/** The strip above the stage (spec section 4.2): who has control, Take control, Give control back, the queue, and
+ *  the pointer-lock control where it applies (spec section 12). */
 
 import type { ControlDocument } from "./state";
 import { describeController, isOwnSessionController } from "./state";
@@ -6,6 +7,8 @@ import { describeController, isOwnSessionController } from "./state";
 export interface StripActions {
   onTakeControl: () => void;
   onReturnControl: () => void;
+  /** The pointer-lock control's button, offered while this human holds control. */
+  pointerLockButton: HTMLButtonElement;
 }
 
 export class Strip {
@@ -31,7 +34,14 @@ export class Strip {
     this.returnButton.textContent = "Give control back";
     this.returnButton.dataset.screenReturnControl = "true";
     this.returnButton.addEventListener("click", () => actions.onReturnControl());
-    this.element.append(this.who, this.waiting, this.status, this.takeButton, this.returnButton);
+    this.element.append(
+      this.who,
+      this.waiting,
+      this.status,
+      actions.pointerLockButton,
+      this.takeButton,
+      this.returnButton,
+    );
   }
 
   update(control: ControlDocument, ownSessionId: string | null, streamStatus: string, notice: string | null): void {

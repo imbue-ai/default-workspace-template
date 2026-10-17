@@ -40,6 +40,10 @@ declare module "@minds/embed-contract" {
   export const OPEN_LINK: "minds:open-link";
   export const OPEN_EXTERNAL: "minds:open-external";
   export const MAX_OPEN_LINK_URL_LENGTH: number;
+  // The immersive-mode pair (contract v9, the Screen integration spec). Probed like the ones above.
+  export const IMMERSIVE_REQUEST: "minds:immersive-request";
+  export const IMMERSIVE_CHANGED: "minds:immersive-changed";
+  export const MAX_IMMERSIVE_ERROR_LENGTH: number;
 
   export const REQUEST_ID_PATTERN: RegExp;
   export const AGENT_ID_PATTERN: RegExp;

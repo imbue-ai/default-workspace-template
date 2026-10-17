@@ -10,9 +10,15 @@
  * ``WireShapeError`` rather than read as an empty one: an empty desktop list would be believed.
  */
 
-export type WindowState = "NORMAL" | "SNAPPED_LEFT" | "SNAPPED_RIGHT" | "MAXIMIZED";
+export type WindowState = "NORMAL" | "SNAPPED_LEFT" | "SNAPPED_RIGHT" | "MAXIMIZED" | "FULLSCREEN";
 
-export const WINDOW_STATES: readonly WindowState[] = ["NORMAL", "SNAPPED_LEFT", "SNAPPED_RIGHT", "MAXIMIZED"];
+export const WINDOW_STATES: readonly WindowState[] = [
+  "NORMAL",
+  "SNAPPED_LEFT",
+  "SNAPPED_RIGHT",
+  "MAXIMIZED",
+  "FULLSCREEN",
+];
 
 export type ShortcutMode = "focus" | "new";
 

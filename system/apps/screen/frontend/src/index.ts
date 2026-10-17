@@ -13,6 +13,7 @@ import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu"
 import { InputRelay } from "./input";
 import { NekoSocket } from "./neko_socket";
 import { Overlays } from "./overlays";
+import { PointerLockControl } from "./pointer_lock";
 import {
   ServiceEvents,
   ServiceRequestError,
@@ -41,6 +42,7 @@ class Viewer {
   private readonly video = document.createElement("video");
   private readonly strip: Strip;
   private readonly overlays: Overlays;
+  private readonly pointerLock: PointerLockControl;
   private state: ScreenStateDocument | null = null;
   private session: NekoSessionAnswer | null = null;
   private socket: NekoSocket | null = null;
@@ -56,9 +58,12 @@ class Viewer {
 
   constructor(mount: HTMLElement) {
     this.root.className = "screen-root";
+    // The deltas have no neko event to go to yet (pointer_lock.ts): the control stays hidden and they are dropped.
+    this.pointerLock = new PointerLockControl({ stage: this.stage, onRelativeMove: () => undefined });
     this.strip = new Strip({
       onTakeControl: () => this.takeControl(),
       onReturnControl: () => this.returnControl(),
+      pointerLockButton: this.pointerLock.button,
     });
     this.overlays = new Overlays(
       () => void postStart(),
@@ -118,6 +123,7 @@ class Viewer {
     // control/request, which it grants with no host, and the service records this human (spec section 6.2).
     const canSend = (isController || this.state.control.controller === "nobody") && this.state.lifecycle === "running";
     this.strip.update(this.state.control, ownSessionId, this.streamStatus, this.notice);
+    this.pointerLock.setAvailable(isController);
     this.overlays.update(this.state, this.streamStatus, this.session !== null, this.signInError);
     this.input?.setEnabled(canSend);
     this.stage.classList.toggle("screen-stage--not-controlling", !canSend);
