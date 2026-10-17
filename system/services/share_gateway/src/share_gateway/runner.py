@@ -45,14 +45,16 @@ from werkzeug.serving import make_server
 from share_gateway import materials as materials_module
 from share_gateway.assignment import RelayAssignment
 from share_gateway.assignment import load_assignment
-from share_gateway.log import log as _log
 from share_gateway.caddyfile import read_registered_apps
 from share_gateway.caddyfile import render_caddyfile
 from share_gateway.certs import CertProvisioningError
 from share_gateway.certs import ensure_share_certificate
+from share_gateway.connect_info import build_connect_info
+from share_gateway.frpc_config import SCREEN_MEDIA_LOCAL_PORT
 from share_gateway.frpc_config import render_frpc_toml
 from share_gateway.handoff import JwksCache
 from share_gateway.handoff import SingleUseJtiRegistry
+from share_gateway.log import log as _log
 from share_gateway.materials import ShareMaterials
 from share_gateway.materials import discard_signing_secret
 from share_gateway.materials import load_or_create_auth_label
@@ -69,6 +71,7 @@ from share_gateway.retry_state import utc_now
 from share_gateway.retry_state import write_gateway_status
 from share_gateway.server import PendingLoginRegistry
 from share_gateway.server import build_gateway_app
+from share_gateway.turn import TurnCredentialCache
 
 POLL_INTERVAL_SECONDS = 10
 APPS_TOML_PATH = Path("data/.state/apps.toml")
@@ -162,12 +165,14 @@ def _reload_frpc(config_path: Path) -> bool:
 
 
 class ShareStack:
-    """The running pieces of one active share: gateway server, caddy, one frpc per assigned relay."""
+    """The running pieces of one active share: gateway server, caddy, one frpc per assigned relay, and the relay
+    credential brokered for the Screen."""
 
     def __init__(self, materials: ShareMaterials, auth_label: str, assignment: RelayAssignment) -> None:
         self.materials = materials
         self.auth_label = auth_label
         self.assignment = assignment
+        self.turn = TurnCredentialCache(materials.connector_url, materials.relay_token)
         self.gateway_server: BaseWSGIServer | None = None
         self.caddy_process: subprocess.Popen[bytes] | None = None
         self.frpc_process_by_relay_id: dict[str, subprocess.Popen[bytes]] = {}
@@ -213,7 +218,14 @@ class ShareStack:
             auth_label=self.auth_label,
             local_https_port=materials_module.CADDY_HTTPS_PORT,
             admin_port=self.admin_port_for(relay_id),
+            media_port=self.assignment.media_port,
+            local_media_port=SCREEN_MEDIA_LOCAL_PORT,
         )
+
+    def connect_info(self) -> dict[str, object]:
+        """The loopback ``GET /connect-info`` answer for the Screen service, from the current assignment and
+        credential."""
+        return build_connect_info(self.assignment, self.turn.ice_servers(), SCREEN_MEDIA_LOCAL_PORT)
 
 
 def _start_frpc_for_relay(stack: ShareStack, relay_id: str) -> None:
@@ -257,14 +269,16 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
             retry_after_seconds=exc.retry_after_seconds,
         ) from exc
 
-    assignment = load_assignment(materials.connector_url, materials.relay_token, materials_module.ASSIGNMENT_CACHE_PATH)
+    assignment = load_assignment(
+        materials.connector_url, materials.relay_token, materials_module.ASSIGNMENT_CACHE_PATH
+    )
     if assignment is None:
-        raise ShareStackStartError(
-            "no relay assignment available yet", is_retryable=True, retry_after_seconds=None
-        )
+        raise ShareStackStartError("no relay assignment available yet", is_retryable=True, retry_after_seconds=None)
 
     auth_label = load_or_create_auth_label(materials_module.AUTH_LABEL_FILE)
     stack = ShareStack(materials, auth_label, assignment)
+    # The credential is an enhancement of the Screen's stream: a refusal here never fails the share.
+    stack.turn.refresh_if_due()
     signing_secret = load_or_create_signing_secret(materials_module.SIGNING_SECRET_FILE, materials.relay_token)
     app = build_gateway_app(
         materials=materials,
@@ -275,6 +289,7 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
         pending_logins=PendingLoginRegistry(),
         auth_label=auth_label,
         get_registered_apps=lambda: read_registered_apps(APPS_TOML_PATH),
+        get_connect_info=stack.connect_info,
     )
     stack.gateway_server = make_server("127.0.0.1", materials_module.GATEWAY_PORT, app, threaded=True)
     threading.Thread(target=stack.gateway_server.serve_forever, name="share-gateway-http", daemon=True).start()
@@ -373,6 +388,7 @@ def _tick_running_stack(stack: ShareStack) -> ShareStack | None:
         return None
     _restart_dead_frpc_processes(stack)
     _repoll_assignment(stack)
+    stack.turn.refresh_if_due()
 
     current_caddyfile = stack.render_current_caddyfile()
     if current_caddyfile != stack.last_caddyfile_text:
@@ -382,8 +398,9 @@ def _tick_running_stack(stack: ShareStack) -> ShareStack | None:
             _log("Reloaded caddy for a service-registry change")
 
     # A service registered while shared needs its label claimed on EVERY
-    # relay; hot-reload each frpc (admin API) so the new claim lands without
-    # dropping existing viewers' tunnels.
+    # relay, and a media port the assignment gained needs its proxy; hot-reload
+    # each frpc (admin API) so the new claim lands without dropping existing
+    # viewers' tunnels.
     for relay_id in sorted(stack.frpc_process_by_relay_id):
         current_frpc_config = stack.render_frpc_config_for(relay_id)
         if current_frpc_config != stack.frpc_config_text_by_relay_id.get(relay_id):
