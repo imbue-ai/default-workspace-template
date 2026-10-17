@@ -46,6 +46,18 @@
   display: none;
 }
 
+/* A fullscreen window takes the whole viewport, the taskbar's band included (contracts.md section 10):
+   while one is on screen the backdrop and its area stop clipping, and the area paints over the
+   taskbar, which is covered rather than taken out so nothing else on the desktop moves. */
+[data-fullscreen-window] .backdrop-area,
+[data-fullscreen-window] .backdrop {
+  overflow: visible;
+}
+
+[data-fullscreen-window] .backdrop-area {
+  z-index: 1;
+}
+
 /* The closed hand for as long as a window is being dragged by its title bar. The window follows
    the pointer, so the handle stays under it the whole way; the attribute is on the desktop's root
    because the cursor has to win over the grab the handle wears at rest. */

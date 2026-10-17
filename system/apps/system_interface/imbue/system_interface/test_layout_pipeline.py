@@ -182,6 +182,7 @@ def test_open_lands_a_window_the_window_verbs_arrange_and_close_takes_away(
         ("minimize", [], (window_id, "SNAPPED_LEFT", True)),
         ("restore", [], (window_id, "NORMAL", False)),
         ("maximize", [], (window_id, "MAXIMIZED", False)),
+        ("place", ["--state", "fullscreen"], (window_id, "FULLSCREEN", False)),
         ("place", ["--frame", "0.1,0.1,0.5,0.5"], (window_id, "NORMAL", False)),
     ):
         result = _run_layout_command([verb, window_id, *extra], layout_server, sandbox)

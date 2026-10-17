@@ -446,7 +446,7 @@ def test_the_retired_zone_flag_names_the_state_flag(
     with pytest.raises(SystemExit):
         run_layout_cli(["place", "self", "--zone", "left"], layout_context)
     err = capsys.readouterr().err
-    assert "--zone is retired" in err and "--state (snapped-left, snapped-right, maximized)" in err
+    assert "--zone is retired" in err and "--state (snapped-left, snapped-right, maximized, fullscreen)" in err
     assert loopback_shell.posted == []
 
 
@@ -778,6 +778,7 @@ def test_a_read_timeout_is_an_unreachable_shell(
         ["place", "self", "--state", "snapped-left"],
         ["place", "self", "--state", "snapped-right"],
         ["place", "self", "--state", "maximized"],
+        ["place", "self", "--state", "fullscreen"],
         ["place", "self", "--frame", "0.1,0.1,0.5,0.5"],
         ["navigate", "self", "/b"],
         ["refresh", "self", "--client", "c1"],

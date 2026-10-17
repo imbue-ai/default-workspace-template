@@ -67,13 +67,18 @@ export const WINDOW_ID_ATTRIBUTE = "data-window-id";
 
 // App pages are cross-origin iframes (each app owns its own origin), so allow-same-origin only
 // lets the framed app be a normal page on ITS origin; it grants nothing on the shell's. An app
-// page may open links in real tabs, download files, and raise modals, none of which a sandboxed
-// frame may do without these; every page gets them, since the shell does not know which apps
-// need which.
+// page may open links in real tabs, download files, and raise modals, and lock the pointer for a
+// relative-motion program on the Screen, none of which a sandboxed frame may do without these;
+// every page gets them, since the shell does not know which apps need which.
 export const PAGE_FRAME_SANDBOX =
-  "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals";
-// Lets embedded apps (the browser fleet viewer) reach the user's clipboard.
-export const PAGE_FRAME_ALLOW = "clipboard-read; clipboard-write";
+  "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads " +
+  "allow-modals allow-pointer-lock";
+// Lets embedded apps (the Screen's viewer) reach the user's clipboard, and ask for Fullscreen-API fullscreen,
+// which the Imbue Studio chrome's immersive mode needs delegated down every frame on the way (the Screen
+// integration spec, section 5.5).
+export const PAGE_FRAME_ALLOW = "clipboard-read; clipboard-write; fullscreen";
+// The page's bottom corners follow the chrome's rounding, which a fullscreen window has none of.
+const PAGE_CORNERS_CLASS = "rounded-b-(--desk-window-radius)";
 // The shell's WindowTitle rule (contracts.md section 1, ``shell/primitives.py``): a longer title is
 // refused with a 400, which would leave the whole report, path included, unstored.
 export const MAX_WINDOW_TITLE_LENGTH = 256;
@@ -301,6 +306,7 @@ export class LivePagesLayer implements PageDriver {
         this.hide(page);
         return;
       }
+      page.wrapper.classList.toggle(PAGE_CORNERS_CLASS, placement.state !== "FULLSCREEN");
       this.show(page, box, index, !this.isGestureActive && window.id === focused);
       if (page.greetedDesktopId !== null && page.greetedDesktopId !== desktop.id) this.greet(page);
     });
@@ -466,7 +472,7 @@ export class LivePagesLayer implements PageDriver {
     const wrapper = document.createElement("div");
     // A surface while the page loads, under the chrome (whose content box is transparent) and over the
     // wallpaper; the bottom corners follow the chrome's rounding.
-    wrapper.className = "live-page absolute overflow-hidden rounded-b-(--desk-window-radius) bg-page";
+    wrapper.className = `live-page absolute overflow-hidden ${PAGE_CORNERS_CLASS} bg-page`;
     wrapper.style.display = "none";
     const frame = document.createElement("iframe");
     frame.setAttribute(LIVE_PAGE_ATTRIBUTE, window.id);

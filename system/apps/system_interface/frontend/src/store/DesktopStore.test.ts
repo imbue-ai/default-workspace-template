@@ -19,11 +19,12 @@ import {
 import type { GridCell } from "../model/records";
 import {
   DesktopStore,
+  IMMERSIVE_REFUSED_NOTICE,
   OTHER_WORKSPACE_LINK_NOTICE,
   SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE,
   chooseInitialDesktopId,
 } from "./DesktopStore";
-import type { PopOutBridge, StoreDependencies } from "./DesktopStore";
+import type { ImmersiveBridge, PopOutBridge, StoreDependencies } from "./DesktopStore";
 import type { ClientStateReport } from "./socket";
 
 const METRICS = themeMetricsRecord();
@@ -83,7 +84,7 @@ function notices(): string[] {
 
 function makeStore(
   redraw: () => void = () => undefined,
-  extra: Pick<StoreDependencies, "popOut" | "soloWindowId" | "isSoloReopened" | "outsideLinks"> = {},
+  extra: Pick<StoreDependencies, "popOut" | "soloWindowId" | "isSoloReopened" | "outsideLinks" | "immersive"> = {},
 ): DesktopStore {
   const store = new DesktopStore({
     clientId: CLIENT,
@@ -2699,5 +2700,71 @@ describe("the phone layout", () => {
     store.onVisibilityChange(false);
     socket.deliver().onConnected();
     expect(reloaded).toEqual(["win-1"]);
+  });
+});
+
+describe("fullscreen and immersive mode", () => {
+  it("fills the viewport with a window and brings it back to its kept frame, and says when one is on screen", async () => {
+    const store = await startedStore();
+    const before = placementOf(store.getState().layout, "win-1");
+    expect(store.isFullscreenShown()).toBe(false);
+    store.toggleFullscreen("win-1");
+    const fullscreen = placementOf(store.getState().layout, "win-1");
+    expect(fullscreen.state).toBe("FULLSCREEN");
+    expect(fullscreen.frame).toEqual(before.frame);
+    expect(fullscreen.is_minimized).toBe(false);
+    expect(store.isFullscreenShown()).toBe(true);
+    // The whole viewport: the backdrop plus the taskbar's band, with no fit applied.
+    expect(store.renderedRect(fullscreen)).toEqual({ x: 0, y: 0, width: 1000, height: 800 + METRICS.taskbarHeight });
+    store.minimizeWindow("win-1");
+    expect(store.isFullscreenShown()).toBe(false);
+    store.restoreWindow("win-1");
+    expect(store.isFullscreenShown()).toBe(true);
+    store.toggleFullscreen("win-1");
+    const restored = placementOf(store.getState().layout, "win-1");
+    expect(restored.state).toBe("NORMAL");
+    expect(restored.frame).toEqual(before.frame);
+    expect(store.isFullscreenShown()).toBe(false);
+  });
+
+  it("asks the chrome for immersive mode only once it said it could, and credits the answer to the window", async () => {
+    const asks: [string, boolean][] = [];
+    const immersive: ImmersiveBridge = { requestImmersive: (windowId, isOn) => asks.push([windowId, isOn]) };
+    const store = makeStore(() => undefined, { immersive });
+    await store.start(NO_LINK);
+    expect(store.getCanImmerse()).toBe(false);
+    store.requestImmersive("win-1");
+    expect(asks).toEqual([]);
+    store.setCanImmerse(true);
+    store.requestImmersive("win-missing");
+    expect(asks).toEqual([]);
+    store.requestImmersive("win-1");
+    expect(asks).toEqual([["win-1", true]]);
+    expect(store.getImmersive()).toBeNull();
+    store.onImmersiveChanged({ isOn: true, isKeyboardLocked: true, error: null });
+    expect(store.getImmersive()).toEqual({ windowId: "win-1", isKeyboardLocked: true });
+    store.leaveImmersive();
+    expect(asks).toEqual([
+      ["win-1", true],
+      ["win-1", false],
+    ]);
+    // The mode ends on the chrome's word, not on the ask.
+    expect(store.getImmersive()).not.toBeNull();
+    store.onImmersiveChanged({ isOn: false, isKeyboardLocked: false, error: null });
+    expect(store.getImmersive()).toBeNull();
+    expect(notices()).toEqual([]);
+  });
+
+  it("notes a refused request and takes the chrome's own changes, lock or no lock", async () => {
+    const store = await startedStore();
+    store.setCanImmerse(true);
+    store.onImmersiveChanged({ isOn: false, isKeyboardLocked: false, error: "fullscreen refused" });
+    expect(notices()).toEqual([`${IMMERSIVE_REFUSED_NOTICE}: fullscreen refused`]);
+    expect(store.getImmersive()).toBeNull();
+    // A change the chrome made on its own names no window.
+    store.onImmersiveChanged({ isOn: true, isKeyboardLocked: false, error: null });
+    expect(store.getImmersive()).toEqual({ windowId: null, isKeyboardLocked: false });
+    store.leaveImmersive();
+    expect(store.getImmersive()).not.toBeNull();
   });
 });
