@@ -230,6 +230,12 @@ class ScreenStack(MutableModel):
             self.secrets = None
         self._set_lifecycle(Lifecycle.STOPPED, None, reason)
 
+    def is_any_member_running(self) -> bool:
+        return any(
+            self.supervisor.program_state(program) in (ProgramState.RUNNING, ProgramState.STARTING)
+            for program in STACK_PROGRAMS
+        )
+
     def mark_stopped(self, reason: str) -> None:
         """The watcher says the group ended on its own."""
         self.set_api_token(None)

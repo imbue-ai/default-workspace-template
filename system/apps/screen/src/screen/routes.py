@@ -320,7 +320,8 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
         body = _json_body()
         member = str(body.get("member", "")).strip() or "a member"
         reason = str(body.get("reason", "")).strip() or f"{member} stopped"
-        service.notify_stopped(member, reason)
+        if not service.notify_stopped(member, reason):
+            return _error("the group is still running", HTTP_CONFLICT)
         return Response(status=HTTP_NO_CONTENT)
 
     # the neko proxy

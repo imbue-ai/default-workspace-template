@@ -73,9 +73,10 @@ def decide_group_end(event_name: str, payload: str) -> GroupEndDecision:
         reason = f"{program} exited"
     else:
         reason = f"{program} exited unexpectedly"
+    # The session goes before the X server it runs on, so a stop never looks like a second unexpected exit.
     return GroupEndDecision(
         stopped=ScreenStopped(member=program, reason=reason),
-        members_to_stop=tuple(member for member in STACK_PROGRAMS if member != program),
+        members_to_stop=tuple(member for member in reversed(STACK_PROGRAMS) if member != program),
     )
 
 

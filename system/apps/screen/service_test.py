@@ -234,10 +234,15 @@ def test_title_follows_the_active_window(client: FlaskClient, service: ScreenSer
 
 
 def test_watcher_notification_stops_the_lifecycle_and_frees_the_lease(
-    client: FlaskClient, service: ScreenService
+    client: FlaskClient, service: ScreenService, fake_supervisor: FakeSupervisor
 ) -> None:
     start_service_stack(service)
     client.post("/api/control/acquire", json={}, headers=_AGENT_A)
+    # A notification while the group still runs is not believed.
+    assert client.post("/api/internal/stopped", json={"member": "screen-xorg", "reason": "x"}).status_code == 409
+    assert client.get("/api/state").get_json()["lifecycle"] == "running"
+    for member in ("screen-xorg", "screen-pulse", "screen-session", "screen-neko"):
+        fake_supervisor.stop_program(member)
     answer = client.post(
         "/api/internal/stopped", json={"member": "screen-xorg", "reason": "screen-xorg exited unexpectedly"}
     )
@@ -246,6 +251,14 @@ def test_watcher_notification_stops_the_lifecycle_and_frees_the_lease(
     assert document["lifecycle"] == "stopped"
     assert document["stop_reason"] == "screen-xorg exited unexpectedly"
     assert document["control"]["controller"] == "nobody"
+    # A member that left as the group ended does not rename the reason.
+    assert (
+        client.post(
+            "/api/internal/stopped", json={"member": "screen-session", "reason": "screen-session exited"}
+        ).status_code
+        == 204
+    )
+    assert client.get("/api/state").get_json()["stop_reason"] == "screen-xorg exited unexpectedly"
     assert client.post("/api/session", headers=_IDENTITY).status_code == 503
 
 

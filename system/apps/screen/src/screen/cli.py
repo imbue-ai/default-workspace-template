@@ -118,20 +118,25 @@ def request_service(method: str, path: str, body: dict[str, Any] | None, is_iden
     try:
         with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
             raw = response.read()
-            return ServiceAnswer(status=response.status, body=_parse_body(raw), raw=raw)
+            return ServiceAnswer(
+                status=response.status, body=parse_answer_body(raw, response.headers.get("Content-Type", "")), raw=raw
+            )
     except urllib.error.HTTPError as e:
         raw = e.read()
-        return ServiceAnswer(status=e.code, body=_parse_body(raw), raw=raw)
+        return ServiceAnswer(status=e.code, body=parse_answer_body(raw, e.headers.get("Content-Type", "")), raw=raw)
     except urllib.error.URLError as e:
         _err(f"cannot reach the Screen service at {service_url()} ({e.reason}). Is it running?")
         raise SystemExit(EXIT_NO_SERVICE) from e
 
 
 @pure
-def _parse_body(raw: bytes) -> dict[str, Any]:
+def parse_answer_body(raw: bytes, content_type: str) -> dict[str, Any]:
+    """The JSON object a service answer carries; ``{}`` for an image or any other non-JSON body."""
+    if "json" not in content_type.lower():
+        return {}
     try:
         parsed = json.loads(raw or b"{}")
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, UnicodeDecodeError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
 

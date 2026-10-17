@@ -263,11 +263,19 @@ class ScreenService(MutableModel):
     def ensure_started(self) -> Lifecycle:
         return self.stack.ensure_started()
 
-    def notify_stopped(self, member: str, reason: str) -> None:
-        """The watcher says a member left and the rest of the group was stopped."""
+    def notify_stopped(self, member: str, reason: str) -> bool:
+        """The watcher says a member left and the rest of the group was stopped; believed only when supervisord
+        agrees that the group is down, so a stray notification cannot declare a running stack stopped."""
+        if self.stack.is_any_member_running():
+            logger.warning("Ignored a stop notification for {} while the group still runs", member)
+            return False
+        if self.stack.lifecycle == Lifecycle.STOPPED:
+            # The first member to go names the reason; the others leaving afterwards is the group ending as designed.
+            return True
         logger.warning("The Screen stopped: {} ({})", reason, member)
         self.stack.mark_stopped(reason)
         self.broadcaster.broadcast({"type": "stopped", "reason": reason, "member": member})
+        return True
 
     # sessions (spec section 6.3)
 

@@ -104,10 +104,13 @@ class Viewer {
     if (!this.state) return;
     const ownSessionId = this.session?.session_id ?? null;
     const isController = isOwnSessionController(this.state.control, ownSessionId);
+    // Input flows while this session controls, and while nobody does: the first input is then neko's
+    // control/request, which it grants with no host, and the service records this human (spec section 6.2).
+    const canSend = (isController || this.state.control.controller === "nobody") && this.state.lifecycle === "running";
     this.strip.update(this.state.control, ownSessionId, this.streamStatus);
     this.overlays.update(this.state, this.streamStatus, this.session !== null);
-    this.input?.setEnabled(isController && this.state.lifecycle === "running");
-    this.stage.classList.toggle("screen-stage--not-controlling", !isController);
+    this.input?.setEnabled(canSend);
+    this.stage.classList.toggle("screen-stage--not-controlling", !canSend);
     this.stage.dataset.screenController = isController ? "you" : this.state.control.controller;
   }
 

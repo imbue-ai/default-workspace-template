@@ -4,6 +4,7 @@ from screen.cli import EXIT_OK
 from screen.cli import EXIT_PREEMPTED
 from screen.cli import EXIT_TIMEOUT
 from screen.cli import describe_controller
+from screen.cli import parse_answer_body
 from screen.cli import render_acquire_answer
 
 
@@ -34,3 +35,11 @@ def test_describe_controller() -> None:
     assert describe_controller({"controller": "agent", "agent_id": "b", "agent_name": "Bob"}, "me") == "agent Bob"
     assert describe_controller({"controller": "human", "human_name": "Josh"}, "me") == "the human (Josh)"
     assert describe_controller({"controller": "nobody"}, "me") == "nobody"
+
+
+def test_answer_bodies_are_parsed_only_when_json() -> None:
+    assert parse_answer_body(b'{"pid": 4}', "application/json") == {"pid": 4}
+    assert parse_answer_body(b"\x89PNG\r\n", "image/png") == {}
+    assert parse_answer_body(b"not json", "application/json; charset=utf-8") == {}
+    assert parse_answer_body(b"[1, 2]", "application/json") == {}
+    assert parse_answer_body(b"", "application/json") == {}
