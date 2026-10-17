@@ -874,11 +874,13 @@ class BrowserFleet(MutableModel):
                 browser.lifecycle = BrowserLifecycle.STOPPED
             for browser in to_launch:
                 browser.lifecycle = BrowserLifecycle.INIT
-            kept_names = set(self._browsers)
         self.on_changed()
         for browser in to_launch:
             self._launch(browser, list(browser.last_known_tabs), browser.last_known_active_tab, True)
         self.checkpoint()
+        # Read right before the sweep: a browser created while the launches ran has a profile to keep too.
+        with self._lock:
+            kept_names = set(self._browsers)
         self.sweep_orphan_profiles(kept_names)
 
     def sweep_orphan_profiles(self, kept_names: set[str]) -> None:
