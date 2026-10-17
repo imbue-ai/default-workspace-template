@@ -19,3 +19,5 @@ Step 8, the browser's migration and the deletions (the Screen spec, sections 16.
 - `system/scripts/env.d/2000-screen.sh` pins Fortress v153.0.8010.36 for x64 and arm64 alike from the official release (the fork build the arm64 pin pointed at is retired), checked against the release's SHA-256 sums; the tarball's versioned directory is installed as it is and `/opt/fortress/tilion-fortress/tilion`, the path AGENTS.md, the root conftest and the Screen service use, is a symlink the unit repoints at the pinned release, so a pin bump reinstalls. The Chrome extensions are fetched for Chrome 153.
 
 - The workspace shell's `open https://...` opens the page through the Screen's `browser` launch path (`system/libs/workspace_layout`), and the shell's layout pipeline test expects the Screen app to be named when it is not registered.
+
+- `docs/system/blueprint/workspace-app-model/contracts.md` loses the browser app too: the Screen takes its row in the built-in manifest table and the `wiring` and `launcher_rank` examples, and the instances API's browser-specific notes and row are gone with the app.
