@@ -62,20 +62,15 @@ def _command_by_program() -> dict[str, str]:
     supervisord's precedence; ``test_supervisord_layout.py`` pins that directory as the one the
     include glob names.
     """
-    parser = configparser.ConfigParser(interpolation=None)
-    parser.read(_SUPERVISORD_CONF)
-    parser.read(
-        sorted((_SUPERVISORD_CONF.parent / "supervisord.conf.d").glob("*.conf"))
-    )
-    return {
-        section.partition(":")[2]: parser[section].get("command", "")
-        for section in parser.sections()
-        if section.startswith("program:")
-    }
+    return _command_by_section(("program:",))
 
 
 def _command_by_program_or_listener() -> dict[str, str]:
     """Every program and event listener the config declares: what a manifest's wiring may name."""
+    return _command_by_section(("program:", "eventlistener:"))
+
+
+def _command_by_section(section_kinds: tuple[str, ...]) -> dict[str, str]:
     parser = configparser.ConfigParser(interpolation=None)
     parser.read(_SUPERVISORD_CONF)
     parser.read(
@@ -84,7 +79,7 @@ def _command_by_program_or_listener() -> dict[str, str]:
     return {
         section.partition(":")[2]: parser[section].get("command", "")
         for section in parser.sections()
-        if section.startswith(("program:", "eventlistener:"))
+        if section.startswith(section_kinds)
     }
 
 
