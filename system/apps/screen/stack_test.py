@@ -45,8 +45,9 @@ def test_start_renders_the_configuration_and_brings_the_members_up_in_order(
     rendered = yaml.safe_load(neko_yaml.read_text())
     assert fake_neko.api_token is not None
     assert rendered["session"]["api_token"] == fake_neko.api_token.get_secret_value()
-    # The service logged itself in with the admin password for its event session.
-    assert fake_neko.calls == ["login:Screen service", "lock:False"]
+    # The service logged itself in with the admin password for its event session, and the lease's projection (a
+    # free Screen is unlocked) follows on the projection thread.
+    assert wait_until(lambda: fake_neko.calls == ["login:Screen service", "lock:False"]), fake_neko.calls
     assert (tmp_path / "runtime").is_dir()
 
 
