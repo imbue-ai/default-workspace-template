@@ -3978,9 +3978,9 @@ def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cance
     ]
     # The page renders the held messages and the phase text from the snapshot, so both ride it.
     assert listed[0]["handoff"]["target_harness"] == "codex"
-    assert listed[0]["handoff"]["held_sends"] == [
-        {"message_id": "trigger-1", "text": "Carry on in Codex"},
-        {"message_id": "m-2", "text": "and this"},
+    assert [(held["message_id"], held["text"]) for held in listed[0]["handoff"]["held_sends"]] == [
+        ("trigger-1", "Carry on in Codex"),
+        ("m-2", "and this"),
     ]
     # The chat still reads from the agent it is leaving.
     assert client.get(f"/api/chats/{first}/events").get_json()["total"] == 1
@@ -4126,9 +4126,9 @@ def test_a_chat_restarting_on_another_account_holds_sends_refuses_the_verbs_and_
         (chat["status"], chat["handoff"]["kind"], chat["handoff"]["phase"], chat["handoff"]["target_label"])
         for chat in listed
     ] == [("working", "rebind", "restarting", "Anthropic 2 (Claude Code)")]
-    assert listed[0]["handoff"]["held_sends"] == [
-        {"message_id": "trigger-1", "text": "Carry on on the other account"},
-        {"message_id": "m-2", "text": "and this"},
+    assert [(held["message_id"], held["text"]) for held in listed[0]["handoff"]["held_sends"]] == [
+        ("trigger-1", "Carry on on the other account"),
+        ("m-2", "and this"),
     ]
     assert not log_path.exists()
 

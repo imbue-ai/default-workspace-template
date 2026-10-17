@@ -395,9 +395,10 @@ def write_marker(
     _mirror_apply_into_run_status(marker.phase, marker.updated_at, repo_root, now)
 
 
-def clear_marker(repo_root: Path) -> None:
+def clear_marker(repo_root: Path, *, is_landed: bool = False) -> None:
+    """Take the marker down; ``is_landed`` when the apply went live, which the run record keeps."""
     marker_path(repo_root).unlink(missing_ok=True)
-    _mirror_apply_into_run_status(None, None, repo_root, time.time)
+    _mirror_apply_into_run_status(None, None, repo_root, time.time, is_landed=is_landed)
 
 
 def _mirror_apply_into_run_status(
@@ -405,6 +406,8 @@ def _mirror_apply_into_run_status(
     apply_updated_at: float | None,
     repo_root: Path,
     now: Callable[[], float],
+    *,
+    is_landed: bool = False,
 ) -> None:
     """Keep the run record's apply fields equal to the marker's presence and phase.
 
@@ -412,16 +415,24 @@ def _mirror_apply_into_run_status(
     Imbue Studio app reads. Stamping the two together at the marker's chokepoints is
     what lets the app size its apply window off this file alone -- the app
     stands back while ``apply_phase`` is set and for the recovery grace after
-    its last restamp, exactly as it did off the marker. A workspace with no run
-    record (an apply run by hand outside a pass) has nothing to report to.
+    its last restamp, exactly as it did off the marker. ``is_landed`` also
+    stamps ``applied_at``, which the app reads to say the update is finishing.
+    A workspace with no run record (an apply run by hand outside a pass) has
+    nothing to report to.
     """
     status = read_run_status(repo_root)
     if status is None:
         return
-    if status.apply_phase == phase and status.apply_updated_at == apply_updated_at:
+    if (
+        status.apply_phase == phase
+        and status.apply_updated_at == apply_updated_at
+        and not is_landed
+    ):
         return
     status.apply_phase = phase
     status.apply_updated_at = apply_updated_at
+    if is_landed:
+        status.applied_at = now()
     write_run_status(status, repo_root, now)
 
 
@@ -474,6 +485,9 @@ class RunStatus:
       completed phase. Mirrored from the apply marker on its every restamp and
       cleared with it, so the app reads the apply's liveness from this one
       file and never has to know the marker exists.
+    * ``applied_at`` -- when the apply went live. Between it and the verdict
+      the update is in place while the run finishes its own checks, which the
+      app says instead of "preparing". Cleared by the next run's ``start``.
     """
 
     chat_agent_name: str
@@ -484,6 +498,7 @@ class RunStatus:
     hold_detail: str = ""
     apply_phase: str | None = None
     apply_updated_at: float | None = None
+    applied_at: float | None = None
     verdict: str | None = None
     detail: str = ""
     resulting_ref: str = ""
@@ -501,6 +516,7 @@ class RunStatus:
                 "hold_detail": self.hold_detail,
                 "apply_phase": self.apply_phase,
                 "apply_updated_at": self.apply_updated_at,
+                "applied_at": self.applied_at,
                 "verdict": self.verdict,
                 "detail": self.detail,
                 "resulting_ref": self.resulting_ref,
@@ -518,6 +534,7 @@ class RunStatus:
         worker_agent_name = raw.get("worker_agent_name")
         apply_phase = raw.get("apply_phase")
         apply_updated_at = raw.get("apply_updated_at")
+        applied_at = raw.get("applied_at")
         verdict = raw.get("verdict")
         verdict_at = raw.get("verdict_at")
         return cls(
@@ -533,6 +550,7 @@ class RunStatus:
             apply_updated_at=float(apply_updated_at)
             if apply_updated_at is not None
             else None,
+            applied_at=float(applied_at) if applied_at is not None else None,
             verdict=str(verdict) if verdict is not None else None,
             detail=str(raw.get("detail", "")),
             resulting_ref=str(raw.get("resulting_ref", "")),

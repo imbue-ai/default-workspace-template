@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import m from "mithril";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../models/Chats", async (importOriginal) => ({
@@ -150,6 +151,36 @@ describe("the held-send bubbles", () => {
     expect(
       bubbles.every((bubble) => rowClassOf(bubble).includes("message-user") && !/opacity-/.test(rowClassOf(bubble))),
     ).toBe(true);
+  });
+
+  it("shows a held background-task report as its one-line notice, and the user's own words as a bubble", () => {
+    const chat = `agent-report-${Math.random()}`;
+    chats.set(
+      chat,
+      chatSnapshotFixture(chat, {
+        handoff: rebindStateFixture({
+          held_sends: [
+            { message_id: "trigger-1", text: "Carry on on the other account" },
+            {
+              message_id: "m-report",
+              text: "<background-task-report>\n<summary>Wait for the worker (finished)</summary>\nExit code: 0\n</background-task-report>",
+              display: "notice",
+              display_label: "Background task",
+              display_body: "Wait for the worker (finished)",
+            },
+          ],
+        }),
+      }),
+    );
+    const root = document.createElement("div");
+
+    m.render(root, renderHeldSends(chat));
+
+    expect(root.querySelector(".held-send .message-notice")?.textContent).toBe(
+      "Background task: Wait for the worker (finished)",
+    );
+    expect(root.textContent).not.toContain("<background-task-report>");
+    expect(root.querySelector(".held-send .message-user-bubble")?.textContent).toBe("Carry on on the other account");
   });
 
   it("renders nothing for a chat that is not switching", () => {

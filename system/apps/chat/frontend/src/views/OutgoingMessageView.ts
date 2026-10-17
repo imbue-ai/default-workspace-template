@@ -10,8 +10,16 @@
  */
 import m from "mithril";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
+import type { DisplayDecision } from "../models/Chats";
 import type { OutgoingMessage } from "../models/OutgoingMessages";
-import { USER_BUBBLE_CLASS, USER_MESSAGE_ROW_CLASS } from "./user-message-display";
+import { classifyDecidedMessage } from "./message-classification";
+import { UserMessageKind } from "./message-kinds";
+import {
+  NOTICE_ROW_SPACING_CLASS,
+  USER_BUBBLE_CLASS,
+  USER_MESSAGE_ROW_CLASS,
+  renderNoticeRow,
+} from "./user-message-display";
 
 // The user rail's own recipes; the extra classes are bare markers for tests.
 const OUTGOING_ROW_CLASS = `${USER_MESSAGE_ROW_CLASS} outgoing-message outgoing-message--sending`;
@@ -22,26 +30,33 @@ const STANDALONE_ROW_SPACING_CLASS = "mb-5";
 
 export interface NotYetRealBubble {
   key: string;
-  /** The user's text, verbatim. */
+  /** The message's text, shown verbatim unless ``displayDecision`` draws it as a notice. */
   content: string;
   /** True inside a group whose own gap spaces its bubbles (the queued group), so the row
    *  carries no bottom margin of its own. */
   isGroupSpaced?: boolean;
   /** Marker classes added to the row, for a caller whose bubbles a test or a style picks out. */
   extraRowClass?: string;
+  /** The backend's render decision for the text; a notice (a background-task report) draws as one. */
+  displayDecision?: DisplayDecision;
 }
 
-/** A user message that is not yet a real turn, drawn as the user bubble it will become. Every
- *  not-yet-delivered message renders through here (optimistic, held by a switch, re-sent by a
- *  tap), so they look the same and the handoff to the real turn is invisible. */
+/** A user message that is not yet a real turn, drawn as the user bubble it will become, or as the
+ *  one-line notice when the backend decided its text renders as one (a background-task report).
+ *  Every not-yet-delivered message renders through here (optimistic, held by a switch, re-sent by
+ *  a tap), so they look the same and the handoff to the real turn is invisible. */
 export function renderNotYetRealBubble(bubble: NotYetRealBubble): m.Vnode {
-  const rowClass = [
-    OUTGOING_ROW_CLASS,
-    bubble.isGroupSpaced === true ? null : STANDALONE_ROW_SPACING_CLASS,
-    bubble.extraRowClass ?? null,
-  ]
+  const cls = classifyDecidedMessage(bubble.content, bubble.displayDecision);
+  const isNotice = cls.kind === UserMessageKind.Notice;
+  const [baseClass, spacingClass] = isNotice
+    ? ["message-notice-row", NOTICE_ROW_SPACING_CLASS]
+    : [OUTGOING_ROW_CLASS, STANDALONE_ROW_SPACING_CLASS];
+  const rowClass = [baseClass, bubble.isGroupSpaced === true ? null : spacingClass, bubble.extraRowClass ?? null]
     .filter((part) => part !== null)
     .join(" ");
+  if (isNotice) {
+    return renderNoticeRow(bubble.key, rowClass, cls);
+  }
   return m("div", { class: rowClass, key: bubble.key }, [
     m("div", { class: USER_BUBBLE_CLASS }, [
       m("div", { class: "message-content whitespace-pre-wrap" }, bubble.content),
@@ -50,7 +65,11 @@ export function renderNotYetRealBubble(bubble: NotYetRealBubble): m.Vnode {
 }
 
 function renderOutgoingBubble(outgoing: OutgoingMessage): m.Vnode {
-  return renderNotYetRealBubble({ key: outgoing.id, content: outgoing.content });
+  return renderNotYetRealBubble({
+    key: outgoing.id,
+    content: outgoing.content,
+    displayDecision: outgoing.displayDecision,
+  });
 }
 
 /** The optimistic outgoing bubbles for a chat, in send order. Returns [] when

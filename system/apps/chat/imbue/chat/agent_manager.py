@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 from typing import Final
 from typing import Self
+from typing import TypeVar
 from uuid import uuid4
 
 from chat_background_tasks.markers import TaskSource
@@ -152,6 +153,7 @@ from imbue.chat.models import ChatCreationOutcome
 from imbue.chat.models import ChatSegmentInfo
 from imbue.chat.models import ChatSnapshot
 from imbue.chat.models import CreatedChat
+from imbue.chat.models import DisplayDecisionFields
 from imbue.chat.models import HandoffError
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HandoffState
@@ -518,17 +520,26 @@ def _build_chat_display_label_command(mngr_binary: str, agent_id: str, name: str
     ]
 
 
+_DecidedT = TypeVar("_DecidedT", bound=DisplayDecisionFields)
+
+
+@pure
+def _with_display_decision(message: _DecidedT, text: str) -> _DecidedT:
+    """``message`` carrying the render decision ``text`` would get in the transcript."""
+    decision = classify_user_message(text)
+    if decision is None:
+        return message
+    return message.model_copy_update(
+        to_update(message.field_ref().display, decision.display),
+        to_update(message.field_ref().display_label, decision.display_label),
+        to_update(message.field_ref().display_body, decision.display_body),
+    )
+
+
 def _queued_message_state(entry: Mapping[str, Any]) -> QueuedMessageState:
     """One harness's queued entry on the wire, carrying the render decision its content would get in the transcript."""
     queued = QueuedMessageState.model_validate(entry)
-    decision = classify_user_message(queued.content)
-    if decision is None:
-        return queued
-    return queued.model_copy_update(
-        to_update(queued.field_ref().display, decision.display),
-        to_update(queued.field_ref().display_label, decision.display_label),
-        to_update(queued.field_ref().display_body, decision.display_body),
-    )
+    return _with_display_decision(queued, queued.content)
 
 
 # AgentMatch requires a host_name, but the send path never reads it -- it groups
@@ -765,7 +776,7 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
     # (a fresh start picked from the provider menu) has no confirming message to show.
     others = transition.held_sends_after_trigger()
     trigger = (
-        (HeldSendSnapshot(message_id=transition.trigger_message_id, text=transition.trigger_text),)
+        (_held_send_snapshot(transition.trigger_message_id, transition.trigger_text),)
         if transition.trigger_text
         else ()
     )
@@ -777,11 +788,17 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
         target_account_id=transition.target_account_id,
         target_harness=transition.target_harness,
         target_label=_target_label_of(transition),
-        held_sends=(*trigger, *(HeldSendSnapshot(message_id=held.message_id, text=held.text) for held in others)),
+        held_sends=(*trigger, *(_held_send_snapshot(held.message_id, held.text) for held in others)),
         model_pick=transition.model_pick,
         error=transition.error,
         failed_step=transition.failed_step,
     )
+
+
+@pure
+def _held_send_snapshot(message_id: str, text: str) -> HeldSendSnapshot:
+    """One held send on the wire, carrying the render decision its text would get in the transcript."""
+    return _with_display_decision(HeldSendSnapshot(message_id=message_id, text=text), text)
 
 
 @pure

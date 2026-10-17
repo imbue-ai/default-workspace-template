@@ -11,6 +11,7 @@
  * specially-rendered message is a backend rule, not a frontend regex.
  */
 
+import type { DisplayDecision } from "../models/Chats";
 import type { ToolCall, UserMessageEvent } from "../models/Response";
 import { KIND_SPEC, Rail, UserMessageKind } from "./message-kinds";
 
@@ -72,6 +73,17 @@ export function classifyUserMessage(event: ClassifiableUserMessage): UserMessage
     default:
       return { kind: UserMessageKind.UserPrompt, label: null, body: content };
   }
+}
+
+/** Classify a message that is not on the transcript yet from the decision the backend made for
+ *  its text (``decision`` is undefined for a plain one). */
+export function classifyDecidedMessage(content: string, decision: DisplayDecision | undefined): UserMessageClass {
+  return classifyUserMessage({
+    content,
+    display: decision?.display ?? undefined,
+    display_label: decision?.display_label ?? undefined,
+    display_body: decision?.display_body ?? undefined,
+  });
 }
 
 // Thin semantic helpers over classifyUserMessage

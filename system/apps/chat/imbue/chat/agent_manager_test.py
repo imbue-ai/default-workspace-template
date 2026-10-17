@@ -5421,6 +5421,33 @@ def test_a_converging_chat_holds_sends_refuses_the_verbs_and_can_be_cancelled(
         manager.stop()
 
 
+def test_a_held_background_task_report_carries_the_notice_it_renders_as(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    sent: list[tuple[str, str, str]] = []
+    manager, store, _argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    first, _successor = _converging_chat(manager, store, phase=HandoffPhase.SUMMARIZING, is_retiring_archived=False)
+    chat_id = ChatId(first)
+    report = (
+        "<background-task-report>\n<summary>Wait for the worker (finished)</summary>\n"
+        "Exit code: 0\n</background-task-report>"
+    )
+    try:
+        manager.hold_send(chat_id, "m-report", report, HeldSendOrigin.SCRIPT)
+        handoff = manager.get_handoff_state(chat_id)
+        assert handoff is not None
+        trigger, held_report = handoff.held_sends
+        assert trigger.display is None
+        assert (held_report.text, held_report.display, held_report.display_label, held_report.display_body) == (
+            report,
+            DisplayKind.NOTICE,
+            "Background task",
+            "Wait for the worker (finished)",
+        )
+    finally:
+        manager.stop()
+
+
 def test_a_failed_handoff_lists_as_an_error_and_a_retry_creates_the_successor(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:

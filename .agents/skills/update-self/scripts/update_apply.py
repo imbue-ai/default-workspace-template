@@ -1382,7 +1382,7 @@ def apply_update(
             )
         elif plan.provisioner:
             clear_provision_incomplete(repo_root)
-        clear_marker(repo_root)
+        clear_marker(repo_root, is_landed=True)
         if keep_rollback_point and not name_status:
             # A merge that changed nothing landed no commit: ``rollback_to`` is
             # HEAD, and a record naming it would offer to revert whatever merge

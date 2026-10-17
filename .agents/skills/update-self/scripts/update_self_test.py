@@ -7941,6 +7941,71 @@ def test_the_marker_mirrors_the_apply_into_the_run_record(
     assert status.apply_updated_at is None
 
 
+def test_a_landed_apply_records_when_it_landed_in_the_run_record(
+    apply_repo: Path, monkeypatch
+) -> None:
+    """The app says the update is finishing, not preparing, between the landing and the verdict."""
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
+    assert (
+        update_self.main(["run-status", "start", "--repo-root", str(apply_repo)]) == 0
+    )
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        target_ref="minds-v0.4.2",
+    )
+
+    assert code == 0
+    status = update_apply_contract.read_run_status(apply_repo)
+    assert status is not None
+    assert status.apply_phase is None
+    assert status.applied_at is not None
+
+
+def test_a_rolled_back_apply_records_no_landing(apply_repo: Path, monkeypatch) -> None:
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
+    assert (
+        update_self.main(["run-status", "start", "--repo-root", str(apply_repo)]) == 0
+    )
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        target_ref="minds-v0.4.2",
+    )
+
+    assert code == 2
+    status = update_apply_contract.read_run_status(apply_repo)
+    assert status is not None
+    assert status.apply_phase is None
+    assert status.applied_at is None
+
+
+def test_run_status_start_clears_the_previous_runs_landing(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
+    assert update_self.main(["run-status", "start", "--repo-root", str(tmp_path)]) == 0
+    _plant_marker(tmp_path)
+    update_apply_contract.clear_marker(tmp_path, is_landed=True)
+    landed = update_apply_contract.read_run_status(tmp_path)
+    assert landed is not None and landed.applied_at is not None
+
+    assert update_self.main(["run-status", "start", "--repo-root", str(tmp_path)]) == 0
+
+    status = update_apply_contract.read_run_status(tmp_path)
+    assert status is not None
+    assert status.applied_at is None
+
+
 def test_the_marker_does_not_invent_a_run_record(tmp_path) -> None:
     # An apply run by hand outside a pass has no run to report to; a record
     # conjured here would name no chat and lock the app's row for good.
