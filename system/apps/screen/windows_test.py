@@ -1,7 +1,9 @@
 from inline_snapshot import snapshot
 
+from screen.primitives import XWindowId
+from screen.windows import find_window
 from screen.windows import parse_wmctrl_list
-from screen.windows import window_title_from_tool_output
+from screen.windows import window_id_from_tool_output
 
 _WMCTRL_OUTPUT = """\
 0x01400003  0 1234   0    0    1920 28   xfce4-panel.Xfce4-panel  box xfce4-panel
@@ -38,6 +40,12 @@ def test_empty_output_lists_no_windows() -> None:
     assert parse_wmctrl_list("") == []
 
 
-def test_active_window_title_is_none_for_an_empty_answer() -> None:
-    assert window_title_from_tool_output("") is None
-    assert window_title_from_tool_output("Firefox\n") == "Firefox"
+def test_the_active_window_id_is_read_in_decimal_and_found_in_the_list_by_value() -> None:
+    assert window_id_from_tool_output("") is None
+    assert window_id_from_tool_output("not a number\n") is None
+    window_id = window_id_from_tool_output("54525953\n")
+    assert window_id == XWindowId("0x03400001")
+    windows = parse_wmctrl_list(_WMCTRL_OUTPUT)
+    found = find_window(windows, XWindowId("0x3400007"))
+    assert found is not None and found.title == "josh@box: ~/workspace - Terminal"
+    assert find_window(windows, XWindowId("0x0fffffff")) is None

@@ -8,6 +8,7 @@ from pydantic import SecretStr
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from screen.primitives import AgentId
+from screen.primitives import BrowserName
 from screen.primitives import DisplayName
 from screen.primitives import NekoSessionId
 from screen.primitives import NekoToken
@@ -195,10 +196,23 @@ class ControlView(FrozenModel):
     idle_release_seconds: int | None = Field(description="Seconds until the idle lease frees itself")
 
 
-class ChromiumView(FrozenModel):
-    """The state of the Chromium the browser launch path starts; a placeholder until the browser migrates here."""
+class BrowserLifecycle(UpperCaseStrEnum):
+    """Where a browser's Chromium is: registered and launching, up, dead unexpectedly, or stopped on purpose (by the
+    user, or with the stack it ran on) with its profile and tabs kept."""
 
-    state: str = Field(description="``absent`` until the migration lands")
+    INIT = auto()
+    RUNNING = auto()
+    CRASHED = auto()
+    STOPPED = auto()
+
+
+class ChromiumView(FrozenModel):
+    """The browser as the viewer sees it (spec sections 4.2 and 16): the one browser's lifecycle, its name, and a
+    page the human asked to open that is held while an agent drives."""
+
+    state: str = Field(description="``absent`` while the fleet holds no browser, else the lifecycle, lower-case")
+    name: BrowserName | None = Field(default=None, description="The browser's name, when there is one")
+    pending_url: str | None = Field(default=None, description="The page held for the human, when one is")
 
 
 class ScreenState(FrozenModel):

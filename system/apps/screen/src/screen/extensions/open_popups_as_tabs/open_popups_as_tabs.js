@@ -1,9 +1,8 @@
-// The fleet streams one browser window, and the window guardian closes any other, so a
-// window.open pop-up (the shape of most "Sign in with ..." buttons) must become a tab. A
-// features string is what asks for a pop-up; appending popup=0 overrides it (a later feature
-// wins) while keeping noopener/noreferrer, and the tab keeps window.opener, which an OAuth
-// callback page needs to hand its result back and close itself. A Proxy keeps window.open's
-// name and length and a native-code toString, though V8 prints any Proxy without its name
+// A window.open pop-up (the shape of most "Sign in with ..." buttons) becomes a tab of the window that opened it,
+// so an agent's tab list and the viewer's one window stay in step. A features string is what asks for a pop-up;
+// appending popup=0 overrides it (a later feature wins) while keeping noopener/noreferrer, and the tab keeps
+// window.opener, which an OAuth callback page needs to hand its result back and close itself. A Proxy keeps
+// window.open's name and length and a native-code toString, though V8 prints any Proxy without its name
 // ("function () { [native code] }", not "function open() ...").
 window.open = new Proxy(window.open, {
   apply(open, thisArg, args) {

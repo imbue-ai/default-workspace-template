@@ -21,6 +21,7 @@ from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import CONTEXT_MENU_ROUTE
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import SHELL_CONTEXT_MENU_PATH
+from screen.browser_routes import build_browser_blueprint
 from screen.data_types import Lifecycle
 from screen.errors import ClipboardError
 from screen.errors import DisplayModeError
@@ -45,8 +46,6 @@ from screen.watch import STOPPED_NOTIFICATION_PATH
 from screen.xclipboard import MAX_CLIPBOARD_BYTES
 
 PAGE_DOCUMENT_FILENAME: Final[str] = "index.html"
-LAUNCH_BROWSER_PATH: Final[str] = "/launch/browser"
-OPEN_URL_PATH: Final[str] = "/api/open-url"
 
 HTTP_NO_CONTENT: Final[int] = 204
 HTTP_BAD_REQUEST: Final[int] = 400
@@ -370,17 +369,9 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
             return _error(str(e), HTTP_BAD_GATEWAY)
         return jsonify({"pid": pid})
 
-    # launch paths and messages
+    # the browser: its launch path, the open:url handler and the fleet API (spec section 16)
 
-    @app.post(LAUNCH_BROWSER_PATH)
-    def launch_browser() -> ResponseReturnValue:
-        # Chromium itself arrives with the browser's migration; until then the launch path shows the Screen.
-        service.ensure_started()
-        return jsonify({"path": "/"})
-
-    @app.post(OPEN_URL_PATH)
-    def open_url() -> ResponseReturnValue:
-        return _error("opening a link on the Screen arrives with the browser's migration", HTTP_SERVICE_UNAVAILABLE)
+    app.register_blueprint(build_browser_blueprint(service))
 
     # the watcher's notification
 

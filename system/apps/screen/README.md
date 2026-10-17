@@ -22,8 +22,10 @@ demand and the `screen-watch` event listener ends them together.
 - `GET /api/state`: `{"lifecycle", "install_reason", "stop_reason", "title", "video_id",
   "control", "screen_size", "chromium"}`. `lifecycle` is `installing` while the env.d
   unit has not installed the stack, `starting` while the group comes up, `running`,
-  or `stopped` with the `stop_reason`. `title` follows the frontmost X window;
-  `video_id` is the profile every viewer selects (below).
+  or `stopped` with the `stop_reason`. `title` follows the frontmost X window ("Browser"
+  for a Chromium window, the window's title otherwise, "Screen" for an empty desktop);
+  `video_id` is the profile every viewer selects (below); `chromium` is the browser's
+  `{"state", "name", "pending_url"}` (see "The browser").
 - `GET /api/ws`: the service's own events to viewers: `state` (the document above, on
   connect and on every change), `profile` when the chosen video id changes, `stopped`
   with a reason, `handoff_request` when an agent hands the Screen to the human.
@@ -62,13 +64,91 @@ demand and the `screen-watch` event listener ends them together.
 - `GET /api/connect-info`: `{"ice_servers", "candidates", "expires_at"}`, where the Screen's
   media port is reachable from this client and the relay servers to use (see
   "Connectivity"); `?relay=1` is the only time ICE servers are asked for.
-- `POST /launch/browser`: the `browser` launch path; it starts the stack and answers
-  `{"path": "/"}` (Chromium itself arrives with the browser's migration).
+- `POST /launch/browser`, body `{"url"?}`: the `browser` launch path; it starts the stack
+  when it is down, starts Chromium when it is not running, opens `url` as a new tab in
+  front when given, raises Chromium's window, and answers `{"path": "/"}`, the Screen's
+  one page. A refusal (a `url` that is not an absolute http(s) URL, Chromium not
+  installed) carries its reason under `detail`.
+- `POST /api/open-url`, body `{"client_id", "url"}`: the `open:url` message handler. A
+  link to a local address (`localhost`, `127.0.0.1`, `[::1]`, `*.localhost`) clicked in
+  the workspace opens as a tab in Chromium, raised, and the Screen's page is shown to the
+  client that clicked (the shell's `show` op); while an agent drives the Screen the page
+  is held instead (below).
+- `/browsers`, `/browsers/<name>/...`: the migrated fleet API the `agentic-browser-fleet`
+  command drives (see "The browser").
 - `/neko/...`: the reverse proxy to neko's HTTP and WebSocket on `127.0.0.1:8091`, with
   a rate limit on `/neko/api/login`.
 - `GET /_static/app_contract.js` and `/_static/context_menu.js`: the shell's modules,
   served from this origin as every app serves them.
 - `GET /health`: `{"status", "lifecycle"}`.
+
+## The browser
+
+The browser is a launch path of the Screen, not an app (spec section 16): one Fortress
+Chromium with one profile, started by the `browser` launch path, `screen run`, or an
+agent's `agentic-browser-fleet new`, its windows ordinary X windows the window manager
+places (the user opens as many as they like; nothing pins or closes them), and never
+stopped when its windows close (the user quits it from inside, `POST
+/browsers/<name>/stop` ends it, or Quit ends the stack). The fleet keeps the browser
+app's shape: browsers by name (`browser-1`, minted as the first free `browser-<N>`), a
+cap of one launched browser, the profile under `$MNGR_HOST_DIR/browser-profiles/`
+(`browser-use-user-data-dir-<name>`, the prefix an upgraded workspace's logins are found
+under), and the tab manifest at `data/.apps/browser/instances.json`, checkpointed every
+ten seconds while the browser runs, on every stop, start and close, and before the
+service stops the stack (`ScreenStack.on_stopping`, while Chromium can still be asked).
+When the stack ends (Quit, memory pressure, a member dying) the X server takes Chromium
+with it and the browser is `stopped` for that stack life; the next stack start relaunches
+it on its saved tabs unless the user had stopped it on purpose (the manifest's `stopped`
+flag), and a workspace whose manifest is lost registers the profiles on disk as stopped
+browsers rather than launching a Chromium nobody asked for. Chromium's processes are
+remapped into the shared-browser band by the band sweep (below).
+
+The fleet API (`/browsers`): `GET /browsers` lists the browser with its lifecycle
+(`init`, `running`, `crashed`, `stopped`), the Screen's lease as the fleet CLI reads it
+(`controller` is `human`, `agent` or `nobody`), and its tabs; `POST /browsers` (`name`
+and `url` optional) answers the one browser like the launch path does, or creates a
+named one (400 for a bad name or URL, 409 for a duplicate or a full fleet, 503 while
+Chromium is installing); `DELETE /browsers/<name>` ends it and deletes its profile;
+`POST .../stop` and `.../start` end and relaunch Chromium with the tabs kept;
+`POST .../close-tab` closes the tab in front (the last tab is replaced with a blank one
+so the window stays); `POST .../pending-url/cancel` drops a held page; `GET .../attach`
+issues an agent its attach URL; `POST .../acquire`, `.../release` and `.../handoff` are
+the Screen's lease verbs under the fleet's paths, so the fleet CLI's exit codes hold.
+
+Agents drive Chromium through the CDP proxy on `127.0.0.1:8083` (its own port: the
+service's is published to the desktop and an unauthenticated CDP endpoint must not travel
+with it), at `ws://127.0.0.1:8083/<name>/<token>` with the token `attach` minted for one
+agent. Every frame is gated on the Screen's lease: the token's agent may drive while it
+holds the lease (a frame touches the lease's idle clock and the profile's input clock),
+a free Screen is taken on the first frame, and a human holding control refuses the frame
+with a CDP error that names `agentic-browser-fleet ls`, never closing the socket (a
+dropped socket poisons a playwright-cli session for good). `Browser.close`, the incognito
+context verbs, `Emulation.setDeviceMetricsOverride` and the download redirects are
+refused outright; closing the last page is refused; `Browser.setWindowBounds` is allowed,
+since the window manager owns the windows now. Discovery (`/json/version`, `/json/list`,
+with and without a trailing slash) is served with the proxy's URLs substituted and
+`Connection: close`. After a forwarded command the view follows the tab the agent
+addressed.
+
+The held-URL rule: a page the human asked to open (`open:url`, or the launch path's
+`url`) while an agent drives the Screen is held rather than opened over the agent's
+work; the viewer's agent overlay names it with "Take control and open it" and "Cancel",
+and it also opens once the agent releases or hands off, or when Chromium finishes
+launching. Agents queued for the Screen are woken through the chat messenger as the
+browser fleet's were.
+
+## Bands
+
+Programs started from the Screen itself (the XFCE menu, a terminal on it) inherit the
+session's band, the stack's own, so the service runs a raise-only sweep every ten
+seconds (`band_sweep.py`, spec section 9.4): every descendant of `screen-session` whose
+executable is not one of the session's own (`startxfce4`, `xfce4-session`, `xfwm4`,
+`xfce4-panel`, `xfdesktop`, `xfsettingsd`, `xfconfd`, the D-Bus daemon) is raised to
+`AGENT_SUBPROCESS` (900), and Chromium's processes, under the session or under the
+Chromium the fleet launched, are remapped into the shared-browser band (910 to 1000,
+renderers at the ceiling) as the browser app's `oom_retag` did; a launch or a new tab
+kicks a short burst of sweeps, since Chromium's processes self-write their values over
+the seconds after. The sweep only ever raises, so repeating it writes nothing more.
 
 ## Profiles, visibility and audio
 
@@ -221,7 +301,7 @@ is recorded. The lease is checkpointed to `data/.state/screen/control.json`.
 API token), `pulse.pa`, `control.json`, `modes.json` (the RANDR modes added this stack
 life), `events/screen/events.jsonl` (the `screen_stopped` events the watcher appends).
 
-## The command
+## The commands
 
 `uv run --no-sync screen` is the agent-facing command (spec section 17): `run`,
 `windows`, `activate`, `shot`, `size [WxH]` (reads the size, or sets it through
@@ -229,6 +309,14 @@ life), `events/screen/events.jsonl` (the `screen_stopped` events the watcher app
 acquire|release|handoff`, `open`. Its
 exit codes are the fleet CLI's: 0 ok, 1 error, 2 preempted (a human has or took
 control; end the turn), 3 busy, 4 timed out, 64 usage, 69 no service.
+
+`uv run agentic-browser-fleet` (`fleet_cli.py`, the `agentic-browser-fleet` skill) owns
+the browser: `ls [--include-tabs]`, `new [name] [--url]`, `close <name>`, `acquire <name>
+[--reclaim]`, `release <name>` (alias `unlock`), `handoff <name> "<reason>"` (alias
+`request-human`), against the fleet routes, with the same exit codes. `new` and `acquire`
+open the Screen's window minimized through the shell's `open` op and print the
+`playwright-cli attach --cdp=` line; `handoff` shows the window, since the human has to
+act in it.
 
 ## Packaging
 

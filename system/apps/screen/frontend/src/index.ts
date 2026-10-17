@@ -34,6 +34,7 @@ import {
   ServiceRequestError,
   fetchConnectInfo,
   fetchState,
+  postCancelPendingUrl,
   postInputSeen,
   postReturnControl,
   postScreenSize,
@@ -101,6 +102,7 @@ class Viewer {
     this.overlays = new Overlays(
       () => void postStart(),
       () => this.takeControl(),
+      () => this.cancelPendingUrl(),
     );
     this.stage.className = "screen-stage screen-stage--not-controlling";
     this.stage.tabIndex = 0;
@@ -479,6 +481,12 @@ class Viewer {
   private async returnControl(): Promise<void> {
     if (this.session === null) return;
     this.showNotice(await postReturnControl(this.session.session_id));
+  }
+
+  private cancelPendingUrl(): void {
+    const name = this.state?.chromium.name;
+    if (!name) return;
+    void postCancelPendingUrl(name);
   }
 }
 
