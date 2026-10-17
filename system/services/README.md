@@ -31,4 +31,8 @@ README; `agent-observer` is the one program on the list with neither, since it
 is `mngr observe` under supervisord rather than code of ours. A background
 service that exists solely to support one app does NOT go here -- it lives in
 that app's folder under `system/apps/` and is named `<app>-<role>`, declared in
-its own `system/supervisord.conf.d/<name>.conf`.
+its own `system/supervisord.conf.d/<name>.conf`. The Screen's stack
+(`screen-xorg`, `screen-pulse`, `screen-session`, `screen-neko`, the
+`screen-stack` group) and its `screen-watch` event listener are such sidecars of
+`system/apps/screen`; the standalone `xvfb` program the browser app filmed on is
+gone with that app, so display `:99` is the Screen's.
