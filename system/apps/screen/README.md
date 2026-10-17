@@ -127,8 +127,14 @@ session alone and with text only, so the directions are:
 
 A file dropped on the viewer by the controller goes to neko's
 `POST /api/room/upload/drop` (multipart `x`, `y` in Screen coordinates, `files`), which
-drags it onto the Screen at that point; dropped on the XFCE desktop it lands in
-`~/Desktop`.
+is meant to drag it onto the Screen at that point so that, dropped on the XFCE desktop,
+it lands in `~/Desktop`. Verified in a local Docker workspace (neko v3.2.0): the files
+reach neko and are written under its `/tmp/neko-drop-*` directory, but neko's drag
+emulation (a GTK popup it drags from the top-left corner with its own pointer moves)
+never maps its window on this stack and the route answers 500 "unable to drop files"
+after neko's one-second wait; moving the XFCE panel away from the corner changed
+nothing. The viewer reports the failure in the strip. Making the drop land is a
+follow-up on neko's side of the boundary.
 
 Under the phone layout (the shared `PHONE_MEDIA_QUERY`; the shell gives pages no phone
 signal) the Screen keeps its size and the viewer offers: one-finger drag pans and a pinch

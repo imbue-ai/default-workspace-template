@@ -24,6 +24,6 @@ Implementation step 7 (clipboard, files, mobile):
 
 - Clipboard both ways while this viewer controls: text and HTML through neko's clipboard route on `clipboard/updated` and on focus or paste; images remote-to-local through neko's `clipboard/image.png` when the service's X clipboard watcher (`xclipboard.py`, the browser app's bridge carried over) announces one on `/api/ws`, and local-to-remote through `POST /api/clipboard/image`, which places the image on `:99` with `xclip`. A paste chord sets the remote clipboard first and then taps V there. `keyboard/map` from `navigator.language`.
 
-- Dropping files on the viewer uploads them through neko's `upload/drop` route at the pointer's Screen coordinates.
+- Dropping files on the viewer uploads them through neko's `upload/drop` route at the pointer's Screen coordinates; neko receives them, but its own drag emulation does not complete on this stack yet (the strip reports the failed drop), which is a follow-up.
 
 - Under the phone layout: pan and pinch-zoom of the drawn video, tap as click and long press as right click mapped into Screen coordinates, two-finger scroll, a modifier bar (Ctrl, Alt, Shift latching for the next key, Esc, Tab) and a Keyboard button raising the soft keyboard; the Screen is never resized from a phone.
