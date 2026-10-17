@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from imbue.imbue_common.model_update import to_update
 from screen.chrome_args import STRIPPED_FROM_PLAYWRIGHT
 from screen.chrome_args import launch_args
 from screen.chrome_launcher import ChromiumLaunchRequest
@@ -101,7 +102,7 @@ def test_a_sandboxed_launch_that_fails_is_retried_once_without_the_sandbox(tmp_p
     # With the sandbox already off there is nothing to retry with.
     record.unlink()
     with pytest.raises(ChromiumStartError):
-        launcher.launch(request.model_copy(update={"is_sandbox_disabled": True}))
+        launcher.launch(request.model_copy_update(to_update(request.field_ref().is_sandbox_disabled, True)))
     assert len(record.read_text().splitlines()) == 1
 
 

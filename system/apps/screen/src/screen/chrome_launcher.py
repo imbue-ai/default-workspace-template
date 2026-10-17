@@ -22,6 +22,7 @@ from loguru import logger
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from screen.chrome_args import launch_args
 from screen.errors import ChromiumStartError
@@ -185,7 +186,7 @@ class SubprocessChromiumLauncher(ChromiumLauncherInterface):
             if request.is_sandbox_disabled:
                 raise
             logger.warning("A sandboxed Chromium launch failed; retrying with --no-sandbox")
-            return self._launch_once(request.model_copy(update={"is_sandbox_disabled": True}))
+            return self._launch_once(request.model_copy_update(to_update(request.field_ref().is_sandbox_disabled, True)))
 
     def _launch_once(self, request: ChromiumLaunchRequest) -> ChromiumHandleInterface:
         executable = str(request.executable)
