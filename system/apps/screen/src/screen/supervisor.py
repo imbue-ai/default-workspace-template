@@ -75,3 +75,11 @@ class SupervisorctlClient(SupervisorInterface):
         # ``status`` exits non-zero whenever a listed program is not RUNNING, so the exit code says nothing.
         completed = self._run(["status", group_member(program)], _STATUS_TIMEOUT_SECONDS)
         return parse_status_line(completed.stdout.strip().splitlines()[0] if completed.stdout.strip() else "")
+
+    def program_pid(self, program: str) -> int | None:
+        # ``pid`` prints the pid, or 0 for a program that is not running.
+        completed = self._run(["pid", group_member(program)], _STATUS_TIMEOUT_SECONDS)
+        text = completed.stdout.strip()
+        if completed.returncode != 0 or not text.isdigit() or int(text) == 0:
+            return None
+        return int(text)

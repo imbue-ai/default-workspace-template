@@ -23,18 +23,24 @@ _BANDED_EXEC_SCRIPT: Final[str] = bands.oom_tag_shell_prefix(bands.AGENT_SUBPROC
 _SHELL_NAME: Final[str] = "screen-run"
 
 
+def screen_process_environment() -> dict[str, str]:
+    """The service's environment with the Screen's display and audio added: what every program started on the
+    Screen (a ``screen run`` command, Chromium) runs with."""
+    return {
+        **os.environ,
+        "DISPLAY": DISPLAY,
+        "XDG_RUNTIME_DIR": RUNTIME_DIR,
+        "PULSE_SERVER": f"unix:{PULSE_SOCKET_PATH}",
+    }
+
+
 class DetachedProcessLauncher(ProcessLauncherInterface):
     """Starts a command in its own session with the Screen's display and audio in its environment."""
 
     working_directory: Path = Field(frozen=True, description="Where the command starts")
 
     def launch(self, command: Sequence[str]) -> int:
-        environment = {
-            **os.environ,
-            "DISPLAY": DISPLAY,
-            "XDG_RUNTIME_DIR": RUNTIME_DIR,
-            "PULSE_SERVER": f"unix:{PULSE_SOCKET_PATH}",
-        }
+        environment = screen_process_environment()
         try:
             process = subprocess.Popen(
                 ["bash", "-c", _BANDED_EXEC_SCRIPT, _SHELL_NAME, *command],

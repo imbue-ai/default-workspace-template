@@ -55,14 +55,13 @@ Built-in manifests:
 | `terminal` | true | false | `terminal` | 40 | `{launch = "new", mode = "new"}` | `new` ("Terminal", POST `/new`, params `workdir` optional) |
 | `terminal-pty` | true | false | `terminal` | | none | none; `internal = true`, `program = "terminal-pty"` |
 | `files` | false | true | `files` | 20 | `{launch = "new", mode = "new"}` | `new` ("File Viewer", `/home/user/workspace/`, params `path` optional) |
-| `browser` | false | false | `browser` | 30 | `{launch = "new", mode = "focus"}` | `new` ("Browser", POST `/new`, params `url` optional) |
 | `screen` | false | false | `screen` | 30 | `{launch = "screen", mode = "focus"}` | `screen` ("Screen", `/`, no params); `browser` ("Browser", POST `/launch/browser`, params `url` optional) |
 | `system-monitor` | false | true | `system-monitor` | 50 | `{launch = "open", mode = "focus"}` | none; the shell synthesizes `open` ("Open Memory & disk", `/`) |
 
-The chat, terminal, browser, Screen, Getting Started, and Memory & disk manifests declare `system = true`.
-The Screen (`docs/system/specs/screen/spec.md`) is the workspace's one streamed Linux desktop; the browser row stays until the browser's migration onto it deletes the browser app.
+The chat, terminal, Screen, Getting Started, and Memory & disk manifests declare `system = true`.
+The Screen (`docs/system/specs/screen/spec.md`) is the workspace's one streamed Linux desktop; the browser is its `browser` launch path, and the browser app that used to hold a row here is gone.
 The chat manifest also declares `[pin] path = "/", style = "avatar", scope = "independent", default_mode = "floating"` and `[[message_handlers]] type = "minds:focus-chat", path = "/api/focus-chat"`.
-The files manifest declares `[[message_handlers]] type = "open:file", show = "{path}?view", showing = ["{path}", "{path}/", "{path}/?view"]`, and the browser's and the Screen's `[[message_handlers]] type = "open:url", path = "/api/open-url"`.
+The files manifest declares `[[message_handlers]] type = "open:file", show = "{path}?view", showing = ["{path}", "{path}/", "{path}/?view"]`, and the Screen's `[[message_handlers]] type = "open:url", path = "/api/open-url"`.
 The critical built-ins declare their `[preview]` tables (the workspace app model's contracts section 2 tabulates them): the shell boots `system-interface --preview --state-dir {copy:state}` over a copy of `data/.state/system_interface` with `MINDS_APPS_FILE = "{registry}"`; the chat `chat-app --secondary` over a copy of `data/.apps/chat` (`CHAT_DATA_DIR`), opening on `/?chat={key}`; the terminal `terminal-app --no-register` over a copy of `data/.apps/terminal` and a `{scratch}` state dir with `MINDS_APPS_FILE = "{registry}"`, booted `--with terminal-pty`; and the pty `terminal-pty --no-register` over a `{scratch}` state dir, probed at `/`. Getting Started, though not critical, declares one too, since its entry point registers itself: `getting-started --no-register --state-dir {scratch}/state`, which registers nothing and opens no first-visit window.
 
 ## 3. The registry (`data/.state/apps.toml`)
@@ -107,7 +106,7 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
 
 ### 4.1a `default_shortcuts_offered.json`
 
-`{"version": 1, "apps": ["browser", "chat", "files", "getting-started", "terminal"]}`: every app whose default shortcut the shell has offered (plan section 3.2), names sorted.
+`{"version": 1, "apps": ["chat", "files", "getting-started", "screen", "terminal"]}`: every app whose default shortcut the shell has offered (plan section 3.2), names sorted.
 
 - A desktop's creation (the default desktop's seeding, `POST /api/desktops`, a visiting user's desktop) adds the apps whose default shortcut it was made with. The reconcile that runs on every read of the desktops and after every change of the registry's rows adds each app whose default shortcut it has just offered to every desktop.
 - A listed app is not offered again, so a default shortcut the user removed stays removed, and an app that deregisters stays listed.
@@ -206,7 +205,7 @@ A preview shell (`system-interface --preview`, booted by `preview_app.py` over a
 An open with `is_new` writes the requesting client's placement (section 10, cascade) on top of its stack, minimized when `minimized` is true (a phone's opens: no other client's layout gets a placement, so the window reads as minimized for everyone), and broadcasts `placements_updated` for that client, and `desktops_updated` for everyone.
 An open answered with `is_new: false` restores and raises the existing window in the requesting client's layout, writes it, and broadcasts `placements_updated` for that client.
 A close drops the window from every layout file of the desktop and broadcasts `desktops_updated` and one `placements_updated` per rewritten layout.
-After that, when the window's app registered a `window_closed_path` and the app is running (a stopped app's port is the shell's own parker, which would wake the app to tell it a window closed), the shell POSTs `{"path", "window_id", "desktop_id"}` to the app's `url` plus that path from a thread of its own, with a 2 second timeout, and neither waits for nor acts on the answer; a deleted desktop's windows are posted the same way. An app may take the posted `path` as proof that a window showed the resource it names (the terminal and the browser mark it window-seen before sweeping), while reading what is shown now from `GET /api/desktops`.
+After that, when the window's app registered a `window_closed_path` and the app is running (a stopped app's port is the shell's own parker, which would wake the app to tell it a window closed), the shell POSTs `{"path", "window_id", "desktop_id"}` to the app's `url` plus that path from a thread of its own, with a 2 second timeout, and neither waits for nor acts on the answer; a deleted desktop's windows are posted the same way. An app may take the posted `path` as proof that a window showed the resource it names (the terminal marks it window-seen before sweeping), while reading what is shown now from `GET /api/desktops`.
 A close is also what starts the clock of the stop-when-no-windows spec (section 6): an app that declares `stop_when_no_windows` and has no window left on any desktop is stopped 60 seconds later, once a client has arrived at the shell since it started, unless it is not `internal` and a per-app share grant names it (its visitors reach it without the shell, so their use leaves no window to count).
 A location that changes nothing writes and broadcasts nothing.
 
@@ -310,7 +309,7 @@ The module listens for `click` and middle-button `auxclick` on the window, the l
 The page's script popups follow the rule too, for what the workspace opens itself: while connected, the module replaces `window.open`, and a call to a page of the page's own origin sends `shell:open` (`ifPresent: "focus"`), and one to a local URL, an address of another app (on the page's own share domain too), or a `file:` URL sends `shell:open-link`; either answers `null`, as a blocked popup does. A call to any other site, to `about:blank` or another scheme, or with no URL goes to the browser's own `window.open` unchanged, so a script that needs the window it opened (a sign-in popup it watches) still gets it. A call naming a frame of the page (an `<iframe name>`) goes to the browser's own `window.open` too, and one naming `_self` follows the rule for a plain click: the page's own origin navigates the page natively, and any other link sends `shell:open-link` and answers `null`. Disconnecting puts `window.open` back.
 
 A page no shell has handed a handshake -- an unframed page, or one framed by something else, such as the chat root opened on its own -- leaves its clicks and popups to the browser.
-`capabilities` is `{navigation: boolean, closeChord: boolean}` and must agree with the handlers: giving `onNavigate` without `navigation: true`, or `navigation: true` without `onNavigate`, is an error the module throws at connect, and so is `closeChord: true` without `onCloseRequest`. A page that declares `closeChord` owns the close chord: the shell sends `shell:close-request` and leaves the window open (the browser closes its current tab that way).
+`capabilities` is `{navigation: boolean, closeChord: boolean}` and must agree with the handlers: giving `onNavigate` without `navigation: true`, or `navigation: true` without `onNavigate`, is an error the module throws at connect, and so is `closeChord: true` without `onCloseRequest`. A page that declares `closeChord` owns the close chord: the shell sends `shell:close-request` and leaves the window open (the Screen's viewer sends Ctrl+W to the remote that way, which closes a browser tab there).
 
 | Direction | Type | Payload |
 |---|---|---|

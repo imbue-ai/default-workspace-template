@@ -172,7 +172,7 @@ def test_open_of_a_launch_path_or_a_url_posts_the_launch_and_its_params(
     assert run_layout_cli(["open", "chat", "--minimized"], layout_context) == 0
     assert loopback_shell.posted_ops() == [
         ("open", {"app": "terminal", "launch": "new", "params": {"workdir": "/data"}, "if_present": "new"}),
-        ("open", {"app": "browser", "launch": "new", "params": {"url": "https://example.com/docs"}}),
+        ("open", {"app": "screen", "launch": "browser", "params": {"url": "https://example.com/docs"}}),
         ("open", {"app": "chat"}),
         ("open", {"app": "chat", "minimized": True}),
     ]

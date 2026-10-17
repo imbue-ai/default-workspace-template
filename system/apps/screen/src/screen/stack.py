@@ -32,6 +32,7 @@ from screen.neko_config import RUNTIME_DIR
 from screen.neko_config import render_neko_yaml
 from screen.neko_config import render_pulse_script
 from screen.primitives import DISPLAY_SOCKET_PATH
+from screen.primitives import FORTRESS_EXECUTABLE
 from screen.primitives import NEKO_PROGRAM
 from screen.primitives import PULSE_PROGRAM
 from screen.primitives import SESSION_PROGRAM
@@ -97,6 +98,14 @@ def describe_missing_install() -> str | None:
     return "waiting for env-converge to install " + ", ".join(missing)
 
 
+@pure
+def describe_missing_browser_install() -> str | None:
+    """Why Chromium cannot launch yet, or None once the env.d unit has installed Fortress."""
+    if os.access(FORTRESS_EXECUTABLE, os.X_OK):
+        return None
+    return "Chromium is still installing in this workspace; try again in a minute."
+
+
 class ScreenStack(MutableModel):
     """Starts, probes and stops the group, keeping the lifecycle and the current start's secrets."""
 
@@ -122,6 +131,11 @@ class ScreenStack(MutableModel):
     )
     set_api_token: Callable[[SecretStr | None], None] = Field(
         frozen=True, description="Hands each start's API token to the neko client"
+    )
+    on_stopping: Callable[[], None] = Field(
+        default=lambda: None,
+        frozen=True,
+        description="Called before a stop the service asked for ends the members (the browser's tab checkpoint)",
     )
 
     lifecycle: Lifecycle = Field(default=Lifecycle.STOPPED, description="Where the stack is")
@@ -284,6 +298,10 @@ class ScreenStack(MutableModel):
         """End the group (Quit, the service's own shutdown) and record why; a start in flight gives up."""
         with self._lock:
             self._abort_start.set()
+            is_running = self.lifecycle == Lifecycle.RUNNING
+        if is_running:
+            # Chromium can still be asked for its tabs (spec section 9.3).
+            self.on_stopping()
         self._stop_members()
         self.set_api_token(None)
         with self._lock:

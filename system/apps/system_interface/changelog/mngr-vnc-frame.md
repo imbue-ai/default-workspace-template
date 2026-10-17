@@ -9,3 +9,5 @@ The shell gains the Screen spec's `FULLSCREEN` placement state and immersive mod
 - The page iframes gain `fullscreen` in their `allow` list and `allow-pointer-lock` in their sandbox list, so the Screen's viewer can lock the pointer and the chrome's fullscreen request is delegated down every frame. A fullscreen page drops its rounded bottom corners.
 
 - `place --state FULLSCREEN` round-trips through the op route and the placements files like every other state.
+
+The layout pipeline test for `workspace-layout open https://...` expects the Screen app to be named when it is not registered, since a bare URL opens through the Screen's `browser` launch path now.

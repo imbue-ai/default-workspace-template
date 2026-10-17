@@ -1,4 +1,6 @@
 import re
+import urllib.parse
+from pathlib import Path
 from typing import Any
 from typing import Final
 from typing import Self
@@ -9,7 +11,11 @@ from pydantic_core import core_schema
 
 from app_manifest.primitives import AppName
 from imbue.imbue_common.primitives import NonEmptyStr
+from imbue.imbue_common.pure import pure
+from screen.browser_names import is_valid_browser_name
+from screen.errors import InvalidBrowserNameError
 from screen.errors import InvalidRunCommandError
+from screen.errors import InvalidStartUrlError
 from screen.errors import WindowToolError
 
 # The app's registered name (what its manifest, system/apps/screen/app.toml, declares and the
@@ -55,8 +61,40 @@ VIDEO_IDS: Final[tuple[str, ...]] = (VIDEO_ID_IDLE, VIDEO_ID_WATCH, VIDEO_ID_CON
 CONTROL_INPUT_WINDOW_SECONDS: Final[float] = 10.0
 IDLE_AFTER_SECONDS: Final[float] = 60.0
 
-# What the viewer's title bar reads for an empty desktop (spec section 4.1).
+# What the viewer's title bar reads for an empty desktop, and for a Chromium window whatever its page says
+# (spec section 4.1).
 DEFAULT_TITLE: Final[str] = "Screen"
+BROWSER_TITLE: Final[str] = "Browser"
+
+# The browser on the Screen (spec section 16): Fortress, where the env.d unit installs it (a stable path the unit
+# keeps pointing at the pinned release), the pinned extensions beside it, the agent-facing CDP proxy, and where
+# the one profile and the tab manifest live, unchanged from the browser app so an upgraded workspace keeps both.
+FORTRESS_EXECUTABLE: Final[Path] = Path("/opt/fortress/tilion-fortress/tilion")
+FORTRESS_EXTENSIONS_DIR: Final[Path] = Path("/opt/fortress/extensions")
+CDP_PROXY_HOST: Final[str] = "127.0.0.1"
+CDP_PROXY_PORT: Final[int] = 8083
+BROWSER_PROFILE_ROOT: Final[Path] = Path("/home/user/.mngr/browser-profiles")
+BROWSER_PROFILE_DIR_PREFIX: Final[str] = "browser-use-user-data-dir-"
+BROWSER_MANIFEST_PATH: Final[Path] = Path("data/.apps/browser/instances.json")
+MAX_BROWSERS: Final[int] = 1
+# A blank page has nothing to geolocate and nothing to consent to: an agent navigates the moment it attaches, and
+# a human types an address.
+BROWSER_HOME_URL: Final[str] = "about:blank"
+# How Chromium's processes and windows are told apart from everything else on the Screen: the executable names a
+# Fortress build runs under, and the markers its WM_CLASS carries.
+CHROMIUM_EXECUTABLE_NAMES: Final[frozenset[str]] = frozenset({"chrome", "chromium", "chromium-browser", "tilion"})
+CHROMIUM_WINDOW_CLASS_MARKERS: Final[tuple[str, ...]] = ("chrome", "chromium", "tilion", "fortress")
+
+# A start page is an absolute http(s) URL with a host; the length bound keeps a query string from smuggling in an
+# unbounded value.
+MAX_START_URL_LENGTH: Final[int] = 2048
+_START_URL_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https"})
+_URL_PREVIEW_LENGTH: Final[int] = 80
+# The hosts of this machine, as a link opened in the workspace names them (``open:url``, the workspace link
+# routing plan): the loopback names and any ``*.localhost`` host. ``urlsplit`` gives an IPv6 host without its
+# brackets.
+_LOCAL_HOSTNAMES: Final[frozenset[str]] = frozenset({"localhost", "127.0.0.1", "::1"})
+_LOCAL_HOSTNAME_SUFFIX: Final[str] = ".localhost"
 
 # An X window id as wmctrl and xdotool print it: a hex literal.
 _WINDOW_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^0x[0-9a-fA-F]{1,8}$")
@@ -104,3 +142,85 @@ class RunCommand(tuple[str, ...]):
     @classmethod
     def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
         return core_schema.no_info_after_validator_function(cls, core_schema.any_schema())
+
+
+class BrowserName(str):
+    """A browser's name: lowercase alphanumeric words joined by single dashes, at most 40 characters, not all
+    digits; safe as a URL path segment, a query value, and the profile directory's suffix."""
+
+    def __new__(cls, value: str) -> Self:
+        if not is_valid_browser_name(value):
+            raise InvalidBrowserNameError(
+                f"invalid browser name {value!r}: names are lowercase letters, digits, and single dashes, 1 to 40 "
+                "characters, not all digits"
+            )
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
+
+
+@pure
+def _preview(value: str) -> str:
+    if len(value) <= _URL_PREVIEW_LENGTH:
+        return repr(value)
+    return repr(value[:_URL_PREVIEW_LENGTH] + "...")
+
+
+@pure
+def describe_start_url_problem(value: str) -> str | None:
+    """Why ``value`` cannot be a start page, or None when it can."""
+    if len(value) > MAX_START_URL_LENGTH:
+        return f"invalid url: {len(value)} characters is over the {MAX_START_URL_LENGTH}-character limit"
+    if any(character <= " " or character == "\x7f" for character in value):
+        return f"invalid url {_preview(value)}: whitespace and control characters are not allowed"
+    try:
+        parts = urllib.parse.urlsplit(value)
+    except ValueError as e:
+        return f"invalid url {_preview(value)}: {e}"
+    if parts.scheme not in _START_URL_SCHEMES or not parts.netloc:
+        return f"invalid url {_preview(value)}: expected an absolute http or https URL with a host"
+    return None
+
+
+@pure
+def describe_local_url_problem(value: str) -> str | None:
+    """Why ``value`` cannot be a link the browser opens for the human, or None when it can."""
+    problem = describe_start_url_problem(value)
+    if problem is not None:
+        return problem
+    hostname = urllib.parse.urlsplit(value).hostname or ""
+    if hostname not in _LOCAL_HOSTNAMES and not hostname.endswith(_LOCAL_HOSTNAME_SUFFIX):
+        return f"invalid url {_preview(value)}: only an address on this machine (localhost) opens here"
+    return None
+
+
+class AbsoluteHttpUrl(str):
+    """A browser's start page: an absolute http(s) URL with a host, at most 2048 characters, no whitespace or
+    control characters."""
+
+    def __new__(cls, value: str) -> Self:
+        problem = describe_start_url_problem(value)
+        if problem is not None:
+            raise InvalidStartUrlError(problem)
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
+
+
+class LocalHttpUrl(str):
+    """A link the browser opens for the human: an absolute http(s) URL on a local host (``localhost``,
+    ``127.0.0.1``, ``[::1]``, or a ``*.localhost`` host), held to a start page's rules."""
+
+    def __new__(cls, value: str) -> Self:
+        problem = describe_local_url_problem(value)
+        if problem is not None:
+            raise InvalidStartUrlError(problem)
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())

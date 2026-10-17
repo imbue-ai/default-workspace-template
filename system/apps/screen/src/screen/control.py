@@ -235,7 +235,8 @@ class ScreenControl(MutableModel):
                 str(queued.agent_id),
                 queued.agent_name,
                 "The Screen was handed back to you (the human finished with it). The human may have moved or "
-                "resized windows, so take a fresh `screen shot` before continuing where you left off.",
+                "resized windows and navigated the browser, so take a fresh `screen shot` (or re-`snapshot` with "
+                "playwright-cli if you drive the browser) before continuing where you left off.",
             )
 
     # the verbs

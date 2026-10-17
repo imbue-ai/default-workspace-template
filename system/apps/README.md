@@ -35,8 +35,12 @@ Built-in apps:
   `terminal/`.
 - `files/` - The file viewer: dufs over the container's filesystem, opened at the
   workspace folder, run from its program line with a vendored, patched frontend.
-- `browser/` - The live browser: a fleet of Chromium browsers streamed to the
-  UI by its daemon (`browser-service`).
+- `screen/` - The Screen: the workspace's one streamed Linux desktop (Xorg, XFCE,
+  PulseAudio and neko) as a window, with the control lease the human and the
+  agents share, the `screen` command, and the browser (one Fortress Chromium on
+  the Screen, the `browser` launch path, the fleet API and the CDP proxy agents
+  drive it through, `agentic-browser-fleet`). Served on port 8090 by the
+  `screen-service` package.
 - `system_monitor/` - Memory & disk: one page showing how much memory and disk
   the workspace is using, which chats, code checkers, and apps hold the memory,
   and which programs the memory guard stopped in the last 24 hours. Served on

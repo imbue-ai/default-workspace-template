@@ -1,29 +1,44 @@
 """The real stack, inside the workspace image (docs/system/specs/screen/spec.md section 20): Xorg, PulseAudio, XFCE
 and neko as subprocesses under the service, the group starting on first demand, neko answering health, a session
-token minted, a screenshot taken, ``xeyes`` appearing in the window list, a member's death ending the group with its
-event, and a second start bringing it back.
+token minted, a screenshot taken, ``xeyes`` appearing in the window list, the browser launch path putting a real
+Fortress on the Screen with its tab checkpointed, a member's death ending the group with its event, and a second
+start bringing it back.
 
 Skips where the env.d unit has not installed the stack (a developer laptop); the CI job that runs the suites inside
 the workspace image fails on a skip, which is how a missing install is noticed."""
 
 import io
+import json
 import os
 import shutil
 import signal
+import threading
+import urllib.request
 from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 
 import pytest
 from PIL import Image
 from flask.testing import FlaskClient
 
 from mock_messenger_test import RecordingMessenger
+from screen.browser_fleet import BrowserFleet
+from screen.browser_manifest import ManifestStore
+from screen.cdp_client import WebSocketCdpConnector
+from screen.cdp_proxy import ProxyServer
+from screen.chrome_launcher import SubprocessChromiumLauncher
 from screen.connect_info import ConnectInfoAggregator
 from screen.data_types import Lifecycle
 from screen.events import EVENTS_RELATIVE_PATH
 from screen.launch import DetachedProcessLauncher
+from screen.launch import screen_process_environment
 from screen.neko_client import NekoClient
+from screen.primitives import BrowserName
 from screen.primitives import DISPLAY_SOCKET_PATH
+from screen.primitives import FORTRESS_EXECUTABLE
 from screen.primitives import NEKO_PROGRAM
 from screen.primitives import STACK_PROGRAMS
 from screen.proxy import NekoProxy
@@ -32,6 +47,7 @@ from screen.service import ScreenService
 from screen.sizing import XrandrDisplayModes
 from screen.stack import NEKO_BINARY_PATH
 from screen.stack import ScreenStack
+from screen.stack import describe_missing_browser_install
 from screen.stack import describe_missing_install
 from screen.watch import decide_group_end
 from screen.watch import end_group
@@ -86,12 +102,32 @@ def live(
         set_api_token=service.set_api_token,
     )
     service.attach_stack(stack)
+    proxy_server = ProxyServer(requested_port=0)
+    proxy_server.start()
+    fleet = BrowserFleet(
+        launcher=SubprocessChromiumLauncher(),
+        cdp_connector=WebSocketCdpConnector(),
+        proxy_server=proxy_server,
+        manifest_store=ManifestStore(path=base / "apps" / "browser" / "instances.json"),
+        profile_root=base / "profiles",
+        executable=FORTRESS_EXECUTABLE,
+        install_check=describe_missing_browser_install,
+        environment=screen_process_environment,
+        is_sandbox_disabled=True,
+        control=service.control,
+        on_changed=service.broadcast_state,
+        on_agent_activity=service.touch,
+        on_chromium_processes_expected=lambda: None,
+        on_browser_running=service.on_browser_running,
+    )
+    service.attach_fleet(fleet, band_sweeper=None)
     service.start()
     client = build_app(service, base / "static", NekoProxy()).test_client()
     try:
         yield service, client, supervisor
     finally:
         service.shutdown("the test ended")
+        proxy_server.stop()
         supervisor.stop_everything()
 
 
@@ -157,6 +193,70 @@ def test_xeyes_appears_in_the_window_list_and_a_raised_window_titles_the_screen(
     assert wait_until(lambda: client.get("/api/state").get_json()["title"] == "screen-test-window", 10.0)
     os.kill(xeyes_pid, signal.SIGTERM)
     os.kill(message.get_json()["pid"], signal.SIGTERM)
+
+
+class _PageHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        body = b"<html><head><title>screen-browser-test</title></head><body>hello</body></html>"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: Any) -> None:
+        pass
+
+
+def test_the_browser_launch_path_puts_fortress_on_the_screen_and_checkpoints_its_tab(
+    live: tuple[ScreenService, FlaskClient, SubprocessSupervisor],
+) -> None:
+    service, client, _supervisor = live
+    missing = describe_missing_browser_install()
+    if missing is not None:
+        pytest.skip(missing)
+    page_server = ThreadingHTTPServer(("127.0.0.1", 0), _PageHandler)
+    serving = threading.Thread(target=page_server.serve_forever, daemon=True)
+    serving.start()
+    try:
+        page_url = f"http://127.0.0.1:{page_server.server_address[1]}/start"
+        answer = client.post("/launch/browser", json={"url": page_url})
+        assert answer.status_code == 200, answer.get_json()
+        assert answer.get_json() == {"path": "/"}
+        browser = service.fleet.get(BrowserName("browser-1"))
+        assert wait_until(lambda: browser.is_running, 120.0), browser.lifecycle
+
+        def chromium_window() -> dict | None:
+            windows = client.get("/api/windows").get_json().get("windows", [])
+            return next(
+                (w for w in windows if any(m in w["window_class"].lower() for m in ("tilion", "chrome", "chromium"))),
+                None,
+            )
+
+        assert wait_until(lambda: chromium_window() is not None, 60.0)
+        assert wait_until(lambda: client.get("/api/state").get_json()["title"] == "Browser", 30.0)
+        listed = client.get("/browsers").get_json()["browsers"][0]
+        assert listed["lifecycle"] == "running"
+        assert wait_until(
+            lambda: any(tab["url"] == page_url for tab in client.get("/browsers").get_json()["browsers"][0]["tabs"]),
+            30.0,
+        )
+        attach = client.get("/browsers/browser-1/attach", headers={"X-Mngr-Agent-Id": "chat-live"}).get_json()
+        assert attach["ok"] is True
+        # The proxy answers Chromium's discovery with its own URL in place of the real port.
+        version = json.loads(urllib.request.urlopen(attach["attach_url"] + "/json/version/", timeout=10).read())
+        assert version["webSocketDebuggerUrl"].startswith("ws://127.0.0.1:")
+        assert version["webSocketDebuggerUrl"].endswith(attach["attach_url"].rsplit("/", 1)[1])
+        service.fleet.checkpoint()
+        manifest = service.fleet.manifest_store.read()
+        assert manifest is not None
+        assert manifest.browsers[0].tabs == (page_url,)
+        assert client.post("/browsers/browser-1/stop").get_json() == {"stopped": True}
+        assert wait_until(lambda: chromium_window() is None, 30.0)
+        assert client.get("/api/state").get_json()["chromium"]["state"] == "stopped"
+    finally:
+        page_server.shutdown()
+        page_server.server_close()
 
 
 def test_a_members_death_ends_the_group_and_records_the_event(

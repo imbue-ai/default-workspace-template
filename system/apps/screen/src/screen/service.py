@@ -23,7 +23,10 @@ from pydantic import SecretStr
 from imbue.imbue_common.event_envelope import parse_iso_timestamp
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from screen.band_sweep import BandSweeper
 from screen.broadcast import ViewerBroadcaster
+from screen.browser_fleet import Browser
+from screen.browser_fleet import BrowserFleet
 from screen.connect_info import ConnectInfoAggregator
 from screen.control import ScreenControl
 from screen.data_types import AcquireStatus
@@ -50,6 +53,9 @@ from screen.interfaces import ProcessLauncherInterface
 from screen.interfaces import WindowToolsInterface
 from screen.neko_client import NekoEventSubscriber
 from screen.primitives import AgentId
+from screen.primitives import BROWSER_TITLE
+from screen.primitives import BrowserName
+from screen.primitives import CHROMIUM_WINDOW_CLASS_MARKERS
 from screen.primitives import DEFAULT_TITLE
 from screen.primitives import NekoSessionId
 from screen.primitives import VIDEO_ID_WATCH
@@ -123,6 +129,24 @@ def is_session_reapable(not_connected_since: str | None, is_connected: bool, now
 
 
 @pure
+def is_chromium_window_class(window_class: str) -> bool:
+    """Whether a WM_CLASS is a Fortress (Chromium) window's."""
+    lowered = window_class.lower()
+    return any(marker in lowered for marker in CHROMIUM_WINDOW_CLASS_MARKERS)
+
+
+@pure
+def title_for_active_window(window: XWindow | None) -> str:
+    """What the Screen's window is titled (spec section 4.1): "Browser" for a Chromium window, the window's title
+    otherwise, the app's name for an empty desktop."""
+    if window is None:
+        return DEFAULT_TITLE
+    if is_chromium_window_class(window.window_class):
+        return BROWSER_TITLE
+    return window.title or DEFAULT_TITLE
+
+
+@pure
 def jpeg_to_png(jpeg_bytes: bytes) -> bytes:
     with Image.open(io.BytesIO(jpeg_bytes)) as image:
         output = io.BytesIO()
@@ -161,6 +185,8 @@ class ScreenService(MutableModel):
 
     _stack: ScreenStack | None = PrivateAttr(default=None)
     _control: ScreenControl | None = PrivateAttr(default=None)
+    _fleet: BrowserFleet | None = PrivateAttr(default=None)
+    _band_sweeper: BandSweeper | None = PrivateAttr(default=None)
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _sessions: dict[NekoSessionId, NekoSession] = PrivateAttr(default_factory=dict)
     _service_session: NekoSession | None = PrivateAttr(default=None)
@@ -192,10 +218,19 @@ class ScreenService(MutableModel):
     def attach_stack(self, stack: ScreenStack) -> None:
         self._stack = stack
 
+    def attach_fleet(self, fleet: BrowserFleet, band_sweeper: BandSweeper | None) -> None:
+        self._fleet = fleet
+        self._band_sweeper = band_sweeper
+
     @property
     def stack(self) -> ScreenStack:
         assert self._stack is not None, "the stack is attached before the service runs"
         return self._stack
+
+    @property
+    def fleet(self) -> BrowserFleet:
+        assert self._fleet is not None, "the fleet is attached before the service runs"
+        return self._fleet
 
     @property
     def control(self) -> ScreenControl:
@@ -219,11 +254,15 @@ class ScreenService(MutableModel):
         ]
         for thread in self._threads:
             thread.start()
+        if self._band_sweeper is not None:
+            self._band_sweeper.start()
 
     def shutdown(self, reason: str) -> None:
         """Stop the group (the service's own shutdown ends it, spec section 9.3) and the service's threads."""
         self._stop.set()
         self._projection_wake.set()
+        if self._band_sweeper is not None:
+            self._band_sweeper.stop()
         if self._subscriber is not None:
             self._subscriber.stop()
         self._stop_clipboard_monitor()
@@ -243,13 +282,14 @@ class ScreenService(MutableModel):
             video_id=self.video_id,
             control=self.control.view(),
             screen_size=self.screen_size if stack.lifecycle == Lifecycle.RUNNING else None,
-            chromium=ChromiumView(state="absent"),
+            chromium=self._fleet.chromium_view() if self._fleet is not None else ChromiumView(state="absent"),
         )
 
     def state_document(self) -> dict[str, Any]:
         return state_document(self.state())
 
-    def _broadcast_state(self) -> None:
+    def broadcast_state(self) -> None:
+        """Every viewer is sent the state document (what the fleet calls when the browser's state changes)."""
         self.broadcaster.broadcast({"type": "state", **self.state_document()})
 
     def broadcaster_state_text(self) -> str:
@@ -261,7 +301,7 @@ class ScreenService(MutableModel):
     def on_lifecycle_changed(self) -> None:
         if self.stack.lifecycle == Lifecycle.STOPPED:
             self._end_of_stack()
-        self._broadcast_state()
+        self.broadcast_state()
 
     def _end_of_stack(self) -> None:
         if self._subscriber is not None:
@@ -277,8 +317,10 @@ class ScreenService(MutableModel):
             self._last_input_at = None
             self.screen_size = None
             self.title = DEFAULT_TITLE
-        # The X server is gone, and with it every mode added to it.
+        # The X server is gone, and with it every mode added to it and every program that ran on it.
         self.modes_ledger.clear()
+        if self._fleet is not None:
+            self._fleet.on_stack_stopped()
         reason = self.stack.stop_reason or "the stack stopped"
         if self.control.view().controller != Controller.NOBODY or self.control.view().waiting:
             self.control.abandon(reason)
@@ -302,6 +344,8 @@ class ScreenService(MutableModel):
             self._last_input_at = self.clock()
         self._request_projection(self.control.view())
         self.refresh_profile()
+        if self._fleet is not None:
+            self._fleet.on_stack_running()
 
     def set_api_token(self, token: SecretStr | None) -> None:
         self.neko.set_api_token(token)
@@ -378,7 +422,10 @@ class ScreenService(MutableModel):
     def _on_control_changed(self, view: ControlView) -> None:
         self._request_projection(view)
         self.refresh_profile()
-        self._broadcast_state()
+        self.broadcast_state()
+        if view.controller != Controller.AGENT and self._fleet is not None:
+            # A page held while an agent drove opens now (spec section 4.2); a tab is slow CDP work, off this thread.
+            threading.Thread(target=self._fleet.open_pending_url, name="screen-pending-url", daemon=True).start()
 
     def _on_handoff_request(self, agent_name: str, reason: str) -> None:
         self.broadcaster.broadcast({"type": "handoff_request", "agent_name": agent_name, "reason": reason})
@@ -502,7 +549,7 @@ class ScreenService(MutableModel):
             self.video_id = chosen
         if is_changed:
             self.broadcaster.broadcast({"type": "profile", "video_id": chosen})
-            self._broadcast_state()
+            self.broadcast_state()
         return chosen
 
     # what neko tells the service
@@ -539,7 +586,7 @@ class ScreenService(MutableModel):
             return
         with self._lock:
             self.screen_size = size
-        self._broadcast_state()
+        self.broadcast_state()
 
     def _handle_control_host(self, payload: dict[str, Any]) -> None:
         """A host change the service did not make is a human taking an uncontrolled Screen; a host going away is
@@ -567,19 +614,21 @@ class ScreenService(MutableModel):
             if self.stack.lifecycle == Lifecycle.RUNNING:
                 self.poll_title()
                 self.refresh_profile()
+                if self._fleet is not None:
+                    self._fleet.tick()
 
     def poll_title(self) -> None:
         try:
-            title = self.window_tools.active_window_title()
+            active = self.window_tools.active_window()
         except WindowToolError as e:
-            logger.debug("Could not read the active window's title: {}", e)
+            logger.debug("Could not read the active window: {}", e)
             return
-        new_title = title if title else DEFAULT_TITLE
+        new_title = title_for_active_window(active)
         with self._lock:
             is_changed = new_title != self.title
             self.title = new_title
         if is_changed:
-            self._broadcast_state()
+            self.broadcast_state()
 
     def _require_running(self) -> None:
         if self.stack.lifecycle != Lifecycle.RUNNING:
@@ -626,7 +675,7 @@ class ScreenService(MutableModel):
             raise DisplayModeError(f"neko refused the size {requested.width}x{requested.height}: {e}") from e
         with self._lock:
             self.screen_size = applied
-        self._broadcast_state()
+        self.broadcast_state()
         return applied
 
     def screenshot(self, quality: int, is_png: bool) -> bytes:
@@ -648,6 +697,46 @@ class ScreenService(MutableModel):
         if self.stack.lifecycle != Lifecycle.RUNNING:
             raise ScreenNotRunningError("the Screen is not running yet")
         return self.launcher.launch(command)
+
+    # the browser (spec section 16)
+
+    def launch_browser(self, start_url: str | None) -> Browser:
+        """The ``browser`` launch path: start the stack when it is down, start Chromium when it is not running (or
+        register it to start with the stack), open the start page as a new tab when given, and raise its window."""
+        self.ensure_started()
+        browser = self.fleet.ensure_browser(start_url)
+        if browser.is_running:
+            self.raise_browser_window()
+        return browser
+
+    def open_url_for_human(self, url: str) -> Browser:
+        """The ``open:url`` handler: a tab in Chromium, raised, unless an agent drives (the page is then held)."""
+        self.ensure_started()
+        browser = self.fleet.open_url_for_human(url)
+        if browser.is_running and browser.pending_url is None:
+            self.raise_browser_window()
+        return browser
+
+    def raise_browser_window(self) -> bool:
+        """Bring Chromium's window (the most recently created, when it has several) to the front; answers whether
+        one was found."""
+        if self.stack.lifecycle != Lifecycle.RUNNING:
+            return False
+        try:
+            windows = self.window_tools.list_windows()
+            chromium_windows = [window for window in windows if is_chromium_window_class(window.window_class)]
+            if not chromium_windows:
+                return False
+            self.window_tools.activate_window(chromium_windows[-1].id)
+        except WindowToolError as e:
+            logger.debug("Could not raise the browser's window: {}", e)
+            return False
+        return True
+
+    def on_browser_running(self, name: BrowserName) -> None:
+        """A browser came up (the fleet's launch thread): its window comes to the front."""
+        logger.debug("Browser {} is running; raising its window", name)
+        self.raise_browser_window()
 
     def wait_until_running(self, timeout_seconds: float) -> bool:
         """Block until the stack runs or the deadline passes (the command's ``run`` waits a little for a start)."""

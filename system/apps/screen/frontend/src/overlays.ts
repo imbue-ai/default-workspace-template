@@ -1,4 +1,6 @@
-/** The overlays over the stage: installing, starting, connecting, stopped (with Start), and the agent dim. */
+/** The overlays over the stage: installing, starting, connecting, stopped (with Start), and the agent dim, which
+ *  also names a page the human asked to open while the agent drives (spec section 4.2): Take control opens it,
+ *  Cancel drops it. */
 
 import type { ControlDocument, ScreenStateDocument } from "./state";
 import type { StreamStatus } from "./webrtc";
@@ -10,9 +12,11 @@ export class Overlays {
   private readonly startButton = document.createElement("button");
   private readonly dim = document.createElement("div");
   private readonly dimTitle = document.createElement("div");
+  private readonly dimPending = document.createElement("div");
   private readonly dimTake = document.createElement("button");
+  private readonly dimCancel = document.createElement("button");
 
-  constructor(onStart: () => void, onTakeControl: () => void) {
+  constructor(onStart: () => void, onTakeControl: () => void, onCancelPendingUrl: () => void) {
     this.element.className = "screen-overlay";
     this.element.dataset.screenOverlay = "true";
     this.title.className = "screen-overlay__title";
@@ -25,10 +29,16 @@ export class Overlays {
     this.dim.className = "screen-overlay screen-overlay--dim";
     this.dim.dataset.screenAgentOverlay = "true";
     this.dimTitle.className = "screen-overlay__title";
+    this.dimPending.className = "screen-overlay__detail";
+    this.dimPending.dataset.screenPendingUrl = "true";
     this.dimTake.className = "screen-button screen-button--primary";
     this.dimTake.textContent = "Take control";
     this.dimTake.addEventListener("click", () => onTakeControl());
-    this.dim.append(this.dimTitle, this.dimTake);
+    this.dimCancel.className = "screen-button";
+    this.dimCancel.textContent = "Cancel";
+    this.dimCancel.dataset.screenCancelPendingUrl = "true";
+    this.dimCancel.addEventListener("click", () => onCancelPendingUrl());
+    this.dim.append(this.dimTitle, this.dimPending, this.dimTake, this.dimCancel);
   }
 
   get dimElement(): HTMLElement {
@@ -64,6 +74,16 @@ export class Overlays {
     const isAgent = control.controller === "agent" && state.lifecycle === "running";
     this.dim.hidden = !isAgent;
     if (isAgent) this.dimTitle.textContent = `${control.agent_name ?? control.agent_id ?? "An agent"} has control`;
+    const pendingUrl = state.chromium.pending_url;
+    const hasPending = isAgent && pendingUrl !== null;
+    this.dimPending.hidden = !hasPending;
+    this.dimCancel.hidden = !hasPending;
+    if (hasPending) {
+      this.dimPending.textContent = `Waiting to open ${pendingUrl} in the browser: take control to open it now`;
+      this.dimTake.textContent = "Take control and open it";
+    } else {
+      this.dimTake.textContent = "Take control";
+    }
   }
 
   private show(title: string, detail: string, isStartOffered: boolean): void {

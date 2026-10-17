@@ -48,10 +48,20 @@ def parse_wmctrl_list(output: str) -> list[XWindow]:
 
 
 @pure
-def window_title_from_tool_output(output: str) -> str | None:
-    """The title ``xdotool getactivewindow getwindowname`` printed, or None for an empty answer."""
-    title = output.strip()
-    return title if title else None
+def window_id_from_tool_output(output: str) -> XWindowId | None:
+    """The id ``xdotool getactivewindow`` printed (decimal), as the window list spells it, or None for an empty or
+    unreadable answer."""
+    text = output.strip()
+    if not text.isdigit():
+        return None
+    return XWindowId(f"0x{int(text):08x}")
+
+
+@pure
+def find_window(windows: list[XWindow], window_id: XWindowId) -> XWindow | None:
+    """The listed window with this id; ids compare by value, since the tools pad them differently."""
+    wanted = int(window_id, 16)
+    return next((window for window in windows if int(window.id, 16) == wanted), None)
 
 
 class DisplayWindowTools(WindowToolsInterface):
@@ -78,12 +88,15 @@ class DisplayWindowTools(WindowToolsInterface):
             raise WindowToolError(f"wmctrl -l failed: {completed.stderr.strip()}")
         return parse_wmctrl_list(completed.stdout)
 
-    def active_window_title(self) -> str | None:
-        completed = self._run(["xdotool", "getactivewindow", "getwindowname"])
+    def active_window(self) -> XWindow | None:
+        completed = self._run(["xdotool", "getactivewindow"])
         # xdotool exits non-zero when no window is active (an empty desktop), which is an answer, not an error.
         if completed.returncode != 0:
             return None
-        return window_title_from_tool_output(completed.stdout)
+        window_id = window_id_from_tool_output(completed.stdout)
+        if window_id is None:
+            return None
+        return find_window(self.list_windows(), window_id)
 
     def activate_window(self, window_id: XWindowId) -> None:
         completed = self._run(["wmctrl", "-i", "-a", str(window_id)])

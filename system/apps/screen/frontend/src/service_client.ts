@@ -66,6 +66,12 @@ export function postReturnControl(sessionId: string): Promise<VerbOutcome> {
   return postControlVerb("/api/control/return", sessionId);
 }
 
+/** Drop the page held for the human while an agent drives the browser (the overlay's Cancel). */
+export async function postCancelPendingUrl(browserName: string): Promise<void> {
+  const response = await fetch(`/browsers/${encodeURIComponent(browserName)}/pending-url/cancel`, { method: "POST" });
+  if (!response.ok) console.warn("[screen] cancelling the held page refused:", await describeRefusal(response));
+}
+
 /** The controller's stage size (spec section 7.2); the service quantizes and clamps it. */
 export async function postScreenSize(
   width: number,

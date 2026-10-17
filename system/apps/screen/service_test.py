@@ -51,7 +51,7 @@ def test_state_document_before_any_start_is_stopped_and_free(client: FlaskClient
     assert document["video_id"] == "watch"
     assert document["control"]["controller"] == "nobody"
     assert document["screen_size"] is None
-    assert document["chromium"] == {"state": "absent"}
+    assert document["chromium"] == {"state": "absent", "name": None, "pending_url": None}
 
 
 def test_a_page_load_starts_the_stack(
@@ -251,14 +251,43 @@ def test_run_starts_the_stack_and_launches_the_command(client: FlaskClient, serv
     assert client.post("/api/run", json={"command": "xeyes"}).status_code == 400
 
 
-def test_title_follows_the_active_window(client: FlaskClient, service: ScreenService) -> None:
+def test_title_follows_the_active_window_and_reads_browser_for_chromium(
+    client: FlaskClient, service: ScreenService
+) -> None:
     start_service_stack(service)
     tools = service.window_tools
     assert isinstance(tools, FakeWindowTools)
-    tools.active_title = "Firefox"
+    tools.windows = [
+        XWindow(
+            id=XWindowId("0x0000001"),
+            desktop=0,
+            pid=1,
+            x=0,
+            y=0,
+            width=10,
+            height=10,
+            window_class="firefox.Firefox",
+            title="Firefox",
+        ),
+        XWindow(
+            id=XWindowId("0x0000002"),
+            desktop=0,
+            pid=2,
+            x=0,
+            y=0,
+            width=10,
+            height=10,
+            window_class="tilion.Tilion",
+            title="Example Domain - Chromium",
+        ),
+    ]
+    tools.active_window_id = "0x0000001"
     service.poll_title()
     assert client.get("/api/state").get_json()["title"] == "Firefox"
-    tools.active_title = None
+    tools.active_window_id = "0x0000002"
+    service.poll_title()
+    assert client.get("/api/state").get_json()["title"] == "Browser"
+    tools.active_window_id = None
     service.poll_title()
     assert client.get("/api/state").get_json()["title"] == "Screen"
 

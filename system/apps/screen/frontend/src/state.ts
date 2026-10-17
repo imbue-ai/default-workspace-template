@@ -21,6 +21,14 @@ export interface ScreenSizeDocument {
   rate: number;
 }
 
+/** The browser on the Screen (spec section 16): the one browser's lifecycle, its name, and a page the human asked
+ *  to open that is held while an agent drives. */
+export interface ChromiumDocument {
+  state: "absent" | "init" | "running" | "crashed" | "stopped";
+  name: string | null;
+  pending_url: string | null;
+}
+
 export interface ScreenStateDocument {
   lifecycle: Lifecycle;
   install_reason: string | null;
@@ -29,6 +37,7 @@ export interface ScreenStateDocument {
   video_id: string;
   control: ControlDocument;
   screen_size: ScreenSizeDocument | null;
+  chromium: ChromiumDocument;
 }
 
 export type ServiceEvent =

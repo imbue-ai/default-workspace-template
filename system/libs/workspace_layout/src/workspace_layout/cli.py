@@ -46,7 +46,7 @@ Subcommands:
     list                                List every app (launch paths, running or not) with its windows, plus the desktops.
     load <desktop>                      Switch the target client onto a desktop.
     open <app|url> [--path P | --launch ID --param k=v ...] [--if-present focus|new] [--minimized]
-                                        Open a window of an app (a bare https:// URL opens a new browser on that page).
+                                        Open a window of an app (a bare https:// URL opens the browser on the Screen at that page).
     open ... --beside [window]          ... and lay it beside that window (your own chat by default): that one
                                         snapped to the left half, the opened one to the right half and on top.
     show <app> --path P [--showing P ...] [--repoint PAGE ...]
@@ -101,8 +101,8 @@ desktop; ``--desktop <name>`` edits that desktop and switches the client to it.
 ``open`` opens a window at ``--path``, or at one of the app's *launch paths* (``--launch <id>``
 with ``--param name=value`` for its parameters; with neither, the app's default launch path).
 A GET launch path is the page itself with the params as its query; a POST launch path is posted
-the params by the shell and answers the page to open (the terminal's and the browser's ``new``,
-the chat's ``new``, ``send``, and ``draft``), so the window opens at the page the app answered.
+the params by the shell and answers the page to open (the terminal's ``new``, the Screen's
+``browser``, the chat's ``new``, ``send``, and ``draft``), so the window opens at the page the app answered.
 A window of the app already at that path is focused rather than duplicated unless
 ``--if-present new`` is passed. The window's id (the new one's, or the focused one's) is
 printed to stdout. To open a folder in the file viewer, ``open files --path
@@ -140,10 +140,10 @@ refused with the verb or form to use instead.
 # How the hints name this command: agents run it from the repo root through the root venv.
 _COMMAND: Final[str] = "uv run --no-sync workspace-layout"
 
-# A bare URL opens a new browser on that page: the browser app's ``new`` launch path with the
-# URL as its ``url`` parameter (system/apps/browser/app.toml).
-_BROWSER_APP_NAME: Final[str] = "browser"
-_BROWSER_NEW_LAUNCH: Final[str] = "new"
+# A bare URL opens the browser on the Screen at that page: the Screen app's ``browser`` launch path with
+# the URL as its ``url`` parameter (system/apps/screen/app.toml).
+_SCREEN_APP_NAME: Final[str] = "screen"
+_BROWSER_LAUNCH: Final[str] = "browser"
 _BROWSER_URL_PARAM: Final[str] = "url"
 _EXTERNAL_URL_PREFIXES: Final[tuple[str, ...]] = ("https://", "http://")
 
@@ -171,9 +171,9 @@ RETIRED_VERBS: Final[Mapping[str, str]] = {
     "split": "'place' sets where a window sits (--state snapped-left|snapped-right|maximized|fullscreen, or --frame x,y,w,h); 'open' puts a new window on the desktop",
     "move": "'place' sets where a window sits (--state snapped-left|snapped-right|maximized|fullscreen, or --frame x,y,w,h)",
     "rename": "a title belongs to the app that owns the page: the chat's POST /api/chats/<id>/rename (the terminal offers no rename route yet)",
-    "delete": "close the window with 'close'; a terminal or the browser is ended by its app once no window shows it, and a chat only by the chat's own destroy route",
-    "stop": "the app's own route stops what backs a page (the chat's stop route, the browser's POST /browsers/<name>/stop)",
-    "start": "the app's own route starts what backs a page (the browser's POST /browsers/<name>/start)",
+    "delete": "close the window with 'close'; a terminal is ended by its app once no window shows it, the Screen and the browser on it never are, and a chat only by the chat's own destroy route",
+    "stop": "the app's own route stops what backs a page (the chat's stop route, the Screen service's POST /browsers/<name>/stop for the browser)",
+    "start": "the app's own route starts what backs a page (the Screen service's POST /browsers/<name>/start for the browser)",
     "replace-url": "'navigate <window> <path>' points a window at another path under its app",
     "inspect": "'desktops' lists every desktop with its windows; 'list' adds every app",
     "where": "'desktops' lists every desktop with its windows and their ids",
@@ -298,7 +298,7 @@ def _retired_spelling_message(value: str) -> str:
             f' (with --path "/?{query}" for one page of it)' if query else ""
         )
     elif prefix == "url:":
-        hint = f"pass the URL itself: '{_COMMAND} open https://...' opens it in a new browser"
+        hint = f"pass the URL itself: '{_COMMAND} open https://...' opens it in the browser on the Screen"
     else:
         hint = f"a subagent's view is a page of the chat app: '{_COMMAND} open chat --path <the subagent view's path>'"
     return (
@@ -320,7 +320,7 @@ def app_name_argument(value: str) -> str:
     """An argument that must name an app; the retired spellings and a URL are refused by name."""
     _refuse_retired_spelling(value)
     if _is_external_url(value):
-        _fail(f"{value!r} is a URL: only 'open' takes one (it opens the page in a new browser)")
+        _fail(f"{value!r} is a URL: only 'open' takes one (it opens the page in the browser on the Screen)")
     return value
 
 
@@ -695,15 +695,15 @@ def _parse_params(raw_params: Sequence[str] | None) -> dict[str, str]:
 def _open_arguments(args: argparse.Namespace) -> dict[str, Any]:
     """The ``open`` op's arguments: the app, its path or launch path with parameters, and how the window lands.
 
-    A bare URL is the browser app's ``new`` launch path with the URL as its ``url`` parameter.
+    A bare URL is the Screen app's ``browser`` launch path with the URL as its ``url`` parameter.
     """
     params = _parse_params(args.param)
     target: str = args.target
     fields: dict[str, Any] = {}
     if _is_external_url(target):
         if args.path or args.launch or params:
-            _fail("a URL is opened in a new browser; --path, --launch, and --param do not apply to it")
-        fields = {"app": _BROWSER_APP_NAME, "launch": _BROWSER_NEW_LAUNCH, "params": {_BROWSER_URL_PARAM: target}}
+            _fail("a URL is opened in the browser on the Screen; --path, --launch, and --param do not apply to it")
+        fields = {"app": _SCREEN_APP_NAME, "launch": _BROWSER_LAUNCH, "params": {_BROWSER_URL_PARAM: target}}
     else:
         fields = {"app": app_name_argument(target)}
         if args.path:
@@ -1013,10 +1013,10 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_force_argument(p_load)
     p_load.set_defaults(func=_cmd_load)
 
-    p_open = subparsers.add_parser("open", help="Open a window of an app (or a URL in a new browser)")
+    p_open = subparsers.add_parser("open", help="Open a window of an app (or a URL in the browser on the Screen)")
     p_open.add_argument(
         "target",
-        help="An app name (open a window of it), or a bare https:// URL (open it in a new browser)",
+        help="An app name (open a window of it), or a bare https:// URL (open it in the browser on the Screen)",
     )
     p_open.add_argument(
         "--path",

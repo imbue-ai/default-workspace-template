@@ -190,9 +190,9 @@ def chat_agent_oom_score_adj(
 # hurts: the two authority paths into the workspace (owner-exec, then the
 # terminal) come first, then the UI and the chat app, then the sharing stack,
 # then the runtime-state sync (github-sync, opt-in) and the host backup, then
-# the job scheduler, then the browser stack (its X display, then the
-# coordinator), then the file viewer, and last the two single-page apps
-# (Getting Started, then Memory & disk).
+# the job scheduler, then the Screen (the streamed desktop the browser runs on),
+# then the file viewer, and last the two single-page apps (Getting Started, then
+# Memory & disk).
 # ``user`` is the single band every *user-created* service shares;
 # it sits above every built-in service so a user's own service is shed before any
 # built-in one, while staying below USER_AGENT.
@@ -255,20 +255,16 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # command is the stock ``/usr/sbin/cron`` binary, not a workspace entry
     # point), so this band reaches it via the backstop listener instead.
     "cron": 55,
-    # The browser coordinator: the daemon that launches and drives Chromium, not
-    # Chromium itself. An expendable built-in service, but a *service*
-    # nonetheless -- it holds little memory, the Chromium processes it manages
-    # outlive its death, and supervisord restarts it straight back into the same
-    # session, so shedding it frees almost nothing. It therefore must stay well
-    # below SHARED_BROWSER, where those Chromium processes live: a coordinator
-    # ranked above them would be picked first every time and free nothing.
-    "browser": 70,
     # The Screen: the service that owns the workspace's one streamed desktop and the
     # four programs of its stack (Xorg, XFCE, PulseAudio, neko), which share the key
-    # through _NON_SERVICE_PROGRAM_BANDS below. Above the browser coordinator and below
-    # the file viewer (docs/system/specs/screen/spec.md section 9.4): the programs the
-    # user runs on the Screen sit in AGENT_SUBPROCESS, so by the time the service bands
-    # are shed every one of them is gone and the stack holds only its own memory.
+    # through _NON_SERVICE_PROGRAM_BANDS below, and that launches the browser's
+    # Chromium. Below the file viewer (docs/system/specs/screen/spec.md section 9.4):
+    # the programs the user runs on the Screen sit in AGENT_SUBPROCESS and Chromium's
+    # processes in the shared-browser band, so by the time the service bands are shed
+    # every one of them is gone and the stack holds only its own memory. The service
+    # itself holds little memory and must stay well below SHARED_BROWSER, where the
+    # Chromium processes it launched live: ranked above them it would be picked first
+    # every time and free nothing.
     "screen": 72,
     # The file viewer: dufs, the tiny static file server the program runs
     # directly. It holds little memory and supervisord restarts it if shed.
@@ -295,9 +291,9 @@ SERVICE_BANDS: Final[dict[str, int]] = {
 #
 # Only the processes that actually hold a browser's memory belong here. Nothing
 # is tagged into this band at spawn: Chromium's processes arrive by self-writing
-# a value that the browser service's sweep remaps (see
-# ``shared_browser_oom_score_adj``). The coordinator that launches them is tagged
-# as a service instead (``SERVICE_BANDS["browser"]``) -- shedding it frees none of
+# a value that the Screen service's band sweep remaps (see
+# ``shared_browser_oom_score_adj``). The service that launches them is tagged
+# as a service instead (``SERVICE_BANDS["screen"]``) -- shedding it frees none of
 # Chromium's memory, so it must not outrank the renderers it manages.
 SHARED_BROWSER: Final[int] = 1000
 
@@ -307,13 +303,14 @@ SHARED_BROWSER: Final[int] = 1000
 # ``AdjustLinuxOOMScore`` in chromium's chrome_main_delegate.cc), which without
 # correction would leave the memory-heavy renderers *more* protected than the
 # agents whose work they serve. The kernel offers no way to forbid that lowering
-# without ``CAP_SYS_RESOURCE``, so the browser service instead sweeps its process
-# tree and remaps every self-lowered value into ``[SHARED_BROWSER_FLOOR,
-# SHARED_BROWSER]`` via ``shared_browser_oom_score_adj``: the whole browser tree
-# stays above AGENT_SUBPROCESS, while Chromium's relative ordering (which is worth
-# keeping -- shedding one renderer kills one tab, not the whole browser) decides
-# where in the band each process lands. Chromium only writes each value once, so a
-# remapped value sticks.
+# without ``CAP_SYS_RESOURCE``, so the Screen service instead sweeps the process
+# trees of the Chromium it launched and of its session and remaps every
+# self-lowered value into ``[SHARED_BROWSER_FLOOR, SHARED_BROWSER]`` via
+# ``shared_browser_oom_score_adj``: the whole browser tree stays above
+# AGENT_SUBPROCESS, while Chromium's relative ordering (which is worth keeping --
+# shedding one renderer kills one tab, not the whole browser) decides where in the
+# band each process lands. Chromium only writes each value once, so a remapped
+# value sticks.
 SHARED_BROWSER_FLOOR: Final[int] = 910
 
 # The top of Chromium's own gradation: what it self-assigns to a renderer, the
@@ -328,7 +325,7 @@ def shared_browser_oom_score_adj(self_assigned: int) -> int:
 
     Order-preserving (a more-expendable Chromium process stays more expendable)
     and clamped, so any input lands inside the band range -- in particular at or
-    above the floor, which is what makes the browser service's sweep idempotent
+    above the floor, which is what makes the Screen service's sweep idempotent
     (it only remaps values *below* the floor).
 
     The input range is Chromium's own gradation, ``0..CHROMIUM_SELF_ASSIGNED_MAX``,

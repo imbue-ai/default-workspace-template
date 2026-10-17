@@ -11,3 +11,11 @@ The Screen's first two implementation steps land the infrastructure around the n
 - The Screen's launch path for its own page is `screen` rather than the spec's `open`, which the manifest schema reserves for the launch path the shell synthesizes.
 
 The desktop interface's documents take the Screen spec's `FULLSCREEN` placement state: `contracts.md` adds the `screen` manifest row (the browser row stays until its migration), the state in the placements file and the `place` op, the viewport as the fullscreen frame under the geometry rules, and the strip's selectors; `concepts.md` lists the state, the strip and the Fullscreen and Immersive menu rows, and marks decision 17 superseded; `plan-desktop-interface.md` 9.4 describes the browser as a launch path of the Screen. `geometry_vectors.json` gains the `fullscreen` cases and `snap_frames.FULLSCREEN` (`"viewport"`).
+
+Step 8, the browser's migration and the deletions (the Screen spec, sections 16.2 and 18):
+
+- `system/apps/browser` is deleted (its changelog entries with it; the browser's history continues in `system/apps/screen`'s), with `system/supervisord.conf.d/browser.conf`, the `pixelflux` and `pcmflux` dependencies (`uv.lock` regenerated), and what the image baked only for the browser: `xvfb`, `xclip`, the libva and pixman runtime libraries, `x11-utils` and the baked PulseAudio (`system/scripts/setup_system.sh`); the Screen's env.d unit installs xclip and PulseAudio with the rest of the stack on first boot. `system/test_app_manifests.py` and `docs/system/blueprint/desktop-interface/contracts.md` section 2 lose the browser's rows.
+
+- `system/scripts/env.d/2000-screen.sh` pins Fortress v153.0.8010.36 for x64 and arm64 alike from the official release (the fork build the arm64 pin pointed at is retired), checked against the release's SHA-256 sums; the tarball's versioned directory is installed as it is and `/opt/fortress/tilion-fortress/tilion`, the path AGENTS.md, the root conftest and the Screen service use, is a symlink the unit repoints at the pinned release, so a pin bump reinstalls. The Chrome extensions are fetched for Chrome 153.
+
+- The workspace shell's `open https://...` opens the page through the Screen's `browser` launch path (`system/libs/workspace_layout`), and the shell's layout pipeline test expects the Screen app to be named when it is not registered.

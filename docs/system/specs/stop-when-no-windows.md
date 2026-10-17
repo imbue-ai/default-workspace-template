@@ -1,6 +1,7 @@
 # Stop apps that have no windows
 
 Status: agreed design (2026-09-28), implemented on `mngr/stop-closed-apps`.
+The browser's rows and decision 3's browser clause are superseded by the Screen spec ([screen/spec.md](screen/spec.md), 2026-10-17): the browser app is gone, the browser is a launch path of the `screen` app, which declares `stop_when_no_windows = false` and never stops for emptiness.
 Audience: implementers of the shell (`system/apps/system_interface`), `system/libs/app_manifest`, `system/scripts/forward_port.py`, the share gateway (`system/services/share_gateway`), the built-in app manifests, the `build-app` skill, and the supervisord drop-ins.
 
 This spec amends the desktop interface ([plan](../blueprint/desktop-interface/plan-desktop-interface.md), [contracts](../blueprint/desktop-interface/contracts.md)) and the window-bound resources spec ([window-bound-resources.md](window-bound-resources.md)) in one place: what happens to an app's *process* once nobody is looking at the app.

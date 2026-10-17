@@ -6,12 +6,17 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from mock_broker_test import FakeBroker
+from mock_chromium_test import FakeCdpConnector
+from mock_chromium_test import FakeChromiumLauncher
 from mock_display_modes_test import FakeDisplayModes
 from mock_messenger_test import RecordingLauncher
 from mock_messenger_test import RecordingMessenger
 from mock_neko_test import FakeNeko
 from mock_supervisor_test import FakeSupervisor
 from mock_window_tools_test import FakeWindowTools
+from screen.browser_fleet import BrowserFleet
+from screen.browser_manifest import ManifestStore
+from screen.cdp_proxy import ProxyServer
 from screen.connect_info import ConnectInfoAggregator
 from screen.proxy import NekoProxy
 from screen.routes import build_app
@@ -88,6 +93,22 @@ def fake_brokers() -> tuple[FakeBroker, FakeBroker]:
 
 
 @pytest.fixture
+def fake_chromium_launcher() -> FakeChromiumLauncher:
+    return FakeChromiumLauncher()
+
+
+@pytest.fixture
+def fake_cdp_connector() -> FakeCdpConnector:
+    return FakeCdpConnector()
+
+
+@pytest.fixture
+def proxy_server() -> ProxyServer:
+    """The agents' CDP proxy, registered against but never bound (a test that needs the socket starts it itself)."""
+    return ProxyServer(requested_port=0)
+
+
+@pytest.fixture
 def service(
     tmp_path: Path,
     fake_supervisor: FakeSupervisor,
@@ -97,9 +118,12 @@ def service(
     manual_clock: ManualClock,
     fake_xclip: Path,
     fake_brokers: tuple[FakeBroker, FakeBroker],
+    fake_chromium_launcher: FakeChromiumLauncher,
+    fake_cdp_connector: FakeCdpConnector,
+    proxy_server: ProxyServer,
 ) -> Iterator[ScreenService]:
     """A service over fakes whose stack starts at once, with no event subscription and no clipboard monitor, on a
-    clock the test moves, with a recording xclip."""
+    clock the test moves, with a recording xclip and a browser fleet whose Chromium is in memory."""
     built = ScreenService(
         repo_root=tmp_path,
         state_dir=tmp_path / "state",
@@ -114,6 +138,23 @@ def service(
         is_clipboard_monitor_enabled=False,
         clock=manual_clock,
     )
+    fleet = BrowserFleet(
+        launcher=fake_chromium_launcher,
+        cdp_connector=fake_cdp_connector,
+        proxy_server=proxy_server,
+        manifest_store=ManifestStore(path=tmp_path / "apps" / "browser" / "instances.json"),
+        profile_root=tmp_path / "profiles",
+        executable=tmp_path / "fortress" / "tilion",
+        install_check=lambda: None,
+        environment=lambda: {"DISPLAY": ":4242"},
+        is_sandbox_disabled=True,
+        control=built.control,
+        on_changed=built.broadcast_state,
+        on_agent_activity=built.touch,
+        on_chromium_processes_expected=lambda: None,
+        on_browser_running=built.on_browser_running,
+    )
+    built.attach_fleet(fleet, band_sweeper=None)
     stack = ScreenStack(
         supervisor=fake_supervisor,
         neko=fake_neko,
@@ -126,6 +167,7 @@ def service(
         on_lifecycle_changed=built.on_lifecycle_changed,
         on_running=built.on_running,
         set_api_token=built.set_api_token,
+        on_stopping=fleet.prepare_for_stack_stop,
     )
     built.attach_stack(stack)
     built.start()

@@ -49,6 +49,10 @@ class SupervisorInterface(MutableModel, ABC):
     def program_state(self, program: str) -> ProgramState:
         """The program's current state."""
 
+    @abstractmethod
+    def program_pid(self, program: str) -> int | None:
+        """The program's pid while it runs, else None."""
+
 
 class WindowToolsInterface(MutableModel, ABC):
     """What the service asks the display: the window list, the active window's title, a raise."""
@@ -58,8 +62,8 @@ class WindowToolsInterface(MutableModel, ABC):
         """Every managed X window on the display."""
 
     @abstractmethod
-    def active_window_title(self) -> str | None:
-        """The frontmost window's title, or None when no window is active."""
+    def active_window(self) -> XWindow | None:
+        """The frontmost window, or None when no window is active."""
 
     @abstractmethod
     def activate_window(self, window_id: XWindowId) -> None:
