@@ -52,6 +52,18 @@ demand and the `screen-watch` event listener ends them together.
   served from this origin as every app serves them.
 - `GET /health`: `{"status", "lifecycle"}`.
 
+## Pointer lock
+
+The viewer carries the pointer-lock plumbing of spec section 12 (`frontend/src/pointer_lock.ts`:
+a strip control that locks the pointer on the stage, the relative motion it yields while locked,
+Escape releasing it in the browser itself), but the control is hidden: neko v3 has no
+relative-motion event. Its `control/move` carries an absolute `{x, y}` only
+(`server/pkg/types/message/messages.go` defines no delta message for pointer motion and
+`server/internal/websocket/handler/control.go` no handler for one; the only deltas are the
+scroll's), and integrating deltas into absolute moves breaks as soon as a relative-motion program
+warps the pointer itself, which is what such programs do. `IS_RELATIVE_MOTION_SUPPORTED` turns
+the control on once neko gains such an event.
+
 ## The lease
 
 `control.py` holds the lease (spec section 6): `controller` (`human`, `agent`,

@@ -1,0 +1,1 @@
+`WindowState` gains `FULLSCREEN` (the Screen spec's L2 layer: the window fills the whole viewport, taskbar and title bar gone), `PLACEABLE_STATES` includes it, and `workspace-layout place <window> --state fullscreen` sets it; `restore` brings a fullscreen window back to its kept frame like a maximized one.
