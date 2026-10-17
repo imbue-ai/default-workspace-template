@@ -155,7 +155,8 @@ class BrowserProxy(MutableModel):
             return discovery_response(payload)
         if bare.endswith("/json/list"):
             raw = fetch_json("/json/list")
-            targets = [target for target in raw if isinstance(target, dict) and target.get("type") == "page"]
+            listed = raw if isinstance(raw, list) else []
+            targets = [target for target in listed if isinstance(target, dict) and target.get("type") == "page"]
             for target in targets:
                 target.pop("devtoolsFrontendUrl", None)
                 target["webSocketDebuggerUrl"] = public_url
@@ -299,6 +300,7 @@ class BrowserProxy(MutableModel):
             return
         verdict = self.screen(frame, token)
         if verdict is not None:
+            logger.debug("Refused a CDP frame ({}) for browser {}: {}", frame.get("method"), self.name, verdict)
             reply(cdp_error_frame(frame.get("id"), frame.get("sessionId"), verdict))
             return
         forward(raw)
