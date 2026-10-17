@@ -1,0 +1,112 @@
+// @vitest-environment jsdom
+/** Pointer mapping into the letterboxed Screen, and what the relay sends to neko and when. */
+import { beforeEach, describe, expect, it } from "vitest";
+
+import { InputRelay, XK_CONTROL_L, XK_W, screenPointFromStage } from "./input";
+import type { NekoSocket } from "./neko_socket";
+
+const SCREEN = { width: 1920, height: 1080 };
+
+function rect(left: number, top: number, width: number, height: number): DOMRect {
+  return {
+    left,
+    top,
+    width,
+    height,
+    right: left + width,
+    bottom: top + height,
+    x: left,
+    y: top,
+    toJSON: () => ({}),
+  };
+}
+
+describe("screenPointFromStage", () => {
+  it("maps through the letterbox of a stage wider than the Screen", () => {
+    // 960x540 of video centred in 1160x540: a 100 px band on each side.
+    const stage = rect(0, 0, 1160, 540);
+    expect(screenPointFromStage(100, 0, stage, SCREEN)).toEqual({ x: 0, y: 0 });
+    expect(screenPointFromStage(580, 270, stage, SCREEN)).toEqual({ x: 960, y: 540 });
+    expect(screenPointFromStage(50, 270, stage, SCREEN)).toBeNull();
+    expect(screenPointFromStage(1100, 270, stage, SCREEN)).toBeNull();
+  });
+
+  it("maps through the letterbox of a stage taller than the Screen, offset by the stage's position", () => {
+    // 960x540 of video centred in 960x740 at (10, 20): a 100 px band above and below.
+    const stage = rect(10, 20, 960, 740);
+    expect(screenPointFromStage(10, 120, stage, SCREEN)).toEqual({ x: 0, y: 0 });
+    expect(screenPointFromStage(490, 390, stage, SCREEN)).toEqual({ x: 960, y: 540 });
+    expect(screenPointFromStage(490, 50, stage, SCREEN)).toBeNull();
+  });
+
+  it("answers nothing for an unsized stage or Screen", () => {
+    expect(screenPointFromStage(5, 5, rect(0, 0, 0, 0), SCREEN)).toBeNull();
+    expect(screenPointFromStage(5, 5, rect(0, 0, 100, 100), { width: 0, height: 0 })).toBeNull();
+  });
+});
+
+interface Sent {
+  event: string;
+  payload: unknown;
+}
+
+class RecordingSocket {
+  readonly sent: Sent[] = [];
+
+  send(event: string, payload?: unknown): void {
+    this.sent.push({ event, payload });
+  }
+}
+
+describe("InputRelay", () => {
+  let socket: RecordingSocket;
+  let stage: HTMLDivElement;
+  let relay: InputRelay;
+
+  beforeEach(() => {
+    socket = new RecordingSocket();
+    stage = document.createElement("div");
+    stage.getBoundingClientRect = () => rect(0, 0, 960, 540);
+    document.body.append(stage);
+    relay = new InputRelay(socket as unknown as NekoSocket, stage);
+    relay.screen = SCREEN;
+  });
+
+  it("sends nothing while disabled", () => {
+    stage.dispatchEvent(new MouseEvent("mousedown", { clientX: 10, clientY: 10, button: 0 }));
+    stage.dispatchEvent(new MouseEvent("mouseup", { clientX: 10, clientY: 10, button: 0 }));
+    relay.sendCloseChord();
+    expect(socket.sent).toEqual([]);
+  });
+
+  it("flushes the pointer's position before a button and maps DOM buttons to X buttons", () => {
+    relay.setEnabled(true);
+    stage.dispatchEvent(new MouseEvent("mousemove", { clientX: 480, clientY: 270 }));
+    stage.dispatchEvent(new MouseEvent("mousedown", { clientX: 480, clientY: 270, button: 2 }));
+    stage.dispatchEvent(new MouseEvent("mouseup", { clientX: 480, clientY: 270, button: 2 }));
+    expect(socket.sent).toEqual([
+      { event: "control/move", payload: { x: 960, y: 540 } },
+      { event: "control/buttondown", payload: { code: 3 } },
+      { event: "control/move", payload: { x: 960, y: 540 } },
+      { event: "control/buttonup", payload: { code: 3 } },
+    ]);
+  });
+
+  it("ignores a press outside the drawn video", () => {
+    relay.setEnabled(true);
+    stage.getBoundingClientRect = () => rect(0, 0, 1160, 540);
+    stage.dispatchEvent(new MouseEvent("mousedown", { clientX: 20, clientY: 270, button: 0 }));
+    expect(socket.sent).toEqual([]);
+  });
+
+  it("sends the close chord as Ctrl+W, pressed and released in order", () => {
+    relay.setEnabled(true);
+    relay.sendCloseChord();
+    expect(socket.sent).toEqual([
+      { event: "control/keydown", payload: { keysym: XK_CONTROL_L } },
+      { event: "control/keydown", payload: { keysym: XK_W } },
+      { event: "control/keyup", payload: { keysym: XK_W } },
+      { event: "control/keyup", payload: { keysym: XK_CONTROL_L } },
+    ]);
+  });
+});
