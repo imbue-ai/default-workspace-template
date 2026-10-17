@@ -345,6 +345,7 @@ describe("the contract", () => {
         desktopId: "home",
         app: "docs",
         path: "/?doc=1",
+        opensLocalFiles: false,
       },
       { type: SHELL_SHOWN },
     ]);
@@ -361,9 +362,17 @@ describe("the contract", () => {
         desktopId: "home",
         app: "docs",
         path: "/?doc=1",
+        opensLocalFiles: false,
       },
       { type: SHELL_HIDDEN },
     ]);
+  });
+
+  it("tells a page in its handshake whether the embedder opens its own file picker", () => {
+    store.setOpensLocalFiles(true);
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, opensLocalFiles: true });
   });
 
   it("greets a page reloaded while hidden with its own desktop, not the active one", async () => {

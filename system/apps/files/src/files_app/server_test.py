@@ -29,6 +29,7 @@ def _app(computer: FakeComputer | None, tmp_path: Path, dufs: httpx.Client | Non
         dufs_url="http://dufs.test",
         gateway=computer.gateway() if computer is not None else None,
         static_directory=static,
+        agent_id="agent-main",
         synced_root=tmp_path / "synced",
         client=dufs or mock_dufs(_dufs_page),
     ).test_client()
@@ -117,7 +118,36 @@ def test_a_grant_naming_its_device_is_read_with_the_device_apart_from_the_path()
     assert shared_paths(rules) == {("host-mac", "/Users/kim/notes"): "write", (None, "/Users/kim/a:b"): "read"}
 
 
-def test_connections_say_how_each_share_reaches_the_workspace_and_when_a_copy_is_behind(tmp_path: Path) -> None:
+def _sync(local_path: str, tmp_path: Path, **fields: object) -> dict[str, object]:
+    return {
+        "local_path": local_path,
+        "workspace_path": f"{tmp_path}/synced/{DEVICE}{local_path}",
+        "activity": "ACTIVE",
+        "state": "SYNCED",
+        "message": None,
+        "bytes_done": None,
+        "bytes_total": None,
+        "direction": "BOTH",
+        "conflict": "NEWER",
+        "has_finished_first_copy": True,
+        "last_synced_at": "2026-10-17T09:30:00Z",
+        **fields,
+    }
+
+
+def test_connections_say_how_each_share_reaches_the_workspace_and_how_its_sync_stands(tmp_path: Path) -> None:
+    fonts = _sync(
+        "/Users/kim/Brand Fonts",
+        tmp_path,
+        state="SYNCING",
+        bytes_done=10,
+        bytes_total=40,
+        has_finished_first_copy=False,
+        last_synced_at=None,
+    )
+    notes = _sync("/Users/kim/notes", tmp_path)
+    # A sync the user turned off is no copy here.
+    old = _sync("/Users/kim/old", tmp_path, activity="INACTIVE", state="STOPPED")
     computer = FakeComputer(
         permissions=[
             "minds-file-server-read-/Users/kim/Brand Fonts",
@@ -125,34 +155,48 @@ def test_connections_say_how_each_share_reaches_the_workspace_and_when_a_copy_is
             "minds-file-server-write-/Users/kim/notes",
             "minds-file-server-read-/Users/kim/Atkinson",
             "minds-file-server-write-/Users/kim/photo.png",
+            "minds-file-server-read-/Users/kim/old",
         ],
         folders={
-            "/Users/kim/Brand Fonts": [("Diatype", True, 0), (".DS_Store", False, 6)],
+            "/Users/kim/Brand Fonts": [("Diatype", True, 0)],
             "/Users/kim/notes": [("todo.md", False, 4)],
             "/Users/kim/Atkinson": [("Mono.otf", False, 3)],
+            "/Users/kim/old": [],
         },
+        syncs=[fonts, notes, old],
     )
     computer.files["/Users/kim/photo.png"] = b"\x89PNG"
-    (tmp_path / "synced" / DEVICE / "Users/kim/Brand Fonts").mkdir(parents=True)
-    notes_copy = tmp_path / "synced" / DEVICE / "Users/kim/notes"
-    notes_copy.mkdir(parents=True)
-    (notes_copy / "todo.md").write_text("- a")
 
     listed = json_of(_app(computer, tmp_path).get("/__files/api/connections"))
     assert listed["devices"] == [{"id": DEVICE, "name": "Kims-Mac.local", "has_device_paths": False}]
     shares = {share["path"]: share for share in listed["shares"]}
-    assert shares["/Users/kim/Brand Fonts"]["sync_state"] == "behind"
-    assert shares["/Users/kim/Brand Fonts"]["access"] == "read"
-    assert shares["/Users/kim/notes"]["sync_state"] == "current"
+    # Imbue Studio's word on each sync reaches the frontend as it came.
+    assert shares["/Users/kim/Brand Fonts"]["sync"] == fonts
+    assert shares["/Users/kim/Brand Fonts"]["synced_copy"] == f"{tmp_path}/synced/{DEVICE}/Users/kim/Brand Fonts/"
+    assert shares["/Users/kim/notes"]["sync"] == notes
     assert shares["/Users/kim/notes"]["access"] == "write"
-    assert shares["/Users/kim/notes"]["synced_copy"] == f"{notes_copy}/"
+    assert shares["/Users/kim/old"]["sync"] is None and shares["/Users/kim/old"]["synced_copy"] is None
     assert shares["/Users/kim/Atkinson"]["synced_copy"] is None
     assert shares["/Users/kim/Atkinson"]["kind"] == "folder"
     assert shares["/Users/kim/photo.png"]["kind"] == "file"
+    (asked,) = [request for request in computer.requests if request.url.path.endswith("/folder-syncs")]
+    assert asked.url.path == "/minds-api-proxy/api/v1/agents/agent-main/folder-syncs"
+    assert asked.headers["X-Latchkey-Device"] == DEVICE
     # Every call through the gateway names the device, and none puts it in the file path.
     file_calls = [request for request in computer.requests if "/files/" in request.url.path]
     assert all(request.headers["X-Latchkey-Device"] == DEVICE for request in file_calls)
     assert all(DEVICE not in request.url.path for request in file_calls)
+
+
+def test_a_copy_whose_computer_does_not_say_how_it_stands_is_listed_with_no_sync(tmp_path: Path) -> None:
+    computer = FakeComputer(
+        permissions=["minds-file-server-read-/Users/kim/notes"], folders={"/Users/kim/notes": []}, syncs=None
+    )
+    copy = tmp_path / "synced" / DEVICE / "Users/kim/notes"
+    copy.mkdir(parents=True)
+    (share,) = json_of(_app(computer, tmp_path).get("/__files/api/connections"))["shares"]
+    assert share["synced_copy"] == f"{copy}/"
+    assert share["sync"] is None
 
 
 def test_a_computer_granting_per_device_lists_each_share_once_and_is_reached_under_its_id(tmp_path: Path) -> None:

@@ -137,6 +137,7 @@ function bootstrap(): void {
   setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) => {
     desktopStore.setCanPopOut(message.canPopOut === true);
     desktopStore.setCanOpenLinksOutside(message.opensExternalLinks === true);
+    desktopStore.setOpensLocalFiles(message.opensLocalFiles === true);
   });
   setEmbedderMessageHandler(REATTACH_WINDOW, (message) => {
     const windowId = message.windowId;

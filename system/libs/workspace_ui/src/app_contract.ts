@@ -114,8 +114,10 @@ export function hasWorkspaceCoordinate(host: string): boolean {
 
 /**
  * What the shell says about the frame it created: the client, the window, its desktop, the app
- * the window belongs to, and the path the window is at (desktop-interface contracts.md section
- * 7). The client id is required; a field the shell does not send, a page reads as "".
+ * the window belongs to, the path the window is at, and whether the Imbue Studio chrome around the
+ * shell opens its own file picker to share something from the user's computer (desktop-interface
+ * contracts.md section 7). The client id is required; a text field the shell does not send, a page
+ * reads as "", and a flag it does not send, as false.
  */
 export interface ShellHandshake {
   clientId: string;
@@ -123,6 +125,7 @@ export interface ShellHandshake {
   desktopId: string;
   app: string;
   path: string;
+  opensLocalFiles: boolean;
 }
 
 /**
@@ -185,7 +188,7 @@ function optionalString(value: unknown): string {
 }
 
 function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
-  const { clientId, windowId, desktopId, app, path } = data;
+  const { clientId, windowId, desktopId, app, path, opensLocalFiles } = data;
   if (typeof clientId !== "string" || clientId === "") return null;
   return {
     clientId,
@@ -193,6 +196,7 @@ function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
     desktopId: optionalString(desktopId),
     app: optionalString(app),
     path: optionalString(path),
+    opensLocalFiles: opensLocalFiles === true,
   };
 }
 

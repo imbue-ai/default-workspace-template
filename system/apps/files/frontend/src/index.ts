@@ -56,7 +56,14 @@ function bootstrap(): void {
   }
 
   let handshake: ShellHandshake | null = null;
-  const connection = connectToShell({ onHandshake: (received) => (handshake = received) });
+  // The handshake comes as a message, so after the window below exists.
+  let filesApp: FilesController | null = null;
+  const connection = connectToShell({
+    onHandshake: (received) => {
+      handshake = received;
+      filesApp?.setOpensLocalFiles(received.opensLocalFiles);
+    },
+  });
   window.addEventListener("focus", () => connection.focused());
   const opener = createContextMenuOpener();
   // The pointer hides while text is typed into the editor or a name being changed.
@@ -84,6 +91,7 @@ function bootstrap(): void {
       ? { exists: data.dir_exists !== false, entries: (data.paths ?? []).map((item) => entryOf(folder, item)) }
       : undefined;
   const app = new FilesController(folder, initial, connection);
+  filesApp = app;
 
   installElementContextMenu({
     connection,

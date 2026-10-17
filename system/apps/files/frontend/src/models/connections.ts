@@ -5,6 +5,7 @@
  */
 
 import { DufsError } from "./dufs";
+import { formatModified, formatSize } from "./format";
 import { nameOf } from "./paths";
 
 export const CONNECTIONS_API = "/__files/api/connections";
@@ -25,8 +26,68 @@ export interface Share {
   is_reachable: boolean;
   /** Where the synced copy is in the workspace, or null when there is none. */
   synced_copy: string | null;
-  /** Whether the copy holds what the computer does; null for a share with no copy. */
-  sync_state: "current" | "behind" | "unknown" | null;
+  /** How Imbue Studio says the copy stands; null for a share with no copy, or a copy whose computer didn't say. */
+  sync: FolderSync | null;
+}
+
+/** A sync as Imbue Studio on the computer reports it. */
+export interface FolderSync {
+  state:
+    | "STARTING"
+    | "RESTARTING"
+    | "SYNCING"
+    | "SYNCED"
+    | "DEACTIVATING"
+    | "DISCARDING"
+    | "STOPPED"
+    | "UNKNOWN"
+    | "FAILED";
+  /** Why it failed, in Imbue Studio's words. */
+  message: string | null;
+  bytes_done: number | null;
+  bytes_total: number | null;
+  /** Whether the copy has once held everything the computer did. */
+  has_finished_first_copy: boolean;
+  /** When a pass last finished (ISO 8601). */
+  last_synced_at: string | null;
+}
+
+/** How a synced copy stands, as Files says it. */
+export type SyncStatus =
+  | { kind: "copying"; done: number | null; total: number | null }
+  | { kind: "syncing"; done: number | null; total: number | null }
+  | { kind: "current"; lastSyncedAt: string | null }
+  | { kind: "failed"; message: string | null }
+  | { kind: "paused" }
+  | { kind: "unknown" };
+
+/** How a share's copy stands, or null for a share with no copy. */
+export function syncStatusOf(share: Share): SyncStatus | null {
+  if (share.synced_copy === null) return null;
+  const sync = share.sync;
+  if (sync === null) return { kind: "unknown" };
+  switch (sync.state) {
+    case "FAILED":
+      return { kind: "failed", message: sync.message };
+    case "STOPPED":
+    case "UNKNOWN":
+    case "DEACTIVATING":
+    case "DISCARDING":
+      return { kind: "paused" };
+    case "SYNCED":
+      if (sync.has_finished_first_copy) return { kind: "current", lastSyncedAt: sync.last_synced_at };
+      break;
+    default:
+      break;
+  }
+  const progress = { done: sync.bytes_done, total: sync.bytes_total };
+  return sync.has_finished_first_copy ? { kind: "syncing", ...progress } : { kind: "copying", ...progress };
+}
+
+/** "10 MB of 40 MB", or "" when the sync didn't say how far along it is. */
+function progressOf(done: number | null, total: number | null): string {
+  if (done === null || total === null || total <= 0) return "";
+  return `${formatSize(done)} of ${formatSize(total)}`;
 }
 
 export interface Connections {
@@ -94,15 +155,34 @@ export function describeShare(share: Share, device: string): string {
 }
 
 function statusOf(share: Share): string {
-  if (share.synced_copy === null) return share.is_reachable ? "" : "Not answering right now.";
-  switch (share.sync_state) {
-    case "behind":
-      return "Hasn't caught up yet.";
+  const status = syncStatusOf(share);
+  if (status === null) return share.is_reachable ? "" : "Not answering right now.";
+  switch (status.kind) {
+    case "copying":
+      return joined("Copying the first time", progressOf(status.done, status.total));
+    case "syncing":
+      return joined("Syncing", progressOf(status.done, status.total));
+    case "current":
+      return status.lastSyncedAt === null
+        ? "Up to date."
+        : `Up to date, last synced ${lowerDay(formatModified(Date.parse(status.lastSyncedAt)))}.`;
+    case "failed":
+      return status.message === null ? "Sync stopped." : `Sync stopped: ${status.message}`;
+    case "paused":
+      return "Not syncing right now.";
     case "unknown":
       return "Can't check: not answering right now.";
-    default:
-      return "Up to date.";
   }
+}
+
+/** "Today at 9:30 AM" as it reads mid-sentence. */
+function lowerDay(when: string): string {
+  return when.replace(/^(Today|Yesterday)/, (day) => day.toLowerCase());
+}
+
+/** "Syncing, 10 MB of 40 MB." or "Syncing." */
+function joined(what: string, progress: string): string {
+  return progress === "" ? `${what}.` : `${what}, ${progress}.`;
 }
 
 /** The share a folder is in (its copy or its live view), the deepest one when shares nest. */
@@ -112,19 +192,40 @@ export function shareAt(connections: Connections | null, folder: string): Share 
     .sort((a, b) => targetOf(b).length - targetOf(a).length)[0];
 }
 
-/** What to tell someone looking inside `folder` when it is in a copy that has fallen behind its computer, or null
- *  when it is not. */
-export function stuckSyncOf(
-  connections: Connections | null,
-  folder: string,
-): { title: string; detail: string } | null {
+/** What a copy's folder says about its sync, above its entries or in place of them. */
+export interface SyncNotice {
+  tone: "warning" | "progress";
+  title: string;
+  detail: string;
+  /** Whether it shows only while the folder holds nothing, where it stands in for the "Empty" note. */
+  isOnlyWhenEmpty: boolean;
+}
+
+/** What to tell someone looking inside `folder` when it is in a copy whose sync has stopped or hasn't finished its
+ *  first copy, or null when there is nothing to say. */
+export function syncNoticeOf(connections: Connections | null, folder: string): SyncNotice | null {
   const share = shareAt(connections, folder);
-  if (connections === null || share === undefined || share.sync_state !== "behind") return null;
-  return {
-    title: `Not synced yet from ${deviceNameOf(connections, share.device)}`,
-    detail:
-      "Your computer has files here that haven't arrived. The sync may be stuck: check it in Imbue Studio on your computer.",
-  };
+  if (connections === null || share === undefined) return null;
+  const status = syncStatusOf(share);
+  const device = deviceNameOf(connections, share.device);
+  if (status?.kind === "failed") {
+    return {
+      tone: "warning",
+      title: `Sync with ${device} stopped`,
+      detail: `${status.message === null ? "" : `${status.message} `}Retry it in Imbue Studio on your computer.`,
+      isOnlyWhenEmpty: false,
+    };
+  }
+  if (status?.kind === "copying") {
+    const progress = progressOf(status.done, status.total);
+    return {
+      tone: "progress",
+      title: `Copying from ${device}`,
+      detail: progress === "" ? "Files appear here as they arrive." : `${progress} so far.`,
+      isOnlyWhenEmpty: true,
+    };
+  }
+  return null;
 }
 
 async function failureOf(response: Response, what: string): Promise<DufsError> {

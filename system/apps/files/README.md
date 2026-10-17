@@ -29,10 +29,14 @@ for every other registered app.
   beside it when changes are allowed; a computer whose Imbue Studio predates
   per-device grants names no device id); `connections.py` reads them per device, notes whether
   Imbue Studio keeps a synced copy at `~/synced_folders/<device id>/<path>`
-  (two-way with write access, one-way with read), and, since the workspace
-  learns nothing from the sync itself, compares the copy's names with the
-  computer's to say when a copy has fallen behind. Files does not ask for new
-  shares: the user makes them in Imbue Studio on their computer.
+  (two-way with write access, one-way with read), and asks Imbue Studio on each
+  computer how its syncs stand (`/minds-api-proxy/api/v1/agents/<MNGR_AGENT_ID>/folder-syncs`,
+  which the workspace's per-agent baseline permission covers). Each share
+  carries Studio's record of its sync as it came (state, failure message,
+  progress, whether the first copy finished, when it last synced); a copy whose
+  computer did not answer is listed with no record, which reads as "can't
+  check". Because the server asks, not the viewer's browser, this works the
+  same in Imbue Studio, a plain browser, a phone, or a share link.
 - `/__remote/<device id>/<path>`: a share with no copy here, read live from the
   computer's file server over WebDAV and answered in dufs's own shape (a page,
   `?json`, the bytes, PUT, DELETE, MKCOL), so the frontend browses it like any
@@ -76,11 +80,20 @@ the workspace (a chain: linked, read live from
 the computer; circular arrows: synced, a copy kept here), and its own entry
 wears the same badge wherever a folder view lists it. After the label come
 marks only when there is something to say: a "Read-only" word badge, a filled
-orange disc when a synced copy has not caught up, and a struck-through laptop
-when its computer is not answering. The row's tooltip says, without repeating
+orange disc when Imbue Studio says a sync stopped, a spinner while it is
+syncing or still making its first copy, and a struck-through laptop when its
+computer is not answering. Inside a copy, a stopped sync says so above the
+entries (with Studio's reason), and an empty copy still on its first pass says
+how far along it is. The row's tooltip says, without repeating
 the name, how it reaches the workspace and how it stands. A synced share opens
-at its copy, the others live. With nothing shared, the section says to share
-from Imbue Studio. Something dragged in from the computer onto a share's row
+at its copy, the others live. Where the Imbue Studio desktop app frames the
+workspace (it says `opensLocalFiles` with `minds:embedder-capabilities`, which
+the shell passes on in each window's handshake), the list ends in "Connect a
+file or folder…": it sends `minds:open-local-files`, Studio opens its own
+picker and then the new share's settings, and its
+`minds:open-local-files-ack` with `added` has the list read again. A plain
+browser, a phone or a share visit never shows it; with nothing shared, the
+section there says to share from Imbue Studio. Something dragged in from the computer onto a share's row
 uploads into that share, as onto any folder. The sidebar's width is dragged from
 its edge (double-click puts it back) and kept with the other preferences. Jumping to a sidebar row starts the
 column view afresh there; drilling down into a folder that happens to be a
