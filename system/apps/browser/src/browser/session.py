@@ -216,6 +216,10 @@ def _stop_xvfb(xvfb: "subprocess.Popen[bytes]") -> None:
 # fixed path: root otherwise leaves the socket group-gated and our clients get
 # "Access denied"); the only fleet change is one sink per browser instead of one global.
 _PULSE_SERVER = "unix:/var/run/pulse/native"
+# Every browser daemon in the workspace shares that pulse daemon, so a preview booted beside the live one names
+# its sinks under a prefix of its own; sharing the live names would route its audio into the live browsers' sinks
+# and unload them when it closes.
+_PULSE_SINK_PREFIX = os.environ.get("BROWSER_PULSE_SINK_PREFIX", "browser")
 
 
 def _pulse_env() -> dict[str, str]:
@@ -225,7 +229,7 @@ def _pulse_env() -> dict[str, str]:
 def _pulse_sink_name(browser_id: str) -> str:
     """A PulseAudio-safe null-sink name giving a browser its own audio bus."""
     safe = "".join(c if c.isalnum() else "_" for c in browser_id)
-    return f"browser_{safe}"
+    return f"{_PULSE_SINK_PREFIX}_{safe}"
 
 
 def _ensure_pulse_daemon() -> bool:
