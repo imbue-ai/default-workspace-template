@@ -164,7 +164,11 @@ export class MobileControls {
     this.stage.style.touchAction = "none";
     this.stage.addEventListener("pointerdown", (event) => {
       if (event.pointerType !== "touch") return;
-      this.stage.setPointerCapture(event.pointerId);
+      try {
+        this.stage.setPointerCapture(event.pointerId);
+      } catch {
+        // A pointer the browser does not track (a synthesized event) cannot be captured; the gesture still counts.
+      }
       this.apply(this.classifier.down(sampleOf(event)));
       this.cancelLongPress();
       if (this.classifier.pointerCount === 1) {
