@@ -27,14 +27,14 @@ describe("Button readonly option", () => {
     const element = renderButton({ readonly: true });
     expect(element.classList.contains("cursor-default")).toBe(true);
     expect(element.classList.contains("cursor-pointer")).toBe(false);
-    expect(element.classList.contains("aria-disabled:opacity-50")).toBe(false);
+    expect(element.classList.contains("aria-disabled:opacity-40")).toBe(false);
   });
 
   it("an interactive button keeps the pointer cursor and the aria-disabled dim", () => {
     const element = renderButton({});
     expect(element.getAttribute("aria-disabled")).toBeNull();
     expect(element.classList.contains("cursor-pointer")).toBe(true);
-    expect(element.classList.contains("aria-disabled:opacity-50")).toBe(true);
+    expect(element.classList.contains("aria-disabled:opacity-40")).toBe(true);
   });
 
   it("stays a real enabled <button> (not disabled), so hover/focus events still fire", () => {

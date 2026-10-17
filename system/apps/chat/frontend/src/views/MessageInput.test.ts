@@ -487,6 +487,159 @@ describe("MessageInput placeholder", () => {
   });
 });
 
+describe("MessageInput attachment chips", () => {
+  const render = () => MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
+
+  beforeEach(() => {
+    mocks.agent.activity_state = undefined;
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    mocks.getComposerAttachments.mockReturnValue([]);
+  });
+
+  function chip(tree: unknown, fileName: string): AnyVnode | undefined {
+    return flatten(tree).find(
+      (vnode) =>
+        typeof vnode.attrs?.className === "string" &&
+        vnode.attrs.className.includes("composer-attachment--") &&
+        flatten(vnode).some((inner) => inner.attrs?.alt === fileName || renderedText(inner).includes(fileName)),
+    );
+  }
+
+  it("puts the attachments inside the text's row, marked so it lays them out between the text and the buttons", () => {
+    const withoutAttachments = findByClass(render(), "message-input-row");
+    expect(withoutAttachments?.attrs?.["data-attachments"]).toBeUndefined();
+    expect(findByClass(withoutAttachments, "composer-attachment")).toBeUndefined();
+
+    mocks.getComposerAttachments.mockReturnValue([
+      { localId: "a1", fileName: "notes.txt", isImage: false, status: "uploading", localSize: 7 },
+    ]);
+    const row = findByClass(render(), "message-input-row");
+    expect(row?.attrs?.["data-attachments"]).toBe("");
+    expect(chip(row, "notes.txt")).toBeDefined();
+  });
+
+  it("shows an uploading image as its own pixels under a spinner, with no way to remove it yet", () => {
+    mocks.getComposerAttachments.mockReturnValue([
+      { localId: "a1", fileName: "photo.png", isImage: true, status: "uploading", previewUrl: "blob:local" },
+    ]);
+    const image = chip(render(), "photo.png");
+    expect(findByTag(image, "img")?.attrs?.src).toBe("blob:local");
+    expect(findByAttr(image, "aria-label", "Uploading")).toBeDefined();
+    expect(findByAttr(image, "aria-label", "Remove attachment")).toBeUndefined();
+  });
+
+  it("shows an uploading file by name and local size, with a spinner where its icon goes", () => {
+    mocks.getComposerAttachments.mockReturnValue([
+      { localId: "a1", fileName: "notes.txt", isImage: false, status: "uploading", localSize: 7 },
+    ]);
+    const file = chip(render(), "notes.txt");
+    expect(findByTag(file, "img")).toBeUndefined();
+    expect(findByAttr(findByClass(file, "composer-attachment-icon"), "aria-label", "Uploading")).toBeDefined();
+    expect(findByClass(file, "composer-attachment-summary")).toBeDefined();
+    expect(findByAttr(file, "aria-label", "Remove attachment")).toBeUndefined();
+  });
+
+  it("shows a ready image as its uploaded thumbnail alone, removable", () => {
+    mocks.getComposerAttachments.mockReturnValue([
+      {
+        localId: "a1",
+        fileName: "photo.png",
+        isImage: true,
+        status: "ready",
+        uploaded: { path: "/uploads/photo.png", name: "photo.png", size: 6, isImage: true, url: "/files/photo.png" },
+      },
+    ]);
+    const image = chip(render(), "photo.png");
+    expect(findByTag(image, "img")?.attrs?.src).toBe("/files/photo.png");
+    expect(findByClass(image, "composer-attachment-name")).toBeUndefined();
+    expect(findByAttr(image, "aria-label", "Uploading")).toBeUndefined();
+    expect(findByAttr(image, "aria-label", "Remove attachment")).toBeDefined();
+  });
+
+  it("says a failed upload failed, even for an image, and lets it be removed", () => {
+    mocks.getComposerAttachments.mockReturnValue([
+      { localId: "a1", fileName: "photo.png", isImage: true, status: "error", error: "boom" },
+    ]);
+    const failed = chip(render(), "photo.png");
+    expect(findByTag(failed, "img")).toBeUndefined();
+    expect(renderedText(failed)).toContain("Upload failed");
+    expect(findByAttr(failed, "aria-label", "Remove attachment")).toBeDefined();
+  });
+});
+
+describe("MessageInput send button", () => {
+  beforeEach(() => {
+    mocks.agent.activity_state = undefined;
+    localStorage.clear();
+  });
+
+  it("stays in place, disabled, with nothing to send, and is enabled once there is text", () => {
+    const component = MessageInput();
+    const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(findByAttr(render(), "aria-label", "Send message")?.attrs?.disabled).toBe(true);
+    const oninput = findByTag(render(), "textarea")?.attrs?.oninput as (event: unknown) => void;
+    oninput({ target: { value: "hello", style: {}, scrollHeight: 10 } });
+    expect(findByAttr(render(), "aria-label", "Send message")?.attrs?.disabled).toBe(false);
+  });
+});
+
+describe("MessageInput layout with attachments", () => {
+  beforeEach(() => {
+    mocks.agent.activity_state = undefined;
+    localStorage.clear();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe(): void {}
+        disconnect(): void {}
+      },
+    );
+  });
+
+  afterEach(() => {
+    mocks.getComposerAttachments.mockReturnValue([]);
+    vi.unstubAllGlobals();
+  });
+
+  /** Lay the composer out, as the browser would, for one line of text that fits; returns whether the row stacked. */
+  function stacksOneLineOfText(): boolean {
+    const tree = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
+    const rowVnode = findByClass(tree, "message-input-row");
+    const attributes = new Set<string>();
+    if (rowVnode?.attrs?.["data-attachments"] !== undefined) attributes.add("data-attachments");
+    const row = {
+      clientWidth: 600,
+      style: {},
+      getBoundingClientRect: () => ({ height: 36 }),
+      hasAttribute: (name: string) => attributes.has(name),
+      removeAttribute: (name: string) => attributes.delete(name),
+      toggleAttribute: (name: string, force: boolean) => {
+        if (force) attributes.add(name);
+        else attributes.delete(name);
+        return force;
+      },
+    };
+    const textarea = { style: {}, scrollHeight: 28, clientHeight: 28, focus: () => undefined };
+    (rowVnode?.attrs?.oncreate as (vnode: unknown) => void)({ dom: row });
+    (findByTag(tree, "textarea")?.attrs?.onupdate as (vnode: unknown) => void)({ dom: textarea });
+    return attributes.has("data-stacked");
+  }
+
+  it("keeps one line of text beside its buttons with no attachments", () => {
+    expect(stacksOneLineOfText()).toBe(false);
+  });
+
+  it("stacks the row whenever it holds attachments, even for one line of text", () => {
+    mocks.getComposerAttachments.mockReturnValue([
+      { localId: "a1", fileName: "notes.txt", isImage: false, status: "uploading", localSize: 7 },
+    ]);
+    expect(stacksOneLineOfText()).toBe(true);
+  });
+});
+
 describe("MessageInput stop button during a compaction", () => {
   beforeEach(() => {
     mocks.agent.activity_state = "COMPACTING";
@@ -1344,6 +1497,8 @@ describe("MessageInput on a chat awaiting its first send with nothing signed in"
 
     expect(renderedText(tree)).toContain("Connect an AI provider to start chatting.");
     expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
+    // Send keeps its place opposite the disabled paperclip, greyed out.
+    expect(findByAttr(tree, "aria-label", "Send message")?.attrs?.disabled).toBe(true);
     const chooseButton = findButton(tree, "Choose a provider");
     expect(chooseButton).toBeDefined();
     (chooseButton!.attrs!.onclick as () => void)();
