@@ -69,6 +69,11 @@ class AppInventoryEntry(FrozenModel):
     row: RegistryRow = Field(description="The registry row, validated on read")
     is_running: bool = Field(description="Derived from supervisord or a TCP probe, never stored")
 
+    @property
+    def display_name(self) -> str:
+        """What users call the app: its declared display name, else its name."""
+        return str(self.row.display_name) if self.row.display_name is not None else str(self.row.name)
+
 
 @pure
 def stoppable_program_of(entry: AppInventoryEntry, entries: Sequence[AppInventoryEntry]) -> str | None:
@@ -90,7 +95,7 @@ def app_view(entry: AppInventoryEntry, share_domain: str | None) -> InventoryApp
     row = entry.row
     return InventoryApp(
         name=row.name,
-        display_name=str(row.display_name) if row.display_name is not None else str(row.name),
+        display_name=entry.display_name,
         icon=row.icon or "",
         label=row.label,
         url=row.url,

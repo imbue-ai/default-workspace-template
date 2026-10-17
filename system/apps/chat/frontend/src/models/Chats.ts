@@ -12,6 +12,8 @@ import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import type { ModelChoice, ModelIdentity } from "./ModelSettings";
 import type { CompactionCause, UserMessageEvent } from "./Response";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
+import { fetchOrNotAnswered, postJson, readResponseFailure } from "@imbue/workspace-ui/src/models/http";
+import type { RequestKind } from "@imbue/workspace-ui/src/models/failure";
 
 /** The agent-level facts about a chat's active agent that the pages render (the backend's
  *  ``ActiveAgentSnapshot``). */
@@ -494,9 +496,7 @@ export function createChat(
 /** The chat a chat list with none to show opens on: one waiting for its first send, which launches it on the
  *  selected account. Nothing is created until then, and a list asking while another waits gets that one. */
 export async function awaitingChatForEmptyList(): Promise<string> {
-  const response = await fetch(apiUrl("/api/chats/awaiting"), { method: "POST" });
-  if (!response.ok) throw new Error(`The chat list could not open a new chat (${response.status})`);
-  const data = (await response.json()) as { chat_id: string };
+  const data = await postJson<{ chat_id: string }>(apiUrl("/api/chats/awaiting"), {});
   return data.chat_id;
 }
 
@@ -513,16 +513,10 @@ export function launchChat(chatId: string, accountId: string, message = ""): Pro
 }
 
 async function postCreateChat(body: Record<string, string | ModelIdentity | null>): Promise<CreatedChat> {
-  const response = await fetch(apiUrl("/api/chats/create"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    const data = (await response.json().catch(() => ({}))) as { detail?: string };
-    throw new Error(data.detail ?? `HTTP ${response.status}`);
-  }
-  const created = (await response.json()) as { chat_id?: string; name?: string; display_name?: string };
+  const created = await postJson<{ chat_id?: string; name?: string; display_name?: string }>(
+    apiUrl("/api/chats/create"),
+    body,
+  );
   if (!created.chat_id) {
     throw new Error("Chat creation returned no chat id");
   }
@@ -555,40 +549,41 @@ export interface AppliedIntake {
 /** Thrown when a token names no held intake: it was applied, dismissed, or expired. */
 export class PendingIntakeGoneError extends Error {}
 
-async function readIntakeResponse<T>(response: Response, token: string): Promise<T> {
+async function readIntakeResponse<T>(response: Response, token: string, kind: RequestKind): Promise<T> {
   if (response.status === 404) throw new PendingIntakeGoneError(`no pending intake ${token}`);
-  if (!response.ok) {
-    const data = (await response.json().catch(() => ({}))) as { detail?: string };
-    throw new Error(data.detail ?? `HTTP ${response.status}`);
-  }
+  if (!response.ok) throw await readResponseFailure(response, kind);
   return (await response.json()) as T;
 }
 
 /** The held intake a token names. Throws ``PendingIntakeGoneError`` when it is gone. */
 export async function fetchPendingIntake(token: string): Promise<PendingIntake> {
-  const response = await fetch(apiUrl(`/api/chats/intakes/${encodeURIComponent(token)}`));
+  const response = await fetchOrNotAnswered(apiUrl(`/api/chats/intakes/${encodeURIComponent(token)}`), {}, "read");
   const data = await readIntakeResponse<{
     message: string;
     is_draft: boolean;
     needs_pick: boolean;
     chat_id: string | null;
-  }>(response, token);
+  }>(response, token, "read");
   return { message: data.message, isDraft: data.is_draft, needsPick: data.needs_pick, chatId: data.chat_id };
 }
 
 /** Apply a held intake, on ``chatId`` when it needed a pick; the token is consumed. Throws
  *  ``PendingIntakeGoneError`` when another apply got there first. */
 export async function applyPendingIntake(token: string, chatId: string | null = null): Promise<AppliedIntake> {
-  const response = await fetch(apiUrl(`/api/chats/intakes/${encodeURIComponent(token)}/apply`), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(chatId === null ? {} : { chat_id: chatId }),
-  });
+  const response = await fetchOrNotAnswered(
+    apiUrl(`/api/chats/intakes/${encodeURIComponent(token)}/apply`),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(chatId === null ? {} : { chat_id: chatId }),
+    },
+    "change",
+  );
   const data = await readIntakeResponse<{
     chat_id: string;
     composer_text: string | null;
     first_message: string | null;
-  }>(response, token);
+  }>(response, token, "change");
   return { chatId: data.chat_id, composerText: data.composer_text, firstMessage: data.first_message };
 }
 

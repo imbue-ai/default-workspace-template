@@ -186,6 +186,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.mngr.errors import AgentNotFoundError
 from imbue.mngr.errors import MngrError
+from imbue.mngr.errors import SendFailureKind
 from imbue.mngr.primitives import AgentId
 
 logger = _loguru_logger
@@ -537,6 +538,12 @@ COMPACTION_REQUESTED_SEND_STATUS: Final[str] = "compaction_requested"
 _DECLINED_SEND_FAILURE_KINDS: Final[frozenset[str]] = frozenset(
     {NOTHING_TO_COMPACT_SEND_FAILURE_KIND, COMPACT_UNAVAILABLE_SEND_FAILURE_KIND}
 )
+# The send failures whose reason is written for the person who has to act on it: the chat's declined /compact, and
+# mngr's input_blocked and agent_unreachable harness refusals.
+_PEOPLE_WORDED_SEND_FAILURE_KINDS: Final[frozenset[str]] = _DECLINED_SEND_FAILURE_KINDS | {
+    str(SendFailureKind.INPUT_BLOCKED),
+    str(SendFailureKind.AGENT_UNREACHABLE),
+}
 
 
 @pure
@@ -761,13 +768,16 @@ def _send_to_chat(
             return _chat_not_found_response(str(chat_id))
         except SendFailedError as send_failure:
             # The harness said why it refused, in words written for the person who has to fix it
-            # ("the agent is in shell mode with an unsubmitted command"). Pass that through rather
-            # than the generic failure below -- it is the only thing here the user can act on.
-            # The kind travels beside the detail so the chat can decide what to offer: trying again
-            # can clear a blocked input and cannot help when there is nothing left to talk to.
+            # ("the agent is in shell mode with an unsubmitted command") for an input_blocked or agent_unreachable
+            # kind: the page shows it as written. The kind travels beside it so the chat can decide what to offer:
+            # trying again can clear a blocked input and cannot help when there is nothing left to talk to. Any
+            # other reason is not known to be written for people, and goes behind the page's details.
             # A /compact the chat declines is its own refusal, not a failure.
+            body = {"detail": send_failure.detail, "kind": send_failure.kind}
+            if send_failure.kind in _PEOPLE_WORDED_SEND_FAILURE_KINDS:
+                body["user_facing_message"] = send_failure.detail
             status_code = 409 if send_failure.kind in _DECLINED_SEND_FAILURE_KINDS else 500
-            return json_response({"detail": send_failure.detail, "kind": send_failure.kind}, status_code=status_code)
+            return json_response(body, status_code=status_code)
         if outcome is SendOutcome.NOT_READY:
             failure = ErrorResponse(
                 detail=f"Agent '{agent_info.name}' is not ready to receive messages yet (its daemon is starting)."

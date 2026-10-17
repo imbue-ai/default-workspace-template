@@ -559,7 +559,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
 
     if (hasNothingToShow && load.error !== null) {
       return m("div", { class: "message-list-error flex flex-col items-center justify-center h-full gap-3" }, [
-        m("p", { class: "text-danger" }, `Error: ${load.error}`),
+        m("p", { class: "text-danger" }, load.error),
         m(Button, { sm: true, extra: "message-list-reload", onclick: () => reloadAfterFailure(chatId) }, "Refresh"),
       ]);
     }

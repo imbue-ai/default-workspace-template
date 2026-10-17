@@ -1002,7 +1002,11 @@ export function App(): m.Component<AppAttrs> {
               observeBackdropSize(current, host);
             },
           }),
-          m(Toasts, { toasts: current.toasts.current(), placementClass: "fixed bottom-(--desk-toast-gap)" }),
+          m(Toasts, {
+            toasts: current.toasts.current(),
+            placementClass: "fixed bottom-(--desk-toast-gap)",
+            onDismiss: (id) => current.toasts.dismiss(id),
+          }),
         ]);
       }
       if (current.isPhoneLayout()) {
@@ -1167,6 +1171,7 @@ export function App(): m.Component<AppAttrs> {
           m(Toasts, {
             toasts: current.toasts.current(),
             placementClass: "fixed bottom-[calc(var(--desk-taskbar-height)+var(--desk-toast-gap))]",
+            onDismiss: (id) => current.toasts.dismiss(id),
           }),
           menuRows === null ? null : menu.view(menuRows),
           settingsDialog === null ? null : settingsDialogView(current, settingsDialog),
