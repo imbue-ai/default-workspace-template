@@ -39,7 +39,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 usage() {
     echo "usage: run_job.sh <job-id> --every <N[mhd]> [--at <hour>] [--retry-after <N[mhd]>] <command...>" >&2
@@ -75,9 +75,27 @@ EVERY_SECONDS=$(to_seconds "$EVERY")
 RETRY_SECONDS=$(to_seconds "$RETRY_AFTER")
 
 STATE_DIR="${MINDS_JOB_STATE_DIR:-$ROOT/data/.state/jobs}/$JOB_ID"
-mkdir -p "$STATE_DIR"
 
 log() { printf '%s run_job[%s]: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$JOB_ID" "$*"; }
+
+# CLEANUP: for a while the runner kept its state under system/data/.state/jobs/,
+# which git neither tracks nor ignores. This moves a job's state from there into
+# place, unless the new dir's last run is at least as recent: a job that was
+# enabled before then also has an older copy there. Remove once every workspace
+# has ticked each of its jobs on a build that has this.
+LEGACY_STATE_DIR="$ROOT/system/data/.state/jobs/$JOB_ID"
+if [ -z "${MINDS_JOB_STATE_DIR:-}" ] && [ -d "$LEGACY_STATE_DIR" ]; then
+    legacy_success="$(cat "$LEGACY_STATE_DIR/last_success" 2>/dev/null || true)"
+    current_success="$(cat "$STATE_DIR/last_success" 2>/dev/null || true)"
+    if [ -e "$STATE_DIR" ] && [ "${current_success:-0}" -ge "${legacy_success:-0}" ]; then
+        rm -rf "$LEGACY_STATE_DIR" || log "could not remove the old state at $LEGACY_STATE_DIR"
+    else
+        { rm -rf "$STATE_DIR" && mkdir -p "$(dirname "$STATE_DIR")" && mv "$LEGACY_STATE_DIR" "$STATE_DIR"; } \
+            || log "could not move the old state at $LEGACY_STATE_DIR"
+    fi
+    rmdir "$ROOT/system/data/.state/jobs" "$ROOT/system/data/.state" "$ROOT/system/data" 2>/dev/null || true
+fi
+mkdir -p "$STATE_DIR"
 
 # One run at a time per job. Held by THIS parent for the whole run; the
 # command below runs with fd 9 closed so nothing it daemonizes can inherit
