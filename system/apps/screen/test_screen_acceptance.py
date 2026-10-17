@@ -62,11 +62,13 @@ _IN_WORKSPACE_ROOT: Final[str] = "/home/user/workspace"
 _INERT_CLIENT_CONFIG: Final[Path] = Path("apps/minds/imbue/minds/config/envs/ci-snapshot/client.toml")
 _ELECTRON_BINARY: Final[Path] = Path("apps/minds/node_modules/.bin/electron")
 _ELECTRON_MAIN_JS: Final[Path] = Path("apps/minds/electron/main.js")
-# The variables this agent's own mngr session carries that the desktop app must not inherit: it derives its own
-# host dir and prefix from the minted root, and a create run by an mngr agent is gated differently.
+# The variables this process carries that the desktop app must not inherit: an mngr agent's identity (the app
+# derives its own host dir and prefix from the minted root, and a create run by an agent is gated differently),
+# and this repo's venv, which `uv run` in the mngr checkout would otherwise be pointed at.
 _ENVIRONMENT_NOT_INHERITED: Final[tuple[str, ...]] = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_BASE_URL",
+    "VIRTUAL_ENV",
     "MNGR_AGENT_ID",
     "MNGR_AGENT_NAME",
     "MNGR_AGENT_STATE_DIR",
@@ -115,7 +117,7 @@ class _Harness(FrozenModel):
     mngr_worktree: Path = Field(description="The mngr monorepo checkout the Electron app runs from")
     template_clone: Path = Field(description="A plain clone of this tree at its branch, the create's build context")
     template_branch: str = Field(description="The branch the clone is at")
-    root_name: str = Field(description="MINDS_ROOT_NAME for this run, minted so no real env is touched")
+    root_name: str = Field(description="MINDS_ROOT_NAME for this run: a `ci` env minted so no real env is touched")
     data_home: Path = Field(description="MINDS_DATA_HOME: every minds root of this run lives under it")
     host_config_root: Path = Field(description="The Electron app's cwd: a pytest-opted-in copy of mngr's config")
     user_data_dir: Path = Field(description="Electron's profile for this run")
@@ -226,7 +228,7 @@ def _build_harness(tmp_path: Path) -> _Harness:
         mngr_worktree=mngr_worktree,
         template_clone=template_clone,
         template_branch=branch,
-        root_name=f"minds-screen-e2e-{run_id}",
+        root_name=f"minds-ci-screen-{run_id}",
         data_home=tmp_path / "minds data home",
         host_config_root=host_config_root,
         user_data_dir=tmp_path / "electron-profile",
