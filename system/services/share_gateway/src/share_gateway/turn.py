@@ -114,10 +114,11 @@ class TurnCredentialCache:
         """Fetch when there is no credential (and the last refusal has aged) or the held one reached half life;
         True when a fetch was attempted."""
         now = self._now()
+        is_past_retry_wait = self.next_attempt_at is None or now >= self.next_attempt_at
         if self.credential is None:
-            is_due = self.next_attempt_at is None or now >= self.next_attempt_at
+            is_due = is_past_retry_wait
         else:
-            is_due = now >= self.credential.refresh_at
+            is_due = now >= self.credential.refresh_at and is_past_retry_wait
         if not is_due:
             return False
         fetched = self._fetch(self._connector_url, self._relay_token, now)

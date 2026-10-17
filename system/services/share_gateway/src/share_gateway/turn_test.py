@@ -135,9 +135,16 @@ def test_a_refused_refresh_keeps_the_held_credential_until_it_expires() -> None:
         cache = TurnCredentialCache(url, "tok", now=clock)
         cache.refresh_if_due()
         clock.now = _T0 + timedelta(minutes=31)
-        cache.refresh_if_due()
+        assert cache.refresh_if_due() is True
+        assert cache.ice_servers() == _SERVERS
+        # The refusal is believed for the retry interval even though the credential is past its half life.
+        clock.now = _T0 + timedelta(minutes=31, seconds=10)
+        assert cache.refresh_if_due() is False
+        clock.now = _T0 + timedelta(minutes=31) + REFUSAL_RETRY_INTERVAL - timedelta(seconds=1)
+        assert cache.refresh_if_due() is False
         assert cache.ice_servers() == _SERVERS
         clock.now = _T0 + timedelta(hours=1)
         assert cache.ice_servers() == []
-        cache.refresh_if_due()
+        assert cache.refresh_if_due() is True
         assert cache.credential is None
+    assert len(connector.requests) == 3
