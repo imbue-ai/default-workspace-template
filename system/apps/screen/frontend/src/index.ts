@@ -353,7 +353,10 @@ class Viewer {
     // A network that needed a relay last time gets the relay servers up front (spec section 5.3).
     const isRelay = readNeedsRelay(pageStorage());
     fetchConnectInfo(isRelay)
-      .then((connectInfo) => this.stream?.request(videoId, connectInfo, isRelay))
+      .then((connectInfo) => {
+        // A release while the fetch was in flight means a hidden viewer: it asks for nothing until seen again.
+        if (this.visibility.wantsMedia) this.stream?.request(videoId, connectInfo, isRelay);
+      })
       .catch((error) => console.error("[screen] connect-info failed", error));
   }
 
