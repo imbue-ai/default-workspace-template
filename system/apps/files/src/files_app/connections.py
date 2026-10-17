@@ -141,10 +141,13 @@ def describe_share(
 ) -> Share:
     remote = list_on_device(gateway, device, has_device_paths, path, depth=0)
     sync = None if syncs is None else syncs.get(path)
-    if sync is not None and isinstance(sync.get("workspace_path"), str):
-        synced_copy: str | None = f"{str(sync['workspace_path']).rstrip('/')}/"
+    copy = synced_root / device / path.lstrip("/")
+    if sync is not None:
+        # Studio names the copy by its absolute path once it knows the workspace's home, and by ``~/...`` before.
+        reported = sync.get("workspace_path")
+        is_absolute = isinstance(reported, str) and reported.startswith("/")
+        synced_copy: str | None = f"{str(reported).rstrip('/')}/" if is_absolute else f"{copy}/"
     else:
-        copy = synced_root / device / path.lstrip("/")
         # With no word from the computer, a copy on disk is still a copy, of a sync whose state is unknown.
         synced_copy = f"{copy}/" if syncs is None and copy.is_dir() else None
     if remote is None or len(remote) == 0:

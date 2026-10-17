@@ -146,6 +146,8 @@ def test_connections_say_how_each_share_reaches_the_workspace_and_how_its_sync_s
         last_synced_at=None,
     )
     notes = _sync("/Users/kim/notes", tmp_path)
+    # Before Studio learns the workspace's home it names the copy from ``~``; the copy is still where it always is.
+    atkinson = _sync("/Users/kim/Atkinson", tmp_path, workspace_path=f"~/synced_folders/{DEVICE}/Users/kim/Atkinson")
     # A sync the user turned off is no copy here.
     old = _sync("/Users/kim/old", tmp_path, activity="INACTIVE", state="STOPPED")
     computer = FakeComputer(
@@ -163,7 +165,7 @@ def test_connections_say_how_each_share_reaches_the_workspace_and_how_its_sync_s
             "/Users/kim/Atkinson": [("Mono.otf", False, 3)],
             "/Users/kim/old": [],
         },
-        syncs=[fonts, notes, old],
+        syncs=[fonts, notes, atkinson, old],
     )
     computer.files["/Users/kim/photo.png"] = b"\x89PNG"
 
@@ -176,7 +178,7 @@ def test_connections_say_how_each_share_reaches_the_workspace_and_how_its_sync_s
     assert shares["/Users/kim/notes"]["sync"] == notes
     assert shares["/Users/kim/notes"]["access"] == "write"
     assert shares["/Users/kim/old"]["sync"] is None and shares["/Users/kim/old"]["synced_copy"] is None
-    assert shares["/Users/kim/Atkinson"]["synced_copy"] is None
+    assert shares["/Users/kim/Atkinson"]["synced_copy"] == f"{tmp_path}/synced/{DEVICE}/Users/kim/Atkinson/"
     assert shares["/Users/kim/Atkinson"]["kind"] == "folder"
     assert shares["/Users/kim/photo.png"]["kind"] == "file"
     (asked,) = [request for request in computer.requests if request.url.path.endswith("/folder-syncs")]
