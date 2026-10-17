@@ -1,0 +1,1 @@
+Datalib declares `[theming] mode = "none"`: its page is datalib-http's own and keeps its look under every workspace theme, while the window around it is themed. Classic Mac and Windows 2000 draw Datalib with their own pixel-art icon.

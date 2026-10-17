@@ -121,6 +121,30 @@ class AppName(str):
         )
 
 
+# An app part's name, as a theme selects it: ``data-part="<app>.<part>"`` (the workspace-themes plan, section 7).
+APP_PART_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9-]{0,47}$")
+
+
+class AppPartName(str):
+    """The name of an element an app lets themes style, unique within the app."""
+
+    def __new__(cls, value: str) -> Self:
+        if APP_PART_NAME_PATTERN.fullmatch(value) is None:
+            raise InvalidManifestValueError(
+                f"app part name {value!r} must be lowercase letters, digits, and dashes, starting with a letter, "
+                "at most 48 characters"
+            )
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(
+            cls, core_schema.str_schema()
+        )
+
+
 class DisplayName(str):
     """What users see for an app: non-empty, at most 64 characters."""
 

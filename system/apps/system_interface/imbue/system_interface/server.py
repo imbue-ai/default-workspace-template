@@ -4,6 +4,7 @@ import queue
 import re
 import shlex
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 from typing import Final
 
@@ -377,7 +378,7 @@ def _index() -> Response:
         html_content = _inject_update_staleness_meta_tag(html_content, staleness)
         html_content = _inject_preview_meta_tag(html_content, state.is_preview)
         return document_response(html_content, is_frontend_built=True)
-    return _frontend_not_built_response()
+    return _frontend_not_built_response(index_path)
 
 
 def render_frontend_not_built_page(terminal_label: str | None) -> str:
@@ -409,8 +410,9 @@ def render_frontend_not_built_page(terminal_label: str | None) -> str:
     )
 
 
-def _frontend_not_built_response() -> Response:
-    """Render the placeholder shown when there is no compiled bundle to serve.
+def _frontend_not_built_response(missing_page: Path) -> Response:
+    """Render the placeholder shown when there is no compiled bundle to serve; ``missing_page`` is the built page
+    the request wanted.
 
     A ``HEAD`` gets the header and nothing else. That is the placeholder's own
     poll asking whether the bundle is back yet -- every ten seconds, for every
@@ -424,10 +426,17 @@ def _frontend_not_built_response() -> Response:
     # Logged with the resolved directory because the usual cause is that the
     # served tree was replaced under a running service, which is otherwise
     # invisible from the supervisor logs.
-    _loguru_logger.warning(
-        "Served the not-built placeholder: no frontend bundle at {}", get_state().static_directory / "index.html"
-    )
+    _loguru_logger.warning("Served the not-built placeholder: no frontend bundle at {}", missing_page)
     return document_response(render_frontend_not_built_page(_terminal_origin_label()), is_frontend_built=False)
+
+
+def _theme_gallery() -> Response:
+    """The theme gallery page (workspace-themes plan section 8.2), a second page of the shell's build."""
+    gallery_path = get_state().static_directory / THEME_GALLERY_FILENAME
+    if not gallery_path.exists():
+        return _frontend_not_built_response(gallery_path)
+    html_content = inject_base_path_meta_tag(gallery_path.read_text(), _root_path())
+    return document_response(html_content, is_frontend_built=True)
 
 
 def _index_catch_all(path: str) -> Response:
@@ -443,6 +452,9 @@ def _health_endpoint() -> Response:
     is_frontend_built = (get_state().static_directory / "index.html").exists()
     return json_response({"status": "ok", "is_frontend_built": is_frontend_built})
 
+
+THEME_GALLERY_ROUTE: Final[str] = "/theme-gallery"
+THEME_GALLERY_FILENAME: Final[str] = "theme-gallery.html"
 
 # Every route the shell answers as JSON lives under it; an unknown path under it is a JSON 404.
 API_PREFIX: Final[str] = "api/"
@@ -802,6 +814,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule(TOUCH_ICON_PATH, view_func=_touch_icon, methods=["GET"])
     application.add_url_rule(MANIFEST_PATH, view_func=_web_manifest, methods=["GET"])
     application.add_url_rule("/api/health", view_func=_health_endpoint, methods=["GET"])
+    application.add_url_rule(THEME_GALLERY_ROUTE, view_func=_theme_gallery, methods=["GET"])
     application.add_url_rule(APP_CONTRACT_ROUTE, view_func=_serve_app_contract, methods=["GET"])
     application.add_url_rule(CONTEXT_MENU_ROUTE, view_func=_serve_context_menu, methods=["GET"])
     application.add_url_rule(PRESENCE_PATH, view_func=_presence_endpoint, methods=["GET"])

@@ -17,6 +17,10 @@ program = "datalib"
 launch = "ui"
 mode = "focus"
 
+# Datalib's page is datalib-http's own; the window around it is themed.
+[theming]
+mode = "none"
+
 # Keep this table last: launch_datalib_http.py appends the token preset to it.
 [[launch_paths]]
 id = "ui"

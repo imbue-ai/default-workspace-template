@@ -137,6 +137,15 @@ export function buttonClass(variant: ButtonVariant = "secondary", options: Butto
   return parts.join(" ");
 }
 
+/** The contract part a button is (docs/system/blueprint/workspace-themes/, section 4.2), for an element that
+ *  takes `buttonClass()` without being a `Button`. */
+export function buttonPartAttrs(
+  variant: ButtonVariant,
+  isIcon: boolean,
+): { readonly "data-part": "button"; readonly "data-variant": ButtonVariant; readonly "data-shape": "icon" | "text" } {
+  return { "data-part": "button", "data-variant": variant, "data-shape": isIcon ? "icon" : "text" };
+}
+
 interface ButtonAttrs extends m.Attributes, ButtonOptions {
   variant?: ButtonVariant;
 }
@@ -155,6 +164,7 @@ export function Button(): m.Component<ButtonAttrs> {
         {
           type: "button",
           class: buttonClass(variant, { sm, xs, icon, round, selected, readonly, quiet, block, extra }),
+          ...buttonPartAttrs(variant, icon === true),
           ...(readonly === true ? { "aria-disabled": "true" } : null),
           ...splitAttrs(vnode.attrs, OWN_KEYS),
         },

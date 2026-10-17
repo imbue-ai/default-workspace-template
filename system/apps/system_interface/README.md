@@ -74,6 +74,14 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   registration `POST /api/avatars` is loopback-only), the embedder-message
   relay (`/api/embedder-messages`), and the loopback-only op route
   (`/api/layout/broadcast`).
+- Workspace themes (`docs/system/blueprint/workspace-themes/`): the catalog
+  with the default the workspace wears (`/api/themes`), the default's route
+  (`POST /api/themes/default`), each theme's icons
+  (`/api/themes/<id>/icons/<file>`), a desktop's own theme
+  (`POST /api/desktops/<id>/theme`), the theme files every app serves from its
+  own origin (`/_static/themes/<path>`), and the theme gallery page
+  (`/theme-gallery`), which shows every part of a theme. A watch on the theme
+  folders and the app manifests says `themes_changed` when the catalog does.
 - The home-screen tile: `/apple-touch-icon.png` and `/manifest.webmanifest`,
   from the selected avatar design and the workspace's name, which also titles
   the page.
@@ -81,11 +89,12 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   right now, with their identity and profile (see "Who is here").
 - The WebSocket (`/api/ws`): `apps_updated`, `desktops_updated`,
   `presence_updated`, `placements_updated`, `active_desktop_changed`,
-  `client_entries_changed`, `avatar_status`, `avatar_selection_changed`, and
-  `layout_op` (contracts section 6); it accepts each client's `client_state`
-  report.
+  `client_entries_changed`, `avatar_status`, `avatar_selection_changed`,
+  `themes_changed`, and `layout_op` (contracts section 6); it accepts each
+  client's `client_state` report.
 
 Its state lives under `data/.state/system_interface/`: `desktops.json`,
+`desktop_themes.json` (the workspace's default theme and each desktop's own),
 `default_shortcuts_offered.json` (the apps whose default shortcut the shell
 has offered), `placements/<desktop>/<client>.json`,
 `window_paths/<client>.json` (a client's own paths for independent windows),

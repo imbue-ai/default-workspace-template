@@ -200,8 +200,9 @@ def build_test_state(
     directory by default); ``inventory`` substitutes an inventory built over a fake fetcher,
     and ``broadcaster`` the fan-out the inventory and the routes share. ``is_preview`` builds
     the preview shell, which refuses the verbs that would reach the live workspace. ``repo_root`` is
-    where the update notice reads its record and finds the update-self script (a fresh temp
-    directory by default, so no test reads the real workspace's). ``static_directory`` replaces the
+    where the update notice reads its record and finds the update-self script, and where the
+    workspace's themes are read from (a fresh temp directory by default, so no test reads the
+    real workspace's). ``static_directory`` replaces the
     package's built bundle directory (the frontend bundle and the bundled wallpapers) with one the
     test fills itself, and ``wallpaper_files_directory`` the directory the workspace's own wallpaper
     files are read from (one under the state directory by default). The avatar's catalog lives under

@@ -59,6 +59,20 @@ App specifics:
   skill's tests run when the app's surface moves), along with everything else
   the change reaches.
 
+## Theme icons
+
+The app needs an icon in every theme that draws its own (`build-app`'s
+`references/theming.md`, "Icons under a theme"). Your checkout's `data/` is not the
+live workspace's, so run every `workspace-themes icon` command with
+`--repo-root /home/user/workspace`: `uv run workspace-themes icon missing --repo-root
+/home/user/workspace` must print `every theme has an icon for every app`; make any icon
+it names with the `make-theme-icon` skill, drawing it by hand (a pixel grid for a png
+theme, a written SVG for an svg theme; a worker asks the user for no image-model key),
+and install it there too. An icon for a built-in
+theme lands under the live workspace's `data/.themes/`, not in the commit; one for a workspace
+theme lands in that theme's `themes/<id>/icons/` there, which is not in your branch either, so
+name each such icon in your report for the chat to commit.
+
 ## Working in isolation
 
 Beyond the live-instance rules in `web-frontend-testing.md`: do not run `workspace-layout

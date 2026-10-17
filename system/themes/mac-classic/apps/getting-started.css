@@ -1,0 +1,6 @@
+/* Getting Started on Classic Mac: the Start tiles' glyphs in black ink on white, like every other icon here. A
+   disabled tile's glyph keeps the tile's faint outline. */
+[data-part="tile"]:not([aria-disabled="true"]) [data-part="getting-started.start-glyph"] {
+  fill: #ffffff;
+  stroke: #000000;
+}

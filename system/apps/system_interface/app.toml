@@ -15,3 +15,8 @@ command = ["system-interface", "--preview", "--state-dir", "{copy:state}"]
 env = {SYSTEM_INTERFACE_PORT = "{port:main}", SYSTEM_INTERFACE_HOST = "{host}", MINDS_APPS_FILE = "{registry}"}
 copies = {state = "data/.state/system_interface"}
 health_path = "/api/health"
+
+# The desktop marks the contract's own parts (docs/system/blueprint/workspace-themes/, section 4.2) and declares none
+# of its own: a theme styles it through those.
+[theming]
+mode = "parts"

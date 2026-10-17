@@ -1,0 +1,1 @@
+The Getting Started page wears the workspace's theme, opening in it without a flash of the standard look. It declares one themeable part, `getting-started.start-glyph`, and its tiles are marked as the contract's `tile` part.

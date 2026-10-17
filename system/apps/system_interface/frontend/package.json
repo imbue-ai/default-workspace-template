@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build && vite build --config vite.contract.config.ts",
+    "build": "tsc --noEmit && vite build && vite build --config vite.contract.config.ts && vite build --config vite.pagekit.config.ts",
     "postbuild": "git rev-parse HEAD:./ HEAD:../../../libs/workspace_ui HEAD:../../../package-lock.json > ../imbue/system_interface/static/.source-tree-hash 2>/dev/null || rm -f ../imbue/system_interface/static/.source-tree-hash",
     "preview": "vite preview",
     "lint": "eslint src/",

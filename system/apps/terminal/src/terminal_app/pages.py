@@ -26,6 +26,9 @@ from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import Field
 from workspace_layout.windows import parse_window_closed_hint, window_query_value
+from workspace_themes.contract import STANDARD_THEME_ID, TERMINAL_TOKENS
+from workspace_themes.primitives import THEME_ID_PATTERN
+from workspace_themes.serving import THEME_STATIC_ROUTE_PREFIX
 
 from terminal_app.errors import (
     InvalidTerminalValueError,
@@ -68,7 +71,42 @@ _CONFIG_ELEMENT_ID: Final[str] = "terminal-config"
 
 # The template's placeholders, filled in one pass so that a title or a config carrying a
 # placeholder's text is not itself filled.
-_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"__(TITLE|CONFIG_ID|CONFIG|CONTRACT_PATH)__")
+_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(
+    r"__(TITLE|CONFIG_ID|CONFIG|CONTRACT_PATH|THEME)__"
+)
+
+# xterm's theme keys for the contract's terminal tokens, in TERMINAL_TOKENS' order.
+_XTERM_THEME_KEYS: Final[tuple[str, ...]] = (
+    "background",
+    "foreground",
+    "cursor",
+    "selectionBackground",
+    "black",
+    "red",
+    "green",
+    "yellow",
+    "blue",
+    "magenta",
+    "cyan",
+    "white",
+    "brightBlack",
+    "brightRed",
+    "brightGreen",
+    "brightYellow",
+    "brightBlue",
+    "brightMagenta",
+    "brightCyan",
+    "brightWhite",
+)
+# What the script needs to know of workspace themes, from the theme library rather than copied into the script.
+_THEME_SCRIPT_CONFIG: Final[str] = json.dumps(
+    {
+        "standard": STANDARD_THEME_ID,
+        "idPattern": THEME_ID_PATTERN.pattern,
+        "bundlePrefix": THEME_STATIC_ROUTE_PREFIX,
+        "paletteTokens": dict(zip(_XTERM_THEME_KEYS, TERMINAL_TOKENS, strict=True)),
+    }
+)
 
 _PAGE_TEMPLATE: Final[str] = """<!doctype html>
 <html lang="en">
@@ -266,7 +304,76 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     if (button !== null) pressKey(button);
     focusPty();
   });
-  frame.addEventListener("load", () => setCtrlArmed(false));
+  frame.addEventListener("load", () => {
+    setCtrlArmed(false);
+    if (palette !== undefined) postToPty({ type: "terminal:theme", theme: palette });
+  });
+
+  // The workspace's theme reaches the terminal as a palette (docs/system/blueprint/workspace-themes/, section
+  // 4.1). The terminal takes no other part in themes ([theming] mode = "none"), so the theme's bundle is loaded
+  // into a blank frame of this origin that nobody sees, never into this page: the --term-* tokens are read there
+  // once it has loaded and handed to the pty page's xterm, and the theme's rules style nothing here. The standard
+  // theme sets none, which leaves xterm its own colors.
+  // The standard theme's id, the pattern a theme id matches, where a theme's bundle is served, and each xterm color's
+  // --term-* token.
+  const THEME = __THEME__;
+  const THEME_ID = new RegExp(THEME.idPattern);
+  let palette = undefined;
+  let paletteFrame = null;
+  // The theme and revision worn or loading, so a repeated shell:theme reloads nothing.
+  let wornTheme = null;
+
+  function readPalette(probe) {
+    const style = probe.contentWindow.getComputedStyle(probe.contentDocument.documentElement);
+    const read = {};
+    for (const [key, token] of Object.entries(THEME.paletteTokens)) {
+      const value = style.getPropertyValue(token).trim();
+      if (value !== "") read[key] = value;
+    }
+    return Object.keys(read).length === 0 ? null : read;
+  }
+
+  function wearTheme(theme, revision) {
+    if (!THEME_ID.test(theme)) return;
+    const key = `${theme}@${revision}`;
+    if (key === wornTheme) return;
+    wornTheme = key;
+    paletteFrame?.remove();
+    paletteFrame = null;
+    if (theme === THEME.standard) {
+      palette = null;
+      postToPty({ type: "terminal:theme", theme: null });
+      return;
+    }
+    // Laid out (not display: none), so every engine resolves the frame's styles, but with no size and unseen.
+    const probe = document.createElement("iframe");
+    probe.setAttribute("aria-hidden", "true");
+    probe.tabIndex = -1;
+    probe.style.cssText = "position: absolute; width: 0; height: 0; border: 0; visibility: hidden;";
+    document.body.appendChild(probe);
+    paletteFrame = probe;
+    const probeDocument = probe.contentDocument;
+    probeDocument.documentElement.dataset.uiTheme = theme;
+    const link = probeDocument.createElement("link");
+    link.rel = "stylesheet";
+    const bundlePath = `${THEME.bundlePrefix}${theme}/theme.css` + (revision ? `?v=${encodeURIComponent(revision)}` : "");
+    link.href = new URL(bundlePath, location.href).href;
+    link.addEventListener("load", () => {
+      if (paletteFrame !== probe) return;
+      palette = readPalette(probe);
+      postToPty({ type: "terminal:theme", theme: palette });
+    });
+    // A theme that cannot be loaded (gone, or unavailable) leaves xterm its own colors, not the last theme's.
+    link.addEventListener("error", () => {
+      if (paletteFrame !== probe) return;
+      probe.remove();
+      paletteFrame = null;
+      wornTheme = null;
+      palette = null;
+      postToPty({ type: "terminal:theme", theme: null });
+    });
+    probeDocument.head.appendChild(link);
+  }
 
   window.addEventListener("message", (event) => {
     const data = event.data;
@@ -290,6 +397,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
           capabilities: { navigation: true, closeChord: false },
           onNavigate: navigate,
           onShown: focusPty,
+          onTheme: wearTheme,
         });
         if (current !== null) connection.location(pathFor(current), document.title);
       })
@@ -306,17 +414,27 @@ _EMPTY_TITLE: Final[str] = "Terminal"
 class SessionPage(FrozenModel):
     """What the wrapper needs to frame one session; ``model_dump`` is what the page and its API read."""
 
-    name: TmuxSessionName = Field(description="The session, which is the terminal's name")
+    name: TmuxSessionName = Field(
+        description="The session, which is the terminal's name"
+    )
     title: TerminalTitle = Field(description="What the window is called")
-    pty_path: str = Field(description="The path on the pty origin that attaches to the session")
-    pty_label: str = Field(description="The pty's origin label, or \"\" while it is not registered")
+    pty_path: str = Field(
+        description="The path on the pty origin that attaches to the session"
+    )
+    pty_label: str = Field(
+        description='The pty\'s origin label, or "" while it is not registered'
+    )
 
 
 class PageConfig(FrozenModel):
     """Everything the wrapper's script reads off the document."""
 
-    session: TmuxSessionName | None = Field(description="The session the page opened on; None for the bare root")
-    page: SessionPage | None = Field(description="The session's page, when there is a session")
+    session: TmuxSessionName | None = Field(
+        description="The session the page opened on; None for the bare root"
+    )
+    page: SessionPage | None = Field(
+        description="The session's page, when there is a session"
+    )
 
 
 @pure
@@ -356,6 +474,7 @@ def render_page(config: PageConfig) -> str:
         "CONFIG_ID": _CONFIG_ELEMENT_ID,
         "CONFIG": encoded,
         "CONTRACT_PATH": APP_CONTRACT_ROUTE,
+        "THEME": _THEME_SCRIPT_CONFIG,
     }
     return _PLACEHOLDER.sub(lambda match: values[match.group(1)], _PAGE_TEMPLATE)
 
@@ -394,12 +513,17 @@ def build_pages_blueprint(
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
 
     def session_page(name: TmuxSessionName) -> SessionPage:
-        listed = next((terminal for terminal in source.list_terminals() if terminal.name == name), None)
+        listed = next(
+            (terminal for terminal in source.list_terminals() if terminal.name == name),
+            None,
+        )
         record = source.remembered_record(name)
         return SessionPage(
             name=name,
             title=listed.title if listed is not None else derive_terminal_title(name),
-            pty_path=pty_path_for_session(name, record.workdir if record is not None else None),
+            pty_path=pty_path_for_session(
+                name, record.workdir if record is not None else None
+            ),
             pty_label=read_origin_label(registry_path, PTY_APP_NAME),
         )
 
@@ -407,7 +531,9 @@ def build_pages_blueprint(
     def wrapper_page() -> ResponseReturnValue:
         raw_session = request.args.get(SESSION_QUERY_KEY, "")
         session = _session_name(raw_session) if raw_session != "" else None
-        config = PageConfig(session=session, page=session_page(session) if session is not None else None)
+        config = PageConfig(
+            session=session, page=session_page(session) if session is not None else None
+        )
         response = Response(render_page(config), mimetype="text/html")
         response.headers["Cache-Control"] = "no-store"
         return response
@@ -436,7 +562,11 @@ def build_pages_blueprint(
     def app_contract() -> ResponseReturnValue:
         if not contract_path.is_file():
             return (
-                jsonify({"detail": f"the workspace shell's frontend is not built: {contract_path} is missing"}),
+                jsonify(
+                    {
+                        "detail": f"the workspace shell's frontend is not built: {contract_path} is missing"
+                    }
+                ),
                 HTTP_NOT_FOUND,
             )
         # Flask resolves a relative path against the app's own directory, not the cwd the path names.

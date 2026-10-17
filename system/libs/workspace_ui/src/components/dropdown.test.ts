@@ -73,6 +73,14 @@ describe("Dropdown", () => {
     expect(part("trigger")!.getAttribute("aria-expanded")).toBe("false");
   });
 
+  it("marks its trigger, list, and options as the contract's parts, so a theme draws them", () => {
+    expect(part("trigger")!.dataset.part).toBe("select");
+    click(part("trigger"));
+    expect(part("list")!.dataset.part).toBe("menu");
+    const options = Array.from(document.body.querySelectorAll<HTMLElement>(`[${DROPDOWN_OPTION_ATTR}]`));
+    expect(options.map((option) => option.dataset.part)).toEqual(["menu-item", "menu-item"]);
+  });
+
   it("marks the picked option and no other", () => {
     value = "a";
     render();

@@ -124,6 +124,9 @@
      full width, which read as a wall rather than as the other side of a
      conversation. */
   --width-agent-gutter: 60px;
+  /* Elevation values, behind --shadow-raised / --shadow-overlay (see @theme below). */
+  --c-shadow-raised: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+  --c-shadow-overlay: 0 0 2px 0 rgba(0, 0, 0, 0.08), 0 3px 8px 2px rgba(0, 0, 0, 0.08);
 }
 
 /* The colour-utility layer: clean semantic names over the --c-* values,
@@ -181,6 +184,9 @@
      --font-mono re-bases the font-mono utility onto the workspace's mono stack. */
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-mono: "SF Mono", "Cascadia Code", ui-monospace, monospace;
+  /* The display face: headings, section labels, and the type a theme gives its titles, buttons, and
+     menus (a theme's token, docs/system/blueprint/workspace-themes/). The standard look sets it in the body face. */
+  --font-display: var(--font-sans);
   /* Spacing — one knob: Tailwind's stock 0.25rem `--spacing` base. The
      `p-N`/`m-N`/`gap-N`/`w-N` utilities generate from it, and hand-written CSS
      references the same scale via the `--spacing(N)` function (e.g.
@@ -202,9 +208,11 @@
   /* Elevation -- two box-shadow steps. --shadow-raised is the subtle resting
      lift on interactive cards; --shadow-overlay is the one soft floating
      shadow shared by everything above the page -- menus, pickers, modals,
-     tooltips, the lightbox. */
-  --shadow-raised: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
-  --shadow-overlay: 0 0 2px 0 rgba(0, 0, 0, 0.08), 0 3px 8px 2px rgba(0, 0, 0, 0.08);
+     tooltips, the lightbox. Tailwind copies a shadow token's value into its
+     utility, so the values live in --c-shadow-* (the value layer) and these
+     point at them, which lets a workspace theme (docs/system/blueprint/workspace-themes/) redeclare them at runtime. */
+  --shadow-raised: var(--c-shadow-raised);
+  --shadow-overlay: var(--c-shadow-overlay);
 }
 
 /* Font family comes from the preflight default (re-based onto --font-sans above). */
@@ -228,11 +236,13 @@ body {
  * used on interactive controls (buttons/tabs) — that treatment comes with the
  * Button/Tab primitive. */
 @utility type-heading-lg {
+  font-family: var(--font-display);
   font-size: var(--font-size-heading-lg);
   font-weight: var(--weight-bold);
   line-height: 1.25;
 }
 @utility type-heading {
+  font-family: var(--font-display);
   font-size: var(--font-size-heading);
   font-weight: var(--weight-semibold);
   line-height: 1.3;
@@ -253,6 +263,7 @@ body {
   line-height: 1.4;
 }
 @utility type-section {
+  font-family: var(--font-display);
   font-size: var(--font-size-helper);
   font-weight: var(--weight-semibold);
   line-height: 1.3;

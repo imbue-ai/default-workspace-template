@@ -50,3 +50,13 @@ describe("Modal Escape ownership", () => {
     m.render(root, []);
   });
 });
+
+describe("Modal theme parts", () => {
+  it("marks its card, header, title, and actions as the contract's dialog parts", () => {
+    const root = renderModal({ title: "Rename", actions: m("button", "Save") });
+
+    const parts = Array.from(root.querySelectorAll<HTMLElement>("[data-part]"), (element) => element.dataset.part);
+    expect(parts).toEqual(["dialog", "dialog-header", "dialog-title", "dialog-actions"]);
+    m.render(root, []);
+  });
+});

@@ -1,0 +1,30 @@
+contract = 1
+id = "mac-classic"
+name = "Classic Mac"
+description = "Black-and-white Macintosh System 6 and 7: pinstriped title bars, rounded buttons, a one-pixel gray desktop, on system.css."
+base = "standard"
+
+[styles]
+files = ["vendor/system.css", "tokens.css", "parts.css"]
+apps = ["chat", "getting-started"]
+
+[chrome]
+title_align = "center"
+leading = ["close", "refresh", "menu", "title"]
+trailing = ["minimize", "maximize"]
+
+[icons]
+guide = "icons/guide.md"
+format = "png"
+size = 32
+rendering = "pixelated"
+background = "transparent"
+palette = ["#000000", "#ffffff"]
+derive = "monochrome"
+references = ["icons/files.png", "icons/chat.png", "icons/terminal.png"]
+
+[[attribution]]
+name = "system.css"
+url = "https://github.com/sakofchit/system.css"
+license = "MIT"
+files = ["vendor/system.css", "vendor/assets/button.svg", "vendor/assets/button-default.svg", "vendor/LICENSE-system"]

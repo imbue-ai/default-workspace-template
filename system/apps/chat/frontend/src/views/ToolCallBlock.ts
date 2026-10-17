@@ -19,6 +19,12 @@
 
 import m from "mithril";
 import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
+import { appPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
+
+/** A tool the agent called and what came back (an open tool chip's panel, a tool call written into markdown) is
+ *  the chat's declared `tool-call` part (its app.toml `[theming]`), which themes may style. The system chips this
+ *  block draws are not tool calls and do not carry it. */
+export const TOOL_CALL_PART = appPartAttrs("chat", "tool-call");
 
 /** The class names are bare markers (markdown.ts drives the same state class;
  *  the inspector reads them); the utilities beside them carry the look. */

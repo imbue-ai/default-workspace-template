@@ -164,6 +164,15 @@ describe("hoverTooltipAttrs", () => {
     expect(hoverTooltipText(button)).toBe("Start");
   });
 
+  it("shows its bubble as the contract's tooltip part", () => {
+    vi.useFakeTimers();
+    const button = renderButton("Start");
+    hoverTooltip(button);
+
+    expect(document.querySelector<HTMLElement>(".hover-tooltip")?.dataset.part).toBe("tooltip");
+    unhoverTooltip(button);
+  });
+
   it("answers a hover over anything inside the trigger", () => {
     vi.useFakeTimers();
     const button = renderButton("Start");

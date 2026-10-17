@@ -12,7 +12,8 @@
 
 import { setHoverTooltip } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
-import { buttonClass } from "@imbue/workspace-ui/src/components/Button";
+import { buttonClass, buttonPartAttrs } from "@imbue/workspace-ui/src/components/Button";
+import { applyPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 
 function filenameFromUrl(imageUrl: string): string {
   try {
@@ -77,6 +78,7 @@ export function openImageLightbox(imageUrl: string, altText: string): void {
 
   const downloadLink = document.createElement("a");
   downloadLink.className = buttonClass("ghost-inverse", { icon: true, extra: "image-lightbox-iconbtn no-underline" });
+  applyPartAttrs(downloadLink, buttonPartAttrs("ghost-inverse", true));
   downloadLink.href = imageUrl;
   downloadLink.download = filename;
   // Same-origin images download in place; a cross-origin (public-URL) image the
@@ -88,6 +90,7 @@ export function openImageLightbox(imageUrl: string, altText: string): void {
 
   const closeButton = document.createElement("button");
   closeButton.className = buttonClass("ghost-inverse", { icon: true, extra: "image-lightbox-iconbtn" });
+  applyPartAttrs(closeButton, buttonPartAttrs("ghost-inverse", true));
   closeButton.type = "button";
   closeButton.setAttribute("aria-label", "Close image viewer");
   closeButton.innerHTML = icon("close", { size: 20 });

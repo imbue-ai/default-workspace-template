@@ -2,10 +2,10 @@
  * The character as a passive drawing: one settled frame of the rig, emitted as
  * a design the shell can serve like any other.
  *
- * The avatar chooser previews every design through the image route, and the
- * route serves passive SVG. The character cannot be drawn that way -- it is a
- * rig -- so it ships a still of its resting pose for the places that need a
- * picture, and the live component for the place that shows it off.
+ * The image route serves every design as passive SVG. The character cannot be
+ * drawn that way -- it is a rig -- so it ships a still of its resting pose for
+ * the places that need a picture, and the live component for the places in
+ * this page that show it (the taskbar, the avatar chooser).
  *
  * Generated rather than drawn by hand, so the still is always the pose the rig
  * actually rests in. Regenerate it with:

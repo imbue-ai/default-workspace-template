@@ -164,6 +164,15 @@ describe("the tool chip row", () => {
     expect(root.querySelector(".tool-chip-detail")).toBeNull();
   });
 
+  it("marks the open chip's panel as the chat's tool-call part, which themes style", () => {
+    mockDetailState.mockReturnValue(undefined);
+    const chips = [chip(read), chip(exec)];
+    mount(chips);
+
+    click(0, chips);
+    expect(root.querySelector(".tool-chip-detail")?.getAttribute("data-part")).toBe("chat.tool-call");
+  });
+
   it("puts the panel directly after the chip that opened it, inside the row", () => {
     mockDetailState.mockReturnValue(undefined);
     const chips = [chip(read), chip(exec), chip(unlabelled)];
@@ -423,6 +432,12 @@ describe("a status chip in the row", () => {
     expect(rest).toEqual([]);
     // Everything it shows is the page's own: nothing is fetched.
     expect(mockRequestDetail).not.toHaveBeenCalled();
+  });
+
+  it("is not marked as the tool-call part: it is not a tool the agent called", () => {
+    setBlockExpanded("chip:sc-1", true);
+    mount([statusChip("sc-1", "the summary")]);
+    expect(root.querySelector(".tool-chip-detail")?.hasAttribute("data-part")).toBe(false);
   });
 
   it("clamps a long output the way a tool's is, and forgets the unfold when closed", () => {

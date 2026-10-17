@@ -5,6 +5,7 @@
  */
 
 import m from "mithril";
+import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import type { AvatarState, TaskbarEntry as TaskbarEntryRecord } from "../reducers/desktopState";
 import { LauncherField } from "./LauncherField";
 import type { LauncherFieldAttrs } from "./LauncherField";
@@ -29,6 +30,7 @@ export const Taskbar: m.Component<TaskbarAttrs> = {
       "div",
       {
         "data-taskbar": "",
+        ...partAttrs("taskbar"),
         // No line along the top and no blur behind it: the surface alone.
         class: "taskbar relative h-(--desk-taskbar-height) shrink-0 bg-(--desk-taskbar-surface)",
       },

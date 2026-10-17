@@ -8,6 +8,7 @@ import {
   TOUCH_ATTRIBUTE,
   ThemeMetricsError,
   applyRenderModes,
+  currentRenderModes,
   followRenderModes,
   parsePixelLength,
   readThemeMetrics,
@@ -150,5 +151,13 @@ describe("followRenderModes", () => {
     applyRenderModes(root.element, { isPhone: false, isTouch: false });
     expect(root.element.hasAttribute(PHONE_ATTRIBUTE)).toBe(false);
     expect(root.element.hasAttribute(TOUCH_ATTRIBUTE)).toBe(false);
+  });
+
+  it("currentRenderModes reads back what applyRenderModes stamped", () => {
+    const root = fakeRoot();
+    applyRenderModes(root.element, { isPhone: true, isTouch: false });
+    expect(currentRenderModes(root.element)).toEqual({ isPhone: true, isTouch: false });
+    applyRenderModes(root.element, { isPhone: false, isTouch: true });
+    expect(currentRenderModes(root.element)).toEqual({ isPhone: false, isTouch: true });
   });
 });

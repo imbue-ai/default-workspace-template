@@ -143,6 +143,14 @@ describe("the provider chooser", () => {
     expect(render()).toContain("Anthropic");
   });
 
+  it("marks its card, header, and title as the dialog parts a theme styles", () => {
+    const root = document.createElement("div");
+    m.render(root, m(ProviderChooserModal as never, { onClose: () => undefined }));
+    const card = root.querySelector('[data-part="dialog"]');
+    expect(card?.getAttribute("role")).toBe("dialog");
+    expect(card?.querySelector('[data-part="dialog-header"] [data-part="dialog-title"]')?.textContent).not.toBe("");
+  });
+
   it("renders a spinner before the lanes arrive", () => {
     state.loaded = false;
     expect(render()).toContain("Loading providers");

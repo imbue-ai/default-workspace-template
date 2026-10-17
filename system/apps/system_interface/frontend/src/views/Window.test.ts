@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { appRecord, windowRecord } from "../testing/records";
 import { Window } from "./Window";
 import type { WindowAttrs } from "./Window";
+import { STANDARD_CHROME } from "../model/themes";
 
 afterEach(unmountViews);
 
@@ -26,6 +27,7 @@ function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
     onRaise: vi.fn(),
     onControl: vi.fn(),
     onToggleMaximize: vi.fn(),
+    chrome: STANDARD_CHROME,
     ...overrides,
   };
   const root = mountView(() => m(Window, attrs));

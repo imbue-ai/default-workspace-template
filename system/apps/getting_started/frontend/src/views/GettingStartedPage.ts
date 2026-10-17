@@ -28,6 +28,7 @@ import {
   visibleStartOptions,
 } from "./startSomething";
 import type { StartOption } from "./startSomething";
+import { FIELD_PART, TILE_PART } from "@imbue/workspace-ui/src/themes/parts";
 
 const SEARCH_PLACEHOLDER = "Search things to start and templates";
 const START_SOMETHING_TITLE = "Start something";
@@ -70,6 +71,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
         key: option.key,
         type: "button",
         "data-start": option.key,
+        ...TILE_PART,
         "aria-disabled": isDisabled ? "true" : undefined,
         class:
           "getting-started-tile flex h-full flex-col rounded-xl border border-default bg-surface p-4 text-left " +
@@ -232,6 +234,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
         placeholder: SEARCH_PLACEHOLDER,
         value: query,
         class: inputClass({ extra: "pl-9" }),
+        ...FIELD_PART,
         oninput: (event: InputEvent) => {
           query = (event.target as HTMLInputElement).value;
         },

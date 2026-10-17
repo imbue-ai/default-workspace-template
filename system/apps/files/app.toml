@@ -17,6 +17,10 @@ label = "File Viewer"
 path = "/home/user/workspace/"
 params = [{name = "path", label = "Path", required = false}]
 
+# The File Viewer is dufs's own vendored page; the window around it is themed.
+[theming]
+mode = "none"
+
 # A link to a file or folder (a chat's absolute-path link) opens on its view page in a file viewer window: dufs shows a
 # file there (text as read-only source, PDFs and media embedded, anything else offered as a download) and ignores
 # ``?view`` on a folder, so a folder opened this way stays at ``/a/b?view``. A window already at the folder, however

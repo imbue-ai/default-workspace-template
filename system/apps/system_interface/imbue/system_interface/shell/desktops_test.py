@@ -23,9 +23,11 @@ from workspace_layout.records import DesktopShortcut
 from workspace_layout.records import GridCell
 from workspace_layout.records import ShortcutTarget
 from workspace_layout.records import Wallpaper
+from workspace_themes.primitives import ThemeId
 
 from imbue.imbue_common.model_update import to_update
 from imbue.system_interface.shell.data_types import AppPin
+from imbue.system_interface.shell.data_types import ThemeChoices
 from imbue.system_interface.shell.desktop_document import next_shortcut_cell
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILENAME
@@ -305,6 +307,26 @@ def test_a_file_of_another_version_or_shape_is_treated_as_absent(tmp_path: Path)
     assert [desktop.id for desktop in store.ensure_default(lambda: ())] == ["home"]
 
 
+def test_a_desktop_made_again_never_wears_a_theme_its_id_left_behind(tmp_path: Path) -> None:
+    store = DesktopStore(state_directory=tmp_path)
+    store.ensure_default(lambda: ())
+    store.create_desktop("Research", "#12B5A5", 4, (), ())
+    store.set_default_theme(ThemeId("mac-classic"))
+    store.set_theme("home", ThemeId("windows-2000"))
+    store.set_theme("research", ThemeId("windows-2000"))
+    # A shell from before themes deletes the desktop without knowing desktop_themes.json.
+    write_desktops_file(tmp_path, *(desktop for desktop in store.list_desktops() if desktop.id != "research"))
+
+    store.create_desktop("Research", "#12B5A5", 4, (), ())
+    assert store.read_theme_choices() == ThemeChoices(
+        default=ThemeId("mac-classic"), theme_by_desktop_id={DesktopId("home"): ThemeId("windows-2000")}
+    )
+
+    (tmp_path / "desktops.json").unlink()
+    store.ensure_default(lambda: ())
+    assert store.read_theme_choices() == ThemeChoices(default=ThemeId("mac-classic"), theme_by_desktop_id={})
+
+
 def test_desktops_are_created_settled_and_deleted_with_the_last_one_refused(tmp_path: Path) -> None:
     store = DesktopStore(state_directory=tmp_path)
     home = store.ensure_default(lambda: ())[0]
@@ -323,11 +345,23 @@ def test_desktops_are_created_settled_and_deleted_with_the_last_one_refused(tmp_
     papered = store.set_wallpaper("research", Wallpaper(kind=WallpaperKind.BUNDLED, name=WallpaperName("dunes")))
     assert papered.wallpaper is not None and papered.wallpaper.name == "dunes"
     assert store.set_wallpaper("research", None).wallpaper is None
+    assert store.read_theme_choices() == ThemeChoices(default=None, theme_by_desktop_id={})
+    assert store.set_theme("research", ThemeId("windows-2000")).name == "Research 2"
+    assert store.read_theme_choices().theme_by_desktop_id == {"research": "windows-2000"}
+    # desktops.json keeps the shape a shell from before themes reads; the theme lives beside it.
+    read_desktops_file_in_its_released_shape(store.state_directory)
+    assert store.set_default_theme(ThemeId("mac-classic")).default == "mac-classic"
+    store.set_theme("research", None)
+    assert store.read_theme_choices() == ThemeChoices(default=ThemeId("mac-classic"), theme_by_desktop_id={})
+    with pytest.raises(DesktopNotFoundError):
+        store.set_theme("nowhere", ThemeId("mac-classic"))
     assert find_desktop_by_name_or_id(store.list_desktops(), "research 2") is not None
     assert find_desktop_by_name_or_id(store.list_desktops(), "nowhere") is None
 
+    store.set_theme("home", ThemeId("windows-2000"))
     outcome = store.delete_desktop("home")
     assert outcome.deleted.id == home.id and outcome.fallback_desktop_id == "research"
+    assert store.read_theme_choices() == ThemeChoices(default=ThemeId("mac-classic"), theme_by_desktop_id={})
     with pytest.raises(LastDesktopError):
         store.delete_desktop("research")
     with pytest.raises(DesktopNotFoundError):

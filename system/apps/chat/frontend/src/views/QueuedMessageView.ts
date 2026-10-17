@@ -35,6 +35,7 @@ import {
   NOTICE_FALLBACK_LABEL,
   NOTICE_ROW_SPACING_CLASS,
   USER_BUBBLE_CLASS,
+  USER_MESSAGE_PART,
   USER_MESSAGE_ROW_CLASS,
   renderNotice,
 } from "./user-message-display";
@@ -125,7 +126,7 @@ function renderQueuedBubble(queued: QueuedMessage, isInGroup: boolean): m.Vnode 
   // opacity-85: the not-yet-sent muting; no bottom margin (the group's own gap
   // is the rhythm between queued bubbles).
   return m("div", { class: `${USER_MESSAGE_ROW_CLASS} queued-message`, key: `queued-${queued.queued_id}` }, [
-    m("div", { class: `${USER_BUBBLE_CLASS} opacity-85` }, [
+    m("div", { class: `${USER_BUBBLE_CLASS} opacity-85`, ...USER_MESSAGE_PART }, [
       m("div", { class: "message-content whitespace-pre-wrap" }, queued.content),
     ]),
   ]);

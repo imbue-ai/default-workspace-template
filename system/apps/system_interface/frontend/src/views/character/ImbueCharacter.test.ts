@@ -92,6 +92,25 @@ describe("the character", () => {
   });
 });
 
+describe("wearing the theme", () => {
+  it("is the avatar part, drawn in the theme's avatar colours unless told a colour", () => {
+    const themed = render();
+    const svg = themed.querySelector("svg") as SVGSVGElement;
+    expect(svg.getAttribute("data-part")).toBe("avatar");
+    expect(svg.getAttribute("data-avatar-kind")).toBe("character");
+    expect((themed.querySelector("[data-character-path]") as SVGPathElement).style.fill).toContain(
+      "var(--desk-avatar-color",
+    );
+    expect((themed.querySelector("stop") as SVGStopElement).style.stopColor).toContain(
+      "var(--desk-avatar-shadow-color",
+    );
+    unmountViews();
+
+    const told = render({ color: "#123456" });
+    expect((told.querySelector("[data-character-path]") as SVGPathElement).style.fill).toBe("rgb(18, 52, 86)");
+  });
+});
+
 describe("the user arriving", () => {
   /** The lean the frame's transform is holding, in degrees. */
   function leanOf(root: HTMLElement): number {

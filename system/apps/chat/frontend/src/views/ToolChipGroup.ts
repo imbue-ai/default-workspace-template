@@ -18,6 +18,7 @@ import m from "mithril";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import { icon, type IconName } from "@imbue/workspace-ui/src/components/icons";
 import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
+import { TOOL_CALL_PART } from "./ToolCallBlock";
 import { resolveToolPayloads } from "./tool-payloads";
 
 /** One call in a run, with the assistant event that issued it. */
@@ -476,6 +477,8 @@ function renderDetail(entry: ChipEntry, toolResults: Map<string, ToolResultEvent
     {
       class: entry.kind === "tool" ? DETAIL_CLASS : `${DETAIL_CLASS} ${entry.detailClass}`,
       key: `detail-${entryId(entry)}`,
+      // A status chip (a compaction) is not a tool the agent called.
+      ...(entry.kind === "tool" ? TOOL_CALL_PART : {}),
     },
     [
       renderDetailHeader(entry),

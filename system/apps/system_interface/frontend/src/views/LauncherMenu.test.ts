@@ -62,6 +62,10 @@ describe("the launcher menu", () => {
     const { root } = render(launcherRowsOf(stateWithWindows(), ""));
     expect(root.querySelector("[data-launcher-overlay]")).not.toBeNull();
     expect(rowKeys(root)).toEqual(["launch:chatty:root", "launch:terminal:new", "text:chatty:new"]);
+    // Each row is the menu's own row part, which themes dress as they dress every menu's rows.
+    expect(
+      Array.from(root.querySelectorAll("[data-launcher-row]")).map((row) => row.getAttribute("data-part")),
+    ).toEqual(["menu-item", "menu-item", "menu-item"]);
     const first = root.querySelector('[data-launch="chatty:root"]')!;
     expect(first.getAttribute("data-highlighted")).toBe("true");
     expect(first.querySelector('[data-key="enter"]')!.textContent).toBe("Enter");

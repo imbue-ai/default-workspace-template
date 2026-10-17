@@ -15,6 +15,8 @@ Internal documentation for the workspace machinery.
   `blueprint/launcher-and-getting-started/plan-launcher-and-getting-started.md`.
   The element context menu, which hands a right-clicked element to a chat, is
   `blueprint/element-reference-menu/plan-element-reference-menu.md`.
+  Workspace themes (the theme folder, its contract, icons under a theme, and how
+  apps take part) are `blueprint/workspace-themes/plan-workspace-themes.md`.
 - `avatar-designs.md` - How to draw and register a desktop avatar design (the
   drawing format the shell validates, and the registration helper).
 - `style_guide.md` - The code style guide, a symlink to the copy
