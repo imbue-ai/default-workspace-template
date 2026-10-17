@@ -316,6 +316,7 @@ class ProxyServer(MutableModel):
     requested_port: int = Field(default=CDP_PROXY_PORT, description="The port to bind; 0 picks a free one")
 
     _browsers: dict[str, BrowserProxy] = PrivateAttr(default_factory=dict)
+    _connections: set[ServerConnection] = PrivateAttr(default_factory=set)
     _server: Server | None = PrivateAttr(default=None)
     _thread: threading.Thread | None = PrivateAttr(default=None)
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
@@ -365,10 +366,19 @@ class ProxyServer(MutableModel):
         logger.info("The CDP proxy listens on {}:{}", self.host, self.port)
 
     def stop(self) -> None:
+        """Stop listening and end every live relay: the library runs each relay on a non-daemon thread, so one left
+        pumping would keep the service process alive after its shutdown."""
         server = self._server
         if server is None:
             return
         server.shutdown()
+        with self._lock:
+            connections = list(self._connections)
+        for connection in connections:
+            try:
+                connection.close(WS_CLOSE_TRY_AGAIN_LATER, "the Screen service is stopping")
+            except (WebSocketException, OSError) as e:
+                logger.debug("Closing a relay on shutdown was ignored ({!r})", e)
         if self._thread is not None:
             self._thread.join(timeout=_SERVER_JOIN_SECONDS)
         self._server = None
@@ -393,7 +403,12 @@ class ProxyServer(MutableModel):
         if proxy is None:
             client.close(WS_CLOSE_POLICY_VIOLATION, "unknown browser")
             return
+        with self._lock:
+            self._connections.add(client)
         try:
             proxy.pump(client, token)
         except (WebSocketException, OSError, CdpError) as e:
             logger.debug("The proxy session for {} ended ({})", name, e)
+        finally:
+            with self._lock:
+                self._connections.discard(client)

@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 import pytest
+from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import connect as connect_websocket
 
 from screen.cdp_proxy import ALWAYS_BLOCKED
@@ -237,6 +238,23 @@ def test_the_server_relays_an_agents_frames_to_chromium_refusing_the_blocked_one
                 assert "not yours" in json.loads(stranger.recv(timeout=5))["error"]["message"]
         finally:
             server.stop()
+
+
+def test_stopping_the_server_ends_the_live_relays_so_their_threads_do_not_outlive_it() -> None:
+    with FakeChromiumServer(
+        targets=[{"targetId": "t1", "type": "page", "url": "https://one.example", "title": ""}]
+    ) as chromium:
+        server = ProxyServer(requested_port=0)
+        server.start()
+        proxy, _ = _proxy(upstream_http=chromium.http_endpoint, public_base=server.public_base)
+        server.register(proxy)
+        with connect_websocket(f"{server.public_base}/browser-1/good", open_timeout=5) as agent:
+            agent.send(json.dumps({"id": 1, "method": "Browser.getVersion"}))
+            assert json.loads(agent.recv(timeout=5))["id"] == 1
+            server.stop()
+            with pytest.raises(ConnectionClosed):
+                agent.recv(timeout=5)
+        assert wait_until(lambda: not any(thread.name == "screen-cdp-pump" for thread in threading.enumerate()))
 
 
 def test_the_server_answers_discovery_over_http_and_an_unknown_browser_with_404() -> None:
