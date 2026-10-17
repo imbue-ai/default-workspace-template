@@ -228,7 +228,8 @@ class Browser(MutableModel):
         return cdp.page_targets()
 
     def page_count(self) -> int:
-        """For the proxy's last-page guard; fails open at zero rather than wedging the socket."""
+        """For the proxy's last-page guard: zero when Chromium cannot be asked, which the guard reads as the last page
+        and refuses the close, rather than wedging the socket on the error."""
         try:
             return len(self.page_targets())
         except (BrowserNotDrivableError, CdpError) as e:
