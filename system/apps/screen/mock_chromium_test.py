@@ -38,10 +38,12 @@ class FakeChromiumLauncher(ChromiumLauncherInterface):
     release: threading.Event = Field(
         default_factory=lambda: _set_event(), description="Every launch waits on this first; clear it to hold a launch"
     )
+    entered: threading.Event = Field(default_factory=threading.Event, description="Set once a launch has begun")
 
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
     def launch(self, request: ChromiumLaunchRequest) -> ChromiumHandleInterface:
+        self.entered.set()
         self.release.wait()
         with self._lock:
             self.requests.append(request)

@@ -599,7 +599,14 @@ class BrowserFleet(MutableModel):
                 self._start(browser, restore_tabs, active_tab)
             except (ChromiumStartError, ChromiumNotInstalledError, CdpError, OSError) as e:
                 browser.teardown_chromium()
-                if is_kept_stopped_on_failure:
+                with self._lock:
+                    is_stack_running = self._is_stack_running
+                if not is_stack_running:
+                    # Not the browser's failure: it launches again with the next stack, as it would have had the
+                    # stack ended a moment later.
+                    logger.info("Browser {} did not launch because the stack ended ({})", browser.name, e)
+                    browser.mark_stopped_with_stack()
+                elif is_kept_stopped_on_failure:
                     logger.warning("Browser {} failed to relaunch ({}); leaving it stopped", browser.name, e)
                     browser.lifecycle = BrowserLifecycle.STOPPED
                 else:
@@ -628,6 +635,12 @@ class BrowserFleet(MutableModel):
             is_sandbox_disabled=self.is_sandbox_disabled,
         )
         chromium = self.launcher.launch(request)
+        # The stack may have ended while Chromium came up; its teardown saw nothing attached yet.
+        with self._lock:
+            is_stack_running = self._is_stack_running
+        if not is_stack_running:
+            chromium.kill()
+            raise ChromiumStartError("the stack ended while Chromium launched")
         self.on_chromium_processes_expected()
         try:
             cdp = self.cdp_connector.connect(chromium.http_endpoint)
