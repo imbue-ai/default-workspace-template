@@ -4,6 +4,22 @@
 
 import type { ControlDocument } from "./state";
 import { describeController, isOwnSessionController } from "./state";
+import type { StreamStatus } from "./webrtc";
+
+/** What the strip says about the media path (spec sections 4.2 and 5.4). */
+export function describeStreamStatus(status: StreamStatus): string {
+  switch (status) {
+    case "connected":
+    case "idle":
+      return "";
+    case "connecting":
+      return "Connecting";
+    case "screencast":
+      return "Slow picture: no media path connected";
+    case "failed":
+      return "The stream could not connect";
+  }
+}
 
 export interface StripActions {
   onTakeControl: () => void;
@@ -68,15 +84,21 @@ export class Strip {
     this.status.textContent = message || this.streamStatusText;
   }
 
-  update(control: ControlDocument, ownSessionId: string | null, streamStatus: string, notice: string | null): void {
+  update(
+    control: ControlDocument,
+    ownSessionId: string | null,
+    streamStatus: StreamStatus,
+    notice: string | null,
+  ): void {
     const isOwn = isOwnSessionController(control, ownSessionId);
     this.who.textContent = `Control: ${describeController(control, ownSessionId)}`;
     this.waiting.textContent = control.waiting.length > 0 ? `Waiting: ${control.waiting.join(", ")}` : "";
     // A refused verb's reason takes the status's place for a moment, so a click that did nothing says why;
     // otherwise a transient line (a clipboard or drop result) stands in for the stream status.
-    this.streamStatusText = streamStatus === "connected" ? "" : streamStatus;
+    this.streamStatusText = describeStreamStatus(streamStatus);
     this.status.textContent = notice ?? (this.transientStatus || this.streamStatusText);
     this.status.classList.toggle("screen-strip__status--notice", notice !== null);
+    this.status.dataset.screenStreamStatus = streamStatus;
     this.takeButton.hidden = isOwn || ownSessionId === null;
     // Giving control back is offered when this human holds it and an agent waits to resume.
     this.returnButton.hidden = !(isOwn && control.waiting.length > 0);

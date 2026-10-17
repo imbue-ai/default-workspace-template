@@ -24,6 +24,7 @@ from imbue.imbue_common.event_envelope import parse_iso_timestamp
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from screen.broadcast import ViewerBroadcaster
+from screen.connect_info import ConnectInfoAggregator
 from screen.control import ScreenControl
 from screen.data_types import AcquireStatus
 from screen.data_types import AddedMode
@@ -142,6 +143,9 @@ class ScreenService(MutableModel):
     clipboard: XClipboard = Field(default_factory=XClipboard, frozen=True, description="xclip on the display")
     launcher: ProcessLauncherInterface = Field(frozen=True, description="How ``screen run`` starts a command")
     messenger: AgentMessengerInterface = Field(frozen=True, description="Wakes queued agents")
+    connectivity: ConnectInfoAggregator = Field(
+        frozen=True, description="Answers connect-info from the brokers (spec section 5.2)"
+    )
     broadcaster: ViewerBroadcaster = Field(default_factory=ViewerBroadcaster, description="The viewers' event fan-out")
     is_event_subscription_enabled: bool = Field(
         default=True, frozen=True, description="Whether to follow neko's WebSocket (off under a fake neko)"

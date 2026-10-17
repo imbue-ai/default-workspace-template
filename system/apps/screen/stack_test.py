@@ -6,12 +6,14 @@ import pytest
 import yaml
 from pydantic import SecretStr
 
+from mock_broker_test import FakeBroker
 from mock_display_modes_test import FakeDisplayModes
 from mock_messenger_test import RecordingLauncher
 from mock_messenger_test import RecordingMessenger
 from mock_neko_test import FakeNeko
 from mock_supervisor_test import FakeSupervisor
 from mock_window_tools_test import FakeWindowTools
+from screen.connect_info import ConnectInfoAggregator
 from screen.data_types import Lifecycle
 from screen.data_types import NekoSecrets
 from screen.data_types import NekoSession
@@ -140,6 +142,9 @@ def test_shutdown_ends_a_stack_still_waiting_for_its_install(
         display_modes=FakeDisplayModes(),
         launcher=RecordingLauncher(),
         messenger=recording_messenger,
+        connectivity=ConnectInfoAggregator(
+            brokers=(FakeBroker(name="desktop"), FakeBroker(name="share gateway")), deadline_seconds=1.0
+        ),
         is_event_subscription_enabled=False,
         is_clipboard_monitor_enabled=False,
     )

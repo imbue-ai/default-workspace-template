@@ -18,6 +18,7 @@ from PIL import Image
 from flask.testing import FlaskClient
 
 from mock_messenger_test import RecordingMessenger
+from screen.connect_info import ConnectInfoAggregator
 from screen.data_types import Lifecycle
 from screen.events import EVENTS_RELATIVE_PATH
 from screen.launch import DetachedProcessLauncher
@@ -74,6 +75,7 @@ def live(
         launcher=DetachedProcessLauncher(working_directory=Path.cwd()),
         is_clipboard_monitor_enabled=False,
         messenger=RecordingMessenger(),
+        connectivity=ConnectInfoAggregator(brokers=()),
     )
     stack = ScreenStack(
         supervisor=supervisor,

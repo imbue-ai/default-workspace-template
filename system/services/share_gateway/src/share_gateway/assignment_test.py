@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from share_gateway.assignment import DEFAULT_POLL_SECONDS
+from share_gateway.assignment import PublishedEndpoint
 from share_gateway.assignment import RelayAssignment
 from share_gateway.assignment import parse_assignment
 from share_gateway.assignment import read_cached_assignment
@@ -63,6 +64,8 @@ def test_parse_assignment_defaults_a_bad_poll_interval() -> None:
 def test_cached_assignment_round_trips(tmp_path: Path) -> None:
     cache_path = tmp_path / "assignment.json"
     assignment = RelayAssignment(
+        media_port=None,
+        published_endpoints=[],
         endpoint_by_relay_id={_RELAY_A: ("203.0.113.1", 7000), _RELAY_B: ("203.0.113.2", 7000)},
         poll_seconds=45,
     )
@@ -81,3 +84,57 @@ def test_read_cached_assignment_handles_missing_and_corrupt_files(tmp_path: Path
     empty_path = tmp_path / "empty.json"
     empty_path.write_text(json.dumps({"relay_endpoints": []}))
     assert read_cached_assignment(empty_path) is None
+
+
+def test_parse_assignment_reads_the_media_port_and_published_endpoints() -> None:
+    body = _body([{"relay_id": _RELAY_A, "endpoint": "203.0.113.1:7000"}])
+    body["media_port"] = 40123
+    body["published_endpoints"] = [
+        {"host": "203.0.113.5", "port": 59000, "protocol": "udp", "guest_port": 59000},
+        {"host": "203.0.113.5", "port": 59000, "protocol": "TCP", "guest_port": 59000},
+        {"host": "203.0.113.5", "port": "many", "protocol": "tcp", "guest_port": 59000},
+        {"host": "", "port": 1, "protocol": "tcp", "guest_port": 59000},
+        {"host": "203.0.113.5", "port": 5, "protocol": "sctp", "guest_port": 5},
+        "junk",
+    ]
+    parsed = parse_assignment(body)
+    assert parsed is not None
+    assert parsed.media_port == 40123
+    assert parsed.published_endpoints == [
+        PublishedEndpoint(host="203.0.113.5", port=59000, protocol="udp", guest_port=59000),
+        PublishedEndpoint(host="203.0.113.5", port=59000, protocol="tcp", guest_port=59000),
+    ]
+
+
+def test_parse_assignment_from_an_older_connector_has_no_media_port_and_no_endpoints() -> None:
+    parsed = parse_assignment(_body([{"relay_id": _RELAY_A, "endpoint": "203.0.113.1:7000"}]))
+    assert parsed is not None
+    assert parsed.media_port is None
+    assert parsed.published_endpoints == []
+    body = _body([{"relay_id": _RELAY_A, "endpoint": "203.0.113.1:7000"}])
+    body["media_port"] = None
+    body["published_endpoints"] = []
+    parsed_null = parse_assignment(body)
+    assert parsed_null is not None
+    assert parsed_null.media_port is None
+
+
+def test_parse_assignment_drops_a_media_port_outside_the_port_range() -> None:
+    body = _body([{"relay_id": _RELAY_A, "endpoint": "203.0.113.1:7000"}])
+    body["media_port"] = 70000
+    parsed = parse_assignment(body)
+    assert parsed is not None
+    assert parsed.media_port is None
+
+
+def test_cached_assignment_round_trips_the_media_port_and_endpoints(tmp_path: Path) -> None:
+    cache_path = tmp_path / "assignment.json"
+    assignment = RelayAssignment(
+        endpoint_by_relay_id={_RELAY_A: ("203.0.113.1", 7000)},
+        poll_seconds=45,
+        media_port=40123,
+        published_endpoints=[PublishedEndpoint(host="203.0.113.5", port=59000, protocol="udp", guest_port=59000)],
+    )
+    write_cached_assignment(cache_path, assignment)
+    assert read_cached_assignment(cache_path) == assignment
+    assert json.loads(cache_path.read_text())["media_port"] == 40123

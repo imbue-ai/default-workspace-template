@@ -51,11 +51,21 @@ export interface NekoSessionAnswer {
   is_owner: boolean;
 }
 
+/** Where the Screen's ICE mux port is reachable from this client (spec section 5.2); ``protocol`` is ``udp`` or
+ *  ``tcp``, lower-case. */
+export interface EndpointCandidate {
+  host: string;
+  port: number;
+  protocol: string;
+}
+
 export interface ConnectInfo {
   ice_servers: RTCIceServer[];
-  candidates: { host: string; port: number; protocol: string }[];
+  candidates: EndpointCandidate[];
   expires_at: string | null;
 }
+
+export const EMPTY_CONNECT_INFO: ConnectInfo = { ice_servers: [], candidates: [], expires_at: null };
 
 /** What the strip says about who has control (spec section 4.2). */
 export function describeController(control: ControlDocument, ownSessionId: string | null): string {

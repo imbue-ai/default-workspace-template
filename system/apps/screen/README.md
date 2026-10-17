@@ -59,8 +59,9 @@ demand and the `screen-watch` event listener ends them together.
   raise, through `wmctrl`.
 - `POST /api/run`, body `{"command": [...]}`: start a command on the Screen with
   `DISPLAY=:99`, detached, in the `AGENT_SUBPROCESS` band; answers `{"pid"}`.
-- `GET /api/connect-info`: `{"ice_servers", "candidates", "expires_at"}`; empty until
-  the desktop's brokers land, which the viewer reads as "use the server's own candidate".
+- `GET /api/connect-info`: `{"ice_servers", "candidates", "expires_at"}`, where the Screen's
+  media port is reachable from this client and the relay servers to use (see
+  "Connectivity"); `?relay=1` is the only time ICE servers are asked for.
 - `POST /launch/browser`: the `browser` launch path; it starts the stack and answers
   `{"path": "/"}` (Chromium itself arrives with the browser's migration).
 - `/neko/...`: the reverse proxy to neko's HTTP and WebSocket on `127.0.0.1:8091`, with
@@ -157,6 +158,49 @@ relative-motion event. Its `control/move` carries an absolute `{x, y}` only
 scroll's), and integrating deltas into absolute moves breaks as soon as a relative-motion program
 warps the pointer itself, which is what such programs do. `IS_RELATIVE_MOTION_SUPPORTED` turns
 the control on once neko gains such an event.
+
+## Connectivity
+
+The stream is ICE over neko's UDP and TCP muxes on port 59000 inside the container (spec
+section 5). Every create template publishes that port (`publish__extend = ["59000/udp",
+"59000/tcp"]`), so the host reaches it at a host port the provider picked; a shared
+workspace's visitors reach it through the relay's `screen-media` tcp proxy or through TURN.
+Neko itself is told nothing about any of this: its candidates carry the container's own
+address, and the viewer rewrites them.
+
+`GET /api/connect-info` asks two brokers in parallel, each bounded to two seconds, and
+answers the union:
+
+- The desktop, through the latchkey gateway's `minds-api-proxy`
+  (`$LATCHKEY_GATEWAY/minds-api-proxy/api/v1/agents/$MNGR_AGENT_ID/media-endpoints`, and
+  `.../ice-servers` only with `?relay=1`), with the gateway password and permissions
+  override mngr injects into the service's environment. Without a gateway or an agent id
+  in the environment the desktop is not asked.
+- The share gateway's loopback `GET http://127.0.0.1:8791/connect-info`
+  (`system/services/share_gateway/README.md`), which answers only while the workspace is
+  shared: the box's own published endpoints, one tcp candidate per relay at the share's
+  media port, and the relay credential the gateway holds.
+
+Candidates are filtered to guest port 59000, de-duplicated, and spelled with a lower-case
+`protocol` (`udp` or `tcp`; the desktop spells it upper-case, the connector lower-case, and
+the service compares case-insensitively). `ice_servers` is the brokers' union, passed to the
+viewer unchanged, and `expires_at` the earliest expiry. A broker that is slow, unreachable
+or refusing is simply absent; with both absent the answer is empty lists, which the viewer
+reads as "use the server's own candidate". The answer is never written to disk and the
+route forbids caching: a relay credential is a bearer token.
+
+The viewer (`frontend/src/webrtc.ts`, `candidates.ts`, `ice_policy.ts`) fetches
+`connect-info` before signaling, builds its peer connection with the ICE servers and
+`iceTransportPolicy: "all"`, and for every server candidate neko sends emits one copy per
+`candidates` entry of the same protocol with the address and port replaced and a distinct
+foundation, dropping the original (unless `candidates` is empty). A connection that is not
+`connected` within four seconds, or fails later, fetches `connect-info?relay=1`, hands the
+servers to the peer and asks neko for an ICE restart (`signal/restart`); the viewer then
+remembers `screen:needs-relay` in `localStorage` and fetches with `relay=1` first on the
+next load. When the relay attempt fails the same way, the viewer shows neko's JPEG
+screencast (`capture.screencast`, 10 fps at quality 60, polled at
+`/neko/api/room/screen/cast.jpg`) with input still over the WebSocket, and the strip says
+"Slow picture: no media path connected".
 
 ## The lease
 

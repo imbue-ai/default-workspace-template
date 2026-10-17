@@ -1,3 +1,4 @@
+import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -11,6 +12,8 @@ from app_manifest.primitives import AppUrl
 from app_manifest.registry import register_app
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import log_span
+from screen.brokers import brokers_from_environ
+from screen.connect_info import ConnectInfoAggregator
 from screen.launch import DetachedProcessLauncher
 from screen.messenger import ChatAgentMessenger
 from screen.neko_client import NekoClient
@@ -57,6 +60,7 @@ def build_service(arguments: ScreenServiceArguments) -> ScreenService:
         display_modes=XrandrDisplayModes(),
         launcher=DetachedProcessLauncher(working_directory=repo_root),
         messenger=ChatAgentMessenger(repo_root=repo_root),
+        connectivity=ConnectInfoAggregator(brokers=brokers_from_environ(os.environ)),
     )
     stack = ScreenStack(
         supervisor=SupervisorctlClient(),

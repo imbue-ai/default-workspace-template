@@ -5,12 +5,14 @@ import pytest
 from flask import Flask
 from flask.testing import FlaskClient
 
+from mock_broker_test import FakeBroker
 from mock_display_modes_test import FakeDisplayModes
 from mock_messenger_test import RecordingLauncher
 from mock_messenger_test import RecordingMessenger
 from mock_neko_test import FakeNeko
 from mock_supervisor_test import FakeSupervisor
 from mock_window_tools_test import FakeWindowTools
+from screen.connect_info import ConnectInfoAggregator
 from screen.proxy import NekoProxy
 from screen.routes import build_app
 from screen.service import ScreenService
@@ -80,6 +82,12 @@ exit 1
 
 
 @pytest.fixture
+def fake_brokers() -> tuple[FakeBroker, FakeBroker]:
+    """The desktop and the share gateway as the service's connectivity brokers, answering nothing until a test says."""
+    return (FakeBroker(name="desktop"), FakeBroker(name="share gateway"))
+
+
+@pytest.fixture
 def service(
     tmp_path: Path,
     fake_supervisor: FakeSupervisor,
@@ -88,6 +96,7 @@ def service(
     recording_messenger: RecordingMessenger,
     manual_clock: ManualClock,
     fake_xclip: Path,
+    fake_brokers: tuple[FakeBroker, FakeBroker],
 ) -> Iterator[ScreenService]:
     """A service over fakes whose stack starts at once, with no event subscription and no clipboard monitor, on a
     clock the test moves, with a recording xclip."""
@@ -100,6 +109,7 @@ def service(
         clipboard=XClipboard(display=":4242", xclip_command=(str(fake_xclip),)),
         launcher=RecordingLauncher(),
         messenger=recording_messenger,
+        connectivity=ConnectInfoAggregator(brokers=fake_brokers, deadline_seconds=1.0),
         is_event_subscription_enabled=False,
         is_clipboard_monitor_enabled=False,
         clock=manual_clock,

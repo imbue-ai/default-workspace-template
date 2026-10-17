@@ -7,7 +7,8 @@
  * video every viewer selects (section 8.1), a hidden viewer releases its media (section 8.2), and audio is off
  * until unmuted (section 8.3). The clipboard crosses both ways while this viewer controls (section 13), a dropped
  * file lands on the Screen at the pointer (section 4.3), and the phone layout pans, zooms and types through its
- * own controls (section 14).
+ * own controls (section 14). The media path is rewritten to the endpoints ``connect-info`` names and escalates
+ * to a relay, then to the JPEG screencast, when no pair connects (section 5).
  */
 
 import "./style.css";
@@ -24,8 +25,10 @@ import { MobileControls } from "./mobile";
 import { NekoSocket } from "./neko_socket";
 import { Overlays } from "./overlays";
 import { PointerLockControl } from "./pointer_lock";
+import { pageStorage, readNeedsRelay } from "./relay_memory";
 import { ResizeReporter } from "./resize_reporter";
 import { windowScheduler } from "./scheduler";
+import { ScreencastPoller } from "./screencast";
 import {
   ServiceEvents,
   ServiceRequestError,
@@ -58,6 +61,8 @@ class Viewer {
   private readonly root = document.createElement("div");
   private readonly stage = document.createElement("div");
   private readonly video = document.createElement("video");
+  private readonly cast = document.createElement("img");
+  private screencast: ScreencastPoller | null = null;
   private readonly strip: Strip;
   private readonly overlays: Overlays;
   private readonly pointerLock: PointerLockControl;
@@ -103,7 +108,11 @@ class Viewer {
     this.video.autoplay = true;
     this.video.playsInline = true;
     this.video.muted = true;
-    this.stage.append(this.video, this.overlays.dimElement, this.overlays.element);
+    this.cast.className = "screen-cast";
+    this.cast.alt = "";
+    this.cast.hidden = true;
+    this.cast.dataset.screenScreencast = "true";
+    this.stage.append(this.video, this.cast, this.overlays.dimElement, this.overlays.element);
     this.root.append(this.strip.element, this.stage);
     mount.append(this.root);
     // A phone never resizes the Screen (spec D7); the shell gives pages no phone signal, so the shared query
@@ -283,6 +292,7 @@ class Viewer {
       this.socket = socket;
       this.stream = new NekoStream(socket, this.video, (status) => {
         this.streamStatus = status;
+        this.syncScreencast();
         this.render();
       });
       this.stream.setAudioEnabled(this.isAudioEnabled);
@@ -340,8 +350,10 @@ class Viewer {
   private requestMedia(): void {
     if (!this.stream || !this.state || !this.isNekoOpen) return;
     const videoId = this.state.video_id;
-    fetchConnectInfo(false)
-      .then((connectInfo) => this.stream?.request(videoId, connectInfo))
+    // A network that needed a relay last time gets the relay servers up front (spec section 5.3).
+    const isRelay = readNeedsRelay(pageStorage());
+    fetchConnectInfo(isRelay)
+      .then((connectInfo) => this.stream?.request(videoId, connectInfo, isRelay))
       .catch((error) => console.error("[screen] connect-info failed", error));
   }
 
@@ -414,9 +426,23 @@ class Viewer {
     if (!this.stream) this.video.muted = !isEnabled;
   }
 
+  /** The screencast runs exactly while the stream says no media path connected (spec section 5.4). */
+  private syncScreencast(): void {
+    const wanted = this.streamStatus === "screencast" && this.session !== null;
+    if (wanted && this.screencast === null && this.session !== null) {
+      this.screencast = new ScreencastPoller(this.cast, this.session.token);
+      this.screencast.start();
+    } else if (!wanted && this.screencast !== null) {
+      this.screencast.stop();
+      this.screencast = null;
+    }
+  }
+
   private teardownStream(): void {
     window.clearTimeout(this.signInRetryTimer);
     this.signInError = null;
+    this.screencast?.stop();
+    this.screencast = null;
     this.stream?.close();
     this.socket?.stop();
     this.stream = null;

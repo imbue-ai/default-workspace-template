@@ -146,7 +146,11 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.get("/api/connect-info")
     def connect_info() -> ResponseReturnValue:
-        return jsonify({"ice_servers": [], "candidates": [], "expires_at": None})
+        is_relay = request.args.get("relay", "") == "1"
+        response = jsonify(service.connectivity.fetch(is_relay).document())
+        # A relay credential is a bearer token: nothing between the service and the viewer may keep it.
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @sock.route("/api/ws")
     def events_socket(ws: Any) -> None:

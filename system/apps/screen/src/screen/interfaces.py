@@ -3,11 +3,14 @@ from abc import abstractmethod
 from collections.abc import Sequence
 from enum import auto
 
+from pydantic import Field
 from pydantic import SecretStr
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.mutable_model import MutableModel
 from screen.data_types import DisplayModes
+from screen.data_types import IceServersAnswer
+from screen.data_types import MediaCandidate
 from screen.data_types import ModeAddition
 from screen.data_types import NekoSession
 from screen.data_types import NekoSessionRecord
@@ -141,3 +144,19 @@ class NekoInterface(MutableModel, ABC):
     @abstractmethod
     def delete_session(self, session_id: NekoSessionId) -> None:
         """Delete a session outright."""
+
+
+class ConnectivityBrokerInterface(MutableModel, ABC):
+    """One source of where the Screen's media port is reachable and of relay servers: the desktop through the
+    latchkey proxy, or the share gateway over loopback (spec section 5.2). Every call may raise
+    ``ConnectivityBrokerError``; the aggregator treats that as the broker being absent."""
+
+    name: str = Field(frozen=True, description="What the broker is called in logs")
+
+    @abstractmethod
+    def fetch_candidates(self) -> tuple[MediaCandidate, ...]:
+        """Where the workspace's published ports are reachable from this broker's side."""
+
+    @abstractmethod
+    def fetch_ice_servers(self) -> IceServersAnswer:
+        """The relay servers this broker brokers, possibly none."""

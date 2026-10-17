@@ -53,7 +53,7 @@ export class Overlays {
         this.show("The screen was stopped", state.stop_reason ?? "", true);
         break;
       case "running":
-        if (streamStatus === "connected") this.element.hidden = true;
+        if (streamStatus === "connected" || streamStatus === "screencast") this.element.hidden = true;
         else if (streamStatus === "failed") this.show("The stream could not connect", "", false);
         else if (hasSession) this.show("Connecting to the screen", "", false);
         else if (signInError !== null)
