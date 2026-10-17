@@ -6,8 +6,11 @@ import pytest
 import yaml
 from pydantic import SecretStr
 
+from mock_messenger_test import RecordingLauncher
+from mock_messenger_test import RecordingMessenger
 from mock_neko_test import FakeNeko
 from mock_supervisor_test import FakeSupervisor
+from mock_window_tools_test import FakeWindowTools
 from screen.data_types import Lifecycle
 from screen.data_types import NekoSecrets
 from screen.data_types import NekoSession
@@ -123,6 +126,43 @@ def test_a_starter_that_dies_unexpectedly_does_not_pin_the_lifecycle_at_starting
     assert stack.lifecycle == Lifecycle.STARTING
     assert stack.ensure_started() == Lifecycle.STARTING
     assert wait_until(lambda: stack.lifecycle == Lifecycle.RUNNING), stack.stop_reason
+
+
+def test_shutdown_ends_a_stack_still_waiting_for_its_install(
+    tmp_path: Path, fake_supervisor: FakeSupervisor, fake_neko: FakeNeko, recording_messenger: RecordingMessenger
+) -> None:
+    service = ScreenService(
+        repo_root=tmp_path,
+        state_dir=tmp_path / "state",
+        neko=fake_neko,
+        window_tools=FakeWindowTools(),
+        launcher=RecordingLauncher(),
+        messenger=recording_messenger,
+        is_event_subscription_enabled=False,
+    )
+    stack = ScreenStack(
+        supervisor=fake_supervisor,
+        neko=fake_neko,
+        state_dir=tmp_path / "state",
+        runtime_dir=tmp_path / "runtime",
+        display_socket_path=tmp_path / "x11" / "X99",
+        install_check=lambda: "waiting for env-converge to install neko",
+        install_poll_seconds=0.01,
+        on_lifecycle_changed=service.on_lifecycle_changed,
+        on_running=service.on_running,
+        set_api_token=service.set_api_token,
+    )
+    service.attach_stack(stack)
+    service.start()
+    service.ensure_started()
+    assert wait_until(lambda: stack.lifecycle == Lifecycle.INSTALLING)
+    service.shutdown("the Screen service stopped")
+    starter = stack._starter
+    assert starter is not None
+    starter.join(timeout=5.0)
+    assert not starter.is_alive()
+    assert stack.lifecycle == Lifecycle.STOPPED
+    assert stack.stop_reason == "the Screen service stopped"
 
 
 def test_stop_ends_the_members_neko_first(service: ScreenService, fake_supervisor: FakeSupervisor) -> None:

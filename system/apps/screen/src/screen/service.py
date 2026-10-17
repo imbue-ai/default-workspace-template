@@ -193,7 +193,7 @@ class ScreenService(MutableModel):
         self._projection_wake.set()
         if self._subscriber is not None:
             self._subscriber.stop()
-        if self.stack.lifecycle in (Lifecycle.RUNNING, Lifecycle.STARTING):
+        if self.stack.lifecycle != Lifecycle.STOPPED:
             self.stack.stop(reason)
         self.broadcaster.shutdown()
 
