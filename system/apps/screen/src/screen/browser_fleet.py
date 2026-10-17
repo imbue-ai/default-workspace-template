@@ -634,7 +634,7 @@ class BrowserFleet(MutableModel):
     def token_may_drive(self, browser: Browser, token: str) -> bool:
         """Whether a frame bearing ``token`` may be forwarded right now: the token must be the browser's current
         one, the browser running, and the Screen's lease the token owner's; a free Screen is taken on the first
-        frame, as the first direct command used to take a resting browser."""
+        frame, so the URL ``new`` prints can drive without a separate ``acquire``."""
         owner = browser.token_owner
         if not token or token != browser.token or owner is None or not browser.is_running:
             return False
