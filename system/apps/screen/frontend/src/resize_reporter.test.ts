@@ -39,14 +39,32 @@ describe("ResizeReporter", () => {
     expect(sent).toHaveLength(2);
   });
 
-  it("holds a size observed while disabled and sends it when enabled", () => {
+  it("keeps the latest size through disabled spells and sends it when enabled", () => {
     const { scheduler, sent, reporter } = build();
     reporter.observe(900, 500);
     scheduler.advance(1000);
+    reporter.setEnabled(false);
+    reporter.setEnabled(false);
     expect(sent).toEqual([]);
     reporter.setEnabled(true);
     scheduler.advance(300);
     expect(sent).toEqual([{ width: 900, height: 500 }]);
+  });
+
+  it("enabling again with an unchanged size sends nothing until forget", () => {
+    const { scheduler, sent, reporter } = build();
+    reporter.setEnabled(true);
+    reporter.observe(900, 500);
+    scheduler.advance(300);
+    reporter.setEnabled(false);
+    reporter.setEnabled(true);
+    scheduler.advance(300);
+    expect(sent).toHaveLength(1);
+    reporter.forget();
+    reporter.setEnabled(false);
+    reporter.setEnabled(true);
+    scheduler.advance(300);
+    expect(sent).toHaveLength(2);
   });
 
   it("disabling cancels a pending send", () => {

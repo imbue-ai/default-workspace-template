@@ -94,12 +94,13 @@ controller and visible; a controller that goes hidden keeps the lease.
 
 Every session requests video with `audio.disabled: true`; the strip's mute control
 sends `signal/audio` with `disabled: false` for this session alone and unmutes the
-video element. In neko v3.2.0 the audio track is attached to the audio pipeline when
-the peer is created and only paused while disabled, so the audio pipeline (pulsesrc on
-the null sink's monitor into opusenc) runs whenever any peer exists, whatever the
-sessions' audio flags; its device is already the null sink's monitor, so the spec's
-fallback is in place by construction and what remains is the encoder's cost on silence,
-measured below.
+video element. Measured in a local Docker workspace (neko v3.2.0): with one viewer
+streaming and audio disabled, `pulseaudio` sits at 0% CPU and neko at the video
+encoder's cost alone (3.6% at `idle`); enabling audio from the strip puts `pulseaudio`
+at 1% and neko at 7%, and closing the viewer takes both back to 0%. So neko does stop
+the audio pipeline while every session has audio disabled, and the spec's fallback (a
+null device until a session enables audio) is not needed. The capture device is the
+null sink's monitor in any case.
 
 ## Clipboard, files and the phone
 

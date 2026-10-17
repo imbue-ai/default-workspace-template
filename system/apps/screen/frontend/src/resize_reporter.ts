@@ -17,7 +17,8 @@ export interface StageSize {
 
 export class ResizeReporter {
   private isEnabled = false;
-  private pending: StageSize | null = null;
+  /** The stage's latest measurement, kept across disabled spells so taking control reports the current size. */
+  private latest: StageSize | null = null;
   private lastSent: StageSize | null = null;
   private timer: number | null = null;
 
@@ -28,20 +29,17 @@ export class ResizeReporter {
   ) {}
 
   setEnabled(isEnabled: boolean): void {
+    const wasEnabled = this.isEnabled;
     this.isEnabled = isEnabled;
-    if (!isEnabled) {
-      this.cancel();
-      this.pending = null;
-    } else if (this.pending !== null) {
-      this.schedule();
-    }
+    if (!isEnabled) this.cancel();
+    else if (!wasEnabled && this.latest !== null) this.schedule();
   }
 
   /** A new stage measurement; the send waits for the debounce window to pass without another. */
   observe(width: number, height: number): void {
     const size = { width: Math.round(width), height: Math.round(height) };
     if (size.width < MIN_REPORTABLE_PX || size.height < MIN_REPORTABLE_PX) return;
-    this.pending = size;
+    this.latest = size;
     if (this.isEnabled) this.schedule();
   }
 
@@ -66,8 +64,7 @@ export class ResizeReporter {
   }
 
   private flush(): void {
-    const size = this.pending;
-    this.pending = null;
+    const size = this.latest;
     if (size === null || !this.isEnabled) return;
     if (this.lastSent !== null && this.lastSent.width === size.width && this.lastSent.height === size.height) return;
     this.lastSent = size;
