@@ -175,7 +175,7 @@ class ClipboardMonitor(MutableModel):
                 for _ in range(display.pending_events()):
                     display.next_event()
                 self._handle_change()
-        except (Xlib.error.XError, Xlib.error.DisplayError, OSError) as e:
+        except (Xlib.error.XError, Xlib.error.DisplayError, Xlib.error.ConnectionClosedError, OSError) as e:
             logger.warning("The clipboard monitor stopped ({})", e)
         finally:
             # Closing flushes, which raises on a connection the server already dropped (the stack ending).
