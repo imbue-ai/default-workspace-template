@@ -9,6 +9,8 @@ its own.
 
 from abc import ABC
 from abc import abstractmethod
+from collections.abc import Callable
+from collections.abc import Sequence
 from pathlib import Path
 
 
@@ -18,6 +20,22 @@ class OneShotCompletionError(RuntimeError):
 
 class OneShotCompletionTimeoutError(OneShotCompletionError):
     """The harness's CLI did not answer in time; another model would wait as long, so no fallback is tried."""
+
+
+def answer_on_first_model(models: Sequence[str | None], complete_on: Callable[[str | None], str]) -> str:
+    """``complete_on``'s answer on the first of ``models`` (None: the account's default) that gives one.
+
+    Raises ``OneShotCompletionError`` naming every model's failure, or the first timeout as it is.
+    """
+    failures: list[str] = []
+    for model in models:
+        try:
+            return complete_on(model)
+        except OneShotCompletionTimeoutError:
+            raise
+        except OneShotCompletionError as e:
+            failures.append(f"{model or 'default model'}: {e}")
+    raise OneShotCompletionError("; ".join(failures))
 
 
 class OneShotCompletion(ABC):

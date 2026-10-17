@@ -26,6 +26,7 @@ import json
 import os
 import shutil
 from collections.abc import Callable
+from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -178,6 +179,34 @@ def build_catalog(data_dir: Path) -> HarnessCatalog:
     )
 
 
+def list_pi_models(env: Mapping[str, str]) -> tuple[str, ...] | None:
+    """The ``provider/model`` tags ``pi --list-models`` reports under ``env``; None when pi could not say."""
+    executable = shutil.which("pi")
+    if executable is None:
+        return None
+    pi_config_dir = env.get("PI_CODING_AGENT_DIR")
+    try:
+        finished = run_local_command_modern_version(
+            [executable, "--list-models"],
+            is_checked=False,
+            timeout=_LIST_MODELS_TIMEOUT_SECONDS,
+            env=dict(env),
+            name="pi --list-models",
+        )
+    except ProcessSetupError as e:
+        logger.warning("pi --list-models could not start for {}: {}", pi_config_dir, e)
+        return None
+    if finished.is_timed_out or finished.returncode != 0:
+        logger.warning(
+            "pi --list-models failed for {} (timed_out={}, returncode={})",
+            pi_config_dir,
+            finished.is_timed_out,
+            finished.returncode,
+        )
+        return None
+    return _parse_list_models(finished.stdout)
+
+
 def get_catalog() -> HarnessCatalog:
     """pi's master catalog, or an empty one when pi's data is absent (invariant: never raise)."""
     executable = shutil.which("pi")
@@ -219,31 +248,8 @@ class PiModelResolver(HarnessModelResolver):
         # full catalog stays the master list -- these ids are matched back to it for labels
         # and thinking levels. On any failure, return None (offer the whole catalog) rather
         # than an empty picker.
-        executable = shutil.which("pi")
-        if executable is None:
-            return None
         pi_config_dir = self._state_dir / PI_CONFIG_DIR_RELPATH
-        env = {**os.environ, "PI_CODING_AGENT_DIR": str(pi_config_dir)}
-        try:
-            finished = run_local_command_modern_version(
-                [executable, "--list-models"],
-                is_checked=False,
-                timeout=_LIST_MODELS_TIMEOUT_SECONDS,
-                env=env,
-                name="pi --list-models",
-            )
-        except ProcessSetupError as e:
-            logger.warning("pi --list-models could not start for {}: {}", pi_config_dir, e)
-            return None
-        if finished.is_timed_out or finished.returncode != 0:
-            logger.warning(
-                "pi --list-models failed for {} (timed_out={}, returncode={})",
-                pi_config_dir,
-                finished.is_timed_out,
-                finished.returncode,
-            )
-            return None
-        return _parse_list_models(finished.stdout)
+        return list_pi_models({**os.environ, "PI_CODING_AGENT_DIR": str(pi_config_dir)})
 
     def switch(self, identity: ModelIdentity, axes: frozenset[ModelAxis], send: Callable[[str], bool]) -> SwitchResult:
         # pi's inbox delivers user messages, not slash commands, so a switch cannot go

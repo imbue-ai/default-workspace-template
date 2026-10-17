@@ -72,6 +72,7 @@ from imbue.chat.harnesses.pi_coding.model import PiAtomicShoulderTap
 from imbue.chat.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.chat.harnesses.pi_coding.model import PiModelResolver
 from imbue.chat.harnesses.pi_coding.model import get_catalog as get_pi_catalog
+from imbue.chat.harnesses.pi_coding.one_shot import PiOneShotCompletion
 from imbue.chat.harnesses.pi_coding.watcher import PiSessionWatcher
 from imbue.chat.harnesses.pi_coding.watcher import PiTranscriptLoader
 from imbue.chat.harnesses.placeholder import EMPTY_CATALOG
@@ -452,6 +453,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         process_started_marker_filename=PiActivityTracker.marker_filename,
         startup_ready_marker=PI_STARTUP_READY_MARKER,
         binding_class=PiAccountBinding,
+        one_shot_completion_class=PiOneShotCompletion,
         resolver_class=PiModelResolver,
         catalog_factory=get_pi_catalog,
         model_state_relative_path=PI_STATE_RELATIVE_PATH,

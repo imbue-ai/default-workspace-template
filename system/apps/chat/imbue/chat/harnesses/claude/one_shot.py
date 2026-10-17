@@ -18,6 +18,7 @@ from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
 from imbue.chat.harnesses.one_shot import OneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
 from imbue.chat.harnesses.one_shot import OneShotCompletionTimeoutError
+from imbue.chat.harnesses.one_shot import answer_on_first_model
 from imbue.concurrency_group.errors import ProcessError
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.pure import pure
@@ -105,15 +106,9 @@ class ClaudeOneShotCompletion(OneShotCompletion):
 
     def complete(self, account_dir: Path, system_prompt: str, prompt: str) -> str:
         """The answer on the first model in ``ONE_SHOT_MODEL_PREFERENCE`` that gives one."""
-        failures: list[str] = []
-        for model in ONE_SHOT_MODEL_PREFERENCE:
-            try:
-                return self._complete_on(model, account_dir, system_prompt, prompt)
-            except OneShotCompletionTimeoutError:
-                raise
-            except OneShotCompletionError as e:
-                failures.append(f"{model or 'default model'}: {e}")
-        raise OneShotCompletionError("; ".join(failures))
+        return answer_on_first_model(
+            ONE_SHOT_MODEL_PREFERENCE, lambda model: self._complete_on(model, account_dir, system_prompt, prompt)
+        )
 
     def _complete_on(self, model: str | None, account_dir: Path, system_prompt: str, prompt: str) -> str:
         env = claude_one_shot_env(os.environ, account_dir)

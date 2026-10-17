@@ -119,8 +119,8 @@ class CodexOneShotCompletion(OneShotCompletion):
     def complete(self, account_dir: Path, system_prompt: str, prompt: str) -> str:
         """The answer on the account's cheapest model; on the default model when that one is refused."""
         choice = choose_codex_one_shot_model(_account_models(account_dir))
-        # codex exec takes no system prompt of its own, so the instructions lead the message.
-        full_prompt = f"{system_prompt}\n\nThe message:\n\n{prompt}"
+        # codex exec takes no system prompt of its own, so the instructions lead the prompt.
+        full_prompt = f"{system_prompt}\n\n{prompt}"
         try:
             return self._complete_on(choice, account_dir, full_prompt)
         except OneShotCompletionTimeoutError:
