@@ -365,9 +365,12 @@ _install_one_extension() {
         return 1
     fi
     mkdir -p "$dest"
-    # A .crx is a zip with a signature header; unzip skips the header and warns.
-    if ! unzip -qo "$crx" -d "$dest" 2>/dev/null; then
-        _log "extensions: unpack FAILED for ${name}; the browser runs without it"
+    # A .crx is a zip with a signature header; unzip skips the header with a warning, which
+    # is its exit status 1, so only a status past that or a missing manifest is a failure.
+    local unzip_status=0
+    unzip -qo "$crx" -d "$dest" >/dev/null 2>&1 || unzip_status=$?
+    if [ "$unzip_status" -gt 1 ] || [ ! -f "$dest/manifest.json" ]; then
+        _log "extensions: unpack FAILED for ${name} (unzip exit ${unzip_status}); the browser runs without it"
         rm -rf "$dest" "$crx"
         return 1
     fi
