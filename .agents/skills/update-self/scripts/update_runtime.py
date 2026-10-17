@@ -5,6 +5,7 @@ shares.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import signal
@@ -15,7 +16,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 
 class ApplyError(Exception):
@@ -142,6 +143,34 @@ class HttpClient:
                 return int(response.status)
         except urllib.error.HTTPError as exc:
             return int(exc.code)
+        except (urllib.error.URLError, OSError):
+            return None
+
+    def post_json(
+        self, url: str, body: Mapping[str, object], timeout: float
+    ) -> FetchedPage | None:
+        """POST ``body`` as JSON; the answer whatever its status, None when there was none."""
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return FetchedPage(
+                    status=int(response.status),
+                    body=response.read().decode("utf-8", errors="replace"),
+                    headers={
+                        key.lower(): value for key, value in response.headers.items()
+                    },
+                )
+        except urllib.error.HTTPError as exc:
+            return FetchedPage(
+                status=int(exc.code),
+                body=exc.read().decode("utf-8", errors="replace"),
+                headers={},
+            )
         except (urllib.error.URLError, OSError):
             return None
 

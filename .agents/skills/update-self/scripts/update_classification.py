@@ -520,3 +520,92 @@ def plan_apply(
         if backend_manifest
         else app_tools_touched_by(paths, app_tools),
     )
+
+
+# The ``setup_system.sh`` defaults that pin an agent harness's version.
+HARNESS_VERSION_PIN_VARS = (
+    "CLAUDE_CODE_VERSION",
+    "CODEX_VERSION",
+    "PI_VERSION",
+    "PI_SUBAGENTS_VERSION",
+    "PI_WEB_ACCESS_VERSION",
+    "OPENCODE_VERSION",
+)
+MNGR_SETTINGS_PATH = ".mngr/settings.toml"
+_PIN_DEFAULT_LINE = re.compile(r'^:\s*"\$\{(\w+):=([^}]*)\}"', re.MULTILINE)
+# Antigravity's only version authority is its versioned installer's name.
+_AGY_INSTALLER = re.compile(r"^system/scripts/agy_install-[^/]+\.sh$")
+# Code a harness loads into its process when it starts.
+_HARNESS_EXTENSION_DIRS = (".pi/extensions/",)
+
+
+class AgentRestartVerdict(NamedTuple):
+    """Whether running agents must restart to pick up what the update changed, and the changes that say so."""
+
+    is_needed: bool
+    triggers: tuple[str, ...]
+
+
+def harness_version_pins(setup_system_text: str) -> dict[str, str]:
+    """The harness version defaults ``setup_system.sh`` sets, by variable."""
+    pins = dict(_PIN_DEFAULT_LINE.findall(setup_system_text))
+    return {var: pins[var] for var in HARNESS_VERSION_PIN_VARS if var in pins}
+
+
+def agent_type_versions(mngr_settings_text: str) -> dict[str, str]:
+    """The ``version`` each ``[agent_types.*]`` table of ``.mngr/settings.toml`` pins."""
+    agent_types = tomllib.loads(mngr_settings_text).get("agent_types", {})
+    return {
+        name: str(table["version"])
+        for name, table in agent_types.items()
+        if isinstance(table, dict) and "version" in table
+    }
+
+
+def _changed_values(
+    label: str, before: dict[str, str], after: dict[str, str]
+) -> list[str]:
+    return [
+        f"{label.format(key)}: {before.get(key, 'unset')} -> {after.get(key, 'unset')}"
+        for key in sorted(before.keys() | after.keys())
+        if before.get(key) != after.get(key)
+    ]
+
+
+def agent_restart_verdict(
+    changed_paths: Sequence[str],
+    setup_system_before: str,
+    setup_system_after: str,
+    mngr_settings_before: str,
+    mngr_settings_after: str,
+) -> AgentRestartVerdict:
+    """Whether an update changes what a running agent's harness loaded when it started.
+
+    Covers what can be read off the diff: a harness version pin, the Antigravity installer,
+    and a harness extension tree. Harness config whose loading the diff cannot place is the
+    worker guide's to judge.
+    """
+    triggers = [
+        *_changed_values(
+            "{}",
+            harness_version_pins(setup_system_before),
+            harness_version_pins(setup_system_after),
+        ),
+        *_changed_values(
+            "agent_types.{}.version",
+            agent_type_versions(mngr_settings_before),
+            agent_type_versions(mngr_settings_after),
+        ),
+        *(
+            f"Antigravity installer: {path}"
+            for path in changed_paths
+            if _AGY_INSTALLER.match(path)
+        ),
+        *(
+            f"harness extension: {path}"
+            for path in changed_paths
+            # A Python file there is the extensions' test, which no harness loads.
+            if path.startswith(_HARNESS_EXTENSION_DIRS) and not path.endswith(".py")
+        ),
+    ]
+    return AgentRestartVerdict(is_needed=bool(triggers), triggers=tuple(triggers))

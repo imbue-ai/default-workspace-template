@@ -41,14 +41,23 @@ Write it for a non-technical reader skimming top to bottom, in this order:
    unrelated. When the worker's rule ran none of them (the update touched
    nothing of theirs), say that the release arrived exactly as it was shipped
    and tested -- never that checks ran and passed.
-6. **Caveats** -- only if any: rebuild-only items, incomplete provisioning, a
+6. **Your chats** -- only when the §4d verdict was `needed`, or the report's
+   **Agent restarts** names a change that reaches only newly created chats. On
+   `needed`, say which chats and background agents were restarted to pick up
+   the new version (if any), that their conversations carry over, and that
+   this chat restarts itself right after this message. Name each one that was
+   busy and left running, say it is still on the previous version, and ask
+   whether to interrupt and restart it now; name any restart that failed the
+   same way. A change that reaches only newly created chats, whatever the
+   verdict, is one line with the offer of a fresh chat.
+7. **Caveats** -- only if any: rebuild-only items, incomplete provisioning, a
    missing backup, unfinished work from an earlier update attempt that Step 3b
    set aside, a deviation the worker disclosed that could not be closed.
-7. **Pre-existing issues** -- only if any, and only after verifying
+8. **Pre-existing issues** -- only if any, and only after verifying
    attribution (worker guide §4a): whether each lives in **built-in** code
    (present at the target ref -> report upstream) or the **user's own** code.
    Never call built-in code "workspace-added".
-8. **The offer** -- see the language rules.
+9. **The offer** -- see the language rules.
 
 When the report marks a surface's merge work nontrivial (the system interface,
 a user app), name that surface, say what was reconciled, and attach the
@@ -64,11 +73,12 @@ or nothing; a change to something they built, or a decision they might have
 made differently, always makes the cut.
 
 Detail in the informational sections (2-5); plain language at the decision
-points -- the headline, any caveat that needs the user's action, and the
-closing offer. Those carry no jargon: never "merge", "land" or "fast-forward"
-there. Frame the close around *what changed in their workspace and how to undo
-it*: "Your workspace is updated -- if anything looks or behaves differently
-than you'd like, tell me and I can put it back."
+points -- the headline, the question about chats still on the previous version
+(6), any caveat that needs the user's action, and the closing offer. Those
+carry no jargon: never "merge", "land" or "fast-forward" there. Frame the
+close around *what changed in their workspace and how to undo it*: "Your
+workspace is updated -- if anything looks or behaves differently than you'd
+like, tell me and I can put it back."
 
 Drop dependency and lockfile mechanics unless the user must act. Never print a
 command *you* will run; describe it ("I'll refresh it automatically if it comes
