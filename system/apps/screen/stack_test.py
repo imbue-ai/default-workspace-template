@@ -1,4 +1,5 @@
 import stat
+import threading
 from pathlib import Path
 
 import yaml
@@ -9,7 +10,9 @@ from mock_supervisor_test import FakeSupervisor
 from screen.data_types import Lifecycle
 from screen.data_types import NekoSecrets
 from screen.data_types import NekoSession
+from screen.interfaces import ProgramState
 from screen.neko_config import render_neko_yaml
+from screen.primitives import STACK_PROGRAMS
 from screen.service import ScreenService
 from screen.stack import ScreenStack
 from screen.stack import secrets_from_neko_yaml
@@ -99,6 +102,41 @@ def test_stop_ends_the_members_neko_first(service: ScreenService, fake_superviso
     ]
     assert service.stack.lifecycle == Lifecycle.STOPPED
     assert service.stack.stop_reason == "quit"
+
+
+def _become_healthy_after(fake_neko: FakeNeko, delay_seconds: float) -> None:
+    fake_neko.is_up = False
+    threading.Timer(delay_seconds, lambda: setattr(fake_neko, "is_up", True)).start()
+
+
+def test_a_stack_can_be_started_again_after_a_stop(service: ScreenService, fake_neko: FakeNeko) -> None:
+    # neko takes a moment to answer its health route, as the real one does, so a start has to wait for it.
+    _become_healthy_after(fake_neko, 0.2)
+    start_service_stack(service)
+    service.stack.stop("quit")
+    assert service.stack.lifecycle == Lifecycle.STOPPED
+    _become_healthy_after(fake_neko, 0.2)
+    start_service_stack(service)
+
+
+def test_a_stop_during_a_start_abandons_it_and_keeps_the_stops_reason(
+    service: ScreenService, fake_supervisor: FakeSupervisor, fake_neko: FakeNeko
+) -> None:
+    fake_neko.is_up = False
+    service.ensure_started()
+    assert wait_until(lambda: ("start", "screen-neko") in fake_supervisor.calls)
+    service.stack.stop("quit")
+    starter = service.stack._starter
+    assert starter is not None
+    starter.join(timeout=5.0)
+    assert not starter.is_alive()
+    assert service.stack.lifecycle == Lifecycle.STOPPED
+    assert service.stack.stop_reason == "quit"
+    assert fake_neko.api_token is None
+    assert all(fake_supervisor.program_state(program) == ProgramState.STOPPED for program in STACK_PROGRAMS)
+    # The abandoned start left nothing behind that keeps a fresh one from succeeding.
+    fake_neko.is_up = True
+    start_service_stack(service)
 
 
 def test_a_running_stack_is_adopted_from_its_neko_yaml(

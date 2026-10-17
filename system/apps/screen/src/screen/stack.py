@@ -131,7 +131,10 @@ class ScreenStack(MutableModel):
 
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _starter: threading.Thread | None = PrivateAttr(default=None)
-    _give_up: threading.Event = PrivateAttr(default_factory=threading.Event)
+    # The current start's abort flag and its number: a stop sets the flag, and a later start gets a fresh one, so a
+    # stop never outlives the start it interrupted.
+    _abort_start: threading.Event = PrivateAttr(default_factory=threading.Event)
+    _start_generation: int = PrivateAttr(default=0)
 
     def _set_lifecycle(self, lifecycle: Lifecycle, install_reason: str | None, stop_reason: str | None) -> None:
         with self._lock:
@@ -140,58 +143,110 @@ class ScreenStack(MutableModel):
             self.stop_reason = stop_reason
         self.on_lifecycle_changed()
 
+    def _set_lifecycle_unless_aborted(
+        self, abort: threading.Event, lifecycle: Lifecycle, install_reason: str | None
+    ) -> bool:
+        """A start's own lifecycle step, skipped (False) once a stop has aborted it, so the STOPPED the stop
+        recorded is never overwritten by the start it interrupted."""
+        with self._lock:
+            if abort.is_set():
+                return False
+            self.lifecycle = lifecycle
+            self.install_reason = install_reason
+            self.stop_reason = None
+        self.on_lifecycle_changed()
+        return True
+
     def ensure_started(self) -> Lifecycle:
         """Start the group unless it is running or coming up; answers the lifecycle as it stands."""
         with self._lock:
             if self.lifecycle in (Lifecycle.RUNNING, Lifecycle.STARTING, Lifecycle.INSTALLING):
                 return self.lifecycle
-            if self._starter is not None and self._starter.is_alive():
+            # A starter that was told to abort is winding down and touches nothing more; one that was not is a
+            # start in flight.
+            if self._starter is not None and self._starter.is_alive() and not self._abort_start.is_set():
                 return self.lifecycle
             # Callers see the start at once, before the thread has run.
             self.lifecycle = Lifecycle.STARTING
             self.stop_reason = None
-            self._starter = threading.Thread(target=self._start, name="screen-stack-start", daemon=True)
+            self._start_generation += 1
+            self._abort_start = threading.Event()
+            self._starter = threading.Thread(
+                target=self._start,
+                args=(self._abort_start, self._start_generation),
+                name="screen-stack-start",
+                daemon=True,
+            )
             self._starter.start()
         self.on_lifecycle_changed()
         return Lifecycle.STARTING
 
-    def _start(self) -> None:
+    def _start(self, abort: threading.Event, generation: int) -> None:
         # The first boot of an existing workspace installs the stack through env-converge; the viewer shows
         # "Installing the screen" until the unit is satisfied.
         missing = self.install_check()
         is_installing = False
-        while missing is not None and not self._give_up.is_set():
-            self._set_lifecycle(Lifecycle.INSTALLING, missing, None)
+        while missing is not None and self._set_lifecycle_unless_aborted(abort, Lifecycle.INSTALLING, missing):
             is_installing = True
-            self._give_up.wait(self.install_poll_seconds)
+            abort.wait(self.install_poll_seconds)
             missing = self.install_check()
         if is_installing:
-            self._set_lifecycle(Lifecycle.STARTING, None, None)
+            self._set_lifecycle_unless_aborted(abort, Lifecycle.STARTING, None)
         try:
-            self._bring_up()
+            self._bring_up(abort)
         except (StackStartError, SupervisorError, NekoError, OSError) as e:
+            if abort.is_set():
+                self._finish_abandoned_start(generation, e)
+                return
             logger.warning("The Screen's stack did not come up: {}", e)
             self._stop_members()
             self.set_api_token(None)
             self._set_lifecycle(Lifecycle.STOPPED, None, f"the stack did not start: {e}")
 
-    def _bring_up(self) -> None:
+    def _finish_abandoned_start(self, generation: int, cause: Exception) -> None:
+        """A start that a stop interrupted: the stop recorded the lifecycle and the reason, so this only cleans up
+        a member the start may have brought up after the stop, unless a newer start owns the members by now."""
+        logger.debug("Abandoned the Screen's start: {}", cause)
+        with self._lock:
+            is_latest = generation == self._start_generation
+        if is_latest:
+            self._stop_members()
+            self.set_api_token(None)
+
+    @staticmethod
+    def _check_not_abandoned(abort: threading.Event) -> None:
+        if abort.is_set():
+            raise StackStartError("the start was abandoned by a stop")
+
+    def _bring_up(self, abort: threading.Event) -> None:
         new_secrets = generate_secrets()
-        self._render_configuration(new_secrets)
+        # Under the lock so that a stop and the render serialize: a render never follows the stop that aborted it.
+        with self._lock:
+            self._check_not_abandoned(abort)
+            self._render_configuration(new_secrets)
         self.set_api_token(new_secrets.api_token)
         for program in STACK_PROGRAMS:
+            self._check_not_abandoned(abort)
             self.supervisor.start_program(program)
             if program == XORG_PROGRAM:
-                self._wait_for_display()
-        if not wait_until_healthy(self.neko, self.neko_health_timeout_seconds, _POLL_SECONDS, self._give_up):
+                self._wait_for_display(abort)
+        if not wait_until_healthy(self.neko, self.neko_health_timeout_seconds, _POLL_SECONDS, abort):
+            self._check_not_abandoned(abort)
             raise StackStartError("neko never answered its health route")
+        self._check_not_abandoned(abort)
         service_session = self.neko.login(
             SERVICE_SESSION_NAME, new_secrets.admin_password.get_secret_value(), is_owner=True
         )
+        # The hand-over to the service and the step to RUNNING happen under the lock, so a stop either precedes
+        # them (and the check raises) or follows them (and finds a running stack to end).
         with self._lock:
+            self._check_not_abandoned(abort)
             self.secrets = new_secrets
-        self.on_running(new_secrets, service_session)
-        self._set_lifecycle(Lifecycle.RUNNING, None, None)
+            self.lifecycle = Lifecycle.RUNNING
+            self.install_reason = None
+            self.stop_reason = None
+            self.on_running(new_secrets, service_session)
+        self.on_lifecycle_changed()
 
     def _render_configuration(self, new_secrets: NekoSecrets) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -203,14 +258,15 @@ class ScreenStack(MutableModel):
         neko_yaml.chmod(0o600)
         neko_yaml.write_text(render_neko_yaml(new_secrets))
 
-    def _wait_for_display(self) -> None:
+    def _wait_for_display(self, abort: threading.Event) -> None:
         deadline = time.monotonic() + _DISPLAY_SOCKET_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
+            self._check_not_abandoned(abort)
             if self.display_socket_path.exists():
                 return
             if self.supervisor.program_state(XORG_PROGRAM) in (ProgramState.EXITED, ProgramState.FATAL):
                 raise StackStartError(f"{XORG_PROGRAM} exited before opening the display")
-            self._give_up.wait(_POLL_SECONDS)
+            abort.wait(_POLL_SECONDS)
         raise StackStartError(f"{XORG_PROGRAM} did not open {self.display_socket_path}")
 
     def _stop_members(self) -> None:
@@ -223,7 +279,8 @@ class ScreenStack(MutableModel):
 
     def stop(self, reason: str) -> None:
         """End the group (Quit, the service's own shutdown) and record why; a start in flight gives up."""
-        self._give_up.set()
+        with self._lock:
+            self._abort_start.set()
         self._stop_members()
         self.set_api_token(None)
         with self._lock:
@@ -237,7 +294,9 @@ class ScreenStack(MutableModel):
         )
 
     def mark_stopped(self, reason: str) -> None:
-        """The watcher says the group ended on its own."""
+        """The watcher says the group ended on its own; a start in flight gives up."""
+        with self._lock:
+            self._abort_start.set()
         self.set_api_token(None)
         with self._lock:
             self.secrets = None
