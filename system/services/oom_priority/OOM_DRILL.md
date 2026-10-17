@@ -30,7 +30,7 @@ terminal's shell and the rootless Docker daemons sit at 200.
 
 ```bash
 supervisorctl status earlyoom         # RUNNING
-pgrep -a earlyoom                     # one process, with the -m/-s/-N/--avoid args
+pgrep -ax earlyoom                    # one process, with the -m/-s/-N/--avoid args
 ```
 
 ## 1. Confirm the priority bands are set
@@ -47,7 +47,7 @@ cat /proc/<claude_pid>/oom_score_adj          # 600 for a worker, 300-800 for a 
 cat /proc/<subprocess_pid>/oom_score_adj      # 900
 # A built-in service sits at its SERVICE_BANDS value (system_interface = 20):
 cat /proc/$(pgrep -f system-interface | head -1)/oom_score_adj   # 20
-# The never-kill infra (sshd, supervisord, earlyoom, tini, tmux) stays at 0:
+# The never-kill infra (sshd, supervisord, earlyoom, earlyoom-stamp, tini, tmux) stays at 0:
 cat /proc/$(pgrep -x supervisord | head -1)/oom_score_adj        # 0
 ```
 
@@ -66,9 +66,9 @@ Watch earlyoom act:
 
 ```bash
 supervisorctl tail -f earlyoom stderr
-# expect: sending SIGTERM to process <pid> ... "python3": oom_score 0, oom_score_adj 900,
-#         badness ... KiB, VmRSS ... MiB, counted RSS ... MiB (smaps_anonymous),
-#         ordering kernel_badness, ...
+# expect: <UTC time> sending SIGTERM to process <pid> ... "python3": oom_score 0,
+#         oom_score_adj 900, badness ... KiB, VmRSS ... MiB, counted RSS ... MiB
+#         (smaps_anonymous), ordering kernel_badness, ...
 # (gVisor serves every oom_score as 0; earlyoom ranks by the badness instead,
 # counting the smaps Anonymous total because gVisor's VmRSS counts whole
 # mapped ranges.)

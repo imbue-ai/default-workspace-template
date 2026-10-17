@@ -1,0 +1,3 @@
+Signing in to an account again no longer starts every chat on it. The restart that makes chats pick up the new credentials now skips agents that are stopped, which read the credentials whenever they next start. On a workspace with a couple of dozen old chats on one account, a single sign-in used to start all of them within five minutes, and earlyoom shed them as fast as they came up until the container ran out of memory and was killed.
+
+The chat app's pytest config also deletes a passing test's `tmp_path` as soon as it finishes and keeps only the latest session's leftovers (`tmp_path_retention_policy = "failed"`, `tmp_path_retention_count = 1`), the same as the root config, so its test runs stop filling the workspace's tmpfs `/tmp`.

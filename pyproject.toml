@@ -160,6 +160,11 @@ norecursedirs = [
     "{arch}",
 ]
 timeout_func_only = true
+# Delete a passing test's tmp_path as soon as it finishes and keep only the latest
+# session's leftovers. /tmp is a tmpfs, and under gVisor every file or directory there
+# also holds sandbox memory until it is deleted.
+tmp_path_retention_policy = "failed"
+tmp_path_retention_count = 1
 # Each app's pyproject declares the same markers for its own run.
 markers = [
     "acceptance: marks tests as requiring network access, Modal credentials, etc. These are required to pass in CI",
