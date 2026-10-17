@@ -59,7 +59,8 @@ in that app's folder and is named `<app>-<role>`.
   services' programs
 - `system/apps/` - Everything tab-openable: `system_interface/` (the workspace
   web UI -- the special app that hosts the other tabs), `chat/` (the agent
-  chats), `terminal/`, `files/`, `browser/`, `system_monitor/` (Memory & disk),
+  chats), `terminal/`, `files/`, `screen/` (the streamed Linux desktop, with the
+  browser as its launch path), `system_monitor/` (Memory & disk),
   and every user-built app, each with an `app.toml` manifest; every
   Python app with a manifest is installed as its own uv tool and is also a
   member of the uv workspace via the `system/apps/*` glob; an app with no
@@ -108,7 +109,7 @@ config per pytest root at the repo root (`offload-modal.toml`,
 `offload-modal-chat.toml`, `offload-modal-system-interface.toml`). The
 checkpoint image is `system/Dockerfile` as shipped, plus a first boot
 (`default-workspace-template-seed`) and `system/scripts/offload_sandbox_init.sh`
-(the Fortress env.d unit and the offload binary); it rebuilds only when one of
+(the Screen's env.d unit, Fortress included, and the offload binary); it rebuilds only when one of
 the config's build inputs changes, and every other commit rides it as a thin
 source diff followed by `system/scripts/offload_post_patch.sh`. Inside the
 image any test that skips fails the job
