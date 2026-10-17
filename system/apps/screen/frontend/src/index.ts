@@ -13,6 +13,8 @@ import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu"
 import { InputRelay } from "./input";
 import { NekoSocket } from "./neko_socket";
 import { Overlays } from "./overlays";
+import { pageStorage, readNeedsRelay } from "./relay_memory";
+import { ScreencastPoller } from "./screencast";
 import {
   ServiceEvents,
   fetchConnectInfo,
@@ -33,6 +35,8 @@ class Viewer {
   private readonly root = document.createElement("div");
   private readonly stage = document.createElement("div");
   private readonly video = document.createElement("video");
+  private readonly cast = document.createElement("img");
+  private screencast: ScreencastPoller | null = null;
   private readonly strip: Strip;
   private readonly overlays: Overlays;
   private state: ScreenStateDocument | null = null;
@@ -60,7 +64,11 @@ class Viewer {
     this.video.autoplay = true;
     this.video.playsInline = true;
     this.video.muted = true;
-    this.stage.append(this.video, this.overlays.dimElement, this.overlays.element);
+    this.cast.className = "screen-cast";
+    this.cast.alt = "";
+    this.cast.hidden = true;
+    this.cast.dataset.screenScreencast = "true";
+    this.stage.append(this.video, this.cast, this.overlays.dimElement, this.overlays.element);
     this.root.append(this.strip.element, this.stage);
     mount.append(this.root);
     window.addEventListener("pagehide", () => this.logout());
@@ -125,6 +133,7 @@ class Viewer {
       this.socket = socket;
       this.stream = new NekoStream(socket, this.video, (status) => {
         this.streamStatus = status;
+        this.syncScreencast();
         this.render();
       });
       this.input = new InputRelay(socket, this.stage);
@@ -146,12 +155,28 @@ class Viewer {
   private onNekoOpen(): void {
     if (!this.stream || !this.state) return;
     const videoId = this.state.video_id;
-    fetchConnectInfo(false)
-      .then((connectInfo) => this.stream?.request(videoId, connectInfo))
+    // A network that needed a relay last time gets the relay servers up front (spec section 5.3).
+    const isRelay = readNeedsRelay(pageStorage());
+    fetchConnectInfo(isRelay)
+      .then((connectInfo) => this.stream?.request(videoId, connectInfo, isRelay))
       .catch((error) => console.error("[screen] connect-info failed", error));
   }
 
+  /** The screencast runs exactly while the stream says no media path connected (spec section 5.4). */
+  private syncScreencast(): void {
+    const wanted = this.streamStatus === "screencast" && this.session !== null;
+    if (wanted && this.screencast === null && this.session !== null) {
+      this.screencast = new ScreencastPoller(this.cast, this.session.token);
+      this.screencast.start();
+    } else if (!wanted && this.screencast !== null) {
+      this.screencast.stop();
+      this.screencast = null;
+    }
+  }
+
   private teardownStream(): void {
+    this.screencast?.stop();
+    this.screencast = null;
     this.stream?.close();
     this.socket?.stop();
     this.stream = null;

@@ -79,13 +79,18 @@
   cursor: default;
 }
 
-.screen-stage video {
+.screen-stage video,
+.screen-stage .screen-cast {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   object-fit: contain;
   background: #000;
+}
+
+.screen-stage .screen-cast[hidden] {
+  display: none;
 }
 
 .screen-overlay {

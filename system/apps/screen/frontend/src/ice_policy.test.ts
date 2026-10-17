@@ -1,0 +1,178 @@
+/** The direct-then-relay-then-screencast state machine over a fake clock and fake actions. */
+import { describe, expect, it } from "vitest";
+
+import { CONNECT_DEADLINE_MS, IcePolicy } from "./ice_policy";
+import type { IcePolicyActions, Timers } from "./ice_policy";
+import type { ConnectInfo } from "./state";
+
+const RELAY_INFO: ConnectInfo = {
+  ice_servers: [{ urls: "turn:turn.example:3478", username: "u", credential: "c" }],
+  candidates: [{ host: "127.0.0.1", port: 32771, protocol: "udp" }],
+  expires_at: "2026-10-17T13:00:00Z",
+};
+
+class FakeClock implements Timers {
+  now = 0;
+  private nextId = 1;
+  private readonly pending = new Map<number, { at: number; callback: () => void }>();
+
+  setTimeout(callback: () => void, ms: number): number {
+    const id = this.nextId++;
+    this.pending.set(id, { at: this.now + ms, callback });
+    return id;
+  }
+
+  clearTimeout(id: number): void {
+    this.pending.delete(id);
+  }
+
+  advance(ms: number): void {
+    this.now += ms;
+    for (const [id, timer] of [...this.pending].sort((a, b) => a[1].at - b[1].at)) {
+      if (timer.at > this.now) continue;
+      this.pending.delete(id);
+      timer.callback();
+    }
+  }
+
+  get armed(): number {
+    return this.pending.size;
+  }
+}
+
+class Recorder implements IcePolicyActions {
+  readonly log: string[] = [];
+  restarted: (ConnectInfo | null)[] = [];
+  fetchResult: Promise<ConnectInfo> = Promise.resolve(RELAY_INFO);
+
+  fetchRelayInfo(): Promise<ConnectInfo> {
+    this.log.push("fetch");
+    return this.fetchResult;
+  }
+
+  restartIce(info: ConnectInfo | null): void {
+    this.log.push("restart");
+    this.restarted.push(info);
+  }
+
+  fallbackToScreencast(): void {
+    this.log.push("screencast");
+  }
+
+  rememberRelay(): void {
+    this.log.push("remember");
+  }
+}
+
+async function settle(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+function build(): { policy: IcePolicy; clock: FakeClock; actions: Recorder } {
+  const clock = new FakeClock();
+  const actions = new Recorder();
+  return { policy: new IcePolicy(actions, clock), clock, actions };
+}
+
+describe("IcePolicy", () => {
+  it("escalates a direct attempt that misses the four-second deadline to a remembered relay restart", async () => {
+    const { policy, clock, actions } = build();
+    policy.attemptStarted(false);
+    clock.advance(CONNECT_DEADLINE_MS - 1);
+    expect(actions.log).toEqual([]);
+    clock.advance(1);
+    await settle();
+    expect(actions.log).toEqual(["remember", "fetch", "restart"]);
+    expect(actions.restarted).toEqual([RELAY_INFO]);
+    expect(policy.phase).toBe("relay");
+    expect(clock.armed).toBe(1);
+  });
+
+  it("hands a relay attempt that misses the deadline to the screencast", async () => {
+    const { policy, clock, actions } = build();
+    policy.attemptStarted(true);
+    clock.advance(CONNECT_DEADLINE_MS);
+    await settle();
+    expect(actions.log).toEqual(["screencast"]);
+    expect(policy.phase).toBe("screencast");
+    expect(clock.armed).toBe(0);
+  });
+
+  it("walks direct, relay, screencast when nothing ever connects", async () => {
+    const { policy, clock, actions } = build();
+    policy.attemptStarted(false);
+    clock.advance(CONNECT_DEADLINE_MS);
+    await settle();
+    clock.advance(CONNECT_DEADLINE_MS);
+    await settle();
+    expect(actions.log).toEqual(["remember", "fetch", "restart", "screencast"]);
+  });
+
+  it("a connection in time disarms the deadline", () => {
+    const { policy, clock, actions } = build();
+    policy.attemptStarted(false);
+    clock.advance(1000);
+    policy.connected();
+    clock.advance(CONNECT_DEADLINE_MS);
+    expect(actions.log).toEqual([]);
+    expect(policy.phase).toBe("connected");
+  });
+
+  it("a failure reported by the browser escalates at once", async () => {
+    const { policy, clock, actions } = build();
+    policy.attemptStarted(false);
+    clock.advance(500);
+    policy.failed();
+    await settle();
+    expect(actions.log).toEqual(["remember", "fetch", "restart"]);
+    expect(policy.phase).toBe("relay");
+  });
+
+  it("a connection that fails later is retried through the relay without being remembered", async () => {
+    const { policy, clock, actions } = build();
+    policy.attemptStarted(false);
+    policy.connected();
+    policy.failed();
+    await settle();
+    expect(actions.log).toEqual(["fetch", "restart"]);
+    clock.advance(CONNECT_DEADLINE_MS);
+    expect(actions.log).toEqual(["fetch", "restart", "screencast"]);
+  });
+
+  it("a failed refetch still restarts ICE with the endpoints already held", async () => {
+    const { policy, clock, actions } = build();
+    actions.fetchResult = Promise.reject(new Error("connect-info answered 503"));
+    policy.attemptStarted(false);
+    clock.advance(CONNECT_DEADLINE_MS);
+    await settle();
+    expect(actions.log).toEqual(["remember", "fetch", "restart"]);
+    expect(actions.restarted).toEqual([null]);
+  });
+
+  it("a reset while the relay info is in flight drops the restart", async () => {
+    const { policy, clock, actions } = build();
+    let resolve: (info: ConnectInfo) => void = () => undefined;
+    actions.fetchResult = new Promise((r) => {
+      resolve = r;
+    });
+    policy.attemptStarted(false);
+    clock.advance(CONNECT_DEADLINE_MS);
+    policy.reset();
+    resolve(RELAY_INFO);
+    await settle();
+    expect(actions.log).toEqual(["remember", "fetch"]);
+    expect(policy.phase).toBe("idle");
+  });
+
+  it("ignores failures reported while idle, fetching or already on the screencast", async () => {
+    const { policy, clock, actions } = build();
+    policy.failed();
+    expect(actions.log).toEqual([]);
+    policy.attemptStarted(true);
+    clock.advance(CONNECT_DEADLINE_MS);
+    await settle();
+    policy.failed();
+    expect(actions.log).toEqual(["screencast"]);
+  });
+});
