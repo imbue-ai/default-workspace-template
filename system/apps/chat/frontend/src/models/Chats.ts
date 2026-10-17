@@ -465,6 +465,18 @@ export function buildAgentTerminalUrl(agentName: string): string {
   return `${baseUrl}${separator}arg=_&arg=agent&arg=${encodeURIComponent(agentName)}`;
 }
 
+/** A create the chat app refused, with its reason in words and, when the account is the reason, the refusal's kind:
+ *  ``no_provider_account`` when nothing is signed in, ``account_signed_out`` when the named account was removed. */
+export class CreateChatRefusedError extends Error {
+  readonly kind: string | null;
+
+  constructor(detail: string, kind: string | null) {
+    super(detail);
+    this.name = "CreateChatRefusedError";
+    this.kind = kind;
+  }
+}
+
 /** A freshly-created chat's identity: its id and its name pair. */
 export interface CreatedChat {
   chatId: string;
@@ -479,7 +491,7 @@ export interface CreatedChat {
  * shows up as provisional until mngr registers it). The display name is minted server-side.
  * ``projectId`` becomes the agent's ``project`` label and is empty for a chat started outside
  * any project; ``message`` is the chat's first message, sent once it runs (empty sends none).
- * Throws with the server's detail on rejection.
+ * Throws a ``CreateChatRefusedError`` with the server's detail on rejection.
  */
 export function createChat(
   projectId: string,
@@ -519,8 +531,8 @@ async function postCreateChat(body: Record<string, string | ModelIdentity | null
     body: JSON.stringify(body),
   });
   if (!response.ok) {
-    const data = (await response.json().catch(() => ({}))) as { detail?: string };
-    throw new Error(data.detail ?? `HTTP ${response.status}`);
+    const data = (await response.json().catch(() => ({}))) as { detail?: string; kind?: string };
+    throw new CreateChatRefusedError(data.detail ?? `HTTP ${response.status}`, data.kind ?? null);
   }
   const created = (await response.json()) as { chat_id?: string; name?: string; display_name?: string };
   if (!created.chat_id) {

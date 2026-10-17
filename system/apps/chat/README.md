@@ -30,8 +30,13 @@ observe`, its own supervised service) writes, and serves:
   composer, which stays in view (holding any draft) but disabled, and opens the
   provider chooser as that notice appears; this is the one place the chooser
   opens for a missing provider (the New chat button opens the awaiting chat, and
-  an intake's first message goes into its composer, with no dialog). Which
-  account a chat starts on is decided from a fresh read of the account list.
+  an intake's first message goes into its composer, with no dialog). Whether
+  anything is signed in is decided from a fresh read of the account list; the
+  New chat button then names no account, so the chat app picks it as the create
+  runs and an account signed out since the page read the list is never the one
+  a new chat starts on. A create the chat app refuses for any other reason shows
+  its reason in a notice rather than opening a chat. A send refused because the
+  chat's account was signed out offers "Choose a provider" in place of Retry.
   The list's right edge drags to resize it (100px to 480px, 180px by default,
   kept per browser). On a phone-sized touchscreen (the shell's rule: a short side at
   most 500px and a long side at most 1000px, either way round), or a window at

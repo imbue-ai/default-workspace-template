@@ -22,8 +22,21 @@ const mocks = vi.hoisted(() => {
     // Whether the transcript load 404'd, and whether the chat app has sent its chat list yet.
     isConversationNotFound: false,
     isChatListReceived: true,
+    // The ids the account list holds, and the one a new chat would start on.
+    accountIds: ["acct-1"] as string[],
+    selectedAccountId: "acct-1" as string | null,
+    openProviderChooser: vi.fn((_intent: { onSignedIn?: (accountId: string) => void }) => undefined),
   };
 });
+
+vi.mock("../models/Providers", () => ({
+  whenAccountsReadyToChoose: async () => undefined,
+  accountForFirstSend: (accountId: string | undefined) => {
+    const id = accountId !== undefined && mocks.accountIds.includes(accountId) ? accountId : mocks.selectedAccountId;
+    return id === null ? null : { id };
+  },
+  openProviderChooser: (intent: { onSignedIn?: (accountId: string) => void }) => mocks.openProviderChooser(intent),
+}));
 
 vi.mock("../models/Chats", () => ({
   getChatById: () => mocks.chat,
@@ -197,6 +210,9 @@ describe("ChatPanel over a provisional chat", () => {
     mocks.isChatListReceived = true;
     mocks.launchChat.mockReset();
     mocks.launchChat.mockImplementation(async () => ({}));
+    mocks.accountIds = ["acct-1"];
+    mocks.selectedAccountId = "acct-1";
+    mocks.openProviderChooser.mockClear();
     mocks.chat = undefined;
     mocks.outgoingBubbles = [];
     mocks.fetchEvents.mockClear();
@@ -254,7 +270,7 @@ describe("ChatPanel over a provisional chat", () => {
     expect(mocks.fetchEvents).not.toHaveBeenCalled();
   });
 
-  it("shows a failed create's reason and retries it on the record's account", () => {
+  it("shows a failed create's reason and retries it on the record's account", async () => {
     failed("acct-1", "mngr create exited with code 1");
     const render = mountPanel();
 
@@ -263,7 +279,35 @@ describe("ChatPanel over a provisional chat", () => {
     expect(findByClass(tree, "message-list-create-failed")).toBeTruthy();
     expect(renderedText(tree)).toContain("mngr create exited with code 1");
     click(findButton(tree, "message-list-create-retry"));
+    await flushAsync();
     expect(mocks.launchChat).toHaveBeenCalledWith(AGENT_ID, "acct-1");
+  });
+
+  it("retries a failed create on the account a new chat would start on once the record's was signed out", async () => {
+    failed("acct-removed", "mngr create exited with code 1");
+    mocks.accountIds = ["acct-live"];
+    mocks.selectedAccountId = "acct-live";
+
+    click(findButton(mountPanel()(), "message-list-create-retry"));
+    await flushAsync();
+
+    expect(mocks.launchChat).toHaveBeenCalledWith(AGENT_ID, "acct-live");
+    expect(mocks.openProviderChooser).not.toHaveBeenCalled();
+  });
+
+  it("retries a failed create through the provider chooser when nothing is signed in", async () => {
+    failed("acct-removed", "mngr create exited with code 1");
+    mocks.accountIds = [];
+    mocks.selectedAccountId = null;
+
+    click(findButton(mountPanel()(), "message-list-create-retry"));
+    await flushAsync();
+
+    expect(mocks.launchChat).not.toHaveBeenCalled();
+    expect(mocks.openProviderChooser).toHaveBeenCalledOnce();
+    mocks.openProviderChooser.mock.calls[0][0].onSignedIn?.("acct-new");
+    await flushAsync();
+    expect(mocks.launchChat).toHaveBeenCalledWith(AGENT_ID, "acct-new");
   });
 
   it("shows a refused relaunch's reason beside the create's, and forgets it once the chat is being created", async () => {

@@ -50,6 +50,7 @@ import {
 } from "../models/Chats";
 import type { ProvisionalChat } from "../models/Chats";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
+import { accountForFirstSend, openProviderChooser, whenAccountsReadyToChoose } from "../models/Providers";
 import { maybeApplyFastModeLimit } from "./fast-mode-limit";
 import { FastModeNotice } from "./FastModeNotice";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
@@ -297,18 +298,34 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     }
   }
 
-  function launch(chatId: string, accountId: string): void {
+  /** "Try again" on a failed create: on the account the chat was minted for, else (that account was signed out
+   *  since) the account a new chat would start on, else the one the provider chooser produces. */
+  async function relaunch(chatId: string, mintedAccountId: string): Promise<void> {
     if (launchInFlight) return;
     launchInFlight = true;
     launchError = null;
-    launchChat(chatId, accountId)
-      .catch((error: unknown) => {
-        launchError = describeRequestError(error);
-      })
-      .finally(() => {
-        launchInFlight = false;
-        m.redraw();
-      });
+    m.redraw();
+    await whenAccountsReadyToChoose();
+    const account = accountForFirstSend(mintedAccountId);
+    if (account === null) {
+      launchInFlight = false;
+      m.redraw();
+      openProviderChooser({ onSignedIn: (accountId) => void launchOn(chatId, accountId) });
+      return;
+    }
+    await launchOn(chatId, account.id);
+  }
+
+  async function launchOn(chatId: string, accountId: string): Promise<void> {
+    launchInFlight = true;
+    try {
+      await launchChat(chatId, accountId);
+    } catch (error) {
+      launchError = describeRequestError(error);
+    } finally {
+      launchInFlight = false;
+      m.redraw();
+    }
   }
 
   /** A conversation with nothing in it yet -- being created, loading, or empty -- drawn as the
@@ -354,7 +371,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 variant: "primary",
                 extra: "message-list-create-retry",
                 readonly: launchInFlight,
-                onclick: () => launch(chatId, provisional.account_id),
+                onclick: () => void relaunch(chatId, provisional.account_id),
               },
               launchInFlight ? "Starting…" : "Try again",
             )

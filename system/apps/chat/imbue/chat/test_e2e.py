@@ -35,6 +35,7 @@ from playwright.sync_api import ViewportSize
 from playwright.sync_api import expect
 
 from imbue.chat.accounts import account_dir
+from imbue.chat.accounts import delete_account
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.auto_open import chat_root_path
@@ -808,7 +809,9 @@ def test_the_transcript_reaches_its_bottom_whatever_the_composer_height(tmp_path
         textarea.fill("\n".join(f"draft line {line}" for line in range(12)))
         expect(chat.locator(".message-input-row")).to_have_attribute("data-stacked", "")
         frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
-        assert frame.evaluate(_MAX_TRANSCRIPT_BOTTOM_GAP_JS) <= 1, "a tall composer pulled the transcript off its bottom"
+        assert frame.evaluate(_MAX_TRANSCRIPT_BOTTOM_GAP_JS) <= 1, (
+            "a tall composer pulled the transcript off its bottom"
+        )
         last_reply_box = _box(chat.locator(".message-assistant", has_text="reply-149"))
         assert last_reply_box["bottom"] <= _box(chat.locator(".message-input-box"))["top"]
 
@@ -1067,6 +1070,60 @@ def test_the_new_chat_button_with_nothing_signed_in_opens_a_chat_that_asks_for_a
         expect(_shown_chat(page).locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
         awaiting = server.chat_state.agent_manager.get_provisional_chats()
         assert [chat.phase.value for chat in awaiting] == ["awaiting_first_send"]
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_the_new_chat_button_starts_on_a_signed_in_account_once_the_most_recent_one_is_removed(
+    tmp_path: Path, page: Page
+) -> None:
+    """An account removed after the chat list read the account list is never the one New chat starts on: the chat
+    starts on the account still signed in, with no refusal shown."""
+    with _switched_workspace(tmp_path, additional_accounts=(("anthropic", "Anthropic"),)) as server:
+        kept, removed = server.account_ids
+        _open_fixture_chat(page, server)
+        delete_account(removed)
+        manager = server.chat_state.agent_manager
+
+        with page.expect_response(lambda response: response.url.endswith("/api/chats/create")) as created:
+            _chat_root(page).locator(".chat-rail-new").first.click()
+
+        assert created.value.status == 201
+        chat_id = created.value.json()["chat_id"]
+
+        def account_of_new_chat() -> str | None:
+            provisional = manager.get_provisional_chat(chat_id)
+            if provisional is not None:
+                return provisional.account_id
+            listed = [chat for chat in manager.get_chat_snapshots() if str(chat.chat_id) == chat_id]
+            return listed[0].active_agent.account_id if listed else None
+
+        wait_for(lambda: account_of_new_chat() is not None, timeout=15.0)
+        assert account_of_new_chat() == kept
+        expect(_chat_root(page).locator(".modal-card")).to_have_count(0)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_send_refused_for_a_removed_account_offers_a_provider_instead_of_retry(tmp_path: Path, page: Page) -> None:
+    """A message sent into a chat whose account was removed after the page read the account list is refused, and
+    the notice leads to the provider chooser rather than a Retry that would be refused the same way; the message
+    stays in the composer."""
+    with _running_e2e_server(tmp_path) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        expect(chat.locator(".message-input-textbox")).to_be_editable(timeout=15000)
+        delete_account(server.account_ids[0])
+
+        chat.locator(".message-input-textbox").fill("are you still there?")
+        chat.locator(".message-input-textbox").press("Enter")
+
+        notice = chat.locator(".modal-card")
+        expect(notice).to_contain_text("Couldn't send your message", timeout=15000)
+        expect(notice).to_contain_text("You signed out of the account this chat runs on.")
+        expect(notice.get_by_role("button", name="Retry")).to_have_count(0)
+        expect(notice.get_by_role("button", name="Force")).to_have_count(0)
+        notice.get_by_role("button", name="Choose a provider").click()
+        expect(chat.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+        expect(chat.locator(".message-input-textbox")).to_have_value("are you still there?")
 
 
 @pytest.mark.timeout(120, func_only=False)

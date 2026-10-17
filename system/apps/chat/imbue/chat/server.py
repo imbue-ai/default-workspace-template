@@ -144,6 +144,7 @@ from imbue.chat.models import IntakeResponse
 from imbue.chat.models import IntakeTarget
 from imbue.chat.models import InterruptAgentResponse
 from imbue.chat.models import ModelOptionsResponse
+from imbue.chat.models import NoProviderAccountError
 from imbue.chat.models import PendingIntakeView
 from imbue.chat.models import PoweredByResponse
 from imbue.chat.models import ProvisionalChat
@@ -154,6 +155,7 @@ from imbue.chat.models import SeedChatRequest
 from imbue.chat.models import SendMessageRequest
 from imbue.chat.models import SendMessageResponse
 from imbue.chat.models import SetModelChoiceRequest
+from imbue.chat.models import SignedOutAccountError
 from imbue.chat.models import ShoulderTapAtomicResponse
 from imbue.chat.models import StartAgentResponse
 from imbue.chat.models import StopAgentResponse
@@ -707,6 +709,11 @@ def _consider_naming_chat(state: ChatAppState, chat_id: ChatId, message: str) ->
 # offers "Choose a provider" in place of the input from the account list, so only a page whose
 # list has not caught up with the sign-out sends and meets this.
 ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND: Final[str] = "account_signed_out"
+
+# The kind of a create refused because nothing is signed in: the caller opens the chat awaiting its first send, whose
+# page asks for a provider, rather than showing the refusal. A create naming a signed-out account answers
+# ``ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND``, like a send to a chat on one.
+NO_PROVIDER_ACCOUNT_CREATE_REFUSAL_KIND: Final[str] = "no_provider_account"
 
 
 def _is_account_signed_out(agent_info: AgentInfo) -> bool:
@@ -1597,11 +1604,16 @@ def _get_screen_capture(chat_id: str) -> Response:
 
 def _created_chat_or_refusal(create: Callable[[], CreatedChat]) -> CreatedChat | Response:
     """Run one create of a chat: the chat, else its refusal as the create route answers it (a taken name is a 409,
-    anything else the manager refused a 400 with its reason)."""
+    anything else the manager refused a 400 with its reason, and a ``kind`` beside it when the account is the
+    reason)."""
     try:
         return create()
     except AgentNameConflictError as e:
         return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
+    except NoProviderAccountError as e:
+        return json_response({"detail": str(e), "kind": NO_PROVIDER_ACCOUNT_CREATE_REFUSAL_KIND}, status_code=400)
+    except SignedOutAccountError as e:
+        return json_response({"detail": str(e), "kind": ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND}, status_code=400)
     except (AgentCreationError, OSError, ValueError) as e:
         return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
 

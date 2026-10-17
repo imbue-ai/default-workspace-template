@@ -24,6 +24,8 @@ from workspace_layout.client import DisconnectedShell
 
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import AccountError
+from imbue.chat.accounts import NoAccountsError
+from imbue.chat.accounts import UnknownAccountError
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import account_label_for
 from imbue.chat.accounts import harness_for
@@ -161,9 +163,11 @@ from imbue.chat.models import HeldSendSnapshot
 from imbue.chat.models import ModelApplyError
 from imbue.chat.models import ModelPick
 from imbue.chat.models import ModelPickRejectedError
+from imbue.chat.models import NoProviderAccountError
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
+from imbue.chat.models import SignedOutAccountError
 from imbue.chat.models import TransitionKind
 from imbue.chat.naming import AUTO_NAME_WORD
 from imbue.chat.naming import canonical_agent_name
@@ -3396,8 +3400,9 @@ class AgentManager:
         collision mngr itself would reject).
 
         ``account_id`` binds the chat to one signed-in account; empty picks the most recently
-        used one. With no accounts at all the create is refused (the chat root offers the
-        provider chooser before it creates).
+        used one. With no accounts at all the create is refused with ``NoProviderAccountError``
+        (the chat root offers the provider chooser before it creates), and one naming an account
+        that has since been signed out with ``SignedOutAccountError``.
 
         ``message`` is the first message the chat sends once it runs, delivered by ``mngr
         create --message`` after the harness signals readiness; a chat that starts with no
@@ -3421,6 +3426,12 @@ class AgentManager:
         extra_labels = dict(labels or {})
         try:
             account = resolve_binding(account_id)
+        except NoAccountsError as e:
+            raise NoProviderAccountError("Connect an AI provider to start chatting.") from e
+        except UnknownAccountError as e:
+            raise SignedOutAccountError(
+                "The account this chat was going to start on was signed out. Choose a provider to start it on."
+            ) from e
         except (AccountError, BindingError) as e:
             raise AgentCreationError(str(e)) from e
         harness = harness_for(account)
