@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # env.d unit: the Screen's stack (Xorg with the dummy driver, XFCE, PulseAudio,
 # GStreamer with x264, xdotool, wmctrl, xclip) and the pinned neko v3 server
-# binary, plus Fortress (stealth Chromium) with its apt system libs and the two
-# pinned Chrome extensions, which moved here from the retired browser unit.
-# Too heavy to bake into the Docker image, and no boot-time service execs any
-# of it directly (the Screen service answers "installing" until this unit is
-# satisfied; the browser degrades gracefully until the engine arrives), so it
-# installs on first boot via the `env-converge` one-shot.
+# binary, plus Fortress (stealth Chromium, the Screen's browser) with its apt
+# system libs and the two Chrome extensions. Too heavy to bake into the Docker
+# image, and no boot-time service execs any of it directly (the Screen service
+# answers "installing" until this unit is satisfied, and its browser launch path
+# "Chromium is still installing" until Fortress arrives), so it installs on
+# first boot via the `env-converge` one-shot.
 #
 # env.d contract: idempotent with a fast satisfied-check -- NO marker files.
 # The converger re-runs every unit on every boot; a satisfied unit exits 0 in
@@ -22,15 +22,16 @@ _log() {
     printf '[env.d/screen] %s\n' "$*"
 }
 
-# Environments that never use the Screen or the browser stack (e.g. the Imbue
-# Studio CI snapshot producer) opt out of the whole unit -- most importantly
-# the hundreds-of-MB Fortress and XFCE downloads -- by setting
-# DWT_SKIP_BROWSER_UNIT=1 in the agent environment. An env var rather than a
+# Environments that never use the Screen (e.g. the Imbue Studio CI snapshot
+# producer) opt out of the whole unit -- most importantly the hundreds-of-MB
+# Fortress and XFCE downloads -- by setting DWT_SKIP_BROWSER_UNIT=1 in the
+# agent environment (the variable keeps the name it had when the browser had a
+# unit of its own). An env var rather than a
 # marker file keeps the env.d contract: the decision is re-evaluated every
 # boot, so a workspace whose environment stops setting it simply converges the
 # stack on its next boot.
 if [ "${DWT_SKIP_BROWSER_UNIT:-}" = "1" ]; then
-    _log "DWT_SKIP_BROWSER_UNIT=1 -- skipping the Screen and browser stack install"
+    _log "DWT_SKIP_BROWSER_UNIT=1 -- skipping the Screen stack install"
     exit 0
 fi
 
@@ -229,24 +230,34 @@ _install_neko() {
     _log "neko: install complete ($_NEKO_INSTALL_PATH)"
 }
 
-# Fortress (tiliondev/fortress) stealth Chromium engine, replacing vanilla
-# Playwright-managed Chromium. x64 from the official release; arm64 has no
-# official release yet (tiliondev/fortress#29, open as of 2026-07-23) so this
-# points at a fork build in the meantime -- swap _FORTRESS_ARM64_URL/_SHA256
-# to the official tiliondev/fortress release once that PR merges.
-# Fork build: https://github.com/minhtrinh-imbue/fortress/releases/tag/linux-arm64-151.0.7908.0-debian12
-# PR:         https://github.com/tiliondev/fortress/pull/29
-readonly _FORTRESS_X64_URL="https://github.com/tiliondev/fortress/releases/download/v151.0.7908.0/tilion-fortress-linux-x64.tar.gz"
-readonly _FORTRESS_X64_SHA256="243238b2b8a8b944b7ba2b63533d2b917da7d569dcb290ce96bf28151294b873"
-readonly _FORTRESS_ARM64_URL="https://github.com/minhtrinh-imbue/fortress/releases/download/linux-arm64-151.0.7908.0-debian12/tilion-fortress-linux-arm64-debian12.tar.gz"
-readonly _FORTRESS_ARM64_SHA256="da6965af8fa8e995d137bcabdca8d163fde7f32ba483eaf5e029223995f19ada"
+# Fortress (tiliondev/fortress), the stealth Chromium the Screen's browser runs,
+# from the official release for x64 and arm64 alike (v3 is the first release to
+# ship a linux-arm64 asset; the fork build the arm64 pin used to point at is
+# retired). The pins are the release's SHA256SUMS, checked after the download.
+# The tarball unpacks to fortress-<major>/ with the `tilion` launcher (a shell
+# script that execs `chrome` beside it with Fortress's persona flags), so the
+# versioned directory is installed as it is and the stable path every consumer
+# knows -- /opt/fortress/tilion-fortress/tilion (AGENTS.md, the Screen service,
+# the root conftest, smoketest_app.py) -- is a symlink the unit repoints at it;
+# a pin bump changes the versioned directory, which is what makes the
+# satisfied-check fail and the new release install.
+readonly _FORTRESS_RELEASE="v153.0.8010.36"
+readonly _FORTRESS_UNPACKED_DIR="fortress-v153"
+readonly _FORTRESS_X64_URL="https://github.com/tiliondev/fortress/releases/download/${_FORTRESS_RELEASE}/fortress-v153-linux-x64.tar.gz"
+readonly _FORTRESS_X64_SHA256="f677f850e64a75f4c202955649df074629306231feb4a2fa9bab0b9bbddafb6a"
+readonly _FORTRESS_ARM64_URL="https://github.com/tiliondev/fortress/releases/download/${_FORTRESS_RELEASE}/fortress-v153-linux-arm64.tar.gz"
+readonly _FORTRESS_ARM64_SHA256="5213d291e6e883ece6d9509fa39be1ae0a7e188592ef87318693e705be994728"
 readonly _FORTRESS_INSTALL_DIR="/opt/fortress"
+readonly _FORTRESS_VERSIONED_DIR="${_FORTRESS_INSTALL_DIR}/${_FORTRESS_UNPACKED_DIR}"
+readonly _FORTRESS_STABLE_LINK="${_FORTRESS_INSTALL_DIR}/tilion-fortress/tilion"
 
 _install_fortress() {
-    # Fast satisfied-check: the pinned engine binary is already in place (its
-    # apt system libs were installed in the same pass that produced it).
-    if [ -x "$_FORTRESS_INSTALL_DIR/tilion-fortress/tilion" ]; then
-        _log "fortress: already installed at $_FORTRESS_INSTALL_DIR, satisfied"
+    # Fast satisfied-check: the pinned release's launcher is in place and the
+    # stable path resolves to it (its apt system libs were installed in the same
+    # pass that produced it).
+    if [ -x "$_FORTRESS_VERSIONED_DIR/tilion" ] \
+        && [ "$(readlink -f "$_FORTRESS_STABLE_LINK" 2>/dev/null)" = "$_FORTRESS_VERSIONED_DIR/tilion" ]; then
+        _log "fortress: $_FORTRESS_RELEASE already installed at $_FORTRESS_VERSIONED_DIR, satisfied"
         return 0
     fi
     # `install-deps` apt-installs the shared libs Chromium needs (libnss3,
@@ -277,7 +288,7 @@ _install_fortress() {
     # shellcheck disable=SC2064
     trap "rm -rf '$tmp_dir'" RETURN
     local asset="$tmp_dir/fortress.tar.gz"
-    if ! curl -fsSL -o "$asset" "$url"; then
+    if ! curl -fsSL --retry 3 --max-time 1200 -o "$asset" "$url"; then
         _log "fortress: download FAILED; the next converge retries"
         return 1
     fi
@@ -285,13 +296,23 @@ _install_fortress() {
         _log "fortress: SHA256 mismatch -- refusing to install"
         return 1
     fi
-    rm -rf "$_FORTRESS_INSTALL_DIR"
-    mkdir -p "$_FORTRESS_INSTALL_DIR"
-    if ! tar xzf "$asset" -C "$_FORTRESS_INSTALL_DIR"; then
+    if ! tar xzf "$asset" -C "$tmp_dir"; then
         _log "fortress: extract FAILED; the next converge retries"
         return 1
     fi
-    chmod +x "$_FORTRESS_INSTALL_DIR/tilion-fortress/tilion"
+    if [ ! -f "$tmp_dir/$_FORTRESS_UNPACKED_DIR/tilion" ] || [ ! -f "$tmp_dir/$_FORTRESS_UNPACKED_DIR/chrome" ]; then
+        _log "fortress: the tarball does not unpack to $_FORTRESS_UNPACKED_DIR/{tilion,chrome}; the pin is wrong"
+        return 1
+    fi
+    # The previous release goes before the new one lands, so the directory never
+    # holds two Chromiums; the extensions beside it are kept.
+    mkdir -p "$_FORTRESS_INSTALL_DIR"
+    find "$_FORTRESS_INSTALL_DIR" -mindepth 1 -maxdepth 1 -name 'fortress-v*' -exec rm -rf {} +
+    rm -rf "${_FORTRESS_INSTALL_DIR}/tilion-fortress"
+    mv "$tmp_dir/$_FORTRESS_UNPACKED_DIR" "$_FORTRESS_VERSIONED_DIR"
+    chmod +x "$_FORTRESS_VERSIONED_DIR/tilion" "$_FORTRESS_VERSIONED_DIR/chrome"
+    mkdir -p "$(dirname "$_FORTRESS_STABLE_LINK")"
+    ln -sfn "$_FORTRESS_VERSIONED_DIR/tilion" "$_FORTRESS_STABLE_LINK"
     # Point Playwright's DEFAULT chromium at Fortress too. A bare `chromium.launch()`
     # (no executable_path) looks in Playwright's own browser cache, which this install
     # deliberately leaves empty (we run `install-deps`, not `install`, so no managed
@@ -299,40 +320,31 @@ _install_fortress() {
     # from Playwright itself so it tracks the pinned version's revision/layout -- so
     # ad-hoc Playwright calls use the same one engine instead of erroring on a missing
     # build. Chromium finds its resources via /proc/self/exe (the real Fortress dir),
-    # so symlinking just the binary is enough.
+    # so symlinking just the launcher is enough.
     local pw_chrome
     pw_chrome="$(cd "$REPO_ROOT" && uv run python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()' 2>/dev/null)"
     if [ -n "$pw_chrome" ]; then
         mkdir -p "$(dirname "$pw_chrome")"
-        ln -sf "$_FORTRESS_INSTALL_DIR/tilion-fortress/tilion" "$pw_chrome"
+        ln -sfn "$_FORTRESS_STABLE_LINK" "$pw_chrome"
         # Some Playwright versions gate launch() on a per-browser install marker.
         touch "$(dirname "$(dirname "$pw_chrome")")/INSTALLATION_COMPLETE" 2>/dev/null || true
         _log "fortress: pointed Playwright's default chromium at Fortress ($pw_chrome)"
     else
         _log "fortress: WARNING could not resolve Playwright's chromium path; a bare chromium.launch() will still need an explicit executable_path"
     fi
-    _log "fortress: install complete (${_FORTRESS_INSTALL_DIR}/tilion-fortress/tilion)"
+    _log "fortress: install complete ($_FORTRESS_RELEASE at $_FORTRESS_STABLE_LINK)"
 }
 
-# Unpacked Chrome extensions loaded into every fleet browser, PINNED by version.
-#
-# These used to be downloaded at RUNTIME by browser-use, straight from the Chrome Web
-# Store, unpinned -- so every workspace got whatever CWS served that day, loaded into the
-# browser holding the user's real logins, on a first-launch network call. That violates
-# this unit's own contract (versions come from pins here, never from a re-run), so they
-# are pinned and installed here instead and passed via --load-extension (see chrome_args).
-#
-# uBlock Origin Lite keeps ad noise out of the accessibility snapshots the agent reads;
-# "I still don't care about cookies" clears the consent walls it would otherwise have to
-# click through. browser-use also shipped "Force Background Tab" -- deliberately dropped,
-# because opening links in background tabs fights the pane's active-tab follow.
+# Unpacked Chrome extensions loaded into the Screen's browser (the Screen service
+# passes them with --load-extension, see its chrome_args). uBlock Origin Lite keeps
+# ad noise out of the accessibility snapshots the agent reads; "I still don't care
+# about cookies" clears the consent walls it would otherwise have to click through.
 #
 # NOT version-pinned, deliberately. The CRX endpoint only serves the CURRENT build for an
 # id, so a "pin" here could only ever be a post-hoc check that logged a mismatch -- pinning
 # theatre, not a pin. Freezing these for real would mean vendoring the CRX into the image or
-# mirroring it, which is not worth it for two ad/cookie blockers. What this DOES fix versus
-# browser-use is the timing and the ownership: the fetch happens once at converge, not on a
-# user's first browser launch, and the set is chosen here rather than by a dependency.
+# mirroring it, which is not worth it for two ad/cookie blockers. The fetch happens once at
+# converge, not on a user's first browser launch, and the set is chosen here.
 readonly _EXTENSIONS_DIR="${_FORTRESS_INSTALL_DIR}/extensions"
 readonly _UBLOCK_ID="ddkjiahejlhfcafbddmgiahcphecmpfh"
 readonly _COOKIES_ID="edibdbjcniadpccecjdfdjjppcpchdlm"
@@ -343,16 +355,16 @@ _install_one_extension() {
         return 0
     fi
     local crx="/tmp/${ext_id}.crx"
-    local url="https://clients2.google.com/service/update2/crx?response=redirect&prodversion=151&acceptformat=crx3&x=id%3D${ext_id}%26uc"
+    local url="https://clients2.google.com/service/update2/crx?response=redirect&prodversion=153&acceptformat=crx3&x=id%3D${ext_id}%26uc"
     _log "extensions: fetching ${name} (${ext_id})"
     if ! curl -fsSL --retry 3 --max-time 120 -o "$crx" "$url"; then
-        _log "extensions: download FAILED for ${name}; browsers run without it"
+        _log "extensions: download FAILED for ${name}; the browser runs without it"
         return 1
     fi
     mkdir -p "$dest"
     # A .crx is a zip with a signature header; unzip skips the header and warns.
     if ! unzip -qo "$crx" -d "$dest" 2>/dev/null; then
-        _log "extensions: unpack FAILED for ${name}; browsers run without it"
+        _log "extensions: unpack FAILED for ${name}; the browser runs without it"
         rm -rf "$dest" "$crx"
         return 1
     fi
