@@ -135,8 +135,8 @@ needs the lease.
 `tk ready` also shows an in-progress `update <name>` or `heal <name>` ticket
 (a background pass hardening an earlier change to this service), proceed with
 your edit; your change simply makes that pass stale. Leave a note on that
-ticket (`tk add-note <id> "..."`) so its owner coalesces at merge time. The
-full contention rules live in
+ticket (`tk add-note <id> "..."`) so its owner catches the pass up to cover
+it at merge time. The full contention rules live in
 [`.agents/shared/references/harden-contention.md`](../../shared/references/harden-contention.md).
 
 ## The live change loop
@@ -480,6 +480,6 @@ them.
 
 Both flows enforce single-flight per creation: if another chat already has a
 harden pass in flight for this service, they leave a note on its ticket
-instead of dispatching a sibling, and the eventual superseding pass covers
-both changes. See
+instead of dispatching a sibling, and that pass catches up at merge time to
+cover both changes. See
 [`.agents/shared/references/harden-contention.md`](../../shared/references/harden-contention.md).

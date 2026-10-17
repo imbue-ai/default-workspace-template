@@ -94,12 +94,25 @@ workspace that is fine goes on telling its user it may be broken.
 
 ## Exit 1 -- precondition; nothing changed
 
-A dirty tree; a refused fast-forward (`HEAD` moved under the pass -- treat as
-stale per `.agents/shared/references/harden-contention.md` and re-dispatch off
-the current `HEAD`, never hand-resolve); another apply in flight; an
-interrupted apply of a *different* merge that needs `recover` first; or this
-merge having already been landed **and rolled back** (see exit 2). Re-dispatch
-a fresh worker pass off the current `HEAD`.
+A dirty tree; a refused fast-forward (`HEAD` moved under the pass); another
+apply in flight; an interrupted apply of a *different* merge that needs
+`recover` first; or this merge having already been landed **and rolled back**
+(see exit 2).
+
+A dirty tree means another chat is mid-edit, and a refused fast-forward means
+one committed while the worker ran. Neither makes the worker's validation
+worthless: release the `editing critical app` leases you took for the apply
+(5b takes them again right before the next one), wait for the edit to settle
+(SKILL.md 5b's settle wait), then run 5b's fast-forward check again. If
+`HEAD` moved, catch the worker up to it as 5b does and apply its new `done`;
+if not, apply the branch as it is. Never destroy the worker to re-dispatch,
+and never build the catch-up merge yourself: the worker's merge is the one its
+validation covers. Another apply in flight is the same once it finishes, and
+so is an interrupted apply of a different merge once `recover` has rolled it
+back, as the refusal says: either has likely moved `HEAD`, so come back
+through 5b's fast-forward check. A merge already landed and rolled back, or
+one that leaves an earlier update's rollback in place, needs a fresh worker
+pass off the current `HEAD`.
 
 ## An interrupted apply
 
@@ -124,20 +137,41 @@ by hand. Say so to the user if that is the update you are running.
 The results message always offers a rollback, and the offer must be real. If
 the user wants the update (or one piece of it) gone: create a **forward
 revert** on a branch -- `git revert -m 1 <merge sha>` for the whole update, or
-a commit reverting just the paths they dislike; never rewind history -- and
-land it with the same machinery:
+a commit reverting just the paths they dislike; never rewind history.
+
+`<merge sha>` is the update's `update-self:` merge, not the tip the apply
+landed. After a catch-up that tip (and the sha the version history records) is
+the worker's catch-up merge or a commit on top of it, and reverting a catch-up
+merge with `-m 1` takes out the workspace's own commits instead of the update:
+
+```bash
+git log --first-parent --merges -1 --format=%H --fixed-strings \
+    --grep "update-self: merge upstream template"
+```
+
+The worker's own commits on top of that merge (a mirror edit, a re-fit, a gate
+fix) are part of the update too: revert each of them first, newest first, then
+the merge. They are the non-merge commits on the first-parent line from the
+merge to the landed tip (the sha the version-history entry records); the
+catch-up merges between them are the workspace's own work and stay:
+
+```bash
+git log --first-parent --no-merges --format=%H <merge sha>..<landed tip>
+```
+
+Land the revert with the same machinery, in ordinary merge mode (no
+`--target-ref`), so it gets the same refresh, restart and health-probe motion
+the update got:
 
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py apply \
     --merge-ref <that branch>
 ```
 
-(ordinary merge mode, no `--target-ref`), so the revert gets the same refresh,
-restart and health-probe motion the update got. Two residues to mention when
-they matter: the apt snapshot advanced by `env-converge upgrade` stays
-advanced, and the version-history entry stays (the revert is its own history).
-The full-rewind fallback is the backup service's restore point, when Step 1
-confirmed a recent one.
+Two residues to mention when they matter: the apt snapshot advanced by
+`env-converge upgrade` stays advanced, and the version-history entry stays
+(the revert is its own history). The full-rewind fallback is the backup
+service's restore point, when Step 1 confirmed a recent one.
 
 ## Migration-required updates
 

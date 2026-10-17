@@ -36,8 +36,8 @@ SNAPSHOTS_DIRNAME = "snapshots"
 # The run-status file: the whole machine-readable contract between an
 # update-self pass and the Imbue Studio app. The lead records the run's start here
 # (``run-status start``, once it holds the updating-workspace lease), the
-# worker it hands the merge to (``run-status delegate``), its one mid-flight
-# hold and its clearing (``run-status hold`` / ``resume``), and its
+# worker it hands the merge to (``run-status delegate``), each wait on the
+# user and its clearing (``run-status hold`` / ``resume``), and its
 # one terminal verdict (``run-status verdict``); the apply mirrors its marker's
 # phase and restamp in alongside. The app's poll reads this file over ``mngr
 # exec`` together with the run's chat agent, and needs nothing else -- it never

@@ -1104,9 +1104,15 @@ def apply_update(
                 "Nothing was changed. "
                 + (
                     "A refused fast-forward means HEAD moved under the pass -- "
-                    "re-dispatch off the current HEAD rather than hand-resolving.\n"
+                    "keep the worker and have it merge the current HEAD into its branch "
+                    "and re-verify (update-self SKILL.md, 5b); "
+                    "do not destroy it or resolve this by hand.\n"
                     if ff_only
-                    else "Resolve the conflict via a fresh worker pass rather than by hand.\n"
+                    else "For a worker's pass branch, have the worker merge the current HEAD "
+                    "into its branch, resolve the conflict there and re-verify "
+                    "(harden-contention.md, 'Catching up a stale pass'), rather than "
+                    "resolving it by hand; a branch with no worker (a forward revert) is "
+                    "re-created off the current HEAD.\n"
                 )
             )
             return 1
@@ -1501,9 +1507,9 @@ def apply_update(
 
     # Post-success bookkeeping (update-self mode only).
     if target_ref is not None:
-        # For the fast-forward landing the merge commit IS the worker branch's
-        # tip, so the sha is re-derivable on any re-run -- which is what keeps
-        # the ledger append a no-op after an interruption.
+        # The fast-forward lands the worker branch's tip, so the sha is
+        # re-derivable on any re-run -- which is what keeps the ledger append a
+        # no-op after an interruption.
         try:
             merge_sha = git_out(runner, repo_root, ["rev-parse", merge_ref])
             write_version_history_entry(

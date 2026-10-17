@@ -250,7 +250,9 @@ def assert_clean_tree(repo_root: Path, runner: Runner) -> None:
     if result.stdout.strip():
         raise ApplyPreconditionError(
             "working tree has uncommitted changes; refusing to apply so a rollback "
-            "can never clobber unrelated work. Commit or stash, then re-run."
+            "can never clobber unrelated work. They are usually another chat's edit in "
+            "progress: wait for it to be committed rather than committing or stashing "
+            "it yourself, then re-run."
         )
 
 

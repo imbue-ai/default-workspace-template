@@ -47,7 +47,7 @@ or service name). Then:
 flight (counting `update` passes on the same target). Run the pre-dispatch
 check in [`.agents/shared/references/harden-contention.md`](../../shared/references/harden-contention.md);
 if another agent's pass is live, leave the note it describes on their ticket
-and stop -- the superseding pass forced at their merge time covers your fix.
+and stop -- the catch-up forced at their merge time covers your fix.
 Only dispatch if no pass is live (or you took over an abandoned one).
 
 ```bash
@@ -155,9 +155,9 @@ On `done`, first run the merge-time checks in
 [`.agents/shared/references/harden-contention.md`](../../shared/references/harden-contention.md):
 wait out any foreground editing lease on the service, confirm the branch is
 still fresh (the creation's footprint has not changed since the worker
-branched), and never hand-resolve a conflicted merge -- a stale or conflicted
-pass is discarded and superseded by one new pass covering everything since the
-last hardened merge.
+branched), and never resolve a conflicted merge yourself -- a stale or
+conflicted pass goes back to its worker to catch up to your `HEAD`, and its
+next `done` comes back through these same checks.
 
 Then merge `mngr/heal-$TARGET`, destroy the worker per `lead-proxy.md`
 (`create_worker.py destroy --name heal-$TARGET`), and go live by type: a **skill** needs

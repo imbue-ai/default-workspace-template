@@ -1048,6 +1048,37 @@ def test_footprint_ranges_hold_after_a_commit_on_top_of_the_merge(
     ]
 
 
+def test_footprint_ranges_hold_after_a_catch_up_merge(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Another chat commits while the worker runs, and the worker merges the moved
+    # HEAD into its branch (the worker guide's catch-up). The ranges still anchor
+    # on the update's merge: the incoming commit is neither the workspace's
+    # pre-update content nor part of the update.
+    history = _UpdateHistory(tmp_path)
+    history.release("minds-v1")
+    history.commit("system/apps/mine/app.py", "local work")
+    _git_in(history.repo, "checkout", "-q", "-b", "mngr/update-self")
+    history.land("minds-v1")
+    merge = _head_sha(history.repo)
+    _git_in(history.repo, "checkout", "-q", history.local)
+    moved_head = history.commit("system/apps/other/app.py", "another chat's work")
+    _git_in(history.repo, "checkout", "-q", "mngr/update-self")
+    history.land(
+        moved_head, subject="Catch up to the workspace's latest work (moved head)"
+    )
+
+    ranges = history.footprint_ranges("minds-v1", capsys)
+
+    assert ranges["merge"] == merge
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
+        "system/apps/mine/app.py"
+    ]
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "minds-v1.txt"
+    ]
+
+
 def test_footprint_ranges_on_a_retry_whose_target_moved(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

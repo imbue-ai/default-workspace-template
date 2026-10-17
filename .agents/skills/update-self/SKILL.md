@@ -21,10 +21,11 @@ atomic, rollback-on-failure **apply**.
 You are the **lead**, and the pass is **fully unattended**: resolve the target,
 dispatch the worker, answer its gates, audit its evidence, run the apply, then
 report. The user launches an update and walks away; they come back to a
-finished result and an offer to roll back anything they don't like. Two things
-still wait for the user: an `--override` past the version ceiling (asked at
-launch, while they are present) and an update that cannot keep something they
-built (the Step 4 hold).
+finished result and an offer to roll back anything they don't like. Three
+things still wait for the user: an `--override` past the version ceiling (asked
+at launch, while they are present), an update that cannot keep something they
+built (the Step 4 hold), and another chat's edit that still holds the update
+after an hour (5b's settle wait).
 
 The default target is **the release the Imbue Studio app driving this workspace was
 built against**, and only that one: the template ships the code that app talks
@@ -82,12 +83,13 @@ python3 .agents/skills/update-self/scripts/update_self.py run-status start
 ```
 
 This writes `data/.state/update-apply/run.json`, which the app polls. Besides
-the `hold`/`resume` pair around its one mid-flight question (Step 4), the pass
-owes that file exactly one more write, a `run-status verdict` when it ends;
-every terminal path below names its verdict, and a pass that ends without one
-shows the user "update failed". It comes after the lease check because there
-is one record per workspace, and a pass that stops because someone else is
-updating must leave the running pass's record alone.
+the `hold`/`resume` pair around each wait on the user (Step 4's customization
+hold, 5b's settle wait), the pass owes that file exactly one more write, a
+`run-status verdict` when it ends; every terminal path below names its
+verdict, and a pass that ends without one shows the user "update failed". It
+comes after the lease check because there is one record per workspace, and a
+pass that stops because someone else is updating must leave the running pass's
+record alone.
 
 **Clean tree.** The worker branches off your `HEAD` and the rollback captures
 it. If `git status --porcelain` is non-empty, record `run-status verdict
@@ -456,6 +458,14 @@ over the gap. A deviation stands only when the worker is gone and the gap
 cannot be closed from here, and then the results message states it plainly as
 a caveat.
 
+A `done` that answers a catch-up (5b) carries a **Catch-up** section, and the
+audit reads it the same way: it must show which of the worker guide's §7 items
+ran over the commits it brought in, each with its evidence, and how each
+conflict there was resolved. The worker's earlier evidence for the rest of the
+pass still stands. The clean-pull skip's empty diff then runs to the branch's
+tip before its first catch-up merge, not to its tip
+(`references/worker-review-gates.md`).
+
 There is no approval gate: the audit, not the user, authorizes the apply. The
 `done` report is your raw material, not the user's message; the results
 message is composed *after* the apply, per `references/results-message.md`.
@@ -489,10 +499,84 @@ anchored so `terminal` does not match `terminal-pty`'s lease), take them in
 name order (`tk create "editing
 critical app <name>" -t chore`, then `tk start` it, each as its own command),
 and if any is held by another agent, release the ones you took and surface it
-instead of proceeding. Release them afterwards.
+instead of proceeding. Take them right before the apply, once the settle wait
+and the fast-forward check below have passed, so no wait or catch-up round
+runs while you hold them, and release them afterwards.
 
 The apply run from here keeps its own run record and raises no "recently
 updated" notice: `--keep-rollback-point` is the careful flow's, not this one's.
+
+**Before the apply, let other chats' work settle.** Other chats keep working
+while the worker runs. If the tree is dirty, or another agent holds an
+`editing service <name>` lease, a chat is mid-edit in the served tree: wait
+for it rather than refusing or re-dispatching. (An `editing critical app`
+lease is not a reason to wait: that flow edits in its own worktree, never the
+served tree, and the lease check above already covers the critical apps this
+update touches.) Wait in the background and end your turn; the result starts
+your next one:
+
+```bash
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/run_in_background.py \
+    --description "Wait for other chats to finish their edits" -- \
+    bash -c 'for i in $(seq 1 360); do leases=$(tk ready) || { echo "tk ready failed"; exit 1; }; if [ -z "$(git status --porcelain)" ] && ! printf "%s\n" "$leases" | grep -q -- "- editing service "; then echo settled; exit 0; fi; sleep 10; done; echo "still busy after an hour"; git status --porcelain; printf "%s\n" "$leases" | grep -- "- editing service "; exit 1'
+```
+
+If it is still busy after the hour, record the hold so the app shows what the
+update is waiting on, then tell the user which chat's edit is holding the
+update and that nothing has been applied; a lease is broken only on their
+call:
+
+```bash
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    run-status hold \
+    --detail "<one plain line: which chat's unfinished edit is holding the update>"
+```
+
+When they answer, record `run-status resume` with the same staged script and
+run the settle wait again. If they skip the update instead, record `run-status
+verdict REFUSED --detail "<that another chat's edit was in progress, and they
+chose not to wait for it>"` and tear down, as Step 4's hold does.
+
+If it says `tk ready failed`, the leases could not be read: find out why
+and wait again. Once it settles, check whether those chats committed since the
+worker branched:
+
+```bash
+git merge-base --is-ancestor HEAD mngr/update-self
+```
+
+Exit 0 means the branch still fast-forwards: apply. Exit 1 means `HEAD` moved
+under the pass, and the apply would refuse it: **catch the worker up** instead
+of redoing the pass. Consume the `done` you are answering first (an older
+launcher's `await` leaves it in place, and a re-armed poll would return it at
+once), then message the worker (it is still waiting, and holds the branch and
+any bundles it built), re-arm the poll as in Step 3b, and audit the `done` it
+sends back (5a). Plain `mngr message`, as Step 3b's cleanup uses plain `mngr`:
+the workspace's own launcher may predate a reply subcommand.
+
+```bash
+mkdir -p data/.tasks/update-self/reports/consumed
+[ ! -e data/.tasks/update-self/reports/report.md ] || mv data/.tasks/update-self/reports/report.md \
+    data/.tasks/update-self/reports/consumed/$(date +%s)-done.md
+```
+
+```bash
+mngr message update-self \
+    -m "Catch up to $(git rev-parse HEAD) per §7 of your worker guide, then report done again."
+```
+
+A non-zero exit other than 7, or a `No agents found` line, means the message
+did not reach the worker: do not re-arm the poll on it. Check whether the
+worker is alive ("Diagnose worker liveness" in
+`.agents/shared/references/lead-proxy.md`) and send again; a worker that is
+gone takes the fresh pass below. Exit 7 means it arrived but the worker sits
+on a dialog it could not dismiss: do not send it again; re-arm the poll, and
+diagnose liveness the same way if no report comes.
+
+A moved `HEAD` never calls for a fresh pass, so never destroy or stop the
+worker to make room for one: after a moved `HEAD`, a fresh pass (Step 3b) is
+only for a worker that is gone, or one that reports `stuck` on the catch-up
+and is not resumed ("Resuming after `stuck`" below).
 
 Run the apply from the staged copy, in the **foreground**: its output (refusal
 and resume messages, any provisioner warning, the `apply phase timings:` line)
@@ -510,8 +594,9 @@ When the report names the worker's **built frontend bundles** (the shell's
 are installed instead of a live build; the apply installs them only as a set (one
 `npm run build` emits them all), and builds live when any is missing or stale.
 
-That one command is the whole landing: it fast-forwards the worker's
-`update-self:` merge commit, snapshots the pre-apply state, refreshes the
+That one command is the whole landing: it fast-forwards to the worker's branch
+tip (its `update-self:` merge and anything it committed after it, catch-up
+merges included), snapshots the pre-apply state, refreshes the
 affected environments, re-runs `system/scripts/setup_system.sh` when a file it
 reads changed, pre-flights the merged backend (the shell, and the chat app in its
 side-effect-free `--preflight` mode, since the chat is the process that imports
@@ -540,8 +625,15 @@ Exit codes:
 - **`1` -- precondition; nothing changed** (dirty tree, `HEAD` moved under the
   pass, another apply in flight, this merge already landed and rolled back, or
   a merge that does not first revert an earlier update's rollback commit).
-  Re-dispatch a fresh worker pass off the current `HEAD`; the refusal names the
-  commits to revert.
+  A dirty tree or a moved `HEAD` is the settle-and-catch-up case above:
+  release the `editing critical app` leases you took for this apply (5b takes
+  them again right before the next one), wait, and come back through the
+  fast-forward check, catching the worker up only if `HEAD` moved. Another
+  apply in flight is the same: wait for it to finish, then come back through
+  that check, since it has likely moved `HEAD`. A merge that leaves a
+  rollback in place, or one already landed and rolled back, needs a fresh
+  worker pass off the current `HEAD` (`references/apply-outcomes.md`); the
+  refusal names the commits to revert.
 
 What each outcome means for the user, the `provision-incomplete` and
 `emergency.json` records, an interrupted apply (re-run the same command; it

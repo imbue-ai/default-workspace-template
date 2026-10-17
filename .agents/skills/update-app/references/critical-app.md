@@ -342,8 +342,12 @@ another critical app may have applied since you branched.
    ```
 
    Empty output means fresh: continue. Any output means the pass is stale; do
-   **not** merge and never hand-resolve a conflicted merge (see
-   `harden-contention.md`). Re-brief the worker to rebase and re-verify.
+   **not** merge, and never resolve a conflicted merge yourself. Catch the
+   pass up per `harden-contention.md` ("Catching up a stale pass"): the worker
+   merges the served `HEAD` into the branch, resolves any conflict, re-verifies
+   what came in, rebuilds the bundles, and reports `done` again, which comes
+   back through this check. When the catch-up changed something the user
+   previewed, offer the final preview again from the worker's work_dir.
 
    If a "recently updated" notice has appeared since entry (another pass's
    apply), tell the user this apply will replace its rollback point, as step 1
@@ -351,9 +355,9 @@ another critical app may have applied since you branched.
 
 2. **Apply.** Run the general update apply, the same script `update-self` lands
    releases with, pointing it at the pass branch and at the bundles the user
-   last previewed (the worker's work_dir after a final preview, otherwise your
-   own worktree). Resolve the worker's in the same invocation, since each bash
-   call starts a fresh shell:
+   last previewed (the worker's work_dir after a final preview or a catch-up,
+   otherwise your own worktree). Resolve the worker's in the same invocation,
+   since each bash call starts a fresh shell:
 
    ```bash
    WORK_DIR=$(mngr ls --include "name == \"update-$SLUG\"" --format json \
@@ -385,7 +389,8 @@ another critical app may have applied since you branched.
    - `3`: **emergency**: even rollback could not restore a healthy workspace.
      Escalate immediately, with the snapshot paths the stderr names.
    - `1`: precondition error (a dirty tree, another apply in flight, a
-     conflicted merge); nothing was changed.
+     conflicted merge); nothing was changed. A conflicted merge is a stale
+     pass: catch it up as step 1 says.
 
 3. **The notice is the user's.** After a successful apply, one banner across
    the top of the workspace names every critical app included in the rollback:
