@@ -14,8 +14,11 @@ from app_manifest.primitives import RepoRelativePath
 from app_manifest.scope import CreationScope
 from app_manifest.scope import ManifestReferenceMatch
 from app_manifest.scope import compute_app_scope
+from app_manifest.scope import compute_pass_scope
 from app_manifest.scope import compute_skill_scope
 from app_manifest.scope import find_referencing_manifests
+from app_manifest.scope import parse_creation_spec
+from app_manifest.scope import render_pass_scope_file
 from app_manifest.scope import render_scope_file
 from app_manifest.scope import with_diff_against_base
 from app_manifest.selection import render_selection
@@ -138,8 +141,63 @@ def _app_scope(repo_root: Path, manifest_path: Path) -> CreationScope:
     return compute_app_scope(repo_root, resolved_manifest_path, manifest)
 
 
+@app_manifest_cli.command("pass-scope")
+@click.option(
+    "--creation",
+    "creation_specs",
+    multiple=True,
+    required=True,
+    help="A creation the pass covers, as <type>:<name> (repeatable): app:<registered name or package>, "
+    "skill:<directory>, service:<package>, or shared:<path under .agents/shared>.",
+)
+@_repo_root_option
+@click.option(
+    "--diff-base",
+    "diff_base",
+    default=None,
+    help="A git ref to diff against; the file then splits the changes into those some creation's "
+    "footprint accounts for and those none does.",
+)
+@click.option(
+    "--diff-ref",
+    "diff_ref",
+    default=None,
+    help="The ref the diff runs to (default HEAD); only meaningful with --diff-base.",
+)
+@click.option(
+    "--out",
+    "out_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Write the pass scope file here (parent directories are created); default: stdout.",
+)
+def pass_scope(
+    creation_specs: tuple[str, ...],
+    repo_root: Path | None,
+    diff_base: str | None,
+    diff_ref: str | None,
+    out_path: Path | None,
+) -> None:
+    """Write the scope file for a harden pass: every creation's footprint, and the diff against all of them."""
+    if diff_ref is not None and diff_base is None:
+        raise click.UsageError("--diff-ref only says where a --diff-base diff runs to; pass both")
+    try:
+        scope = compute_pass_scope(
+            _resolved_repo_root(repo_root),
+            [parse_creation_spec(spec) for spec in creation_specs],
+            diff_base,
+            diff_ref if diff_ref is not None else "HEAD",
+        )
+    except AppManifestError as e:
+        raise click.ClickException(str(e)) from e
+    _emit_rendered(render_pass_scope_file(scope), out_path)
+
+
 def _emit_scope_file(scope: CreationScope, out_path: Path | None) -> None:
-    rendered = render_scope_file(scope)
+    _emit_rendered(render_scope_file(scope), out_path)
+
+
+def _emit_rendered(rendered: str, out_path: Path | None) -> None:
     if out_path is None:
         click.echo(rendered, nl=False)
         return

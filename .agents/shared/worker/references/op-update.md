@@ -49,12 +49,13 @@ Read the task body for which of the two handoff shapes you were given:
   Verify and harden it -- **do not re-implement it**, and do not redesign the
   approved shape.
 
-Either way, verify per `type-app.md` and `web-frontend-testing.md`, then report
-`done` (or a mid-flight `question`, or `stuck`) with a body that tells the lead
-what landed:
+Either way, verify each creation in the pass per its own `type-<TYPE>.md` --
+the apps per `type-app.md` and `web-frontend-testing.md` -- then report `done`
+(or a mid-flight `question`, or `stuck`) with a body that tells the lead what
+landed:
 
 ```
-Hardened <app> on branch `<branch>`.
+Hardened <every creation the pass covers> on branch `<branch>`.
 - Change: <one-sentence>
 - Frontend / backend: <which, and the files touched>
 - Bundles built: <the static/ path of every bundle you built, all three when the shared library changed>
@@ -84,7 +85,8 @@ per `.agents/shared/worker/references/update-vs-create-new.md` (default to in-pl
 only split when the gap has a concrete standalone use case). Other creations
 update in place.
 
-Propose an outline. For a **skill**, the outline contents are defined in
+Propose one outline covering every creation in the pass. For a **skill**, the
+outline contents are defined in
 `.agents/shared/worker/references/skill-outline-fields.md`; add the update decision
 (update-in-place vs. new sibling). For an **app** (or a service), the
 outline is the decision, what changes, and the routes/scenarios affected. Write a
@@ -176,8 +178,13 @@ Updated app or service `<name>`:
 ```
 
 The `References registered` and `Outside footprint` lines come from the scope
-file (`harden-creation.md`); a creation with no footprint writes `none` for
-both.
+file (`harden-creation.md`).
+
+In a pass over several creations, write one block per creation, in the order
+the task lists them; the lines about the pass as a whole (the scenarios and tests
+run, `Outside footprint`, which the scope file judges against every creation at
+once, `Undeclared couplings`, `Flaky tests`) may instead come once, after the
+last block.
 
 Push it and stop. On approval, emit a `name: done` terminal report. In the
 committed path a clean verification may produce no new worker commits -- that is

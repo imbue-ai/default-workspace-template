@@ -15,6 +15,7 @@ import pytest
 from app_manifest.manifest import MANIFEST_FILENAME, load_manifest
 from app_manifest.primitives import RESERVED_APP_NAMES
 from app_manifest.scope import APP_CONVENTIONS
+from app_manifest.scope import SERVICE_CONVENTIONS
 from app_manifest.scope import SKILL_CONVENTIONS
 from app_manifest.scope import compute_app_scope
 from oom_priority import bands
@@ -174,7 +175,9 @@ def test_every_manifest_validates_against_the_repo_root(manifest_path: Path) -> 
 
 
 @pytest.mark.parametrize(
-    "convention_path", sorted(set(APP_CONVENTIONS + SKILL_CONVENTIONS)), ids=str
+    "convention_path",
+    sorted(set(APP_CONVENTIONS + SKILL_CONVENTIONS + SERVICE_CONVENTIONS)),
+    ids=str,
 )
 def test_every_convention_doc_the_scope_file_names_exists(convention_path: str) -> None:
     # The scope file points every review pass at these; a renamed doc would otherwise

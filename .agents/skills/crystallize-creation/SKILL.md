@@ -31,8 +31,8 @@ The type drives two things: which **gates** the worker emits (skill →
 `outline-approval` then `final-creation`; app → none, since the user
 confirmed the live site already) and the **go-live** step after merge (skill →
 post-crystallize migration; app → refresh the window). The worker reads the
-type from the task file and loads `type-<TYPE>.md`; you proxy
-whatever gates it emits.
+type from the task file's `creations` and loads `type-<TYPE>.md`; you
+proxy whatever gates it emits.
 
 ## When to invoke (skill, standalone)
 
@@ -80,21 +80,20 @@ echo "$TICKET_ID" > data/.tasks/harden/crystallize-$NAME/ticket_id.txt
 
 ## Step 3: Write the task file
 
-The frontmatter carries `operation: crystallize`, the `type`,
-`finish_report_path` (the report destination the lead polls; see
-`.agents/shared/references/worker-reporting.md`), `scope_file` (where the worker
-writes the creation's computed footprint at the start of its run -- you name the
+The frontmatter carries `operation: crystallize`, `creations` (the one
+creation as `<type>:<name>`: `skill:$NAME`, `app:<app name>`, or
+`service:<package>`), `finish_report_path` (the report destination the lead
+polls; see `.agents/shared/references/worker-reporting.md`), `scope_file`
+(where the worker writes the creation's computed footprint -- you name the
 path, the worker creates the file), `diff_base` (the commit before the work
 being hardened began: your `HEAD` at dispatch for a skill reconstructed from
-the transcript; for `type: app`, the parent of the commit that added the app's
+the transcript; for an app, the parent of the commit that added the app's
 manifest, `$(git rev-parse "$(git log --diff-filter=A --format=%H -1 --
 system/apps/<package>/app.toml)^")`, so the scope file's diff covers the
-scaffold and everything built on it), and an optional `source_artifacts_dir`.
-For a `type: service` task, which has no footprint, omit `scope_file` and set
-`diff_base` to the parent of the commit that added the service's
-`system/supervisord.conf.d/<name>.conf`, the same way; `diff_base` goes on
-every task, since the worker's test gate selects its suites from what changed
-since it. The body *describes* the
+scaffold and everything built on it; for a service, the parent of the commit
+that added its `system/supervisord.conf.d/<name>.conf`, the same way), and an
+optional `source_artifacts_dir`. The worker's test gate also selects its suites
+from what changed since `diff_base`. The body *describes* the
 work and -- for a skill reconstructed from the transcript -- anchors the
 worker's search with verbatim quotes (the user's original ask, key decisions,
 tool outputs that defined the recipe). Without anchors the worker scans the
@@ -110,7 +109,7 @@ finish_report_path: data/.tasks/harden/crystallize-$NAME/reports/report.md
 scope_file: data/.tasks/harden/crystallize-$NAME/scope.json
 diff_base: $(git rev-parse HEAD)
 operation: crystallize
-type: skill
+creations: skill:$NAME
 FRONTMATTER_EOF
 # If a wrapper staged input files, add this line inside the frontmatter:
 #   source_artifacts_dir: data/.tasks/<calling-skill>/$NAME/
@@ -138,8 +137,8 @@ after. Describe the contract; do not prescribe subcommands or surfaces.>
 
 ## What to do
 Read and follow `.agents/shared/worker/SKILL.md` from your own checkout. It
-reads `operation` and `type` from this frontmatter and follows the matching
-references. When you reach a gate or terminal status, push a report to the lead
+reads `operation` and `creations` from this frontmatter and follows the
+matching references. When you reach a gate or terminal status, push a report to the lead
 per its reporting protocol; the destination is `finish_report_path`.
 Whether to split this pass across sibling sub-workers is your own call, per the
 harden contract's "Splitting the pass across sub-workers".
@@ -161,10 +160,11 @@ BODY_EOF
 } > data/.tasks/harden/crystallize-$NAME/task.md
 ```
 
-Set `type: app` (and adjust the body to point at the already-built lib)
-when invoked by `build-app`. Fill in the real `## What was done` and
-`## Anchors` -- do not leave the placeholders. If frontmatter sets
-`source_artifacts_dir`, Step 4 pushes that directory to the worker too.
+Set `creations: app:<app name>` (and adjust the body to point at the
+already-built lib) when invoked by `build-app`. Fill in the real
+`## What was done` and `## Anchors` -- do not leave the placeholders. If
+frontmatter sets `source_artifacts_dir`, Step 4 pushes that directory to the
+worker too.
 
 ## Step 4: Launch the worker
 
@@ -242,8 +242,12 @@ sub-workers it split its pass across are already gone with it):
   introduced, restart any caching service, and close the ticket recorded in
   `data/.tasks/harden/crystallize-$NAME/ticket_id.txt`. Commit consumer changes as a
   separate commit.
-- **service**: refresh its window so the user sees the merged build
-  (`uv run --no-sync workspace-layout refresh --app <service-name>`), then close the ticket.
+- **app**: refresh its window so the user sees the merged build
+  (`uv run --no-sync workspace-layout refresh --app <app-name>`), then close
+  the ticket.
+- **service**: it has no window -- restart its programs (`supervisorctl
+  restart <program>`): the one named after the package (`host_backup` runs as
+  `host-backup`) and any `<program>-<role>` ones. Then close the ticket.
 
 ## Guidelines
 

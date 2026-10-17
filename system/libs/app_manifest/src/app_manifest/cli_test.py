@@ -14,6 +14,7 @@ from app_manifest.testing import run_git
 from app_manifest.testing import selection_lock
 from app_manifest.testing import write_app_manifest
 from app_manifest.testing import write_repo_file
+from app_manifest.testing import write_supervisord_dropin
 
 
 def _run_cli(arguments: list[str]) -> Result:
@@ -514,3 +515,68 @@ def test_select_tests_needs_a_diff_or_paths(tmp_path: Path) -> None:
     assert neither.exit_code != 0
     assert "--diff-base" in neither.output
     assert ref_without_base.exit_code != 0
+
+
+def test_pass_scope_judges_the_diff_against_every_creation_in_the_pass(tmp_path: Path) -> None:
+    """A change spanning an app, an unrelated skill, a service, and a shared reference is all
+    the pass's; only a file no creation accounts for is outside, and the service owns its
+    programs by name."""
+    build_news_workspace(tmp_path)
+    write_repo_file(tmp_path, ".agents/skills/digest/SKILL.md", "# digest\n")
+    write_repo_file(tmp_path, ".agents/shared/references/digest.md", "# digest\n")
+    write_repo_file(tmp_path, "system/services/share_gateway/runner.py", "PORT = 1\n")
+    write_supervisord_dropin(tmp_path, "share-gateway", ("program:share-gateway", "program:share-gateway-relay"))
+    write_repo_file(tmp_path, "docs/system/unrelated.md", "# unrelated\n")
+    init_git_repository(tmp_path)
+    base_sha = commit_everything(tmp_path, "base")
+    write_repo_file(tmp_path, "system/apps/news/runner.py", "ROUTES = ('/api/entries',)\n")
+    write_repo_file(tmp_path, ".agents/skills/digest/SKILL.md", "# digest, edited\n")
+    write_repo_file(tmp_path, ".agents/shared/references/digest.md", "# digest, edited\n")
+    write_repo_file(tmp_path, "system/services/share_gateway/runner.py", "PORT = 2\n")
+    write_supervisord_dropin(tmp_path, "share-gateway", ("program:share-gateway",))
+    write_repo_file(tmp_path, "docs/system/unrelated.md", "# unrelated, edited\n")
+    commit_everything(tmp_path, "the change under review")
+
+    result = _run_cli(
+        [
+            "pass-scope",
+            "--creation",
+            "app:news",
+            "--creation",
+            "skill:digest",
+            "--creation",
+            "service:share_gateway",
+            "--creation",
+            "shared:references/digest.md",
+            "--repo-root",
+            str(tmp_path),
+            "--diff-base",
+            base_sha,
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    scope = json.loads(result.output)
+    assert [creation["creation"]["type"] for creation in scope["creations"]] == ["app", "skill", "service", "skill"]
+    service = scope["creations"][2]
+    assert service["primary"] == ["system/services/share_gateway/"]
+    assert service["wiring"] == [
+        {"path": "system/supervisord.conf.d/share-gateway.conf", "sections": ["program:share-gateway"]}
+    ]
+    assert sorted(scope["diff"]["inside_footprint"]) == [
+        ".agents/shared/references/digest.md",
+        ".agents/skills/digest/SKILL.md",
+        "system/apps/news/runner.py",
+        "system/services/share_gateway/runner.py",
+        "system/supervisord.conf.d/share-gateway.conf",
+    ]
+    assert scope["diff"]["outside_footprint"] == ["docs/system/unrelated.md"]
+
+
+def test_pass_scope_refuses_a_creation_that_is_not_type_and_name(tmp_path: Path) -> None:
+    build_news_workspace(tmp_path)
+
+    result = _run_cli(["pass-scope", "--creation", "widget:news", "--repo-root", str(tmp_path)])
+
+    assert result.exit_code != 0
+    assert "widget:news" in result.output

@@ -15,11 +15,15 @@ from app_manifest.scope import CreationScope
 from app_manifest.scope import CreationType
 from app_manifest.scope import ReferenceKind
 from app_manifest.scope import compute_app_scope
+from app_manifest.scope import compute_creation_scope
+from app_manifest.scope import compute_pass_scope
 from app_manifest.scope import compute_skill_scope
 from app_manifest.scope import find_referencing_manifests
 from app_manifest.scope import find_wiring_sections
+from app_manifest.scope import parse_creation_spec
 from app_manifest.scope import reference_kind_for_path
 from app_manifest.scope import render_scope_file
+from app_manifest.scope import split_against_creations
 from app_manifest.scope import with_diff_against_base
 from app_manifest.testing import NEWS_MANIFEST
 from app_manifest.testing import build_news_workspace
@@ -610,3 +614,89 @@ def test_the_diff_can_run_to_a_ref_other_than_head_so_a_merge_answers_for_each_s
     # The referenced script the release changed is inside; the doc the app never claimed is not.
     assert update_side.diff.inside_footprint == ("system/scripts/run_news.sh",)
     assert update_side.diff.outside_footprint == ("docs/system/style_guide.md",)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        "news",
+        "skill:",
+        "widget:news",
+        "skill:digest/scripts",
+        "shared:../skills/digest",
+        "app:.",
+        "shared:references/",
+    ],
+)
+def test_a_creation_spec_is_refused_unless_it_is_type_and_name_inside_its_directory(spec: str) -> None:
+    with pytest.raises(ScopeComputationError, match="is not <type>:<name>"):
+        parse_creation_spec(spec)
+
+
+def test_an_app_creation_is_found_by_its_registered_name_or_scoped_by_its_directory(
+    tmp_path: Path,
+) -> None:
+    """A lead names an app by its registered name, which need not be its package's; an app
+    directory with no manifest yet is scoped by its directory and the programs named after it."""
+    build_news_workspace(tmp_path)
+    write_app_manifest(
+        tmp_path,
+        "daily_digest",
+        'name = "daily-digest"\ndisplay_name = "Daily digest"\nicon = "icon.svg"\n',
+        is_icon_written=True,
+    )
+    write_repo_file(tmp_path, "system/apps/road_map/runner.py", "ROUTES = ()\n")
+    write_supervisord_dropin(
+        tmp_path, "road-map", ("program:road-map", "program:road-map-sync", "program:road-mapper")
+    )
+
+    by_name = compute_creation_scope(tmp_path, parse_creation_spec("app:daily-digest"))
+    unmanifested = compute_creation_scope(tmp_path, parse_creation_spec("app:road_map"))
+
+    assert by_name.creation.type is CreationType.APP
+    assert by_name.creation.package == "daily_digest"
+    assert by_name.creation.manifest == "system/apps/daily_digest/app.toml"
+    assert list(by_name.primary) == ["system/apps/daily_digest/"]
+    assert unmanifested.creation.type is CreationType.APP
+    assert unmanifested.creation.manifest is None
+    assert list(unmanifested.primary) == ["system/apps/road_map/"]
+    assert [(wiring.path, list(wiring.sections)) for wiring in unmanifested.wiring] == [
+        ("system/supervisord.conf.d/road-map.conf", ["program:road-map", "program:road-map-sync"])
+    ]
+
+
+def test_a_pass_diff_counts_a_file_one_creation_excludes_when_another_owns_it(tmp_path: Path) -> None:
+    """A file is the pass's when any creation's footprint covers it and that creation does not
+    exclude it; a file outside every footprint that some creation excludes is in neither list."""
+    build_news_workspace(tmp_path)
+    digest_manifest_path = write_app_manifest(
+        tmp_path,
+        "daily_digest",
+        'name = "daily-digest"\ndisplay_name = "Daily digest"\nicon = "icon.svg"\n\n'
+        '[scope]\nexclude = ["system/apps/news/runner.py"]\n',
+        is_icon_written=True,
+    )
+    digest_scope = compute_app_scope(
+        tmp_path, digest_manifest_path, load_manifest(digest_manifest_path, repo_root=tmp_path)
+    )
+
+    inside, outside = split_against_creations(
+        [
+            RepoRelativePath("system/apps/news/runner.py"),
+            RepoRelativePath("system/apps/daily_digest/runner.py"),
+            RepoRelativePath("docs/generated/api.md"),
+            RepoRelativePath("docs/system/unrelated.md"),
+        ],
+        (_news_app_scope(tmp_path), digest_scope),
+    )
+
+    assert inside == ("system/apps/news/runner.py", "system/apps/daily_digest/runner.py")
+    assert outside == ("docs/system/unrelated.md",)
+
+
+def test_a_pass_that_names_a_creation_twice_is_refused(tmp_path: Path) -> None:
+    build_news_workspace(tmp_path)
+    news = parse_creation_spec("app:news")
+
+    with pytest.raises(ScopeComputationError, match="names app:news more than once"):
+        compute_pass_scope(tmp_path, [news, parse_creation_spec("skill:news-refresh"), news], None, "HEAD")

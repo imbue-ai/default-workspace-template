@@ -85,9 +85,13 @@ The models behind a workspace app's two descriptions:
   app's stale reference does not block every other creation's footprint).
   `compute_skill_scope` refuses a path that does not exist, because git ignores a
   pathspec that matches nothing and a mistyped path would read as "unchanged".
-  `BUILT_IN_EXCLUDES`, `APP_CONVENTIONS`, and `SKILL_CONVENTIONS` are the fixed
-  lists. Exclude matching is `pathspec` gitignore syntax; a failing git command
-  raises `ScopeComputationError` rather than reporting an empty diff.
+  `parse_creation_spec`, `compute_creation_scope`, `compute_pass_scope`, and
+  `render_pass_scope_file` build the pass scope file behind `app-manifest
+  pass-scope`, and `split_against_creations` is the diff split both scope files
+  share. `BUILT_IN_EXCLUDES`, `APP_CONVENTIONS`, `SKILL_CONVENTIONS`, and
+  `SERVICE_CONVENTIONS` are the fixed lists. Exclude matching is `pathspec`
+  gitignore syntax; a failing git command raises `ScopeComputationError` rather
+  than reporting an empty diff.
 - `app_manifest.selection` and `app_manifest.workspace_graph`: the test
   selection behind `app-manifest select-tests` (below). `workspace_graph` reads
   what the workspace declares about its packages: the uv workspace members and
@@ -147,8 +151,9 @@ goes to stdout; with it, the parent directories are created.
 }
 ```
 
-- `creation.type` is `app` or `skill`; a skill's `package` and `manifest` are
-  null and its `name` is the directory's name.
+- `creation.type` is `app` or `skill` (or `service`, from `pass-scope` below); a
+  skill's `package` and `manifest` are null and its `name` is the directory's
+  name.
 - `primary` is what the creation is: the app's package directory, or the
   `--for-path` path. A directory ends in `/`.
 - `wiring` is the supervisord sections the app owns: its own
@@ -185,6 +190,24 @@ goes to stdout; with it, the parent directories are created.
   the changed files under none of those. A file matched by `exclude` is in
   neither. A non-empty `outside_footprint` means either a missing reference or a
   change that does not belong on the branch.
+
+`app-manifest pass-scope` writes the scope file for a harden pass, which covers
+every creation one change touched:
+
+    app-manifest pass-scope --creation <type>:<name> [--creation ...] [--repo-root DIR] [--diff-base REF [--diff-ref REF]] [--out FILE]
+
+Each `--creation` is `app:<registered name or package directory>`,
+`skill:<directory under .agents/skills>`, `service:<package under
+system/services>`, or `shared:<path under .agents/shared>` (a shared script or
+reference, scoped as `--for-path` scopes it). The file is
+`{"creations": [...], "diff": ...}`: one entry per creation, each the scope
+`footprint` writes with its `diff` null, and one `diff` for the pass, whose
+`inside_footprint` is every changed file some creation's footprint accounts
+for (and that creation does not exclude) and whose `outside_footprint` is
+every changed file none does. A service has `type` `service`, its directory as
+`primary`, and as `wiring` the program named after its package (`host_backup`
+runs as `host-backup`) and every `<name>-<role>` one; an app directory with no
+`app.toml` yet is scoped the same way.
 
 `app-manifest references --for-path <path>` prints one JSON object per line
 (`app`, `manifest`, `path`, `note`) for every app whose manifest claims that

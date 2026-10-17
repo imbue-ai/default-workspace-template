@@ -1,11 +1,14 @@
 import configparser
 import json
+import re
 import subprocess
 import time
+from collections.abc import Callable
 from collections.abc import Sequence
 from enum import auto
 from pathlib import Path
 from typing import Final
+from typing import assert_never
 
 import pathspec
 from imbue.imbue_common.enums import LowerCaseStrEnum
@@ -61,6 +64,18 @@ SKILL_CONVENTIONS: Final[tuple[RepoRelativePath, ...]] = (
     RepoRelativePath("docs/system/style_guide.md"),
 )
 
+SERVICE_CONVENTIONS: Final[tuple[RepoRelativePath, ...]] = (
+    RepoRelativePath("system/services/README.md"),
+    RepoRelativePath(".agents/shared/worker/references/type-service.md"),
+    RepoRelativePath("docs/system/style_guide.md"),
+)
+
+_SKILLS_DIRECTORY: Final[str] = ".agents/skills"
+# One segment of a creation's name: a directory or file name, never "." or "..".
+_CREATION_NAME_SEGMENT: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_SHARED_DIRECTORY: Final[str] = ".agents/shared"
+_SERVICES_DIRECTORY: Final[str] = "system/services"
+
 # A git command that has not finished by the hard timeout is broken rather than slow; one that
 # takes longer than the warning threshold is a repository worth looking at before it breaks.
 _GIT_HARD_TIMEOUT_SECONDS: Final[float] = 60.0
@@ -75,6 +90,7 @@ class CreationType(LowerCaseStrEnum):
 
     APP = auto()
     SKILL = auto()
+    SERVICE = auto()
 
 
 class ReferenceKind(LowerCaseStrEnum):
@@ -100,10 +116,14 @@ _REFERENCE_KIND_BY_PREFIX: Final[tuple[tuple[str, ReferenceKind], ...]] = (
 class CreationIdentity(FrozenModel):
     """Which creation a scope file is about."""
 
-    type: CreationType = Field(description="app or skill")
-    name: NonEmptyStr = Field(description="The app's registered name, or the skill's directory name")
-    package: NonEmptyStr | None = Field(description="The app's package directory name; absent for a skill")
-    manifest: RepoRelativePath | None = Field(description="The app's manifest; absent for a skill")
+    type: CreationType = Field(description="app, skill, or service")
+    name: NonEmptyStr = Field(description="The app's registered name, or the skill's or service's directory name")
+    package: NonEmptyStr | None = Field(
+        description="The app's or service's package directory name; absent for a skill"
+    )
+    manifest: RepoRelativePath | None = Field(
+        description="The app's manifest; absent for a skill, a service, or an app that has none"
+    )
 
 
 class WiringSection(FrozenModel):
@@ -191,6 +211,26 @@ def find_wiring_sections(repo_root: Path, manifest: AppManifest) -> tuple[Wiring
     sidecar_prefix = f"program:{manifest.name}-"
     declared_sections = [f"program:{program}" for program in manifest.wiring.programs]
 
+    wiring, defined_sections = _owned_wiring_sections(
+        repo_root,
+        lambda section: section == own_section
+        or section.startswith(sidecar_prefix)
+        or section in declared_sections,
+    )
+    for declared_section in declared_sections:
+        if declared_section not in defined_sections:
+            raise ScopeComputationError(
+                f"manifest {manifest.name} declares wiring program {declared_section!r}, which "
+                f"{repo_root / _SUPERVISORD_CONF} and its drop-ins do not define"
+            )
+    return wiring
+
+
+def _owned_wiring_sections(
+    repo_root: Path, is_owned: Callable[[str], bool]
+) -> tuple[tuple[WiringSection, ...], frozenset[str]]:
+    """The sections ``is_owned`` accepts, attributed to the file each is written in, and
+    every section the main config and its drop-ins define."""
     wiring: list[WiringSection] = []
     defined_sections: set[str] = set()
     for conf_path in _supervisord_conf_paths(repo_root):
@@ -201,23 +241,28 @@ def find_wiring_sections(repo_root: Path, manifest: AppManifest) -> tuple[Wiring
             raise ScopeComputationError(f"cannot parse {repo_root / conf_path}: {e}") from e
         sections = parser.sections()
         defined_sections.update(sections)
-        owned_sections = tuple(
-            NonEmptyStr(section)
-            for section in sections
-            if section == own_section
-            or section.startswith(sidecar_prefix)
-            or section in declared_sections
-        )
+        owned_sections = tuple(NonEmptyStr(section) for section in sections if is_owned(section))
         if owned_sections:
             wiring.append(WiringSection(path=conf_path, sections=owned_sections))
+    return tuple(wiring), frozenset(defined_sections)
 
-    for declared_section in declared_sections:
-        if declared_section not in defined_sections:
-            raise ScopeComputationError(
-                f"manifest {manifest.name} declares wiring program {declared_section!r}, which "
-                f"{repo_root / _SUPERVISORD_CONF} and its drop-ins do not define"
-            )
-    return tuple(wiring)
+
+@pure
+def program_name_for_package(package: str) -> str:
+    """The supervisord program a creation with no manifest runs as: its package directory's
+    name with underscores as hyphens (``host_backup`` runs as ``host-backup``)."""
+    return package.replace("_", "-")
+
+
+def find_named_wiring_sections(repo_root: Path, program: str) -> tuple[WiringSection, ...]:
+    """The supervisord blocks a creation with no manifest owns by name: the program named
+    ``program`` and every ``<program>-<role>`` one."""
+    own_section = f"program:{program}"
+    wiring, _ = _owned_wiring_sections(
+        repo_root,
+        lambda section: section == own_section or section.startswith(f"{own_section}-"),
+    )
+    return wiring
 
 
 def _supervisord_conf_paths(repo_root: Path) -> tuple[RepoRelativePath, ...]:
@@ -513,6 +558,47 @@ def read_file_at_revision(repo_root: Path, revision: str, path: RepoRelativePath
     return _run_git(repo_root, ("show", f"{revision}:{path}"))
 
 
+@pure
+def split_against_creations(
+    changed_files: Sequence[RepoRelativePath], creations: Sequence[CreationScope]
+) -> tuple[tuple[RepoRelativePath, ...], tuple[RepoRelativePath, ...]]:
+    """The changed files some creation's footprint accounts for, and those none does.
+
+    A file is inside when a creation's footprint covers it and that creation does not
+    exclude it. Otherwise a file the built-ins or any creation excludes is in neither list.
+    """
+    built_in_spec = pathspec.PathSpec.from_lines(_EXCLUDE_PATTERN_STYLE, BUILT_IN_EXCLUDES)
+    exclude_specs = [
+        (creation, pathspec.PathSpec.from_lines(_EXCLUDE_PATTERN_STYLE, creation.exclude))
+        for creation in creations
+    ]
+    inside: list[RepoRelativePath] = []
+    outside: list[RepoRelativePath] = []
+    for changed_file in changed_files:
+        if built_in_spec.match_file(changed_file):
+            continue
+        if any(
+            is_inside_footprint(changed_file, creation) and not exclude_spec.match_file(changed_file)
+            for creation, exclude_spec in exclude_specs
+        ):
+            inside.append(changed_file)
+        elif not any(exclude_spec.match_file(changed_file) for _, exclude_spec in exclude_specs):
+            outside.append(changed_file)
+    return tuple(inside), tuple(outside)
+
+
+@pure
+def _summarize_diff(changed: ChangedFiles, creations: Sequence[CreationScope]) -> DiffSummary:
+    inside_footprint, outside_footprint = split_against_creations(changed.files, creations)
+    return DiffSummary(
+        base=changed.base,
+        ref=changed.ref,
+        files=changed.files,
+        inside_footprint=inside_footprint,
+        outside_footprint=outside_footprint,
+    )
+
+
 def with_diff_against_base(
     scope: CreationScope, repo_root: Path, diff_base: str, diff_ref: str
 ) -> CreationScope:
@@ -521,28 +607,149 @@ def with_diff_against_base(
     A ref other than HEAD lets one tree answer for a range that does not end at it, such as
     what a merge commit's first parent changed since the fork point.
     """
-    changed = list_changed_files(repo_root, diff_base, diff_ref)
-    exclude_spec = pathspec.PathSpec.from_lines(_EXCLUDE_PATTERN_STYLE, scope.exclude)
-    inside_footprint: list[RepoRelativePath] = []
-    outside_footprint: list[RepoRelativePath] = []
-    for changed_file in changed.files:
-        if exclude_spec.match_file(changed_file):
-            continue
-        if is_inside_footprint(changed_file, scope):
-            inside_footprint.append(changed_file)
-        else:
-            outside_footprint.append(changed_file)
-    diff_summary = DiffSummary(
-        base=changed.base,
-        ref=changed.ref,
-        files=changed.files,
-        inside_footprint=tuple(inside_footprint),
-        outside_footprint=tuple(outside_footprint),
-    )
+    diff_summary = _summarize_diff(list_changed_files(repo_root, diff_base, diff_ref), (scope,))
     return scope.model_copy_update(to_update(scope.field_ref().diff, diff_summary))
 
 
 @pure
 def render_scope_file(scope: CreationScope) -> str:
     """The scope file's JSON text, indented and newline-terminated."""
+    return f"{json.dumps(scope.model_dump(mode='json'), indent=2)}\n"
+
+
+def compute_service_scope(repo_root: Path, package: str) -> CreationScope:
+    """The footprint of the standalone service in ``system/services/<package>/``: its directory
+    and the programs named after it, with no diff attached yet."""
+    return _compute_unmanifested_scope(
+        repo_root, CreationType.SERVICE, f"{_SERVICES_DIRECTORY}/{package}", SERVICE_CONVENTIONS
+    )
+
+
+def _compute_unmanifested_scope(
+    repo_root: Path,
+    creation_type: CreationType,
+    directory: str,
+    conventions: tuple[RepoRelativePath, ...],
+) -> CreationScope:
+    """Raises ScopeComputationError when ``directory`` is missing, for the reason
+    ``compute_skill_scope`` gives."""
+    repo_root = repo_root.resolve()
+    if not (repo_root / directory).is_dir():
+        raise ScopeComputationError(f"{directory!r} is not a directory under {repo_root}")
+    package = Path(directory).name
+    return CreationScope(
+        creation=CreationIdentity(
+            type=creation_type, name=NonEmptyStr(package), package=NonEmptyStr(package), manifest=None
+        ),
+        primary=(RepoRelativePath(f"{directory}/"),),
+        wiring=find_named_wiring_sections(repo_root, program_name_for_package(package)),
+        references=(),
+        context=(),
+        conventions=conventions,
+        exclude=BUILT_IN_EXCLUDES,
+        diff=None,
+    )
+
+
+class CreationSpecType(LowerCaseStrEnum):
+    """What a lead names a creation as; a shared script or reference is scoped as a skill is."""
+
+    APP = auto()
+    SKILL = auto()
+    SERVICE = auto()
+    SHARED = auto()
+
+
+class CreationSpec(FrozenModel):
+    """One creation a pass covers, as a lead names it: ``<type>:<name>``."""
+
+    type: CreationSpecType = Field(description="app, skill, service, or shared")
+    name: NonEmptyStr = Field(
+        description="An app's registered name or package directory; a skill's or service's directory "
+        "name; a shared script's or reference's path under .agents/shared"
+    )
+
+
+@pure
+def parse_creation_spec(spec: str) -> CreationSpec:
+    """Read ``<type>:<name>``; raises ScopeComputationError on any other shape. A name is a
+    directory or file name; only a shared creation's is a path, of such names."""
+    type_text, separator, name = spec.partition(":")
+    types = [member.value for member in CreationSpecType]
+    segments = name.split("/")
+    is_path_allowed = type_text == CreationSpecType.SHARED
+    if (
+        not separator
+        or type_text not in types
+        or (len(segments) > 1 and not is_path_allowed)
+        or not all(_CREATION_NAME_SEGMENT.fullmatch(segment) for segment in segments)
+    ):
+        raise ScopeComputationError(f"{spec!r} is not <type>:<name> with a type of {', '.join(types)}")
+    return CreationSpec(type=CreationSpecType(type_text), name=NonEmptyStr(name))
+
+
+def compute_creation_scope(repo_root: Path, spec: CreationSpec) -> CreationScope:
+    """The footprint of the creation ``spec`` names, with no diff attached yet.
+
+    An app is found by its package directory, then by its registered name. An app directory
+    with no manifest yet is scoped as a service is: its directory and the programs named
+    after it.
+    """
+    repo_root = repo_root.resolve()
+    match spec.type:
+        case CreationSpecType.SKILL:
+            return compute_skill_scope(repo_root, RepoRelativePath(f"{_SKILLS_DIRECTORY}/{spec.name}"))
+        case CreationSpecType.SHARED:
+            return compute_skill_scope(repo_root, RepoRelativePath(f"{_SHARED_DIRECTORY}/{spec.name}"))
+        case CreationSpecType.SERVICE:
+            return compute_service_scope(repo_root, spec.name)
+        case CreationSpecType.APP:
+            return _compute_named_app_scope(repo_root, spec.name)
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def _compute_named_app_scope(repo_root: Path, name: str) -> CreationScope:
+    manifest_path = repo_root.joinpath(*APPS_DIRECTORY_PARTS, name, MANIFEST_FILENAME)
+    if manifest_path.is_file():
+        return compute_app_scope(repo_root, manifest_path, load_manifest(manifest_path, repo_root=repo_root))
+    for loaded in load_app_manifests(repo_root):
+        if loaded.manifest.name == name:
+            return compute_app_scope(repo_root, loaded.manifest_path, loaded.manifest)
+    return _compute_unmanifested_scope(
+        repo_root, CreationType.APP, "/".join((*APPS_DIRECTORY_PARTS, name)), APP_CONVENTIONS
+    )
+
+
+class PassScope(FrozenModel):
+    """Every creation a harden pass covers, and the pass's diff judged against all of them."""
+
+    creations: tuple[CreationScope, ...] = Field(description="Each creation's footprint, without a diff")
+    diff: DiffSummary | None = Field(
+        description="The diff against a base, split by whether any creation's footprint accounts for each "
+        "file, when the caller asks for one"
+    )
+
+
+def compute_pass_scope(
+    repo_root: Path, specs: Sequence[CreationSpec], diff_base: str | None, diff_ref: str
+) -> PassScope:
+    """The scope of a pass over ``specs``, with its diff when ``diff_base`` is given."""
+    if not specs:
+        raise ScopeComputationError("a pass covers at least one creation")
+    repeated = sorted({f"{spec.type}:{spec.name}" for spec in specs if specs.count(spec) > 1})
+    if repeated:
+        raise ScopeComputationError(f"a pass names {', '.join(repeated)} more than once")
+    creations = tuple(compute_creation_scope(repo_root, spec) for spec in specs)
+    if diff_base is None:
+        return PassScope(creations=creations, diff=None)
+    return PassScope(
+        creations=creations,
+        diff=_summarize_diff(list_changed_files(repo_root.resolve(), diff_base, diff_ref), creations),
+    )
+
+
+@pure
+def render_pass_scope_file(scope: PassScope) -> str:
+    """The pass scope file's JSON text, indented and newline-terminated."""
     return f"{json.dumps(scope.model_dump(mode='json'), indent=2)}\n"

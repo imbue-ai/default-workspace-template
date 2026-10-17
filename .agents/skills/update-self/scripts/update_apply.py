@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import datetime
 import fcntl
+import json
 import os
 import re
 import shutil
@@ -955,6 +956,7 @@ def apply_update(
     expend: ExpendWrapper = as_expendable,
     sweep_homes: Sequence[Path],
     keep_rollback_point: bool = False,
+    pass_scope: Sequence[PassCreation] = (),
 ) -> int:
     """Land ``merge_ref`` and make the live workspace consistent with it, as one
     atomic, idempotent, rollback-on-failure motion. Returns the process exit
@@ -972,6 +974,8 @@ def apply_update(
     place and writes the rollback-point record the shell raises its notice
     from (:func:`rollback_last`, :func:`confirm_last`); any apply, with the
     flag or without, first discards the previous record's snapshots.
+    ``pass_scope`` is the harden pass the merge lands (:func:`read_pass_scope`):
+    its ordinary apps and services join the record beside the critical apps.
     """
     resolved_base = (
         base_url or os.environ.get(ENV_WORKSPACE_URL, DEFAULT_WORKSPACE_URL)
@@ -1396,6 +1400,9 @@ def apply_update(
             # touched, so the shell can offer the previous version back until a
             # person confirms the update or the next apply replaces the point.
             touched = _touched_critical_apps(plan, name_status, repo_root)
+            ride_along = _ride_along(
+                pass_scope, name_status, {name for name, _ in touched}
+            )
             write_last_good(
                 LastGoodRecord(
                     merge_sha=git_out(runner, repo_root, ["rev-parse", "HEAD"]),
@@ -1403,11 +1410,15 @@ def apply_update(
                     applied_at=now(),
                     driven_by=marker.dri_agent,
                     snapshots=list(marker.snapshots),
-                    programs=sorted({program for _, program in touched}),
-                    apps=[name for name, _ in touched],
+                    programs=sorted(
+                        {program for _, program in touched if program is not None}
+                        | set(ride_along.programs)
+                    ),
+                    apps=[name for name, _ in touched] + ride_along.apps,
                     needs_system_services_restart=_needs_system_services_restart(
                         plan, [path for _, path in name_status]
                     ),
+                    unrestarted=ride_along.unrestarted,
                 ),
                 repo_root,
             )
@@ -1577,7 +1588,7 @@ def _touched_critical_apps(
     plan: ApplyPlan,
     name_status: Sequence[tuple[str, str]],
     repo_root: Path,
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str | None]]:
     """The critical apps included in this apply's rollback: ``(name, program)``.
 
     Read off the merged tree's manifests: an app is touched when a changed path is
@@ -1587,9 +1598,11 @@ def _touched_critical_apps(
     shell's process runs changed. A frontend apply replaces every bundle, so include
     each critical owner even if that app's source was unchanged. An extra restart is
     acceptable; rollback targeting does not need to compare installed and kept source
-    stamps.
+    stamps. An app the merge added has no program once a rollback removes it, so it is
+    named with ``None`` for its program: nothing to restart or wait on.
     """
     paths = [path for _, path in name_status]
+    added_paths = {path for status, path in name_status if status.startswith("A")}
     apps_dir = repo_root / APPS_DIR
     if not apps_dir.is_dir():
         return []
@@ -1597,7 +1610,7 @@ def _touched_critical_apps(
         {bundle.app for bundle in FRONTEND_BUNDLES} if plan.frontend else set()
     )
     reinstalled_tool_directories = {tool.directory for tool in plan.app_tools}
-    touched: list[tuple[str, str]] = []
+    touched: list[tuple[str, str | None]] = []
     for directory in sorted(apps_dir.iterdir()):
         manifest_path = directory / MANIFEST_FILENAME
         if not manifest_path.is_file():
@@ -1622,11 +1635,94 @@ def _touched_critical_apps(
         )
         if not is_touched:
             continue
+        if f"{app_directory}/{MANIFEST_FILENAME}" in added_paths:
+            touched.append((name, None))
+            continue
         program = manifest.get("program")
         touched.append(
             (name, program if isinstance(program, str) and program else name)
         )
     return touched
+
+
+class PassCreation(NamedTuple):
+    """One creation of the harden pass an apply lands, as ``app-manifest pass-scope`` wrote it."""
+
+    type: str
+    name: str
+    primary: str
+    programs: tuple[str, ...]
+
+
+_PROGRAM_SECTION_PREFIX = "program:"
+# The file whose addition marks a creation the merge brought in, by type.
+_ADDED_MARKER_BY_TYPE = {"app": MANIFEST_FILENAME, "service": "pyproject.toml"}
+
+
+def read_pass_scope(path: Path) -> list[PassCreation]:
+    """The creations in a pass scope file, each with the supervisord programs its
+    footprint's wiring names. Raises ``ValueError`` on a file that is not one."""
+    try:
+        raw = json.loads(path.read_text())
+        return [
+            PassCreation(
+                type=str(entry["creation"]["type"]),
+                name=str(entry["creation"]["name"]),
+                primary=str(entry["primary"][0]),
+                programs=tuple(
+                    section.removeprefix(_PROGRAM_SECTION_PREFIX)
+                    for wiring in entry["wiring"]
+                    for section in wiring["sections"]
+                    if section.startswith(_PROGRAM_SECTION_PREFIX)
+                ),
+            )
+            for entry in raw["creations"]
+        ]
+    except (OSError, json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+        raise ValueError(f"{path} is not a pass scope file ({exc})") from exc
+
+
+class RideAlong(NamedTuple):
+    """What the rollback takes back for the pass's creations that are not critical apps."""
+
+    apps: list[str]
+    programs: list[str]
+    unrestarted: list[str]
+
+
+def _ride_along(
+    creations: Sequence[PassCreation],
+    name_status: Sequence[tuple[str, str]],
+    critical_apps: Collection[str],
+) -> RideAlong:
+    """The ordinary apps and services of the pass: the apps the notice names, the programs
+    a rollback restarts, and the creations it has no program to restart for.
+
+    The pass scope's wiring is the one account of what runs each creation, so the
+    programs come from it. A creation the merge added is removed by the rollback, so it
+    has nothing to restart; an ordinary one with no wiring (a service cron runs, say) is
+    left for the agent to restart, and the notice names it.
+    """
+    added_paths = {path for status, path in name_status if status.startswith("A")}
+    apps: list[str] = []
+    programs: list[str] = []
+    unrestarted: list[str] = []
+    for creation in creations:
+        if creation.type not in _ADDED_MARKER_BY_TYPE or creation.name in critical_apps:
+            continue
+        if creation.type == "app":
+            apps.append(creation.name)
+        is_added = (
+            f"{creation.primary.rstrip('/')}/{_ADDED_MARKER_BY_TYPE[creation.type]}"
+            in added_paths
+        )
+        if is_added:
+            continue
+        if creation.programs:
+            programs.extend(creation.programs)
+        else:
+            unrestarted.append(creation.name)
+    return RideAlong(apps=apps, programs=programs, unrestarted=unrestarted)
 
 
 # The trees a rollback cannot undo by restarting programs: the bootstrap and the
@@ -1885,6 +1981,12 @@ def _run_rollback(
                 argv, cwd=str(repo_root), capture_output=True, text=True, check=False
             )
 
+    unrestarted_note = (
+        f" {', '.join(record.unrestarted)} did not restart with it; ask your agent "
+        "to restart them."
+        if record.unrestarted
+        else ""
+    )
     if record.needs_system_services_restart:
         _finish_rollback(
             record,
@@ -1892,12 +1994,12 @@ def _run_rollback(
             "The previous version is restored, but this update also changed how the workspace "
             "starts, which only a restart of the workspace's system services finishes. Ask your "
             "agent to run "
-            f"`{SERVICES_RESTART_COMMAND}`.",
+            f"`{SERVICES_RESTART_COMMAND}`.{unrestarted_note}",
         )
         sys.stderr.write(
             "rolled back: the files are restored; the workspace's system services must be restarted "
             "to finish "
-            f"(`{SERVICES_RESTART_COMMAND}`).\n"
+            f"(`{SERVICES_RESTART_COMMAND}`).{unrestarted_note}\n"
         )
         return 0
 
@@ -1923,6 +2025,10 @@ def _run_rollback(
             ).strip()
             sys.stderr.write(f"warning: supervisorctl restart reported: {stderr}\n")
     _record_rollback_progress(record, repo_root, _ROLLBACK_PROGRESS_CHECKING)
+    # Only the critical programs gate the verdict, as they gate the apply's: an ordinary
+    # app or service that does not come back is the agent's to fix, not an emergency.
+    critical_programs = {SHELL_PROGRAM, *read_critical_programs(repo_root)}
+    waited_programs = [program for program in programs if program in critical_programs]
     app_names = [name for name in read_critical_apps(repo_root) if name in record.apps]
     unsettled = wait_settled(
         http,
@@ -1930,13 +2036,13 @@ def _run_rollback(
         runner,
         sleeper,
         shell_url=f"{resolved_base}{HEALTH_PATH}",
-        programs=sorted({SHELL_PROGRAM, *programs}),
+        programs=sorted({SHELL_PROGRAM, *waited_programs}),
         app_names=app_names,
-        require_stable_pid=bool(programs),
+        require_stable_pid=bool(waited_programs),
     )
     if unsettled is None:
         unsettled = _describe_restored_frontend_failure(
-            http, repo_root, resolved_base, sleeper, programs, app_names
+            http, repo_root, resolved_base, sleeper, waited_programs, app_names
         )
     if unsettled is not None:
         write_emergency(
@@ -1958,8 +2064,12 @@ def _run_rollback(
         sys.stderr.write(f"rollback did not restore health: {unsettled}\n")
         return 3
     refresh_workspace_view(repo_root, runner)
-    _finish_rollback(record, repo_root, "Rolled back to the previous version.")
-    sys.stderr.write("rolled back: the previous version is restored and healthy.\n")
+    _finish_rollback(
+        record, repo_root, f"Rolled back to the previous version.{unrestarted_note}"
+    )
+    sys.stderr.write(
+        f"rolled back: the previous version is restored and healthy.{unrestarted_note}\n"
+    )
     return 0
 
 

@@ -5,7 +5,7 @@ signed off on a shape in the foreground, put in the thorough, expensive effort
 to turn it into a hardened, committed, reviewed creation -- in the background,
 off the interactive path. This contract is the part that is identical across
 every operation (crystallize, update, heal) and every creation (a reusable
-skill, an app, a service, the system interface).
+skill, an app, a service).
 
 ## The premise and the bar
 
@@ -44,66 +44,59 @@ and full test suites at the end of hardening.
 
 ## The scope file
 
-Every run over a creation with a footprint -- an app with an `app.toml`, or a
-skill -- computes that footprint and writes it to the path the task
-frontmatter's `scope_file` names -- Step 1's `eval` exposes it as
-`SCOPE_FILE`, and it sits beside your task file at
+Every run computes the pass's footprint -- every creation in `CREATIONS` -- and
+writes it to `SCOPE_FILE`, beside your task file at
 `data/.tasks/harden/<slug>/scope.json`. Compute it before any other work when
-the creation already exists on disk; for a skill you are building from scratch
-(a skill `crystallize`), compute it as soon as the skill directory exists,
-since the command refuses a path that is not there:
+the creations already exist on disk; when you are building one from scratch (a
+skill `crystallize`), compute it as soon as its directory exists, since the
+command refuses a creation that is not there:
 
 ```bash
-mkdir -p "$(dirname "$SCOPE_FILE")"
-
-# TYPE app (an app with an app.toml) -- from the manifest:
-uv run app-manifest footprint system/apps/<package>/app.toml \
-    --diff-base "$DIFF_BASE" --out "$SCOPE_FILE"
-
-# TYPE skill -- by path:
-uv run app-manifest footprint --for-path .agents/skills/<name> \
+uv run app-manifest pass-scope $(printf -- '--creation %s ' $CREATIONS) \
     --diff-base "$DIFF_BASE" --out "$SCOPE_FILE"
 ```
 
 `DIFF_BASE` comes from the task frontmatter's `diff_base`: the commit the lead
 recorded at dispatch as the one *before* the work being hardened began, so the
 scope file's `diff` covers the committed change you are verifying, and -- once
-you regenerate it -- your own commits too. Fail loudly if it is unset.
+you regenerate it -- your own commits too.
 
-A creation with no manifest -- a pre-manifest app, a standalone service, the
-system interface -- has nothing to resolve: its footprint is its own directory
-plus its supervisord section, and the run carries no scope file.
-
-The file records `primary` (the creation's own directories), `wiring` (the
-supervisord program blocks that run it, in the files that declare them),
-`references` (what its manifest claims outside its directory -- a skill that
-drives it, a script, a doc), `context` (paths to read but never change),
-`conventions`, `exclude` (a hard denylist of globs), and `diff` (the branch's
-changed files, split into those inside the footprint and `outside_footprint`).
-The freshness check the lead runs before merging reads it
-(`.agents/shared/references/harden-contention.md`). Regenerate it whenever the
-footprint moves under you -- when you register a `[[references]]` entry, or
-when you add a supervisord section -- and once more immediately before your
-final report, after committing everything, so the `diff` it carries includes
-every commit you made (the diff reads commits only; an uncommitted edit is
-invisible to it).
+The file holds one entry per creation under `creations` -- its `primary` (its
+own directories), `wiring` (the supervisord program blocks that run it, in the
+files that declare them), `references` (what its manifest claims outside its
+directory -- a skill that drives it, a script, a doc), `context` (paths to read
+but never change), `conventions`, and `exclude` (a hard denylist of globs) --
+and one `diff` for the whole pass: the branch's changed files, split into those
+some creation's footprint accounts for and `outside_footprint`, those none
+does. `system/libs/app_manifest/README.md` describes both. The freshness check
+the lead runs before merging reads the same footprints
+(`.agents/shared/references/harden-contention.md`). Regenerate the file
+whenever a footprint moves under you -- when you register a `[[references]]`
+entry, or when you add a supervisord section -- and once more immediately
+before your final report, after committing everything, so the `diff` it carries
+includes every commit you made (the diff reads commits only; an uncommitted
+edit is invisible to it).
 
 A non-empty `diff.outside_footprint` in that final scope file is a claim to
 settle before you report. For each path, either add a `[[references]]` entry to
-the app's `app.toml` -- when the file genuinely belongs to the creation -- or
-name it in your final report under `Outside footprint:`, one line each on why it
+the owning app's `app.toml` -- when the file genuinely belongs to it -- or name
+it in your final report under `Outside footprint:`, one line each on why it
 changed on this branch. A skill run's one sanctioned edit inside an app
-directory, the `[[references]]` entry it adds to that app's manifest, sits under
-the scope file's `context` and is counted as inside the footprint.
+directory, the `[[references]]` entry it adds to that app's manifest, sits
+under the skill's `context` and is counted as inside the footprint.
+
 ## Splitting the pass across sub-workers
 
-Split the pass across sibling sub-workers when the creation has two or more
+Split the pass across sibling sub-workers when the change has two or more
 parts a user would name separately and each is a whole job once tested;
 otherwise harden it yourself, since every sibling pays a venv converge and a
 plugin install before it does any work. A page with three views over an ingested
 export splits: the interface is one worker's job and the ingestion is another's.
 Two unrelated features split too. A single page whose backend only serves it
-does not, nor do a few small files or a script.
+does not, nor do a few small files or a script. Split by job, not by creation:
+a pass over two apps edited to work together is one job (the seam between them
+is what most needs testing, and only a worker holding both sides can test it),
+while a pass over two creations changed for unrelated reasons may be two.
 
 Launch each sibling with the launch-task skill exactly as a chat agent would
 (`.agents/skills/launch-task/SKILL.md`). Name each sibling with your own worker
@@ -116,10 +109,10 @@ yourself": answer a sibling's `question` yourself or re-raise it to your own
 lead, merge exactly one level with `--no-ff`, destroy a merged sibling and stop
 a stuck one, and await it with `--timeout 60m`.
 
-- Each sibling's task file carries the same `operation` and `type` as yours plus
-  its boundary in prose, and your `diff_base`; when your run carries a scope
-  file, also give the sibling its own `scope_file` path beside its task file,
-  since Step 1 fails loudly without them. Say in the body that it runs only its
+- Each sibling's task file carries the same `operation` as yours, the
+  `creations` its boundary touches, its own `scope_file` beside its task file
+  (Step 1 fails loudly without them), its boundary in prose, and your
+  `diff_base`. Say in the body that it runs only its
   scope's tests and **skips the "Review gates" section below**, because you run
   that verification once on the merged result, and that a small out-of-scope
   edit is allowed but must be listed in its `done` report.

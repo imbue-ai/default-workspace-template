@@ -8020,6 +8020,12 @@ def test_a_worker_bundle_flag_may_name_each_app_only_once() -> None:
             "with --ff-only and without --keep-rollback-point",
             id="update-self-landing-cannot-keep-a-rollback-point",
         ),
+        # The rollback point records the pass's apps and services from its scope file.
+        pytest.param(
+            ["--keep-rollback-point"],
+            "--keep-rollback-point and --pass-scope go together",
+            id="a-rollback-point-needs-the-pass-scope",
+        ),
     ],
 )
 def test_apply_refuses_a_flag_combination_it_cannot_honor(
@@ -8037,7 +8043,11 @@ def _rollback_point(repo_root: Path) -> "update_apply_contract.LastGoodRecord | 
     return update_apply_contract.read_last_good(repo_root)
 
 
-def _apply_keeping_the_rollback_point(runner: _RecordingRunner, repo_root: Path) -> int:
+def _apply_keeping_the_rollback_point(
+    runner: _RecordingRunner,
+    repo_root: Path,
+    pass_scope: Sequence[update_apply.PassCreation] = (),
+) -> int:
     return update_apply.apply_update(
         _MERGE_REF,
         repo_root,
@@ -8055,6 +8065,7 @@ def _apply_keeping_the_rollback_point(runner: _RecordingRunner, repo_root: Path)
         expend=_tagging_expend,
         sweep_homes=(),
         keep_rollback_point=True,
+        pass_scope=pass_scope,
     )
 
 
@@ -8091,13 +8102,15 @@ def test_the_record_names_every_critical_app_the_apply_touched(
     apply_repo: Path,
 ) -> None:
     """A shared-library change rebuilds every bundle, so each critical bundle owner is touched;
-    a change under one app's directory touches that app; a non-critical app never counts."""
+    a change under one app's directory touches that app; a non-critical app never counts by
+    its paths alone: the pass scope is what names those."""
     _write_openable_app(apply_repo, "chat")
     _write_openable_app(apply_repo, "terminal")
+    _write_openable_app(apply_repo, "roadmap", is_critical=False, program="roadmap-web")
     _write_registry(apply_repo, {"chat": _CHAT_ROW_URL, "terminal": _TERMINAL_ROW_URL})
     runner = _apply_runner(
         "M\tsystem/libs/workspace_ui/src/origin.ts\nM\tsystem/apps/terminal/src/terminal_app/main.py\n"
-        "M\tsystem/apps/browser/src/browser/session.py\n",
+        "M\tsystem/apps/roadmap/src/roadmap/main.py\n",
         apply_repo,
     )
 
@@ -8107,6 +8120,171 @@ def test_the_record_names_every_critical_app_the_apply_touched(
     assert record is not None
     assert record.apps == ["chat", "system_interface", "terminal"]
     assert record.programs == ["chat", "system_interface", "terminal"]
+
+
+_RIDE_ALONG_DIFF = (
+    _CHAT_FRONTEND_DIFF
+    + "M\tsystem/apps/roadmap/src/roadmap/main.py\n"
+    + "A\tsystem/apps/notes/app.toml\n"
+    + "M\tsystem/services/host_backup/src/host_backup/runner.py\n"
+    + "M\tsystem/services/oom_priority/bin/oom_tag_backstop.py\n"
+    + "A\tsystem/services/share_gateway/pyproject.toml\n"
+    + "M\t.agents/skills/digest/SKILL.md\n"
+)
+
+
+def _ride_along_pass_scope() -> list[update_apply.PassCreation]:
+    """A careful pass over the chat and, riding along, an ordinary app, an app the merge adds,
+    a service whose wiring names its programs, a service with none, a service the merge adds,
+    and a skill."""
+    return [
+        update_apply.PassCreation("app", "chat", "system/apps/chat/", ("chat",)),
+        update_apply.PassCreation(
+            "app", "roadmap", "system/apps/roadmap/", ("roadmap-web",)
+        ),
+        update_apply.PassCreation("app", "notes", "system/apps/notes/", ("notes",)),
+        update_apply.PassCreation(
+            "service",
+            "host_backup",
+            "system/services/host_backup/",
+            ("host-backup", "host-backup-sidecar"),
+        ),
+        update_apply.PassCreation(
+            "service", "oom_priority", "system/services/oom_priority/", ()
+        ),
+        update_apply.PassCreation(
+            "service",
+            "share_gateway",
+            "system/services/share_gateway/",
+            ("share-gateway",),
+        ),
+        update_apply.PassCreation("skill", "digest", ".agents/skills/digest/", ()),
+    ]
+
+
+def test_the_record_takes_the_pass_scopes_other_apps_and_services(
+    apply_repo: Path,
+) -> None:
+    """Beside the critical apps, the record takes the pass's other apps and services from
+    its scope: the programs their wiring names, an added app named with nothing to restart,
+    an added service with nothing to restart, and a service with no program left for the
+    agent rather than escalated."""
+    _write_openable_app(apply_repo, "chat")
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
+
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_RIDE_ALONG_DIFF, apply_repo),
+            apply_repo,
+            _ride_along_pass_scope(),
+        )
+        == 0
+    )
+
+    record = _rollback_point(apply_repo)
+    assert record is not None
+    assert record.apps == ["chat", "system_interface", "roadmap", "notes"]
+    assert record.programs == [
+        "chat",
+        "host-backup",
+        "host-backup-sidecar",
+        "roadmap-web",
+        "system_interface",
+    ]
+    assert record.unrestarted == ["oom_priority"]
+    assert record.needs_system_services_restart is False
+
+
+def test_a_rollback_restarts_the_pass_and_waits_on_critical_apps_alone(
+    apply_repo: Path,
+) -> None:
+    """Only critical programs gate a rollback's verdict, as they gate the apply's: the pass's
+    other programs are restarted, a creation with none is named for the agent, and the
+    rollback still finishes rather than stopping for a services restart."""
+    _write_openable_app(apply_repo, "chat")
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_RIDE_ALONG_DIFF, apply_repo),
+            apply_repo,
+            _ride_along_pass_scope(),
+        )
+        == 0
+    )
+    # The fixture's supervisor reports only the critical programs: the others never settle.
+    runner = _rollback_runner(apply_repo)
+
+    assert _rollback(runner, apply_repo) == 0
+
+    assert runner.argvs_starting("supervisorctl", "restart") == [
+        [
+            "supervisorctl",
+            "restart",
+            "chat",
+            "host-backup",
+            "host-backup-sidecar",
+            "roadmap-web",
+            "system_interface",
+        ]
+    ]
+    settled = _rollback_point(apply_repo)
+    assert settled is not None
+    assert settled.outcome == (
+        "Rolled back to the previous version. oom_priority did not restart with it; "
+        "ask your agent to restart them."
+    )
+
+
+# What ``app-manifest pass-scope`` writes for an app and a service (fields the reader does
+# not use trimmed); system/libs/app_manifest's CLI test pins the same shape.
+_PASS_SCOPE_FILE = """{
+  "creations": [
+    {
+      "creation": {"type": "app", "name": "roadmap", "package": "roadmap", "manifest": "system/apps/roadmap/app.toml"},
+      "primary": ["system/apps/roadmap/"],
+      "wiring": [
+        {"path": "system/supervisord.conf.d/roadmap.conf", "sections": ["program:roadmap", "program:roadmap-sync"]},
+        {"path": "system/supervisord.conf.d/xvfb.conf", "sections": ["program:xvfb"]}
+      ],
+      "references": [], "context": [], "conventions": [], "exclude": [], "diff": null
+    },
+    {
+      "creation": {"type": "service", "name": "oom_priority", "package": "oom_priority", "manifest": null},
+      "primary": ["system/services/oom_priority/"],
+      "wiring": [],
+      "references": [], "context": [], "conventions": [], "exclude": [], "diff": null
+    }
+  ],
+  "diff": null
+}
+"""
+
+
+def test_the_pass_scope_reader_takes_each_creations_programs_from_its_wiring(
+    tmp_path: Path,
+) -> None:
+    scope_file = tmp_path / "scope.json"
+    scope_file.write_text(_PASS_SCOPE_FILE)
+
+    assert update_apply.read_pass_scope(scope_file) == [
+        update_apply.PassCreation(
+            "app",
+            "roadmap",
+            "system/apps/roadmap/",
+            ("roadmap", "roadmap-sync", "xvfb"),
+        ),
+        update_apply.PassCreation(
+            "service", "oom_priority", "system/services/oom_priority/", ()
+        ),
+    ]
+
+
+def test_the_pass_scope_reader_refuses_a_file_that_is_not_one(tmp_path: Path) -> None:
+    scope_file = tmp_path / "scope.json"
+    scope_file.write_text('{"creation": {"type": "app"}}')
+
+    with pytest.raises(ValueError, match="is not a pass scope file"):
+        update_apply.read_pass_scope(scope_file)
 
 
 def test_the_record_names_every_critical_app_whose_tool_the_apply_reinstalled(
@@ -8307,9 +8485,17 @@ def test_a_failed_snapshot_restore_keeps_recovery_copies_even_when_health_would_
 def test_a_rollback_that_needs_the_services_agent_restores_the_files_and_names_the_command(
     apply_repo: Path,
 ) -> None:
+    """The outcome names the command, and a pass creation with no program to restart,
+    which the services restart does not reach either."""
     assert (
         _apply_keeping_the_rollback_point(
-            _apply_runner("M\tsystem/scripts/bootstrap.sh\n", apply_repo), apply_repo
+            _apply_runner("M\tsystem/scripts/bootstrap.sh\n", apply_repo),
+            apply_repo,
+            [
+                update_apply.PassCreation(
+                    "service", "oom_priority", "system/services/oom_priority/", ()
+                )
+            ],
         )
         == 0
     )
@@ -8326,6 +8512,7 @@ def test_a_rollback_that_needs_the_services_agent_restores_the_files_and_names_t
     assert (
         record.outcome is not None
         and update_apply.SERVICES_RESTART_COMMAND in record.outcome
+        and "oom_priority did not restart with it" in record.outcome
     )
 
 

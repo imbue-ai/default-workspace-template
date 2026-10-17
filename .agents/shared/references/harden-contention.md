@@ -1,11 +1,11 @@
 # Contention between passes over the same creation
 
 Multiple chats can each change the same creation and each dispatch a harden
-pass (`update-creation` / `heal-creation`). Left uncoordinated this produces
-two failure shapes: two agents' harden workers colliding (the worker name,
-branch, and runtime dir are all derived from the creation name), and a
-hardened branch getting merged after the base it was verified against has
-moved.
+pass (`update-creation` / `heal-creation`). A pass covers every creation its
+change touched, so two passes collide whenever they share any one creation.
+Left uncoordinated this produces two failure shapes: two agents' harden
+workers hardening the same creation at once, and a hardened branch getting
+merged after the base it was verified against has moved.
 
 Two principles drive every rule below:
 
@@ -23,28 +23,39 @@ Two principles drive every rule below:
 
 At most one harden pass per creation may be in flight, in either flow -- an
 `update` and a `heal` pass on the same creation collide just as hard as two
-updates. Before opening the tracking ticket, look for a live pass:
+updates. A pass's ticket title lists every creation it covers (`update
+app:roadmap skill:sync-roadmap`), so before opening the tracking ticket, look
+for a live pass on each creation yours would cover. The match also takes the
+bare name, which is how a ticket opened before titles carried types names its
+creation:
 
 ```bash
 tk ready > /tmp/harden-inflight.txt
-grep -E "(update|heal) $TARGET" /tmp/harden-inflight.txt
+for CREATION in $CREATIONS; do
+    grep -E -- "- (update|heal) ([^ ]+ )*($CREATION|${CREATION#*:})( |\$)" /tmp/harden-inflight.txt
+done
 ```
 
 - **No match** -- dispatch normally.
 - **A match assigned to you** -- you already have a pass in flight; supersede
   it (below) rather than launching a sibling.
 - **A match assigned to another agent** -- check whether it is actually
-  live: the worker session responds to the liveness probe in
-  `lead-proxy.md` (`tmux capture-pane -t minds-<worker-name>:claude -p -S -20`),
-  or the ticket has recent notes/reports. Then:
+  live: the worker session (its name is in the ticket's description, `tk show
+  <id>`) responds to the liveness probe in `lead-proxy.md` (`tmux capture-pane
+  -t minds-<worker-name>:claude -p -S -20`), or the ticket has recent
+  notes/reports. Then:
   - **Live**: do NOT dispatch a second pass. Leave a note on their ticket so
     the owner coalesces your change at merge time, and stop -- your turn-end
     obligation is met, because the superseding pass their merge-time
     freshness check forces will cover your commits too:
 
     ```bash
-    tk add-note <their-ticket-id> "Commits <range> also change $TARGET; this pass is now stale. Coalesce at merge time per harden-contention.md."
+    tk add-note <their-ticket-id> "Commits <range> also change $CREATIONS; this pass is now stale. Coalesce at merge time per harden-contention.md."
     ```
+
+    Their pass may cover fewer creations than your change touched. The
+    note still names all of yours, so the superseding pass covers the whole
+    change rather than the half that overlapped.
   - **Abandoned** (worker session gone, no report, holder agent not
     running): take it over. Destroy the worker with the launcher
     (`--delete-branches`, which also takes its sub-workers and their branches),
@@ -59,16 +70,16 @@ states; the newest pass always covers the union instead.
 Run these in order before any merge from a worker branch -- the merge on `done`
 or a provisional milestone merge:
 
-1. **Wait out the foreground lease (apps and services only).** If the creation is
-   an app or service and another agent holds its editing lease (an open/in-progress
-   `editing service <name>` ticket in `tk ready`, or `editing critical app <name>`
-   for a critical app -- see `update-app`'s "One editor at a time"), do not merge
-   or refresh mid-edit. Re-check about once a minute until the lease is
-   released, then continue -- their edit will usually make your pass stale
-   anyway, which the next check catches.
+1. **Wait out the foreground lease (apps and services only).** If a creation in
+   the pass is an app or service and another agent holds its editing lease (an
+   open/in-progress `editing service <name>` ticket in `tk ready`, or `editing
+   critical app <name>` for a critical app -- see `update-app`'s "One editor at
+   a time"), do not merge or refresh mid-edit. Re-check about once a minute
+   until the lease is released, then continue -- their edit will usually make
+   your pass stale anyway, which the next check catches.
 
-2. **Freshness check.** The pass is mergeable only if the creation has not
-   changed since the worker branched. The paths to diff are the creation's
+2. **Freshness check.** The pass is mergeable only if no creation in it has
+   changed since the worker branched. The paths to diff are every creation's
    whole footprint, not just the files the worker touched, which is what the
    worker's scope file holds. That file lives under the worker's own `data/`
    (gitignored, and only the reports directory syncs back), so recompute it on
@@ -77,30 +88,24 @@ or a provisional milestone merge:
    ```bash
    BASE=$(git merge-base HEAD "$WORKER_BRANCH")
    SCOPE=$(mktemp)
-   # an app with a manifest:
-   uv run app-manifest footprint system/apps/<package>/app.toml --out "$SCOPE" || exit 1
-   # a skill:
-   uv run app-manifest footprint --for-path .agents/skills/<name> --out "$SCOPE" || exit 1
-
-   PATHS=$(jq -r '[.primary[], .wiring[].path, .references[].path] | unique | .[]' "$SCOPE")
+   uv run app-manifest pass-scope $(printf -- '--creation %s ' $CREATIONS) --out "$SCOPE" || exit 1
+   PATHS=$(jq -r '[.creations[] | .primary[], .wiring[].path, .references[].path] | unique | .[]' "$SCOPE")
    [ -n "$PATHS" ] || exit 1
    git diff --name-only "$BASE" HEAD -- $PATHS
    ```
 
-   The two guards matter: with an empty `$PATHS` the diff covers the whole
-   tree, and any commit anywhere reads as a moved base. If the footprint
-   command fails (a reference the manifest names no longer exists, say), fix
-   the manifest on your branch first and rerun; do not treat the failure as
-   staleness. When the worker's `done` report lists paths under `References
-   registered:`, add them to `$PATHS` as well -- your tree's manifest predates
-   them.
-   A creation with no manifest is diffed at its own path: a standalone service
-   under `system/services/<package>/` (plus `system/supervisord.conf.d/<name>.conf`), a shared
-   script or reference at its path. A critical app's merge lives in
+   The guards matter: with an empty `$PATHS` the diff covers the whole
+   tree, and any commit anywhere reads as a moved base. If the command fails
+   (a reference a manifest names no longer exists, say), fix the manifest on
+   your branch first and rerun; do not treat the failure as staleness. When
+   the worker's `done` report lists paths under `References registered:`, add
+   them to `$PATHS` as well -- your tree's manifest predates them. A critical
+   app's merge lives in
    `update-app/references/critical-app.md` step 4, which applies this same
-   check over each leased app's `system/apps/<package>/` together with
-   `system/libs/workspace_ui/`, `system/libs/workspace_layout/`, `system/package.json`,
-   `system/package-lock.json`, and every file the pass branch changes. Empty output means fresh: merge normally. Any output means the base moved under
+   check over the pass's footprint together with `system/libs/workspace_ui/`,
+   `system/libs/workspace_layout/`, `system/package.json`,
+   `system/package-lock.json`, and every file the pass branch changes. Empty
+   output means fresh: merge normally. Any output means the base moved under
    the worker: the pass is stale -- do not merge; supersede it (below).
 
    No shared *authored* file remains in that footprint -- a creation's
@@ -109,9 +114,9 @@ or a provisional milestone merge:
    creations built in the same tree no longer collide textually: neither
    appears in the other's diff, and neither makes the merge conflict.
 
-   That is a claim about paths, not about correctness. The check reads one
-   creation's own paths, so it cannot see a change to something that creation
-   *depends on*: a shared library under `system/libs/` (`app_manifest` alone
+   That is a claim about paths, not about correctness. The check reads the
+   pass's own creations' paths, so it cannot see a change to something they
+   *depend on*: a shared library under `system/libs/` (`app_manifest` alone
    backs `chat`, `terminal` and the system interface), a skill script an app
    calls or reads (`system_interface`'s `update_staleness_test.py` asserts
    against `update-self`'s `update_apply_contract.py`), or another creation's
@@ -119,8 +124,8 @@ or a provisional milestone merge:
    a pass this check calls fresh, and conflicts with nothing. Widening the
    footprint to cover it would not do: every shared-library commit would then
    stale every pass in flight, which is the serialization the split exists to
-   remove. So read a green result as "nothing this creation owns moved", not
-   as "this pass is still valid".
+   remove. So read a green result as "nothing the pass's creations own moved",
+   not as "this pass is still valid".
 
    `uv.lock` is deliberately NOT in the footprint. It is derived, every
    creation's scaffold regenerates it, and `.gitattributes` marks it
@@ -176,9 +181,11 @@ that no longer exists, so nothing on the pass or its sub-workers is worth
 keeping. Then dispatch a
 fresh pass through the normal flow (Steps 1-3 of the calling skill) whose
 scope covers **everything since the last hardened merge**: at minimum the
-`$BASE..HEAD` commits touching the creation, plus whatever any notes on the
-old ticket describe. One superseding pass validates the union of all pending
-changes together -- which is the only combination that will actually run.
+`$BASE..HEAD` commits touching its creations, plus whatever any notes on the
+old ticket describe -- including any creations the notes name that the old
+pass did not cover, which the new pass now covers too. One superseding pass
+validates the union of all pending changes together -- which is the only
+combination that will actually run.
 
 Two wrinkles when the pass had already delivered a provisional milestone
 merge:

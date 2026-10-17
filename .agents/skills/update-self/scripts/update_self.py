@@ -155,6 +155,7 @@ from update_apply import (
     apply_update,
     confirm_last,
     pending_update_rollbacks,
+    read_pass_scope,
     recover,
     rollback_last,
     update_rollback_history,
@@ -682,6 +683,17 @@ def _cmd_apply(args: argparse.Namespace) -> int:
             "error: --keep-rollback-point needs an ordinary merge to roll back later; "
             "it cannot be combined with --ff-only."
         )
+    if args.keep_rollback_point != (args.pass_scope is not None):
+        raise SystemExit(
+            "error: --keep-rollback-point and --pass-scope go together: the rollback point "
+            "records the pass's apps and services from its scope file."
+        )
+    try:
+        pass_scope = (
+            read_pass_scope(args.pass_scope) if args.pass_scope is not None else []
+        )
+    except ValueError as exc:
+        raise SystemExit(f"error: --pass-scope: {exc}") from exc
     return apply_update(
         args.merge_ref,
         _repo_root(args).resolve(),
@@ -693,6 +705,7 @@ def _cmd_apply(args: argparse.Namespace) -> int:
         spawner=Spawner(),
         sweep_homes=default_sweep_homes(),
         keep_rollback_point=args.keep_rollback_point,
+        pass_scope=pass_scope,
     )
 
 
@@ -1004,6 +1017,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "careful flow for a critical app): the shell raises a notice offering "
         "the previous version back until a person confirms the update, and the "
         "next apply replaces the point.",
+    )
+    apply_parser.add_argument(
+        "--pass-scope",
+        type=Path,
+        default=None,
+        help="The harden pass's scope file (`app-manifest pass-scope`), with "
+        "--keep-rollback-point: the rollback point records its apps and services "
+        "and the programs its wiring names, so a rollback restarts them too.",
     )
     apply_parser.set_defaults(func=_cmd_apply)
 

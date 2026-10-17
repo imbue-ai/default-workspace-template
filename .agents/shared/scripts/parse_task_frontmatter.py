@@ -46,10 +46,21 @@ Extra string keys must be valid POSIX shell identifiers (so the
 variable instead of being parsed as a command). A key like
 ``staged-inputs`` fails loud rather than silently disappearing.
 
+A task that names an ``operation`` (a harden pass) must also carry
+``creations``, the space-separated ``<type>:<name>`` of every creation the
+pass covers (``app:roadmap skill:sync-roadmap``; a type is ``app``, ``skill``,
+``service``, or ``shared`` with a path under ``.agents/shared``), and
+``scope_file``, where the worker writes the pass's footprint; both reach the
+worker as ``CREATIONS`` and ``SCOPE_FILE`` like any other string field. Each
+creation's shape is checked by ``app-manifest pass-scope``, which the worker runs
+on them first. Such a task may not carry a top-level ``type``: that is the
+single-creation shape ``creations`` replaced.
+
 On any failure -- file missing, no/broken frontmatter, any required
-field missing, wrong type, empty string, or an extra key that isn't a
-valid shell identifier -- prints a human-readable error to stderr and
-exits 1.
+field missing, wrong type, empty string, an extra key that isn't a
+valid shell identifier, or a harden pass missing ``creations`` or
+``scope_file``, or carrying a top-level ``type`` -- prints a
+human-readable error to stderr and exits 1.
 """
 
 from __future__ import annotations
@@ -73,6 +84,10 @@ _OPTIONAL_KNOWN_FIELDS = (_ADDRESS_FIELD, _TASK_FILE_FIELD)
 # Fixed emission order for the well-known fields (address first when present).
 _ORDERED_KNOWN_FIELDS = (_ADDRESS_FIELD, _TASK_FILE_FIELD, *_REQUIRED_FIELDS)
 _SHELL_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_OPERATION_FIELD = "operation"
+_CREATIONS_FIELD = "creations"
+_SCOPE_FILE_FIELD = "scope_file"
+_SINGLE_CREATION_TYPE_FIELD = "type"
 
 
 def _split_frontmatter(text: str) -> dict[str, Any]:
@@ -96,6 +111,28 @@ def _split_frontmatter(text: str) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise ValueError("task file frontmatter must be a YAML mapping")
     return parsed
+
+
+def _check_harden_pass(frontmatter: dict[str, Any]) -> None:
+    """Check a harden pass carries ``creations`` and ``scope_file`` and no top-level ``type``.
+    Each creation's shape is ``app-manifest pass-scope``'s to check, the first command the
+    worker runs on them."""
+    if _OPERATION_FIELD not in frontmatter:
+        return
+    for field in (_CREATIONS_FIELD, _SCOPE_FILE_FIELD):
+        if (
+            not isinstance(frontmatter.get(field), str)
+            or not frontmatter[field].strip()
+        ):
+            raise ValueError(
+                f"frontmatter names an `{_OPERATION_FIELD}`, so it needs a non-empty "
+                f"string `{field}`"
+            )
+    if _SINGLE_CREATION_TYPE_FIELD in frontmatter:
+        raise ValueError(
+            f"frontmatter has a top-level `{_SINGLE_CREATION_TYPE_FIELD}`; a harden pass "
+            f"names each creation's type in `{_CREATIONS_FIELD}` instead"
+        )
 
 
 def parse(task_file: Path) -> dict[str, str]:
@@ -153,6 +190,7 @@ def parse(task_file: Path) -> dict[str, str]:
                 f"using snake_case so downstream `eval` can consume the "
                 f"rendered KEY=value line."
             )
+    _check_harden_pass(frontmatter)
     return result
 
 
