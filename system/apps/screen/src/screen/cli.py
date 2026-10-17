@@ -329,10 +329,12 @@ def control_handoff(reason: str) -> None:
         _err(_detail(answer, f"handoff failed ({answer.status})"))
         raise SystemExit(EXIT_ERROR)
     if answer.body.get("ok"):
-        open_screen_window(is_minimized=False)
+        # The lease is the human's whether or not the window could be shown; the agent must hear that either way.
+        is_shown = open_screen_window(is_minimized=False)
         _out(
-            f"handed the Screen to the human: {reason}. You're first in line to resume. Tell the user what to do, "
-            "end your turn, and re-run `screen control acquire` when they hand control back."
+            f"handed the Screen to the human: {reason}. You're first in line to resume. Tell the user what to do"
+            + ("" if is_shown else " (and to open the Screen themselves, since its window could not be shown)")
+            + ", end your turn, and re-run `screen control acquire` when they hand control back."
         )
         raise SystemExit(EXIT_PREEMPTED)
     _out(
@@ -341,8 +343,9 @@ def control_handoff(reason: str) -> None:
     raise SystemExit(EXIT_PREEMPTED)
 
 
-def open_screen_window(is_minimized: bool) -> None:
-    """Open the Screen's window for the user through the shell's ``open`` op (one window, focused if present)."""
+def open_screen_window(is_minimized: bool) -> bool:
+    """Open the Screen's window for the user through the shell's ``open`` op (one window, focused if present);
+    answers whether it was opened, with the shell's refusal printed to stderr when it was not."""
     shell = ShellLayoutClient(
         shell_url=shell_base_url(), requester=requester_from_environment(), timeout_seconds=_SHELL_OP_TIMEOUT_SECONDS
     )
@@ -350,7 +353,8 @@ def open_screen_window(is_minimized: bool) -> None:
         shell.open(OpenArgs(app=APP_NAME, path=WindowPath("/"), if_present=IfPresent.FOCUS, minimized=is_minimized))
     except ShellOpError as e:
         _err(f"the Screen's window could not be opened: {e}")
-        raise SystemExit(EXIT_ERROR) from e
+        return False
+    return True
 
 
 @main.command("open")
@@ -363,7 +367,8 @@ def open_screen_window(is_minimized: bool) -> None:
 )
 def open_command(is_shown: bool) -> None:
     """Open the Screen's window on the user's desktop (minimized unless --show)."""
-    open_screen_window(is_minimized=not is_shown)
+    if not open_screen_window(is_minimized=not is_shown):
+        raise SystemExit(EXIT_ERROR)
     _out("opened the Screen's window")
 
 
