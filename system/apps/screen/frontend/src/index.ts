@@ -15,12 +15,14 @@ import { NekoSocket } from "./neko_socket";
 import { Overlays } from "./overlays";
 import {
   ServiceEvents,
+  ServiceRequestError,
   fetchConnectInfo,
   fetchState,
   postReturnControl,
   postSession,
   postStart,
   postTakeControl,
+  type VerbOutcome,
 } from "./service_client";
 import type { NekoSessionAnswer, ScreenStateDocument, ServiceEvent } from "./state";
 import { isOwnSessionController } from "./state";
@@ -28,6 +30,10 @@ import { Strip } from "./strip";
 import { NekoStream, type StreamStatus } from "./webrtc";
 
 export const PAGE_PATH = "/";
+
+// How long a refused sign-in waits before trying again, and how long a refused verb's reason stays in the strip.
+const SIGN_IN_RETRY_MS = 3000;
+const NOTICE_MS = 4000;
 
 class Viewer {
   private readonly root = document.createElement("div");
@@ -42,6 +48,10 @@ class Viewer {
   private input: InputRelay | null = null;
   private streamStatus: StreamStatus = "idle";
   private isSigningIn = false;
+  private signInError: string | null = null;
+  private signInRetryTimer = 0;
+  private notice: string | null = null;
+  private noticeTimer = 0;
   private reportLocation: ((title: string) => void) | null = null;
 
   constructor(mount: HTMLElement) {
@@ -107,8 +117,8 @@ class Viewer {
     // Input flows while this session controls, and while nobody does: the first input is then neko's
     // control/request, which it grants with no host, and the service records this human (spec section 6.2).
     const canSend = (isController || this.state.control.controller === "nobody") && this.state.lifecycle === "running";
-    this.strip.update(this.state.control, ownSessionId, this.streamStatus);
-    this.overlays.update(this.state, this.streamStatus, this.session !== null);
+    this.strip.update(this.state.control, ownSessionId, this.streamStatus, this.notice);
+    this.overlays.update(this.state, this.streamStatus, this.session !== null, this.signInError);
     this.input?.setEnabled(canSend);
     this.stage.classList.toggle("screen-stage--not-controlling", !canSend);
     this.stage.dataset.screenController = isController ? "you" : this.state.control.controller;
@@ -117,9 +127,16 @@ class Viewer {
   private async signIn(): Promise<void> {
     if (this.isSigningIn) return;
     this.isSigningIn = true;
+    window.clearTimeout(this.signInRetryTimer);
     try {
-      const session = await postSession();
-      if (session === null) return;
+      let session: NekoSessionAnswer;
+      try {
+        session = await postSession();
+      } catch (error) {
+        this.noteSignInFailure(error);
+        return;
+      }
+      this.signInError = null;
       this.session = session;
       const socket = new NekoSocket(session.token, () => this.onNekoOpen());
       this.socket = socket;
@@ -143,6 +160,28 @@ class Viewer {
     }
   }
 
+  /** A refused sign-in is shown on the overlay and tried again while the stack still reads running. */
+  private noteSignInFailure(error: unknown): void {
+    this.signInError = error instanceof ServiceRequestError ? error.detail : String(error);
+    console.warn("[screen] sign-in failed:", this.signInError);
+    this.render();
+    this.signInRetryTimer = window.setTimeout(() => {
+      if (this.session === null && this.state?.lifecycle === "running") void this.signIn();
+    }, SIGN_IN_RETRY_MS);
+  }
+
+  /** What a refused verb said, in the strip for a moment. */
+  private showNotice(outcome: VerbOutcome): void {
+    if (outcome.ok) return;
+    this.notice = outcome.detail ?? "refused";
+    window.clearTimeout(this.noticeTimer);
+    this.noticeTimer = window.setTimeout(() => {
+      this.notice = null;
+      this.render();
+    }, NOTICE_MS);
+    this.render();
+  }
+
   private onNekoOpen(): void {
     if (!this.stream || !this.state) return;
     const videoId = this.state.video_id;
@@ -152,6 +191,8 @@ class Viewer {
   }
 
   private teardownStream(): void {
+    window.clearTimeout(this.signInRetryTimer);
+    this.signInError = null;
     this.stream?.close();
     this.socket?.stop();
     this.stream = null;
@@ -176,13 +217,13 @@ class Viewer {
 
   private async takeControl(): Promise<void> {
     if (this.session === null) return;
-    await postTakeControl(this.session.session_id);
+    this.showNotice(await postTakeControl(this.session.session_id));
     this.stage.focus();
   }
 
   private async returnControl(): Promise<void> {
     if (this.session === null) return;
-    await postReturnControl(this.session.session_id);
+    this.showNotice(await postReturnControl(this.session.session_id));
   }
 }
 

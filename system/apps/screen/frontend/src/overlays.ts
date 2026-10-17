@@ -35,7 +35,12 @@ export class Overlays {
     return this.dim;
   }
 
-  update(state: ScreenStateDocument, streamStatus: StreamStatus, hasSession: boolean): void {
+  update(
+    state: ScreenStateDocument,
+    streamStatus: StreamStatus,
+    hasSession: boolean,
+    signInError: string | null,
+  ): void {
     const control: ControlDocument = state.control;
     switch (state.lifecycle) {
       case "installing":
@@ -50,7 +55,10 @@ export class Overlays {
       case "running":
         if (streamStatus === "connected") this.element.hidden = true;
         else if (streamStatus === "failed") this.show("The stream could not connect", "", false);
-        else this.show(hasSession ? "Connecting to the screen" : "Signing in to the screen", "", false);
+        else if (hasSession) this.show("Connecting to the screen", "", false);
+        else if (signInError !== null)
+          this.show("Could not sign in to the screen", `${signInError} (retrying)`, false);
+        else this.show("Signing in to the screen", "", false);
         break;
     }
     const isAgent = control.controller === "agent" && state.lifecycle === "running";

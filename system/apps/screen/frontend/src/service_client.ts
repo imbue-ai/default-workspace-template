@@ -10,32 +10,60 @@ export async function fetchState(): Promise<ScreenStateDocument> {
   return (await response.json()) as ScreenStateDocument;
 }
 
-export async function postStart(): Promise<void> {
-  await fetch("/api/start", { method: "POST" });
+/** A route of the service refused or failed a request; ``detail`` is what its JSON body said, else the status. */
+export class ServiceRequestError extends Error {
+  constructor(
+    readonly status: number,
+    readonly detail: string,
+  ) {
+    super(`the Screen service answered ${status}: ${detail}`);
+    this.name = "ServiceRequestError";
+  }
 }
 
-export async function postSession(): Promise<NekoSessionAnswer | null> {
+/** What a refused answer says about itself: its JSON ``detail``, else its status line. */
+export async function describeRefusal(response: Response): Promise<string> {
+  const detail = await response.json().then(
+    (body: unknown) => (body !== null && typeof body === "object" ? (body as { detail?: unknown }).detail : undefined),
+    () => undefined,
+  );
+  if (typeof detail === "string" && detail) return detail;
+  return response.statusText ? `${response.status} ${response.statusText}` : `status ${response.status}`;
+}
+
+export async function postStart(): Promise<void> {
+  const response = await fetch("/api/start", { method: "POST" });
+  if (!response.ok) console.warn("[screen] start refused:", await describeRefusal(response));
+}
+
+/** Throws a ServiceRequestError when the service refuses the login (the stack not running, neko refusing). */
+export async function postSession(): Promise<NekoSessionAnswer> {
   const response = await fetch("/api/session", { method: "POST" });
-  if (!response.ok) return null;
+  if (!response.ok) throw new ServiceRequestError(response.status, await describeRefusal(response));
   return (await response.json()) as NekoSessionAnswer;
 }
 
-export async function postTakeControl(sessionId: string): Promise<boolean> {
-  const response = await fetch("/api/control/take", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: sessionId }),
-  });
-  return response.ok;
+export interface VerbOutcome {
+  ok: boolean;
+  detail: string | null;
 }
 
-export async function postReturnControl(sessionId: string): Promise<boolean> {
-  const response = await fetch("/api/control/return", {
+async function postControlVerb(path: string, sessionId: string): Promise<VerbOutcome> {
+  const response = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session_id: sessionId }),
   });
-  return response.ok;
+  if (response.ok) return { ok: true, detail: null };
+  return { ok: false, detail: await describeRefusal(response) };
+}
+
+export function postTakeControl(sessionId: string): Promise<VerbOutcome> {
+  return postControlVerb("/api/control/take", sessionId);
+}
+
+export function postReturnControl(sessionId: string): Promise<VerbOutcome> {
+  return postControlVerb("/api/control/return", sessionId);
 }
 
 export async function fetchConnectInfo(isRelay: boolean): Promise<ConnectInfo> {

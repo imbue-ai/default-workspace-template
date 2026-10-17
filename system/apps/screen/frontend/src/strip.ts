@@ -34,11 +34,13 @@ export class Strip {
     this.element.append(this.who, this.waiting, this.status, this.takeButton, this.returnButton);
   }
 
-  update(control: ControlDocument, ownSessionId: string | null, streamStatus: string): void {
+  update(control: ControlDocument, ownSessionId: string | null, streamStatus: string, notice: string | null): void {
     const isOwn = isOwnSessionController(control, ownSessionId);
     this.who.textContent = `Control: ${describeController(control, ownSessionId)}`;
     this.waiting.textContent = control.waiting.length > 0 ? `Waiting: ${control.waiting.join(", ")}` : "";
-    this.status.textContent = streamStatus === "connected" ? "" : streamStatus;
+    // A refused verb's reason takes the status's place for a moment, so a click that did nothing says why.
+    this.status.textContent = notice ?? (streamStatus === "connected" ? "" : streamStatus);
+    this.status.classList.toggle("screen-strip__status--notice", notice !== null);
     this.takeButton.hidden = isOwn || ownSessionId === null;
     // Giving control back is offered when this human holds it and an agent waits to resume.
     this.returnButton.hidden = !(isOwn && control.waiting.length > 0);
