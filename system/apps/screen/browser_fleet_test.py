@@ -118,7 +118,8 @@ def test_create_registers_the_browser_at_once_and_launches_it_on_the_start_page(
     assert request.is_sandbox_disabled is True
     assert harness.connector.connected == [harness.launcher.handles[0].http_endpoint]
     assert harness.proxy_server.lookup("browser-1") is not None
-    assert harness.running == ["browser-1"]
+    # The lifecycle flips before the service is told, so the window raise is waited for rather than read at once.
+    assert wait_until(lambda: harness.running == ["browser-1"])
     assert harness.kicks >= 1
     assert browser.token and browser.token_owner is None
     assert harness.fleet.chromium_view().model_dump() == {"state": "running", "name": "browser-1", "pending_url": None}
