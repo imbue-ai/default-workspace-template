@@ -83,7 +83,8 @@ def service_url() -> str:
         registry = _repo_root() / registry
     try:
         document = tomllib.loads(registry.read_text())
-    except (OSError, tomllib.TOMLDecodeError):
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        logger.debug("Could not read the app registry at {} ({}); using {}", registry, e, DEFAULT_SERVICE_URL)
         return DEFAULT_SERVICE_URL
     for app in document.get("apps", []):
         if app.get("name") == str(APP_NAME) and app.get("url"):

@@ -446,7 +446,8 @@ class ScreenService(MutableModel):
     def _handle_screen_size(self, payload: dict[str, Any]) -> None:
         try:
             size = ScreenSize.model_validate({key: payload.get(key) for key in ("width", "height", "rate")})
-        except ValueError:
+        except ValueError as e:
+            logger.debug("Ignored a screen size neko reported in a shape this build does not read: {}", e)
             return
         with self._lock:
             self.screen_size = size
