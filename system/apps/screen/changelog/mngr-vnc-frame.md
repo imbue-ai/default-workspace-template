@@ -51,3 +51,9 @@ Step 8, the browser's migration (spec section 16): the browser app's history con
 - The service runs a raise-only band sweep every ten seconds (`band_sweep.py`, spec section 9.4): programs started from the Screen are raised to `AGENT_SUBPROCESS`, Chromium's processes are remapped into the shared-browser band as the browser app's `oom_retag` did, with a burst after each launch or new tab.
 
 - The `open_popups_as_tabs` extension, `chrome_args`, `chrome_launcher` (Fortress's launcher waits up to 45 seconds for the debug port), the CDP client (synchronous) and the manifest and name modules moved here with their tests; the viewer-sizing, capture-backend and videopipe tests of the browser app are gone with the code they covered.
+
+Step 9, the tests that need the whole (spec section 20):
+
+- `test_screen_integration.py` sets its own timeout (the root config's ten seconds would end a stack start), marks the Fortress case `browser`, wires the browser fleet before the stack as the service does, and gains the Quit case: the service's shutdown ends every member and frees the display, and a fresh service's first page load starts a new stack.
+
+- `test_screen_acceptance.py`, marked `acceptance`: Imbue Studio's Electron app creates a local Docker workspace from this tree and Playwright drives the whole journey of the spec's acceptance row (a frame, control, a terminal typed into, the browser launch path with a URL, close with the stack running, Quit with everything gone). It runs on a developer's machine with `MNGR_WORKTREE` naming the mngr checkout and skips at collection without it; the README has the recipe.
