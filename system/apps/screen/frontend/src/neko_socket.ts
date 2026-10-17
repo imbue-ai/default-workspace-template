@@ -53,7 +53,8 @@ export class NekoSocket {
       let parsed: { event?: unknown; payload?: unknown };
       try {
         parsed = JSON.parse(String(message.data)) as { event?: unknown; payload?: unknown };
-      } catch {
+      } catch (error) {
+        console.warn("[screen] unreadable neko message", error);
         return;
       }
       if (typeof parsed.event !== "string") return;

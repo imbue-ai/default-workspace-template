@@ -32,7 +32,9 @@ export class NekoStream {
     socket.on("signal/offer", renegotiate);
     socket.on("signal/restart", renegotiate);
     socket.on("signal/answer", (payload) => {
-      this.pc?.setRemoteDescription({ type: "answer", sdp: String(payload.sdp ?? "") }).catch(() => undefined);
+      this.pc
+        ?.setRemoteDescription({ type: "answer", sdp: String(payload.sdp ?? "") })
+        .catch((error) => console.warn("[screen] neko's answer was not accepted", error));
     });
     socket.on("signal/candidate", (payload) => {
       const candidate = payload as unknown as RTCIceCandidateInit;
@@ -71,7 +73,9 @@ export class NekoStream {
 
   private addCandidate(candidate: RTCIceCandidateInit): void {
     for (const rewritten of candidatesToAdd(candidate, this.connectInfo)) {
-      this.pc?.addIceCandidate(rewritten).catch(() => undefined);
+      this.pc
+        ?.addIceCandidate(rewritten)
+        .catch((error) => console.warn("[screen] a server candidate was not accepted", rewritten.candidate, error));
     }
   }
 
