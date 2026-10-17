@@ -15,7 +15,6 @@ from screen.browser_fleet import BrowserFleet
 from screen.browser_manifest import BrowserManifest
 from screen.browser_manifest import ManifestEntry
 from screen.browser_manifest import ManifestStore
-from screen.browser_manifest import ManifestStore as _Store
 from screen.cdp_client import CdpTarget
 from screen.cdp_proxy import ProxyServer
 from screen.control import ScreenControl
@@ -556,4 +555,3 @@ def test_describe_carries_the_lease_the_lifecycle_and_the_tabs(tmp_path: Path) -
     )
     assert described["crashed"] is False
     assert described["tabs"] == [{"index": 0, "title": "One", "url": "https://one", "active": True}]
-    assert _Store(path=tmp_path / "x").path.name == "x"
