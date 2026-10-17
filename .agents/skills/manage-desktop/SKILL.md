@@ -279,6 +279,7 @@ the app's own to name, stop, or end:
 | End a chat | the chat's own destroy route; closing a chat window ends nothing |
 | End a terminal or the browser | `close` its last window: the terminal deletes a session no window shows, and the browser stops (profile and tabs kept) once none shows it |
 | Open another chat | the chat root page (`open chat`), or `open chat --path "/?chat=<id>"` |
+| Drive the Screen (the workspace's one streamed Linux desktop, the `screen` app) | the `screen` command (`uv run --no-sync screen run|windows|activate|shot|control ...`), never the layout ops: its window shows the desktop, and `open screen` is one window of it; the stack never stops when its window closes |
 
 `workspace-layout` refuses the old tabbed-shell verbs (`split`, `move`, `rename`,
 `delete`, `stop`, `start`, `replace-url`, `inspect`, `where`, `views`) and the

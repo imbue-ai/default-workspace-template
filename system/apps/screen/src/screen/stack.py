@@ -1,0 +1,274 @@
+"""The stack's lifecycle (docs/system/specs/screen/spec.md section 9): rendering the configuration, starting the
+group's programs in order, waiting for neko, and recording why the group ended."""
+
+import os
+import secrets as secrets_module
+import shutil
+import threading
+import time
+from collections.abc import Callable
+from pathlib import Path
+from typing import Final
+
+import yaml
+from loguru import logger
+from pydantic import Field
+from pydantic import PrivateAttr
+from pydantic import SecretStr
+
+from imbue.imbue_common.mutable_model import MutableModel
+from imbue.imbue_common.pure import pure
+from screen.data_types import Lifecycle
+from screen.data_types import NekoSecrets
+from screen.data_types import NekoSession
+from screen.errors import NekoError
+from screen.errors import StackStartError
+from screen.errors import SupervisorError
+from screen.interfaces import NekoInterface
+from screen.interfaces import ProgramState
+from screen.interfaces import SupervisorInterface
+from screen.neko_client import wait_until_healthy
+from screen.neko_config import RUNTIME_DIR
+from screen.neko_config import render_neko_yaml
+from screen.neko_config import render_pulse_script
+from screen.primitives import DISPLAY_SOCKET_PATH
+from screen.primitives import NEKO_PROGRAM
+from screen.primitives import PULSE_PROGRAM
+from screen.primitives import SESSION_PROGRAM
+from screen.primitives import STACK_PROGRAMS
+from screen.primitives import XORG_PROGRAM
+from screen.xorg_config import render_xorg_conf
+
+XORG_CONF_FILENAME: Final[str] = "xorg.conf"
+NEKO_YAML_FILENAME: Final[str] = "neko.yaml"
+PULSE_SCRIPT_FILENAME: Final[str] = "pulse.pa"
+NEKO_BINARY_PATH: Final[Path] = Path("/opt/neko/bin/neko")
+
+# The service's own neko member, logged in with the admin password for the event session.
+SERVICE_SESSION_NAME: Final[str] = "Screen service"
+
+# Xorg takes well under a second to open the display; neko a few seconds to bind and start its pipelines.
+_DISPLAY_SOCKET_TIMEOUT_SECONDS: Final[float] = 20.0
+_NEKO_HEALTH_TIMEOUT_SECONDS: Final[float] = 60.0
+_POLL_SECONDS: Final[float] = 0.2
+_INSTALL_POLL_SECONDS: Final[float] = 5.0
+_SECRET_BYTES: Final[int] = 24
+
+
+@pure
+def generate_secrets() -> NekoSecrets:
+    return NekoSecrets(
+        user_password=SecretStr(secrets_module.token_urlsafe(_SECRET_BYTES)),
+        admin_password=SecretStr(secrets_module.token_urlsafe(_SECRET_BYTES)),
+        api_token=SecretStr(secrets_module.token_urlsafe(_SECRET_BYTES)),
+    )
+
+
+@pure
+def secrets_from_neko_yaml(text: str) -> NekoSecrets:
+    """The secrets a rendered ``neko.yaml`` carries, so a restarted service can speak to a stack that kept running."""
+    document = yaml.safe_load(text)
+    try:
+        multiuser = document["member"]["multiuser"]
+        return NekoSecrets(
+            user_password=SecretStr(multiuser["user_password"]),
+            admin_password=SecretStr(multiuser["admin_password"]),
+            api_token=SecretStr(document["session"]["api_token"]),
+        )
+    except (KeyError, TypeError) as e:
+        raise StackStartError("the rendered neko.yaml carries no secrets") from e
+
+
+@pure
+def describe_missing_install() -> str | None:
+    """Why the stack cannot start yet, or None once the env.d unit has installed everything the programs exec."""
+    missing = [
+        name
+        for name, is_present in (
+            ("Xorg", shutil.which("Xorg") is not None),
+            ("startxfce4", shutil.which("startxfce4") is not None),
+            ("pulseaudio", shutil.which("pulseaudio") is not None),
+            ("neko", NEKO_BINARY_PATH.is_file() and os.access(NEKO_BINARY_PATH, os.X_OK)),
+        )
+        if not is_present
+    ]
+    if not missing:
+        return None
+    return "waiting for env-converge to install " + ", ".join(missing)
+
+
+class ScreenStack(MutableModel):
+    """Starts, probes and stops the group, keeping the lifecycle and the current start's secrets."""
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    supervisor: SupervisorInterface = Field(frozen=True, description="supervisord, for the group's programs")
+    neko: NekoInterface = Field(frozen=True, description="neko's REST client; its token follows each start")
+    state_dir: Path = Field(frozen=True, description="data/.state/screen")
+    runtime_dir: Path = Field(default=Path(RUNTIME_DIR), frozen=True, description="The members' XDG runtime dir")
+    display_socket_path: Path = Field(default=Path(DISPLAY_SOCKET_PATH), frozen=True, description="Xorg's socket")
+    install_check: Callable[[], str | None] = Field(
+        default=describe_missing_install, frozen=True, description="Why the stack cannot start yet, or None"
+    )
+    neko_health_timeout_seconds: float = Field(
+        default=_NEKO_HEALTH_TIMEOUT_SECONDS, frozen=True, description="How long a start waits for neko's health route"
+    )
+    install_poll_seconds: float = Field(
+        default=_INSTALL_POLL_SECONDS, frozen=True, description="How often an install wait re-checks the unit"
+    )
+    on_lifecycle_changed: Callable[[], None] = Field(frozen=True, description="Called after every lifecycle change")
+    on_running: Callable[[NekoSecrets, NekoSession], None] = Field(
+        frozen=True, description="Called once neko answers, with the secrets and the service's admin session"
+    )
+    set_api_token: Callable[[SecretStr | None], None] = Field(
+        frozen=True, description="Hands each start's API token to the neko client"
+    )
+
+    lifecycle: Lifecycle = Field(default=Lifecycle.STOPPED, description="Where the stack is")
+    install_reason: str | None = Field(default=None, description="What is still installing")
+    stop_reason: str | None = Field(default=None, description="Why the stack ended")
+    secrets: NekoSecrets | None = Field(default=None, description="The current start's secrets")
+
+    _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    _starter: threading.Thread | None = PrivateAttr(default=None)
+    _give_up: threading.Event = PrivateAttr(default_factory=threading.Event)
+
+    def _set_lifecycle(self, lifecycle: Lifecycle, install_reason: str | None, stop_reason: str | None) -> None:
+        with self._lock:
+            self.lifecycle = lifecycle
+            self.install_reason = install_reason
+            self.stop_reason = stop_reason
+        self.on_lifecycle_changed()
+
+    def ensure_started(self) -> Lifecycle:
+        """Start the group unless it is running or coming up; answers the lifecycle as it stands."""
+        with self._lock:
+            if self.lifecycle in (Lifecycle.RUNNING, Lifecycle.STARTING, Lifecycle.INSTALLING):
+                return self.lifecycle
+            if self._starter is not None and self._starter.is_alive():
+                return self.lifecycle
+            # Callers see the start at once, before the thread has run.
+            self.lifecycle = Lifecycle.STARTING
+            self.stop_reason = None
+            self._starter = threading.Thread(target=self._start, name="screen-stack-start", daemon=True)
+            self._starter.start()
+        self.on_lifecycle_changed()
+        return Lifecycle.STARTING
+
+    def _start(self) -> None:
+        # The first boot of an existing workspace installs the stack through env-converge; the viewer shows
+        # "Installing the screen" until the unit is satisfied.
+        missing = self.install_check()
+        is_installing = False
+        while missing is not None and not self._give_up.is_set():
+            self._set_lifecycle(Lifecycle.INSTALLING, missing, None)
+            is_installing = True
+            self._give_up.wait(self.install_poll_seconds)
+            missing = self.install_check()
+        if is_installing:
+            self._set_lifecycle(Lifecycle.STARTING, None, None)
+        try:
+            self._bring_up()
+        except (StackStartError, SupervisorError, NekoError, OSError) as e:
+            logger.warning("The Screen's stack did not come up: {}", e)
+            self._stop_members()
+            self.set_api_token(None)
+            self._set_lifecycle(Lifecycle.STOPPED, None, f"the stack did not start: {e}")
+
+    def _bring_up(self) -> None:
+        new_secrets = generate_secrets()
+        self._render_configuration(new_secrets)
+        self.set_api_token(new_secrets.api_token)
+        for program in STACK_PROGRAMS:
+            self.supervisor.start_program(program)
+            if program == XORG_PROGRAM:
+                self._wait_for_display()
+        if not wait_until_healthy(self.neko, self.neko_health_timeout_seconds, _POLL_SECONDS, self._give_up):
+            raise StackStartError("neko never answered its health route")
+        service_session = self.neko.login(
+            SERVICE_SESSION_NAME, new_secrets.admin_password.get_secret_value(), is_owner=True
+        )
+        with self._lock:
+            self.secrets = new_secrets
+        self.on_running(new_secrets, service_session)
+        self._set_lifecycle(Lifecycle.RUNNING, None, None)
+
+    def _render_configuration(self, new_secrets: NekoSecrets) -> None:
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        self.runtime_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        (self.state_dir / XORG_CONF_FILENAME).write_text(render_xorg_conf())
+        (self.state_dir / PULSE_SCRIPT_FILENAME).write_text(render_pulse_script())
+        neko_yaml = self.state_dir / NEKO_YAML_FILENAME
+        neko_yaml.touch(mode=0o600, exist_ok=True)
+        neko_yaml.chmod(0o600)
+        neko_yaml.write_text(render_neko_yaml(new_secrets))
+
+    def _wait_for_display(self) -> None:
+        deadline = time.monotonic() + _DISPLAY_SOCKET_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            if self.display_socket_path.exists():
+                return
+            if self.supervisor.program_state(XORG_PROGRAM) in (ProgramState.EXITED, ProgramState.FATAL):
+                raise StackStartError(f"{XORG_PROGRAM} exited before opening the display")
+            self._give_up.wait(_POLL_SECONDS)
+        raise StackStartError(f"{XORG_PROGRAM} did not open {self.display_socket_path}")
+
+    def _stop_members(self) -> None:
+        # neko first (its viewers see the stop), then the session, PulseAudio and the X server last.
+        for program in (NEKO_PROGRAM, SESSION_PROGRAM, PULSE_PROGRAM, XORG_PROGRAM):
+            try:
+                self.supervisor.stop_program(program)
+            except SupervisorError as e:
+                logger.warning("Could not stop {}: {}", program, e)
+
+    def stop(self, reason: str) -> None:
+        """End the group (Quit, the service's own shutdown) and record why; a start in flight gives up."""
+        self._give_up.set()
+        self._stop_members()
+        self.set_api_token(None)
+        with self._lock:
+            self.secrets = None
+        self._set_lifecycle(Lifecycle.STOPPED, None, reason)
+
+    def is_any_member_running(self) -> bool:
+        return any(
+            self.supervisor.program_state(program) in (ProgramState.RUNNING, ProgramState.STARTING)
+            for program in STACK_PROGRAMS
+        )
+
+    def mark_stopped(self, reason: str) -> None:
+        """The watcher says the group ended on its own."""
+        self.set_api_token(None)
+        with self._lock:
+            self.secrets = None
+        self._set_lifecycle(Lifecycle.STOPPED, None, reason)
+
+    def adopt_running_stack(self) -> bool:
+        """At service start: when every member is RUNNING and neko answers, take the stack over from the previous
+        service life with the secrets its neko.yaml carries. Otherwise leave the lifecycle stopped."""
+        neko_yaml = self.state_dir / NEKO_YAML_FILENAME
+        states = {program: self.supervisor.program_state(program) for program in STACK_PROGRAMS}
+        if any(state != ProgramState.RUNNING for state in states.values()) or not neko_yaml.is_file():
+            return False
+        try:
+            found_secrets = secrets_from_neko_yaml(neko_yaml.read_text())
+        except (OSError, StackStartError, yaml.YAMLError) as e:
+            logger.warning("The running stack's neko.yaml is unreadable ({}); leaving it alone", e)
+            return False
+        self.set_api_token(found_secrets.api_token)
+        if not self.neko.is_healthy():
+            self.set_api_token(None)
+            return False
+        try:
+            service_session = self.neko.login(
+                SERVICE_SESSION_NAME, found_secrets.admin_password.get_secret_value(), is_owner=True
+            )
+        except NekoError as e:
+            logger.warning("Could not log the service in to the running neko ({}); leaving it alone", e)
+            self.set_api_token(None)
+            return False
+        with self._lock:
+            self.secrets = found_secrets
+        self.on_running(found_secrets, service_session)
+        self._set_lifecycle(Lifecycle.RUNNING, None, None)
+        return True

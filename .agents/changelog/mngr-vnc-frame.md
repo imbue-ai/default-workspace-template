@@ -1,0 +1,1 @@
+The `manage-desktop` skill names the Screen (the `screen` app, the workspace's one streamed Linux desktop) and points at its `screen` command for driving it, since the layout ops only place its window.

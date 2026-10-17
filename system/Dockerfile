@@ -88,6 +88,7 @@ COPY system/libs/workspace_ui/package.json /home/user/workspace/system/libs/work
 COPY system/apps/system_interface/frontend/package.json /home/user/workspace/system/apps/system_interface/frontend/
 COPY system/apps/chat/frontend/package.json /home/user/workspace/system/apps/chat/frontend/
 COPY system/apps/getting_started/frontend/package.json /home/user/workspace/system/apps/getting_started/frontend/
+COPY system/apps/screen/frontend/package.json /home/user/workspace/system/apps/screen/frontend/
 
 # Dependency install (manifests only). Shared verbatim with the Lima provider.
 # Copied with its sibling _mngr_git_auth.sh (which it sources via `dirname "$0"`).
@@ -102,7 +103,8 @@ COPY system/apps/getting_started/frontend/package.json /home/user/workspace/syst
 # helper treats as absent), and the secret never lands in a layer.
 COPY system/scripts/install_dependencies.sh /usr/local/bin/default-workspace-template-install-dependencies
 COPY system/scripts/_mngr_git_auth.sh /usr/local/bin/_mngr_git_auth.sh
-RUN chmod +x /usr/local/bin/default-workspace-template-install-dependencies && default-workspace-template-install-dependencies
+RUN --mount=type=secret,id=mngr_internal_git_token,required=false \
+    chmod +x /usr/local/bin/default-workspace-template-install-dependencies && default-workspace-template-install-dependencies
 
 # End pre-COPY manifest layer. Source-changing layers begin below.
 
@@ -112,7 +114,8 @@ COPY . /home/user/workspace/
 # Build the workspace from full source. Shared verbatim with the Lima provider.
 # With a private pin, set_mngr_pin.py gives this RUN the same secret mount as
 # the dependency install above: the tool installs fetch mngr from the pin.
-RUN bash /home/user/workspace/system/scripts/build_workspace.sh
+RUN --mount=type=secret,id=mngr_internal_git_token,required=false \
+    bash /home/user/workspace/system/scripts/build_workspace.sh
 
 # Move the baked workspace off the volume mount path so the shipped
 # image has /home/user/workspace/ EMPTY. At runtime, /home/user is a persistent

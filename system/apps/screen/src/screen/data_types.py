@@ -1,0 +1,171 @@
+from enum import auto
+
+from pydantic import ConfigDict
+from pydantic import Field
+from pydantic import SecretStr
+
+from imbue.imbue_common.enums import UpperCaseStrEnum
+from imbue.imbue_common.frozen_model import FrozenModel
+from screen.primitives import AgentId
+from screen.primitives import DisplayName
+from screen.primitives import NekoSessionId
+from screen.primitives import NekoToken
+from screen.primitives import XWindowId
+
+
+class Lifecycle(UpperCaseStrEnum):
+    """Where the stack is: the env.d unit still installing it, the group coming up, streaming, or ended."""
+
+    INSTALLING = auto()
+    STARTING = auto()
+    RUNNING = auto()
+    STOPPED = auto()
+
+
+class Controller(UpperCaseStrEnum):
+    """Who drives the Screen: a human session, an agent holding the lease, or nobody."""
+
+    HUMAN = auto()
+    AGENT = auto()
+    NOBODY = auto()
+
+
+class AcquireStatus(UpperCaseStrEnum):
+    """What an agent's ``acquire`` came to (the fleet API's vocabulary, which its CLI's exit codes follow)."""
+
+    ACQUIRED = auto()
+    BUSY_HUMAN = auto()
+    BUSY_AGENT = auto()
+    TIMED_OUT = auto()
+
+
+class RequestIdentity(FrozenModel):
+    """The requester a proxy vouched for in ``X-Imbue-Identity``: the owner flag always, the account when shared."""
+
+    # The header is cross-version wire data from the proxies; a field this build does not know must never make
+    # it unreadable.
+    model_config = ConfigDict(extra="ignore")
+
+    owner: bool = Field(description="Whether the requester is the workspace's owner")
+    user_id: str | None = Field(default=None, description="The account's user id (absent for an unshared workspace)")
+    email: str | None = Field(
+        default=None, description="The account's verified email, present exactly when user_id is"
+    )
+    name: str | None = Field(
+        default=None, description="A display name an older proxy stamps; absent from current ones"
+    )
+
+
+class NekoSecrets(FrozenModel):
+    """What neko is configured with at a stack start and what the service keeps to speak to it."""
+
+    user_password: SecretStr = Field(description="The multiuser provider's password for human sessions")
+    admin_password: SecretStr = Field(description="The multiuser provider's password for the service's event session")
+    api_token: SecretStr = Field(description="The API token the service's REST calls carry")
+
+
+class ScreenSize(FrozenModel):
+    """A display mode as neko reports it."""
+
+    width: int = Field(description="Width in pixels")
+    height: int = Field(description="Height in pixels")
+    rate: int = Field(description="Refresh rate in Hz")
+
+
+class QueuedAgent(FrozenModel):
+    """An agent waiting to resume once the Screen frees."""
+
+    agent_id: AgentId = Field(description="The agent's chat id")
+    agent_name: str | None = Field(default=None, description="The agent's display name, when it gave one")
+
+
+class ControlRecord(FrozenModel):
+    """The lease as ``control.json`` keeps it across a service restart."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    controller: Controller = Field(default=Controller.NOBODY, description="Who drives the Screen")
+    owner_agent_id: AgentId | None = Field(default=None, description="The agent holding the lease, when one does")
+    owner_agent_name: str | None = Field(default=None, description="That agent's display name")
+    human_pinned: bool = Field(default=False, description="Whether the human took control explicitly")
+    human_session_id: NekoSessionId | None = Field(
+        default=None, description="The neko session of the human in control, when one is"
+    )
+    human_name: str | None = Field(default=None, description="That human's display name")
+    resume_queue: tuple[QueuedAgent, ...] = Field(default=(), description="Agents to wake when the Screen frees")
+
+
+class ControlView(FrozenModel):
+    """The lease as the viewer and the agent command see it."""
+
+    controller: Controller = Field(description="Who drives the Screen")
+    human_pinned: bool = Field(description="Whether the human took control explicitly")
+    human_session_id: NekoSessionId | None = Field(description="The neko session of the human in control")
+    human_name: str | None = Field(description="That human's display name")
+    agent_id: AgentId | None = Field(description="The agent holding the lease")
+    agent_name: str | None = Field(description="That agent's display name")
+    waiting: tuple[str, ...] = Field(description="Display names of the agents queued, in order")
+    idle_seconds: int | None = Field(description="How long the agent's lease has been idle, while an agent holds it")
+    idle_release_seconds: int | None = Field(description="Seconds until the idle lease frees itself")
+
+
+class ChromiumView(FrozenModel):
+    """The state of the Chromium the browser launch path starts; a placeholder until the browser migrates here."""
+
+    state: str = Field(description="``absent`` until the migration lands")
+
+
+class ScreenState(FrozenModel):
+    """The ``GET /api/state`` document (docs/system/specs/screen/spec.md section 10.1)."""
+
+    lifecycle: Lifecycle = Field(description="Where the stack is")
+    install_reason: str | None = Field(description="What the env.d unit has not installed yet, while installing")
+    stop_reason: str | None = Field(description="Why the stack ended, while stopped")
+    title: str = Field(description="The frontmost X window's title, or the app's name for an empty desktop")
+    video_id: str = Field(description="The video profile every viewer selects")
+    control: ControlView = Field(description="The lease")
+    screen_size: ScreenSize | None = Field(description="The display's current mode, while running")
+    chromium: ChromiumView = Field(description="The browser's state")
+
+
+class XWindow(FrozenModel):
+    """One X window as ``wmctrl -lpxG`` lists it."""
+
+    id: XWindowId = Field(description="The window id")
+    desktop: int = Field(description="The desktop the window is on (-1 for a sticky window)")
+    pid: int = Field(description="The owning process, or 0 when the window does not say")
+    x: int = Field(description="Left edge")
+    y: int = Field(description="Top edge")
+    width: int = Field(description="Width in pixels")
+    height: int = Field(description="Height in pixels")
+    window_class: str = Field(description="The WM_CLASS, ``instance.class``")
+    title: str = Field(description="The window's title")
+
+
+class NekoSession(FrozenModel):
+    """A neko session the service logged a human in to, or its own admin session."""
+
+    session_id: NekoSessionId = Field(description="neko's session id")
+    token: NekoToken = Field(description="The session token")
+    name: DisplayName = Field(description="The display name the session was logged in with")
+    is_owner: bool = Field(description="Whether the identity behind it is the workspace's owner")
+    is_admin: bool = Field(description="Whether it was logged in with the admin password (the service's own)")
+
+
+class ScreenStopped(FrozenModel):
+    """What the watcher reports when the group ends: the member that left and why."""
+
+    member: str = Field(description="The program that left RUNNING")
+    reason: str = Field(description="How it left, in words")
+
+
+class NekoSessionRecord(FrozenModel):
+    """A session as neko's sessions route lists it: who it is and whether it is connected right now."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    session_id: NekoSessionId = Field(description="neko's session id")
+    name: str = Field(description="The session's display name")
+    is_admin: bool = Field(description="Whether the session is an admin")
+    is_connected: bool = Field(description="Whether a WebSocket is open for it")
+    not_connected_since: str | None = Field(description="When it last disconnected, as neko timestamps it")
