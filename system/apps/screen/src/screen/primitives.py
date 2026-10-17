@@ -35,9 +35,13 @@ SESSION_PROGRAM: Final[str] = "screen-session"
 NEKO_PROGRAM: Final[str] = "screen-neko"
 STACK_PROGRAMS: Final[tuple[str, ...]] = (XORG_PROGRAM, PULSE_PROGRAM, SESSION_PROGRAM, NEKO_PROGRAM)
 
-# The display cap (spec D1) and the modes xorg.conf is seeded with (spec section 7.1).
+# The display cap (spec D1), the floor and the quantum of a requested size (spec section 7.2), and the modes
+# xorg.conf is seeded with (spec section 7.1).
 MAX_WIDTH: Final[int] = 1920
 MAX_HEIGHT: Final[int] = 1080
+MIN_WIDTH: Final[int] = 640
+MIN_HEIGHT: Final[int] = 480
+SIZE_QUANTUM_PX: Final[int] = 16
 SEEDED_MODES: Final[tuple[tuple[int, int], ...]] = ((1920, 1080), (1600, 900), (1280, 720))
 
 # The video ids of the three profiles (spec section 8.1), in neko's order.
@@ -45,6 +49,11 @@ VIDEO_ID_IDLE: Final[str] = "idle"
 VIDEO_ID_WATCH: Final[str] = "watch"
 VIDEO_ID_CONTROL: Final[str] = "control"
 VIDEO_IDS: Final[tuple[str, ...]] = (VIDEO_ID_IDLE, VIDEO_ID_WATCH, VIDEO_ID_CONTROL)
+
+# The profile chooser's clocks (spec section 8.1): how recent a human's input must be for ``control``, and how long
+# with no input at all before ``idle``.
+CONTROL_INPUT_WINDOW_SECONDS: Final[float] = 10.0
+IDLE_AFTER_SECONDS: Final[float] = 60.0
 
 # What the viewer's title bar reads for an empty desktop (spec section 4.1).
 DEFAULT_TITLE: Final[str] = "Screen"

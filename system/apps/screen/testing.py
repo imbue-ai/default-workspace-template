@@ -32,6 +32,19 @@ _DEFAULT_WAIT_SECONDS: Final[float] = 10.0
 _POLL_SECONDS: Final[float] = 0.02
 
 
+class ManualClock:
+    """A monotonic clock a test advances by hand, standing in for ``time.monotonic``."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
 def wait_until(predicate: Callable[[], bool], timeout_seconds: float = _DEFAULT_WAIT_SECONDS) -> bool:
     """Poll ``predicate`` until it holds or the deadline passes."""
     deadline = time.monotonic() + timeout_seconds

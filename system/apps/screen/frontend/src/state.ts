@@ -34,7 +34,15 @@ export interface ScreenStateDocument {
 export type ServiceEvent =
   | ({ type: "state" } & ScreenStateDocument)
   | { type: "stopped"; reason: string; member?: string }
+  | { type: "profile"; video_id: string }
+  | { type: "clipboard"; kind: string }
   | { type: "handoff_request"; agent_name: string; reason: string };
+
+export interface ScreenSizeAnswer {
+  applied: boolean;
+  reason: string | null;
+  screen_size: ScreenSizeDocument | null;
+}
 
 export interface NekoSessionAnswer {
   session_id: string;

@@ -7,6 +7,8 @@ from pydantic import SecretStr
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.mutable_model import MutableModel
+from screen.data_types import DisplayModes
+from screen.data_types import ModeAddition
 from screen.data_types import NekoSession
 from screen.data_types import NekoSessionRecord
 from screen.data_types import ScreenSize
@@ -59,6 +61,18 @@ class WindowToolsInterface(MutableModel, ABC):
     @abstractmethod
     def activate_window(self, window_id: XWindowId) -> None:
         """Raise and focus a window."""
+
+
+class DisplayModesInterface(MutableModel, ABC):
+    """What the sizing asks the X server through xrandr: the advertised modes, and adding one."""
+
+    @abstractmethod
+    def query(self) -> DisplayModes:
+        """The connected output and the modes it advertises."""
+
+    @abstractmethod
+    def add_mode(self, addition: ModeAddition) -> None:
+        """Create the modeline and add it to the output."""
 
 
 class AgentMessengerInterface(MutableModel, ABC):
@@ -115,6 +129,10 @@ class NekoInterface(MutableModel, ABC):
     @abstractmethod
     def screen_size(self) -> ScreenSize:
         """The display's current mode."""
+
+    @abstractmethod
+    def set_screen_size(self, size: ScreenSize) -> ScreenSize:
+        """Select an advertised mode; neko restarts the capture and broadcasts ``screen/updated``."""
 
     @abstractmethod
     def list_sessions(self) -> list[NekoSessionRecord]:

@@ -1,4 +1,3 @@
-import os
 import threading
 from pathlib import Path
 
@@ -36,8 +35,9 @@ class FakeSupervisor(SupervisorInterface):
         with self._lock:
             self.calls.append(("stop", program))
             self.states[program] = ProgramState.STOPPED
-        if program == XORG_PROGRAM and self.display_socket_path is not None and self.display_socket_path.exists():
-            os.unlink(self.display_socket_path)
+        # An abandoned start and the stop that abandoned it may both stop Xorg, so the unlink races itself.
+        if program == XORG_PROGRAM and self.display_socket_path is not None:
+            self.display_socket_path.unlink(missing_ok=True)
 
     def program_state(self, program: str) -> ProgramState:
         with self._lock:

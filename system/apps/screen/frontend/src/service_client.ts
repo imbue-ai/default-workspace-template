@@ -1,6 +1,6 @@
 /** The service's own routes and its ``/api/ws`` event socket, with a reconnecting subscription. */
 
-import type { ConnectInfo, NekoSessionAnswer, ScreenStateDocument, ServiceEvent } from "./state";
+import type { ConnectInfo, NekoSessionAnswer, ScreenSizeAnswer, ScreenStateDocument, ServiceEvent } from "./state";
 
 const RECONNECT_MS = 1500;
 
@@ -64,6 +64,30 @@ export function postTakeControl(sessionId: string): Promise<VerbOutcome> {
 
 export function postReturnControl(sessionId: string): Promise<VerbOutcome> {
   return postControlVerb("/api/control/return", sessionId);
+}
+
+/** The controller's stage size (spec section 7.2); the service quantizes and clamps it. */
+export async function postScreenSize(
+  width: number,
+  height: number,
+  sessionId: string,
+): Promise<ScreenSizeAnswer | null> {
+  const response = await fetch("/api/screen-size", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ width, height, session_id: sessionId }),
+  });
+  if (!response.ok) return null;
+  return (await response.json()) as ScreenSizeAnswer;
+}
+
+/** This session sent input: the profile chooser's clock (spec section 8.1). */
+export async function postInputSeen(sessionId: string): Promise<void> {
+  await fetch("/api/input-seen", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId }),
+  });
 }
 
 export async function fetchConnectInfo(isRelay: boolean): Promise<ConnectInfo> {

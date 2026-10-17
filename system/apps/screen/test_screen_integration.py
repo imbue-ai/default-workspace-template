@@ -28,6 +28,7 @@ from screen.primitives import STACK_PROGRAMS
 from screen.proxy import NekoProxy
 from screen.routes import build_app
 from screen.service import ScreenService
+from screen.sizing import XrandrDisplayModes
 from screen.stack import NEKO_BINARY_PATH
 from screen.stack import ScreenStack
 from screen.stack import describe_missing_install
@@ -69,7 +70,9 @@ def live(
         state_dir=state_dir,
         neko=neko,
         window_tools=DisplayWindowTools(),
+        display_modes=XrandrDisplayModes(),
         launcher=DetachedProcessLauncher(working_directory=Path.cwd()),
+        is_clipboard_monitor_enabled=False,
         messenger=RecordingMessenger(),
     )
     stack = ScreenStack(

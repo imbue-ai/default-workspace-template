@@ -17,6 +17,8 @@ dependencies = [
     "pillow>=10",
     "pydantic>=2.0",
     "pydantic-settings>=2.13.1",
+    # The clipboard monitor's XFixes notifications; xclip does the selection itself.
+    "python-xlib>=0.33",
     # neko's configuration file is YAML, the one format that carries its pipeline list.
     "pyyaml>=6",
     "simple-websocket>=1.0",

@@ -38,5 +38,17 @@ class WindowToolError(ScreenError):
     """wmctrl or xdotool failed or answered something unreadable."""
 
 
+class DisplayModeError(ScreenError):
+    """xrandr failed, or the display advertises no output to add a mode to."""
+
+
+class ClipboardError(ScreenError):
+    """xclip could not set or read the X clipboard."""
+
+
+class InvalidScreenSizeError(ScreenError, ValueError):
+    """A requested size is not a pair of positive integers."""
+
+
 class ServeError(ScreenError):
     """The page server could not bind or shut down as asked."""

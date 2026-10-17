@@ -6,6 +6,7 @@ import pytest
 import yaml
 from pydantic import SecretStr
 
+from mock_display_modes_test import FakeDisplayModes
 from mock_messenger_test import RecordingLauncher
 from mock_messenger_test import RecordingMessenger
 from mock_neko_test import FakeNeko
@@ -136,9 +137,11 @@ def test_shutdown_ends_a_stack_still_waiting_for_its_install(
         state_dir=tmp_path / "state",
         neko=fake_neko,
         window_tools=FakeWindowTools(),
+        display_modes=FakeDisplayModes(),
         launcher=RecordingLauncher(),
         messenger=recording_messenger,
         is_event_subscription_enabled=False,
+        is_clipboard_monitor_enabled=False,
     )
     stack = ScreenStack(
         supervisor=fake_supervisor,
