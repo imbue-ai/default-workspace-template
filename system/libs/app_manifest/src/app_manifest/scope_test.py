@@ -168,9 +168,10 @@ def test_a_declared_wiring_program_may_be_an_event_listener(tmp_path: Path) -> N
 
     wiring = find_wiring_sections(tmp_path, load_manifest(manifest_path, repo_root=tmp_path))
 
+    # Drop-ins are read in name order, as supervisord reads them.
     assert [(section.path, list(section.sections)) for section in wiring] == [
-        ("system/supervisord.conf.d/news.conf", ["program:news"]),
         ("system/supervisord.conf.d/news-watch.conf", ["eventlistener:news-watch"]),
+        ("system/supervisord.conf.d/news.conf", ["program:news"]),
     ]
 
 
