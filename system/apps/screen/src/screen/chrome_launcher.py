@@ -209,7 +209,9 @@ class SubprocessChromiumLauncher(ChromiumLauncherInterface):
             if request.is_sandbox_disabled:
                 raise
             logger.warning("A sandboxed Chromium launch failed; retrying with --no-sandbox")
-            return self._launch_once(request.model_copy_update(to_update(request.field_ref().is_sandbox_disabled, True)))
+            return self._launch_once(
+                request.model_copy_update(to_update(request.field_ref().is_sandbox_disabled, True))
+            )
 
     def _launch_once(self, request: ChromiumLaunchRequest) -> ChromiumHandleInterface:
         executable = str(request.executable)

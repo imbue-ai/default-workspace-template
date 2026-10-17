@@ -130,7 +130,11 @@ def test_kill_escalates_to_sigkill_and_reaps_a_chromium_that_ignores_sigterm(tmp
         stderr=subprocess.DEVNULL,
     )
     handle = ChromiumProcess(
-        http_endpoint="http://127.0.0.1:1", pid=process.pid, process=process, profile_dir=tmp_path, kill_wait_seconds=0.3
+        http_endpoint="http://127.0.0.1:1",
+        pid=process.pid,
+        process=process,
+        profile_dir=tmp_path,
+        kill_wait_seconds=0.3,
     )
     assert handle.is_alive()
     handle.kill()
