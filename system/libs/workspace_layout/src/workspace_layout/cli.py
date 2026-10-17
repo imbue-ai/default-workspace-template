@@ -104,8 +104,8 @@ the params by the shell and answers the page to open (the terminal's and the bro
 the chat's ``new``, ``send``, and ``draft``), so the window opens at the page the app answered.
 A window of the app already at that path is focused rather than duplicated unless
 ``--if-present new`` is passed. The window's id (the new one's, or the focused one's) is
-printed to stdout. To open a folder in the file viewer, ``open files --path
-/home/user/workspace/data/notes/`` (the viewer serves the filesystem root, so the path is
+printed to stdout. To open a folder in Files, ``open files --path
+/home/user/workspace/data/notes/`` (Files serves the filesystem root, so the path is
 absolute); the ``path`` launch parameter (``open files --param path=/home/user/workspace/data/notes/``)
 lands in the same folder but as a window at ``/home/user/workspace/?path=...``, and a window is
 focused only when its path matches exactly, so use one form per folder.

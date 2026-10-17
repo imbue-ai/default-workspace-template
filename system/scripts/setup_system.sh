@@ -449,7 +449,7 @@ else
     bash "$setup_dir/default-workspace-template-install-secret-scanners"
 fi
 
-# owner-exec (the in-container exec daemon), dufs (the file-viewer server) and
+# owner-exec (the in-container exec daemon), dufs (the Files app's server) and
 # earlyoom (the OOM-prevention daemon; see install_earlyoom.sh for why it is a
 # fork), each a pinned, sha256-verified static binary with its own idempotent
 # installer.

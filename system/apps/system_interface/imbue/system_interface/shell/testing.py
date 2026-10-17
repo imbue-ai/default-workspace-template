@@ -187,7 +187,7 @@ BUILTIN_SHORTCUT_APPS_WITH_CHAT: Final[tuple[str, ...]] = ("chat", *BUILTIN_SHOR
 
 def builtin_rows_toml_before_chat() -> tuple[str, ...]:
     """The rows of the built-in apps that register before the chat, shaped as their manifests make them: the shell
-    (internal), Getting Started, the file viewer, the browser, and the terminal."""
+    (internal), Getting Started, Files, the browser, and the terminal."""
     return (
         registry_row_toml("system_interface", "http://localhost:8000", is_internal=True, is_critical=True),
         registry_row_toml(
@@ -201,10 +201,10 @@ def builtin_rows_toml_before_chat() -> tuple[str, ...]:
         registry_row_toml(
             "files",
             TEST_FILES_URL,
-            display_name="File Viewer",
+            display_name="Files",
             launcher_rank=20,
             default_shortcut=("new", "new"),
-            launch_paths=[("new", "File Viewer", "/home/user/workspace/")],
+            launch_paths=[("new", "Files", "/home/user/workspace/")],
         ),
         registry_row_toml(
             "browser",
@@ -514,20 +514,20 @@ def read_stub_update_self_calls(repo_root: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text().splitlines() if line]
 
 
-# The File Viewer (``system/apps/files``): dufs, a binary the workspace image installs, serving the workspace's
-# vendored and patched frontend. Tests that run the real viewer skip where dufs is not installed.
+# Files (``system/apps/files``): dufs, a binary the workspace image installs, serving the Files frontend's build. Tests
+# that run the real Files skip where dufs is not installed.
 FILES_APP_DIRECTORY: Final[Path] = Path(__file__).resolve().parents[4] / "files"
 DUFS_BINARY: Final[str | None] = shutil.which("dufs")
 _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[6]
-# The workspace's own path, where the viewer's pages import the shell's app contract module from
-# (``files/assets/shell.js``): dufs serves the filesystem root, so the module's path there is its URL.
+# The workspace's own path, where Files' "not found" page imports the shell's app contract module from: dufs serves
+# the filesystem root, so the module's path there is its URL.
 _WORKSPACE_ROOT: Final[PurePosixPath] = PurePosixPath("/home/user/workspace")
 
 
 @contextmanager
-def running_file_viewer(root: Path) -> Generator[str, None, None]:
-    """Run dufs over ``root`` as the File Viewer's program line runs it over ``/``, with the shell's built app contract
-    module at its workspace path under ``root``, where the viewer's pages import it; yields its loopback URL."""
+def running_files(root: Path) -> Generator[str, None, None]:
+    """Run dufs over ``root`` as Files runs it over ``/``, with the Files frontend's build as its assets and the shell's
+    built app contract module at its workspace path under ``root``; yields its loopback URL."""
     assert DUFS_BINARY is not None, "dufs is not installed"
     served_contract = root / _WORKSPACE_ROOT.relative_to("/") / SHELL_APP_CONTRACT_PATH
     served_contract.parent.mkdir(parents=True, exist_ok=True)
@@ -535,7 +535,7 @@ def running_file_viewer(root: Path) -> Generator[str, None, None]:
     port = find_free_port()
     url = f"http://127.0.0.1:{port}"
     command = [DUFS_BINARY, "--allow-all", "--bind", "127.0.0.1", "--port", str(port)]
-    command += ["--assets", str(FILES_APP_DIRECTORY / "assets"), str(root)]
+    command += ["--assets", str(FILES_APP_DIRECTORY / "static"), str(root)]
     process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         wait_for(
@@ -555,14 +555,14 @@ def running_file_viewer(root: Path) -> Generator[str, None, None]:
             process.wait(timeout=5.0)
 
 
-def file_viewer_registry_row(url: str) -> str:
-    """The File Viewer's registry row at ``url``, with the message handlers its own manifest declares."""
+def files_registry_row(url: str) -> str:
+    """Files' registry row at ``url``, with the message handlers its own manifest declares."""
     manifest = load_manifest(FILES_APP_DIRECTORY / "app.toml")
     return registry_row_toml(
         str(manifest.name),
         url,
         display_name=str(manifest.display_name),
-        launch_paths=(("new", "File Viewer", "/"),),
+        launch_paths=(("new", "Files", "/"),),
         message_handlers=[
             (str(handler.type), str(handler.path)) for handler in manifest.message_handlers if handler.path is not None
         ],

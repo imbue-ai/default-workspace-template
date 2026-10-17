@@ -1,7 +1,7 @@
 /**
- * The shell's toasts (plan-phone-interface.md): a failed operation says so in a short note that rises over the
- * desktop or above the phone's bar and goes away on its own, instead of a browser ``alert()`` that stops
- * everything until it is dismissed.
+ * A page's toasts: a failed operation says so in a short note that rises at the foot of the page and goes away on
+ * its own, instead of a browser ``alert()`` that stops everything until it is dismissed. ``components/toasts.ts``
+ * draws them.
  */
 
 export interface Toast {

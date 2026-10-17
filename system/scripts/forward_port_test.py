@@ -753,7 +753,7 @@ def _write_manifest(tmp_path: Path, body: str, icon: str | None = _ICON) -> Path
 
 _FULL_MANIFEST = """
 name = "files"
-display_name = "File Viewer"
+display_name = "Files"
 icon = "icon.svg"
 critical = false
 stop_when_no_windows = true
@@ -768,7 +768,7 @@ mode = "focus"
 
 [[launch_paths]]
 id = "new"
-label = "New File Viewer"
+label = "Files"
 path = "/"
 params = [{name = "path", label = "Path", required = false}]
 text_param = "path"
@@ -820,7 +820,7 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     assert row["url"] == "http://localhost:8300"
     assert _LABEL_RE.match(row["label"])
     assert row["icon"] == _ICON
-    assert row["display_name"] == "File Viewer"
+    assert row["display_name"] == "Files"
     assert "instances" not in row and "instances_url" not in row
     assert row["critical"] is False
     assert row["stop_when_no_windows"] is True
@@ -837,7 +837,7 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     # The row carries each launch path's param NAMES (the launcher reads them), its presets, and its method, text
     # and draft params, and none of those keys at all for a launch path that declares none of them.
     assert row["launch_paths"] == [
-        {"id": "new", "label": "New File Viewer", "path": "/", "params": ["path"], "text_param": "path"},
+        {"id": "new", "label": "Files", "path": "/", "params": ["path"], "text_param": "path"},
         {"id": "recent", "label": "Recent files", "path": "/recent"},
         {
             "id": "draft",
@@ -1195,7 +1195,7 @@ def test_registration_ignores_the_manifests_references_and_scope_tables(
     assert "scope" not in row
     assert "wiring" not in row
     # The keys the manifest does own still land, so this is not a vacuous pass.
-    assert row["display_name"] == "File Viewer"
+    assert row["display_name"] == "Files"
     assert row["priority"] == "files"
 
 

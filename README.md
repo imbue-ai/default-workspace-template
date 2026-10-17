@@ -24,7 +24,7 @@ you'll want to make:
 ## What's here
 
 - `apps/` - Everything you can open as a tab: the built-in apps (chat, the
-  terminal, the file viewer, the browser, Memory & disk) and the apps your agent builds for you. (A shortcut
+  terminal, Files, the browser, Memory & disk) and the apps your agent builds for you. (A shortcut
   to `system/apps/`.)
 - `skills/` - Everything your agent knows how to do: the built-in skills and
   the ones it has learned for you. (A shortcut to `.agents/skills/`.)

@@ -93,11 +93,9 @@ package = false
 members = ["system/libs/*", "system/services/*", "system/apps/*"]
 # system/libs/workspace_ui is a JavaScript library (the frontends' shared code), not a Python
 # package; system/apps/terminal_pty is a manifest alone (the terminal's pty origin), whose
-# program is an entry point of system/apps/terminal, and system/apps/files is a manifest
-# and a vendored frontend around the dufs binary its program line runs.
-# system/apps/datalib is likewise a manifest and a standard-library launcher around the
-# datalib-http binary.
-exclude = ["system/libs/workspace_ui", "system/apps/terminal_pty", "system/apps/files", "system/apps/datalib"]
+# program is an entry point of system/apps/terminal. system/apps/datalib is a manifest and a
+# standard-library launcher around the datalib-http binary.
+exclude = ["system/libs/workspace_ui", "system/apps/terminal_pty", "system/apps/datalib"]
 
 [tool.uv.sources]
 bootstrap = { workspace = true }
