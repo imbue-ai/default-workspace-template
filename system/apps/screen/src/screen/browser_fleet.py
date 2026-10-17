@@ -12,6 +12,7 @@ import secrets as secrets_module
 import shutil
 import threading
 from collections.abc import Callable
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -134,6 +135,47 @@ class Browser(MutableModel):
     @property
     def token_owner(self) -> AgentId | None:
         return self._token_owner
+
+    @property
+    def token_owner_name(self) -> str | None:
+        return self._token_owner_name
+
+    def remember_tabs(self, urls: Sequence[str], active_tab: int) -> None:
+        """What a start restores: the tab list and the index in front among it (the first when out of range)."""
+        with self._lock:
+            self.last_known_tabs = list(urls)
+            self.last_known_active_tab = active_tab if 0 <= active_tab < len(urls) else 0
+
+    def remember_tab_in_front(self, url: str) -> None:
+        """A page added to a stopped browser's list, to open in front when it starts."""
+        with self._lock:
+            self.last_known_tabs.append(url)
+            self.last_known_active_tab = len(self.last_known_tabs) - 1
+
+    def mark_stopped_by_user(self) -> None:
+        """The stop verb: stopped on purpose, so a stack start leaves it stopped; a held page is dropped."""
+        with self._lock:
+            self.lifecycle = BrowserLifecycle.STOPPED
+            self.is_stopped_by_user = True
+            self.pending_url = None
+
+    def mark_stopped_with_stack(self) -> None:
+        """The stack ended under it: stopped for this stack life and, unless the user had stopped it, launched again
+        when the stack next runs; a held page is dropped."""
+        with self._lock:
+            if self.lifecycle != BrowserLifecycle.STOPPED:
+                self.is_launch_wanted = True
+            self.lifecycle = BrowserLifecycle.STOPPED
+            self.pending_url = None
+
+    def mark_crashed(self) -> bool:
+        """Chromium died under a running browser; answers whether it was running (a stopped one has not crashed)."""
+        with self._lock:
+            if self.lifecycle != BrowserLifecycle.RUNNING:
+                return False
+            self.lifecycle = BrowserLifecycle.CRASHED
+            self.pending_url = None
+            return True
 
     def mint_token(self, agent_id: AgentId | None, agent_name: str | None) -> str:
         """A fresh capability token issued to one agent: minted on every launch (a CLI session reconnecting across
@@ -482,9 +524,7 @@ class BrowserFleet(MutableModel):
                 self.hold_pending_url(browser, start_url)
             return browser
         if start_url is not None:
-            with browser._lock:
-                browser.last_known_tabs.append(start_url)
-                browser.last_known_active_tab = len(browser.last_known_tabs) - 1
+            browser.remember_tab_in_front(start_url)
         self.start_browser(browser.name)
         return browser
 
@@ -575,10 +615,8 @@ class BrowserFleet(MutableModel):
         if missing is not None:
             raise ChromiumNotInstalledError(missing)
         restorable = [url for url in restore_tabs if is_restorable_url(url)]
-        with browser._lock:
-            if restorable:
-                browser.last_known_tabs = list(restorable)
-                browser.last_known_active_tab = active_tab if 0 <= active_tab < len(restorable) else 0
+        if restorable:
+            browser.remember_tabs(restorable, active_tab)
         urls = restorable or [BROWSER_HOME_URL]
         request = ChromiumLaunchRequest(
             executable=self.executable,
@@ -645,7 +683,7 @@ class BrowserFleet(MutableModel):
         if view.controller == Controller.NOBODY:
             status = self.control.acquire(
                 owner,
-                browser._token_owner_name,
+                browser.token_owner_name,
                 is_reclaim=False,
                 is_wait=False,
                 max_wait_seconds=None,
@@ -709,10 +747,7 @@ class BrowserFleet(MutableModel):
         if browser.lifecycle == BrowserLifecycle.STOPPED:
             return
         browser.refresh_tabs()
-        with browser._lock:
-            browser.lifecycle = BrowserLifecycle.STOPPED
-            browser.is_stopped_by_user = True
-            browser.pending_url = None
+        browser.mark_stopped_by_user()
         self.proxy_server.unregister(str(name))
         browser.teardown_chromium()
         self.checkpoint()
@@ -774,11 +809,7 @@ class BrowserFleet(MutableModel):
         for browser in browsers:
             self.proxy_server.unregister(str(browser.name))
             browser.teardown_chromium()
-            with browser._lock:
-                if browser.lifecycle != BrowserLifecycle.STOPPED:
-                    browser.is_launch_wanted = True
-                browser.lifecycle = BrowserLifecycle.STOPPED
-                browser.pending_url = None
+            browser.mark_stopped_with_stack()
         self.on_changed()
 
     def prepare_for_stack_stop(self) -> None:
@@ -863,11 +894,8 @@ class BrowserFleet(MutableModel):
     def mark_crashed(self, browser: Browser) -> None:
         """Chromium died unexpectedly: the browser reports ``crashed`` to agents and viewers rather than freezing,
         and its profile and last tabs stay for a start."""
-        with browser._lock:
-            if browser.lifecycle != BrowserLifecycle.RUNNING:
-                return
-            browser.lifecycle = BrowserLifecycle.CRASHED
-            browser.pending_url = None
+        if not browser.mark_crashed():
+            return
         logger.warning("Browser {} crashed (Chromium's connection was lost)", browser.name)
         self.proxy_server.unregister(str(browser.name))
         self.checkpoint()
