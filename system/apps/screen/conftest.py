@@ -5,11 +5,13 @@ import pytest
 from flask import Flask
 from flask.testing import FlaskClient
 
+from mock_broker_test import FakeBroker
 from mock_messenger_test import RecordingLauncher
 from mock_messenger_test import RecordingMessenger
 from mock_neko_test import FakeNeko
 from mock_supervisor_test import FakeSupervisor
 from mock_window_tools_test import FakeWindowTools
+from screen.connect_info import ConnectInfoAggregator
 from screen.proxy import NekoProxy
 from screen.routes import build_app
 from screen.service import ScreenService
@@ -32,8 +34,18 @@ def recording_messenger() -> RecordingMessenger:
 
 
 @pytest.fixture
+def fake_brokers() -> tuple[FakeBroker, FakeBroker]:
+    """The desktop and the share gateway as the service's connectivity brokers, answering nothing until a test says."""
+    return (FakeBroker(name="desktop"), FakeBroker(name="share gateway"))
+
+
+@pytest.fixture
 def service(
-    tmp_path: Path, fake_supervisor: FakeSupervisor, fake_neko: FakeNeko, recording_messenger: RecordingMessenger
+    tmp_path: Path,
+    fake_supervisor: FakeSupervisor,
+    fake_neko: FakeNeko,
+    recording_messenger: RecordingMessenger,
+    fake_brokers: tuple[FakeBroker, FakeBroker],
 ) -> Iterator[ScreenService]:
     """A service over fakes whose stack starts at once, with no event subscription."""
     built = ScreenService(
@@ -43,6 +55,7 @@ def service(
         window_tools=FakeWindowTools(),
         launcher=RecordingLauncher(),
         messenger=recording_messenger,
+        connectivity=ConnectInfoAggregator(brokers=fake_brokers, deadline_seconds=1.0),
         is_event_subscription_enabled=False,
     )
     stack = ScreenStack(

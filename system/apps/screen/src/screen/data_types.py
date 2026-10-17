@@ -1,4 +1,5 @@
 from enum import auto
+from typing import Any
 
 from pydantic import ConfigDict
 from pydantic import Field
@@ -37,6 +38,60 @@ class AcquireStatus(UpperCaseStrEnum):
     BUSY_HUMAN = auto()
     BUSY_AGENT = auto()
     TIMED_OUT = auto()
+
+
+class TransportProtocol(UpperCaseStrEnum):
+    """An ICE candidate's transport: what neko's UDP mux and TCP mux each carry (spec section 5.1)."""
+
+    UDP = auto()
+    TCP = auto()
+
+
+class MediaCandidate(FrozenModel):
+    """Where a published port of the workspace is reachable from a viewer: one rewritten ICE candidate's address."""
+
+    host: str = Field(description="The address a viewer dials: an IP or hostname")
+    port: int = Field(description="The port at that address")
+    protocol: TransportProtocol = Field(description="The transport the address carries")
+    guest_port: int | None = Field(
+        default=None, description="The port inside the workspace the address forwards to, when the broker says"
+    )
+
+
+class IceServer(FrozenModel):
+    """One ``RTCIceServer`` as a broker answered it, passed to the viewer unchanged (the TURN spec, section 4.2)."""
+
+    # Cloudflare decides the entry's keys; whatever it adds rides along to the viewer.
+    model_config = ConfigDict(extra="allow")
+
+    urls: str | tuple[str, ...] = Field(description="The STUN or TURN URLs")
+    username: str | None = Field(default=None, description="The TURN username, when the entry is a relay")
+    credential: str | None = Field(default=None, description="The TURN credential, when the entry is a relay")
+
+
+class IceServersAnswer(FrozenModel):
+    """What a broker's ICE servers route answered: the servers and when the credential expires."""
+
+    ice_servers: tuple[IceServer, ...] = Field(description="The servers, possibly none")
+    expires_at: str | None = Field(description="RFC 3339 expiry of the credential, when there is one")
+
+
+class ConnectInfo(FrozenModel):
+    """The ``GET /api/connect-info`` answer (spec section 5.2): the union of what the brokers said in time."""
+
+    ice_servers: tuple[IceServer, ...] = Field(description="Every ICE server the brokers answered")
+    candidates: tuple[MediaCandidate, ...] = Field(description="Where the ICE mux port is reachable, de-duplicated")
+    expires_at: str | None = Field(description="The earliest expiry among the credentials, when any")
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "ice_servers": [server.model_dump(exclude_none=True) for server in self.ice_servers],
+            "candidates": [
+                {"host": candidate.host, "port": candidate.port, "protocol": candidate.protocol.value.lower()}
+                for candidate in self.candidates
+            ],
+            "expires_at": self.expires_at,
+        }
 
 
 class RequestIdentity(FrozenModel):

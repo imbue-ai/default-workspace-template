@@ -40,3 +40,7 @@ class WindowToolError(ScreenError):
 
 class ServeError(ScreenError):
     """The page server could not bind or shut down as asked."""
+
+
+class ConnectivityBrokerError(ScreenError):
+    """A connectivity broker (the desktop through the latchkey proxy, the share gateway) refused or could not be reached."""

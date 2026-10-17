@@ -11,11 +11,16 @@ from pathlib import Path
 from flask.testing import FlaskClient
 from simple_websocket import Client as WebSocketClient
 
+from mock_broker_test import FakeBroker
 from mock_neko_test import FakeNeko
 from mock_supervisor_test import FakeSupervisor
 from mock_window_tools_test import FakeWindowTools
+from screen.data_types import IceServer
+from screen.data_types import IceServersAnswer
 from screen.data_types import Lifecycle
+from screen.data_types import MediaCandidate
 from screen.data_types import NekoSessionRecord
+from screen.data_types import TransportProtocol
 from screen.data_types import XWindow
 from screen.primitives import NekoSessionId
 from screen.primitives import XWindowId
@@ -66,8 +71,31 @@ def test_the_browser_launch_path_starts_the_stack_and_answers_the_root(
     assert wait_until(lambda: service.stack.lifecycle == Lifecycle.RUNNING)
 
 
-def test_connect_info_is_empty_in_this_wave(client: FlaskClient) -> None:
-    assert client.get("/api/connect-info").get_json() == {"ice_servers": [], "candidates": [], "expires_at": None}
+def test_connect_info_answers_the_brokers_union_and_asks_for_ice_servers_only_with_relay(
+    client: FlaskClient, fake_brokers: tuple[FakeBroker, FakeBroker]
+) -> None:
+    desktop, gateway = fake_brokers
+    desktop.candidates = (
+        MediaCandidate(host="127.0.0.1", port=32771, protocol=TransportProtocol.UDP, guest_port=59000),
+        MediaCandidate(host="127.0.0.1", port=32770, protocol=TransportProtocol.TCP, guest_port=22),
+    )
+    desktop.ice_servers = IceServersAnswer(
+        ice_servers=(IceServer(urls="stun:stun.cloudflare.com:3478"),), expires_at="2026-10-17T13:00:00Z"
+    )
+    gateway.candidates = (MediaCandidate(host="relay.example", port=40123, protocol=TransportProtocol.TCP),)
+    direct = client.get("/api/connect-info").get_json()
+    assert direct == {
+        "ice_servers": [],
+        "candidates": [
+            {"host": "127.0.0.1", "port": 32771, "protocol": "udp"},
+            {"host": "relay.example", "port": 40123, "protocol": "tcp"},
+        ],
+        "expires_at": None,
+    }
+    relay = client.get("/api/connect-info?relay=1").get_json()
+    assert relay["ice_servers"] == [{"urls": "stun:stun.cloudflare.com:3478"}]
+    assert relay["expires_at"] == "2026-10-17T13:00:00Z"
+    assert desktop.calls == ["candidates", "candidates", "ice_servers"]
 
 
 def test_session_is_logged_in_with_the_identitys_name(
