@@ -547,11 +547,13 @@ export class DesktopStore {
     this.immersiveBridge.requestImmersive(windowId, true);
   }
 
-  /** Ask the chrome to leave immersive mode (the strip's control); the mode ends when the chrome says so. */
-  leaveImmersive(): void {
+  /** Ask the chrome to leave immersive mode (the strip's control, the menu's row); the mode ends when the chrome
+   *  says so. The ask names the window that entered it, else ``windowId``, the one the control belongs to: the
+   *  contract validates the id, so a mode the chrome entered on its own still needs a real one to leave by. */
+  leaveImmersive(windowId: string): void {
     const immersive = this.immersive;
     if (immersive === null) return;
-    this.immersiveBridge.requestImmersive(immersive.windowId ?? this.immersiveRequestWindowId ?? "", false);
+    this.immersiveBridge.requestImmersive(immersive.windowId ?? this.immersiveRequestWindowId ?? windowId, false);
   }
 
   /** The chrome said immersive mode changed (``minds:immersive-changed``), by a request of this shell's or on its

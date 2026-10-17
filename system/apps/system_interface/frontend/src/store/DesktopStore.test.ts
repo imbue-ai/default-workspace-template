@@ -2743,7 +2743,7 @@ describe("fullscreen and immersive mode", () => {
     expect(store.getImmersive()).toBeNull();
     store.onImmersiveChanged({ isOn: true, isKeyboardLocked: true, error: null });
     expect(store.getImmersive()).toEqual({ windowId: "win-1", isKeyboardLocked: true });
-    store.leaveImmersive();
+    store.leaveImmersive("win-1");
     expect(asks).toEqual([
       ["win-1", true],
       ["win-1", false],
@@ -2756,7 +2756,10 @@ describe("fullscreen and immersive mode", () => {
   });
 
   it("notes a refused request and takes the chrome's own changes, lock or no lock", async () => {
-    const store = await startedStore();
+    const asks: [string, boolean][] = [];
+    const immersive: ImmersiveBridge = { requestImmersive: (windowId, isOn) => asks.push([windowId, isOn]) };
+    const store = makeStore(() => undefined, { immersive });
+    await store.start(NO_LINK);
     store.setCanImmerse(true);
     store.onImmersiveChanged({ isOn: false, isKeyboardLocked: false, error: "fullscreen refused" });
     expect(notices()).toEqual([`${IMMERSIVE_REFUSED_NOTICE}: fullscreen refused`]);
@@ -2764,7 +2767,9 @@ describe("fullscreen and immersive mode", () => {
     // A change the chrome made on its own names no window.
     store.onImmersiveChanged({ isOn: true, isKeyboardLocked: false, error: null });
     expect(store.getImmersive()).toEqual({ windowId: null, isKeyboardLocked: false });
-    store.leaveImmersive();
+    // Leaving it is asked in the name of the window whose strip was pressed: the contract takes no empty id.
+    store.leaveImmersive("win-1");
+    expect(asks).toEqual([["win-1", false]]);
     expect(store.getImmersive()).not.toBeNull();
   });
 });

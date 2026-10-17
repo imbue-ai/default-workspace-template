@@ -581,7 +581,7 @@ export function App(): m.Component<AppAttrs> {
         toggleFullscreen: () => current.toggleFullscreen(windowId),
         isImmersive,
         immersive: current.getCanImmerse()
-          ? () => (isImmersive ? current.leaveImmersive() : current.requestImmersive(windowId))
+          ? () => (isImmersive ? current.leaveImmersive(windowId) : current.requestImmersive(windowId))
           : null,
       },
       share: app === undefined || app.critical ? null : () => openShareSettings(app),

@@ -165,7 +165,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                         isOn: immersive !== null,
                         isKeyboardLocked: immersive?.isKeyboardLocked === true,
                         onEnter: () => store.requestImmersive(window.id),
-                        onLeave: () => store.leaveImmersive(),
+                        onLeave: () => store.leaveImmersive(window.id),
                       }
                     : null,
                   onRaise: () => store.raiseWindow(window.id),
