@@ -56,3 +56,40 @@ class ServeError(ScreenError):
 
 class ConnectivityBrokerError(ScreenError):
     """A connectivity broker (the desktop through the latchkey proxy, the share gateway) refused or could not be reached."""
+
+
+class InvalidBrowserNameError(ScreenError, ValueError):
+    """A string is not a browser name (see ``browser_names.is_valid_browser_name``)."""
+
+
+class InvalidStartUrlError(ScreenError, ValueError):
+    """A start page is not an absolute http(s) URL with a host, or not one on this machine where that is required."""
+
+
+class UnknownBrowserError(ScreenError):
+    """No registered browser has the given name."""
+
+
+class DuplicateBrowserNameError(ScreenError):
+    """A chosen browser name collides with a live browser, a saved one, or an on-disk profile."""
+
+
+class FleetFullError(ScreenError):
+    """The fleet already holds as many launched browsers as it may."""
+
+
+class BrowserNotDrivableError(ScreenError):
+    """The browser cannot be driven right now: Chromium is still launching, it crashed, it is stopped, or the
+    fleet has no connection to it."""
+
+
+class ChromiumNotInstalledError(ScreenError):
+    """Fortress has not been installed by the env.d unit yet."""
+
+
+class ChromiumStartError(ScreenError):
+    """Chromium did not come up, or never published a debug port."""
+
+
+class CdpError(ScreenError):
+    """A CDP call returned an error payload, timed out, or could not be delivered."""
