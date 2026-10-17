@@ -283,11 +283,14 @@ _install_fortress() {
         *) _log "fortress: unsupported architecture $(uname -m)"; return 1 ;;
     esac
     _log "fortress: downloading $url"
-    local tmp_dir
-    tmp_dir="$(mktemp -d)"
+    # Staged on disk beside the install: /tmp is a 1 GiB tmpfs in the workspace, and the
+    # tarball plus its 600 MB tree do not fit there.
+    mkdir -p "$_FORTRESS_INSTALL_DIR"
+    local stage_dir
+    stage_dir="$(mktemp -d "${_FORTRESS_INSTALL_DIR}/.install.XXXXXX")"
     # shellcheck disable=SC2064
-    trap "rm -rf '$tmp_dir'" RETURN
-    local asset="$tmp_dir/fortress.tar.gz"
+    trap "rm -rf '$stage_dir'" RETURN
+    local asset="$stage_dir/fortress.tar.gz"
     if ! curl -fsSL --retry 3 --max-time 1200 -o "$asset" "$url"; then
         _log "fortress: download FAILED; the next converge retries"
         return 1
@@ -296,20 +299,20 @@ _install_fortress() {
         _log "fortress: SHA256 mismatch -- refusing to install"
         return 1
     fi
-    if ! tar xzf "$asset" -C "$tmp_dir"; then
+    if ! tar xzf "$asset" -C "$stage_dir"; then
         _log "fortress: extract FAILED; the next converge retries"
         return 1
     fi
-    if [ ! -f "$tmp_dir/$_FORTRESS_UNPACKED_DIR/tilion" ] || [ ! -f "$tmp_dir/$_FORTRESS_UNPACKED_DIR/chrome" ]; then
+    rm -f "$asset"
+    if [ ! -f "$stage_dir/$_FORTRESS_UNPACKED_DIR/tilion" ] || [ ! -f "$stage_dir/$_FORTRESS_UNPACKED_DIR/chrome" ]; then
         _log "fortress: the tarball does not unpack to $_FORTRESS_UNPACKED_DIR/{tilion,chrome}; the pin is wrong"
         return 1
     fi
     # The previous release goes before the new one lands, so the directory never
     # holds two Chromiums; the extensions beside it are kept.
-    mkdir -p "$_FORTRESS_INSTALL_DIR"
     find "$_FORTRESS_INSTALL_DIR" -mindepth 1 -maxdepth 1 -name 'fortress-v*' -exec rm -rf {} +
     rm -rf "${_FORTRESS_INSTALL_DIR}/tilion-fortress"
-    mv "$tmp_dir/$_FORTRESS_UNPACKED_DIR" "$_FORTRESS_VERSIONED_DIR"
+    mv "$stage_dir/$_FORTRESS_UNPACKED_DIR" "$_FORTRESS_VERSIONED_DIR"
     chmod +x "$_FORTRESS_VERSIONED_DIR/tilion" "$_FORTRESS_VERSIONED_DIR/chrome"
     mkdir -p "$(dirname "$_FORTRESS_STABLE_LINK")"
     ln -sfn "$_FORTRESS_VERSIONED_DIR/tilion" "$_FORTRESS_STABLE_LINK"
