@@ -15,6 +15,7 @@ from screen.proxy import NekoProxy
 from screen.routes import build_app
 from screen.service import ScreenService
 from screen.stack import ScreenStack
+from screen.xclipboard import XClipboard
 from testing import ManualClock
 
 
@@ -44,6 +45,41 @@ def manual_clock() -> ManualClock:
 
 
 @pytest.fixture
+def fake_xclip(tmp_path: Path) -> Path:
+    """A stand-in ``xclip``: ``-i`` records its target and stdin under the record directory, ``-o`` answers the
+    targets and payloads the test wrote there as ``out.<target>`` (a slash in the target spelled ``_``)."""
+    record_dir = tmp_path / "xclip-record"
+    record_dir.mkdir()
+    script = tmp_path / "xclip"
+    script.write_text(f"""#!/usr/bin/env bash
+set -eu
+record="{record_dir}"
+target=""
+mode=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -t) target="$2"; shift 2 ;;
+    -i) mode=in; shift ;;
+    -o) mode=out; shift ;;
+    *) shift ;;
+  esac
+done
+if [ "$mode" = in ]; then
+  printf '%s' "$target" > "$record/set.target"
+  cat > "$record/set.bytes"
+  exit 0
+fi
+if [ -f "$record/out.${{target//\\//_}}" ]; then
+  cat "$record/out.${{target//\\//_}}"
+  exit 0
+fi
+exit 1
+""")
+    script.chmod(0o755)
+    return script
+
+
+@pytest.fixture
 def service(
     tmp_path: Path,
     fake_supervisor: FakeSupervisor,
@@ -51,17 +87,21 @@ def service(
     fake_display_modes: FakeDisplayModes,
     recording_messenger: RecordingMessenger,
     manual_clock: ManualClock,
+    fake_xclip: Path,
 ) -> Iterator[ScreenService]:
-    """A service over fakes whose stack starts at once, with no event subscription, on a clock the test moves."""
+    """A service over fakes whose stack starts at once, with no event subscription and no clipboard monitor, on a
+    clock the test moves, with a recording xclip."""
     built = ScreenService(
         repo_root=tmp_path,
         state_dir=tmp_path / "state",
         neko=fake_neko,
         window_tools=FakeWindowTools(),
         display_modes=fake_display_modes,
+        clipboard=XClipboard(display=":4242", xclip_command=(str(fake_xclip),)),
         launcher=RecordingLauncher(),
         messenger=recording_messenger,
         is_event_subscription_enabled=False,
+        is_clipboard_monitor_enabled=False,
         clock=manual_clock,
     )
     stack = ScreenStack(

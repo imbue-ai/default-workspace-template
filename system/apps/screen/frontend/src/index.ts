@@ -5,7 +5,9 @@
  * frames it, reporting ``/`` with the title the service tracks, and owns the close chord (Ctrl+W goes to the
  * remote). The controller's stage size drives the Screen's size (section 7.2), the service's profile drives the
  * video every viewer selects (section 8.1), a hidden viewer releases its media (section 8.2), and audio is off
- * until unmuted (section 8.3).
+ * until unmuted (section 8.3). The clipboard crosses both ways while this viewer controls (section 13), a dropped
+ * file lands on the Screen at the pointer (section 4.3), and the phone layout pans, zooms and types through its
+ * own controls (section 14).
  */
 
 import "./style.css";
@@ -14,7 +16,11 @@ import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
 import { PHONE_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
-import { InputRelay } from "./input";
+import { ClipboardBridge, navigatorClipboard, serviceClipboardTransport } from "./clipboard";
+import { uploadDroppedFiles } from "./files";
+import { InputRelay, XK_V } from "./input";
+import { keyboardMapForLanguage } from "./keyboard_map";
+import { MobileControls } from "./mobile";
 import { NekoSocket } from "./neko_socket";
 import { Overlays } from "./overlays";
 import { ResizeReporter } from "./resize_reporter";
@@ -40,6 +46,7 @@ export const PAGE_PATH = "/";
 
 /** How often at most the input relay tells the service this session is active (its window is ten seconds). */
 const INPUT_SEEN_THROTTLE_MS = 2000;
+const CLIPBOARD_STATUS_MS = 2200;
 
 class Viewer {
   private readonly root = document.createElement("div");
@@ -49,7 +56,10 @@ class Viewer {
   private readonly overlays: Overlays;
   private readonly visibility: ViewerVisibility;
   private readonly resizeReporter: ResizeReporter;
+  private readonly clipboard: ClipboardBridge;
+  private readonly mobile: MobileControls | null;
   private readonly isPhone: boolean;
+  private clipboardStatusTimer = 0;
   private state: ScreenStateDocument | null = null;
   private session: NekoSessionAnswer | null = null;
   private socket: NekoSocket | null = null;
@@ -90,9 +100,88 @@ class Viewer {
       windowScheduler,
     );
     this.resizeReporter = new ResizeReporter((size) => this.sendScreenSize(size.width, size.height), windowScheduler);
+    this.clipboard = new ClipboardBridge(
+      serviceClipboardTransport(() => this.session?.token ?? null),
+      navigatorClipboard,
+      (message) => this.showClipboardStatus(message),
+    );
+    this.mobile = this.isPhone ? this.buildMobileControls() : null;
     this.observeVisibility();
     this.observeStageSize();
+    this.wireClipboard();
+    this.wireFileDrop();
     window.addEventListener("pagehide", () => this.logout());
+  }
+
+  private buildMobileControls(): MobileControls {
+    this.root.classList.add("screen-root--phone");
+    const keys = {
+      keyDown: (keysym: number) => this.input?.keyDown(keysym),
+      keyUp: (keysym: number) => this.input?.keyUp(keysym),
+    };
+    const controls = new MobileControls(
+      this.stage,
+      this.video,
+      {
+        clickAt: (clientX, clientY, button) => this.input?.clickAt(clientX, clientY, button),
+        scroll: (steps) => this.input?.scroll(steps),
+      },
+      keys,
+      windowScheduler,
+    );
+    this.root.append(controls.bar);
+    return controls;
+  }
+
+  private wireClipboard(): void {
+    window.addEventListener("focus", () => void this.clipboard.onFocus());
+    document.addEventListener("paste", (event) => {
+      if (!this.clipboard.isActive || !event.clipboardData) return;
+      event.preventDefault();
+      void this.clipboard.onPaste(event.clipboardData).then((isSent) => {
+        // The clipboard is on the Screen: paste it there with the chord the user pressed (Ctrl+V, or synthesized
+        // for a Cmd+V), unless nothing crossed.
+        if (isSent) this.input?.tapWithControl(XK_V);
+      });
+    });
+  }
+
+  private wireFileDrop(): void {
+    this.stage.addEventListener("dragover", (event) => {
+      if (!this.canUpload()) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+      this.stage.classList.add("screen-stage--dropping");
+    });
+    this.stage.addEventListener("dragleave", () => this.stage.classList.remove("screen-stage--dropping"));
+    this.stage.addEventListener("drop", (event) => {
+      this.stage.classList.remove("screen-stage--dropping");
+      if (!this.canUpload() || !event.dataTransfer || this.session === null || !this.input) return;
+      event.preventDefault();
+      const files = Array.from(event.dataTransfer.files);
+      const at = this.input.pointAt(event.clientX, event.clientY);
+      if (files.length === 0 || at === null) return;
+      this.showClipboardStatus(
+        files.length === 1 ? "Dropping the file on the Screen" : "Dropping the files on the Screen",
+      );
+      uploadDroppedFiles(files, at, this.session.token)
+        .then((isUploaded) => this.showClipboardStatus(isUploaded ? "Dropped on the Screen" : "The drop failed"))
+        .catch(() => this.showClipboardStatus("The drop failed"));
+    });
+  }
+
+  private canUpload(): boolean {
+    return (
+      this.state !== null &&
+      this.session !== null &&
+      isOwnSessionController(this.state.control, this.session.session_id)
+    );
+  }
+
+  private showClipboardStatus(message: string): void {
+    this.strip.showStatus(message);
+    window.clearTimeout(this.clipboardStatusTimer);
+    this.clipboardStatusTimer = window.setTimeout(() => this.strip.showStatus(""), CLIPBOARD_STATUS_MS);
   }
 
   attachShell(reportLocation: (title: string) => void): void {
@@ -118,6 +207,8 @@ class Viewer {
       this.teardownStream();
     } else if (event.type === "profile") {
       this.stream?.selectVideo(event.video_id);
+    } else if (event.type === "clipboard") {
+      if (event.kind === "image") void this.clipboard.onRemoteImageUpdated();
     } else if (event.type === "handoff_request") {
       // The strip already shows the queue; the overlay's dim lifts as the lease moved to nobody.
     }
@@ -151,6 +242,8 @@ class Viewer {
     this.strip.update(this.state.control, ownSessionId, this.streamStatus);
     this.overlays.update(this.state, this.streamStatus, this.session !== null);
     this.input?.setEnabled(canSend);
+    this.mobile?.setEnabled(canSend);
+    this.clipboard.isActive = isController && this.state.lifecycle === "running";
     this.resizeReporter.setEnabled(isController && this.state.lifecycle === "running" && !this.isPhone);
     this.stage.classList.toggle("screen-stage--not-controlling", !mayControl);
     this.stage.dataset.screenController = isController ? "you" : this.state.control.controller;
@@ -172,7 +265,9 @@ class Viewer {
       });
       this.stream.setAudioEnabled(this.isAudioEnabled);
       this.input = new InputRelay(socket, this.stage, () => this.noteInput());
+      if (this.mobile) this.input.viewTransform = () => this.mobile?.viewTransform ?? { zoom: 1, pan: { x: 0, y: 0 } };
       if (this.state?.screen_size) this.input.screen = this.state.screen_size;
+      socket.on("clipboard/updated", () => void this.clipboard.onRemoteTextUpdated());
       socket.on("screen/updated", (payload) => {
         if (this.input) this.input.screen = { width: Number(payload.width), height: Number(payload.height) };
       });
@@ -189,6 +284,9 @@ class Viewer {
 
   private onNekoOpen(): void {
     this.isNekoOpen = true;
+    // neko maps keysyms with the layout it is told, once per session (spec section 13); only the host may set it,
+    // so it is sent again when this session takes control.
+    this.sendKeyboardMap();
     // A reopened socket is a new neko connection with no peer: ask again if this viewer is visible.
     this.visibility.reset();
     this.visibility.evaluate();
@@ -245,6 +343,11 @@ class Viewer {
     }).observe(this.stage);
   }
 
+  private sendKeyboardMap(): void {
+    const choice = keyboardMapForLanguage(navigator.language ?? "");
+    this.socket?.send("keyboard/map", { layout: choice.layout, variant: choice.variant });
+  }
+
   private sendScreenSize(width: number, height: number): void {
     if (this.session === null) return;
     postScreenSize(width, height, this.session.session_id).catch((error) =>
@@ -295,8 +398,9 @@ class Viewer {
   private async takeControl(): Promise<void> {
     if (this.session === null) return;
     await postTakeControl(this.session.session_id);
-    // The new controller's stage decides the Screen's size from here.
+    // The new controller's stage decides the Screen's size from here, and its layout the keyboard map.
     this.resizeReporter.forget();
+    this.sendKeyboardMap();
     this.stage.focus();
   }
 

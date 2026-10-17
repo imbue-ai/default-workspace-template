@@ -18,6 +18,8 @@ export class Strip {
   private readonly takeButton = document.createElement("button");
   private readonly returnButton = document.createElement("button");
   private readonly muteButton = document.createElement("button");
+  private transientStatus = "";
+  private streamStatusText = "";
 
   constructor(actions: StripActions) {
     this.element.className = "screen-strip";
@@ -49,11 +51,18 @@ export class Strip {
       : "Play the Screen's audio in this window";
   }
 
+  /** A transient line (a clipboard or drop result) shown in place of the stream status; "" clears it. */
+  showStatus(message: string): void {
+    this.transientStatus = message;
+    this.status.textContent = message || this.streamStatusText;
+  }
+
   update(control: ControlDocument, ownSessionId: string | null, streamStatus: string): void {
     const isOwn = isOwnSessionController(control, ownSessionId);
     this.who.textContent = `Control: ${describeController(control, ownSessionId)}`;
     this.waiting.textContent = control.waiting.length > 0 ? `Waiting: ${control.waiting.join(", ")}` : "";
-    this.status.textContent = streamStatus === "connected" ? "" : streamStatus;
+    this.streamStatusText = streamStatus === "connected" ? "" : streamStatus;
+    this.status.textContent = this.transientStatus || this.streamStatusText;
     this.takeButton.hidden = isOwn || ownSessionId === null;
     // Giving control back is offered when this human holds it and an agent waits to resume.
     this.returnButton.hidden = !(isOwn && control.waiting.length > 0);

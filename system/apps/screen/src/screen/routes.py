@@ -22,6 +22,7 @@ from app_manifest.registry import CONTEXT_MENU_ROUTE
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import SHELL_CONTEXT_MENU_PATH
 from screen.data_types import Lifecycle
+from screen.errors import ClipboardError
 from screen.errors import DisplayModeError
 from screen.errors import InvalidRunCommandError
 from screen.errors import NekoError
@@ -41,6 +42,7 @@ from screen.proxy import NekoProxy
 from screen.service import DEFAULT_SCREENSHOT_QUALITY
 from screen.service import ScreenService
 from screen.watch import STOPPED_NOTIFICATION_PATH
+from screen.xclipboard import MAX_CLIPBOARD_BYTES
 
 PAGE_DOCUMENT_FILENAME: Final[str] = "index.html"
 LAUNCH_BROWSER_PATH: Final[str] = "/launch/browser"
@@ -51,6 +53,8 @@ HTTP_BAD_REQUEST: Final[int] = 400
 HTTP_FORBIDDEN: Final[int] = 403
 HTTP_NOT_FOUND: Final[int] = 404
 HTTP_CONFLICT: Final[int] = 409
+HTTP_PAYLOAD_TOO_LARGE: Final[int] = 413
+HTTP_UNSUPPORTED_MEDIA_TYPE: Final[int] = 415
 HTTP_BAD_GATEWAY: Final[int] = 502
 HTTP_SERVICE_UNAVAILABLE: Final[int] = 503
 
@@ -271,6 +275,28 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
             return _error("session_id is required", HTTP_BAD_REQUEST)
         if not service.note_input(session_id):
             return _error("no such session", HTTP_NOT_FOUND)
+        return Response(status=HTTP_NO_CONTENT)
+
+    # the clipboard
+
+    @app.post("/api/clipboard/image")
+    def clipboard_image() -> ResponseReturnValue:
+        mime = (request.content_type or "").split(";")[0].strip().lower()
+        if not mime.startswith("image/"):
+            return _error("the body must be an image (Content-Type image/...)", HTTP_UNSUPPORTED_MEDIA_TYPE)
+        if request.content_length is not None and request.content_length > MAX_CLIPBOARD_BYTES:
+            return _error(f"the image is over the {MAX_CLIPBOARD_BYTES} byte cap", HTTP_PAYLOAD_TOO_LARGE)
+        data = request.get_data()
+        if len(data) == 0:
+            return _error("the image is empty", HTTP_BAD_REQUEST)
+        if len(data) > MAX_CLIPBOARD_BYTES:
+            return _error(f"the image is over the {MAX_CLIPBOARD_BYTES} byte cap", HTTP_PAYLOAD_TOO_LARGE)
+        try:
+            service.set_clipboard_image(data, mime)
+        except ScreenNotRunningError as e:
+            return _error(str(e), HTTP_CONFLICT)
+        except ClipboardError as e:
+            return _error(str(e), HTTP_BAD_GATEWAY)
         return Response(status=HTTP_NO_CONTENT)
 
     # the display

@@ -3,18 +3,25 @@
  *  section 11). */
 
 import GuacamoleKeyboard from "@imbue/workspace-ui/src/guacamole_keyboard.js";
+import type { KeySink } from "./modifier_latch";
 import type { NekoSocket } from "./neko_socket";
+import { IDENTITY_TRANSFORM, screenPointFromClient } from "./view_transform";
+import type { Point, Size, ViewTransform } from "./view_transform";
 
 const MOVE_COALESCE_MS = 16;
 const WHEEL_STEP_PX = 53;
 
 export const XK_CONTROL_L = 0xffe3;
+export const XK_CONTROL_R = 0xffe4;
+export const XK_META_L = 0xffe7;
+export const XK_META_R = 0xffe8;
+export const XK_SUPER_L = 0xffeb;
+export const XK_SUPER_R = 0xffec;
 export const XK_W = 0x0077;
+export const XK_V = 0x0076;
+export const XK_V_UPPER = 0x0056;
 
-export interface ScreenGeometry {
-  width: number;
-  height: number;
-}
+export type ScreenGeometry = Size;
 
 /** Where a pointer event lands on the Screen, given the letterboxed video inside the stage; null outside it. */
 export function screenPointFromStage(
@@ -22,26 +29,21 @@ export function screenPointFromStage(
   clientY: number,
   stageRect: DOMRect,
   screen: ScreenGeometry,
-): { x: number; y: number } | null {
-  if (screen.width <= 0 || screen.height <= 0 || stageRect.width <= 0 || stageRect.height <= 0) return null;
-  const scale = Math.min(stageRect.width / screen.width, stageRect.height / screen.height);
-  const drawnWidth = screen.width * scale;
-  const drawnHeight = screen.height * scale;
-  const left = stageRect.left + (stageRect.width - drawnWidth) / 2;
-  const top = stageRect.top + (stageRect.height - drawnHeight) / 2;
-  const x = Math.round((clientX - left) / scale);
-  const y = Math.round((clientY - top) / scale);
-  if (x < 0 || y < 0 || x >= screen.width || y >= screen.height) return null;
-  return { x, y };
+  transform: ViewTransform = IDENTITY_TRANSFORM,
+): Point | null {
+  return screenPointFromClient(clientX, clientY, stageRect, screen, transform);
 }
 
-export class InputRelay {
+export class InputRelay implements KeySink {
   private readonly keyboard = new GuacamoleKeyboard();
-  private pendingMove: { x: number; y: number } | null = null;
+  private readonly held = new Set<number>();
+  private pendingMove: Point | null = null;
   private moveTimer = 0;
   private wheel = { x: 0, y: 0, t: 0 };
   isEnabled = false;
   screen: ScreenGeometry = { width: 0, height: 0 };
+  /** The phone's zoom and pan over the video; identity elsewhere. */
+  viewTransform: () => ViewTransform = () => IDENTITY_TRANSFORM;
 
   constructor(
     private readonly socket: NekoSocket,
@@ -51,14 +53,17 @@ export class InputRelay {
   ) {
     this.keyboard.onkeydown = (keysym) => {
       if (!this.isEnabled) return true;
+      // A paste chord is left to the browser so its ``paste`` event fires with the clipboard's data; the viewer
+      // then sets the remote clipboard and taps V itself (spec section 13).
+      if (this.isPasteChord(keysym)) return true;
       this.flushMove();
-      socket.send("control/keydown", { keysym });
-      this.onInput();
+      this.keyDown(keysym);
       return false;
     };
     this.keyboard.onkeyup = (keysym) => {
       if (!this.isEnabled) return;
-      socket.send("control/keyup", { keysym });
+      if (this.isPasteChord(keysym)) return;
+      this.keyUp(keysym);
     };
     this.keyboard.listenTo(stage);
     stage.addEventListener("mousemove", (event) => this.onMove(event));
@@ -68,12 +73,88 @@ export class InputRelay {
       if (this.isEnabled) event.preventDefault();
     });
     stage.addEventListener("wheel", (event) => this.onWheel(event), { passive: false });
-    stage.addEventListener("blur", () => this.keyboard.reset());
+    stage.addEventListener("blur", () => this.releaseHeld());
   }
 
   setEnabled(isEnabled: boolean): void {
-    if (this.isEnabled && !isEnabled) this.keyboard.reset();
+    if (this.isEnabled && !isEnabled) this.releaseHeld();
     this.isEnabled = isEnabled;
+  }
+
+  private isPasteChord(keysym: number): boolean {
+    const isPasteKey = keysym === XK_V || keysym === XK_V_UPPER;
+    return isPasteKey && (this.isControlHeld || this.isCommandHeld);
+  }
+
+  get isControlHeld(): boolean {
+    return this.held.has(XK_CONTROL_L) || this.held.has(XK_CONTROL_R);
+  }
+
+  private get isCommandHeld(): boolean {
+    return (
+      this.held.has(XK_META_L) || this.held.has(XK_META_R) || this.held.has(XK_SUPER_L) || this.held.has(XK_SUPER_R)
+    );
+  }
+
+  /** Release every key held on the remote (focus left, control left): nothing stays pinned down. */
+  releaseHeld(): void {
+    this.keyboard.reset();
+    for (const keysym of [...this.held]) this.socket.send("control/keyup", { keysym });
+    this.held.clear();
+  }
+
+  keyDown(keysym: number): void {
+    if (!this.isEnabled) return;
+    this.held.add(keysym);
+    this.socket.send("control/keydown", { keysym });
+    this.onInput();
+  }
+
+  keyUp(keysym: number): void {
+    if (!this.isEnabled) return;
+    this.held.delete(keysym);
+    this.socket.send("control/keyup", { keysym });
+  }
+
+  /** Tap a key, with Ctrl held for it unless the user already holds Ctrl (a paste after the clipboard was set). */
+  tapWithControl(keysym: number): void {
+    if (!this.isEnabled) return;
+    const isControlAlready = this.isControlHeld;
+    if (!isControlAlready) this.socket.send("control/keydown", { keysym: XK_CONTROL_L });
+    this.socket.send("control/keydown", { keysym });
+    this.socket.send("control/keyup", { keysym });
+    if (!isControlAlready) this.socket.send("control/keyup", { keysym: XK_CONTROL_L });
+    this.onInput();
+  }
+
+  /** A click at a client point (the phone's tap or long press), with the X button number. */
+  clickAt(clientX: number, clientY: number, button: number): void {
+    if (!this.isEnabled) return;
+    const point = this.pointAt(clientX, clientY);
+    if (point === null) return;
+    this.pendingMove = point;
+    this.flushMove();
+    this.socket.send("control/buttondown", { code: button });
+    this.socket.send("control/buttonup", { code: button });
+    this.onInput();
+  }
+
+  /** Wheel steps (the phone's two-finger scroll). */
+  scroll(steps: Point): void {
+    if (!this.isEnabled || (steps.x === 0 && steps.y === 0)) return;
+    this.socket.send("control/scroll", { delta_x: steps.x, delta_y: steps.y, control_key: false });
+    this.onInput();
+  }
+
+  /** The screen point under a client point, or null outside the drawn video. */
+  pointAt(clientX: number, clientY: number): Point | null {
+    return screenPointFromStage(
+      clientX,
+      clientY,
+      this.stage.getBoundingClientRect(),
+      this.screen,
+      this.viewTransform(),
+    );
   }
 
   /** The close chord: Ctrl+W to the remote rather than the window closing (spec section 11). */
@@ -85,8 +166,8 @@ export class InputRelay {
     this.socket.send("control/keyup", { keysym: XK_CONTROL_L });
   }
 
-  private pointOf(event: MouseEvent): { x: number; y: number } | null {
-    return screenPointFromStage(event.clientX, event.clientY, this.stage.getBoundingClientRect(), this.screen);
+  private pointOf(event: MouseEvent): Point | null {
+    return this.pointAt(event.clientX, event.clientY);
   }
 
   private onMove(event: MouseEvent): void {

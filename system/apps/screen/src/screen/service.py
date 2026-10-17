@@ -60,6 +60,9 @@ from screen.sizing import ModesLedger
 from screen.sizing import decide_mode_addition
 from screen.sizing import quantize_screen_size
 from screen.stack import ScreenStack
+from screen.xclipboard import ClipboardContents
+from screen.xclipboard import ClipboardMonitor
+from screen.xclipboard import XClipboard
 
 # How long a disconnected human session is kept before the reaper deletes it (spec section 6.3).
 SESSION_REAP_AFTER: Final[timedelta] = timedelta(minutes=10)
@@ -136,11 +139,15 @@ class ScreenService(MutableModel):
     neko: NekoInterface = Field(frozen=True, description="neko's REST client")
     window_tools: WindowToolsInterface = Field(frozen=True, description="wmctrl and xdotool on the display")
     display_modes: DisplayModesInterface = Field(frozen=True, description="xrandr on the display")
+    clipboard: XClipboard = Field(default_factory=XClipboard, frozen=True, description="xclip on the display")
     launcher: ProcessLauncherInterface = Field(frozen=True, description="How ``screen run`` starts a command")
     messenger: AgentMessengerInterface = Field(frozen=True, description="Wakes queued agents")
     broadcaster: ViewerBroadcaster = Field(default_factory=ViewerBroadcaster, description="The viewers' event fan-out")
     is_event_subscription_enabled: bool = Field(
         default=True, frozen=True, description="Whether to follow neko's WebSocket (off under a fake neko)"
+    )
+    is_clipboard_monitor_enabled: bool = Field(
+        default=True, frozen=True, description="Whether to watch the X clipboard (off where no display runs)"
     )
     clock: Callable[[], float] = Field(default=time.monotonic, frozen=True, description="The monotonic clock")
 
@@ -154,6 +161,7 @@ class ScreenService(MutableModel):
     _sessions: dict[NekoSessionId, NekoSession] = PrivateAttr(default_factory=dict)
     _service_session: NekoSession | None = PrivateAttr(default=None)
     _subscriber: NekoEventSubscriber | None = PrivateAttr(default=None)
+    _clipboard_monitor: ClipboardMonitor | None = PrivateAttr(default=None)
     _secrets: NekoSecrets | None = PrivateAttr(default=None)
     _last_host_id: str | None = PrivateAttr(default=None)
     _last_input_at: float | None = PrivateAttr(default=None)
@@ -214,6 +222,7 @@ class ScreenService(MutableModel):
         self._projection_wake.set()
         if self._subscriber is not None:
             self._subscriber.stop()
+        self._stop_clipboard_monitor()
         if self.stack.lifecycle in (Lifecycle.RUNNING, Lifecycle.STARTING):
             self.stack.stop(reason)
         self.broadcaster.shutdown()
@@ -254,6 +263,7 @@ class ScreenService(MutableModel):
         if self._subscriber is not None:
             self._subscriber.stop()
             self._subscriber = None
+        self._stop_clipboard_monitor()
         with self._lock:
             self._sessions.clear()
             self._service_session = None
@@ -279,6 +289,10 @@ class ScreenService(MutableModel):
             )
             self._subscriber = subscriber
             subscriber.start()
+        if self.is_clipboard_monitor_enabled and self._clipboard_monitor is None:
+            monitor = ClipboardMonitor(clipboard=self.clipboard, on_change=self.on_clipboard_changed)
+            self._clipboard_monitor = monitor
+            monitor.start()
         # A start is activity: the first minute streams at ``watch`` rather than at the idle rate.
         with self._lock:
             self._last_input_at = self.clock()
@@ -565,6 +579,26 @@ class ScreenService(MutableModel):
     def _require_running(self) -> None:
         if self.stack.lifecycle != Lifecycle.RUNNING:
             raise ScreenNotRunningError("the Screen is not running")
+
+    # the clipboard (spec section 13)
+
+    def _stop_clipboard_monitor(self) -> None:
+        if self._clipboard_monitor is not None:
+            self._clipboard_monitor.stop()
+            self._clipboard_monitor = None
+
+    def on_clipboard_changed(self, contents: ClipboardContents) -> None:
+        """The X clipboard has a new owner: when it offers an image, viewers are told so the controller's can fetch
+        it through neko's clipboard image route (text and HTML reach the host through neko's own event)."""
+        if contents.has_image:
+            self.broadcaster.broadcast({"type": "clipboard", "kind": "image"})
+
+    def set_clipboard_image(self, data: bytes, mime: str) -> None:
+        """Place a viewer's image on the X clipboard (local to remote)."""
+        self._require_running()
+        if self._clipboard_monitor is not None:
+            self._clipboard_monitor.note_written(data)
+        self.clipboard.set_contents(data, mime)
 
     def set_screen_size(self, width: int, height: int) -> ScreenSize:
         """Resize the display (spec section 7.2): quantize and clamp, add the RANDR mode when the server lacks it,

@@ -72,6 +72,7 @@ def live(
         window_tools=DisplayWindowTools(),
         display_modes=XrandrDisplayModes(),
         launcher=DetachedProcessLauncher(working_directory=Path.cwd()),
+        is_clipboard_monitor_enabled=False,
         messenger=RecordingMessenger(),
     )
     stack = ScreenStack(

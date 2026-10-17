@@ -40,6 +40,9 @@ demand and the `screen-watch` event listener ends them together.
   stack's life and forgotten when it ends.
 - `POST /api/input-seen`, body `{"session_id"}`: the viewer's input relay reporting
   activity (throttled to one per two seconds client-side), the profile chooser's clock.
+- `POST /api/clipboard/image`, the body an image (`Content-Type: image/...`, at most 10
+  MiB): placed on the X clipboard of `:99` with `xclip` (local to remote, spec section
+  13).
 - `POST /api/start`: start the stack (the stopped overlay's Start button).
 - `POST /api/session`: a neko session for the requester's identity (`X-Imbue-Identity`;
   a header-less request is the owner): the service logs the human in to neko with the
@@ -97,6 +100,44 @@ the null sink's monitor into opusenc) runs whenever any peer exists, whatever th
 sessions' audio flags; its device is already the null sink's monitor, so the spec's
 fallback is in place by construction and what remains is the encoder's cost on silence,
 measured below.
+
+## Clipboard, files and the phone
+
+`xclipboard.py` (the browser app's bridge, carried over) owns the X clipboard: `xclip`
+sets and reads the CLIPBOARD selection and an XFixes watcher on `:99` notices every
+ownership change while the stack runs. neko sends `clipboard/updated` to the host
+session alone and with text only, so the directions are:
+
+- Remote to local: on `clipboard/updated` the controller's viewer reads text and HTML
+  from neko's `GET /api/room/clipboard` (host only) and writes them with the Clipboard
+  API; when the watcher sees an image target the service broadcasts `clipboard`
+  (`{"kind": "image"}`) on `/api/ws` and the controller's viewer fetches
+  `GET /neko/api/room/clipboard/image.png` and writes it. A write that fails for want of
+  focus runs on the next focus.
+- Local to remote: on focus and on paste, while this viewer holds control, the viewer
+  reads the local clipboard; text and HTML go to neko's `POST /api/room/clipboard` (its
+  `clipboard/set` message drops the HTML), an image to `POST /api/clipboard/image`. A
+  paste chord (Ctrl+V, Cmd+V) is left to the browser so its `paste` event carries the
+  data; once the remote clipboard holds it the viewer taps V with Ctrl held on the
+  remote. What was just received is never echoed back, by content hash.
+- `keyboard/map` goes once per neko connection and again when this session takes
+  control (only the host may set it), with the layout `navigator.language` suggests,
+  `us` by default.
+
+A file dropped on the viewer by the controller goes to neko's
+`POST /api/room/upload/drop` (multipart `x`, `y` in Screen coordinates, `files`), which
+drags it onto the Screen at that point; dropped on the XFCE desktop it lands in
+`~/Desktop`.
+
+Under the phone layout (the shared `PHONE_MEDIA_QUERY`; the shell gives pages no phone
+signal) the Screen keeps its size and the viewer offers: one-finger drag pans and a pinch
+zooms the drawn video (the viewer's own transform, never a resize), a tap is a left
+click and a long press a right click at the mapped point, a two-finger drag scrolls, a
+bar offers Ctrl, Alt and Shift (each latching for the next key) plus Esc and Tab, and a
+Keyboard button focuses a hidden input whose `input` and `keydown` events become neko
+key events. Taps and long presses reach the Screen as mouse events: neko's touch
+events need its xf86 input driver, which this stack does not run (`desktop.input` is
+off).
 
 ## The lease
 
