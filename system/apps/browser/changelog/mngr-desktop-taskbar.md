@@ -1,1 +1,0 @@
-The `new` launch path's label is "Browser" rather than "Open Browser": the launcher's row is the one place the label shows (shortcuts read the app's display name), and it reads as the app's name there. Nothing about what the launch path does changes.

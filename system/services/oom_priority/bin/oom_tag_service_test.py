@@ -128,7 +128,10 @@ def test_every_service_key_in_supervisord_conf_has_a_band() -> None:
     # miss for months (this is what happened to `xvfb`). Catch it here instead.
     keys = [
         key
-        for key in (_service_key_of(command) for command in _command_by_supervisord_program().values())
+        for key in (
+            _service_key_of(command)
+            for command in _command_by_supervisord_program().values()
+        )
         if key is not None
     ]
     assert keys, f"no oom_tag_service.py invocations found in {_SUPERVISORD_CONF}"

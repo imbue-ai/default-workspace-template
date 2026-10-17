@@ -1,1 +1,0 @@
-The browser's manifest no longer declares `xvfb` as its wiring: `system/supervisord.conf.d/xvfb.conf` is gone and display `:99` is the Screen's Xorg (`docs/system/specs/screen/spec.md` D16). Chromium keeps `DISPLAY=:99`, so until the browser's migration onto the Screen it renders onto the Screen's display when the Screen's stack runs, and fails to find a display otherwise.
