@@ -25,11 +25,10 @@ let store: DesktopStore;
 
 /** A fetch that answers every request the way the shell's notice routes do, recording what was asked. */
 function stubFetch(status = 204, detail?: string): ReturnType<typeof vi.fn> {
-  const fetchMock = vi.fn(async () => ({
-    ok: status < 400,
-    status,
-    json: async () => (detail === undefined ? {} : { detail }),
-  }));
+  const fetchMock = vi.fn(
+    async () =>
+      new Response(status === 204 ? null : JSON.stringify(detail === undefined ? {} : { detail }), { status }),
+  );
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }

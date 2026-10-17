@@ -17,6 +17,8 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
+import { postJson } from "@imbue/workspace-ui/src/models/http";
+import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import type { SecretResolution } from "./message-classification";
 import { isSecretRequestCall } from "./message-classification";
@@ -154,24 +156,12 @@ export const secretStatusCache = new SecretStatusCache();
 
 // Submit and decline
 
-async function postJson(path: string, body: unknown): Promise<{ ok: boolean; detail: string }> {
+async function postAnswer(path: string, body: unknown): Promise<{ ok: boolean; detail: string }> {
   try {
-    const response = await fetch(apiUrl(path), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (response.ok) return { ok: true, detail: "" };
-    let detail = `The chat app answered HTTP ${response.status}.`;
-    try {
-      const parsed = (await response.json()) as { detail?: unknown };
-      if (typeof parsed.detail === "string") detail = parsed.detail;
-    } catch {
-      // A non-JSON error body keeps the status-code wording.
-    }
-    return { ok: false, detail };
-  } catch {
-    return { ok: false, detail: "The chat app could not be reached." };
+    await postJson<unknown>(apiUrl(path), body);
+    return { ok: true, detail: "" };
+  } catch (error) {
+    return { ok: false, detail: describeRequestError(error) };
   }
 }
 
@@ -179,11 +169,11 @@ export function submitSecret(
   requestId: string,
   values: Record<string, string>,
 ): Promise<{ ok: boolean; detail: string }> {
-  return postJson(`/api/secret-requests/${encodeURIComponent(requestId)}/submit`, { values });
+  return postAnswer(`/api/secret-requests/${encodeURIComponent(requestId)}/submit`, { values });
 }
 
 export function declineSecret(requestId: string, note: string): Promise<{ ok: boolean; detail: string }> {
-  return postJson(`/api/secret-requests/${encodeURIComponent(requestId)}/decline`, note ? { note } : {});
+  return postAnswer(`/api/secret-requests/${encodeURIComponent(requestId)}/decline`, note ? { note } : {});
 }
 
 // Rendering

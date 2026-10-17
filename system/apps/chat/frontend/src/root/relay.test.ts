@@ -36,6 +36,8 @@ describe("isForwardedToShell", () => {
     expect(isForwardedToShell({ type: "shell:open-link", url: "http://files-ab12cd34.host-0123.localhost/" })).toBe(
       true,
     );
+    expect(isForwardedToShell({ type: "shell:start-with-text", text: "Fix this." })).toBe(true);
+    expect(isForwardedToShell({ type: "shell:report-bug" })).toBe(true);
   });
 
   it("keeps everything else the page posts, and anything that is not a typed message, at the root", () => {

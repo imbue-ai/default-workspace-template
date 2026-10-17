@@ -36,11 +36,16 @@ DESKTOP_ID_FIELD: Final[str] = "desktop_id"
 WINDOW_PATH_FIELD: Final[str] = "window_path"
 # The one field a POST launch answers.
 PATH_FIELD: Final[str] = "path"
+# The fields of an app's failed launch answer that the shell passes on as they are: a sentence the app wrote for
+# people, and whether that sentence asks for a bug report.
+USER_FACING_MESSAGE_FIELD: Final[str] = "user_facing_message"
+REPORTABLE_FIELD: Final[str] = "reportable"
 
 # A launch is one loopback request an app answers once it has decided what to show; an app that takes longer
 # than this has hung.
 LAUNCH_TIMEOUT_SECONDS: Final[float] = 30.0
-# How much of an app's answer a refusal quotes.
+# How much of an app's failed launch answer's detail the shell quotes; its user_facing_message, a sentence for people,
+# is passed on whole.
 _DETAIL_LIMIT: Final[int] = 400
 
 
@@ -135,24 +140,38 @@ def launch_post(entry: AppInventoryEntry, launch_path: RegistryLaunchPath, body:
 
 
 @pure
-def _quoted_detail(body: Any) -> str:
-    if isinstance(body, dict) and isinstance(body.get("detail"), str):
-        return body["detail"][:_DETAIL_LIMIT]
+def _string_field(body: Any, field: str) -> str:
+    if isinstance(body, dict) and isinstance(body.get(field), str):
+        return body[field].strip()
     return ""
+
+
+@pure
+def _reportable_field(body: Any) -> bool | None:
+    if isinstance(body, dict) and isinstance(body.get(REPORTABLE_FIELD), bool):
+        return body[REPORTABLE_FIELD]
+    return None
 
 
 @pure
 def launched_path(app: str, outcome: LaunchPostOutcome) -> WindowPath:
     """The page path a POST launch answered. A 4xx carrying a ``detail`` is the app's refusal, passed on as
     LaunchRefusedError with that detail; anything else that is not a 200 carrying a window path (a 4xx with no
-    detail among them: a missing or GET-only route, not a refusal the app wrote) is LaunchUnavailableError."""
-    if 400 <= outcome.status_code < 500:
-        detail = _quoted_detail(outcome.body)
-        if detail:
-            raise LaunchRefusedError(f"{app} refused the launch: {detail}")
-        raise LaunchUnavailableError(f"{app} answered the launch with {outcome.status_code} and no refusal detail")
+    detail among them: a missing or GET-only route, not a refusal the app wrote) is LaunchUnavailableError, which
+    carries the app's ``detail`` too when it gave one, whatever the status. A failed answer's ``user_facing_message``
+    and ``reportable`` go with either as the app wrote them; the shell writes no sentence of its own."""
     if outcome.status_code != 200:
-        raise LaunchUnavailableError(f"{app} answered the launch with {outcome.status_code} instead of a page path")
+        detail = _string_field(outcome.body, "detail")[:_DETAIL_LIMIT]
+        user_facing_message = _string_field(outcome.body, USER_FACING_MESSAGE_FIELD) or None
+        reportable = _reportable_field(outcome.body) if user_facing_message is not None else None
+        if 400 <= outcome.status_code < 500 and detail:
+            raise LaunchRefusedError(f"{app} refused the launch: {detail}", user_facing_message, reportable)
+        answered_with = f"{app} answered the launch with {outcome.status_code}"
+        raise LaunchUnavailableError(
+            f"{answered_with}: {detail}" if detail else f"{answered_with} and no reason",
+            user_facing_message,
+            reportable,
+        )
     answered = outcome.body.get(PATH_FIELD) if isinstance(outcome.body, dict) else None
     if not isinstance(answered, str):
         raise LaunchUnavailableError(f"{app} answered the launch with no page path")

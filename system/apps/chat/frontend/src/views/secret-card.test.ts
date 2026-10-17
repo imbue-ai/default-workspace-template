@@ -4,12 +4,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import type { SecretResolution } from "./message-classification";
 import type { SecretCardHandlers, SecretCardState } from "./secret-card";
+import { notAnsweredSentence } from "@imbue/workspace-ui/src/models/failure";
 import {
   SECRET_STATUS_RETRY_DELAY_MS,
   SecretStatusCache,
+  declineSecret,
   isFiledSecretRequest,
   parseSecretRequest,
   renderSecretCard,
+  submitSecret,
 } from "./secret-card";
 
 function makeToolCall(display?: "secret_request" | "permission_request"): ToolCall {
@@ -277,5 +280,31 @@ describe("status hydration", () => {
     await settleHydrations(redraw, 3);
     expect(cache.known("secret-3")).toBe("stored");
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("submit and decline", () => {
+  it("passes the route's own reason on, and never says whether an unanswered answer went through", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify({ status: "stored" }), { status: 200 }))
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ detail: "Request secret-1 is not pending" }), { status: 409 }),
+        )
+        .mockResolvedValueOnce(new Response("Bad Gateway", { status: 502 }))
+        .mockRejectedValueOnce(new TypeError("Failed to fetch")),
+    );
+    expect(await submitSecret("secret-1", { SVC_TOKEN: "t" })).toEqual({ ok: true, detail: "" });
+    expect(await submitSecret("secret-1", { SVC_TOKEN: "t" })).toEqual({
+      ok: false,
+      detail: "Request secret-1 is not pending",
+    });
+    expect(await declineSecret("secret-1", "")).toEqual({ ok: false, detail: notAnsweredSentence("change") });
+    expect(await submitSecret("secret-1", { SVC_TOKEN: "t" })).toEqual({
+      ok: false,
+      detail: notAnsweredSentence("change"),
+    });
   });
 });
