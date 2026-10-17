@@ -4,6 +4,7 @@ import os
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Final
 
 from pydantic import Field
 
@@ -14,11 +15,12 @@ from screen.neko_config import PULSE_SOCKET_PATH
 from screen.neko_config import RUNTIME_DIR
 from screen.primitives import DISPLAY
 
-
-def _band_self_before_exec() -> None:
-    # Runs in the child between fork and exec: the band survives execve and is inherited by everything the command
-    # spawns, so a program started on the Screen is shed before the stack (spec section 9.4).
-    bands.set_oom_score_adj(os.getpid(), bands.AGENT_SUBPROCESS)
+# The shell that bands itself and then becomes the command: the band survives execve and is inherited by everything
+# the command spawns, so a program started on the Screen is shed before the stack (spec section 9.4). A shell does
+# the tagging because the process to tag does not exist before the launch, and a ``preexec_fn`` is unsafe in a
+# threaded service.
+_BANDED_EXEC_SCRIPT: Final[str] = bands.oom_tag_shell_prefix(bands.AGENT_SUBPROCESS) + 'exec "$@"'
+_SHELL_NAME: Final[str] = "screen-run"
 
 
 class DetachedProcessLauncher(ProcessLauncherInterface):
@@ -35,15 +37,15 @@ class DetachedProcessLauncher(ProcessLauncherInterface):
         }
         try:
             process = subprocess.Popen(
-                list(command),
+                ["bash", "-c", _BANDED_EXEC_SCRIPT, _SHELL_NAME, *command],
                 cwd=self.working_directory,
                 env=environment,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
-                preexec_fn=_band_self_before_exec,
             )
         except OSError as e:
             raise ScreenError(f"could not start {command[0]!r} on the Screen: {e}") from e
+        # The shell execs the command, so its pid is the command's.
         return process.pid
