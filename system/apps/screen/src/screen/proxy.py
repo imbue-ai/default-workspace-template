@@ -143,8 +143,8 @@ class NekoProxy(MutableModel):
                     except TimeoutError:
                         continue
                     downstream.send(message)
-            except (WebSocketException, ConnectionClosed, OSError):
-                pass
+            except (WebSocketException, ConnectionClosed, OSError) as e:
+                logger.debug("The neko relay's upstream-to-viewer side ended: {!r}", e)
             finally:
                 stop.set()
 
@@ -156,12 +156,12 @@ class NekoProxy(MutableModel):
                 if message is None:
                     continue
                 upstream.send(message)
-        except (ConnectionClosed, WebSocketException, OSError):
-            pass
+        except (ConnectionClosed, WebSocketException, OSError) as e:
+            logger.debug("The neko relay's viewer-to-upstream side ended: {!r}", e)
         finally:
             stop.set()
             try:
                 upstream.close()
-            except (WebSocketException, OSError):
-                pass
+            except (WebSocketException, OSError) as e:
+                logger.debug("Could not close the neko relay's upstream socket cleanly: {!r}", e)
             pump.join(timeout=5.0)

@@ -160,8 +160,9 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
                     is_open = False
                 else:
                     ws.send(message)
-        except ConnectionClosed:
-            pass
+        except ConnectionClosed as e:
+            # A page going away is the normal end of its events socket.
+            logger.trace("A viewer's events socket closed: {!r}", e)
         finally:
             service.broadcaster.unregister(client_queue)
 
