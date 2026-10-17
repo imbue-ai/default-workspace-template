@@ -134,6 +134,8 @@ class TurnCredentialCache:
 
     def ice_servers(self) -> list[object]:
         """What the Screen service is told: the held credential's servers while it is valid, else none."""
-        if self.credential is None or self._now() >= self.credential.expires_at:
+        # One read: the runner's tick thread may drop the credential between two.
+        credential = self.credential
+        if credential is None or self._now() >= credential.expires_at:
             return []
-        return list(self.credential.ice_servers)
+        return list(credential.ice_servers)
