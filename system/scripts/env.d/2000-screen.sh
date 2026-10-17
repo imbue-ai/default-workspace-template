@@ -1,33 +1,36 @@
 #!/usr/bin/env bash
-# env.d unit: Fortress (stealth Chromium) + its apt system libs. Too heavy to
-# bake into the Docker image, and no boot-time service execs it directly (the
-# browser service degrades gracefully until the engine arrives), so it installs
-# on first boot via the `env-converge` one-shot. xvfb + xclip are baked into
-# the image (setup_system.sh) because [program:xvfb] DOES exec its binary
-# directly at boot; the install step below remains only for rootfses built
-# from pre-bake images, where its satisfied-check is not yet instant.
+# env.d unit: the Screen's stack (Xorg with the dummy driver, XFCE, PulseAudio,
+# GStreamer with x264, xdotool, wmctrl, xclip) and the pinned neko v3 server
+# binary, plus Fortress (stealth Chromium) with its apt system libs and the two
+# pinned Chrome extensions, which moved here from the retired browser unit.
+# Too heavy to bake into the Docker image, and no boot-time service execs any
+# of it directly (the Screen service answers "installing" until this unit is
+# satisfied; the browser degrades gracefully until the engine arrives), so it
+# installs on first boot via the `env-converge` one-shot.
 #
 # env.d contract: idempotent with a fast satisfied-check -- NO marker files.
 # The converger re-runs every unit on every boot; a satisfied unit exits 0 in
 # milliseconds, and version stability comes from the pins in this script (a
 # re-run never silently changes versions -- only a pin bump, landed via
-# update-self, does).
+# update-self, does). apt installs come from the snapshot mirror
+# .mngr/apt-snapshot-timestamp pins (system/scripts/write_apt_sources.sh).
 set -euo pipefail
 
 readonly REPO_ROOT="${ENV_CONVERGE_WORKSPACE_DIR:-/home/user/workspace}"
 
 _log() {
-    printf '[env.d/playwright-fortress] %s\n' "$*"
+    printf '[env.d/screen] %s\n' "$*"
 }
 
-# Environments that never use the browser stack (e.g. the Imbue Studio CI snapshot
-# producer) opt out of the whole unit -- most importantly the hundreds-of-MB
-# Fortress download -- by setting DWT_SKIP_BROWSER_UNIT=1 in the agent
-# environment. An env var rather than a marker file keeps the env.d contract:
-# the decision is re-evaluated every boot, so a workspace whose environment
-# stops setting it simply converges the browser stack on its next boot.
+# Environments that never use the Screen or the browser stack (e.g. the Imbue
+# Studio CI snapshot producer) opt out of the whole unit -- most importantly
+# the hundreds-of-MB Fortress and XFCE downloads -- by setting
+# DWT_SKIP_BROWSER_UNIT=1 in the agent environment. An env var rather than a
+# marker file keeps the env.d contract: the decision is re-evaluated every
+# boot, so a workspace whose environment stops setting it simply converges the
+# stack on its next boot.
 if [ "${DWT_SKIP_BROWSER_UNIT:-}" = "1" ]; then
-    _log "DWT_SKIP_BROWSER_UNIT=1 -- skipping the browser stack install"
+    _log "DWT_SKIP_BROWSER_UNIT=1 -- skipping the Screen and browser stack install"
     exit 0
 fi
 
@@ -67,6 +70,163 @@ _recover_interrupted_dpkg() {
     if ! apt-get --fix-broken install -y; then
         _log "WARNING: 'apt-get --fix-broken install' returned non-zero; the apt install below may still fail"
     fi
+}
+
+# The apt lists are removed from the image after the bake, so an install needs
+# one refresh of the pinned snapshot's indexes first; once per unit run.
+_apt_lists_refreshed=0
+_apt_install() {
+    if [ "$_apt_lists_refreshed" -eq 0 ]; then
+        if ! apt-get update -y; then
+            _log "apt-get update FAILED; the next converge retries"
+            return 1
+        fi
+        _apt_lists_refreshed=1
+    fi
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@"
+}
+
+# The Screen's packages (docs/system/specs/screen/spec.md section 18): Xorg
+# with the dummy driver (xserver-xorg-core carries cvt), XFCE as the plain
+# metapackage without the goodies plus its terminal, PulseAudio, GStreamer with
+# the x264 encoder (in plugins-ugly), the X and PulseAudio capture elements,
+# the tools the service drives the display with (xdotool, wmctrl, xclip,
+# xrandr from x11-xserver-utils), dbus-x11 for the session bus startxfce4
+# launches, x11-apps for xeyes (the smoke test's window), and the shared
+# libraries the neko binary links that nothing else here pulls in.
+readonly _SCREEN_APT_PACKAGES=(
+    xserver-xorg-core
+    xserver-xorg-video-dummy
+    xfce4
+    xfce4-terminal
+    pulseaudio
+    pulseaudio-utils
+    gstreamer1.0-plugins-base
+    gstreamer1.0-plugins-good
+    gstreamer1.0-plugins-bad
+    gstreamer1.0-plugins-ugly
+    gstreamer1.0-x
+    gstreamer1.0-pulseaudio
+    xdotool
+    wmctrl
+    xclip
+    x11-xserver-utils
+    x11-apps
+    dbus-x11
+    libgstreamer-plugins-base1.0-0
+    libgtk-3-0t64
+    libxcvt0
+    libxtst6
+    libxres1
+)
+
+_install_screen_packages() {
+    # Fast satisfied-check (env.d contract: no marker files): the binaries the
+    # Screen's programs exec and the x264 encoder plugin are in place.
+    if command -v Xorg >/dev/null 2>&1 \
+        && command -v startxfce4 >/dev/null 2>&1 \
+        && command -v xfce4-terminal >/dev/null 2>&1 \
+        && command -v pulseaudio >/dev/null 2>&1 \
+        && command -v xdotool >/dev/null 2>&1 \
+        && command -v wmctrl >/dev/null 2>&1 \
+        && command -v xclip >/dev/null 2>&1 \
+        && command -v xrandr >/dev/null 2>&1 \
+        && command -v xeyes >/dev/null 2>&1 \
+        && command -v dbus-launch >/dev/null 2>&1 \
+        && [ -n "$(find /usr/lib -path '*/gstreamer-1.0/libgstx264.so' -print -quit 2>/dev/null)" ] \
+        && [ -n "$(find /usr/lib -path '*/gstreamer-1.0/libgstximagesrc.so' -print -quit 2>/dev/null)" ] \
+        && [ -n "$(find /usr/lib -path '*/gstreamer-1.0/libgstpulseaudio.so' -print -quit 2>/dev/null)" ] \
+        && [ -n "$(find /usr/lib -path '*/xorg/modules/drivers/dummy_drv.so' -print -quit 2>/dev/null)" ]; then
+        _log "screen packages: already installed, satisfied"
+        return 0
+    fi
+    _recover_interrupted_dpkg
+    _log "screen packages: installing ${#_SCREEN_APT_PACKAGES[@]} apt packages"
+    if ! _apt_install "${_SCREEN_APT_PACKAGES[@]}"; then
+        _log "screen packages: apt install FAILED; the next converge retries"
+        return 1
+    fi
+    _log "screen packages: install complete"
+}
+
+# The neko v3 server binary (m1k1o/neko, Apache-2.0). neko publishes no release
+# binary (its GitHub releases carry no assets), so the one file this needs,
+# /usr/bin/neko, is taken from the pinned ghcr.io/m1k1o/neko/base image through
+# the OCI registry API: an anonymous pull token, then the one layer blob that
+# the image's `COPY /src/bin/neko /usr/bin/neko` step produced, pinned by its
+# digest per architecture, extracted with tar, and checked against the pinned
+# SHA-256 of the binary itself.
+#
+# How the pins were computed (2026-10-17, tag 3.2.0 = neko v3.2.0):
+#   TOKEN=$(curl -fsSL 'https://ghcr.io/token?scope=repository:m1k1o/neko/base:pull' | jq -r .token)
+#   curl -fsSL -H "Authorization: Bearer $TOKEN" \
+#        -H 'Accept: application/vnd.oci.image.index.v1+json' \
+#        https://ghcr.io/v2/m1k1o/neko/base/manifests/3.2.0
+#     -> the index (docker-content-digest sha256:587a3389b6b99c8999eb00a768c79205a74647c57cf5b9695a90234a0edaa446)
+#        names one manifest per platform: linux/amd64 sha256:37fb9f9f6a34608f7d25fa0ed0ecccb6c4ef9563dc2feaf8cc493cb43939fce5,
+#        linux/arm64 sha256:3629b012656d3d2a76bc9b21c4ea1ebd03f4f1366383490d6065df0e332619e8.
+#   For each: fetch the manifest and its config blob, pair the manifest's layers
+#   with the config's non-empty history entries in order; the layer whose
+#   created_by reads "COPY /src/bin/neko /usr/bin/neko" is the one below.
+#   Download that layer blob, `tar -xzf - usr/bin/neko`, `sha256sum` the result.
+readonly _NEKO_IMAGE_REPOSITORY="m1k1o/neko/base"
+readonly _NEKO_IMAGE_TAG="3.2.0"
+readonly _NEKO_AMD64_LAYER_DIGEST="sha256:bde5ab1e10a03c81b0c0fc4a031d1a9c50eb297e212f3516f99adb02c460f18c"
+readonly _NEKO_AMD64_SHA256="265c202f1b99d9e85aa3fe2a3c38de6ce4f3c698aa16c0b0250ebf1f7f4b98ca"
+readonly _NEKO_ARM64_LAYER_DIGEST="sha256:cfe02384b17eaba05759c333efebc2b594de1de2eb6e6e28f5d2687ee58c5764"
+readonly _NEKO_ARM64_SHA256="39fab8e67365509244d24ea9378d72d88781f6ade9914f953be7051ec91fe9d7"
+readonly _NEKO_INSTALL_PATH="/opt/neko/bin/neko"
+
+_file_sha256() {
+    sha256sum "$1" | awk '{print $1}'
+}
+
+_install_neko() {
+    local layer_digest sha256
+    case "$(uname -m)" in
+        x86_64) layer_digest="$_NEKO_AMD64_LAYER_DIGEST"; sha256="$_NEKO_AMD64_SHA256" ;;
+        aarch64) layer_digest="$_NEKO_ARM64_LAYER_DIGEST"; sha256="$_NEKO_ARM64_SHA256" ;;
+        *) _log "neko: unsupported architecture $(uname -m)"; return 1 ;;
+    esac
+    # Fast satisfied-check: the pinned binary is in place (hashing 27 MB takes
+    # tens of milliseconds, and it is what makes a pin bump re-install).
+    if [ -x "$_NEKO_INSTALL_PATH" ] && [ "$(_file_sha256 "$_NEKO_INSTALL_PATH")" = "$sha256" ]; then
+        _log "neko: already installed at $_NEKO_INSTALL_PATH, satisfied"
+        return 0
+    fi
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+    # shellcheck disable=SC2064
+    trap "rm -rf '$tmp_dir'" RETURN
+    _log "neko: fetching a pull token for ghcr.io/$_NEKO_IMAGE_REPOSITORY"
+    local token
+    token="$(curl -fsSL --max-time 60 "https://ghcr.io/token?scope=repository:${_NEKO_IMAGE_REPOSITORY}:pull" \
+        | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+    if [ -z "$token" ]; then
+        _log "neko: could not get a registry token; the next converge retries"
+        return 1
+    fi
+    local layer="$tmp_dir/neko-layer.tar.gz"
+    _log "neko: downloading layer $layer_digest of ${_NEKO_IMAGE_REPOSITORY}:${_NEKO_IMAGE_TAG}"
+    if ! curl -fsSL --retry 3 --max-time 600 -H "Authorization: Bearer $token" \
+        -o "$layer" "https://ghcr.io/v2/${_NEKO_IMAGE_REPOSITORY}/blobs/${layer_digest}"; then
+        _log "neko: layer download FAILED; the next converge retries"
+        return 1
+    fi
+    if [ "sha256:$(_file_sha256 "$layer")" != "$layer_digest" ]; then
+        _log "neko: layer digest mismatch -- refusing to install"
+        return 1
+    fi
+    if ! tar -xzf "$layer" -C "$tmp_dir" usr/bin/neko; then
+        _log "neko: the layer holds no usr/bin/neko; the pin is wrong"
+        return 1
+    fi
+    if [ "$(_file_sha256 "$tmp_dir/usr/bin/neko")" != "$sha256" ]; then
+        _log "neko: binary SHA256 mismatch -- refusing to install"
+        return 1
+    fi
+    install -D -m 0755 "$tmp_dir/usr/bin/neko" "$_NEKO_INSTALL_PATH"
+    _log "neko: install complete ($_NEKO_INSTALL_PATH)"
 }
 
 # Fortress (tiliondev/fortress) stealth Chromium engine, replacing vanilla
@@ -121,7 +281,7 @@ _install_fortress() {
         _log "fortress: download FAILED; the next converge retries"
         return 1
     fi
-    if [ "$(sha256sum "$asset" | awk '{print $1}')" != "$sha256" ]; then
+    if [ "$(_file_sha256 "$asset")" != "$sha256" ]; then
         _log "fortress: SHA256 mismatch -- refusing to install"
         return 1
     fi
@@ -208,7 +368,7 @@ _install_extensions() {
         _log "extensions: already installed, satisfied"
         return 0
     fi
-    command -v unzip >/dev/null 2>&1 || apt-get install -y --no-install-recommends unzip || return 1
+    command -v unzip >/dev/null 2>&1 || _apt_install unzip || return 1
     mkdir -p "$_EXTENSIONS_DIR"
     local rc=0
     _install_one_extension "ublock-origin-lite" "$_UBLOCK_ID" || rc=$?
@@ -216,30 +376,11 @@ _install_extensions() {
     return "$rc"
 }
 
-_install_xvfb() {
-    # Fast satisfied-check (env.d contract: no marker files): both binaries exist.
-    if command -v Xvfb >/dev/null 2>&1 && command -v xclip >/dev/null 2>&1; then
-        _log "xvfb: Xvfb and xclip already installed, satisfied"
-        return 0
-    fi
-    # Headful Chromium needs a display; Xvfb is a headless X server that gives it
-    # one (the browser runs headful under it -- see session.py's _HEADLESS). xclip
-    # bridges the resulting X11 clipboard to/from the user for native copy/paste
-    # (images included). Recover any interrupted dpkg first, same as fortress.
-    _recover_interrupted_dpkg
-    _log "xvfb: installing xvfb + xclip"
-    if apt-get update -y && apt-get install -y --no-install-recommends xvfb xclip; then
-        _log "xvfb: install complete"
-    else
-        _log "xvfb: install FAILED; the next converge retries"
-        return 1
-    fi
-}
-
 main() {
     local rc=0
+    _install_screen_packages || rc=$?
+    _install_neko || rc=$?
     _install_fortress || rc=$?
-    _install_xvfb || rc=$?
     # Extensions are a nice-to-have: a failure here must not fail the unit, because a
     # browser without an ad blocker still works and the converge retries next boot.
     _install_extensions || _log "extensions: not installed this pass; will retry next converge"

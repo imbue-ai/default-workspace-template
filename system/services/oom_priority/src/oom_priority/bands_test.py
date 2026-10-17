@@ -54,8 +54,8 @@ _BUILTIN_SERVICE_ORDER = (
     "github-sync",
     "host-backup",
     "cron",
-    "xvfb",
     "browser",
+    "screen",
     "files",
     "getting-started",
     "system-monitor",
@@ -117,6 +117,9 @@ def test_supervisord_program_bands_preserve_the_shedding_order() -> None:
     assert (
         bands.supervisord_program_band("publish_cgroup_meminfo", {}) == bands.PROTECTED
     )
+    # The Screen's stack members and watcher resolve to the Screen service's own band.
+    for member in ("screen-xorg", "screen-session", "screen-pulse", "screen-neko", "screen-watch"):
+        assert bands.supervisord_program_band(member, {}) == bands.SERVICE_BANDS["screen"], member
     assert bands.SHARED_BROWSER > bands.AGENT_SUBPROCESS
     # The `browser` program is the coordinator, not Chromium: it resolves to its
     # service band, never to the shared-browser band its children occupy.

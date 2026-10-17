@@ -53,7 +53,7 @@ build_inputs = [
     "system/scripts/default_workspace_template_seed.sh",
     "system/scripts/seed_home_skeleton.sh",
     # What the first-boot steps run on top of it.
-    "system/scripts/env.d/1000-playwright-fortress.sh",
+    "system/scripts/env.d/2000-screen.sh",
     "system/scripts/env.d/1300-mcpc-home-link.sh",
     "system/scripts/offload_sandbox_init.sh",
 ]

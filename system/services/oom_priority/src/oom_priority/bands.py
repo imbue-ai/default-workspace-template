@@ -255,12 +255,6 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # command is the stock ``/usr/sbin/cron`` binary, not a workspace entry
     # point), so this band reaches it via the backstop listener instead.
     "cron": 55,
-    # The shared X display Chromium renders into. Losing it breaks the browser
-    # subsystem, so it is *less* expendable than the coordinator below -- whose
-    # death Chromium survives -- but more so than the workspace's own services:
-    # by the time the service bands are being shed at all, every Chromium process
-    # (910-1000) is long gone and this display is holding nothing.
-    "xvfb": 65,
     # The browser coordinator: the daemon that launches and drives Chromium, not
     # Chromium itself. An expendable built-in service, but a *service*
     # nonetheless -- it holds little memory, the Chromium processes it manages
@@ -269,6 +263,13 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # below SHARED_BROWSER, where those Chromium processes live: a coordinator
     # ranked above them would be picked first every time and free nothing.
     "browser": 70,
+    # The Screen: the service that owns the workspace's one streamed desktop and the
+    # four programs of its stack (Xorg, XFCE, PulseAudio, neko), which share the key
+    # through _NON_SERVICE_PROGRAM_BANDS below. Above the browser coordinator and below
+    # the file viewer (docs/system/specs/screen/spec.md section 9.4): the programs the
+    # user runs on the Screen sit in AGENT_SUBPROCESS, so by the time the service bands
+    # are shed every one of them is gone and the stack holds only its own memory.
+    "screen": 72,
     # The file viewer: dufs, the tiny static file server the program runs
     # directly. It holds little memory and supervisord restarts it if shed.
     "files": 75,
@@ -362,6 +363,13 @@ _NON_SERVICE_PROGRAM_BANDS: Final[dict[str, int]] = {
     # service origin and exits; shedding it mid-run would leave the registration
     # half-done, and it holds no memory worth reclaiming.
     "vm-exec-register": PROTECTED,
+    # The Screen's stack and its watcher share the Screen service's band: the group ends
+    # together, so no member is worth more or less than the service that starts it.
+    "screen-xorg": SERVICE_BANDS["screen"],
+    "screen-session": SERVICE_BANDS["screen"],
+    "screen-pulse": SERVICE_BANDS["screen"],
+    "screen-neko": SERVICE_BANDS["screen"],
+    "screen-watch": SERVICE_BANDS["screen"],
 }
 
 

@@ -65,7 +65,7 @@ it uses; `[scope] exclude` lists gitignore-style globs that no review or test
 pass considers, on top of the built-in ones (`system/vendor/**`, `data/**`,
 `**/node_modules/**`, `**/dist/**`, `**/.venv/**`); `[wiring] programs` names
 the supervisord programs the app owns beyond its own block and its
-`<name>-<role>` sidecars (the browser declares `xvfb`). A reference may not point
+`<name>-<role>` sidecars (the Screen declares the four programs of its stack and its watcher). A reference may not point
 inside the app's own directory (already implicit) or into another app's (that is
 a `pyproject.toml` dependency), and every one must exist, which
 `system/test_app_manifests.py` checks for every manifest in the tree. Together
