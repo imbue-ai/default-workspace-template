@@ -34,6 +34,7 @@ _BUILT_IN_APP_PACKAGES = (
     "chat",
     "files",
     "getting_started",
+    "screen",
     "system_interface",
     "system_monitor",
     "terminal",
@@ -70,6 +71,20 @@ def _command_by_program() -> dict[str, str]:
         section.partition(":")[2]: parser[section].get("command", "")
         for section in parser.sections()
         if section.startswith("program:")
+    }
+
+
+def _command_by_program_or_listener() -> dict[str, str]:
+    """Every program and event listener the config declares: what a manifest's wiring may name."""
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read(_SUPERVISORD_CONF)
+    parser.read(
+        sorted((_SUPERVISORD_CONF.parent / "supervisord.conf.d").glob("*.conf"))
+    )
+    return {
+        section.partition(":")[2]: parser[section].get("command", "")
+        for section in parser.sections()
+        if section.startswith(("program:", "eventlistener:"))
     }
 
 
@@ -195,14 +210,15 @@ def test_built_in_app_footprint_carries_the_drop_ins_that_run_it(manifest_path: 
 
     for program in (manifest.program, *manifest.wiring.programs):
         dropin = f"system/supervisord.conf.d/{program}.conf"
-        assert sections_by_path.get(dropin) == [f"program:{program}"], (
+        # A wiring program may be an event listener (the Screen's watcher), declared in its own section kind.
+        assert sections_by_path.get(dropin) in ([f"program:{program}"], [f"eventlistener:{program}"]), (
             f"{manifest_path} runs program {program!r}, whose drop-in the footprint does not "
             f"carry as wiring: {sections_by_path}"
         )
 
 
 def test_every_declared_wiring_program_has_a_supervisord_block() -> None:
-    command_by_program = _command_by_program()
+    command_by_program = _command_by_program_or_listener()
     for manifest_path in _every_manifest_path():
         for program in load_manifest(manifest_path, repo_root=_REPO_ROOT).wiring.programs:
             assert program in command_by_program, (
@@ -214,7 +230,11 @@ def test_every_declared_wiring_program_has_a_supervisord_block() -> None:
 def test_the_first_label_of_every_standalone_program_is_a_reserved_app_name() -> None:
     # An app named after a standalone program's first label would claim that program as
     # its <name>-<role> sidecar when its footprint is computed, so the label is reserved.
-    app_programs = {load_manifest(path, repo_root=_REPO_ROOT).program for path in _every_manifest_path()}
+    manifests = [load_manifest(path, repo_root=_REPO_ROOT) for path in _every_manifest_path()]
+    # A program an app's manifest declares as its wiring (the Screen's stack members) is that app's, not standalone.
+    app_programs = {manifest.program for manifest in manifests} | {
+        program for manifest in manifests for program in manifest.wiring.programs
+    }
     standalone_labels = {
         program.partition("-")[0]
         for program in _command_by_program()
@@ -382,6 +402,30 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["terminal"].critical is True
     assert by_name["files"].critical is False
     assert by_name["browser"].critical is False
+    assert by_name["screen"].critical is False
+    # The Screen (docs/system/specs/screen/spec.md D2 and section 18): one page at its root, the browser a launch
+    # path of it, the stack's programs and the watcher its wiring, never stopped for emptiness, band ``screen``.
+    assert by_name["screen"].program == "screen"
+    assert by_name["screen"].priority == "screen"
+    assert by_name["screen"].system is True
+    assert by_name["screen"].default_shortcut is not None
+    assert by_name["screen"].default_shortcut.launch == "screen"
+    assert by_name["screen"].default_shortcut.mode == "focus"
+    assert [(entry.id, entry.path, entry.method.value) for entry in by_name["screen"].launch_paths] == [
+        ("screen", "/", "GET"),
+        ("browser", "/launch/browser", "POST"),
+    ]
+    assert [param.name for param in by_name["screen"].launch_paths[1].params] == ["url"]
+    assert by_name["screen"].wiring.programs == (
+        "screen-xorg",
+        "screen-session",
+        "screen-pulse",
+        "screen-neko",
+        "screen-watch",
+    )
+    assert [(handler.type, handler.path) for handler in by_name["screen"].message_handlers] == [
+        ("open:url", "/api/open-url")
+    ]
     # The stop-when-no-windows spec, section 4.2: the file viewer, Getting Started, and Memory & disk stop once no
     # window shows them; the browser keeps running, since agents drive its browsers with no window; and the
     # critical ones (which the manifest refuses the field on) never stop.
@@ -392,6 +436,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "terminal-pty": False,
         "files": True,
         "browser": False,
+        "screen": False,
         "getting-started": True,
         "system-monitor": True,
     }
@@ -407,6 +452,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "terminal-pty": "internal",
         "files": "app",
         "browser": "system",
+        "screen": "system",
         "getting-started": "system",
         "system-monitor": "system",
     }
@@ -435,10 +481,10 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     # One order for the built-ins: the desktop seeds its shortcuts in it and the launcher lists its apps in it.
     assert sorted(
         (manifest.launcher_rank, manifest.name) for manifest in by_name.values() if manifest.launcher_rank is not None
-    ) == [(10, "chat"), (15, "getting-started"), (20, "files"), (30, "browser"), (40, "terminal"), (50, "system-monitor")]
-    # Every seeded shortcut opens a new window of its app; the one browser is focused instead
-    # (docs/system/specs/window-bound-resources.md section 3.1).
-    for name, mode in (("chat", "new"), ("terminal", "new"), ("files", "new"), ("browser", "focus")):
+    ) == [(10, "chat"), (15, "getting-started"), (20, "files"), (30, "browser"), (30, "screen"), (40, "terminal"), (50, "system-monitor")]
+    # Every seeded shortcut opens a new window of its app; the one browser and the one Screen are focused instead
+    # (docs/system/specs/window-bound-resources.md section 3.1; the Screen spec D2).
+    for name, mode in (("chat", "new"), ("terminal", "new"), ("files", "new"), ("browser", "focus"), ("screen", "focus")):
         assert by_name[name].default_shortcut is not None
         assert by_name[name].default_shortcut.mode == mode, name
     # The desktop interface's launch paths (desktop-interface contracts.md section 2; the POST ones are the

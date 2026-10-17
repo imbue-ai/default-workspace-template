@@ -1,0 +1,1 @@
+`find_wiring_sections` accepts a declared wiring program whose supervisord block is an `[eventlistener:...]` section (the Screen's `screen-watch`), attributing it to its drop-in like a program's block.

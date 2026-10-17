@@ -1,0 +1,13 @@
+The Screen app (`docs/system/specs/screen/spec.md`, implementation steps 1 and 2): the workspace's one streamed Linux desktop as a window.
+
+- The `screen-service` daemon on `127.0.0.1:8090` renders `xorg.conf`, `neko.yaml` (mode 600, with that start's passwords and API token) and the PulseAudio script under `data/.state/screen/`, starts the `screen-stack` group on demand (a page load, the Start button, the `browser` launch path, `screen run`, an agent's `acquire`) and answers `starting` until neko's health route does; `GET /api/state` carries the lifecycle (`installing` while env-converge has not installed the stack), the lease, the frontmost window's title and the display mode; `/api/ws` pushes `state`, `stopped` and `handoff_request`.
+
+- Sessions and identity: `POST /api/session` logs the requester in to neko with the user password and a name from `X-Imbue-Identity` (the name, else the email's local part, else Owner or Guest); the viewer logs out on `pagehide` and the service deletes sessions disconnected for ten minutes.
+
+- The control lease (`ScreenControl`), the browser fleet's state machine with `acquire`, `release`, `take_control`, `handoff` and `return_to_agents`, a FIFO wait queue and a resume queue, the 60-second idle TTL and the 12-second claim window, checkpointed to `control.json` and projected onto neko (`locked_controls` while an agent holds it, the human made host otherwise, a human taking an uncontrolled Screen learned from `control/host`). Human routes `POST /api/control/take` and `/return`; agent routes `/acquire`, `/release`, `/handoff` with `X-Mngr-Agent-Id`.
+
+- `GET /api/screenshot` (PNG by default, from neko's admin screenshot), `GET /api/windows` and `POST /api/windows/<id>/activate` through `wmctrl`, `POST /api/run` launching a command with `DISPLAY=:99` in the `AGENT_SUBPROCESS` band, the `/neko/` reverse proxy (HTTP and WebSocket, with a rate limit on the login route), and `GET /api/connect-info` answering no endpoints yet.
+
+- The `screen` command: `run`, `windows`, `activate`, `shot`, `size` (read only for now), `control acquire|release|handoff`, `open`, with the fleet CLI's exit codes. The `screen-watch` event listener stops the rest of the group when a member exits, appends a `screen_stopped` event and tells the service.
+
+- The viewer (`frontend/`, built into `src/screen/static/`): the video over neko's signaling with the server's candidate used as given, the strip (who has control, Take control, Give control back), the installing, starting and stopped overlays, the agent dim, mouse and keyboard input while this session controls, and the shell connection with `closeChord` sending Ctrl+W to the remote.
