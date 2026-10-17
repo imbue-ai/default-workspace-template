@@ -8,6 +8,7 @@ import { candidatesToAdd } from "./candidates";
 import { IcePolicy } from "./ice_policy";
 import type { NekoSocket } from "./neko_socket";
 import { pageStorage, rememberNeedsRelay } from "./relay_memory";
+import { windowScheduler } from "./scheduler";
 import { fetchConnectInfo } from "./service_client";
 import type { ConnectInfo } from "./state";
 import { EMPTY_CONNECT_INFO } from "./state";
@@ -40,7 +41,7 @@ export class NekoStream {
         fallbackToScreencast: () => this.fallbackToScreencast(),
         rememberRelay: () => rememberNeedsRelay(pageStorage()),
       },
-      { setTimeout: (callback, ms) => window.setTimeout(callback, ms), clearTimeout: (id) => window.clearTimeout(id) },
+      windowScheduler,
     );
     socket.on("signal/provide", (payload) => {
       this.onProvide(payload).catch((error) => console.error("[screen] webrtc setup failed", error));

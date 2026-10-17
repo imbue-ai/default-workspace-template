@@ -3,6 +3,7 @@
  *  escalates once to a relay restart (``connect-info?relay=1``, ICE restarted, the need remembered for next time);
  *  a relay attempt that fails the same way hands the picture to the screencast. */
 
+import type { Scheduler } from "./scheduler";
 import type { ConnectInfo } from "./state";
 
 export const CONNECT_DEADLINE_MS = 4000;
@@ -21,11 +22,6 @@ export interface IcePolicyActions {
   rememberRelay(): void;
 }
 
-export interface Timers {
-  setTimeout(callback: () => void, ms: number): number;
-  clearTimeout(id: number): void;
-}
-
 export class IcePolicy {
   phase: IcePhase = "idle";
   private deadline = 0;
@@ -33,7 +29,7 @@ export class IcePolicy {
 
   constructor(
     private readonly actions: IcePolicyActions,
-    private readonly timers: Timers,
+    private readonly timers: Scheduler,
     private readonly deadlineMs: number = CONNECT_DEADLINE_MS,
   ) {}
 

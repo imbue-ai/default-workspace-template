@@ -23,6 +23,11 @@ export class FakeScheduler implements Scheduler {
     this.pending = this.pending.filter((timer) => timer.handle !== handle);
   }
 
+  /** How many timers are armed and not yet due. */
+  get pendingCount(): number {
+    return this.pending.length;
+  }
+
   /** Move the clock forward, running every timer that comes due in order. */
   advance(ms: number): void {
     const target = this.now + ms;

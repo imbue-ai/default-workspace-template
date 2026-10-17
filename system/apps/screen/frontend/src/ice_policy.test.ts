@@ -2,43 +2,15 @@
 import { describe, expect, it } from "vitest";
 
 import { CONNECT_DEADLINE_MS, IcePolicy } from "./ice_policy";
-import type { IcePolicyActions, Timers } from "./ice_policy";
+import type { IcePolicyActions } from "./ice_policy";
 import type { ConnectInfo } from "./state";
+import { FakeScheduler } from "./testing/fakeScheduler";
 
 const RELAY_INFO: ConnectInfo = {
   ice_servers: [{ urls: "turn:turn.example:3478", username: "u", credential: "c" }],
   candidates: [{ host: "127.0.0.1", port: 32771, protocol: "udp" }],
   expires_at: "2026-10-17T13:00:00Z",
 };
-
-class FakeClock implements Timers {
-  now = 0;
-  private nextId = 1;
-  private readonly pending = new Map<number, { at: number; callback: () => void }>();
-
-  setTimeout(callback: () => void, ms: number): number {
-    const id = this.nextId++;
-    this.pending.set(id, { at: this.now + ms, callback });
-    return id;
-  }
-
-  clearTimeout(id: number): void {
-    this.pending.delete(id);
-  }
-
-  advance(ms: number): void {
-    this.now += ms;
-    for (const [id, timer] of [...this.pending].sort((a, b) => a[1].at - b[1].at)) {
-      if (timer.at > this.now) continue;
-      this.pending.delete(id);
-      timer.callback();
-    }
-  }
-
-  get armed(): number {
-    return this.pending.size;
-  }
-}
 
 class Recorder implements IcePolicyActions {
   readonly log: string[] = [];
@@ -69,8 +41,8 @@ async function settle(): Promise<void> {
   await Promise.resolve();
 }
 
-function build(): { policy: IcePolicy; clock: FakeClock; actions: Recorder } {
-  const clock = new FakeClock();
+function build(): { policy: IcePolicy; clock: FakeScheduler; actions: Recorder } {
+  const clock = new FakeScheduler();
   const actions = new Recorder();
   return { policy: new IcePolicy(actions, clock), clock, actions };
 }
@@ -86,7 +58,7 @@ describe("IcePolicy", () => {
     expect(actions.log).toEqual(["remember", "fetch", "restart"]);
     expect(actions.restarted).toEqual([RELAY_INFO]);
     expect(policy.phase).toBe("relay");
-    expect(clock.armed).toBe(1);
+    expect(clock.pendingCount).toBe(1);
   });
 
   it("hands a relay attempt that misses the deadline to the screencast", async () => {
@@ -96,7 +68,7 @@ describe("IcePolicy", () => {
     await settle();
     expect(actions.log).toEqual(["screencast"]);
     expect(policy.phase).toBe("screencast");
-    expect(clock.armed).toBe(0);
+    expect(clock.pendingCount).toBe(0);
   });
 
   it("walks direct, relay, screencast when nothing ever connects", async () => {
