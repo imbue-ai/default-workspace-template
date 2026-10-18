@@ -220,7 +220,10 @@ def _build_harness(tmp_path: Path) -> _Harness:
     _git(host_config_root, "init", "--quiet")
     settings_path = host_config_root / ".mngr" / "settings.toml"
     settings_path.parent.mkdir()
-    settings_path.write_text((mngr_worktree / ".mngr" / "settings.toml").read_text())
+    # The clone's settings, so the create templates the desktop stacks are the template's, opted into the
+    # pytest config guard; MNGR_PROJECT_CONFIG_DIR points every mngr the app runs here, including the backend's
+    # own in-process load, whose cwd is the mngr checkout (whose .mngr is never opted in).
+    settings_path.write_text((template_clone / ".mngr" / "settings.toml").read_text())
     _opt_into_pytest_config_guard(settings_path)
     shots_dir = tmp_path / "shots"
     shots_dir.mkdir()
@@ -229,7 +232,7 @@ def _build_harness(tmp_path: Path) -> _Harness:
         template_clone=template_clone,
         template_branch=branch,
         root_name=f"minds-ci-screen-{run_id}",
-        data_home=tmp_path / "minds data home",
+        data_home=tmp_path / "minds-data-home",
         host_config_root=host_config_root,
         user_data_dir=tmp_path / "electron-profile",
         workspace_name=f"screen-e2e-{run_id}",
@@ -249,8 +252,8 @@ def _electron_environment(harness: _Harness) -> dict[str, str]:
             "MINDS_WORKSPACE_GIT_URL": str(harness.template_clone),
             "MINDS_WORKSPACE_BRANCH": harness.template_branch,
             "MINDS_USE_LOCAL_WORKSPACE_DEFAULTS": "1",
-            # The spawned `mngr create` reads the clone's .mngr/settings.toml, where the create templates live.
             "MNGR_ROOT_NAME": "mngr",
+            "MNGR_PROJECT_CONFIG_DIR": str(harness.host_config_root / ".mngr"),
             # The providers that need credentials this machine may not hold are silenced for every mngr the app
             # spawns and for the destroy; the workspace is local Docker.
             "MNGR__PROVIDERS__MODAL__IS_ENABLED": "false",
