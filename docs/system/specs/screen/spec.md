@@ -263,7 +263,7 @@ Nothing stops the group for lack of viewers, windows, or apps (D3).
 
 ### 9.4 Bands
 
-`SERVICE_BANDS` gains `screen = 72`, between `browser` and `files`, for the service and the four group members alike.
+`SERVICE_BANDS` gains `screen = 72`, between `system_interface` and `files` (the `browser` and `xvfb` bands go with the browser app), for the service and the four group members alike.
 Chromium's processes are re-tagged into the shared-browser band by the migrated `oom_retag` sweep as today, and `screen run` launches land in `AGENT_SUBPROCESS` (900).
 Programs started from the Screen itself (the XFCE menu, a terminal on it) inherit the session's band, so the service runs a raise-only sweep every 10 seconds, the shape of the Chromium retag: every descendant of `screen-session` whose executable is not one of the session's own (`xfce4-session`, `xfwm4`, `xfce4-panel`, `xfdesktop`, `xfsettingsd`, `xfconfd`, and the D-Bus daemon they start) is raised to `AGENT_SUBPROCESS`, and Chromium's to the shared-browser band as today.
 Under pressure the order is therefore: programs on the Screen, then Chromium's renderers, then the stack.
