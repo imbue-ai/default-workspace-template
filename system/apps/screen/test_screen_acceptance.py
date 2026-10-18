@@ -217,6 +217,12 @@ def _build_harness(tmp_path: Path) -> _Harness:
         pytest.fail(f"{_MNGR_INTERNAL_GIT_TOKEN_ENV_VAR} is not set; the workspace image's build needs it")
     if subprocess.run(["docker", "info"], capture_output=True, check=False, timeout=60).returncode != 0:
         pytest.fail("docker is not answering on this host; the workspace is a local Docker container")
+    with sync_playwright() as playwright:
+        if not Path(playwright.chromium.executable_path).exists():
+            pytest.fail(
+                "Playwright's Chromium is not installed for this venv (the viewer is shown in it); "
+                "run `uv run --no-sync playwright install chromium` from the repo root"
+            )
     run_id = uuid4().hex[:8]
     template_clone = tmp_path / "template"
     branch = _clone_template(template_clone)
