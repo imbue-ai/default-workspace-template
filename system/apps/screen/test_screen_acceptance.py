@@ -4,11 +4,11 @@ see a frame, take control, type into a terminal on the Screen, open the browser 
 tab, close the window with the stack still running, and quit with everything gone.
 
 The desktop app lives in the mngr monorepo, so the test runs on a developer's machine with ``MNGR_WORKTREE`` naming
-a synced checkout of it (Electron installed under ``apps/minds``), Docker on the host, a display, and, while the
-tree pins the private mngr repo, ``MNGR_INTERNAL_GIT_TOKEN`` for the workspace image's build;
-``system/apps/screen/README.md`` has the recipe. It is skipped at collection where ``MNGR_WORKTREE`` is unset, which
-includes the CI job inside the workspace image, where nothing of this can run (no Docker on the host, no desktop
-app).
+a synced checkout of it (Electron installed under ``apps/minds``), Docker on the host, a display, a Chromium to
+show the Screen's viewer in (``SCREEN_ACCEPTANCE_CHROMIUM``, else a Playwright build), and, while the tree pins the
+private mngr repo, ``MNGR_INTERNAL_GIT_TOKEN`` for the workspace image's build; ``system/apps/screen/README.md`` has
+the recipe. It is skipped at collection where ``MNGR_WORKTREE`` is unset, which includes the CI job inside the
+workspace image, where nothing of this can run (no Docker on the host, no desktop app).
 """
 
 import io

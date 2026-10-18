@@ -355,15 +355,14 @@ frame, take control, type into a terminal on the Screen, open the browser launch
 close the window with the stack still running, and quit with everything gone. It needs the mngr
 monorepo (synced, with Electron installed under `apps/minds`), Docker on this machine, a display
 (the Electron window appears on it), a Chromium to show the viewer in (Electron exposes neither the
-Screen's nested frame nor a new page to Playwright: this venv's Playwright build, else the newest build in
-`~/.cache/ms-playwright`, else the one `SCREEN_ACCEPTANCE_CHROMIUM` names), and, while the tree pins the
-private mngr repo (`python3 system/scripts/set_mngr_pin.py --check` says `internal`),
-`MNGR_INTERNAL_GIT_TOKEN` in the environment (the read-only credential the image's build then needs to
-fetch mngr; the mngr monorepo's `apps/minds/docs/dwt-mngr-pin.md` says where it comes from); it skips
-at collection without
-`MNGR_WORKTREE`, so CI never runs it. Everything it makes is torn down at the end (the workspace
-through `mngr destroy`, the app's processes, the throwaway minds root under pytest's temporary
-directory), and its screenshots are left under that directory for a look:
+Screen's nested frame nor a new page to Playwright: the one `SCREEN_ACCEPTANCE_CHROMIUM` names, else
+this venv's Playwright build, else the newest build under `~/.cache/ms-playwright`), and, while the
+tree pins the private mngr repo (`python3 system/scripts/set_mngr_pin.py --check` says `internal`),
+`MNGR_INTERNAL_GIT_TOKEN` in the environment (the read-only credential the image's build then needs
+to fetch mngr; the mngr monorepo's `apps/minds/docs/dwt-mngr-pin.md` says where it comes from); it
+skips at collection without `MNGR_WORKTREE`, so CI never runs it. Everything it makes is torn down at
+the end (the workspace through `mngr destroy`, the app's processes, the throwaway minds root under
+pytest's temporary directory), and its screenshots are left under that directory for a look:
 
 ```bash
 MNGR_WORKTREE=/path/to/mngr uv run --no-sync pytest -q -p no:cacheprovider \
