@@ -366,7 +366,7 @@ While the share stack is up:
 - "The browser" is one Chromium with one profile, started by the `browser` launch path, `screen run`, or an agent's `new`; it is not stopped when its windows close (the user closes it from inside, or Quit ends the stack); its tabs are checkpointed as today and restored when it is next started.
 - Chromium's windows are ordinary X windows: the user may open as many as they like, the window manager places them, and nothing pins or closes them.
   `Browser.setWindowBounds` leaves the CDP block list; `Emulation.setDeviceMetricsOverride` stays blocked.
-- Fortress is upgraded to its latest release in the same change, x64 and arm64 pins alike, in the new env.d unit.
+- Fortress stays at v151 in the new env.d unit, x64 and arm64 pins alike: v153 was tried, and Playwright 1.58's click hangs on a touch-enabled page in it (the files app's phone-layout tests time out), so the upgrade waits for a Playwright that supports it.
 
 ### 16.2 What goes
 
@@ -466,7 +466,7 @@ Each step leaves the tree green on the branch; nothing merges until the last.
 5. The share gateway's part and the relay `tcp` proxy (needs the connector's `media_port`).
 6. `FULLSCREEN` in the shell, immersive mode through the embed contract, pointer lock plumbing.
 7. Clipboard, files, mobile.
-8. The browser's migration and the Fortress upgrade; the deletions; skills and documents.
+8. The browser's migration and the Fortress unit's move; the deletions; skills and documents.
 9. Tests that need the whole, the acceptance test, the document changes of section 19.
 
 ## 22. Out of scope and follow-ups

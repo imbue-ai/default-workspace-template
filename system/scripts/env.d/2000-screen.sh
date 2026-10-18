@@ -229,23 +229,27 @@ _install_neko() {
     _log "neko: install complete ($_NEKO_INSTALL_PATH)"
 }
 
-# Fortress (tiliondev/fortress), the stealth Chromium the Screen's browser runs,
-# from the official release for x64 and arm64 alike. The pins are the release's
-# SHA256SUMS, checked after the download.
-# The tarball unpacks to fortress-<major>/ with the `tilion` launcher (a shell
-# script that execs `chrome` beside it with Fortress's persona flags), so the
-# versioned directory is installed as it is and the stable path every consumer
-# knows, /opt/fortress/tilion-fortress/tilion, is a symlink the unit repoints at it;
-# a pin bump changes the versioned directory, which is what makes the
-# satisfied-check fail and the new release install.
-readonly _FORTRESS_RELEASE="v153.0.8010.36"
-readonly _FORTRESS_UNPACKED_DIR="fortress-v153"
-readonly _FORTRESS_X64_URL="https://github.com/tiliondev/fortress/releases/download/${_FORTRESS_RELEASE}/fortress-v153-linux-x64.tar.gz"
-readonly _FORTRESS_X64_SHA256="f677f850e64a75f4c202955649df074629306231feb4a2fa9bab0b9bbddafb6a"
-readonly _FORTRESS_ARM64_URL="https://github.com/tiliondev/fortress/releases/download/${_FORTRESS_RELEASE}/fortress-v153-linux-arm64.tar.gz"
-readonly _FORTRESS_ARM64_SHA256="5213d291e6e883ece6d9509fa39be1ae0a7e188592ef87318693e705be994728"
+# Fortress (tiliondev/fortress), the stealth Chromium the Screen's browser runs.
+# The pin stays at v151: Playwright 1.58's click hangs on a touch-enabled page in
+# Fortress v153 (the files app's phone-layout tests time out), and v151 is the
+# release the workspaces shipped before the Screen. x64 comes from the official
+# release; arm64 has no official v151 build (tiliondev/fortress#29), so it comes
+# from the fork build main pinned, as before.
+# Fork build: https://github.com/minhtrinh-imbue/fortress/releases/tag/linux-arm64-151.0.7908.0-debian12
+# Both tarballs unpack to tilion-fortress/ with the `tilion` launcher (a shell
+# script that execs `chrome` beside it with Fortress's persona flags). The tree is
+# installed under a versioned directory and the stable path every consumer knows,
+# /opt/fortress/tilion-fortress/tilion, is a symlink the unit repoints at it; a pin
+# bump changes the versioned directory, which is what makes the satisfied-check
+# fail and the new release install.
+readonly _FORTRESS_RELEASE="v151.0.7908.0"
+readonly _FORTRESS_UNPACKED_DIR="tilion-fortress"
+readonly _FORTRESS_X64_URL="https://github.com/tiliondev/fortress/releases/download/${_FORTRESS_RELEASE}/tilion-fortress-linux-x64.tar.gz"
+readonly _FORTRESS_X64_SHA256="243238b2b8a8b944b7ba2b63533d2b917da7d569dcb290ce96bf28151294b873"
+readonly _FORTRESS_ARM64_URL="https://github.com/minhtrinh-imbue/fortress/releases/download/linux-arm64-151.0.7908.0-debian12/tilion-fortress-linux-arm64-debian12.tar.gz"
+readonly _FORTRESS_ARM64_SHA256="da6965af8fa8e995d137bcabdca8d163fde7f32ba483eaf5e029223995f19ada"
 readonly _FORTRESS_INSTALL_DIR="/opt/fortress"
-readonly _FORTRESS_VERSIONED_DIR="${_FORTRESS_INSTALL_DIR}/${_FORTRESS_UNPACKED_DIR}"
+readonly _FORTRESS_VERSIONED_DIR="${_FORTRESS_INSTALL_DIR}/fortress-${_FORTRESS_RELEASE}"
 readonly _FORTRESS_STABLE_LINK="${_FORTRESS_INSTALL_DIR}/tilion-fortress/tilion"
 
 _install_fortress() {
@@ -255,6 +259,13 @@ _install_fortress() {
     if [ -x "$_FORTRESS_VERSIONED_DIR/tilion" ] \
         && [ "$(readlink -f "$_FORTRESS_STABLE_LINK" 2>/dev/null)" = "$_FORTRESS_VERSIONED_DIR/tilion" ]; then
         _log "fortress: $_FORTRESS_RELEASE already installed at $_FORTRESS_VERSIONED_DIR, satisfied"
+        return 0
+    fi
+    # CLEANUP: drop once every image predating the versioned layout (baked before 2026-10-18) is gone.
+    # The unit that came before this one unpacked the same release straight into the stable path.
+    if [ ! -L "$_FORTRESS_STABLE_LINK" ] && [ -x "$_FORTRESS_STABLE_LINK" ] \
+        && "$_FORTRESS_INSTALL_DIR/tilion-fortress/chrome" --version 2>/dev/null | grep -q "${_FORTRESS_RELEASE#v}"; then
+        _log "fortress: $_FORTRESS_RELEASE already installed at $_FORTRESS_STABLE_LINK by the previous unit, satisfied"
         return 0
     fi
     # `install-deps` apt-installs the shared libs Chromium needs (libnss3,
@@ -353,7 +364,7 @@ _install_one_extension() {
         return 0
     fi
     local crx="/tmp/${ext_id}.crx"
-    local url="https://clients2.google.com/service/update2/crx?response=redirect&prodversion=153&acceptformat=crx3&x=id%3D${ext_id}%26uc"
+    local url="https://clients2.google.com/service/update2/crx?response=redirect&prodversion=151&acceptformat=crx3&x=id%3D${ext_id}%26uc"
     _log "extensions: fetching ${name} (${ext_id})"
     if ! curl -fsSL --retry 3 --max-time 120 -o "$crx" "$url"; then
         _log "extensions: download FAILED for ${name}; the browser runs without it"
