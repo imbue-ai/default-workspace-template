@@ -492,14 +492,15 @@ def _cookie_to_set(cookie: Cookie) -> SetCookieParam:
     )
 
 
+@contextmanager
 def _open_screen_from_launcher(
     workspace: Frame, playwright: Playwright, harness: _Harness
-) -> tuple[Frame, str, Browser]:
-    """Press the Screen's launcher row; return the viewer's frame, the window id, and the browser showing it.
+) -> Generator[tuple[Frame, str]]:
+    """Press the Screen's launcher row and yield the viewer's frame with the window id.
 
     Electron exposes the shell's frame to Playwright but neither the Screen's frame nested inside it nor a new
     page, so the viewer is shown in a Chromium of its own at the same address, through the same desktop proxy,
-    carrying the desktop session's cookies; the caller closes that browser.
+    carrying the desktop session's cookies; that browser is closed when the block ends.
     """
     if workspace.query_selector(f"{_LAUNCHER_OVERLAY}:visible") is None:
         opener = _LAUNCHER_INPUT if workspace.query_selector(_LAUNCHER_INPUT) is not None else _LAUNCHER_FIELD
@@ -516,13 +517,15 @@ def _open_screen_from_launcher(
     )
     assert _SCREEN_ORIGIN.match(viewer_url), viewer_url
     viewer_browser = playwright.chromium.launch(executable_path=harness.viewer_chromium)
-    viewer_context = viewer_browser.new_context(ignore_https_errors=True, viewport={"width": 1280, "height": 800})
-    viewer_context.add_cookies([_cookie_to_set(cookie) for cookie in workspace.page.context.cookies()])
-    viewer_page = viewer_context.new_page()
-    viewer_page.goto(viewer_url, wait_until="domcontentloaded")
-    screen = viewer_page.main_frame
-    logger.info("The Screen's window {} shows {}, driven in a browser of its own", window_id, viewer_url)
-    return screen, window_id, viewer_browser
+    try:
+        viewer_context = viewer_browser.new_context(ignore_https_errors=True, viewport={"width": 1280, "height": 800})
+        viewer_context.add_cookies([_cookie_to_set(cookie) for cookie in workspace.page.context.cookies()])
+        viewer_page = viewer_context.new_page()
+        viewer_page.goto(viewer_url, wait_until="domcontentloaded")
+        logger.info("The Screen's window {} shows {}, driven in a browser of its own", window_id, viewer_url)
+        yield viewer_page.main_frame, window_id
+    finally:
+        viewer_browser.close()
 
 
 def _service_get(screen: Frame, path: str) -> dict[str, Any]:
@@ -633,115 +636,114 @@ def _running_state(screen: Frame) -> dict[str, Any] | None:
 
 def _drive_the_screen(workspace: Frame, harness: _Harness, inside: _Workspace, playwright: Playwright) -> None:
     # Open the Screen and see a frame.
-    screen, window_id, viewer = _open_screen_from_launcher(workspace, playwright, harness)
-    state = _wait_until("the Screen's stack running", _SCREEN_RUNNING_SECONDS, lambda: _running_state(screen))
-    assert state["screen_size"] == {"width": 1920, "height": 1080, "rate": 60}, state
-    _wait_until("the video decoding (readyState 4)", _FRAME_SECONDS, lambda: _video_ready_state(screen) == 4)
-    frame_png: bytes = _wait_until(
-        "a frame with a desktop's spread of grey levels", _FRAME_SECONDS, lambda: _desktop_frame(screen)
-    )
-    (harness.shots_dir / "03-first-frame.png").write_bytes(frame_png)
-    logger.info("A frame is showing (grey levels span {})", _grey_level_range(frame_png))
+    with _open_screen_from_launcher(workspace, playwright, harness) as (screen, window_id):
+        state = _wait_until("the Screen's stack running", _SCREEN_RUNNING_SECONDS, lambda: _running_state(screen))
+        assert state["screen_size"] == {"width": 1920, "height": 1080, "rate": 60}, state
+        _wait_until("the video decoding (readyState 4)", _FRAME_SECONDS, lambda: _video_ready_state(screen) == 4)
+        frame_png: bytes = _wait_until(
+            "a frame with a desktop's spread of grey levels", _FRAME_SECONDS, lambda: _desktop_frame(screen)
+        )
+        (harness.shots_dir / "03-first-frame.png").write_bytes(frame_png)
+        logger.info("A frame is showing (grey levels span {})", _grey_level_range(frame_png))
 
-    # Take control: with nobody controlling, the first input is neko's control/request and the service records it.
-    screen.click(_STAGE, position={"x": 400, "y": 300})
-    _wait_until(
-        "this viewer becoming the controller",
-        _CONTROL_SECONDS,
-        lambda: screen.query_selector(f'{_STAGE}[data-screen-controller="you"]') is not None,
-    )
-    assert "Control: You" in screen.inner_text("[data-screen-controller]")
-    assert _service_get(screen, "/api/state")["control"]["controller"] == "human"
+        # Take control: with nobody controlling, the first input is neko's control/request and the service records it.
+        screen.click(_STAGE, position={"x": 400, "y": 300})
+        _wait_until(
+            "this viewer becoming the controller",
+            _CONTROL_SECONDS,
+            lambda: screen.query_selector(f'{_STAGE}[data-screen-controller="you"]') is not None,
+        )
+        assert "Control: You" in screen.inner_text("[data-screen-controller]")
+        assert _service_get(screen, "/api/state")["control"]["controller"] == "human"
 
-    # Type into a terminal on the Screen and see the text land: the command it runs writes a marker file.
-    started = inside.run("uv run --no-sync screen run xfce4-terminal")
-    assert started.returncode == 0, started.stderr
-    terminal = _wait_until(
-        "the terminal's window appearing",
-        _WINDOW_SECONDS,
-        lambda: _window_matching(screen, lambda w: "xfce4-terminal" in w["window_class"].lower()),
-    )
-    assert inside.succeeds(f"uv run --no-sync screen activate {terminal['id']}")
-    _wait_until("the terminal coming to the front", _WINDOW_SECONDS, lambda: _is_frontmost(screen, terminal["id"]))
-    marker = f"{_IN_WORKSPACE_ROOT}/data/screen-acceptance-{uuid4().hex[:8]}.txt"
-    screen.click(_STAGE, position={"x": 400, "y": 300})
-    screen.page.keyboard.type(f"touch {marker}", delay=40)
-    screen.page.keyboard.press("Enter")
-    _wait_until(
-        "the typed command creating the marker file", _WINDOW_SECONDS, lambda: inside.succeeds(f"test -f {marker}")
-    )
-    _shot(screen, harness.shots_dir, "04-terminal-typed")
-    logger.info("The typed command ran on the Screen ({})", marker)
+        # Type into a terminal on the Screen and see the text land: the command it runs writes a marker file.
+        started = inside.run("uv run --no-sync screen run xfce4-terminal")
+        assert started.returncode == 0, started.stderr
+        terminal = _wait_until(
+            "the terminal's window appearing",
+            _WINDOW_SECONDS,
+            lambda: _window_matching(screen, lambda w: "xfce4-terminal" in w["window_class"].lower()),
+        )
+        assert inside.succeeds(f"uv run --no-sync screen activate {terminal['id']}")
+        _wait_until("the terminal coming to the front", _WINDOW_SECONDS, lambda: _is_frontmost(screen, terminal["id"]))
+        marker = f"{_IN_WORKSPACE_ROOT}/data/screen-acceptance-{uuid4().hex[:8]}.txt"
+        screen.click(_STAGE, position={"x": 400, "y": 300})
+        screen.page.keyboard.type(f"touch {marker}", delay=40)
+        screen.page.keyboard.press("Enter")
+        _wait_until(
+            "the typed command creating the marker file", _WINDOW_SECONDS, lambda: inside.succeeds(f"test -f {marker}")
+        )
+        _shot(screen, harness.shots_dir, "04-terminal-typed")
+        logger.info("The typed command ran on the Screen ({})", marker)
 
-    # The browser launch path with a URL: Chromium comes up on the Screen with the page as its tab. Fortress is
-    # installed by the first-boot env.d unit, which may still be running in a workspace this young.
-    _wait_until(
-        "the first-boot install finishing (Fortress)",
-        _INSTALL_SECONDS,
-        lambda: inside.supervisor_state("env-converge") == "EXITED"
-        and inside.succeeds("test -x /opt/fortress/tilion-fortress/tilion"),
-    )
-    page_url = "https://example.com/"
-    opened = inside.run(f"uv run --no-sync workspace-layout open {page_url}", timeout_seconds=120.0)
-    assert opened.returncode == 0, (opened.stdout, opened.stderr)
-    _wait_until(
-        "Chromium's window showing the page",
-        _BROWSER_SECONDS,
-        lambda: _window_matching(
-            screen,
-            lambda w: any(m in w["window_class"].lower() for m in ("tilion", "chrome", "chromium"))
-            and "Example Domain" in w["title"],
-        ),
-    )
-    state = _service_get(screen, "/api/state")
-    assert state["chromium"]["state"] == "running", state["chromium"]
-    assert state["title"] == "Browser", state["title"]
-    _wait_until(
-        "the browser's tab listed by the fleet",
-        _WINDOW_SECONDS,
-        lambda: any(tab["url"] == page_url for tab in _service_get(screen, "/browsers")["browsers"][0]["tabs"]),
-    )
-    _shot(screen, harness.shots_dir, "05-browser-tab")
+        # The browser launch path with a URL: Chromium comes up on the Screen with the page as its tab. Fortress is
+        # installed by the first-boot env.d unit, which may still be running in a workspace this young.
+        _wait_until(
+            "the first-boot install finishing (Fortress)",
+            _INSTALL_SECONDS,
+            lambda: inside.supervisor_state("env-converge") == "EXITED"
+            and inside.succeeds("test -x /opt/fortress/tilion-fortress/tilion"),
+        )
+        page_url = "https://example.com/"
+        opened = inside.run(f"uv run --no-sync workspace-layout open {page_url}", timeout_seconds=120.0)
+        assert opened.returncode == 0, (opened.stdout, opened.stderr)
+        _wait_until(
+            "Chromium's window showing the page",
+            _BROWSER_SECONDS,
+            lambda: _window_matching(
+                screen,
+                lambda w: any(m in w["window_class"].lower() for m in ("tilion", "chrome", "chromium"))
+                and "Example Domain" in w["title"],
+            ),
+        )
+        state = _service_get(screen, "/api/state")
+        assert state["chromium"]["state"] == "running", state["chromium"]
+        assert state["title"] == "Browser", state["title"]
+        _wait_until(
+            "the browser's tab listed by the fleet",
+            _WINDOW_SECONDS,
+            lambda: any(tab["url"] == page_url for tab in _service_get(screen, "/browsers")["browsers"][0]["tabs"]),
+        )
+        _shot(screen, harness.shots_dir, "05-browser-tab")
 
-    # Close the window: the stack runs on (D3).
-    workspace.click(f'[data-window-id="{window_id}"] [data-window-control="close"]')
-    workspace.wait_for_selector(_SCREEN_IFRAME, state="detached", timeout=int(_WINDOW_SECONDS * 1000))
-    workspace.wait_for_timeout(5000)
-    assert inside.supervisor_state("screen-stack:screen-neko") == "RUNNING"
-    assert inside.supervisor_state("screen") == "RUNNING"
-    assert inside.succeeds('curl -fsS http://127.0.0.1:8090/api/state | grep -q \'"lifecycle": *"running"\'')
-    logger.info("The window is closed and the stack still runs")
-
-    viewer.close()
+        # Close the window: the stack runs on (D3).
+        workspace.click(f'[data-window-id="{window_id}"] [data-window-control="close"]')
+        workspace.wait_for_selector(_SCREEN_IFRAME, state="detached", timeout=int(_WINDOW_SECONDS * 1000))
+        workspace.wait_for_timeout(5000)
+        assert inside.supervisor_state("screen-stack:screen-neko") == "RUNNING"
+        assert inside.supervisor_state("screen") == "RUNNING"
+        assert inside.succeeds('curl -fsS http://127.0.0.1:8090/api/state | grep -q \'"lifecycle": *"running"\'')
+        logger.info("The window is closed and the stack still runs")
 
     # Open it again (one more viewer of the same Screen), then Quit from the window menu: everything is gone.
-    screen, window_id, viewer = _open_screen_from_launcher(workspace, playwright, harness)
-    _wait_until("the reopened Screen's video", _FRAME_SECONDS, lambda: _video_ready_state(screen) == 4)
-    workspace.click(f'[data-window-id="{window_id}"] [data-window-control="menu"]')
-    workspace.wait_for_selector('[data-menu-row="quit"]', state="visible", timeout=10_000)
-    _shot(workspace, harness.shots_dir, "06-window-menu")
-    workspace.click('[data-menu-row="quit"]')
-    workspace.wait_for_selector(_SCREEN_IFRAME, state="detached", timeout=int(_WINDOW_SECONDS * 1000))
-    _wait_until(
-        "the service stopping",
-        _STACK_STATE_SECONDS,
-        lambda: inside.supervisor_state("screen") in ("STOPPED", "EXITED"),
-    )
-    _wait_until(
-        "the stack's members stopping",
-        _STACK_STATE_SECONDS,
-        lambda: all(
-            inside.supervisor_state(f"screen-stack:{member}") in ("STOPPED", "EXITED")
-            for member in ("screen-neko", "screen-session", "screen-pulse", "screen-xorg")
-        ),
-    )
-    _wait_until(
-        "the display socket going away", _STACK_STATE_SECONDS, lambda: inside.succeeds("test ! -e /tmp/.X11-unix/X99")
-    )
-    assert not inside.succeeds("pgrep -x Xorg") and not inside.succeeds("pgrep -x neko")
-    logger.info("Quit ended the service and every member of the stack")
-    _shot(workspace, harness.shots_dir, "07-after-quit")
-    viewer.close()
+    with _open_screen_from_launcher(workspace, playwright, harness) as (reopened_screen, reopened_window_id):
+        _wait_until("the reopened Screen's video", _FRAME_SECONDS, lambda: _video_ready_state(reopened_screen) == 4)
+        workspace.click(f'[data-window-id="{reopened_window_id}"] [data-window-control="menu"]')
+        workspace.wait_for_selector('[data-menu-row="quit"]', state="visible", timeout=10_000)
+        _shot(workspace, harness.shots_dir, "06-window-menu")
+        workspace.click('[data-menu-row="quit"]')
+        workspace.wait_for_selector(_SCREEN_IFRAME, state="detached", timeout=int(_WINDOW_SECONDS * 1000))
+        _wait_until(
+            "the service stopping",
+            _STACK_STATE_SECONDS,
+            lambda: inside.supervisor_state("screen") in ("STOPPED", "EXITED"),
+        )
+        _wait_until(
+            "the stack's members stopping",
+            _STACK_STATE_SECONDS,
+            lambda: all(
+                inside.supervisor_state(f"screen-stack:{member}") in ("STOPPED", "EXITED")
+                for member in ("screen-neko", "screen-session", "screen-pulse", "screen-xorg")
+            ),
+        )
+        _wait_until(
+            "the display socket going away",
+            _STACK_STATE_SECONDS,
+            lambda: inside.succeeds("test ! -e /tmp/.X11-unix/X99"),
+        )
+        assert not inside.succeeds("pgrep -x Xorg") and not inside.succeeds("pgrep -x neko")
+        logger.info("Quit ended the service and every member of the stack")
+        _shot(workspace, harness.shots_dir, "07-after-quit")
 
 
 def test_the_screen_works_through_the_desktop_app_on_a_local_docker_workspace(tmp_path: Path) -> None:
