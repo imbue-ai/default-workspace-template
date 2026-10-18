@@ -1,8 +1,8 @@
 /** The overlays over the stage: installing, starting, connecting, stopped (with Start), and the agent dim, which
  *  also names a page the human asked to open while the agent drives (spec section 4.2): Take control opens it,
- *  Cancel drops it. */
+ *  Cancel drops it (the owner's alone, as the route that drops it refuses a visitor). */
 
-import type { ControlDocument, ScreenStateDocument } from "./state";
+import type { ControlDocument, NekoSessionAnswer, ScreenStateDocument } from "./state";
 import type { StreamStatus } from "./webrtc";
 
 export class Overlays {
@@ -48,10 +48,11 @@ export class Overlays {
   update(
     state: ScreenStateDocument,
     streamStatus: StreamStatus,
-    hasSession: boolean,
+    session: NekoSessionAnswer | null,
     signInError: string | null,
   ): void {
     const control: ControlDocument = state.control;
+    const hasSession = session !== null;
     switch (state.lifecycle) {
       case "installing":
         this.show("Installing the screen", state.install_reason ?? "", false);
@@ -77,7 +78,7 @@ export class Overlays {
     const pendingUrl = state.chromium.pending_url;
     const hasPending = isAgent && pendingUrl !== null;
     this.dimPending.hidden = !hasPending;
-    this.dimCancel.hidden = !hasPending;
+    this.dimCancel.hidden = !(hasPending && session?.is_owner === true);
     if (hasPending) {
       this.dimPending.textContent = `Waiting to open ${pendingUrl} in the browser: take control to open it now`;
       this.dimTake.textContent = "Take control and open it";

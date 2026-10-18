@@ -266,7 +266,7 @@ class Viewer {
     const canSend = mayControl && this.visibility.isVisible;
     this.strip.update(this.state.control, ownSessionId, this.streamStatus, this.notice);
     this.pointerLock.setAvailable(isController);
-    this.overlays.update(this.state, this.streamStatus, this.session !== null, this.signInError);
+    this.overlays.update(this.state, this.streamStatus, this.session, this.signInError);
     this.input?.setEnabled(canSend);
     this.mobile?.setEnabled(canSend);
     this.clipboard.isActive = isController && this.state.lifecycle === "running";

@@ -2,7 +2,10 @@
 import { describe, expect, it } from "vitest";
 
 import { Overlays } from "./overlays";
-import type { ScreenStateDocument } from "./state";
+import type { NekoSessionAnswer, ScreenStateDocument } from "./state";
+
+const OWNER: NekoSessionAnswer = { session_id: "s1", token: "tok-1", name: "Josh", is_owner: true };
+const VISITOR: NekoSessionAnswer = { session_id: "s2", token: "tok-2", name: "Mia", is_owner: false };
 
 function state(overrides: Partial<ScreenStateDocument>): ScreenStateDocument {
   return {
@@ -35,7 +38,7 @@ describe("Overlays", () => {
       () => undefined,
       () => undefined,
     );
-    overlays.update(state({}), "connected", true, null);
+    overlays.update(state({}), "connected", OWNER, null);
     const dim = overlays.dimElement;
     expect(dim.hidden).toBe(false);
     expect(dim.querySelector<HTMLElement>("[data-screen-pending-url]")?.hidden).toBe(true);
@@ -57,7 +60,7 @@ describe("Overlays", () => {
     overlays.update(
       state({ chromium: { state: "running", name: "browser-1", pending_url: "http://localhost:3000/app" } }),
       "connected",
-      true,
+      OWNER,
       null,
     );
     const dim = overlays.dimElement;
@@ -71,6 +74,24 @@ describe("Overlays", () => {
     expect(cancelled).toBe(1);
   });
 
+  it("names the held page to a visitor and offers to open it, but not to drop it", () => {
+    const overlays = new Overlays(
+      () => undefined,
+      () => undefined,
+      () => undefined,
+    );
+    overlays.update(
+      state({ chromium: { state: "running", name: "browser-1", pending_url: "http://localhost:3000/app" } }),
+      "connected",
+      VISITOR,
+      null,
+    );
+    const dim = overlays.dimElement;
+    expect(dim.querySelector<HTMLElement>("[data-screen-pending-url]")?.hidden).toBe(false);
+    expect(dim.textContent).toContain("Take control and open it");
+    expect(dim.querySelector<HTMLButtonElement>("[data-screen-cancel-pending-url]")?.hidden).toBe(true);
+  });
+
   it("lifts the dim once a human holds control, whatever is held", () => {
     const overlays = new Overlays(
       () => undefined,
@@ -79,7 +100,7 @@ describe("Overlays", () => {
     );
     const human = state({ chromium: { state: "running", name: "browser-1", pending_url: "http://localhost:1/" } });
     human.control = { ...human.control, controller: "human", human_session_id: "s1", human_name: "Josh" };
-    overlays.update(human, "connected", true, null);
+    overlays.update(human, "connected", OWNER, null);
     expect(overlays.dimElement.hidden).toBe(true);
   });
 });
