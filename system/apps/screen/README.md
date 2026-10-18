@@ -208,10 +208,11 @@ session alone and with text only, so the directions are:
   focus runs on the next focus.
 - Local to remote: on focus and on paste, while this viewer holds control, the viewer
   reads the local clipboard; text and HTML go to neko's `POST /api/room/clipboard` (its
-  `clipboard/set` message drops the HTML), an image to `POST /api/clipboard/image`. A
-  paste chord (Ctrl+V, Cmd+V) is left to the browser so its `paste` event carries the
-  data; once the remote clipboard holds it the viewer taps V with Ctrl held on the
-  remote. What was just received is never echoed back, by content hash.
+  `clipboard/set` message drops the HTML), an image to `POST /api/clipboard/image`, which
+  is the owner's route (a visitor's image is refused). A paste chord (Ctrl+V, Cmd+V) is
+  left to the browser so its `paste` event carries the data; once the remote clipboard
+  holds it the viewer taps V with Ctrl held on the remote, and a paste that did not cross
+  says so in the strip. What was just received is never echoed back, by content hash.
 - `keyboard/map` goes once per neko connection and again when this session takes
   control (only the host may set it), with the layout `navigator.language` suggests,
   `us` by default.

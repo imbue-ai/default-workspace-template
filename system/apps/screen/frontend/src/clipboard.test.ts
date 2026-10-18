@@ -9,7 +9,9 @@ interface Harness {
   log: string[];
 }
 
-function build(): Harness {
+/** ``isRemoteRefusing`` makes every write to the Screen fail, as the service's owner-only image route does for a
+ *  visitor. */
+function build(isRemoteRefusing = false): Harness {
   const remote = { text: "", html: "", image: null as Blob | null };
   const local = { text: "", html: "", image: null as Blob | null, isFocused: true };
   const log: string[] = [];
@@ -21,12 +23,14 @@ function build(): Harness {
       return remote.image;
     },
     async writeRemoteText(text, html) {
+      if (isRemoteRefusing) return false;
       remote.text = text;
       remote.html = html;
       log.push(`remote-text:${text}`);
       return true;
     },
     async writeRemoteImage(image) {
+      if (isRemoteRefusing) return false;
       remote.image = image;
       log.push(`remote-image:${image.size}`);
       return true;
@@ -94,6 +98,27 @@ describe("ClipboardBridge", () => {
     expect(await bridge.onPaste(data)).toBe(true);
     expect(remote.image).toBe(file);
     expect(remote.text).toBe("");
+  });
+
+  it("reports a paste the Screen refused, and keeps the focus sweep quiet", async () => {
+    const { bridge, local, log } = build(true);
+    const file = new File([new Uint8Array(16)], "shot.png", { type: "image/png" });
+    const imagePaste = {
+      items: [{ kind: "file", type: "image/png", getAsFile: () => file }],
+      getData: () => "",
+    } as unknown as DataTransfer;
+    expect(await bridge.onPaste(imagePaste)).toBe(false);
+    expect(log).toContain("status:The image could not be pasted on the Screen");
+    const textPaste = {
+      items: [],
+      getData: (type: string) => (type === "text/plain" ? "hello" : ""),
+    } as unknown as DataTransfer;
+    expect(await bridge.onPaste(textPaste)).toBe(false);
+    expect(log).toContain("status:The text could not be pasted on the Screen");
+    log.length = 0;
+    local.image = file;
+    await bridge.onFocus();
+    expect(log.filter((entry) => entry.startsWith("status:"))).toEqual([]);
   });
 
   it("does nothing while this viewer does not control", async () => {
