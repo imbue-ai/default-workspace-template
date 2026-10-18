@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+from app_manifest.testing import assert_document_policy_admits_page
 from flask import Flask
 from flask.testing import FlaskClient
 from workspace_layout.primitives import ClientId
@@ -263,6 +264,32 @@ def test_an_unknown_path_falls_through_to_the_shell_document(tmp_path: Path) -> 
     assert response.status_code == 200
     assert "text/html" in response.content_type
     assert "the shell" in response.text
+
+
+def test_the_built_page_and_the_placeholder_are_served_under_the_document_policy(tmp_path: Path) -> None:
+    """The desktop (a built document with no inline script) and the placeholder (one inline script) both carry a
+    policy a browser would run them under; the shell's frames of other apps and its socket stay admitted."""
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    state = build_test_state()
+    state.static_directory = static_dir
+    test_client = create_application(state).test_client()
+
+    placeholder = test_client.get("/")
+    (static_dir / "index.html").write_text(
+        '<html><head><script src="/assets/index.js"></script></head><body></body></html>'
+    )
+    desktop = test_client.get("/")
+
+    assert placeholder.headers[FRONTEND_BUILT_HEADER] == "false"
+    assert desktop.headers[FRONTEND_BUILT_HEADER] == "true"
+    for page in (placeholder, desktop):
+        assert_document_policy_admits_page(page)
+        policy = page.headers["Content-Security-Policy"]
+        assert "frame-src http: https:" in policy
+        assert "connect-src" not in policy
+        assert "frame-ancestors" not in policy
+    assert "Content-Security-Policy" not in test_client.get("/api/health").headers
 
 
 def test_index_marks_the_not_built_placeholder_as_not_the_app(tmp_path: Path) -> None:

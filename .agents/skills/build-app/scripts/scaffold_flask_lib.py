@@ -317,6 +317,8 @@ unmodified -- nothing rewrites anything. Use ``flask_sock`` if you need
 WebSockets.
 """
 
+import base64
+import hashlib
 import os
 from pathlib import Path
 
@@ -352,8 +354,7 @@ SHELL_STATIC_MODULE_NAMES = {SHELL_STATIC_MODULE_NAMES!r}
 # this app's window at the same place, and installs the element context menu.
 # A page visited outside the shell runs it harmlessly: nothing arrives, and the
 # menu's Explain and Modify rows grey out.
-SHELL_PAGE_SCRIPT = """\
-<script type="module">
+SHELL_PAGE_SCRIPT_BODY = """
   import {{ connectToShell }} from "/_static/app_contract.js";
   import {{ installElementContextMenu }} from "/_static/context_menu.js";
   let handshake = null;
@@ -364,9 +365,36 @@ SHELL_PAGE_SCRIPT = """\
     }},
   }});
   installElementContextMenu({{ connection, handshake: () => handshake }});
-</script>"""
+"""
+SHELL_PAGE_SCRIPT = f'<script type="module">{{SHELL_PAGE_SCRIPT_BODY}}</script>'
+
+
+def inline_script_source(body: str) -> str:
+    """The Content-Security-Policy source admitting one inline <script> whose body is exactly ``body``."""
+    return "'sha256-" + base64.b64encode(hashlib.sha256(body.encode()).digest()).decode() + "'"
+
+
+# Every HTML page is served under this policy (the app is reachable from the
+# internet once the workspace is shared): scripts only from this origin plus the
+# inline blocks listed here by hash, fetches and sockets only to this origin,
+# inline styles, images from anywhere, frames of any http(s) page, no plugins.
+# A new inline <script> needs its ``inline_script_source`` added; a third-party
+# script, font or API needs its origin added to the matching directive.
+CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; "
+    f"script-src 'self' {{inline_script_source(SHELL_PAGE_SCRIPT_BODY)}}; "
+    "style-src 'self' 'unsafe-inline'; img-src * data: blob:; frame-src http: https:; "
+    "object-src 'none'; base-uri 'self'; form-action 'self'"
+)
 
 app = Flask("{package}", static_folder=None)
+
+
+@app.after_request
+def add_content_security_policy(response: Response) -> Response:
+    if response.mimetype == "text/html":
+        response.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+    return response
 
 
 @app.route("/")
