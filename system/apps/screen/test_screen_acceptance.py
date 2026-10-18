@@ -460,8 +460,24 @@ def _grey_level_range(png: bytes) -> int:
     return (present[-1] - present[0]) if present else 0
 
 
+_DESKTOP_GREY_LEVEL_SPREAD: Final[int] = 64
+
+
+def _desktop_frame(screen: Frame) -> bytes | None:
+    """The video element's current picture when it shows a desktop (its grey levels spread at least
+    ``_DESKTOP_GREY_LEVEL_SPREAD``), or None while it is still black or frozen."""
+    png = screen.locator("video").screenshot()
+    return png if _grey_level_range(png) >= _DESKTOP_GREY_LEVEL_SPREAD else None
+
+
 def _window_matching(screen: Frame, predicate: Callable[[dict[str, Any]], bool]) -> dict[str, Any] | None:
     return next((window for window in _service_get(screen, "/api/windows")["windows"] if predicate(window)), None)
+
+
+def _is_frontmost(screen: Frame, window_id: str) -> bool:
+    """Whether the Screen's title follows the window: ``/api/state`` carries the frontmost window's title."""
+    window = _window_matching(screen, lambda w: w["id"] == window_id)
+    return window is not None and _service_get(screen, "/api/state")["title"] == window["title"]
 
 
 def _kill_processes_referencing(tokens: tuple[str, ...]) -> None:
@@ -536,12 +552,11 @@ def _drive_the_screen(workspace: Frame, harness: _Harness, inside: _Workspace) -
     state = _wait_until("the Screen's stack running", _SCREEN_RUNNING_SECONDS, lambda: _running_state(screen))
     assert state["screen_size"] == {"width": 1920, "height": 1080, "rate": 60}, state
     _wait_until("the video decoding (readyState 4)", _FRAME_SECONDS, lambda: _video_ready_state(screen) == 4)
-    screen.wait_for_timeout(1500)
-    frame_png = screen.locator("video").screenshot()
+    frame_png: bytes = _wait_until(
+        "a frame with a desktop's spread of grey levels", _FRAME_SECONDS, lambda: _desktop_frame(screen)
+    )
     (harness.shots_dir / "03-first-frame.png").write_bytes(frame_png)
-    spread = _grey_level_range(frame_png)
-    assert spread >= 64, f"the first frame is flat (grey levels span {spread})"
-    logger.info("A frame is showing (grey levels span {})", spread)
+    logger.info("A frame is showing (grey levels span {})", _grey_level_range(frame_png))
 
     # Take control: with nobody controlling, the first input is neko's control/request and the service records it.
     screen.click(_STAGE, position={"x": 400, "y": 300})
@@ -562,7 +577,7 @@ def _drive_the_screen(workspace: Frame, harness: _Harness, inside: _Workspace) -
         lambda: _window_matching(screen, lambda w: "xfce4-terminal" in w["window_class"].lower()),
     )
     assert inside.succeeds(f"uv run --no-sync screen activate {terminal['id']}")
-    screen.wait_for_timeout(1500)
+    _wait_until("the terminal coming to the front", _WINDOW_SECONDS, lambda: _is_frontmost(screen, terminal["id"]))
     marker = f"{_IN_WORKSPACE_ROOT}/data/screen-acceptance-{uuid4().hex[:8]}.txt"
     screen.click(_STAGE, position={"x": 400, "y": 300})
     page.keyboard.type(f"touch {marker}", delay=40)
