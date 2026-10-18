@@ -119,7 +119,7 @@
   --z-overlay: 10000;
   --z-popover: 10001;
   --z-tooltip: 10002;
-  --width-message-column: 740px;
+  --width-message-column: 672px;
   /* The agent's side of the column keeps this much clear on the right. The user's
      bubbles already stop short (they cap at 80% and hug the right edge); without
      it the agent's prose and task rows were the only thing running the column's
@@ -288,9 +288,9 @@ body {
  * track/arc default to --c-border / --c-accent, overridable via
  * --spinner-track / --spinner-arc.
  * .spinner--current makes it monochrome (currentColor ring with a transparent
- * gap) for use on coloured contexts. (The login screen's fancier SVG arc is
- * its own svg drawing -- see loginSpinnerIcon in components/icons.ts -- but shares
- * this @keyframes.) */
+ * gap) for use on coloured contexts. (The fancier SVG arc that sign-in and an
+ * attachment's upload show is its own svg drawing -- see spinnerIcon in
+ * components/icons.ts -- but shares this @keyframes.) */
 @keyframes spin {
   to {
     transform: rotate(360deg);

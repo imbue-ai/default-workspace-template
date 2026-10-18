@@ -391,7 +391,7 @@ def test_a_chat_waiting_on_background_tasks_shows_the_wait_in_the_list_and_the_s
 
 @pytest.mark.timeout(60, func_only=False)
 def test_conversation_and_composer_render(e2e_server: RunningWorkspace, page: Page) -> None:
-    """The opened chat shows both sides of its conversation and a composer whose send button follows the text."""
+    """The opened chat shows both sides of its conversation and a composer whose send button lights up with the text."""
     _open_fixture_chat(page, e2e_server)
 
     expect(_chat(page).locator(".message-user").first).to_contain_text("Hello agent!")
@@ -400,9 +400,9 @@ def test_conversation_and_composer_render(e2e_server: RunningWorkspace, page: Pa
     textarea = _chat(page).locator(".message-input-textbox")
     expect(textarea).to_be_visible(timeout=15000)
     send_button = _chat(page).locator(".message-input-send-button")
-    expect(send_button).to_have_count(0)
+    expect(send_button).to_be_disabled()
     textarea.fill("test message")
-    expect(send_button).to_be_visible()
+    expect(send_button).to_be_enabled()
 
 
 @pytest.mark.timeout(60, func_only=False)
@@ -441,9 +441,10 @@ def _box(locator: Locator) -> dict[str, float]:
 
 @pytest.mark.timeout(60, func_only=False)
 def test_composer_buttons_move_under_text_that_wraps(e2e_server: RunningWorkspace, page: Page) -> None:
-    """Text that fits on one line keeps the composer's buttons beside it. Text that needs a second line, by
-    wrapping or by a line break, gets the composer's full width, with the buttons in a row at the bottom
-    right under it, and they come back beside it once the text fits on one line again."""
+    """Text that fits on one line sits between the composer's attach button and its send button. Text that
+    needs a second line, by wrapping or by a line break, gets the composer's full width, with attach at the
+    bottom left and send at the bottom right under it, and they come back beside it once the text fits on
+    one line again."""
     page.set_viewport_size({"width": 1200, "height": 900})
     _open_fixture_chat(page, e2e_server)
     chat = _chat(page)
@@ -451,20 +452,26 @@ def test_composer_buttons_move_under_text_that_wraps(e2e_server: RunningWorkspac
     expect(textarea).to_be_visible(timeout=15000)
     row = chat.locator(".message-input-row")
     toolbar = chat.locator(".message-input-toolbar")
+    attach = chat.locator(".message-input-attach-button")
 
     def assert_buttons_beside_text() -> None:
         expect(row).not_to_have_attribute("data-stacked", "")
-        text_box, toolbar_box = _box(textarea), _box(toolbar)
+        text_box, toolbar_box, attach_box = _box(textarea), _box(toolbar), _box(attach)
         assert toolbar_box["left"] >= text_box["right"] - 1
+        assert attach_box["right"] <= text_box["left"] + 1
         assert toolbar_box["top"] < text_box["bottom"]
+        assert attach_box["top"] < text_box["bottom"]
 
     def assert_buttons_under_text() -> None:
         expect(row).to_have_attribute("data-stacked", "")
-        row_box, text_box, toolbar_box = _box(row), _box(textarea), _box(toolbar)
+        row_box, text_box = _box(row), _box(textarea)
+        toolbar_box, attach_box = _box(toolbar), _box(attach)
         assert text_box["right"] - text_box["left"] >= row_box["right"] - row_box["left"] - 1
-        assert toolbar_box["top"] >= text_box["bottom"] - 1
-        assert abs(toolbar_box["bottom"] - row_box["bottom"]) <= 1
+        for button_box in (toolbar_box, attach_box):
+            assert button_box["top"] >= text_box["bottom"] - 1
+            assert abs(button_box["bottom"] - row_box["bottom"]) <= 1
         assert abs(toolbar_box["right"] - row_box["right"]) <= 1
+        assert abs(attach_box["left"] - row_box["left"]) <= 1
 
     textarea.fill("short message")
     assert_buttons_beside_text()

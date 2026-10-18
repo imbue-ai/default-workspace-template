@@ -164,12 +164,12 @@ export function alertDotIcon(size = 12, className = ""): string {
   );
 }
 
-/** Animated login spinner. Not a CSS ring like .spinner (the faded ring +
+/** Animated spinner: sign-in, an attachment's upload. Not a CSS ring like .spinner (the faded ring +
  *  solid arc are drawn in the SVG itself), so it carries its own size and
  *  rotation -- the animation references the shared @keyframes spin. */
-export function loginSpinnerIcon(size = 32): string {
+export function spinnerIcon(size = 32): string {
   return (
-    `<svg xmlns="${XMLNS}" width="${size}" height="${size}" class="claude-login-spinner animate-[spin_800ms_linear_infinite]" viewBox="0 0 24 24" fill="none" aria-hidden="true">` +
+    `<svg xmlns="${XMLNS}" width="${size}" height="${size}" class="spinner-icon animate-[spin_800ms_linear_infinite]" viewBox="0 0 24 24" fill="none" aria-hidden="true">` +
     `<circle cx="12" cy="12" r="10" stroke="currentColor" stroke-opacity="0.18" stroke-width="3"/>` +
     `<path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>`
   );
