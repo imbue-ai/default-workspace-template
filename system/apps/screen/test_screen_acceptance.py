@@ -438,12 +438,18 @@ def _open_screen_from_launcher(workspace: Frame) -> tuple[Frame, str]:
     workspace.click(row)
     workspace.wait_for_selector(_SCREEN_IFRAME, state="attached", timeout=int(_WINDOW_SECONDS * 1000))
     window_id = workspace.eval_on_selector(_SCREEN_IFRAME, "(el) => el.getAttribute('data-live-page')")
-    screen: Frame = _wait_until(
-        "the Screen's page framing",
+    viewer_url: str = _wait_until(
+        "the Screen's page getting its address",
         _WINDOW_SECONDS,
-        lambda: next((frame for frame in workspace.child_frames if _SCREEN_ORIGIN.match(frame.url)), None),
+        lambda: workspace.eval_on_selector(_SCREEN_IFRAME, "(el) => el.src") or None,
     )
-    logger.info("The Screen's window {} shows {}", window_id, screen.url)
+    assert _SCREEN_ORIGIN.match(viewer_url), viewer_url
+    # Electron exposes the shell's frame to Playwright but not the Screen's frame nested inside it, so the
+    # viewer is driven as a page of its own at the same address, through the same desktop proxy and session.
+    viewer_page = workspace.page.context.new_page()
+    viewer_page.goto(viewer_url, wait_until="domcontentloaded")
+    screen = viewer_page.main_frame
+    logger.info("The Screen's window {} shows {}, driven as its own page", window_id, viewer_url)
     return screen, window_id
 
 
