@@ -47,6 +47,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 
 MNGR_WORKTREE_ENV_VAR: Final[str] = "MNGR_WORKTREE"
 _MNGR_INTERNAL_GIT_TOKEN_ENV_VAR: Final[str] = "MNGR_INTERNAL_GIT_TOKEN"
+_VIEWER_CHROMIUM_ENV_VAR: Final[str] = "SCREEN_ACCEPTANCE_CHROMIUM"
 
 if os.environ.get(MNGR_WORKTREE_ENV_VAR, "") == "":
     pytest.skip(
@@ -438,9 +439,6 @@ def _find_container(harness: _Harness) -> _Workspace:
     container = _wait_until("the workspace's container appearing", _WINDOW_SECONDS, workspace_container)
     logger.info("The workspace's container is {}", container)
     return _Workspace(container=container)
-
-
-_VIEWER_CHROMIUM_ENV_VAR: Final[str] = "SCREEN_ACCEPTANCE_CHROMIUM"
 
 
 def _viewer_chromium_executable() -> str | None:
