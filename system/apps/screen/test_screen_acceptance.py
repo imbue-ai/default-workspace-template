@@ -33,7 +33,9 @@ import pytest
 import tomlkit
 from PIL import Image
 from loguru import logger
+from playwright._impl._api_structures import SetCookieParam
 from playwright.sync_api import Browser
+from playwright.sync_api import Cookie
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Frame
 from playwright.sync_api import Page
@@ -428,6 +430,20 @@ def _find_container(harness: _Harness) -> _Workspace:
     return _Workspace(container=container)
 
 
+def _cookie_to_set(cookie: Cookie) -> SetCookieParam:
+    """The desktop session's cookie as a cookie to set: Playwright reads and writes two different shapes."""
+    return SetCookieParam(
+        name=cookie["name"],
+        value=cookie["value"],
+        domain=cookie["domain"],
+        path=cookie["path"],
+        expires=cookie["expires"],
+        httpOnly=cookie["httpOnly"],
+        secure=cookie["secure"],
+        sameSite=cookie["sameSite"],
+    )
+
+
 def _open_screen_from_launcher(workspace: Frame, playwright: Playwright) -> tuple[Frame, str, Browser]:
     """Press the Screen's launcher row; return the viewer's frame, the window id, and the browser showing it.
 
@@ -451,7 +467,7 @@ def _open_screen_from_launcher(workspace: Frame, playwright: Playwright) -> tupl
     assert _SCREEN_ORIGIN.match(viewer_url), viewer_url
     viewer_browser = playwright.chromium.launch()
     viewer_context = viewer_browser.new_context(ignore_https_errors=True, viewport={"width": 1280, "height": 800})
-    viewer_context.add_cookies(workspace.page.context.cookies())
+    viewer_context.add_cookies([_cookie_to_set(cookie) for cookie in workspace.page.context.cookies()])
     viewer_page = viewer_context.new_page()
     viewer_page.goto(viewer_url, wait_until="domcontentloaded")
     screen = viewer_page.main_frame
