@@ -191,7 +191,7 @@ def chat_agent_oom_score_adj(
 # terminal) come first, then the UI and the chat app, then the sharing stack,
 # then the runtime-state sync (github-sync, opt-in) and the host backup, then
 # the job scheduler, then the Screen (the streamed desktop the browser runs on),
-# then the file viewer, and last the two single-page apps (Getting Started, then
+# then the Files app, and last the two single-page apps (Getting Started, then
 # Memory & disk).
 # ``user`` is the single band every *user-created* service shares;
 # it sits above every built-in service so a user's own service is shed before any
@@ -258,7 +258,7 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # The Screen: the service that owns the workspace's one streamed desktop and the
     # four programs of its stack (Xorg, XFCE, PulseAudio, neko), which share the key
     # through _NON_SERVICE_PROGRAM_BANDS below, and that launches the browser's
-    # Chromium. Below the file viewer (docs/system/specs/screen/spec.md section 9.4):
+    # Chromium. Below the Files app (docs/system/specs/screen/spec.md section 9.4):
     # the programs the user runs on the Screen sit in AGENT_SUBPROCESS and Chromium's
     # processes in the shared-browser band, so by the time the service bands are shed
     # every one of them is gone and the stack holds only its own memory. The service
@@ -266,8 +266,8 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # Chromium processes it launched live: ranked above them it would be picked first
     # every time and free nothing.
     "screen": 72,
-    # The file viewer: dufs, the tiny static file server the program runs
-    # directly. It holds little memory and supervisord restarts it if shed.
+    # The Files app: a small Flask server over the workspace's files. It
+    # holds little memory and supervisord restarts it if shed.
     "files": 75,
     # The Getting Started page: one static page and a cached catalog. A shed costs
     # one reload of a window that shows nothing of the user's.

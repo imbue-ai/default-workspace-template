@@ -375,7 +375,8 @@ fresh install lands on its `Home` desktop with the Getting Started window
 open, placed there once by that app for the first client that connects.
 
 A refused operation (an open, a close, a shortcut move) says so in a toast at
-the foot of the screen (`views/Toast.ts`) rather than a browser alert.
+the foot of the screen (the shared toasts of `system/libs/workspace_ui`) rather
+than a browser alert.
 
 ### The phone layout
 

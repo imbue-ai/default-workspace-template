@@ -6,20 +6,31 @@
   <meta name="viewport" content="width=device-width" />
   <title>Not found</title>
   <style>
+    /* The workspace's own colours and type (system/libs/workspace_ui/src/base.css), written out: this page is
+       copied into the build as-is and carries no stylesheet. */
     html {
-      font-family: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+      font-size: 14px;
       line-height: 1.5;
-      color: #24292e;
+      color: #202020;
+      background: #ffffff;
     }
 
     body {
       margin: 0;
-      padding: 1.5em 1em;
+      padding: 80px 24px;
+      text-align: center;
     }
 
     h1 {
-      font-size: 1.25em;
-      margin: 0 0 0.5em;
+      font-size: 18px;
+      font-weight: 600;
+      margin: 0 0 8px;
+    }
+
+    p {
+      color: #666666;
+      margin: 0 0 4px;
     }
 
     .asked-path {
@@ -27,7 +38,7 @@
     }
 
     a {
-      color: #0366d6;
+      color: #2f6b4f;
       text-decoration: none;
       word-break: break-all;
     }
@@ -47,8 +58,8 @@
   <p>There is nothing at <code class="asked-path"></code>.</p>
   <p class="nearest hidden">The nearest folder above it is <a class="nearest-folder"></a>.</p>
   <script>
-    // The File Viewer's page for a path that does not exist. dufs serves this file as it is,
-    // with status 404, for every such path, so everything here is read from the address.
+    // Files' page for a path that does not exist. The Files server serves this file as it
+    // is, with status 404, for every such path, so everything here is read from the address.
     (async () => {
       const segments = location.pathname.split("/").filter((segment) => segment !== "");
       const decode = (text) => {
@@ -67,9 +78,7 @@
         .then(({ connectToShell }) => connectToShell({}).location(location.pathname + location.search, title))
         .catch((error) => console.warn("[files] the app contract did not load", error));
 
-      // Walk up to the first folder that exists. A folder's listing is asked for with a trailing
-      // slash, since dufs answers a missing one that way with a listing whose ``dir_exists`` is
-      // false rather than with this page.
+      // Walk up to the first folder that exists.
       for (let depth = segments.length - 1; depth >= 0; depth--) {
         const folder = depth === 0 ? "/" : `/${segments.slice(0, depth).join("/")}/`;
         let listing = null;
@@ -79,7 +88,7 @@
         } catch {
           listing = null;
         }
-        if (listing !== null && listing.kind === "Index" && listing.dir_exists === true) {
+        if (listing !== null && listing.kind === "folder") {
           const $link = document.querySelector(".nearest-folder");
           $link.href = folder;
           $link.textContent = decode(folder);

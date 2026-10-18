@@ -105,7 +105,6 @@
   --desk-phone-grab-height: 5px;
   /* A toast rides this far above whatever it sits on: the taskbar, or the phone's bar. */
   --desk-toast-gap: 16px;
-  --desk-toast-radius: 20px;
 }
 
 [data-touch] {

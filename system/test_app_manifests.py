@@ -438,7 +438,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert [
         (handler.type, handler.path) for handler in by_name["screen"].message_handlers
     ] == [("open:url", "/api/open-url")]
-    # The stop-when-no-windows spec, section 4.2: the file viewer, Getting Started, and Memory & disk stop once no
+    # The stop-when-no-windows spec, section 4.2: Files, Getting Started, and Memory & disk stop once no
     # window shows them; the Screen never stops for emptiness (the Screen spec, D3); and the critical ones (which
     # the manifest refuses the field on) never stop.
     assert {

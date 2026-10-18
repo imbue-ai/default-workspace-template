@@ -1607,7 +1607,7 @@ describe("links Imbue Studio hands over", () => {
   const SHELL_HOST = `system-interface-aa11bb22.${COORDINATE}`;
   const FILES_APP = appRecord("files", { label: "files-ab12cd34" });
 
-  it("opens a file URL in the File Viewer through open:file, with its path decoded and sent as the page's app", async () => {
+  it("opens a file URL in Files through open:file, with its path decoded and sent as the page's app", async () => {
     const store = await startedStore();
 
     await store.openLink("file:///home/user/my%20notes/plan.md", SHELL_HOST, "chat");
