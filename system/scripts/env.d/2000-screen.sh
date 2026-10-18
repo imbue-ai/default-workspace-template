@@ -266,8 +266,12 @@ _install_neko() {
 }
 
 # Fortress (tiliondev/fortress), the stealth Chromium the Screen's browser runs. Pinned
-# at v151 because Playwright 1.58's click hangs on a touch-enabled page in v153; arm64
-# has no official v151 build (tiliondev/fortress#29), so it comes from a fork build.
+# at v151, the last BSD release: v153 (Fortress v3) moves to a source-available license
+# that charges organizations of our size for production use, and its engine-level
+# "recorded-human mouse motion" makes a CDP mouse click hang under Playwright (1.58 and
+# 1.64 alike, with the raw-engine switch, and with the launcher bypassed), which would
+# stall every agent driving the browser fleet. arm64 has no official v151 build
+# (tiliondev/fortress#29), so it comes from a fork build.
 # The tarballs unpack to tilion-fortress/ (the `tilion` launcher execs `chrome` beside
 # it). The tree is installed under a versioned directory and the stable path every
 # consumer knows, /opt/fortress/tilion-fortress/tilion, is a symlink repointed at it,
