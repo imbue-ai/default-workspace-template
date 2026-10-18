@@ -21,6 +21,7 @@ from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import CONTEXT_MENU_ROUTE
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import SHELL_CONTEXT_MENU_PATH
+from screen.browser_routes import LAUNCH_BROWSER_PATH
 from screen.browser_routes import OPEN_URL_PATH
 from screen.browser_routes import build_browser_blueprint
 from screen.data_types import Lifecycle
@@ -70,7 +71,7 @@ _NOT_BUILT_PAGE: Final[str] = (
 )
 
 # The routes that act on the Screen outside the lease: the agent verbs, the display and window tools, ``screen run``,
-# the clipboard, ``open:url`` and the whole fleet API. A share admits a visitor to this origin, and these are the
+# the clipboard, the ``browser`` launch path, ``open:url`` and the whole fleet API. A share admits a visitor to this origin, and these are the
 # owner's (and the agents', who reach the service over loopback with no identity header); a visitor's part is the
 # viewer's routes, where the lease arbitrates. Matched on the path and everything under it.
 _OWNER_ONLY_PATH_PREFIXES: Final[tuple[str, ...]] = (
@@ -81,6 +82,7 @@ _OWNER_ONLY_PATH_PREFIXES: Final[tuple[str, ...]] = (
     "/api/screenshot",
     "/api/windows",
     "/api/clipboard/image",
+    LAUNCH_BROWSER_PATH,
     OPEN_URL_PATH,
     "/browsers",
 )

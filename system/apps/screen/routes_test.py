@@ -37,6 +37,7 @@ _OWNER_ONLY_REQUESTS: Final[tuple[tuple[str, str, str], ...]] = (
     ("GET", "/api/windows", "/api/windows"),
     ("POST", "/api/windows/<window_id>/activate", "/api/windows/0x03600001/activate"),
     ("POST", "/api/clipboard/image", "/api/clipboard/image"),
+    ("POST", LAUNCH_BROWSER_PATH, LAUNCH_BROWSER_PATH),
     ("POST", "/api/open-url", "/api/open-url"),
     ("GET", "/browsers", "/browsers"),
     ("POST", "/browsers", "/browsers"),
@@ -52,7 +53,7 @@ _OWNER_ONLY_REQUESTS: Final[tuple[tuple[str, str, str], ...]] = (
 )
 
 # The rules a visitor may call: the viewer's own, the lease-arbitrated human verbs, the shell's modules, the neko
-# proxy, the launch path the shell posts over loopback, and the watcher's notification (loopback-gated itself).
+# proxy, and the watcher's notification (loopback-gated itself).
 _OPEN_RULES: Final[frozenset[str]] = frozenset(
     {
         "/",
@@ -69,7 +70,6 @@ _OPEN_RULES: Final[frozenset[str]] = frozenset(
         "/api/control/return",
         "/api/screen-size",
         "/api/input-seen",
-        LAUNCH_BROWSER_PATH,
         STOPPED_NOTIFICATION_PATH,
         f"{NEKO_PROXY_PREFIX}/<path:upstream_path>",
         f"{NEKO_PROXY_PREFIX}/api/ws",
