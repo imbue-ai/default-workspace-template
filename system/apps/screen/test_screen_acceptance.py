@@ -428,8 +428,13 @@ def _find_container(harness: _Harness) -> _Workspace:
     return _Workspace(container=container)
 
 
-def _open_screen_from_launcher(workspace: Frame) -> tuple[Frame, str]:
-    """Press the Screen's launcher row and return its page's frame with its window id."""
+def _open_screen_from_launcher(workspace: Frame, playwright: Playwright) -> tuple[Frame, str, Browser]:
+    """Press the Screen's launcher row; return the viewer's frame, the window id, and the browser showing it.
+
+    Electron exposes the shell's frame to Playwright but neither the Screen's frame nested inside it nor a new
+    page, so the viewer is shown in a Chromium of its own at the same address, through the same desktop proxy,
+    carrying the desktop session's cookies; the caller closes that browser.
+    """
     if workspace.query_selector(f"{_LAUNCHER_OVERLAY}:visible") is None:
         opener = _LAUNCHER_INPUT if workspace.query_selector(_LAUNCHER_INPUT) is not None else _LAUNCHER_FIELD
         workspace.click(opener)
@@ -444,13 +449,14 @@ def _open_screen_from_launcher(workspace: Frame) -> tuple[Frame, str]:
         lambda: workspace.eval_on_selector(_SCREEN_IFRAME, "(el) => el.src") or None,
     )
     assert _SCREEN_ORIGIN.match(viewer_url), viewer_url
-    # Electron exposes the shell's frame to Playwright but not the Screen's frame nested inside it, so the
-    # viewer is driven as a page of its own at the same address, through the same desktop proxy and session.
-    viewer_page = workspace.page.context.new_page()
+    viewer_browser = playwright.chromium.launch()
+    viewer_context = viewer_browser.new_context(ignore_https_errors=True, viewport={"width": 1280, "height": 800})
+    viewer_context.add_cookies(workspace.page.context.cookies())
+    viewer_page = viewer_context.new_page()
     viewer_page.goto(viewer_url, wait_until="domcontentloaded")
     screen = viewer_page.main_frame
-    logger.info("The Screen's window {} shows {}, driven as its own page", window_id, viewer_url)
-    return screen, window_id
+    logger.info("The Screen's window {} shows {}, driven in a browser of its own", window_id, viewer_url)
+    return screen, window_id, viewer_browser
 
 
 def _service_get(screen: Frame, path: str) -> dict[str, Any]:
@@ -560,10 +566,9 @@ def _running_state(screen: Frame) -> dict[str, Any] | None:
     return state if state["lifecycle"] == "running" else None
 
 
-def _drive_the_screen(workspace: Frame, harness: _Harness, inside: _Workspace) -> None:
-    page = workspace.page
+def _drive_the_screen(workspace: Frame, harness: _Harness, inside: _Workspace, playwright: Playwright) -> None:
     # Open the Screen and see a frame.
-    screen, window_id = _open_screen_from_launcher(workspace)
+    screen, window_id, viewer = _open_screen_from_launcher(workspace, playwright)
     state = _wait_until("the Screen's stack running", _SCREEN_RUNNING_SECONDS, lambda: _running_state(screen))
     assert state["screen_size"] == {"width": 1920, "height": 1080, "rate": 60}, state
     _wait_until("the video decoding (readyState 4)", _FRAME_SECONDS, lambda: _video_ready_state(screen) == 4)
@@ -595,8 +600,8 @@ def _drive_the_screen(workspace: Frame, harness: _Harness, inside: _Workspace) -
     _wait_until("the terminal coming to the front", _WINDOW_SECONDS, lambda: _is_frontmost(screen, terminal["id"]))
     marker = f"{_IN_WORKSPACE_ROOT}/data/screen-acceptance-{uuid4().hex[:8]}.txt"
     screen.click(_STAGE, position={"x": 400, "y": 300})
-    page.keyboard.type(f"touch {marker}", delay=40)
-    page.keyboard.press("Enter")
+    screen.page.keyboard.type(f"touch {marker}", delay=40)
+    screen.page.keyboard.press("Enter")
     _wait_until(
         "the typed command creating the marker file", _WINDOW_SECONDS, lambda: inside.succeeds(f"test -f {marker}")
     )
@@ -635,8 +640,10 @@ def _drive_the_screen(workspace: Frame, harness: _Harness, inside: _Workspace) -
     assert inside.succeeds('curl -fsS http://127.0.0.1:8090/api/state | grep -q \'"lifecycle": *"running"\'')
     logger.info("The window is closed and the stack still runs")
 
+    viewer.close()
+
     # Open it again (one more viewer of the same Screen), then Quit from the window menu: everything is gone.
-    screen, window_id = _open_screen_from_launcher(workspace)
+    screen, window_id, viewer = _open_screen_from_launcher(workspace, playwright)
     _wait_until("the reopened Screen's video", _FRAME_SECONDS, lambda: _video_ready_state(screen) == 4)
     workspace.click(f'[data-window-id="{window_id}"] [data-window-control="menu"]')
     workspace.wait_for_selector('[data-menu-row="quit"]', state="visible", timeout=10_000)
@@ -662,6 +669,7 @@ def _drive_the_screen(workspace: Frame, harness: _Harness, inside: _Workspace) -
     assert not inside.succeeds("pgrep -x Xorg") and not inside.succeeds("pgrep -x neko")
     logger.info("Quit ended the service and every member of the stack")
     _shot(workspace, harness.shots_dir, "07-after-quit")
+    viewer.close()
 
 
 def test_the_screen_works_through_the_desktop_app_on_a_local_docker_workspace(tmp_path: Path) -> None:
@@ -677,7 +685,7 @@ def test_the_screen_works_through_the_desktop_app_on_a_local_docker_workspace(tm
                 try:
                     workspace = _create_workspace(browser, page, harness)
                     inside = _find_container(harness)
-                    _drive_the_screen(workspace, harness, inside)
+                    _drive_the_screen(workspace, harness, inside, playwright)
                 finally:
                     browser.close()
     finally:
