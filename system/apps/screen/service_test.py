@@ -382,6 +382,8 @@ def test_disconnected_sessions_are_reaped_after_ten_minutes(
 
 
 @pytest.mark.flaky
+# The root pytest config's ten-second limit would end the test before the first-message window below.
+@pytest.mark.timeout(30)
 def test_the_events_socket_sends_the_state_first_and_then_changes(app, service: ScreenService) -> None:
     with serve_in_background("127.0.0.1", 0, app) as server:
         port = server.socket.getsockname()[1]
