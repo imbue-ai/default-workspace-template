@@ -21,6 +21,7 @@ from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import CONTEXT_MENU_ROUTE
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import SHELL_CONTEXT_MENU_PATH
+from screen.browser_routes import OPEN_URL_PATH
 from screen.browser_routes import build_browser_blueprint
 from screen.data_types import Lifecycle
 from screen.errors import ClipboardError
@@ -68,11 +69,36 @@ _NOT_BUILT_PAGE: Final[str] = (
     "</body></html>"
 )
 
+# The routes that act on the Screen outside the lease: the agent verbs, the display and window tools, ``screen run``,
+# the clipboard, ``open:url`` and the whole fleet API. A share admits a visitor to this origin, and these are the
+# owner's (and the agents', who reach the service over loopback with no identity header); a visitor's part is the
+# viewer's routes, where the lease arbitrates. Matched on the path and everything under it.
+_OWNER_ONLY_PATH_PREFIXES: Final[tuple[str, ...]] = (
+    "/api/run",
+    "/api/control/acquire",
+    "/api/control/release",
+    "/api/control/handoff",
+    "/api/screenshot",
+    "/api/windows",
+    "/api/clipboard/image",
+    OPEN_URL_PATH,
+    "/browsers",
+)
+_VISITOR_REFUSAL: Final[str] = "this route is the workspace owner's"
+
 
 def _error(detail: str, status: int) -> Response:
     response = jsonify({"detail": detail, "error": detail})
     response.status_code = status
     return response
+
+
+def _is_owner_request() -> bool:
+    return parse_identity_header(request.headers.get(IDENTITY_HEADER)).owner
+
+
+def _is_owner_only_path(path: str) -> bool:
+    return any(path == prefix or path.startswith(f"{prefix}/") for prefix in _OWNER_ONLY_PATH_PREFIXES)
 
 
 def _json_body() -> dict[str, Any]:
@@ -100,6 +126,14 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
     app = Flask(__name__, static_folder=None)
     app.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": 25}
     sock = Sock(app)
+
+    # the owner gate
+
+    @app.before_request
+    def refuse_visitors_on_owner_routes() -> ResponseReturnValue | None:
+        if _is_owner_only_path(request.path) and not _is_owner_request():
+            return _error(_VISITOR_REFUSAL, HTTP_FORBIDDEN)
+        return None
 
     # the page and the shell's modules
 
@@ -255,7 +289,10 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
         session_id = _session_id_from_body()
         current = service.screen_size
         # A viewer's report counts only while its session controls the Screen; a report with no session (the
-        # ``screen size`` command) is the controller's by definition (spec sections 7.2 and 17).
+        # ``screen size`` command) is the controller's by definition (spec sections 7.2 and 17), so only the owner
+        # may send one.
+        if session_id is None and not _is_owner_request():
+            return _error(_VISITOR_REFUSAL, HTTP_FORBIDDEN)
         if session_id is not None and not service.is_controller_session(session_id):
             return jsonify(
                 {

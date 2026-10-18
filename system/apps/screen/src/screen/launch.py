@@ -9,6 +9,8 @@ from typing import Final
 from pydantic import Field
 
 from oom_priority import bands
+from screen.brokers import ENV_GATEWAY_PASSWORD
+from screen.brokers import ENV_GATEWAY_PERMISSIONS_OVERRIDE
 from screen.errors import ScreenError
 from screen.interfaces import ProcessLauncherInterface
 from screen.neko_config import PULSE_SOCKET_PATH
@@ -22,12 +24,16 @@ from screen.primitives import DISPLAY
 _BANDED_EXEC_SCRIPT: Final[str] = bands.oom_tag_shell_prefix(bands.AGENT_SUBPROCESS) + 'exec "$@"'
 _SHELL_NAME: Final[str] = "screen-run"
 
+# The gateway credentials mngr injects into the service's environment stay with the service: nothing started on the
+# Screen needs them, and an agent that does holds them in its own shell already.
+_WITHHELD_VARIABLES: Final[frozenset[str]] = frozenset({ENV_GATEWAY_PASSWORD, ENV_GATEWAY_PERMISSIONS_OVERRIDE})
+
 
 def screen_process_environment() -> dict[str, str]:
-    """The service's environment with the Screen's display and audio added: what every program started on the
-    Screen (a ``screen run`` command, Chromium) runs with."""
+    """The service's environment, less the gateway credentials, with the Screen's display and audio added: what
+    every program started on the Screen (a ``screen run`` command, Chromium) runs with."""
     return {
-        **os.environ,
+        **{name: value for name, value in os.environ.items() if name not in _WITHHELD_VARIABLES},
         "DISPLAY": DISPLAY,
         "XDG_RUNTIME_DIR": RUNTIME_DIR,
         "PULSE_SERVER": f"unix:{PULSE_SOCKET_PATH}",

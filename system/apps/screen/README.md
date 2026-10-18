@@ -16,6 +16,14 @@ demand and the `screen-watch` event listener ends them together.
 
 ## The service
 
+Identity comes from `X-Imbue-Identity` (a header-less request came over loopback and is the
+owner). A visitor, an identity whose `owner` is false, may use only the viewer's routes (the
+page and its assets, `/health`, `/api/state`, `/api/start`, `/api/connect-info`, `/api/ws`,
+`/api/session`, `/api/control/take` and `/return`, `/api/input-seen`, `/api/screen-size` with
+the session's id, and `/neko/`), where the lease arbitrates; every other route (`/api/run`,
+the agent verbs, the screenshot, the window tools, the clipboard, a session-less
+`/api/screen-size`, `/api/open-url` and the whole `/browsers` API) answers a visitor 403.
+
 - `GET /`: the viewer page (the frontend's build, `src/screen/static/index.html`; a
   placeholder until it is built), with its bundle under `/assets/`. A page load starts
   the stack when it is not running.
