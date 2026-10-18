@@ -271,11 +271,11 @@ def _electron_environment(harness: _Harness) -> dict[str, str]:
             "MINDS_USE_LOCAL_WORKSPACE_DEFAULTS": "1",
             "MNGR_ROOT_NAME": "mngr",
             "MNGR_PROJECT_CONFIG_DIR": str(harness.host_config_root / ".mngr"),
-            # The providers that need credentials this machine may not hold are silenced for every mngr the app
-            # spawns and for the destroy; the workspace is local Docker.
             # The clone's settings enable Docker only inside its `docker` create template; the app's other mngr
             # runs (discovery, the forwarder, the destroy) must see the workspace too.
             "MNGR__PROVIDERS__DOCKER__IS_ENABLED": "true",
+            # The providers that need credentials this machine may not hold are silenced for every mngr the app
+            # spawns and for the destroy; the workspace is local Docker.
             "MNGR__PROVIDERS__MODAL__IS_ENABLED": "false",
             "MNGR__PROVIDERS__AWS__IS_ENABLED": "false",
             "MNGR__PROVIDERS__VULTR__IS_ENABLED": "false",
