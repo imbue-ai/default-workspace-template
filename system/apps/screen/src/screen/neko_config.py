@@ -54,7 +54,7 @@ VIDEO_PROFILES: Final[tuple[VideoProfile, ...]] = (
 @pure
 def _pipeline_config(profile: VideoProfile) -> dict[str, Any]:
     # neko evaluates each gst_params value as an expression: a bare word that names no variable is passed through
-    # as it is, so a preset name works, and a value carrying ``=`` would not (the lab's gotcha); none here does.
+    # as it is, so a preset name works, and a value carrying ``=`` would not; none here does.
     return {
         "fps": str(profile.fps),
         "gst_prefix": "! video/x-raw,format=I420",

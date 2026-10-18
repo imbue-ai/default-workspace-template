@@ -76,8 +76,7 @@ def build_service(arguments: ScreenServiceArguments, proxy_server: ProxyServer) 
         messenger=ChatAgentMessenger(repo_root=repo_root),
         connectivity=ConnectInfoAggregator(brokers=brokers_from_environ(os.environ)),
     )
-    # Chromium's profile root follows $MNGR_HOST_DIR as the browser app's did, so an upgraded workspace keeps its
-    # logins.
+    # Chromium's profile root follows $MNGR_HOST_DIR, so an upgraded workspace keeps its logins.
     profile_root = Path(os.environ.get("MNGR_HOST_DIR", str(BROWSER_PROFILE_ROOT.parent))) / BROWSER_PROFILE_ROOT.name
     band_sweeper = BandSweeper(
         session_pid=lambda: supervisor.program_pid(SESSION_PROGRAM),

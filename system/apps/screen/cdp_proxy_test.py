@@ -63,7 +63,7 @@ def test_a_valid_token_forwards_ordinary_methods() -> None:
     assert _screen(proxy, "Page.navigate") is None
     assert _screen(proxy, "Runtime.evaluate") is None
     assert _screen(proxy, "Input.dispatchMouseEvent") is None
-    # Chromium's windows are the window manager's to place now, so moving one is allowed.
+    # Chromium's windows are the window manager's to place, so moving one is allowed.
     assert _screen(proxy, "Browser.setWindowBounds") is None
 
 

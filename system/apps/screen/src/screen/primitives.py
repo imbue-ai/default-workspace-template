@@ -68,7 +68,7 @@ BROWSER_TITLE: Final[str] = "Browser"
 
 # The browser on the Screen (spec section 16): Fortress, where the env.d unit installs it (a stable path the unit
 # keeps pointing at the pinned release), the pinned extensions beside it, the agent-facing CDP proxy, and where
-# the one profile and the tab manifest live, unchanged from the browser app so an upgraded workspace keeps both.
+# the one profile and the tab manifest live (the paths an upgraded workspace already has them at).
 FORTRESS_EXECUTABLE: Final[Path] = Path("/opt/fortress/tilion-fortress/tilion")
 FORTRESS_EXTENSIONS_DIR: Final[Path] = Path("/opt/fortress/extensions")
 CDP_PROXY_HOST: Final[str] = "127.0.0.1"

@@ -681,7 +681,7 @@ class BrowserFleet(MutableModel):
         self.on_browser_running(browser.name)
         self.open_pending_url()
 
-    # the gate (the per-frame replacement for the browser app's per-command compare-and-set)
+    # the gate
 
     def token_may_drive(self, browser: Browser, token: str) -> bool:
         """Whether a frame bearing ``token`` may be forwarded right now: the token must be the browser's current

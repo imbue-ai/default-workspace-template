@@ -25,9 +25,8 @@ _log() {
 # Environments that never use the Screen (e.g. the Imbue Studio CI snapshot
 # producer) opt out of the whole unit -- most importantly the hundreds-of-MB
 # Fortress and XFCE downloads -- by setting DWT_SKIP_BROWSER_UNIT=1 in the
-# agent environment (the variable keeps the name it had when the browser had a
-# unit of its own). An env var rather than a
-# marker file keeps the env.d contract: the decision is re-evaluated every
+# agent environment. An env var rather than a marker file keeps the env.d
+# contract: the decision is re-evaluated every
 # boot, so a workspace whose environment stops setting it simply converges the
 # stack on its next boot.
 if [ "${DWT_SKIP_BROWSER_UNIT:-}" = "1" ]; then
@@ -87,7 +86,7 @@ _apt_install() {
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@"
 }
 
-# The Screen's packages (docs/system/specs/screen/spec.md section 18): Xorg
+# The Screen's packages: Xorg
 # with the dummy driver (xserver-xorg-core carries cvt), XFCE as the plain
 # metapackage without the goodies plus its terminal, PulseAudio, GStreamer with
 # the x264 encoder (in plugins-ugly), the X and PulseAudio capture elements,
@@ -231,14 +230,12 @@ _install_neko() {
 }
 
 # Fortress (tiliondev/fortress), the stealth Chromium the Screen's browser runs,
-# from the official release for x64 and arm64 alike (v3 is the first release to
-# ship a linux-arm64 asset; the fork build the arm64 pin used to point at is
-# retired). The pins are the release's SHA256SUMS, checked after the download.
+# from the official release for x64 and arm64 alike. The pins are the release's
+# SHA256SUMS, checked after the download.
 # The tarball unpacks to fortress-<major>/ with the `tilion` launcher (a shell
 # script that execs `chrome` beside it with Fortress's persona flags), so the
 # versioned directory is installed as it is and the stable path every consumer
-# knows -- /opt/fortress/tilion-fortress/tilion (AGENTS.md, the Screen service,
-# the root conftest, smoketest_app.py) -- is a symlink the unit repoints at it;
+# knows, /opt/fortress/tilion-fortress/tilion, is a symlink the unit repoints at it;
 # a pin bump changes the versioned directory, which is what makes the
 # satisfied-check fail and the new release install.
 readonly _FORTRESS_RELEASE="v153.0.8010.36"
@@ -262,8 +259,6 @@ _install_fortress() {
     fi
     # `install-deps` apt-installs the shared libs Chromium needs (libnss3,
     # libgbm, etc.) -- Fortress is a Chromium build too, same requirement.
-    # Recover any interrupted dpkg state first so a bake-interrupted install
-    # can actually complete on retry.
     _recover_interrupted_dpkg
     _log "fortress: installing apt system libs"
     # `python -m playwright` (not the console script) on purpose: console-script

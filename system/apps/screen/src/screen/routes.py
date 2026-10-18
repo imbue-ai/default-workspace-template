@@ -81,7 +81,7 @@ def _json_body() -> dict[str, Any]:
 
 
 def _agent_identity() -> tuple[AgentId | None, str | None]:
-    # Advisory, as the fleet API's is: a client-set header among cooperating in-container agents, not authentication.
+    # Advisory: a client-set header among cooperating in-container agents, not authentication.
     raw_id = request.headers.get(AGENT_ID_HEADER, "").strip()
     name = request.headers.get(AGENT_NAME_HEADER, "").strip() or None
     return (AgentId(raw_id) if raw_id else None), name

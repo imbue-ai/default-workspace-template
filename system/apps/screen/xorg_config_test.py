@@ -5,7 +5,7 @@ from screen.xorg_config import render_xorg_conf
 
 
 def test_cvt_modelines_match_the_cvt_tool() -> None:
-    # Reference values from ``cvt <w> <h> 60`` (xserver-xorg-core), the tool the sizing change will shell out to.
+    # Reference values from ``cvt <w> <h> 60`` (xserver-xorg-core).
     assert cvt_modeline(1920, 1080).render() == snapshot(
         'Modeline "1920x1080_60" 173.00 1920 2048 2248 2576 1080 1083 1088 1120 -HSync +VSync'
     )

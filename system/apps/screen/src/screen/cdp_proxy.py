@@ -41,7 +41,7 @@ from screen.primitives import CDP_PROXY_PORT
 
 # Methods refused even while the agent legitimately holds the lease: deliberately short and enumerated, since a
 # general-purpose CDP filter breaks the CLI in ways nobody can predict. ``Browser.setWindowBounds`` is allowed:
-# Chromium's windows are ordinary X windows now, and nothing pins them (spec section 16.1).
+# Chromium's windows are ordinary X windows that nothing pins (spec section 16.1).
 ALWAYS_BLOCKED: Final[frozenset[str]] = frozenset(
     {
         # Kills the browser the human may be holding, behind the fleet's back.

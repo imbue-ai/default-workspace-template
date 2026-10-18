@@ -29,7 +29,7 @@ from screen.primitives import DISPLAY
 # The image targets a remote copy of a picture offers, tried before text.
 IMAGE_TARGETS: Final[tuple[str, ...]] = ("image/png", "image/jpeg", "image/bmp")
 TEXT_TARGET: Final[str] = "UTF8_STRING"
-# Never read or place more than this (the browser app's cap, the viewer's too).
+# Never read or place more than this (the viewer's cap too).
 MAX_CLIPBOARD_BYTES: Final[int] = 10 * 1024 * 1024
 _XCLIP_TIMEOUT_SECONDS: Final[float] = 5.0
 _MONITOR_JOIN_SECONDS: Final[float] = 3.0
