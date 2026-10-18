@@ -102,6 +102,8 @@ _SCREEN_RUNNING_SECONDS: Final[float] = 900.0
 _FRAME_SECONDS: Final[float] = 120.0
 _CONTROL_SECONDS: Final[float] = 20.0
 _WINDOW_SECONDS: Final[float] = 60.0
+# The first-boot env.d unit downloads Fortress and neko into a fresh workspace before the browser can start.
+_INSTALL_SECONDS: Final[float] = 900.0
 _BROWSER_SECONDS: Final[float] = 180.0
 _STACK_STATE_SECONDS: Final[float] = 60.0
 _DESTROY_SECONDS: Final[float] = 600.0
@@ -651,7 +653,14 @@ def _drive_the_screen(workspace: Frame, harness: _Harness, inside: _Workspace, p
     _shot(screen, harness.shots_dir, "04-terminal-typed")
     logger.info("The typed command ran on the Screen ({})", marker)
 
-    # The browser launch path with a URL: Chromium comes up on the Screen with the page as its tab.
+    # The browser launch path with a URL: Chromium comes up on the Screen with the page as its tab. Fortress is
+    # installed by the first-boot env.d unit, which may still be running in a workspace this young.
+    _wait_until(
+        "the first-boot install finishing (Fortress)",
+        _INSTALL_SECONDS,
+        lambda: inside.supervisor_state("env-converge") == "EXITED"
+        and inside.succeeds("test -x /opt/fortress/tilion-fortress/tilion"),
+    )
     page_url = "https://example.com/"
     opened = inside.run(f"uv run --no-sync workspace-layout open {page_url}", timeout_seconds=120.0)
     assert opened.returncode == 0, (opened.stdout, opened.stderr)
