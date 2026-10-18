@@ -8,9 +8,8 @@ from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 
-import pytest
 from flask.testing import FlaskClient
-from simple_websocket import Client as WebSocketClient
+from websockets.sync.client import connect as connect_websocket
 
 from mock_broker_test import FakeBroker
 from mock_display_modes_test import FakeDisplayModes
@@ -381,31 +380,22 @@ def test_disconnected_sessions_are_reaped_after_ten_minutes(
     assert is_session_reapable(old, True, now) is False
 
 
-@pytest.mark.flaky
-# The root pytest config's ten-second limit would end the test before the first-message window below.
-@pytest.mark.timeout(30)
 def test_the_events_socket_sends_the_state_first_and_then_changes(app, service: ScreenService) -> None:
     with serve_in_background("127.0.0.1", 0, app) as server:
         port = server.socket.getsockname()[1]
-        socket_client = WebSocketClient.connect(f"ws://127.0.0.1:{port}/api/ws")
-        try:
-            # The first message has missed five seconds on a cold worker (the first test of a batch).
-            first = json.loads(socket_client.receive(timeout=15))
+        with connect_websocket(f"ws://127.0.0.1:{port}/api/ws", open_timeout=5) as socket_client:
+            first = json.loads(socket_client.recv(timeout=5))
             assert first["type"] == "state"
             assert first["lifecycle"] == "stopped"
             start_service_stack(service)
             seen: list[str] = []
             deadline_reached = False
             while not deadline_reached:
-                message = socket_client.receive(timeout=5)
-                assert message is not None
-                document = json.loads(message)
+                document = json.loads(socket_client.recv(timeout=5))
                 seen.append(document["lifecycle"])
                 if document["lifecycle"] == "running":
                     deadline_reached = True
             assert "starting" in seen
-        finally:
-            socket_client.close()
 
 
 def test_state_broadcasts_do_not_block_when_no_viewer_listens(service: ScreenService) -> None:
@@ -548,17 +538,12 @@ def test_a_profile_change_is_announced_on_the_events_socket(
     start_service_stack(service)
     with serve_in_background("127.0.0.1", 0, app) as server:
         port = server.socket.getsockname()[1]
-        socket_client = WebSocketClient.connect(f"ws://127.0.0.1:{port}/api/ws")
-        try:
-            assert json.loads(socket_client.receive(timeout=5))["type"] == "state"
+        with connect_websocket(f"ws://127.0.0.1:{port}/api/ws", open_timeout=5) as socket_client:
+            assert json.loads(socket_client.recv(timeout=5))["type"] == "state"
             manual_clock.advance(61)
             assert service.refresh_profile() == "idle"
             seen: list[dict] = []
             while not any(document.get("type") == "profile" for document in seen):
-                message = socket_client.receive(timeout=5)
-                assert message is not None
-                seen.append(json.loads(message))
+                seen.append(json.loads(socket_client.recv(timeout=5)))
             profile = next(document for document in seen if document["type"] == "profile")
             assert profile["video_id"] == "idle"
-        finally:
-            socket_client.close()
