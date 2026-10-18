@@ -252,6 +252,19 @@ def test_a_drop_refuses_bad_names_empty_drops_and_oversize_bodies(client: FlaskC
     assert not service.desktop_dir.exists()
 
 
+def test_a_form_past_werkzeugs_own_limits_is_refused_in_the_routes_shape(client: FlaskClient) -> None:
+    """A route with no body cap of its own still answers a 413 as JSON when werkzeug refuses the form it reads
+    (here more field bytes than the form parser keeps in memory), without naming a cap it does not have."""
+    too_many_field_bytes = client.post(
+        "/api/control/take",
+        data={"session_id": "s" * 600_000},
+        content_type="application/x-www-form-urlencoded",
+        headers=_OWNER,
+    )
+    assert too_many_field_bytes.status_code == 413
+    assert too_many_field_bytes.get_json()["detail"] == "the body is too large to parse"
+
+
 def _paste(client: FlaskClient, headers: dict[str, str], session_id: str):
     return client.post(
         "/api/clipboard/image",

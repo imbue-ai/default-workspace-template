@@ -152,7 +152,11 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.errorhandler(RequestEntityTooLarge)
     def refuse_oversize_body(_error_: RequestEntityTooLarge) -> ResponseReturnValue:
-        return _error(f"the body is over the {request.max_content_length} byte cap", HTTP_PAYLOAD_TOO_LARGE)
+        # Raised past a route's body cap, and by werkzeug's own form limits (the memory a form's fields may take,
+        # the number of parts) on any route that reads a form, where no body cap is set.
+        cap = request.max_content_length
+        detail = f"the body is over the {cap} byte cap" if cap is not None else "the body is too large to parse"
+        return _error(detail, HTTP_PAYLOAD_TOO_LARGE)
 
     # the page and the shell's modules
 
