@@ -240,7 +240,10 @@ _install_neko_image_file() {
         _log "neko: $name SHA256 mismatch -- refusing to install"
         return 1
     fi
-    install -D -m "$mode" "$tmp_dir/$member" "$destination"
+    if ! install -D -m "$mode" "$tmp_dir/$member" "$destination"; then
+        _log "neko: could not install the $name at $destination; the next converge retries"
+        return 1
+    fi
     _log "neko: $name install complete ($destination)"
 }
 
