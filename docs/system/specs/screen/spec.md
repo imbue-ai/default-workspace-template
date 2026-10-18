@@ -367,7 +367,7 @@ While the share stack is up:
 - "The browser" is one Chromium with one profile, started by the `browser` launch path, `screen run`, or an agent's `new`; it is not stopped when its windows close (the user closes it from inside, or Quit ends the stack); its tabs are checkpointed as today and restored when it is next started.
 - Chromium's windows are ordinary X windows: the user may open as many as they like, the window manager places them, and nothing pins or closes them.
   `Browser.setWindowBounds` leaves the CDP block list; `Emulation.setDeviceMetricsOverride` stays blocked.
-- Fortress is upgraded to v153 in the new env.d unit, x64 and arm64 alike from the official release (the fork build that supplied arm64 is retired); the Playwright click hang on a touch-enabled page that held it at v151 went with the files app's redesign.
+- Fortress stays at v151 in the new env.d unit, x64 and arm64 pins alike: v153 was tried, and Playwright 1.58's click hangs on a touch-enabled page in it (the files app's phone-layout tests time out), so the upgrade waits for a Playwright that supports it.
 
 ### 16.2 What goes
 
