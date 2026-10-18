@@ -447,12 +447,13 @@ def _video_ready_state(screen: Frame) -> int:
     return screen.evaluate("() => { const v = document.querySelector('video'); return v ? v.readyState : -1; }")
 
 
-def _mean_brightness(png: bytes) -> float:
+def _grey_level_range(png: bytes) -> int:
+    """The spread between the darkest and the brightest grey level in the picture: a black or frozen frame is flat,
+    a desktop (the image's XFCE wallpaper is black, its panel light) is not."""
     with Image.open(io.BytesIO(png)) as image:
-        grey = image.convert("L")
-        histogram = grey.histogram()
-    total = sum(histogram)
-    return sum(level * count for level, count in enumerate(histogram)) / total if total else 0.0
+        histogram = image.convert("L").histogram()
+    present = [level for level, count in enumerate(histogram) if count > 0]
+    return (present[-1] - present[0]) if present else 0
 
 
 def _window_matching(screen: Frame, predicate: Callable[[dict[str, Any]], bool]) -> dict[str, Any] | None:
@@ -531,9 +532,9 @@ def _drive_the_screen(workspace: Frame, harness: _Harness, inside: _Workspace) -
     screen.wait_for_timeout(1500)
     frame_png = screen.locator("video").screenshot()
     (harness.shots_dir / "03-first-frame.png").write_bytes(frame_png)
-    brightness = _mean_brightness(frame_png)
-    assert brightness > 8.0, f"the first frame is black (mean brightness {brightness:.1f})"
-    logger.info("A frame is showing (mean brightness {:.1f})", brightness)
+    spread = _grey_level_range(frame_png)
+    assert spread >= 64, f"the first frame is flat (grey levels span {spread})"
+    logger.info("A frame is showing (grey levels span {})", spread)
 
     # Take control: with nobody controlling, the first input is neko's control/request and the service records it.
     screen.click(_STAGE, position={"x": 400, "y": 300})
