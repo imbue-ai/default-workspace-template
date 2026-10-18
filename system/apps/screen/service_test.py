@@ -8,6 +8,7 @@ from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 
+import pytest
 from flask.testing import FlaskClient
 from simple_websocket import Client as WebSocketClient
 
@@ -380,12 +381,14 @@ def test_disconnected_sessions_are_reaped_after_ten_minutes(
     assert is_session_reapable(old, True, now) is False
 
 
+@pytest.mark.flaky
 def test_the_events_socket_sends_the_state_first_and_then_changes(app, service: ScreenService) -> None:
     with serve_in_background("127.0.0.1", 0, app) as server:
         port = server.socket.getsockname()[1]
         socket_client = WebSocketClient.connect(f"ws://127.0.0.1:{port}/api/ws")
         try:
-            first = json.loads(socket_client.receive(timeout=5))
+            # The first message has missed five seconds on a cold worker (the first test of a batch).
+            first = json.loads(socket_client.receive(timeout=15))
             assert first["type"] == "state"
             assert first["lifecycle"] == "stopped"
             start_service_stack(service)
