@@ -107,7 +107,24 @@ def test_the_clipboard_image_route_validates_its_body(client: FlaskClient, servi
     assert no_part.status_code == 400
     assert _paste(client, session_id, b"hello", "text/plain").status_code == 415
     assert _paste(client, session_id, b"", "image/png").status_code == 400
-    assert _paste(client, session_id, b"x" * (MAX_CLIPBOARD_BYTES + 1), "image/png").status_code == 413
+    too_large = _paste(client, session_id, b"x" * (MAX_CLIPBOARD_BYTES + 1), "image/png")
+    assert too_large.status_code == 413
+    assert too_large.get_json()["detail"] == f"the body is over the {MAX_CLIPBOARD_BYTES} byte cap"
+
+
+def test_an_oversize_chunked_paste_is_refused_as_it_is_read(client: FlaskClient, service: ScreenService) -> None:
+    """A chunked body names no Content-Length, so the cap holds on the stream itself: the parse stops at the cap
+    instead of spooling the whole image to the tmpfs."""
+    start_service_stack(service)
+    session_id = _controlling_session(client)
+    chunked = client.post(
+        "/api/clipboard/image",
+        data={"session_id": session_id, "image": (io.BytesIO(b"x" * (MAX_CLIPBOARD_BYTES + 1)), "clip", "image/png")},
+        content_type="multipart/form-data",
+        environ_overrides={"HTTP_TRANSFER_ENCODING": "chunked", "wsgi.input_terminated": True},
+    )
+    assert chunked.status_code == 413
+    assert chunked.get_json()["detail"] == f"the body is over the {MAX_CLIPBOARD_BYTES} byte cap"
 
 
 def test_an_image_on_the_remote_clipboard_is_announced_to_viewers(service: ScreenService) -> None:

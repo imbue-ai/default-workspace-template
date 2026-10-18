@@ -56,7 +56,8 @@ other route (`/api/run`, the agent verbs, the screenshot, the window tools, a se
 - `POST /api/clipboard/image`, multipart `session_id` and `image` (an `image/...` part of at
   most 10 MiB): the controller's pasted image, placed on the X clipboard of `:99` with `xclip`
   (local to remote, spec section 13). A session that does not control the Screen is refused.
-- `POST /api/drop`, multipart `session_id` and `files` (at most 64 MiB together, else 413): the
+- `POST /api/drop`, multipart `session_id` and `files` (at most 64 MiB for the whole body, refused 413
+  as it is read, chunked or not): the
   controller's dropped files, written into the Screen's desktop folder (below) under their own
   names (a clash takes `-1`, `-2`, ...; a name with a path separator or a leading dot is refused);
   answers `{"directory", "saved"}`. A session that does not control the Screen is refused.

@@ -239,6 +239,16 @@ def test_a_drop_refuses_bad_names_empty_drops_and_oversize_bodies(client: FlaskC
         environ_overrides={"CONTENT_LENGTH": str(MAX_DROP_BYTES + 1)},
     )
     assert too_large.status_code == 413
+    assert too_large.get_json()["detail"] == f"the body is over the {MAX_DROP_BYTES} byte cap"
+    # A chunked body names no Content-Length; the cap holds on the stream itself, before the files are spooled.
+    chunked = client.post(
+        "/api/drop",
+        data={"session_id": owner["session_id"], "files": [(io.BytesIO(b"x" * (MAX_DROP_BYTES + 1)), "a.bin")]},
+        content_type="multipart/form-data",
+        headers=_OWNER,
+        environ_overrides={"HTTP_TRANSFER_ENCODING": "chunked", "wsgi.input_terminated": True},
+    )
+    assert chunked.status_code == 413
     assert not service.desktop_dir.exists()
 
 

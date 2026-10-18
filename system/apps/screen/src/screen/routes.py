@@ -15,8 +15,8 @@ from flask.typing import ResponseReturnValue
 from flask_sock import Sock
 from loguru import logger
 from simple_websocket import ConnectionClosed
-from werkzeug.datastructures import FileStorage
 from werkzeug.exceptions import NotFound
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import CONTEXT_MENU_ROUTE
@@ -124,11 +124,11 @@ def _agent_identity() -> tuple[AgentId | None, str | None]:
     return (AgentId(raw_id) if raw_id else None), name
 
 
-def _upload_size(upload: FileStorage) -> int:
-    upload.stream.seek(0, 2)
-    size = upload.stream.tell()
-    upload.stream.seek(0)
-    return size
+def _cap_request_body(max_bytes: int) -> None:
+    """Have werkzeug refuse a body past ``max_bytes`` as it is read, framing included: a Content-Length past it before
+    the first byte, and a chunked body (which names no length) the moment it passes the cap, so an oversize upload is
+    never spooled to the tmpfs. Set before anything reads the body."""
+    request.max_content_length = max_bytes
 
 
 def _is_loopback_request() -> bool:
@@ -149,6 +149,10 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
         if _is_owner_only_path(request.path) and not is_owner_request():
             return _error(VISITOR_REFUSAL, HTTP_FORBIDDEN)
         return None
+
+    @app.errorhandler(RequestEntityTooLarge)
+    def refuse_oversize_body(_error_: RequestEntityTooLarge) -> ResponseReturnValue:
+        return _error(f"the body is over the {request.max_content_length} byte cap", HTTP_PAYLOAD_TOO_LARGE)
 
     # the page and the shell's modules
 
@@ -351,8 +355,7 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
     @app.post("/api/clipboard/image")
     def clipboard_image() -> ResponseReturnValue:
         """The controller's pasted image (spec section 13): multipart ``session_id`` and ``image``."""
-        if request.content_length is not None and request.content_length > MAX_CLIPBOARD_BYTES:
-            return _error(f"the image is over the {MAX_CLIPBOARD_BYTES} byte cap", HTTP_PAYLOAD_TOO_LARGE)
+        _cap_request_body(MAX_CLIPBOARD_BYTES)
         if service.stack.lifecycle != Lifecycle.RUNNING:
             return _error("the Screen is not running", HTTP_CONFLICT)
         session_id = session_id_from_request()
@@ -370,8 +373,6 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
         data = upload.read()
         if len(data) == 0:
             return _error("the image is empty", HTTP_BAD_REQUEST)
-        if len(data) > MAX_CLIPBOARD_BYTES:
-            return _error(f"the image is over the {MAX_CLIPBOARD_BYTES} byte cap", HTTP_PAYLOAD_TOO_LARGE)
         try:
             service.set_clipboard_image(data, mime)
         except ScreenNotRunningError as e:
@@ -384,8 +385,7 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.post("/api/drop")
     def drop_files() -> ResponseReturnValue:
-        if request.content_length is not None and request.content_length > MAX_DROP_BYTES:
-            return _error(f"the files are over the {MAX_DROP_BYTES} byte cap", HTTP_PAYLOAD_TOO_LARGE)
+        _cap_request_body(MAX_DROP_BYTES)
         if service.stack.lifecycle != Lifecycle.RUNNING:
             return _error("the Screen is not running", HTTP_CONFLICT)
         session_id = session_id_from_request()
@@ -401,8 +401,6 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
             named = [(DroppedFileName(upload.filename or ""), upload.stream) for upload in uploads]
         except InvalidDroppedFileNameError as e:
             return _error(str(e), HTTP_BAD_REQUEST)
-        if sum(_upload_size(upload) for upload in uploads) > MAX_DROP_BYTES:
-            return _error(f"the files are over the {MAX_DROP_BYTES} byte cap", HTTP_PAYLOAD_TOO_LARGE)
         try:
             saved = service.save_dropped_files(named)
         except ScreenNotRunningError as e:
