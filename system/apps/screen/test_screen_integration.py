@@ -69,8 +69,8 @@ def _skip_reason() -> str | None:
     missing = describe_missing_install()
     if missing is not None:
         return missing
-    if shutil.which("xeyes") is None or shutil.which("wmctrl") is None or shutil.which("xdotool") is None:
-        return "the Screen's tools (xeyes, wmctrl, xdotool) are not installed"
+    if any(shutil.which(tool) is None for tool in ("xeyes", "xfce4-terminal", "wmctrl", "xdotool")):
+        return "the Screen's tools (xeyes, xfce4-terminal, wmctrl, xdotool) are not installed"
     if Path(DISPLAY_SOCKET_PATH).exists():
         return "display :99 is already in use on this host"
     if os.geteuid() != 0:
@@ -222,16 +222,20 @@ def test_xeyes_appears_in_the_window_list_and_a_raised_window_titles_the_screen(
         return next((window for window in windows if class_fragment in window["window_class"].lower()), None)
 
     assert wait_until(lambda: window_of("xeyes") is not None, 30.0)
-    # xeyes takes no input focus, so a focusable window is what the title follows.
-    message = client.post("/api/run", json={"command": ["xmessage", "-title", "screen-test-window", "hello"]})
-    assert message.status_code == 200, message.get_json()
-    assert wait_until(lambda: window_of("xmessage") is not None, 30.0)
-    xmessage_window = window_of("xmessage")
-    assert xmessage_window is not None
-    assert client.post(f"/api/windows/{xmessage_window['id']}/activate").status_code == 200
+    # xeyes takes no input focus, so a focusable window is what the title follows: a terminal of its own process
+    # (the image has no xmessage) with a fixed title.
+    terminal = client.post(
+        "/api/run", json={"command": ["xfce4-terminal", "--disable-server", "-T", "screen-test-window"]}
+    )
+    assert terminal.status_code == 200, terminal.get_json()
+    assert wait_until(lambda: window_of("xfce4-terminal") is not None, 30.0)
+    terminal_window = window_of("xfce4-terminal")
+    assert terminal_window is not None
+    assert client.post(f"/api/windows/{terminal_window['id']}/activate").status_code == 200
     assert wait_until(lambda: client.get("/api/state").get_json()["title"] == "screen-test-window", 10.0)
     os.kill(xeyes_pid, signal.SIGTERM)
-    os.kill(message.get_json()["pid"], signal.SIGTERM)
+    os.kill(terminal.get_json()["pid"], signal.SIGTERM)
+    assert wait_until(lambda: window_of("xfce4-terminal") is None, 10.0)
 
 
 class _PageHandler(BaseHTTPRequestHandler):
