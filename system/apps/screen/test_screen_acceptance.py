@@ -128,7 +128,7 @@ class _Harness(FrozenModel):
     root_name: str = Field(description="MINDS_ROOT_NAME for this run: a `ci` env minted so no real env is touched")
     data_home: Path = Field(description="MINDS_DATA_HOME: every minds root of this run lives under it")
     host_config_root: Path = Field(description="The Electron app's cwd: a pytest-opted-in copy of mngr's config")
-    viewer_chromium: str = Field(description="The Chromium executable the viewer is shown in")
+    viewer_chromium: Path = Field(description="The Chromium executable the viewer is shown in")
     user_data_dir: Path = Field(description="Electron's profile for this run")
     workspace_name: str = Field(description="The workspace the create form names")
     shots_dir: Path = Field(description="Where the run's screenshots land")
@@ -441,18 +441,18 @@ def _find_container(harness: _Harness) -> _Workspace:
     return _Workspace(container=container)
 
 
-def _viewer_chromium_executable() -> str | None:
+def _viewer_chromium_executable() -> Path | None:
     """The Chromium that shows the viewer: the named one, else this venv's Playwright build, else the newest
     Playwright build in the cache (another venv's), since Playwright may have no build for this OS release."""
     named = os.environ.get(_VIEWER_CHROMIUM_ENV_VAR, "")
     if named:
-        return named
+        return Path(named)
     with sync_playwright() as playwright:
         own = Path(playwright.chromium.executable_path)
     if own.exists():
-        return str(own)
+        return own
     cached = sorted(Path.home().glob(".cache/ms-playwright/chromium-*/chrome-linux*/chrome"))
-    return str(cached[-1]) if cached else None
+    return cached[-1] if cached else None
 
 
 def _cookie_to_set(cookie: Cookie) -> SetCookieParam:
