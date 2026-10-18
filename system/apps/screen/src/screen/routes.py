@@ -120,6 +120,17 @@ def _session_id_from_body() -> NekoSessionId | None:
     return NekoSessionId(raw) if isinstance(raw, str) and raw else None
 
 
+def _visitor_refusal_for_session(service: ScreenService, session_id: NekoSessionId) -> Response | None:
+    """A visitor acts only as a visitor's session: naming the owner's, whose id the state document carries while
+    it controls, is refused."""
+    if _is_owner_request():
+        return None
+    session = service.known_session(session_id)
+    if session is not None and session.is_owner:
+        return _error(_VISITOR_REFUSAL, HTTP_FORBIDDEN)
+    return None
+
+
 def _is_loopback_request() -> bool:
     return request.remote_addr in ("127.0.0.1", "::1")
 
@@ -237,6 +248,9 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
         session_id = _session_id_from_body()
         if session_id is None:
             return _error("session_id is required", HTTP_BAD_REQUEST)
+        refusal = _visitor_refusal_for_session(service, session_id)
+        if refusal is not None:
+            return refusal
         if service.stack.lifecycle != Lifecycle.RUNNING:
             return _error("the Screen is not running", HTTP_CONFLICT)
         if not service.take_control(session_id):
@@ -248,6 +262,9 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
         session_id = _session_id_from_body()
         if session_id is None:
             return _error("session_id is required", HTTP_BAD_REQUEST)
+        refusal = _visitor_refusal_for_session(service, session_id)
+        if refusal is not None:
+            return refusal
         returned = service.return_control(session_id)
         return jsonify({"ok": returned, **service.state_document()["control"]})
 
@@ -295,6 +312,10 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
         # may send one.
         if session_id is None and not _is_owner_request():
             return _error(_VISITOR_REFUSAL, HTTP_FORBIDDEN)
+        if session_id is not None:
+            refusal = _visitor_refusal_for_session(service, session_id)
+            if refusal is not None:
+                return refusal
         if session_id is not None and not service.is_controller_session(session_id):
             return jsonify(
                 {
@@ -316,6 +337,9 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
         session_id = _session_id_from_body()
         if session_id is None:
             return _error("session_id is required", HTTP_BAD_REQUEST)
+        refusal = _visitor_refusal_for_session(service, session_id)
+        if refusal is not None:
+            return refusal
         if not service.note_input(session_id):
             return _error("no such session", HTTP_NOT_FOUND)
         return Response(status=HTTP_NO_CONTENT)

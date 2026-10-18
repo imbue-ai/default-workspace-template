@@ -130,6 +130,37 @@ def test_a_visitor_uses_the_viewer_and_takes_control_through_the_lease(
     assert returned.get_json()["controller"] == "nobody"
 
 
+def test_a_visitor_may_not_act_as_the_owners_session(
+    client: FlaskClient, service: ScreenService, fake_neko: FakeNeko
+) -> None:
+    start_service_stack(service)
+    owner = _session(client, _OWNER)
+    visitor = _session(client, _VISITOR)
+    assert (
+        client.post("/api/control/take", json={"session_id": owner["session_id"]}, headers=_OWNER).status_code == 200
+    )
+    # The owner's id is in the state document every viewer reads.
+    assert client.get("/api/state", headers=_VISITOR).get_json()["control"]["human_session_id"] == owner["session_id"]
+    for path, body in (
+        ("/api/control/return", {"session_id": owner["session_id"]}),
+        ("/api/control/take", {"session_id": owner["session_id"]}),
+        ("/api/input-seen", {"session_id": owner["session_id"]}),
+        ("/api/screen-size", {"width": 1024, "height": 768, "session_id": owner["session_id"]}),
+    ):
+        refused = client.post(path, json=body, headers=_VISITOR)
+        assert refused.status_code == 403, path
+        assert refused.get_json()["detail"] == "this route is the workspace owner's"
+    control = client.get("/api/state", headers=_VISITOR).get_json()["control"]
+    assert control["controller"] == "human"
+    assert control["human_session_id"] == owner["session_id"]
+    assert not any(call.startswith("size:") for call in fake_neko.calls)
+    # The visitor's own session, and an unknown one, are answered as before.
+    assert (
+        client.post("/api/input-seen", json={"session_id": visitor["session_id"]}, headers=_VISITOR).status_code == 204
+    )
+    assert client.post("/api/input-seen", json={"session_id": "no-such"}, headers=_VISITOR).status_code == 404
+
+
 def test_a_size_report_with_no_session_is_the_owners_alone(
     client: FlaskClient, service: ScreenService, fake_neko: FakeNeko
 ) -> None:

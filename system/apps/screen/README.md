@@ -19,11 +19,12 @@ demand and the `screen-watch` event listener ends them together.
 Identity comes from `X-Imbue-Identity` (a header-less request came over loopback and is the
 owner). A visitor, an identity whose `owner` is false, may use only the viewer's routes (the
 page and its assets, `/health`, `/api/state`, `/api/start`, `/api/connect-info`, `/api/ws`,
-`/api/session`, `/api/control/take` and `/return`, `/api/input-seen`, `/api/screen-size` with
-the session's id, and `/neko/`), where the lease arbitrates; every other route (`/api/run`,
-the agent verbs, the screenshot, the window tools, the clipboard, a session-less
-`/api/screen-size`, `/launch/browser`, `/api/open-url` and the whole `/browsers` API) answers
-a visitor 403.
+`/api/session`, `/api/control/take` and `/return`, `/api/input-seen` and `/api/screen-size`
+with a visitor's session id, and `/neko/`), where the lease arbitrates; naming the owner's
+session on those (its id is in the state document while the owner controls) answers a visitor
+403, and so does every other route (`/api/run`, the agent verbs, the screenshot, the window
+tools, the clipboard, a session-less `/api/screen-size`, `/launch/browser`, `/api/open-url`
+and the whole `/browsers` API).
 
 - `GET /`: the viewer page (the frontend's build, `src/screen/static/index.html`; a
   placeholder until it is built), with its bundle under `/assets/`. A page load starts

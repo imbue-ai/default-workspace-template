@@ -295,7 +295,7 @@ All on `127.0.0.1:8090`, identity from `X-Imbue-Identity`:
 | `/browsers/...`, `GET /json/version` and the CDP proxy | the migrated fleet API (section 16) |
 | `/neko/...` | the reverse proxy to neko, HTTP and WebSocket, with the service's own rate limit on `/neko/api/login` |
 
-A visitor (an identity whose `owner` is false, section 4.6) may call only the viewer's routes, where the lease arbitrates: the page, `/api/state`, `/api/start`, `/api/connect-info`, `/api/ws`, `/api/session`, the human verbs, `/api/input-seen`, `/api/screen-size` with the session's id, and `/neko/...`.
+A visitor (an identity whose `owner` is false, section 4.6) may call only the viewer's routes, where the lease arbitrates: the page, `/api/state`, `/api/start`, `/api/connect-info`, `/api/ws`, `/api/session`, the human verbs, `/api/input-seen` and `/api/screen-size` with a visitor's session id (the owner's session, whose id the state document carries while it controls, answers a visitor 403), and `/neko/...`.
 Every other route, `/api/run`, the agent verbs, the screenshot, the window tools, the clipboard, a session-less `/api/screen-size`, `/launch/browser`, `/api/open-url` and the whole `/browsers` API, answers a visitor 403; a request with no header is the owner (section 6.3), so agents and the shell, which reach the service over loopback, are not affected.
 
 ### 10.2 Events to viewers
