@@ -4,10 +4,11 @@ see a frame, take control, type into a terminal on the Screen, open the browser 
 tab, close the window with the stack still running, and quit with everything gone.
 
 The desktop app lives in the mngr monorepo, so the test runs on a developer's machine with ``MNGR_WORKTREE`` naming
-a synced checkout of it (Electron installed under ``apps/minds``), Docker on the host, a display, and
-``MNGR_INTERNAL_GIT_TOKEN`` for the workspace image's build; ``system/apps/screen/README.md`` has the recipe. It is
-skipped at collection where the variable is unset, which includes the CI job inside the workspace image, where
-nothing of this can run (no Docker on the host, no desktop app).
+a synced checkout of it (Electron installed under ``apps/minds``), Docker on the host, a display, and, while the
+tree pins the private mngr repo, ``MNGR_INTERNAL_GIT_TOKEN`` for the workspace image's build;
+``system/apps/screen/README.md`` has the recipe. It is skipped at collection where ``MNGR_WORKTREE`` is unset, which
+includes the CI job inside the workspace image, where nothing of this can run (no Docker on the host, no desktop
+app).
 """
 
 import io
@@ -65,6 +66,9 @@ _IN_WORKSPACE_ROOT: Final[str] = "/home/user/workspace"
 _INERT_CLIENT_CONFIG: Final[Path] = Path("apps/minds/imbue/minds/config/envs/ci-snapshot/client.toml")
 _ELECTRON_BINARY: Final[Path] = Path("apps/minds/node_modules/.bin/electron")
 _ELECTRON_MAIN_JS: Final[Path] = Path("apps/minds/electron/main.js")
+# The one writer and reader of this tree's mngr pin: `--check` prints `public` or `internal`.
+_PIN_CHECK_SCRIPT: Final[Path] = Path("system/scripts/set_mngr_pin.py")
+_INTERNAL_PIN_KIND: Final[str] = "internal"
 # The variables this process carries that the desktop app must not inherit: an mngr agent's identity (the app
 # derives its own host dir and prefix from the minted root, and a create run by an agent is gated differently),
 # and this repo's venv, which `uv run` in the mngr checkout would otherwise be pointed at.
@@ -212,13 +216,31 @@ def _git_commit_all(repo: Path, message: str) -> None:
     )
 
 
+def _mngr_pin_kind() -> str:
+    """Whether this tree pins the public mngr mirror or the private repo (whose build needs a credential), from
+    the pin tool's own check, which also fails on a tree whose pin and BuildKit lines disagree."""
+    completed = subprocess.run(
+        ["python3", str(_REPO_ROOT / _PIN_CHECK_SCRIPT), "--check", "--repo-root", str(_REPO_ROOT)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    if completed.returncode != 0:
+        pytest.fail(f"The mngr pin check refused this tree: {completed.stderr.strip()}")
+    return completed.stdout.strip()
+
+
 def _build_harness(tmp_path: Path) -> _Harness:
     mngr_worktree = Path(os.environ[MNGR_WORKTREE_ENV_VAR]).resolve()
     for required in (_ELECTRON_BINARY, _ELECTRON_MAIN_JS, _INERT_CLIENT_CONFIG, Path(".mngr/settings.toml")):
         if not (mngr_worktree / required).exists():
             pytest.fail(f"{mngr_worktree / required} is missing; is {MNGR_WORKTREE_ENV_VAR} a synced mngr checkout?")
-    if os.environ.get(_MNGR_INTERNAL_GIT_TOKEN_ENV_VAR, "") == "":
-        pytest.fail(f"{_MNGR_INTERNAL_GIT_TOKEN_ENV_VAR} is not set; the workspace image's build needs it")
+    if _mngr_pin_kind() == _INTERNAL_PIN_KIND and os.environ.get(_MNGR_INTERNAL_GIT_TOKEN_ENV_VAR, "") == "":
+        pytest.fail(
+            f"{_MNGR_INTERNAL_GIT_TOKEN_ENV_VAR} is not set; the workspace image's build fetches mngr from the private"
+            " repo this tree pins and needs it"
+        )
     if subprocess.run(["docker", "info"], capture_output=True, check=False, timeout=60).returncode != 0:
         pytest.fail("docker is not answering on this host; the workspace is a local Docker container")
     viewer_chromium = _viewer_chromium_executable()
