@@ -68,3 +68,5 @@ The owner gate:
 - The viewer offers the held page's Cancel (an owner-only verb) to the owner's session alone; a paste that the Screen refused, such as a visitor's image, says so in the strip instead of failing quietly.
 
 - Programs started on the Screen (`screen run` commands, Chromium) no longer inherit the service's `LATCHKEY_GATEWAY_PASSWORD` and `LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE`; nothing launched there needs them, and an agent that does holds them in its own shell.
+
+- `test_screen_integration.py` no longer depends on the order its tests run in: every test takes a `running` fixture that starts the stack over the module's service life on demand (and builds a fresh life after a test quit the service), so each passes alone in its own CI sandbox.

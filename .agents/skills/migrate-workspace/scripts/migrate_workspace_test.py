@@ -461,7 +461,7 @@ def test_parse_supervisord_ports_reads_the_real_template_config(
     # scan covers them); the others register from their program lines.
     assert {(port.name, port.port) for port in ports} >= {
         ("system_interface", 8000),
-        ("browser", 8081),
+        ("screen", 8090),
         ("files", 8300),
     }
     assert not {port.name for port in ports} & {"terminal", "chat"}

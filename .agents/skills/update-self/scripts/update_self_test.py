@@ -890,7 +890,7 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     # Base commit: one pre-existing top-level entry (must NOT be reported as
     # newly added), plus a source file the target will leave untouched.
     _write("changelog/old-entry.md")
-    _write("system/apps/browser/src/browser/session.py", "print('hi')\n")
+    _write("system/apps/screen/src/screen/service.py", "print('hi')\n")
     _git("add", "-A")
     _git("commit", "-q", "-m", "base")
     _git("tag", "base")
@@ -899,10 +899,10 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     # entry (excluded), and a non-changelog source change (ignored).
     _write(".agents/changelog/my-branch.md")
     _write("system/changelog/my-branch.md")
-    _write("system/apps/browser/changelog/my-branch.md")
+    _write("system/apps/screen/changelog/my-branch.md")
     _write("system/apps/system_interface/changelog/my-branch.md")
     _write("system/services/gamma/changelog/my-branch.md")
-    _write("system/apps/browser/src/browser/session.py", "print('bye')\n")
+    _write("system/apps/screen/src/screen/service.py", "print('bye')\n")
     _git("add", "-A")
     _git("commit", "-q", "-m", "target")
     _git("tag", "target")
@@ -924,7 +924,7 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     added = json.loads(capsys.readouterr().out)["added"]
     assert sorted(added) == [
         ".agents/changelog/my-branch.md",
-        "system/apps/browser/changelog/my-branch.md",
+        "system/apps/screen/changelog/my-branch.md",
         "system/apps/system_interface/changelog/my-branch.md",
         "system/changelog/my-branch.md",
         "system/services/gamma/changelog/my-branch.md",
@@ -933,7 +933,7 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     # The worker guide has the tool run from the staged skill's scripts
     # directory. A git pathspec is cwd-relative, so from a subdirectory the
     # changelog glob matched nothing and the digest was silently empty.
-    subdir = tmp_path / "system" / "apps" / "browser"
+    subdir = tmp_path / "system" / "apps" / "screen"
     assert (
         update_self.main(
             [
@@ -1665,10 +1665,10 @@ def _mngr_requirement(package: str, subdirectory: str) -> str:
 _MNGR_BASE = _mngr_requirement("imbue-mngr", "libs/mngr")
 
 # The Python apps a workspace tree carries, as the apply discovers them
-# (``read_app_tools``): the shell (critical) and the browser daemon (not).
+# (``read_app_tools``): the shell (critical) and the Screen service (not).
 _APP_FIXTURES = (
     ("system_interface", "system-interface", "system-interface", True),
-    ("browser", "browser", "browser-service", False),
+    ("screen", "screen", "screen-service", False),
 )
 
 
@@ -1971,7 +1971,7 @@ _FIXTURE_PROGRAMS = (
     "terminal",
     "terminal-pty",
     "files",
-    "browser",
+    "screen",
 )
 
 
@@ -2192,11 +2192,11 @@ def test_read_app_tools_lists_every_python_app_in_the_tree() -> None:
     assert shell.executable == update_layout.TOOL_NAME
     assert shell.plugin_key == "system_interface"
     assert shell.is_critical is True
-    browser = by_name["browser"]
-    assert browser.directory == "system/apps/browser"
-    assert browser.executable == "browser-service"
-    assert browser.plugin_key == "browser"
-    assert browser.is_critical is False
+    screen = by_name["screen"]
+    assert screen.directory == "system/apps/screen"
+    assert screen.executable == "screen-service"
+    assert screen.plugin_key == "screen"
+    assert screen.is_critical is False
     terminal = by_name["terminal-app"]
     assert terminal.directory == "system/apps/terminal"
     assert terminal.executable == "terminal-app"
@@ -2222,7 +2222,7 @@ def test_read_app_tools_leaves_a_pre_manifest_app_to_the_root_venv(
 
     tools = update_classification.read_app_tools(repo_root)
 
-    assert {app.tool_name for app in tools} == {"system-interface", "browser"}
+    assert {app.tool_name for app in tools} == {"system-interface", "screen"}
     assert "legacy" not in capsys.readouterr().err
 
 
@@ -2249,7 +2249,7 @@ def test_read_app_tools_skips_an_app_it_cannot_describe(tmp_path: Path, capsys) 
 
     tools = update_classification.read_app_tools(repo_root)
 
-    assert {app.tool_name for app in tools} == {"system-interface", "browser"}
+    assert {app.tool_name for app in tools} == {"system-interface", "screen"}
     err = capsys.readouterr().err
     assert "broken" in err and "unreadable" in err and "nameless" in err
 
@@ -2264,13 +2264,13 @@ def test_read_app_tools_skips_an_app_it_cannot_describe(tmp_path: Path, capsys) 
         ("system/apps/system_interface/app.toml", {"system-interface"}),
         ("system/apps/chat/imbue/chat/server.py", {"chat"}),
         ("system/apps/chat/app.toml", {"chat"}),
-        ("system/apps/browser/src/browser/runner.py", {"browser"}),
-        ("system/apps/browser/pyproject.toml", {"browser"}),
+        ("system/apps/screen/src/screen/service.py", {"screen"}),
+        ("system/apps/screen/pyproject.toml", {"screen"}),
         # The frontend bundle and served assets never change what the tool resolves to.
         ("system/apps/system_interface/frontend/src/App.ts", set()),
         ("system/apps/chat/frontend/src/index.ts", set()),
         ("system/apps/chat/imbue/chat/static/chat.html", set()),
-        ("system/apps/browser/src/browser/static/app.js", set()),
+        ("system/apps/screen/src/screen/static/index.html", set()),
         ("system/apps/terminal/src/terminal_app/main.py", {"terminal-app"}),
         ("system/apps/terminal/terminal_tmux.conf", {"terminal-app"}),
         # The files viewer has no Python package: dufs serves its vendored frontend as-is.
@@ -2570,7 +2570,7 @@ def test_apply_backend_manifest_refreshes_every_environment(apply_repo: Path) ->
         "-e",
     ]
     assert [argv[4] for argv in installs[1:]] == [
-        "system/apps/browser",
+        "system/apps/screen",
         update_layout.SYSTEM_INTERFACE_DIR,
     ]
     assert runner.ran("uv", "sync", "--all-packages", "--frozen")
@@ -2618,16 +2618,16 @@ def test_apply_backend_source_change_reinstalls_only_the_apps_own_tool(
     assert runner.ran(*_RESTART)
 
 
-def test_apply_browser_change_reinstalls_the_browser_tool_alone(
+def test_apply_screen_change_reinstalls_the_screen_tool_alone(
     apply_repo: Path,
 ) -> None:
-    runner = _apply_runner("M\tsystem/apps/browser/src/browser/runner.py\n", apply_repo)
+    runner = _apply_runner("M\tsystem/apps/screen/src/screen/service.py\n", apply_repo)
 
     code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
 
     assert code == 0
     installs = runner.argvs_starting("uv", "tool", "install")
-    assert [argv[4] for argv in installs] == ["system/apps/browser"]
+    assert [argv[4] for argv in installs] == ["system/apps/screen"]
     assert not runner.ran("uv", "sync")
 
 
@@ -3876,7 +3876,7 @@ def test_a_health_probe_that_never_finds_the_app_says_what_it_last_saw(
 def test_read_critical_apps_reads_only_critical_apps_the_user_can_open(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # The fixture tree already carries the shell (critical, internal) and the browser.
+    # The fixture tree already carries the shell (critical, internal) and the Screen.
     repo_root = _make_apply_repo(tmp_path)
     _write_openable_app(repo_root, "terminal")
     _write_openable_app(repo_root, "chat")
@@ -6013,18 +6013,18 @@ def test_snapshots_copy_aside_the_tool_of_a_critical_app_but_not_of_another(
     tmp_path: Path,
 ) -> None:
     # The shell is critical (its manifest says so), so an apply that touches
-    # it copies its tool environment aside for the rollback; the browser is
+    # it copies its tool environment aside for the rollback; the Screen is
     # not, so a rollback reinstalls its tool from the restored tree instead.
     repo_root = _make_apply_repo(tmp_path)
     runner = _RecordingRunner()
     shell_tool = _tool_on_path(
         tmp_path, runner, "system-interface", update_layout.TOOL_NAME
     )
-    _tool_on_path(tmp_path, runner, "browser", "browser-service")
+    _tool_on_path(tmp_path, runner, "screen", "screen-service")
     plan = update_classification.plan_apply(
         [
             _BACKEND_DIFF.split("\t")[1].strip(),
-            "system/apps/browser/src/browser/runner.py",
+            "system/apps/screen/src/screen/service.py",
         ],
         _PROVISIONER_INPUTS,
         update_classification.read_app_tools(repo_root),
@@ -6420,7 +6420,7 @@ def test_a_rollback_rebuilds_the_tool_envs_it_could_not_copy_aside(
     # time has no copy to put back. A rollback that keyed the rebuild on the
     # venv alone reported success with the tools still built from the
     # rolled-back-away tree -- the ModuleNotFoundError-on-mngr state. The
-    # browser's tool is never copied aside (not critical), so it is rebuilt too.
+    # Screen's tool is never copied aside (not critical), so it is rebuilt too.
     (apply_repo / ".venv").mkdir()
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)  # no tools on PATH
     spawner = _FakeSpawner(output="ImportError: boom", exited=True)
@@ -6695,10 +6695,10 @@ def test_recovery_rebuilds_only_the_app_tools_with_no_copy_and_a_directory(
     restored = {update_environment.tool_snapshot_name("system-interface")}
 
     rebuild = update_apply._app_tools_to_rebuild(
-        (by_name["system-interface"], by_name["browser"], added), restored, repo_root
+        (by_name["system-interface"], by_name["screen"], added), restored, repo_root
     )
 
-    assert rebuild == (by_name["browser"],)
+    assert rebuild == (by_name["screen"],)
     assert "system/apps/gone is not in the restored tree" in capsys.readouterr().err
 
 
@@ -8097,7 +8097,7 @@ def test_the_record_names_every_critical_app_the_apply_touched(
     _write_registry(apply_repo, {"chat": _CHAT_ROW_URL, "terminal": _TERMINAL_ROW_URL})
     runner = _apply_runner(
         "M\tsystem/libs/workspace_ui/src/origin.ts\nM\tsystem/apps/terminal/src/terminal_app/main.py\n"
-        "M\tsystem/apps/browser/src/browser/session.py\n",
+        "M\tsystem/apps/screen/src/screen/service.py\n",
         apply_repo,
     )
 
