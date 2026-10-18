@@ -338,3 +338,33 @@ cd system/apps/screen/frontend && npm run dev
 # Tests
 cd system/apps/screen && uv run pytest
 ```
+
+## Tests
+
+The unit tests run anywhere. `test_screen_integration.py` runs the real stack (Xorg, PulseAudio,
+XFCE, neko and Fortress as subprocesses under the service) and skips where the env.d unit has not
+installed it; the CI job that runs the suites inside the workspace image fails on that skip, which
+is how a missing install is noticed there. To run it by hand in a workspace, quit the Screen first
+(the suite needs display `:99`) and run `uv run --no-sync pytest system/apps/screen/test_screen_integration.py`
+from the repo root as root.
+
+`test_screen_acceptance.py` is the acceptance test of spec section 20 through the real desktop:
+Imbue Studio's Electron app creates a local Docker workspace from this tree (a plain clone of the
+committed branch, so commit first), and Playwright drives it over CDP to open the Screen, see a
+frame, take control, type into a terminal on the Screen, open the browser launch path with a URL,
+close the window with the stack still running, and quit with everything gone. It needs the mngr
+monorepo (synced, with Electron installed under `apps/minds`), Docker on this machine, a display
+(the Electron window appears on it), and the mngr-internal token for the image's build; it skips
+at collection without `MNGR_WORKTREE`, so CI never runs it. Everything it makes is torn down at the
+end (the workspace through `mngr destroy`, the app's processes, the throwaway minds root under
+pytest's temporary directory), and its screenshots are left under that directory for a look:
+
+```bash
+export VAULT_ADDR=https://vault-cluster-public-vault-df29b16f.9b573ab7.z1.hashicorp.cloud:8200 VAULT_NAMESPACE=admin
+export MNGR_INTERNAL_GIT_TOKEN="$(vault kv get -field=value secrets/minds/dev/mngr-internal-git/MNGR_INTERNAL_GIT_TOKEN)"
+MNGR_WORKTREE=/path/to/mngr uv run --no-sync pytest -q -p no:cacheprovider \
+  system/apps/screen/test_screen_acceptance.py --basetemp=/var/tmp/screen-acceptance
+```
+
+A cold image build takes a quarter of an hour or more; with Docker's layer cache warm the whole run
+is a few minutes of create plus a few of the journey.

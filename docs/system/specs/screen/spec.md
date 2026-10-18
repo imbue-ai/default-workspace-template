@@ -1,6 +1,6 @@
 # The Screen: a streamed Linux desktop as a workspace window
 
-Status: designed 2026-10-17 (Josh + agent); implementation on `mngr/vnc-frame` (this repository and the mngr monorepo's branch of the same name).
+Status: designed 2026-10-17 (Josh + agent); implemented on `mngr/vnc-frame` (this repository and the mngr monorepo's branch of the same name) as of 2026-10-17, with the verified deviations recorded in the implementation notes of section 22.
 Audience: the agent implementing `system/apps/screen`, the shell (`system/apps/system_interface`), `system/libs/workspace_layout`, `system/libs/app_manifest`, the share gateway (`system/services/share_gateway`), `system/services/oom_priority`, the env.d units, the `agentic-browser-fleet` and `manage-desktop` skills, and the deletion of `system/apps/browser`.
 Builds on the desktop interface ([plan](../../blueprint/desktop-interface/plan-desktop-interface.md), [contracts](../../blueprint/desktop-interface/contracts.md), [concepts](../../blueprint/desktop-interface/concepts.md)), [window-bound-resources.md](../window-bound-resources.md), [stop-when-no-windows.md](../stop-when-no-windows.md), and three specs in the mngr monorepo: `specs/published-ports/spec.md`, `specs/turn-relay/spec.md`, and `specs/screen-studio-integration/spec.md` ("the integration spec" below).
 
@@ -475,3 +475,20 @@ Each step leaves the tree green on the branch; nothing merges until the last.
 - Self-hosted coturn (the TURN spec, section 9), if relay cost or abuse warrants it.
 - Renaming the browser's profile and manifest paths under `screen`.
 - An occlusion signal from the shell, so a Screen fully covered by another window stops streaming.
+
+### Implementation notes
+
+What the implementers found and verified where the tree departs from the text above; the text stands as the design, and these are the facts on the branch.
+
+- The launch path of the Screen's own page is `screen`, not `open`: the manifest schema reserves `open` for the launch path the shell synthesizes, so the default shortcut is `{launch = "screen", mode = "focus"}` (section 18).
+- The supervisord group is `screen-stack`, not `screen`: a program outside a group is its own group of that name, and the service program is `screen` (section 9.1).
+- The service's own neko event session is a login with the admin password over the WebSocket, not the API token: the API-token session cannot open a WebSocket (section 6.2).
+- neko sends `clipboard/updated` to the host session alone and with text only, so the viewer reads text and HTML back through the REST clipboard route (`GET /api/room/clipboard`) and sets them through its POST, since `clipboard/set` drops the HTML (section 13).
+- File drop does not land: neko receives the files through `upload/drop`, but its drag emulation never maps its window on Xorg dummy with XFCE and the route answers 500; the viewer reports the failed drop in the strip (section 4.3).
+- Taps and long presses on a phone reach the Screen as mouse events: neko's touch events need its xf86 input driver, which this stack does not run (section 14).
+- The pointer-lock control is hidden: neko v3 has no relative-motion event, only absolute `control/move`, so the plumbing waits behind `IS_RELATIVE_MOTION_SUPPORTED` (section 12).
+- The share gateway's loopback route is `GET /connect-info` on its loopback port, as section 15 says, and the desktop's `media-endpoints` spells the protocol upper-case where the connector spells it lower-case; the service lowercases (section 5.2).
+- neko stops the audio pipeline on its own while every session has audio disabled (measured: PulseAudio and the encoder at 0% with a muted viewer), so the null-device fallback of section 8.3 is not needed.
+- The bands as prescribed shed Chromium's renderers before the programs on the Screen: `AGENT_SUBPROCESS` (900) sits below the shared-browser band (910 to 1000), so under pressure the order is Chromium's renderers, then programs on the Screen, then the stack (section 9.4).
+- `GET /json/version` and `/json/list` are served by the CDP proxy on `127.0.0.1:8083`, not by the service on 8090 (section 10.1).
+- The acceptance test of section 20 runs on a developer's machine only (`system/apps/screen/test_screen_acceptance.py`, which needs the mngr monorepo for the Imbue Studio app); CI runs the in-image integration suite.

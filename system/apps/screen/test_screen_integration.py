@@ -5,7 +5,9 @@ Fortress on the Screen with its tab checkpointed, a member's death ending the gr
 start bringing it back.
 
 Skips where the env.d unit has not installed the stack (a developer laptop); the CI job that runs the suites inside
-the workspace image fails on a skip, which is how a missing install is noticed."""
+the workspace image fails on a skip, which is how a missing install is noticed. The root pytest config's ten-second
+timeout is for unit tests, so the module sets its own: a stack start waits up to 90 seconds and a Fortress launch up
+to two minutes."""
 
 import io
 import json
@@ -23,7 +25,9 @@ from typing import Any
 import pytest
 from PIL import Image
 from flask.testing import FlaskClient
+from pydantic import Field
 
+from imbue.imbue_common.frozen_model import FrozenModel
 from mock_messenger_test import RecordingMessenger
 from screen.browser_fleet import BrowserFleet
 from screen.browser_manifest import ManifestStore
@@ -33,6 +37,7 @@ from screen.chrome_launcher import SubprocessChromiumLauncher
 from screen.connect_info import ConnectInfoAggregator
 from screen.data_types import Lifecycle
 from screen.events import EVENTS_RELATIVE_PATH
+from screen.interfaces import ProgramState
 from screen.launch import DetachedProcessLauncher
 from screen.launch import screen_process_environment
 from screen.neko_client import NekoClient
@@ -55,6 +60,8 @@ from screen.windows import DisplayWindowTools
 from testing import SubprocessSupervisor
 from testing import wait_until
 
+pytestmark = pytest.mark.timeout(300)
+
 _START_TIMEOUT_SECONDS = 90.0
 
 
@@ -62,8 +69,8 @@ def _skip_reason() -> str | None:
     missing = describe_missing_install()
     if missing is not None:
         return missing
-    if shutil.which("xeyes") is None or shutil.which("wmctrl") is None or shutil.which("xdotool") is None:
-        return "the Screen's tools (xeyes, wmctrl, xdotool) are not installed"
+    if any(shutil.which(tool) is None for tool in ("xeyes", "xfce4-terminal", "wmctrl", "xdotool")):
+        return "the Screen's tools (xeyes, xfce4-terminal, wmctrl, xdotool) are not installed"
     if Path(DISPLAY_SOCKET_PATH).exists():
         return "display :99 is already in use on this host"
     if os.geteuid() != 0:
@@ -71,16 +78,24 @@ def _skip_reason() -> str | None:
     return None
 
 
-@pytest.fixture(scope="module")
-def live(
-    tmp_path_factory: pytest.TempPathFactory,
-) -> Iterator[tuple[ScreenService, FlaskClient, SubprocessSupervisor]]:
-    reason = _skip_reason()
-    if reason is not None:
-        pytest.skip(reason)
-    base = tmp_path_factory.mktemp("screen")
+class _LiveService(FrozenModel):
+    """One life of the Screen service over the real programs, as ``screen.main`` wires it."""
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    service: ScreenService = Field(description="The service")
+    client: FlaskClient = Field(description="Its routes")
+    proxy_server: ProxyServer = Field(description="The agents' CDP proxy, bound to a free port")
+
+    def shutdown(self, reason: str) -> None:
+        self.service.shutdown(reason)
+        self.proxy_server.stop()
+
+
+def _build_live_service(base: Path, supervisor: SubprocessSupervisor) -> _LiveService:
+    """Build and start a service over ``base`` (the state dir, the browser's manifest and profile) the way
+    ``screen.main`` does, with the fleet attached before the stack so a stop checkpoints Chromium's tabs."""
     state_dir = base / "state"
-    supervisor = SubprocessSupervisor(state_dir=state_dir, log_dir=base / "logs")
     neko = NekoClient()
     service = ScreenService(
         repo_root=Path.cwd(),
@@ -93,15 +108,6 @@ def live(
         messenger=RecordingMessenger(),
         connectivity=ConnectInfoAggregator(brokers=()),
     )
-    stack = ScreenStack(
-        supervisor=supervisor,
-        neko=neko,
-        state_dir=state_dir,
-        on_lifecycle_changed=service.on_lifecycle_changed,
-        on_running=service.on_running,
-        set_api_token=service.set_api_token,
-    )
-    service.attach_stack(stack)
     proxy_server = ProxyServer(requested_port=0)
     proxy_server.start()
     fleet = BrowserFleet(
@@ -121,14 +127,47 @@ def live(
         on_browser_running=service.on_browser_running,
     )
     service.attach_fleet(fleet, band_sweeper=None)
+    stack = ScreenStack(
+        supervisor=supervisor,
+        neko=neko,
+        state_dir=state_dir,
+        on_lifecycle_changed=service.on_lifecycle_changed,
+        on_running=service.on_running,
+        set_api_token=service.set_api_token,
+        on_stopping=fleet.prepare_for_stack_stop,
+    )
+    service.attach_stack(stack)
     service.start()
     client = build_app(service, base / "static", NekoProxy()).test_client()
+    return _LiveService(service=service, client=client, proxy_server=proxy_server)
+
+
+@pytest.fixture(scope="module")
+def live_base(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    reason = _skip_reason()
+    if reason is not None:
+        pytest.skip(reason)
+    return tmp_path_factory.mktemp("screen")
+
+
+@pytest.fixture(scope="module")
+def live_supervisor(live_base: Path) -> Iterator[SubprocessSupervisor]:
+    supervisor = SubprocessSupervisor(state_dir=live_base / "state", log_dir=live_base / "logs")
     try:
-        yield service, client, supervisor
+        yield supervisor
     finally:
-        service.shutdown("the test ended")
-        proxy_server.stop()
         supervisor.stop_everything()
+
+
+@pytest.fixture(scope="module")
+def live(
+    live_base: Path, live_supervisor: SubprocessSupervisor
+) -> Iterator[tuple[ScreenService, FlaskClient, SubprocessSupervisor]]:
+    built = _build_live_service(live_base, live_supervisor)
+    try:
+        yield built.service, built.client, live_supervisor
+    finally:
+        built.shutdown("the test ended")
 
 
 def test_the_stack_starts_on_first_demand_and_neko_answers(
@@ -183,16 +222,20 @@ def test_xeyes_appears_in_the_window_list_and_a_raised_window_titles_the_screen(
         return next((window for window in windows if class_fragment in window["window_class"].lower()), None)
 
     assert wait_until(lambda: window_of("xeyes") is not None, 30.0)
-    # xeyes takes no input focus, so a focusable window is what the title follows.
-    message = client.post("/api/run", json={"command": ["xmessage", "-title", "screen-test-window", "hello"]})
-    assert message.status_code == 200, message.get_json()
-    assert wait_until(lambda: window_of("xmessage") is not None, 30.0)
-    xmessage_window = window_of("xmessage")
-    assert xmessage_window is not None
-    assert client.post(f"/api/windows/{xmessage_window['id']}/activate").status_code == 200
+    # xeyes takes no input focus, so a focusable window is what the title follows: a terminal of its own process
+    # (the image has no xmessage) with a fixed title.
+    terminal = client.post(
+        "/api/run", json={"command": ["xfce4-terminal", "--disable-server", "-T", "screen-test-window"]}
+    )
+    assert terminal.status_code == 200, terminal.get_json()
+    assert wait_until(lambda: window_of("xfce4-terminal") is not None, 30.0)
+    terminal_window = window_of("xfce4-terminal")
+    assert terminal_window is not None
+    assert client.post(f"/api/windows/{terminal_window['id']}/activate").status_code == 200
     assert wait_until(lambda: client.get("/api/state").get_json()["title"] == "screen-test-window", 10.0)
     os.kill(xeyes_pid, signal.SIGTERM)
-    os.kill(message.get_json()["pid"], signal.SIGTERM)
+    os.kill(terminal.get_json()["pid"], signal.SIGTERM)
+    assert wait_until(lambda: window_of("xfce4-terminal") is None, 10.0)
 
 
 class _PageHandler(BaseHTTPRequestHandler):
@@ -208,6 +251,7 @@ class _PageHandler(BaseHTTPRequestHandler):
         pass
 
 
+@pytest.mark.browser
 def test_the_browser_launch_path_puts_fortress_on_the_screen_and_checkpoints_its_tab(
     live: tuple[ScreenService, FlaskClient, SubprocessSupervisor],
 ) -> None:
@@ -290,3 +334,31 @@ def test_a_second_start_brings_the_stack_back(live: tuple[ScreenService, FlaskCl
     )
     assert service.neko.is_healthy()
     assert NEKO_BINARY_PATH.is_file()
+
+
+def test_quit_ends_every_member_and_the_next_open_starts_a_fresh_stack(
+    live: tuple[ScreenService, FlaskClient, SubprocessSupervisor], live_base: Path
+) -> None:
+    """Quit stops the service, whose shutdown ends the group (spec section 9.3); the next open of the window finds
+    a restarted service and a page load starts the stack again."""
+    service, _client, supervisor = live
+    assert service.stack.lifecycle == Lifecycle.RUNNING
+    service.shutdown("Quit from the window menu")
+    assert service.stack.lifecycle == Lifecycle.STOPPED
+    assert service.stack.stop_reason == "Quit from the window menu"
+    assert not service.stack.is_any_member_running()
+    assert all(supervisor.program_state(program) != ProgramState.RUNNING for program in STACK_PROGRAMS)
+    assert wait_until(lambda: not Path(DISPLAY_SOCKET_PATH).exists(), 10.0)
+
+    restarted = _build_live_service(live_base, supervisor)
+    try:
+        assert restarted.client.get("/api/state").get_json()["lifecycle"] == "stopped"
+        assert restarted.client.get("/").status_code == 200
+        assert wait_until(lambda: restarted.service.stack.lifecycle == Lifecycle.RUNNING, _START_TIMEOUT_SECONDS), (
+            restarted.service.stack.stop_reason
+        )
+        assert restarted.service.neko.is_healthy()
+        assert restarted.client.get("/api/state").get_json()["control"]["controller"] == "nobody"
+    finally:
+        restarted.shutdown("the test ended")
+    assert not Path(DISPLAY_SOCKET_PATH).exists() or wait_until(lambda: not Path(DISPLAY_SOCKET_PATH).exists(), 10.0)
