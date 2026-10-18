@@ -27,7 +27,7 @@ _VISITOR: Final[dict[str, str]] = {
 _AGENT: Final[dict[str, str]] = {"X-Mngr-Agent-Id": "chat-a", "X-Mngr-Agent-Name": "Alice"}
 
 # Every route a visitor may not call, as (method, the rule, a path under it). The gate answers before the view
-# runs, so the body is whatever the view would want and the Screen's state does not matter.
+# runs, so no request needs a body or a running Screen.
 _OWNER_ONLY_REQUESTS: Final[tuple[tuple[str, str, str], ...]] = (
     ("POST", "/api/run", "/api/run"),
     ("POST", "/api/control/acquire", "/api/control/acquire"),
@@ -52,8 +52,7 @@ _OWNER_ONLY_REQUESTS: Final[tuple[tuple[str, str, str], ...]] = (
     ("POST", "/browsers/<raw_name>/handoff", "/browsers/browser-1/handoff"),
 )
 
-# The rules a visitor may call: the viewer's own, the lease-arbitrated human verbs, the shell's modules, the neko
-# proxy, and the watcher's notification (loopback-gated itself).
+# The rules a visitor may call (the watcher's notification gates itself on loopback).
 _OPEN_RULES: Final[frozenset[str]] = frozenset(
     {
         "/",
@@ -154,7 +153,7 @@ def test_a_visitor_may_not_act_as_the_owners_session(
     assert control["controller"] == "human"
     assert control["human_session_id"] == owner["session_id"]
     assert not any(call.startswith("size:") for call in fake_neko.calls)
-    # The visitor's own session, and an unknown one, are answered as before.
+    # A visitor's own session and an unknown one are unaffected.
     assert (
         client.post("/api/input-seen", json={"session_id": visitor["session_id"]}, headers=_VISITOR).status_code == 204
     )

@@ -229,19 +229,13 @@ _install_neko() {
     _log "neko: install complete ($_NEKO_INSTALL_PATH)"
 }
 
-# Fortress (tiliondev/fortress), the stealth Chromium the Screen's browser runs.
-# The pin stays at v151: Playwright 1.58's click hangs on a touch-enabled page in
-# Fortress v153 (the files app's phone-layout tests time out), and v151 is the
-# release the workspaces shipped before the Screen. x64 comes from the official
-# release; arm64 has no official v151 build (tiliondev/fortress#29), so it comes
-# from the fork build main pinned, as before.
-# Fork build: https://github.com/minhtrinh-imbue/fortress/releases/tag/linux-arm64-151.0.7908.0-debian12
-# Both tarballs unpack to tilion-fortress/ with the `tilion` launcher (a shell
-# script that execs `chrome` beside it with Fortress's persona flags). The tree is
-# installed under a versioned directory and the stable path every consumer knows,
-# /opt/fortress/tilion-fortress/tilion, is a symlink the unit repoints at it; a pin
-# bump changes the versioned directory, which is what makes the satisfied-check
-# fail and the new release install.
+# Fortress (tiliondev/fortress), the stealth Chromium the Screen's browser runs. Pinned
+# at v151 because Playwright 1.58's click hangs on a touch-enabled page in v153; arm64
+# has no official v151 build (tiliondev/fortress#29), so it comes from a fork build.
+# The tarballs unpack to tilion-fortress/ (the `tilion` launcher execs `chrome` beside
+# it). The tree is installed under a versioned directory and the stable path every
+# consumer knows, /opt/fortress/tilion-fortress/tilion, is a symlink repointed at it,
+# so a pin bump fails the satisfied-check and installs the new release.
 readonly _FORTRESS_RELEASE="v151.0.7908.0"
 readonly _FORTRESS_UNPACKED_DIR="tilion-fortress"
 readonly _FORTRESS_X64_URL="https://github.com/tiliondev/fortress/releases/download/${_FORTRESS_RELEASE}/tilion-fortress-linux-x64.tar.gz"
@@ -261,8 +255,8 @@ _install_fortress() {
         _log "fortress: $_FORTRESS_RELEASE already installed at $_FORTRESS_VERSIONED_DIR, satisfied"
         return 0
     fi
-    # CLEANUP: drop once every image predating the versioned layout (baked before 2026-10-18) is gone.
-    # The unit that came before this one unpacked the same release straight into the stable path.
+    # CLEANUP: drop once every image baked before 2026-10-18 is gone; that unit unpacked this
+    # same release straight into the stable path rather than under a versioned directory.
     if [ ! -L "$_FORTRESS_STABLE_LINK" ] && [ -x "$_FORTRESS_STABLE_LINK" ] \
         && "$_FORTRESS_INSTALL_DIR/tilion-fortress/chrome" --version 2>/dev/null | grep -q "${_FORTRESS_RELEASE#v}"; then
         _log "fortress: $_FORTRESS_RELEASE already installed at $_FORTRESS_STABLE_LINK by the previous unit, satisfied"

@@ -70,10 +70,9 @@ _NOT_BUILT_PAGE: Final[str] = (
     "</body></html>"
 )
 
-# The routes that act on the Screen outside the lease: the agent verbs, the display and window tools, ``screen run``,
-# the clipboard, the ``browser`` launch path, ``open:url`` and the whole fleet API. A share admits a visitor to this origin, and these are the
-# owner's (and the agents', who reach the service over loopback with no identity header); a visitor's part is the
-# viewer's routes, where the lease arbitrates. Matched on the path and everything under it.
+# A share admits a visitor to the whole origin, so the routes that act on the Screen outside the lease refuse one:
+# they are the owner's and the agents' (who reach the service over loopback with no identity header), while the
+# viewer's routes, where the lease arbitrates, stay open. Matched on the path and everything under it.
 _OWNER_ONLY_PATH_PREFIXES: Final[tuple[str, ...]] = (
     "/api/run",
     "/api/control/acquire",

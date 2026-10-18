@@ -6,10 +6,9 @@ start bringing it back.
 
 Skips where the env.d unit has not installed the stack (a developer laptop); the CI job that runs the suites inside
 the workspace image fails on a skip, which is how a missing install is noticed. That job spreads a module's tests over
-several sandboxes, so no test may lean on an earlier one having started the stack: each takes the ``running`` fixture,
-which starts the stack over the module's one service life the way a page load does, or begins a fresh life when the
-previous test quit the service. The root pytest config's ten-second timeout is for unit tests, so the module sets its
-own: a stack start waits up to 90 seconds and a Fortress launch up to two minutes."""
+several sandboxes, so no test may lean on an earlier one having started the stack: each takes the ``running`` fixture.
+The root pytest config's ten-second timeout is for unit tests, so the module sets its own: a stack start waits up to
+90 seconds and a Fortress launch up to two minutes."""
 
 import io
 import json
