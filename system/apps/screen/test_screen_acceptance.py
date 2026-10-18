@@ -222,10 +222,11 @@ def _build_harness(tmp_path: Path) -> _Harness:
     if subprocess.run(["docker", "info"], capture_output=True, check=False, timeout=60).returncode != 0:
         pytest.fail("docker is not answering on this host; the workspace is a local Docker container")
     viewer_chromium = _viewer_chromium_executable()
-    if viewer_chromium is None:
+    if viewer_chromium is None or not viewer_chromium.exists():
         pytest.fail(
-            "No Chromium to show the viewer in: install Playwright's (`uv run --no-sync playwright install chromium`), "
-            f"or name one with {_VIEWER_CHROMIUM_ENV_VAR} (any Playwright build under ~/.cache/ms-playwright is found)"
+            f"No Chromium to show the viewer in ({viewer_chromium or 'none found'}): install Playwright's "
+            f"(`uv run --no-sync playwright install chromium`), or name one with {_VIEWER_CHROMIUM_ENV_VAR} (any "
+            "Playwright build under ~/.cache/ms-playwright is found)"
         )
     run_id = uuid4().hex[:8]
     template_clone = tmp_path / "template"
