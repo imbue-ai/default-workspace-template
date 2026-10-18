@@ -125,6 +125,7 @@ class _Harness(FrozenModel):
     root_name: str = Field(description="MINDS_ROOT_NAME for this run: a `ci` env minted so no real env is touched")
     data_home: Path = Field(description="MINDS_DATA_HOME: every minds root of this run lives under it")
     host_config_root: Path = Field(description="The Electron app's cwd: a pytest-opted-in copy of mngr's config")
+    viewer_chromium: str = Field(description="The Chromium executable the viewer is shown in")
     user_data_dir: Path = Field(description="Electron's profile for this run")
     workspace_name: str = Field(description="The workspace the create form names")
     shots_dir: Path = Field(description="Where the run's screenshots land")
@@ -217,7 +218,8 @@ def _build_harness(tmp_path: Path) -> _Harness:
         pytest.fail(f"{_MNGR_INTERNAL_GIT_TOKEN_ENV_VAR} is not set; the workspace image's build needs it")
     if subprocess.run(["docker", "info"], capture_output=True, check=False, timeout=60).returncode != 0:
         pytest.fail("docker is not answering on this host; the workspace is a local Docker container")
-    if _viewer_chromium_executable() is None:
+    viewer_chromium = _viewer_chromium_executable()
+    if viewer_chromium is None:
         pytest.fail(
             "No Chromium to show the viewer in: install Playwright's (`uv run --no-sync playwright install chromium`), "
             f"or name one with {_VIEWER_CHROMIUM_ENV_VAR} (any Playwright build under ~/.cache/ms-playwright is found)"
@@ -244,6 +246,7 @@ def _build_harness(tmp_path: Path) -> _Harness:
         root_name=f"minds-ci-screen-{run_id}",
         data_home=tmp_path / "minds-data-home",
         host_config_root=host_config_root,
+        viewer_chromium=viewer_chromium,
         user_data_dir=tmp_path / "electron-profile",
         workspace_name=f"screen-e2e-{run_id}",
         shots_dir=shots_dir,
@@ -466,7 +469,9 @@ def _cookie_to_set(cookie: Cookie) -> SetCookieParam:
     )
 
 
-def _open_screen_from_launcher(workspace: Frame, playwright: Playwright) -> tuple[Frame, str, Browser]:
+def _open_screen_from_launcher(
+    workspace: Frame, playwright: Playwright, harness: _Harness
+) -> tuple[Frame, str, Browser]:
     """Press the Screen's launcher row; return the viewer's frame, the window id, and the browser showing it.
 
     Electron exposes the shell's frame to Playwright but neither the Screen's frame nested inside it nor a new
@@ -487,7 +492,7 @@ def _open_screen_from_launcher(workspace: Frame, playwright: Playwright) -> tupl
         lambda: workspace.eval_on_selector(_SCREEN_IFRAME, "(el) => el.src") or None,
     )
     assert _SCREEN_ORIGIN.match(viewer_url), viewer_url
-    viewer_browser = playwright.chromium.launch(executable_path=_viewer_chromium_executable())
+    viewer_browser = playwright.chromium.launch(executable_path=harness.viewer_chromium)
     viewer_context = viewer_browser.new_context(ignore_https_errors=True, viewport={"width": 1280, "height": 800})
     viewer_context.add_cookies([_cookie_to_set(cookie) for cookie in workspace.page.context.cookies()])
     viewer_page = viewer_context.new_page()
@@ -606,7 +611,7 @@ def _running_state(screen: Frame) -> dict[str, Any] | None:
 
 def _drive_the_screen(workspace: Frame, harness: _Harness, inside: _Workspace, playwright: Playwright) -> None:
     # Open the Screen and see a frame.
-    screen, window_id, viewer = _open_screen_from_launcher(workspace, playwright)
+    screen, window_id, viewer = _open_screen_from_launcher(workspace, playwright, harness)
     state = _wait_until("the Screen's stack running", _SCREEN_RUNNING_SECONDS, lambda: _running_state(screen))
     assert state["screen_size"] == {"width": 1920, "height": 1080, "rate": 60}, state
     _wait_until("the video decoding (readyState 4)", _FRAME_SECONDS, lambda: _video_ready_state(screen) == 4)
@@ -681,7 +686,7 @@ def _drive_the_screen(workspace: Frame, harness: _Harness, inside: _Workspace, p
     viewer.close()
 
     # Open it again (one more viewer of the same Screen), then Quit from the window menu: everything is gone.
-    screen, window_id, viewer = _open_screen_from_launcher(workspace, playwright)
+    screen, window_id, viewer = _open_screen_from_launcher(workspace, playwright, harness)
     _wait_until("the reopened Screen's video", _FRAME_SECONDS, lambda: _video_ready_state(screen) == 4)
     workspace.click(f'[data-window-id="{window_id}"] [data-window-control="menu"]')
     workspace.wait_for_selector('[data-menu-row="quit"]', state="visible", timeout=10_000)
