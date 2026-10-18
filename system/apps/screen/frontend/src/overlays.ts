@@ -1,9 +1,16 @@
 /** The overlays over the stage: installing, starting, connecting, stopped (with Start), and the agent dim, which
  *  also names a page the human asked to open while the agent drives (spec section 4.2): Take control opens it,
- *  Cancel drops it (the owner's alone, as the route that drops it refuses a visitor). */
+ *  Cancel drops it, offered to the sessions the service lets drop it. */
 
 import type { ControlDocument, NekoSessionAnswer, ScreenStateDocument } from "./state";
+import { isOwnSessionController } from "./state";
 import type { StreamStatus } from "./webrtc";
+
+/** Whether the service lets this session drop a held page: the session in control, or the owner's. */
+export function mayCancelPendingUrl(control: ControlDocument, session: NekoSessionAnswer | null): boolean {
+  if (session === null) return false;
+  return session.is_owner || isOwnSessionController(control, session.session_id);
+}
 
 export class Overlays {
   readonly element = document.createElement("div");
@@ -78,7 +85,7 @@ export class Overlays {
     const pendingUrl = state.chromium.pending_url;
     const hasPending = isAgent && pendingUrl !== null;
     this.dimPending.hidden = !hasPending;
-    this.dimCancel.hidden = !(hasPending && session?.is_owner === true);
+    this.dimCancel.hidden = !(hasPending && mayCancelPendingUrl(control, session));
     if (hasPending) {
       this.dimPending.textContent = `Waiting to open ${pendingUrl} in the browser: take control to open it now`;
       this.dimTake.textContent = "Take control and open it";

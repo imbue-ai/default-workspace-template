@@ -2,8 +2,6 @@
 and Chromium and answers the Screen's page, ``open:url`` opens or holds a page and shows the Screen, and the
 ``/browsers`` verbs answer as the fleet CLI expects."""
 
-from collections.abc import Iterator
-
 import pytest
 from flask.testing import FlaskClient
 
@@ -16,9 +14,9 @@ from screen.data_types import XWindow
 from screen.primitives import BrowserName
 from screen.primitives import XWindowId
 from screen.service import ScreenService
+from testing import start_browser
 from testing import start_service_stack
 from testing import wait_until
-from workspace_layout.shell_url import ENV_SHELL_URL
 from workspace_layout.testing import FAKE_WINDOW_ID
 from workspace_layout.testing import LoopbackShell
 from workspace_layout.testing import desktop_answer
@@ -37,24 +35,6 @@ _CHROMIUM_WINDOW = XWindow(
     window_class="tilion.Tilion",
     title="Example",
 )
-
-
-@pytest.fixture
-def loopback_shell(monkeypatch: pytest.MonkeyPatch) -> Iterator[LoopbackShell]:
-    with LoopbackShell(
-        op_answer={**desktop_answer(fake_desktop("home"), "c1", FAKE_WINDOW_ID), "shown": "raised"}
-    ) as shell:
-        monkeypatch.setenv(ENV_SHELL_URL, shell.url)
-        yield shell
-
-
-def _running_browser(client: FlaskClient, service: ScreenService) -> str:
-    answer = client.post("/launch/browser", json={"client_id": "c1"})
-    assert answer.status_code == 200, answer.get_json()
-    browser = service.fleet.the_browser()
-    assert browser is not None
-    assert wait_until(lambda: browser.is_running), browser.lifecycle
-    return str(browser.name)
 
 
 def test_the_browser_launch_path_starts_the_stack_and_chromium_and_answers_the_screens_page(
@@ -98,7 +78,7 @@ def test_the_launch_path_refuses_a_bad_start_page_under_detail(client: FlaskClie
 def test_open_url_opens_the_page_in_front_and_shows_the_screen_to_the_client_that_asked(
     client: FlaskClient, service: ScreenService, fake_cdp_connector: FakeCdpConnector, loopback_shell: LoopbackShell
 ) -> None:
-    _running_browser(client, service)
+    start_browser(client, service)
     loopback_shell.op_answer = {**desktop_answer(fake_desktop("home"), "c-link", FAKE_WINDOW_ID), "shown": "raised"}
     answer = client.post(
         "/api/open-url", json={"type": "open:url", "client_id": "c-link", "url": "http://localhost:3000/app"}
@@ -112,7 +92,7 @@ def test_open_url_opens_the_page_in_front_and_shows_the_screen_to_the_client_tha
 def test_open_url_holds_the_page_while_an_agent_drives_and_the_viewer_can_cancel_it(
     client: FlaskClient, service: ScreenService, fake_cdp_connector: FakeCdpConnector, loopback_shell: LoopbackShell
 ) -> None:
-    name = _running_browser(client, service)
+    name = start_browser(client, service)
     assert client.post(f"/browsers/{name}/acquire", json={}, headers=_AGENT_A).get_json()["ok"] is True
     held = client.post("/api/open-url", json={"client_id": "c-link", "url": "http://localhost:3000/"})
     assert held.status_code == 200, held.get_json()
@@ -127,7 +107,7 @@ def test_open_url_holds_the_page_while_an_agent_drives_and_the_viewer_can_cancel
 def test_a_held_page_opens_once_the_agent_releases(
     client: FlaskClient, service: ScreenService, fake_cdp_connector: FakeCdpConnector, loopback_shell: LoopbackShell
 ) -> None:
-    name = _running_browser(client, service)
+    name = start_browser(client, service)
     client.post(f"/browsers/{name}/acquire", json={}, headers=_AGENT_A)
     client.post("/api/open-url", json={"client_id": "c-link", "url": "http://localhost:3000/"})
     assert client.post(f"/browsers/{name}/release", headers=_AGENT_A).get_json() == {"released": True}
@@ -158,7 +138,7 @@ def test_open_url_refuses_what_it_cannot_open_with_the_reason_under_detail(
 def test_open_url_says_why_when_the_shell_will_not_show_the_screen(
     client: FlaskClient, service: ScreenService, fake_cdp_connector: FakeCdpConnector, loopback_shell: LoopbackShell
 ) -> None:
-    _running_browser(client, service)
+    start_browser(client, service)
     loopback_shell.op_refusal = (404, {"detail": "No client 'c-gone'"})
     answer = client.post("/api/open-url", json={"client_id": "c-gone", "url": "http://localhost:3000/"})
     assert answer.status_code == 502
@@ -169,7 +149,7 @@ def test_open_url_says_why_when_the_shell_will_not_show_the_screen(
 def test_the_fleet_is_listed_with_the_lease_and_the_tabs(client: FlaskClient, service: ScreenService) -> None:
     empty = client.get("/browsers").get_json()
     assert empty["browsers"] == [] and empty["can_create"] is True and empty["browser_max"] == 1
-    name = _running_browser(client, service)
+    name = start_browser(client, service)
     listed = client.get("/browsers").get_json()
     assert listed["browser_count"] == 1
     assert listed["browsers"][0]["id"] == name
@@ -189,7 +169,7 @@ def test_a_named_create_and_its_refusals(client: FlaskClient, service: ScreenSer
 def test_attach_acquire_release_and_handoff_through_the_fleet_routes(
     client: FlaskClient, service: ScreenService
 ) -> None:
-    name = _running_browser(client, service)
+    name = start_browser(client, service)
     assert client.get(f"/browsers/{name}/attach").status_code == 400
     attached = client.get(f"/browsers/{name}/attach", headers=_AGENT_A).get_json()
     assert attached["ok"] is True and attached["attach_url"].startswith("http://127.0.0.1:")
@@ -220,7 +200,7 @@ def test_acquire_on_a_browser_still_launching_says_starting(
 def test_stop_start_close_tab_and_delete_through_the_routes(
     client: FlaskClient, service: ScreenService, fake_cdp_connector: FakeCdpConnector
 ) -> None:
-    name = _running_browser(client, service)
+    name = start_browser(client, service)
     cdp = fake_cdp_connector.clients[0]
     cdp.create_target("https://one.example")
     cdp.create_target("https://two.example")
@@ -243,7 +223,7 @@ def test_a_stack_stop_checkpoints_the_tabs_and_the_browser_comes_back_with_the_s
     fake_cdp_connector: FakeCdpConnector,
     fake_chromium_launcher: FakeChromiumLauncher,
 ) -> None:
-    name = _running_browser(client, service)
+    name = start_browser(client, service)
     fake_cdp_connector.clients[0].create_target("https://kept.example")
     service.stack.stop("quit")
     manifest = service.fleet.manifest_store.read()

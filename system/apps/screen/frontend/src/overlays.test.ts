@@ -1,8 +1,8 @@
 /** The agent overlay names a page held for the human and offers to open or drop it (spec section 4.2). */
 import { describe, expect, it } from "vitest";
 
-import { Overlays } from "./overlays";
-import type { NekoSessionAnswer, ScreenStateDocument } from "./state";
+import { Overlays, mayCancelPendingUrl } from "./overlays";
+import type { ControlDocument, NekoSessionAnswer, ScreenStateDocument } from "./state";
 
 const OWNER: NekoSessionAnswer = { session_id: "s1", token: "tok-1", name: "Josh", is_owner: true };
 const VISITOR: NekoSessionAnswer = { session_id: "s2", token: "tok-2", name: "Mia", is_owner: false };
@@ -74,7 +74,7 @@ describe("Overlays", () => {
     expect(cancelled).toBe(1);
   });
 
-  it("names the held page to a visitor and offers to open it, but not to drop it", () => {
+  it("names the held page to a visitor who does not control and offers to open it, but not to drop it", () => {
     const overlays = new Overlays(
       () => undefined,
       () => undefined,
@@ -90,6 +90,23 @@ describe("Overlays", () => {
     expect(dim.querySelector<HTMLElement>("[data-screen-pending-url]")?.hidden).toBe(false);
     expect(dim.textContent).toContain("Take control and open it");
     expect(dim.querySelector<HTMLButtonElement>("[data-screen-cancel-pending-url]")?.hidden).toBe(true);
+  });
+
+  it("offers Cancel to the sessions the service lets drop a held page", () => {
+    const agentDrives: ControlDocument = state({}).control;
+    expect(mayCancelPendingUrl(agentDrives, OWNER)).toBe(true);
+    expect(mayCancelPendingUrl(agentDrives, VISITOR)).toBe(false);
+    expect(mayCancelPendingUrl(agentDrives, null)).toBe(false);
+    const visitorControls: ControlDocument = {
+      ...agentDrives,
+      controller: "human",
+      human_session_id: VISITOR.session_id,
+      human_name: VISITOR.name,
+      agent_id: null,
+      agent_name: null,
+    };
+    expect(mayCancelPendingUrl(visitorControls, VISITOR)).toBe(true);
+    expect(mayCancelPendingUrl(visitorControls, { ...VISITOR, session_id: "s3" })).toBe(false);
   });
 
   it("lifts the dim once a human holds control, whatever is held", () => {

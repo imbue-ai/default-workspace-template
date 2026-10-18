@@ -76,3 +76,9 @@ File drop lands on the desktop:
 - Dropping files on the viewer now posts them to the service's own `POST /api/drop` (multipart `session_id` and `files`, the controlling session alone, a visitor in control included) instead of neko's `upload/drop`, whose drag emulation never completes on this stack. The service writes them into the Screen's desktop folder, the XDG desktop directory `xfdesktop` shows as icons (`XDG_DESKTOP_DIR` from `~/.config/user-dirs.dirs`, else `~/Desktop`), creating it when missing, keeping each file's name, suffixing a clash (`report-1.pdf`), refusing names with path separators or a leading dot, and answering 413 past 64 MiB for one drop. The strip says where the files landed (`Saved to /home/user/Desktop: report.pdf`).
 
 - `test_screen_integration.py` drops a file through the route in the workspace image and finds it in the desktop folder.
+
+Lease arbitration for the paste and the held page's Cancel:
+
+- `POST /api/clipboard/image` takes multipart `session_id` and `image` and the service accepts it from the session in control alone, so a visitor in control pastes images again; `POST /browsers/<name>/pending-url/cancel` takes `session_id` in its body or query and answers the session in control or the owner (a header-less caller over loopback, an agent or the shell, still works with no session). Both left the owner gate; a visitor's session that does not control gets the lease refusal (403, `only the session in control of the Screen may do this`), and naming the owner's session the owner-gate refusal as before.
+
+- The viewer sends its session id on both calls and offers the held page's Cancel to the sessions the service lets drop it (the session in control, or the owner's); a page is held only while an agent drives, so in practice that is the owner's viewer.

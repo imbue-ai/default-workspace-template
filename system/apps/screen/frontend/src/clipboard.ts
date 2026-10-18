@@ -4,9 +4,10 @@
  * and HTML from neko's clipboard route and writes them locally; the service's ``clipboard`` event says an image is
  * there, which the viewer fetches from neko's image route and writes. Local to remote: on focus and on paste the
  * viewer reads the local clipboard; text and HTML go to neko's clipboard route (its ``clipboard/set`` message
- * carries text alone), an image to the service's ``/api/clipboard/image`` (the owner's route: a visitor's image
- * is refused). A paste that does not cross says so in the strip; the focus sweep stays quiet. A local write needs
- * a focused document, so one that fails is kept for the next focus.
+ * carries text alone), an image to the service's ``/api/clipboard/image`` as this session, which the service
+ * accepts from the session in control alone (a visitor in control included). A paste that does not cross says so
+ * in the strip; the focus sweep stays quiet. A local write needs a focused document, so one that fails is kept for
+ * the next focus.
  */
 
 export const CLIPBOARD_MAX_BYTES = 10 * 1024 * 1024;
@@ -25,8 +26,12 @@ export interface LocalClipboard {
   read(): Promise<{ text: string; html: string; image: Blob | null } | null>;
 }
 
-/** The transport over the service's origin: neko's routes under ``/neko/`` with the session's token. */
-export function serviceClipboardTransport(token: () => string | null): ClipboardTransport {
+/** The transport over the service's origin: neko's routes under ``/neko/`` with the session's token, and the
+ *  service's image route as the session's id. */
+export function serviceClipboardTransport(
+  token: () => string | null,
+  sessionId: () => string | null,
+): ClipboardTransport {
   const headers = (): HeadersInit => {
     const bearer = token();
     return bearer ? { Authorization: `Bearer ${bearer}` } : {};
@@ -53,11 +58,12 @@ export function serviceClipboardTransport(token: () => string | null): Clipboard
       return response.ok;
     },
     async writeRemoteImage(image) {
-      const response = await fetch("/api/clipboard/image", {
-        method: "POST",
-        headers: { "Content-Type": image.type || "image/png" },
-        body: image,
-      });
+      const session = sessionId();
+      if (session === null) return false;
+      const form = new FormData();
+      form.set("session_id", session);
+      form.set("image", image, "clipboard");
+      const response = await fetch("/api/clipboard/image", { method: "POST", body: form });
       return response.ok;
     },
   };

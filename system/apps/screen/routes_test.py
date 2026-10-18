@@ -1,9 +1,11 @@
 """The owner gate over the service's routes: a share admits a visitor to this origin, so every route that acts on
-the Screen outside the lease refuses an identity whose ``owner`` is false, while the viewer's routes keep answering
-one and a header-less (loopback) request keeps reading as the owner."""
+the Screen outside the lease refuses an identity whose ``owner`` is false, while the viewer's routes, where the
+lease arbitrates (a visitor in control pastes, drops files and cancels a held page), keep answering one and a
+header-less (loopback) request keeps reading as the owner."""
 
 import io
 import json
+from pathlib import Path
 from typing import Final
 
 import pytest
@@ -12,13 +14,17 @@ from flask.testing import FlaskClient
 
 from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import CONTEXT_MENU_ROUTE
+from mock_chromium_test import FakeCdpConnector
 from mock_neko_test import FakeNeko
+from screen.browser_routes import CANCEL_PENDING_URL_RULE
 from screen.browser_routes import LAUNCH_BROWSER_PATH
 from screen.desktop_files import MAX_DROP_BYTES
 from screen.proxy import NEKO_PROXY_PREFIX
 from screen.service import ScreenService
 from screen.watch import STOPPED_NOTIFICATION_PATH
+from testing import start_browser
 from testing import start_service_stack
+from workspace_layout.testing import LoopbackShell
 
 _OWNER: Final[dict[str, str]] = {
     "X-Imbue-Identity": json.dumps({"owner": True, "user_id": "u1", "email": "josh@imbue.com"})
@@ -27,6 +33,7 @@ _VISITOR: Final[dict[str, str]] = {
     "X-Imbue-Identity": json.dumps({"owner": False, "user_id": "u2", "email": "mia@example.com"})
 }
 _AGENT: Final[dict[str, str]] = {"X-Mngr-Agent-Id": "chat-a", "X-Mngr-Agent-Name": "Alice"}
+_PNG_HEADER: Final[bytes] = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 
 # Every route a visitor may not call, as (method, the rule, a path under it). The gate answers before the view
 # runs, so no request needs a body or a running Screen.
@@ -38,7 +45,6 @@ _OWNER_ONLY_REQUESTS: Final[tuple[tuple[str, str, str], ...]] = (
     ("GET", "/api/screenshot", "/api/screenshot"),
     ("GET", "/api/windows", "/api/windows"),
     ("POST", "/api/windows/<window_id>/activate", "/api/windows/0x03600001/activate"),
-    ("POST", "/api/clipboard/image", "/api/clipboard/image"),
     ("POST", LAUNCH_BROWSER_PATH, LAUNCH_BROWSER_PATH),
     ("POST", "/api/open-url", "/api/open-url"),
     ("GET", "/browsers", "/browsers"),
@@ -47,14 +53,14 @@ _OWNER_ONLY_REQUESTS: Final[tuple[tuple[str, str, str], ...]] = (
     ("POST", "/browsers/<raw_name>/stop", "/browsers/browser-1/stop"),
     ("POST", "/browsers/<raw_name>/start", "/browsers/browser-1/start"),
     ("POST", "/browsers/<raw_name>/close-tab", "/browsers/browser-1/close-tab"),
-    ("POST", "/browsers/<raw_name>/pending-url/cancel", "/browsers/browser-1/pending-url/cancel"),
     ("GET", "/browsers/<raw_name>/attach", "/browsers/browser-1/attach"),
     ("POST", "/browsers/<raw_name>/acquire", "/browsers/browser-1/acquire"),
     ("POST", "/browsers/<raw_name>/release", "/browsers/browser-1/release"),
     ("POST", "/browsers/<raw_name>/handoff", "/browsers/browser-1/handoff"),
 )
 
-# The rules a visitor may call (the watcher's notification gates itself on loopback).
+# The rules a visitor may call: the viewer's, where the lease arbitrates (the watcher's notification gates itself
+# on loopback).
 _OPEN_RULES: Final[frozenset[str]] = frozenset(
     {
         "/",
@@ -71,7 +77,9 @@ _OPEN_RULES: Final[frozenset[str]] = frozenset(
         "/api/control/return",
         "/api/screen-size",
         "/api/input-seen",
+        "/api/clipboard/image",
         "/api/drop",
+        CANCEL_PENDING_URL_RULE,
         STOPPED_NOTIFICATION_PATH,
         f"{NEKO_PROXY_PREFIX}/<path:upstream_path>",
         f"{NEKO_PROXY_PREFIX}/api/ws",
@@ -232,6 +240,105 @@ def test_a_drop_refuses_bad_names_empty_drops_and_oversize_bodies(client: FlaskC
     )
     assert too_large.status_code == 413
     assert not service.desktop_dir.exists()
+
+
+def _paste(client: FlaskClient, headers: dict[str, str], session_id: str):
+    return client.post(
+        "/api/clipboard/image",
+        data={"session_id": session_id, "image": (io.BytesIO(_PNG_HEADER), "clip", "image/png")},
+        content_type="multipart/form-data",
+        headers=headers,
+    )
+
+
+def _hold_a_page(client: FlaskClient, service: ScreenService) -> str:
+    """A browser with a page held for the human while an agent drives; answers the browser's name."""
+    name = start_browser(client, service)
+    assert client.post(f"/browsers/{name}/acquire", json={}, headers=_AGENT).get_json()["ok"] is True
+    held = client.post("/api/open-url", json={"client_id": "c-link", "url": "http://localhost:3000/"})
+    assert held.status_code == 200, held.get_json()
+    assert client.get("/api/state").get_json()["chromium"]["pending_url"] == "http://localhost:3000/"
+    return name
+
+
+def test_a_visitor_in_control_pastes_an_image_and_may_cancel_a_held_page(
+    client: FlaskClient, service: ScreenService, fake_xclip: Path, loopback_shell: LoopbackShell
+) -> None:
+    name = start_browser(client, service)
+    visitor = _session(client, _VISITOR)
+    assert (
+        client.post("/api/control/take", json={"session_id": visitor["session_id"]}, headers=_VISITOR).status_code
+        == 200
+    )
+    pasted = _paste(client, _VISITOR, visitor["session_id"])
+    assert pasted.status_code == 204, pasted.get_json()
+    assert (fake_xclip.parent / "xclip-record" / "set.bytes").read_bytes() == _PNG_HEADER
+    # A page is held only while an agent drives, so a human in control finds none to drop; the verb is theirs anyway.
+    cancelled = client.post(
+        f"/browsers/{name}/pending-url/cancel", json={"session_id": visitor["session_id"]}, headers=_VISITOR
+    )
+    assert cancelled.status_code == 200, cancelled.get_json()
+    assert cancelled.get_json() == {"cancelled": False}
+
+
+def test_a_visitor_who_does_not_control_gets_the_lease_refusal(
+    client: FlaskClient,
+    service: ScreenService,
+    fake_xclip: Path,
+    fake_cdp_connector: FakeCdpConnector,
+    loopback_shell: LoopbackShell,
+) -> None:
+    name = _hold_a_page(client, service)
+    visitor = _session(client, _VISITOR)
+    owner = _session(client, _OWNER)
+    refused_paste = _paste(client, _VISITOR, visitor["session_id"])
+    assert refused_paste.status_code == 403
+    assert refused_paste.get_json()["detail"] == "only the session in control of the Screen may do this"
+    assert not (fake_xclip.parent / "xclip-record" / "set.bytes").exists()
+    for body, query in (
+        ({"session_id": visitor["session_id"]}, ""),
+        ({}, f"?session_id={visitor['session_id']}"),
+        ({}, ""),
+    ):
+        refused_cancel = client.post(f"/browsers/{name}/pending-url/cancel{query}", json=body, headers=_VISITOR)
+        assert refused_cancel.status_code == 403, (body, query)
+        assert refused_cancel.get_json()["detail"] == "only the session in control of the Screen may do this"
+        assert refused_cancel.get_json()["error"] == refused_cancel.get_json()["detail"]
+    # Naming the owner's session is the owner-gate refusal, as on every viewer route.
+    as_owner = client.post(
+        f"/browsers/{name}/pending-url/cancel", json={"session_id": owner["session_id"]}, headers=_VISITOR
+    )
+    assert as_owner.status_code == 403
+    assert as_owner.get_json()["detail"] == "this route is the workspace owner's"
+    assert _paste(client, _VISITOR, owner["session_id"]).get_json()["detail"] == "this route is the workspace owner's"
+    assert client.get("/api/state").get_json()["chromium"]["pending_url"] == "http://localhost:3000/"
+    assert fake_cdp_connector.clients[0].created == []
+
+
+def test_the_owner_cancels_a_held_page_with_or_without_a_session(
+    client: FlaskClient, service: ScreenService, loopback_shell: LoopbackShell
+) -> None:
+    name = _hold_a_page(client, service)
+    # A header-less caller (an agent or the shell over loopback) carries no session and still may.
+    assert client.post(f"/browsers/{name}/pending-url/cancel").get_json() == {"cancelled": True}
+    assert (
+        client.post("/api/open-url", json={"client_id": "c-link", "url": "http://localhost:3000/"}).status_code == 200
+    )
+    # The owner's own viewer names its session, which does not control while the agent drives.
+    owner = _session(client, _OWNER)
+    with_session = client.post(
+        f"/browsers/{name}/pending-url/cancel", json={"session_id": owner["session_id"]}, headers=_OWNER
+    )
+    assert with_session.get_json() == {"cancelled": True}
+    assert (
+        client.post("/api/open-url", json={"client_id": "c-link", "url": "http://localhost:3000/"}).status_code == 200
+    )
+    by_query = client.post(f"/browsers/{name}/pending-url/cancel?session_id={owner['session_id']}", headers=_OWNER)
+    assert by_query.get_json() == {"cancelled": True}
+    # A paste, unlike the cancel, is the controller's alone: the owner's session is not in control.
+    refused_paste = _paste(client, _OWNER, owner["session_id"])
+    assert refused_paste.status_code == 403
+    assert refused_paste.get_json()["detail"] == "only the session in control of the Screen may do this"
 
 
 def test_a_size_report_with_no_session_is_the_owners_alone(

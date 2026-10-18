@@ -22,6 +22,7 @@ from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import CONTEXT_MENU_ROUTE
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import SHELL_CONTEXT_MENU_PATH
+from screen.browser_routes import CANCEL_PENDING_URL_RULE
 from screen.browser_routes import LAUNCH_BROWSER_PATH
 from screen.browser_routes import OPEN_URL_PATH
 from screen.browser_routes import build_browser_blueprint
@@ -42,11 +43,15 @@ from screen.identity import IDENTITY_HEADER
 from screen.identity import parse_identity_header
 from screen.primitives import AgentId
 from screen.primitives import DroppedFileName
-from screen.primitives import NekoSessionId
 from screen.primitives import RunCommand
 from screen.primitives import XWindowId
 from screen.proxy import NEKO_PROXY_PREFIX
 from screen.proxy import NekoProxy
+from screen.route_guards import VISITOR_REFUSAL
+from screen.route_guards import describe_controller_refusal
+from screen.route_guards import describe_visitor_refusal
+from screen.route_guards import is_owner_request
+from screen.route_guards import session_id_from_request
 from screen.service import DEFAULT_SCREENSHOT_QUALITY
 from screen.service import ScreenService
 from screen.watch import STOPPED_NOTIFICATION_PATH
@@ -77,7 +82,8 @@ _NOT_BUILT_PAGE: Final[str] = (
 
 # A share admits a visitor to the whole origin, so the routes that act on the Screen outside the lease refuse one:
 # they are the owner's and the agents' (who reach the service over loopback with no identity header), while the
-# viewer's routes, where the lease arbitrates, stay open. Matched on the path and everything under it.
+# viewer's routes, where the lease arbitrates, stay open. Matched on the path and everything under it, except the
+# rules below, which the lease arbitrates although they sit under an owner-only prefix.
 _OWNER_ONLY_PATH_PREFIXES: Final[tuple[str, ...]] = (
     "/api/run",
     "/api/control/acquire",
@@ -85,26 +91,21 @@ _OWNER_ONLY_PATH_PREFIXES: Final[tuple[str, ...]] = (
     "/api/control/handoff",
     "/api/screenshot",
     "/api/windows",
-    "/api/clipboard/image",
     LAUNCH_BROWSER_PATH,
     OPEN_URL_PATH,
     "/browsers",
 )
-_VISITOR_REFUSAL: Final[str] = "this route is the workspace owner's"
-_CONTROLLER_REFUSAL: Final[str] = "only the session in control of the Screen may do this"
-# The multipart fields of a drop: the dropping session and its files.
-_DROP_SESSION_FIELD: Final[str] = "session_id"
+# Rules under an owner-only prefix that the lease arbitrates instead (a session in control, or the owner).
+_LEASE_ARBITRATED_RULES: Final[frozenset[str]] = frozenset({CANCEL_PENDING_URL_RULE})
+# The multipart fields of a drop and of a pasted image, beside ``session_id``.
 _DROP_FILES_FIELD: Final[str] = "files"
+_CLIPBOARD_IMAGE_FIELD: Final[str] = "image"
 
 
 def _error(detail: str, status: int) -> Response:
     response = jsonify({"detail": detail, "error": detail})
     response.status_code = status
     return response
-
-
-def _is_owner_request() -> bool:
-    return parse_identity_header(request.headers.get(IDENTITY_HEADER)).owner
 
 
 def _is_owner_only_path(path: str) -> bool:
@@ -123,32 +124,11 @@ def _agent_identity() -> tuple[AgentId | None, str | None]:
     return (AgentId(raw_id) if raw_id else None), name
 
 
-def _session_id_from_body() -> NekoSessionId | None:
-    raw = _json_body().get("session_id")
-    return NekoSessionId(raw) if isinstance(raw, str) and raw else None
-
-
-def _session_id_from_form() -> NekoSessionId | None:
-    raw = request.form.get(_DROP_SESSION_FIELD, "")
-    return NekoSessionId(raw) if raw else None
-
-
 def _upload_size(upload: FileStorage) -> int:
     upload.stream.seek(0, 2)
     size = upload.stream.tell()
     upload.stream.seek(0)
     return size
-
-
-def _visitor_refusal_for_session(service: ScreenService, session_id: NekoSessionId) -> Response | None:
-    """A visitor acts only as a visitor's session: naming the owner's, whose id the state document carries while
-    it controls, is refused."""
-    if _is_owner_request():
-        return None
-    session = service.known_session(session_id)
-    if session is not None and session.is_owner:
-        return _error(_VISITOR_REFUSAL, HTTP_FORBIDDEN)
-    return None
 
 
 def _is_loopback_request() -> bool:
@@ -164,8 +144,10 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.before_request
     def refuse_visitors_on_owner_routes() -> ResponseReturnValue | None:
-        if _is_owner_only_path(request.path) and not _is_owner_request():
-            return _error(_VISITOR_REFUSAL, HTTP_FORBIDDEN)
+        if request.url_rule is not None and request.url_rule.rule in _LEASE_ARBITRATED_RULES:
+            return None
+        if _is_owner_only_path(request.path) and not is_owner_request():
+            return _error(VISITOR_REFUSAL, HTTP_FORBIDDEN)
         return None
 
     # the page and the shell's modules
@@ -265,12 +247,12 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.post("/api/control/take")
     def take_control() -> ResponseReturnValue:
-        session_id = _session_id_from_body()
+        session_id = session_id_from_request()
         if session_id is None:
             return _error("session_id is required", HTTP_BAD_REQUEST)
-        refusal = _visitor_refusal_for_session(service, session_id)
+        refusal = describe_visitor_refusal(service, session_id)
         if refusal is not None:
-            return refusal
+            return _error(refusal, HTTP_FORBIDDEN)
         if service.stack.lifecycle != Lifecycle.RUNNING:
             return _error("the Screen is not running", HTTP_CONFLICT)
         if not service.take_control(session_id):
@@ -279,12 +261,12 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.post("/api/control/return")
     def return_control() -> ResponseReturnValue:
-        session_id = _session_id_from_body()
+        session_id = session_id_from_request()
         if session_id is None:
             return _error("session_id is required", HTTP_BAD_REQUEST)
-        refusal = _visitor_refusal_for_session(service, session_id)
+        refusal = describe_visitor_refusal(service, session_id)
         if refusal is not None:
-            return refusal
+            return _error(refusal, HTTP_FORBIDDEN)
         returned = service.return_control(session_id)
         return jsonify({"ok": returned, **service.state_document()["control"]})
 
@@ -325,17 +307,17 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
             return _error("width and height must be positive integers", HTTP_BAD_REQUEST)
         if service.stack.lifecycle != Lifecycle.RUNNING:
             return _error("the Screen is not running", HTTP_CONFLICT)
-        session_id = _session_id_from_body()
+        session_id = session_id_from_request()
         current = service.screen_size
         # A viewer's report counts only while its session controls the Screen; a report with no session (the
         # ``screen size`` command) is the controller's by definition (spec sections 7.2 and 17), so only the owner
         # may send one.
-        if session_id is None and not _is_owner_request():
-            return _error(_VISITOR_REFUSAL, HTTP_FORBIDDEN)
+        if session_id is None and not is_owner_request():
+            return _error(VISITOR_REFUSAL, HTTP_FORBIDDEN)
         if session_id is not None:
-            refusal = _visitor_refusal_for_session(service, session_id)
+            refusal = describe_visitor_refusal(service, session_id)
             if refusal is not None:
-                return refusal
+                return _error(refusal, HTTP_FORBIDDEN)
         if session_id is not None and not service.is_controller_session(session_id):
             return jsonify(
                 {
@@ -354,12 +336,12 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.post("/api/input-seen")
     def input_seen() -> ResponseReturnValue:
-        session_id = _session_id_from_body()
+        session_id = session_id_from_request()
         if session_id is None:
             return _error("session_id is required", HTTP_BAD_REQUEST)
-        refusal = _visitor_refusal_for_session(service, session_id)
+        refusal = describe_visitor_refusal(service, session_id)
         if refusal is not None:
-            return refusal
+            return _error(refusal, HTTP_FORBIDDEN)
         if not service.note_input(session_id):
             return _error("no such session", HTTP_NOT_FOUND)
         return Response(status=HTTP_NO_CONTENT)
@@ -368,12 +350,24 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.post("/api/clipboard/image")
     def clipboard_image() -> ResponseReturnValue:
-        mime = (request.content_type or "").split(";")[0].strip().lower()
-        if not mime.startswith("image/"):
-            return _error("the body must be an image (Content-Type image/...)", HTTP_UNSUPPORTED_MEDIA_TYPE)
+        """The controller's pasted image (spec section 13): multipart ``session_id`` and ``image``."""
         if request.content_length is not None and request.content_length > MAX_CLIPBOARD_BYTES:
             return _error(f"the image is over the {MAX_CLIPBOARD_BYTES} byte cap", HTTP_PAYLOAD_TOO_LARGE)
-        data = request.get_data()
+        if service.stack.lifecycle != Lifecycle.RUNNING:
+            return _error("the Screen is not running", HTTP_CONFLICT)
+        session_id = session_id_from_request()
+        if session_id is None:
+            return _error("session_id is required", HTTP_BAD_REQUEST)
+        refusal = describe_controller_refusal(service, session_id)
+        if refusal is not None:
+            return _error(refusal, HTTP_FORBIDDEN)
+        upload = request.files.get(_CLIPBOARD_IMAGE_FIELD)
+        if upload is None:
+            return _error(f"the {_CLIPBOARD_IMAGE_FIELD} part is missing", HTTP_BAD_REQUEST)
+        mime = upload.mimetype.lower()
+        if not mime.startswith("image/"):
+            return _error("the image part must be an image (image/...)", HTTP_UNSUPPORTED_MEDIA_TYPE)
+        data = upload.read()
         if len(data) == 0:
             return _error("the image is empty", HTTP_BAD_REQUEST)
         if len(data) > MAX_CLIPBOARD_BYTES:
@@ -394,14 +388,12 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
             return _error(f"the files are over the {MAX_DROP_BYTES} byte cap", HTTP_PAYLOAD_TOO_LARGE)
         if service.stack.lifecycle != Lifecycle.RUNNING:
             return _error("the Screen is not running", HTTP_CONFLICT)
-        session_id = _session_id_from_form()
+        session_id = session_id_from_request()
         if session_id is None:
             return _error("session_id is required", HTTP_BAD_REQUEST)
-        refusal = _visitor_refusal_for_session(service, session_id)
+        refusal = describe_controller_refusal(service, session_id)
         if refusal is not None:
-            return refusal
-        if not service.is_controller_session(session_id):
-            return _error(_CONTROLLER_REFUSAL, HTTP_FORBIDDEN)
+            return _error(refusal, HTTP_FORBIDDEN)
         uploads = request.files.getlist(_DROP_FILES_FIELD)
         if not uploads:
             return _error("no files were sent", HTTP_BAD_REQUEST)

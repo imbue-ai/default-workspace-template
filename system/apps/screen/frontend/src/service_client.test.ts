@@ -2,7 +2,13 @@
 /** What a refused service answer says about itself, and how a refused sign-in reaches the viewer. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ServiceRequestError, describeRefusal, postSession, postTakeControl } from "./service_client";
+import {
+  ServiceRequestError,
+  describeRefusal,
+  postCancelPendingUrl,
+  postSession,
+  postTakeControl,
+} from "./service_client";
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -43,6 +49,24 @@ describe("postSession", () => {
       vi.fn(() => Promise.resolve(jsonResponse(200, session))),
     );
     expect(await postSession()).toEqual(session);
+  });
+});
+
+describe("postCancelPendingUrl", () => {
+  it("names the browser in the path and this session in the body", async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init: RequestInit) => {
+        calls.push({ url, init });
+        return Promise.resolve(jsonResponse(200, { cancelled: true }));
+      }),
+    );
+    await postCancelPendingUrl("browser-1", "s2");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("/browsers/browser-1/pending-url/cancel");
+    expect(calls[0].init.method).toBe("POST");
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ session_id: "s2" });
   });
 });
 

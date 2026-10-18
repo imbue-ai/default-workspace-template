@@ -289,15 +289,15 @@ All on `127.0.0.1:8090`, identity from `X-Imbue-Identity`:
 | `GET /api/screenshot` | section 6.4 |
 | `POST /api/run` | `screen run` (section 17) |
 | `GET /api/windows`, `POST /api/windows/<id>/activate` | the X window list and raise, through `wmctrl` |
-| `POST /api/clipboard/image` | local-to-remote image (section 13) |
+| `POST /api/clipboard/image` | local-to-remote image (section 13), multipart `session_id` and `image`, the session in control alone |
 | `POST /api/drop` | files dropped on the viewer (multipart `session_id` and `files`, at most 64 MiB together), written into the desktop folder (section 4.3) |
 | `POST /launch/browser` | the `browser` launch path: ensure Chromium, open the start page, answer `{"path": "/"}` |
 | `POST /api/open-url` | the `open:url` handler: a tab in Chromium, raised, with the held-URL rule while an agent drives |
-| `/browsers/...`, `GET /json/version` and the CDP proxy | the migrated fleet API (section 16) |
+| `/browsers/...`, `GET /json/version` and the CDP proxy | the migrated fleet API (section 16); `POST /browsers/<name>/pending-url/cancel` takes `session_id` in its body or query and answers the session in control or the owner, with or without a session |
 | `/neko/...` | the reverse proxy to neko, HTTP and WebSocket, with the service's own rate limit on `/neko/api/login` |
 
-A visitor (an identity whose `owner` is false, section 4.6) may call only the viewer's routes, where the lease arbitrates: the page, `/api/state`, `/api/start`, `/api/connect-info`, `/api/ws`, `/api/session`, the human verbs, `/api/input-seen`, `/api/screen-size` and `/api/drop` with a visitor's session id (the owner's session, whose id the state document carries while it controls, answers a visitor 403; a drop needs the session in control), and `/neko/...`.
-Every other route, `/api/run`, the agent verbs, the screenshot, the window tools, the clipboard, a session-less `/api/screen-size`, `/launch/browser`, `/api/open-url` and the whole `/browsers` API, answers a visitor 403; a request with no header is the owner (section 6.3), so agents and the shell, which reach the service over loopback, are not affected.
+A visitor (an identity whose `owner` is false, section 4.6) may call only the viewer's routes, where the lease arbitrates: the page, `/api/state`, `/api/start`, `/api/connect-info`, `/api/ws`, `/api/session`, the human verbs, `/api/input-seen`, `/api/screen-size`, `/api/clipboard/image`, `/api/drop` and `/browsers/<name>/pending-url/cancel` with a visitor's session id (the owner's session, whose id the state document carries while it controls, answers a visitor 403; a paste and a drop need the session in control, and a cancel the session in control or the owner), and `/neko/...`.
+Every other route, `/api/run`, the agent verbs, the screenshot, the window tools, a session-less `/api/screen-size`, `/launch/browser`, `/api/open-url` and the rest of the `/browsers` API, answers a visitor 403; a request with no header is the owner (section 6.3), so agents and the shell, which reach the service over loopback, are not affected.
 
 ### 10.2 Events to viewers
 
@@ -342,7 +342,7 @@ Neko's relative-motion support is verified in the implementation; without it the
 ## 13. Clipboard
 
 - Remote to local: on `clipboard/updated` the viewer reads text and HTML from the event and writes them with the Clipboard API; when the service's `clipboard` event says an image is present, the viewer fetches `/neko/api/room/clipboard/image.png` and writes it.
-- Local to remote: on focus and on paste, while this viewer holds control, the viewer reads the local clipboard; text and HTML go through `clipboard/set`; an image goes to `POST /api/clipboard/image`, which the service places on the X clipboard with the migrated `xclipboard` module.
+- Local to remote: on focus and on paste, while this viewer holds control, the viewer reads the local clipboard; text and HTML go through `clipboard/set`; an image goes to `POST /api/clipboard/image` as this session (multipart `session_id` and `image`), which the service accepts from the session in control alone and places on the X clipboard with the migrated `xclipboard` module.
 - The keyboard map: the viewer sends `keyboard/map` once per session from `navigator.language` and the layout it detects, defaulting to `us`.
 
 ## 14. Mobile

@@ -126,7 +126,10 @@ class Viewer {
     );
     this.resizeReporter = new ResizeReporter((size) => this.sendScreenSize(size.width, size.height), windowScheduler);
     this.clipboard = new ClipboardBridge(
-      serviceClipboardTransport(() => this.session?.token ?? null),
+      serviceClipboardTransport(
+        () => this.session?.token ?? null,
+        () => this.session?.session_id ?? null,
+      ),
       navigatorClipboard,
       (message) => this.showClipboardStatus(message),
     );
@@ -487,8 +490,8 @@ class Viewer {
 
   private cancelPendingUrl(): void {
     const name = this.state?.chromium.name;
-    if (!name) return;
-    void postCancelPendingUrl(name);
+    if (!name || this.session === null) return;
+    void postCancelPendingUrl(name, this.session.session_id);
   }
 }
 

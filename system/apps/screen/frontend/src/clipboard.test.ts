@@ -9,8 +9,8 @@ interface Harness {
   log: string[];
 }
 
-/** ``isRemoteRefusing`` makes every write to the Screen fail, as the service's owner-only image route does for a
- *  visitor. */
+/** ``isRemoteRefusing`` makes every write to the Screen fail, as the service's image route does for a session that
+ *  does not hold control. */
 function build(isRemoteRefusing = false): Harness {
   const remote = { text: "", html: "", image: null as Blob | null };
   const local = { text: "", html: "", image: null as Blob | null, isFocused: true };

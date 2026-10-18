@@ -24,6 +24,11 @@ from screen.service import ScreenService
 from screen.stack import ScreenStack
 from screen.xclipboard import XClipboard
 from testing import ManualClock
+from workspace_layout.shell_url import ENV_SHELL_URL
+from workspace_layout.testing import FAKE_WINDOW_ID
+from workspace_layout.testing import LoopbackShell
+from workspace_layout.testing import desktop_answer
+from workspace_layout.testing import fake_desktop
 
 
 @pytest.fixture
@@ -175,6 +180,16 @@ def service(
     built.start()
     yield built
     built.shutdown("the test ended")
+
+
+@pytest.fixture
+def loopback_shell(monkeypatch: pytest.MonkeyPatch) -> Iterator[LoopbackShell]:
+    """A shell on loopback that answers every op as a raised window on the home desktop, named to the service."""
+    with LoopbackShell(
+        op_answer={**desktop_answer(fake_desktop("home"), "c1", FAKE_WINDOW_ID), "shown": "raised"}
+    ) as shell:
+        monkeypatch.setenv(ENV_SHELL_URL, shell.url)
+        yield shell
 
 
 @pytest.fixture

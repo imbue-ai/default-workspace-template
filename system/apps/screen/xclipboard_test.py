@@ -1,5 +1,6 @@
 """The X clipboard bridge over a fake ``xclip``: what is placed, what is read, and the route that places an image."""
 
+import io
 import json
 from pathlib import Path
 
@@ -67,11 +68,25 @@ def test_parse_targets_handles_an_unreadable_selection() -> None:
     assert parse_targets(b"UTF8_STRING image/bmp").image_target == "image/bmp"
 
 
-def test_the_clipboard_image_route_places_the_image_on_the_display(
+def _paste(client: FlaskClient, session_id: str, image: bytes, mime: str):
+    return client.post(
+        "/api/clipboard/image",
+        data={"session_id": session_id, "image": (io.BytesIO(image), "clip", mime)},
+        content_type="multipart/form-data",
+    )
+
+
+def _controlling_session(client: FlaskClient) -> str:
+    session = client.post("/api/session").get_json()
+    assert client.post("/api/control/take", json={"session_id": session["session_id"]}).status_code == 200
+    return session["session_id"]
+
+
+def test_the_clipboard_image_route_places_the_controllers_image_on_the_display(
     client: FlaskClient, service: ScreenService, fake_xclip: Path
 ) -> None:
     start_service_stack(service)
-    answer = client.post("/api/clipboard/image", data=_PNG_HEADER, content_type="image/png")
+    answer = _paste(client, _controlling_session(client), _PNG_HEADER, "image/png")
     assert answer.status_code == 204, answer.get_json()
     record = fake_xclip.parent / "xclip-record"
     assert (record / "set.target").read_text() == "image/png"
@@ -79,12 +94,20 @@ def test_the_clipboard_image_route_places_the_image_on_the_display(
 
 
 def test_the_clipboard_image_route_validates_its_body(client: FlaskClient, service: ScreenService) -> None:
-    assert client.post("/api/clipboard/image", data=_PNG_HEADER, content_type="image/png").status_code == 409
+    assert _paste(client, "s1", _PNG_HEADER, "image/png").status_code == 409
     start_service_stack(service)
-    assert client.post("/api/clipboard/image", data=b"hello", content_type="text/plain").status_code == 415
-    assert client.post("/api/clipboard/image", data=b"", content_type="image/png").status_code == 400
-    too_large = client.post("/api/clipboard/image", data=b"x" * (MAX_CLIPBOARD_BYTES + 1), content_type="image/png")
-    assert too_large.status_code == 413
+    session_id = _controlling_session(client)
+    no_session = client.post(
+        "/api/clipboard/image",
+        data={"image": (io.BytesIO(_PNG_HEADER), "clip", "image/png")},
+        content_type="multipart/form-data",
+    )
+    assert no_session.status_code == 400
+    no_part = client.post("/api/clipboard/image", data={"session_id": session_id}, content_type="multipart/form-data")
+    assert no_part.status_code == 400
+    assert _paste(client, session_id, b"hello", "text/plain").status_code == 415
+    assert _paste(client, session_id, b"", "image/png").status_code == 400
+    assert _paste(client, session_id, b"x" * (MAX_CLIPBOARD_BYTES + 1), "image/png").status_code == 413
 
 
 def test_an_image_on_the_remote_clipboard_is_announced_to_viewers(service: ScreenService) -> None:

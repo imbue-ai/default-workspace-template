@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 from typing import Final
 
+from flask.testing import FlaskClient
 from pydantic import Field
 from pydantic import PrivateAttr
 from websockets.exceptions import ConnectionClosed
@@ -70,6 +71,16 @@ def start_service_stack(service: ScreenService) -> None:
     """Start the stack through its on-demand path and wait until it runs."""
     service.ensure_started()
     assert wait_until(lambda: service.stack.lifecycle == Lifecycle.RUNNING), service.stack.stop_reason
+
+
+def start_browser(client: FlaskClient, service: ScreenService) -> str:
+    """Start the stack and the one browser through the launch path and wait until Chromium runs; its name."""
+    answer = client.post("/launch/browser", json={"client_id": "c1"})
+    assert answer.status_code == 200, answer.get_json()
+    browser = service.fleet.the_browser()
+    assert browser is not None
+    assert wait_until(lambda: browser.is_running), browser.lifecycle
+    return str(browser.name)
 
 
 class FakeChromiumServer(MutableModel):

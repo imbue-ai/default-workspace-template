@@ -25,6 +25,11 @@ from screen.primitives import AbsoluteHttpUrl
 from screen.primitives import AgentId
 from screen.primitives import BrowserName
 from screen.primitives import LocalHttpUrl
+from screen.primitives import NekoSessionId
+from screen.route_guards import CONTROLLER_REFUSAL
+from screen.route_guards import describe_visitor_refusal
+from screen.route_guards import is_owner_request
+from screen.route_guards import session_id_from_request
 from screen.service import ScreenService
 from workspace_layout.client import ShellLayoutClient
 from workspace_layout.errors import InvalidLayoutValueError
@@ -36,6 +41,9 @@ from workspace_layout.shell_url import shell_base_url
 
 LAUNCH_BROWSER_PATH: Final[str] = "/launch/browser"
 OPEN_URL_PATH: Final[str] = "/api/open-url"
+# The one fleet rule the lease arbitrates rather than the owner gate: dropping a held page is the controller's or
+# the owner's (section 4.2), and the owner over loopback carries no session.
+CANCEL_PENDING_URL_RULE: Final[str] = "/browsers/<raw_name>/pending-url/cancel"
 # The launch path's one parameter (the manifest's ``params``): the start page, posted by the shell beside its own
 # envelope fields, which are ignored here.
 START_URL_PARAM: Final[str] = "url"
@@ -45,6 +53,7 @@ SCREEN_PAGE_PATH: Final[str] = "/"
 _SHELL_SHOW_TIMEOUT_SECONDS: Final[float] = 5.0
 
 HTTP_BAD_REQUEST: Final[int] = 400
+HTTP_FORBIDDEN: Final[int] = 403
 HTTP_NOT_FOUND: Final[int] = 404
 HTTP_CONFLICT: Final[int] = 409
 HTTP_BAD_GATEWAY: Final[int] = 502
@@ -247,8 +256,23 @@ def build_browser_blueprint(service: ScreenService) -> Blueprint:
             return _error({"error": str(e)}, HTTP_CONFLICT)
         return jsonify({"closed": True})
 
-    @blueprint.post("/browsers/<raw_name>/pending-url/cancel")
+    def _describe_cancel_refusal(session_id: NekoSessionId | None) -> str | None:
+        if session_id is None:
+            return None if is_owner_request() else CONTROLLER_REFUSAL
+        visitor_refusal = describe_visitor_refusal(service, session_id)
+        if visitor_refusal is not None:
+            return visitor_refusal
+        if is_owner_request() or service.is_controller_session(session_id):
+            return None
+        return CONTROLLER_REFUSAL
+
+    @blueprint.post(CANCEL_PENDING_URL_RULE)
     def cancel_pending_url(raw_name: str) -> ResponseReturnValue:
+        """Drop the held page: the session in control may (``session_id`` in the body or the query), and so may the
+        owner, with or without a session, since agents and the shell reach the service over loopback with none."""
+        refusal = _describe_cancel_refusal(session_id_from_request())
+        if refusal is not None:
+            return _error({"detail": refusal, "error": refusal}, HTTP_FORBIDDEN)
         browser = _resolve(raw_name)
         if isinstance(browser, Response):
             return browser

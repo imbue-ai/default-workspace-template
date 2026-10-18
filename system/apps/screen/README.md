@@ -19,12 +19,13 @@ demand and the `screen-watch` event listener ends them together.
 Identity comes from `X-Imbue-Identity` (a header-less request came over loopback and is the
 owner). A visitor, an identity whose `owner` is false, may use only the viewer's routes (the
 page and its assets, `/health`, `/api/state`, `/api/start`, `/api/connect-info`, `/api/ws`,
-`/api/session`, `/api/control/take` and `/return`, `/api/input-seen`, `/api/screen-size` and
-`/api/drop` with a visitor's session id, and `/neko/`), where the lease arbitrates; naming the owner's
-session on those (its id is in the state document while the owner controls) answers a visitor
-403, and so does every other route (`/api/run`, the agent verbs, the screenshot, the window
-tools, the clipboard, a session-less `/api/screen-size`, `/launch/browser`, `/api/open-url`
-and the whole `/browsers` API).
+`/api/session`, `/api/control/take` and `/return`, `/api/input-seen`, `/api/screen-size`,
+`/api/clipboard/image`, `/api/drop` and `/browsers/<name>/pending-url/cancel` with a visitor's
+session id, and `/neko/`), where the lease arbitrates: a paste and a drop need the session in
+control, a cancel the session in control or the owner. Naming the owner's session on those (its
+id is in the state document while the owner controls) answers a visitor 403, and so does every
+other route (`/api/run`, the agent verbs, the screenshot, the window tools, a session-less
+`/api/screen-size`, `/launch/browser`, `/api/open-url` and the rest of the `/browsers` API).
 
 - `GET /`: the viewer page (the frontend's build, `src/screen/static/index.html`; a
   placeholder until it is built), with its bundle under `/assets/`. A page load starts
@@ -52,9 +53,9 @@ and the whole `/browsers` API).
   stack's life and forgotten when it ends.
 - `POST /api/input-seen`, body `{"session_id"}`: the viewer's input relay reporting
   activity (throttled to one per two seconds client-side), the profile chooser's clock.
-- `POST /api/clipboard/image`, the body an image (`Content-Type: image/...`, at most 10
-  MiB): placed on the X clipboard of `:99` with `xclip` (local to remote, spec section
-  13).
+- `POST /api/clipboard/image`, multipart `session_id` and `image` (an `image/...` part of at
+  most 10 MiB): the controller's pasted image, placed on the X clipboard of `:99` with `xclip`
+  (local to remote, spec section 13). A session that does not control the Screen is refused.
 - `POST /api/drop`, multipart `session_id` and `files` (at most 64 MiB together, else 413): the
   controller's dropped files, written into the Screen's desktop folder (below) under their own
   names (a clash takes `-1`, `-2`, ...; a name with a path separator or a leading dot is refused);
@@ -125,7 +126,9 @@ named one (400 for a bad name or URL, 409 for a duplicate or a full fleet, 503 w
 Chromium is installing); `DELETE /browsers/<name>` ends it and deletes its profile;
 `POST .../stop` and `.../start` end and relaunch Chromium with the tabs kept;
 `POST .../close-tab` closes the tab in front (the last tab is replaced with a blank one
-so the window stays); `POST .../pending-url/cancel` drops a held page; `GET .../attach`
+so the window stays); `POST .../pending-url/cancel` drops a held page (`session_id` in the
+body or the query: the session in control may, and so may the owner, with or without a
+session, since agents and the shell call it over loopback with none); `GET .../attach`
 issues an agent its attach URL; `POST .../acquire`, `.../release` and `.../handoff` are
 the Screen's lease verbs under the fleet's paths, so the fleet CLI's exit codes hold.
 
@@ -212,8 +215,9 @@ session alone and with text only, so the directions are:
   focus runs on the next focus.
 - Local to remote: on focus and on paste, while this viewer holds control, the viewer
   reads the local clipboard; text and HTML go to neko's `POST /api/room/clipboard` (its
-  `clipboard/set` message drops the HTML), an image to `POST /api/clipboard/image`, which
-  is the owner's route (a visitor's image is refused). A paste chord (Ctrl+V, Cmd+V) is
+  `clipboard/set` message drops the HTML), an image to `POST /api/clipboard/image` as this
+  session, which the service accepts from the session in control alone (a visitor in control
+  included). A paste chord (Ctrl+V, Cmd+V) is
   left to the browser so its `paste` event carries the data; once the remote clipboard
   holds it the viewer taps V with Ctrl held on the remote, and a paste that did not cross
   says so in the strip. What was just received is never echoed back, by content hash.
