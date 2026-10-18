@@ -354,14 +354,14 @@ committed branch, so commit first), and Playwright drives it over CDP to open th
 frame, take control, type into a terminal on the Screen, open the browser launch path with a URL,
 close the window with the stack still running, and quit with everything gone. It needs the mngr
 monorepo (synced, with Electron installed under `apps/minds`), Docker on this machine, a display
-(the Electron window appears on it), and the mngr-internal token for the image's build; it skips
-at collection without `MNGR_WORKTREE`, so CI never runs it. Everything it makes is torn down at the
-end (the workspace through `mngr destroy`, the app's processes, the throwaway minds root under
-pytest's temporary directory), and its screenshots are left under that directory for a look:
+(the Electron window appears on it), and `MNGR_INTERNAL_GIT_TOKEN` in the environment (the
+read-only credential for the private mngr repo the image's build needs; the mngr monorepo's
+`apps/minds/docs/dwt-mngr-pin.md` says where it comes from); it skips at collection without
+`MNGR_WORKTREE`, so CI never runs it. Everything it makes is torn down at the end (the workspace
+through `mngr destroy`, the app's processes, the throwaway minds root under pytest's temporary
+directory), and its screenshots are left under that directory for a look:
 
 ```bash
-export VAULT_ADDR=https://vault-cluster-public-vault-df29b16f.9b573ab7.z1.hashicorp.cloud:8200 VAULT_NAMESPACE=admin
-export MNGR_INTERNAL_GIT_TOKEN="$(vault kv get -field=value secrets/minds/dev/mngr-internal-git/MNGR_INTERNAL_GIT_TOKEN)"
 MNGR_WORKTREE=/path/to/mngr uv run --no-sync pytest -q -p no:cacheprovider \
   system/apps/screen/test_screen_acceptance.py --basetemp=/var/tmp/screen-acceptance
 ```
