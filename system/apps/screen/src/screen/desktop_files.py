@@ -85,6 +85,9 @@ def save_dropped_file(directory: Path, name: DroppedFileName, stream: IO[bytes])
             with os.fdopen(descriptor, "wb") as output:
                 shutil.copyfileobj(stream, output)
         except OSError as e:
+            # The exclusive create made the name this drop's own, so a half-written file is removed rather than
+            # left on the desktop looking whole.
+            target.unlink(missing_ok=True)
             raise FileDropError(f"{target} could not be written: {e}") from e
         return target
     raise FileDropError(f"{directory} already holds {_MAX_CLASH_ATTEMPTS} files named after {name}")

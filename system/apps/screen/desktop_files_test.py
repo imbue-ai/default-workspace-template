@@ -76,6 +76,22 @@ def test_saving_creates_the_folder_keeps_the_name_and_suffixes_a_clash(tmp_path:
     assert (first.stat().st_mode & 0o777) == 0o644
 
 
+class _FailingStream(io.BytesIO):
+    """An upload whose body cannot be read."""
+
+    def read(self, size: int | None = -1, /) -> bytes:
+        raise OSError("the upload's spool is gone")
+
+
+def test_a_write_that_fails_leaves_no_partial_file_behind(tmp_path: Path) -> None:
+    desktop = tmp_path / "Desktop"
+    with pytest.raises(FileDropError, match="could not be written"):
+        save_dropped_file(desktop, DroppedFileName("report.pdf"), _FailingStream())
+    assert list(desktop.iterdir()) == []
+    # The name is free again for the next drop.
+    assert save_dropped_file(desktop, DroppedFileName("report.pdf"), io.BytesIO(b"one")).name == "report.pdf"
+
+
 def test_a_folder_that_cannot_be_created_is_a_file_drop_error(tmp_path: Path) -> None:
     blocker = tmp_path / "not-a-folder"
     blocker.write_text("x")
