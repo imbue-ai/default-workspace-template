@@ -251,8 +251,12 @@ def _electron_environment(harness: _Harness) -> dict[str, str]:
             "MINDS_USE_LOCAL_WORKSPACE_DEFAULTS": "1",
             # The spawned `mngr create` reads the clone's .mngr/settings.toml, where the create templates live.
             "MNGR_ROOT_NAME": "mngr",
+            # The providers that need credentials this machine may not hold are silenced for every mngr the app
+            # spawns and for the destroy; the workspace is local Docker.
             "MNGR__PROVIDERS__MODAL__IS_ENABLED": "false",
             "MNGR__PROVIDERS__AWS__IS_ENABLED": "false",
+            "MNGR__PROVIDERS__VULTR__IS_ENABLED": "false",
+            "MNGR__PROVIDERS__OVH__IS_ENABLED": "false",
             "LATCHKEY_DISABLE_COUNTING": "1",
         }
     )
@@ -460,15 +464,15 @@ def _window_matching(screen: Frame, predicate: Callable[[dict[str, Any]], bool])
     return next((window for window in _service_get(screen, "/api/windows")["windows"] if predicate(window)), None)
 
 
-def _kill_processes_referencing(token: str) -> None:
-    """End every process whose command line carries this run's root name (the app's detached forwarder and the
-    like), each by its exact pid."""
+def _kill_processes_referencing(tokens: tuple[str, ...]) -> None:
+    """End every process whose command line carries one of this run's names (the root name, or the data home the
+    app's detached latchkey forwarder is pointed at), each by its exact pid."""
     own_pid = os.getpid()
     listing = subprocess.run(["ps", "-eo", "pid=,args="], capture_output=True, text=True, check=False, timeout=30)
     pids = [
         int(line.split(None, 1)[0])
         for line in listing.stdout.splitlines()
-        if token in line and int(line.split(None, 1)[0]) != own_pid
+        if any(token in line for token in tokens) and int(line.split(None, 1)[0]) != own_pid
     ]
     for pid in pids:
         try:
@@ -476,12 +480,12 @@ def _kill_processes_referencing(token: str) -> None:
         except ProcessLookupError:
             pass
     if pids:
-        logger.info("Ended {} process(es) referencing {}", len(pids), token)
+        logger.info("Ended {} process(es) referencing {}", len(pids), tokens)
 
 
 def _destroy_workspace(harness: _Harness) -> None:
-    """Destroy the workspace through the desktop app's own mngr state, then remove any container of this run that
-    outlived it."""
+    """Destroy the workspace through the desktop app's own mngr state, then remove any container or volume of this
+    run that outlived it."""
     host_dirs = list(harness.data_home.glob(f"{harness.tier}/*/mngr"))
     if host_dirs:
         environment = {
@@ -504,17 +508,20 @@ def _destroy_workspace(harness: _Harness) -> None:
         logger.info("mngr destroy exited {}: {}", completed.returncode, (completed.stderr or completed.stdout)[-800:])
     else:
         logger.warning("No mngr host dir under {}; removing this run's containers directly", harness.data_home)
-    listing = subprocess.run(
-        ["docker", "ps", "-aq", "--filter", f"name={harness.root_name}-"],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=60,
-    )
-    leftovers = listing.stdout.split()
-    if leftovers:
-        subprocess.run(["docker", "rm", "-f", *leftovers], capture_output=True, check=False, timeout=120)
-        logger.warning("Removed {} leftover container(s) of {}", len(leftovers), harness.root_name)
+    for kind, listing_command, remove_command in (
+        ("container", ["docker", "ps", "-aq", "--filter", f"name={harness.root_name}-"], ["docker", "rm", "-f"]),
+        (
+            "volume",
+            ["docker", "volume", "ls", "-q", "--filter", f"name={harness.root_name}-"],
+            ["docker", "volume", "rm"],
+        ),
+    ):
+        leftovers = subprocess.run(
+            listing_command, capture_output=True, text=True, check=False, timeout=60
+        ).stdout.split()
+        if leftovers:
+            subprocess.run([*remove_command, *leftovers], capture_output=True, check=False, timeout=120)
+            logger.warning("Removed {} leftover {}(s) of {}", len(leftovers), kind, harness.root_name)
 
 
 def _running_state(screen: Frame) -> dict[str, Any] | None:
@@ -645,5 +652,5 @@ def test_the_screen_works_through_the_desktop_app_on_a_local_docker_workspace(tm
                     browser.close()
     finally:
         _destroy_workspace(harness)
-        _kill_processes_referencing(harness.root_name)
+        _kill_processes_referencing((harness.root_name, str(harness.data_home)))
         shutil.rmtree(harness.user_data_dir, ignore_errors=True)
