@@ -354,7 +354,9 @@ committed branch, so commit first), and Playwright drives it over CDP to open th
 frame, take control, type into a terminal on the Screen, open the browser launch path with a URL,
 close the window with the stack still running, and quit with everything gone. It needs the mngr
 monorepo (synced, with Electron installed under `apps/minds`), Docker on this machine, a display
-(the Electron window appears on it), and `MNGR_INTERNAL_GIT_TOKEN` in the environment (the
+(the Electron window appears on it), a Chromium to show the viewer in (Electron exposes neither the
+Screen's nested frame nor a new page to Playwright: this venv's Playwright build, else the newest build in
+`~/.cache/ms-playwright`, else the one `SCREEN_ACCEPTANCE_CHROMIUM` names), and `MNGR_INTERNAL_GIT_TOKEN` in the environment (the
 read-only credential for the private mngr repo the image's build needs; the mngr monorepo's
 `apps/minds/docs/dwt-mngr-pin.md` says where it comes from); it skips at collection without
 `MNGR_WORKTREE`, so CI never runs it. Everything it makes is torn down at the end (the workspace

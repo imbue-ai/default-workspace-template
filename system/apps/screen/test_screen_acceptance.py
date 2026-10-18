@@ -217,12 +217,11 @@ def _build_harness(tmp_path: Path) -> _Harness:
         pytest.fail(f"{_MNGR_INTERNAL_GIT_TOKEN_ENV_VAR} is not set; the workspace image's build needs it")
     if subprocess.run(["docker", "info"], capture_output=True, check=False, timeout=60).returncode != 0:
         pytest.fail("docker is not answering on this host; the workspace is a local Docker container")
-    with sync_playwright() as playwright:
-        if not Path(playwright.chromium.executable_path).exists():
-            pytest.fail(
-                "Playwright's Chromium is not installed for this venv (the viewer is shown in it); "
-                "run `uv run --no-sync playwright install chromium` from the repo root"
-            )
+    if _viewer_chromium_executable() is None:
+        pytest.fail(
+            "No Chromium to show the viewer in: install Playwright's (`uv run --no-sync playwright install chromium`), "
+            f"or name one with {_VIEWER_CHROMIUM_ENV_VAR} (any Playwright build under ~/.cache/ms-playwright is found)"
+        )
     run_id = uuid4().hex[:8]
     template_clone = tmp_path / "template"
     branch = _clone_template(template_clone)
@@ -436,6 +435,23 @@ def _find_container(harness: _Harness) -> _Workspace:
     return _Workspace(container=container)
 
 
+_VIEWER_CHROMIUM_ENV_VAR: Final[str] = "SCREEN_ACCEPTANCE_CHROMIUM"
+
+
+def _viewer_chromium_executable() -> str | None:
+    """The Chromium that shows the viewer: the named one, else this venv's Playwright build, else the newest
+    Playwright build in the cache (another venv's), since Playwright may have no build for this OS release."""
+    named = os.environ.get(_VIEWER_CHROMIUM_ENV_VAR, "")
+    if named:
+        return named
+    with sync_playwright() as playwright:
+        own = Path(playwright.chromium.executable_path)
+    if own.exists():
+        return str(own)
+    cached = sorted(Path.home().glob(".cache/ms-playwright/chromium-*/chrome-linux*/chrome"))
+    return str(cached[-1]) if cached else None
+
+
 def _cookie_to_set(cookie: Cookie) -> SetCookieParam:
     """The desktop session's cookie as a cookie to set: Playwright reads and writes two different shapes."""
     return SetCookieParam(
@@ -471,7 +487,7 @@ def _open_screen_from_launcher(workspace: Frame, playwright: Playwright) -> tupl
         lambda: workspace.eval_on_selector(_SCREEN_IFRAME, "(el) => el.src") or None,
     )
     assert _SCREEN_ORIGIN.match(viewer_url), viewer_url
-    viewer_browser = playwright.chromium.launch()
+    viewer_browser = playwright.chromium.launch(executable_path=_viewer_chromium_executable())
     viewer_context = viewer_browser.new_context(ignore_https_errors=True, viewport={"width": 1280, "height": 800})
     viewer_context.add_cookies([_cookie_to_set(cookie) for cookie in workspace.page.context.cookies()])
     viewer_page = viewer_context.new_page()
