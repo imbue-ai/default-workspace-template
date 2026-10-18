@@ -28,28 +28,33 @@ from screen.interfaces import NekoInterface
 from screen.interfaces import ProgramState
 from screen.interfaces import SupervisorInterface
 from screen.neko_client import wait_until_healthy
-from screen.neko_config import RUNTIME_DIR
 from screen.neko_config import render_neko_yaml
 from screen.neko_config import render_pulse_script
 from screen.primitives import DISPLAY_SOCKET_PATH
 from screen.primitives import FORTRESS_EXECUTABLE
 from screen.primitives import NEKO_PROGRAM
 from screen.primitives import PULSE_PROGRAM
+from screen.primitives import RUNTIME_DIR
 from screen.primitives import SESSION_PROGRAM
 from screen.primitives import STACK_PROGRAMS
 from screen.primitives import XORG_PROGRAM
+from screen.xorg_config import INPUT_SOCKET_PATH
 from screen.xorg_config import render_xorg_conf
 
 XORG_CONF_FILENAME: Final[str] = "xorg.conf"
 NEKO_YAML_FILENAME: Final[str] = "neko.yaml"
 PULSE_SCRIPT_FILENAME: Final[str] = "pulse.pa"
 NEKO_BINARY_PATH: Final[Path] = Path("/opt/neko/bin/neko")
+# neko's Xorg input driver, in the server's input module directory, where the env.d unit installs it beside the
+# binary (Xorg loads it as the ``neko`` driver of the touchscreen xorg.conf declares).
+NEKO_INPUT_MODULE_PATH: Final[Path] = Path("/usr/lib/xorg/modules/input/neko_drv.so")
 
 # The service's own neko member, logged in with the admin password for the event session.
 SERVICE_SESSION_NAME: Final[str] = "Screen service"
 
-# Xorg takes well under a second to open the display; neko a few seconds to bind and start its pipelines.
-_DISPLAY_SOCKET_TIMEOUT_SECONDS: Final[float] = 20.0
+# Xorg takes well under a second to open the display and bind the input driver's socket; neko a few seconds to bind
+# and start its pipelines.
+_XORG_SOCKETS_TIMEOUT_SECONDS: Final[float] = 20.0
 _NEKO_HEALTH_TIMEOUT_SECONDS: Final[float] = 60.0
 _POLL_SECONDS: Final[float] = 0.2
 _INSTALL_POLL_SECONDS: Final[float] = 5.0
@@ -82,7 +87,8 @@ def secrets_from_neko_yaml(text: str) -> NekoSecrets:
 
 @pure
 def describe_missing_install() -> str | None:
-    """Why the stack cannot start yet, or None once the env.d unit has installed everything the programs exec."""
+    """Why the stack cannot start yet, or None once the env.d unit has installed everything the programs exec and
+    load."""
     missing = [
         name
         for name, is_present in (
@@ -90,6 +96,7 @@ def describe_missing_install() -> str | None:
             ("startxfce4", shutil.which("startxfce4") is not None),
             ("pulseaudio", shutil.which("pulseaudio") is not None),
             ("neko", NEKO_BINARY_PATH.is_file() and os.access(NEKO_BINARY_PATH, os.X_OK)),
+            ("neko's input driver", NEKO_INPUT_MODULE_PATH.is_file()),
         )
         if not is_present
     ]
@@ -116,8 +123,14 @@ class ScreenStack(MutableModel):
     state_dir: Path = Field(frozen=True, description="data/.state/screen")
     runtime_dir: Path = Field(default=Path(RUNTIME_DIR), frozen=True, description="The members' XDG runtime dir")
     display_socket_path: Path = Field(default=Path(DISPLAY_SOCKET_PATH), frozen=True, description="Xorg's socket")
+    input_socket_path: Path = Field(
+        default=Path(INPUT_SOCKET_PATH), frozen=True, description="The input driver's socket, bound by Xorg"
+    )
     install_check: Callable[[], str | None] = Field(
         default=describe_missing_install, frozen=True, description="Why the stack cannot start yet, or None"
+    )
+    xorg_sockets_timeout_seconds: float = Field(
+        default=_XORG_SOCKETS_TIMEOUT_SECONDS, frozen=True, description="How long a start waits for Xorg's sockets"
     )
     neko_health_timeout_seconds: float = Field(
         default=_NEKO_HEALTH_TIMEOUT_SECONDS, frozen=True, description="How long a start waits for neko's health route"
@@ -242,11 +255,14 @@ class ScreenStack(MutableModel):
             self._check_not_abandoned(abort)
             self._render_configuration(new_secrets)
         self.set_api_token(new_secrets.api_token)
+        # A socket a killed Xorg left behind would pass the wait below before the new server has bound its own, and
+        # neko dials it once; the driver unlinks a stale one itself, but only after this wait could have seen it.
+        self.input_socket_path.unlink(missing_ok=True)
         for program in STACK_PROGRAMS:
             self._check_not_abandoned(abort)
             self.supervisor.start_program(program)
             if program == XORG_PROGRAM:
-                self._wait_for_display(abort)
+                self._wait_for_xorg(abort)
         if not wait_until_healthy(self.neko, self.neko_health_timeout_seconds, _POLL_SECONDS, abort):
             self._check_not_abandoned(abort)
             raise StackStartError("neko never answered its health route")
@@ -275,16 +291,19 @@ class ScreenStack(MutableModel):
         neko_yaml.chmod(0o600)
         neko_yaml.write_text(render_neko_yaml(new_secrets))
 
-    def _wait_for_display(self, abort: threading.Event) -> None:
-        deadline = time.monotonic() + _DISPLAY_SOCKET_TIMEOUT_SECONDS
+    def _wait_for_xorg(self, abort: threading.Event) -> None:
+        """Until Xorg has opened the display and bound the input driver's socket, which neko dials once at its
+        start and exits without."""
+        deadline = time.monotonic() + self.xorg_sockets_timeout_seconds
         while time.monotonic() < deadline:
             self._check_not_abandoned(abort)
-            if self.display_socket_path.exists():
+            if self.display_socket_path.exists() and self.input_socket_path.exists():
                 return
             if self.supervisor.program_state(XORG_PROGRAM) in (ProgramState.EXITED, ProgramState.FATAL):
                 raise StackStartError(f"{XORG_PROGRAM} exited before opening the display")
             abort.wait(_POLL_SECONDS)
-        raise StackStartError(f"{XORG_PROGRAM} did not open {self.display_socket_path}")
+        missing = self.display_socket_path if not self.display_socket_path.exists() else self.input_socket_path
+        raise StackStartError(f"{XORG_PROGRAM} did not open {missing}")
 
     def _stop_members(self) -> None:
         # neko first (its viewers see the stop), then the session, PulseAudio and the X server last.

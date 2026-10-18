@@ -2,8 +2,9 @@
  * The phone layout's controls (docs/system/specs/screen/spec.md section 14): touch on the stage classified into
  * taps, long presses, pans, pinches and scrolls; a modifier bar with Ctrl, Alt, Shift (latching for the next key),
  * Esc and Tab; and a keyboard button focusing a hidden input whose ``input`` and ``keydown`` events become neko key
- * events. Pan and zoom move the drawn video (the Screen keeps its size); a tap and a long press reach the Screen
- * as mouse clicks at the mapped point.
+ * events. Pan and zoom move the drawn video (the Screen keeps its size); a tap reaches the Screen as a touch at the
+ * mapped point (through neko's input driver), a long press as a right click there, since X touch has no second
+ * button and a context menu is what the press is for.
  */
 
 import { GestureClassifier, LONG_PRESS_MS } from "./gestures";
@@ -16,12 +17,13 @@ import type { Point, ViewTransform } from "./view_transform";
 
 /** What the controls do to the Screen; the viewer wires these to the input relay. */
 export interface MobileActions {
+  /** A tap at a client point, with the finger's pressure (0 to 1) as the pointer event reported it. */
+  tapAt(clientX: number, clientY: number, pressure: number): void;
   /** A click at a client point: left (1) or right (3) button. */
   clickAt(clientX: number, clientY: number, button: number): void;
   scroll(steps: Point): void;
 }
 
-const X_BUTTON_LEFT = 1;
 const X_BUTTON_RIGHT = 3;
 
 /** The non-character keys a soft keyboard sends through ``keydown`` with a name, as X keysyms. */
@@ -49,6 +51,8 @@ export class MobileControls {
   private readonly modifierButtons = new Map<Modifier, HTMLButtonElement>();
   private transform: ViewTransform = IDENTITY_TRANSFORM;
   private longPressTimer: number | null = null;
+  /** The pressure of the finger that went down last, for the tap it may turn out to be. */
+  private lastDownPressure = 0;
   private lastInputValue = "";
   isEnabled = false;
 
@@ -169,6 +173,7 @@ export class MobileControls {
       } catch {
         // A pointer the browser does not track (a synthesized event) cannot be captured; the gesture still counts.
       }
+      this.lastDownPressure = event.pressure;
       this.apply(this.classifier.down(sampleOf(event)));
       this.cancelLongPress();
       if (this.classifier.pointerCount === 1) {
@@ -211,7 +216,7 @@ export class MobileControls {
       case "none":
         return;
       case "tap":
-        if (this.isEnabled) this.actions.clickAt(gesture.at.x, gesture.at.y, X_BUTTON_LEFT);
+        if (this.isEnabled) this.actions.tapAt(gesture.at.x, gesture.at.y, this.lastDownPressure);
         return;
       case "long-press":
         if (this.isEnabled) this.actions.clickAt(gesture.at.x, gesture.at.y, X_BUTTON_RIGHT);

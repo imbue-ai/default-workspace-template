@@ -1,8 +1,8 @@
 """The real stack, inside the workspace image (docs/system/specs/screen/spec.md section 20): Xorg, PulseAudio, XFCE
 and neko as subprocesses under the service, the group starting on first demand, neko answering health, a session
-token minted, a screenshot taken, ``xeyes`` appearing in the window list, the browser launch path putting a real
-Fortress on the Screen with its tab checkpointed, a member's death ending the group with its event, and a second
-start bringing it back.
+token minted, a screenshot taken, ``xeyes`` appearing in the window list, a touch through neko's input driver moving
+the pointer, the browser launch path putting a real Fortress on the Screen with its tab checkpointed, a member's
+death ending the group with its event, and a second start bringing it back.
 
 Skips where the env.d unit has not installed the stack (a developer laptop); the CI job that runs the suites inside
 the workspace image fails on a skip, which is how a missing install is noticed. That job spreads a module's tests over
@@ -16,6 +16,7 @@ import json
 import os
 import shutil
 import signal
+import subprocess
 import threading
 import urllib.request
 from collections.abc import Iterator
@@ -28,6 +29,7 @@ import pytest
 from PIL import Image
 from flask.testing import FlaskClient
 from pydantic import Field
+from websockets.sync.client import connect as connect_websocket
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
@@ -43,8 +45,10 @@ from screen.events import EVENTS_RELATIVE_PATH
 from screen.interfaces import ProgramState
 from screen.launch import DetachedProcessLauncher
 from screen.launch import screen_process_environment
+from screen.neko_client import NEKO_WEBSOCKET_URL
 from screen.neko_client import NekoClient
 from screen.primitives import BrowserName
+from screen.primitives import DISPLAY
 from screen.primitives import DISPLAY_SOCKET_PATH
 from screen.primitives import FORTRESS_EXECUTABLE
 from screen.primitives import NEKO_PROGRAM
@@ -60,6 +64,8 @@ from screen.stack import describe_missing_install
 from screen.watch import decide_group_end
 from screen.watch import end_group
 from screen.windows import DisplayWindowTools
+from screen.xorg_config import INPUT_DEVICE_IDENTIFIER
+from screen.xorg_config import INPUT_DRIVER
 from testing import SubprocessSupervisor
 from testing import wait_until
 
@@ -276,6 +282,58 @@ def test_xeyes_appears_in_the_window_list_and_a_raised_window_titles_the_screen(
     os.kill(xeyes_pid, signal.SIGTERM)
     os.kill(terminal.get_json()["pid"], signal.SIGTERM)
     assert wait_until(lambda: window_of("xfce4-terminal") is None, 10.0)
+
+
+def _pointer_location() -> tuple[int, int]:
+    """Where the core pointer is on the Screen, as ``xdotool getmouselocation --shell`` prints it."""
+    completed = subprocess.run(
+        ["xdotool", "getmouselocation", "--shell"],
+        env={**os.environ, "DISPLAY": DISPLAY},
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10,
+    )
+    values = dict(line.split("=", 1) for line in completed.stdout.splitlines() if "=" in line)
+    return int(values["X"]), int(values["Y"])
+
+
+def _is_pointer_near(target: tuple[int, int]) -> bool:
+    """Within the two pixels the touch's round trip through the driver's 16-bit axes may move a point."""
+    x, y = _pointer_location()
+    return abs(x - target[0]) <= 2 and abs(y - target[1]) <= 2
+
+
+def test_a_touch_through_nekos_input_driver_moves_the_pointer(running: _LiveService) -> None:
+    """Xorg loads neko's input driver for the touchscreen xorg.conf declares and neko connects to its socket, which
+    the Xorg log records; a touch begun and ended over neko's WebSocket then lands as a touch on the Screen, whose
+    pointer emulation leaves the core pointer at the touched point."""
+    client, supervisor = running.client, running.supervisor
+    xorg_log = supervisor.log_dir / "Xorg.log"
+    assert wait_until(lambda: xorg_log.exists(), 10.0)
+    assert f"Using input driver '{INPUT_DRIVER}' for '{INPUT_DEVICE_IDENTIFIER}'" in xorg_log.read_text()
+    device_prefix = f"{INPUT_DRIVER}: {INPUT_DEVICE_IDENTIFIER}:"
+    assert wait_until(lambda: f"{device_prefix} accepted connection" in xorg_log.read_text(), 10.0), (
+        xorg_log.read_text()[-2000:]
+    )
+    session = client.post("/api/session", headers={"X-Imbue-Identity": '{"owner": true, "email": "josh@imbue.com"}'})
+    assert session.status_code == 200, session.get_json()
+    token = session.get_json()["token"]
+    subprocess.run(
+        ["xdotool", "mousemove", "10", "10"], env={**os.environ, "DISPLAY": DISPLAY}, check=True, timeout=10
+    )
+    assert wait_until(lambda: _pointer_location() == (10, 10), 5.0)
+    touched = (300, 200)
+    with connect_websocket(f"{NEKO_WEBSOCKET_URL}?token={token}", open_timeout=10) as connection:
+        init = json.loads(connection.recv(timeout=10))
+        assert init["event"] == "system/init", init
+        assert init["payload"]["touch_events"] is True
+        # The first input from a session with no host is its control request, which neko grants (spec section 6.2).
+        touch = {"touch_id": 1, "x": touched[0], "y": touched[1], "pressure": 128}
+        connection.send(json.dumps({"event": "control/touchbegin", "payload": touch}))
+        connection.send(json.dumps({"event": "control/touchend", "payload": touch}))
+        assert wait_until(lambda: _is_pointer_near(touched), 10.0), (_pointer_location(), xorg_log.read_text()[-2000:])
+    client.post("/api/control/return", json={"session_id": session.get_json()["session_id"]})
 
 
 class _PageHandler(BaseHTTPRequestHandler):

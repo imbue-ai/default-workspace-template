@@ -63,6 +63,44 @@ def test_a_member_that_fails_to_start_stops_the_rest_and_records_why(
     assert fake_neko.api_token is None
 
 
+def test_xorg_that_never_binds_the_input_drivers_socket_is_a_failed_start(
+    tmp_path: Path, fake_supervisor: FakeSupervisor, fake_neko: FakeNeko
+) -> None:
+    """neko dials the driver's socket once at its start, so a start waits for Xorg to bind it and gives up when it
+    never does, before neko is ever started."""
+    unbound = tmp_path / "never-bound.sock"
+    stack = ScreenStack(
+        supervisor=fake_supervisor,
+        neko=fake_neko,
+        state_dir=tmp_path / "state",
+        runtime_dir=tmp_path / "runtime",
+        display_socket_path=tmp_path / "x11" / "X99",
+        input_socket_path=unbound,
+        xorg_sockets_timeout_seconds=0.2,
+        install_check=lambda: None,
+        on_lifecycle_changed=lambda: None,
+        on_running=lambda _secrets, _session: None,
+        set_api_token=fake_neko.set_api_token,
+    )
+    stack.ensure_started()
+    assert wait_until(lambda: stack.lifecycle == Lifecycle.STOPPED)
+    assert stack.stop_reason == f"the stack did not start: screen-xorg did not open {unbound}"
+    assert ("start", "screen-neko") not in fake_supervisor.calls
+    assert ("stop", "screen-xorg") in fake_supervisor.calls
+
+
+def test_a_stale_input_socket_is_removed_before_xorg_starts(
+    service: ScreenService, fake_supervisor: FakeSupervisor, tmp_path: Path
+) -> None:
+    """A socket a killed Xorg left behind would pass the start's wait before the new server bound its own."""
+    stale = tmp_path / "runtime" / "xf86-input-neko.sock"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("stale")
+    start_service_stack(service)
+    assert stale.read_text() == ""
+    assert fake_supervisor.calls[0] == ("start", "screen-xorg")
+
+
 def test_neko_never_answering_health_is_a_failed_start(service: ScreenService, fake_neko: FakeNeko) -> None:
     fake_neko.is_up = False
     service.ensure_started()
@@ -83,6 +121,7 @@ def test_installing_is_reported_until_the_unit_is_satisfied(
         state_dir=tmp_path / "state",
         runtime_dir=tmp_path / "runtime",
         display_socket_path=tmp_path / "x11" / "X99",
+        input_socket_path=tmp_path / "runtime" / "xf86-input-neko.sock",
         install_check=lambda: missing.pop(0) if missing else None,
         install_poll_seconds=0.01,
         on_lifecycle_changed=lambda: lifecycles.append(stack.lifecycle),
@@ -118,6 +157,7 @@ def test_a_starter_that_dies_unexpectedly_does_not_pin_the_lifecycle_at_starting
         state_dir=tmp_path / "state",
         runtime_dir=tmp_path / "runtime",
         display_socket_path=tmp_path / "x11" / "X99",
+        input_socket_path=tmp_path / "runtime" / "xf86-input-neko.sock",
         install_check=install_check,
         on_lifecycle_changed=lambda: None,
         on_running=lambda _secrets, _session: None,
@@ -155,6 +195,7 @@ def test_shutdown_ends_a_stack_still_waiting_for_its_install(
         state_dir=tmp_path / "state",
         runtime_dir=tmp_path / "runtime",
         display_socket_path=tmp_path / "x11" / "X99",
+        input_socket_path=tmp_path / "runtime" / "xf86-input-neko.sock",
         install_check=lambda: "waiting for env-converge to install neko",
         install_poll_seconds=0.01,
         on_lifecycle_changed=service.on_lifecycle_changed,
@@ -234,6 +275,7 @@ def test_a_running_stack_is_adopted_from_its_neko_yaml(
         state_dir=tmp_path / "state",
         runtime_dir=tmp_path / "runtime",
         display_socket_path=tmp_path / "x11" / "X99",
+        input_socket_path=tmp_path / "runtime" / "xf86-input-neko.sock",
         install_check=lambda: None,
         on_lifecycle_changed=lambda: None,
         on_running=lambda _secrets, _session: None,

@@ -7,8 +7,9 @@
  * video every viewer selects (section 8.1), a hidden viewer releases its media (section 8.2), and audio is off
  * until unmuted (section 8.3). The clipboard crosses both ways while this viewer controls (section 13), a dropped
  * file lands on the Screen at the pointer (section 4.3), and the phone layout pans, zooms and types through its
- * own controls (section 14). The media path is rewritten to the endpoints ``connect-info`` names and escalates
- * to a relay, then to the JPEG screencast, when no pair connects (section 5).
+ * own controls, with a tap a touch through neko's input driver (section 14). The media path is rewritten to the
+ * endpoints ``connect-info`` names and escalates to a relay, then to the JPEG screencast, when no pair connects
+ * (section 5).
  */
 
 import "./style.css";
@@ -148,6 +149,7 @@ class Viewer {
       this.stage,
       this.video,
       {
+        tapAt: (clientX, clientY, pressure) => this.input?.tapAt(clientX, clientY, pressure),
         clickAt: (clientX, clientY, button) => this.input?.clickAt(clientX, clientY, button),
         scroll: (steps) => this.input?.scroll(steps),
       },
@@ -308,6 +310,7 @@ class Viewer {
       socket.on("system/init", (payload) => {
         const size = payload.screen_size as { width?: number; height?: number } | undefined;
         if (this.input && size?.width && size?.height) this.input.screen = { width: size.width, height: size.height };
+        if (this.input) this.input.isTouchSupported = payload.touch_events === true;
       });
       socket.start();
       this.render();

@@ -25,6 +25,8 @@ APP_NAME: Final[AppName] = AppName("screen")
 # The one display (docs/system/specs/screen/spec.md D16), taken from the browser's Xvfb.
 DISPLAY: Final[str] = ":99"
 DISPLAY_SOCKET_PATH: Final[str] = "/tmp/.X11-unix/X99"
+# The members' XDG runtime dir, where the stack's own sockets live (PulseAudio's, the input driver's).
+RUNTIME_DIR: Final[str] = "/tmp/screen-runtime"
 
 # Where the service, neko and the ICE muxes listen (spec section 5.1).
 SERVICE_HOST: Final[str] = "127.0.0.1"

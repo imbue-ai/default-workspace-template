@@ -149,13 +149,16 @@ _install_screen_packages() {
     _log "screen packages: install complete"
 }
 
-# The neko v3 server binary (m1k1o/neko, Apache-2.0). neko publishes no release
-# binary (its GitHub releases carry no assets), so the one file this needs,
-# /usr/bin/neko, is taken from the pinned ghcr.io/m1k1o/neko/base image through
-# the OCI registry API: an anonymous pull token, then the one layer blob that
-# the image's `COPY /src/bin/neko /usr/bin/neko` step produced, pinned by its
-# digest per architecture, extracted with tar, and checked against the pinned
-# SHA-256 of the binary itself.
+# The neko v3 server binary and its Xorg input driver (m1k1o/neko, Apache-2.0). neko
+# publishes no release binary (its GitHub releases carry no assets), so the two files
+# this needs, /usr/bin/neko and the touchscreen module /usr/lib/xorg/modules/input/
+# neko_drv.so, are taken from the pinned ghcr.io/m1k1o/neko/base image through the OCI
+# registry API: an anonymous pull token, then the one layer blob that the image's COPY
+# step for each file produced, pinned by its digest per architecture, extracted with
+# tar, and checked against the pinned SHA-256 of the file itself. The module goes into
+# the server's input module directory, where Xorg finds the ``neko`` driver the Screen's
+# xorg.conf names; the image builds it on Debian trixie against the same xorg-server
+# (21.1, XInput ABI 24.4) the pinned snapshot installs here.
 #
 # How the pins were computed (2026-10-17, tag 3.2.0 = neko v3.2.0):
 #   TOKEN=$(curl -fsSL 'https://ghcr.io/token?scope=repository:m1k1o/neko/base:pull' | jq -r .token)
@@ -167,8 +170,9 @@ _install_screen_packages() {
 #        linux/arm64 sha256:3629b012656d3d2a76bc9b21c4ea1ebd03f4f1366383490d6065df0e332619e8.
 #   For each: fetch the manifest and its config blob, pair the manifest's layers
 #   with the config's non-empty history entries in order; the layer whose
-#   created_by reads "COPY /src/bin/neko /usr/bin/neko" is the one below.
-#   Download that layer blob, `tar -xzf - usr/bin/neko`, `sha256sum` the result.
+#   created_by reads "COPY /src/bin/neko /usr/bin/neko" holds the binary and the one
+#   reading "COPY /usr/local/lib/xorg/modules/input/neko_drv.so ..." the module.
+#   Download each layer blob, `tar -xzf -` the member, `sha256sum` the result.
 readonly _NEKO_IMAGE_REPOSITORY="m1k1o/neko/base"
 readonly _NEKO_IMAGE_TAG="3.2.0"
 readonly _NEKO_AMD64_LAYER_DIGEST="sha256:bde5ab1e10a03c81b0c0fc4a031d1a9c50eb297e212f3516f99adb02c460f18c"
@@ -176,57 +180,86 @@ readonly _NEKO_AMD64_SHA256="265c202f1b99d9e85aa3fe2a3c38de6ce4f3c698aa16c0b0250
 readonly _NEKO_ARM64_LAYER_DIGEST="sha256:cfe02384b17eaba05759c333efebc2b594de1de2eb6e6e28f5d2687ee58c5764"
 readonly _NEKO_ARM64_SHA256="39fab8e67365509244d24ea9378d72d88781f6ade9914f953be7051ec91fe9d7"
 readonly _NEKO_INSTALL_PATH="/opt/neko/bin/neko"
+readonly _NEKO_INPUT_AMD64_LAYER_DIGEST="sha256:ab1fea03845aff1fdc09bf155f11a43bfecea8185c43f922a4b63ae6dc2e6d2b"
+readonly _NEKO_INPUT_AMD64_SHA256="548b696c876b93deea6a7a7bc75e02ad8731eba9e0d89a08873e7a8c59ebc514"
+readonly _NEKO_INPUT_ARM64_LAYER_DIGEST="sha256:b6e0e2bca85ce2c55e15fe0a8da457ce61aa2551398c03e2efef321554c20cff"
+readonly _NEKO_INPUT_ARM64_SHA256="bfb0948d00abc7fe8112d0e4b91d0be19ff4551cee0cbcea6b196ae6135d8999"
+readonly _NEKO_INPUT_IMAGE_MEMBER="usr/lib/xorg/modules/input/neko_drv.so"
+readonly _NEKO_INPUT_INSTALL_PATH="/usr/lib/xorg/modules/input/neko_drv.so"
 
 _file_sha256() {
     sha256sum "$1" | awk '{print $1}'
 }
 
-_install_neko() {
-    local layer_digest sha256
-    case "$(uname -m)" in
-        x86_64) layer_digest="$_NEKO_AMD64_LAYER_DIGEST"; sha256="$_NEKO_AMD64_SHA256" ;;
-        aarch64) layer_digest="$_NEKO_ARM64_LAYER_DIGEST"; sha256="$_NEKO_ARM64_SHA256" ;;
-        *) _log "neko: unsupported architecture $(uname -m)"; return 1 ;;
-    esac
-    # Fast satisfied-check: the pinned binary is in place (hashing 27 MB takes
-    # tens of milliseconds, and it is what makes a pin bump re-install).
-    if [ -x "$_NEKO_INSTALL_PATH" ] && [ "$(_file_sha256 "$_NEKO_INSTALL_PATH")" = "$sha256" ]; then
-        _log "neko: already installed at $_NEKO_INSTALL_PATH, satisfied"
+# An anonymous pull token for the neko base image, on stdout (the logging goes to stderr,
+# since callers capture stdout).
+_neko_token() {
+    local token
+    _log "neko: fetching a pull token for ghcr.io/$_NEKO_IMAGE_REPOSITORY" >&2
+    token="$(curl -fsSL --max-time 60 "https://ghcr.io/token?scope=repository:${_NEKO_IMAGE_REPOSITORY}:pull" \
+        | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+    if [ -z "$token" ]; then
+        _log "neko: could not get a registry token; the next converge retries" >&2
+        return 1
+    fi
+    printf '%s' "$token"
+}
+
+# Install one file of the image: the member <member> of the layer <layer_digest>, whose
+# SHA-256 is <sha256>, at <destination> with mode <mode>. Idempotent: a destination that
+# already hashes to the pin is left alone (hashing 27 MB takes tens of milliseconds, and
+# it is what makes a pin bump re-install).
+_install_neko_image_file() {
+    local name="$1" layer_digest="$2" member="$3" sha256="$4" destination="$5" mode="$6"
+    if [ -f "$destination" ] && [ "$(_file_sha256 "$destination")" = "$sha256" ]; then
+        _log "neko: $name already installed at $destination, satisfied"
         return 0
     fi
+    local token
+    token="$(_neko_token)" || return 1
     local tmp_dir
     tmp_dir="$(mktemp -d)"
     # shellcheck disable=SC2064
     trap "rm -rf '$tmp_dir'" RETURN
-    _log "neko: fetching a pull token for ghcr.io/$_NEKO_IMAGE_REPOSITORY"
-    local token
-    token="$(curl -fsSL --max-time 60 "https://ghcr.io/token?scope=repository:${_NEKO_IMAGE_REPOSITORY}:pull" \
-        | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
-    if [ -z "$token" ]; then
-        _log "neko: could not get a registry token; the next converge retries"
-        return 1
-    fi
-    local layer="$tmp_dir/neko-layer.tar.gz"
-    _log "neko: downloading layer $layer_digest of ${_NEKO_IMAGE_REPOSITORY}:${_NEKO_IMAGE_TAG}"
+    local layer="$tmp_dir/layer.tar.gz"
+    _log "neko: downloading layer $layer_digest of ${_NEKO_IMAGE_REPOSITORY}:${_NEKO_IMAGE_TAG} for the $name"
     if ! curl -fsSL --retry 3 --max-time 600 -H "Authorization: Bearer $token" \
         -o "$layer" "https://ghcr.io/v2/${_NEKO_IMAGE_REPOSITORY}/blobs/${layer_digest}"; then
         _log "neko: layer download FAILED; the next converge retries"
         return 1
     fi
     if [ "sha256:$(_file_sha256 "$layer")" != "$layer_digest" ]; then
-        _log "neko: layer digest mismatch -- refusing to install"
+        _log "neko: layer digest mismatch -- refusing to install the $name"
         return 1
     fi
-    if ! tar -xzf "$layer" -C "$tmp_dir" usr/bin/neko; then
-        _log "neko: the layer holds no usr/bin/neko; the pin is wrong"
+    if ! tar -xzf "$layer" -C "$tmp_dir" "$member"; then
+        _log "neko: the layer holds no $member; the pin is wrong"
         return 1
     fi
-    if [ "$(_file_sha256 "$tmp_dir/usr/bin/neko")" != "$sha256" ]; then
-        _log "neko: binary SHA256 mismatch -- refusing to install"
+    if [ "$(_file_sha256 "$tmp_dir/$member")" != "$sha256" ]; then
+        _log "neko: $name SHA256 mismatch -- refusing to install"
         return 1
     fi
-    install -D -m 0755 "$tmp_dir/usr/bin/neko" "$_NEKO_INSTALL_PATH"
-    _log "neko: install complete ($_NEKO_INSTALL_PATH)"
+    install -D -m "$mode" "$tmp_dir/$member" "$destination"
+    _log "neko: $name install complete ($destination)"
+}
+
+_install_neko() {
+    local layer_digest sha256 input_layer_digest input_sha256
+    case "$(uname -m)" in
+        x86_64)
+            layer_digest="$_NEKO_AMD64_LAYER_DIGEST"; sha256="$_NEKO_AMD64_SHA256"
+            input_layer_digest="$_NEKO_INPUT_AMD64_LAYER_DIGEST"; input_sha256="$_NEKO_INPUT_AMD64_SHA256" ;;
+        aarch64)
+            layer_digest="$_NEKO_ARM64_LAYER_DIGEST"; sha256="$_NEKO_ARM64_SHA256"
+            input_layer_digest="$_NEKO_INPUT_ARM64_LAYER_DIGEST"; input_sha256="$_NEKO_INPUT_ARM64_SHA256" ;;
+        *) _log "neko: unsupported architecture $(uname -m)"; return 1 ;;
+    esac
+    local rc=0
+    _install_neko_image_file "binary" "$layer_digest" "usr/bin/neko" "$sha256" "$_NEKO_INSTALL_PATH" 0755 || rc=$?
+    _install_neko_image_file "input driver" "$input_layer_digest" "$_NEKO_INPUT_IMAGE_MEMBER" "$input_sha256" \
+        "$_NEKO_INPUT_INSTALL_PATH" 0644 || rc=$?
+    return "$rc"
 }
 
 # Fortress (tiliondev/fortress), the stealth Chromium the Screen's browser runs, from the

@@ -28,7 +28,9 @@ from testing import ManualClock
 
 @pytest.fixture
 def fake_supervisor(tmp_path: Path) -> FakeSupervisor:
-    return FakeSupervisor(display_socket_path=tmp_path / "x11" / "X99")
+    return FakeSupervisor(
+        display_socket_path=tmp_path / "x11" / "X99", input_socket_path=tmp_path / "runtime" / "xf86-input-neko.sock"
+    )
 
 
 @pytest.fixture
@@ -161,6 +163,7 @@ def service(
         state_dir=tmp_path / "state",
         runtime_dir=tmp_path / "runtime",
         display_socket_path=tmp_path / "x11" / "X99",
+        input_socket_path=tmp_path / "runtime" / "xf86-input-neko.sock",
         install_check=lambda: None,
         neko_health_timeout_seconds=1.0,
         install_poll_seconds=0.01,

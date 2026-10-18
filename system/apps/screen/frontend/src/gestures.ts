@@ -2,8 +2,8 @@
  * The phone's touch gestures over the stage (docs/system/specs/screen/spec.md section 14), classified from
  * pointer events: a tap is a click at the point, a press held still is a right click, one finger moving is a pan
  * of the view, two fingers moving together scroll the Screen, two fingers moving apart or together zoom. Pan and
- * zoom are the viewer's own; a tap and a long press reach the Screen as mouse events (neko's touch events need its
- * xf86 input driver, which the stack does not run).
+ * zoom are the viewer's own; a tap reaches the Screen as a touch through neko's input driver and a long press as a
+ * right click.
  */
 
 import type { Point } from "./view_transform";

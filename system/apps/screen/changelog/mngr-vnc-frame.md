@@ -70,3 +70,11 @@ The owner gate:
 - Programs started on the Screen (`screen run` commands, Chromium) no longer inherit the service's `LATCHKEY_GATEWAY_PASSWORD` and `LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE`; nothing launched there needs them, and an agent that does holds them in its own shell.
 
 - `test_screen_integration.py` no longer depends on the order its tests run in: every test takes a `running` fixture that starts the stack over the module's service life on demand (and builds a fresh life after a test quit the service), so each passes alone in its own CI sandbox.
+
+Touch through neko's input driver (spec section 14):
+
+- `xorg.conf` declares neko's `xf86-input-neko` touchscreen (`screen_touchscreen`, `Driver "neko"`, `SocketName /tmp/screen-runtime/xf86-input-neko.sock`, the layout's `CorePointer`) and `neko.yaml` enables `desktop.input` on that socket; the stack waits for the display socket and the driver's socket before starting the other members, removes a stale driver socket before Xorg starts, and reports `installing` until the env.d unit has put `/usr/lib/xorg/modules/input/neko_drv.so` in place.
+
+- The viewer sends a phone's tap as `control/touchbegin` and `control/touchend` at the mapped point with the finger's pressure (a byte, never zero) and a fresh sixteen-bit touch id, when neko's `system/init` says `touch_events`; otherwise, and for a long press (a right click), the mouse path stays.
+
+- `test_screen_integration.py` asserts in the workspace image that Xorg loaded the `neko` driver for the device and accepted neko's connection, that `system/init` carries `touch_events`, and that a touch over neko's WebSocket moves the core pointer to the touched point (read back with `xdotool getmouselocation`).

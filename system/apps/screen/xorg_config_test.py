@@ -20,7 +20,7 @@ def test_cvt_modelines_match_the_cvt_tool() -> None:
     )
 
 
-def test_xorg_conf_renders_the_dummy_screen_with_the_seeded_modes() -> None:
+def test_xorg_conf_renders_the_dummy_screen_the_seeded_modes_and_nekos_touchscreen() -> None:
     assert render_xorg_conf() == snapshot("""\
 Section "ServerFlags"
   Option "DontVTSwitch" "true"
@@ -28,6 +28,13 @@ Section "ServerFlags"
   Option "PciForceNone" "true"
   Option "AutoEnableDevices" "false"
   Option "AutoAddDevices" "false"
+EndSection
+
+Section "InputDevice"
+  Identifier "screen_touchscreen"
+  Option "SendCoreEvents" "On"
+  Option "SocketName" "/tmp/screen-runtime/xf86-input-neko.sock"
+  Driver "neko"
 EndSection
 
 Section "Device"
@@ -62,5 +69,6 @@ EndSection
 Section "ServerLayout"
   Identifier "screen_layout"
   Screen "screen"
+  InputDevice "screen_touchscreen" "CorePointer"
 EndSection
 """)
