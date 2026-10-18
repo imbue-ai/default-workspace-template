@@ -212,10 +212,12 @@ version = "0.1.0"
 source = { editable = "system/libs/app_manifest" }
 dependencies = [
     { name = "click" },
+    { name = "flask" },
     { name = "imbue-common" },
     { name = "loguru" },
     { name = "pathspec" },
     { name = "pydantic" },
+    { name = "werkzeug" },
 ]
 
 [package.dev-dependencies]
@@ -226,10 +228,12 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
+    { name = "flask", specifier = ">=3.0" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=8df8587c97cf137194d2cd7728cb4f8cbb8d9fa3" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pathspec", specifier = ">=1.1" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "werkzeug", specifier = ">=3.0" },
 ]
 
 [package.metadata.requires-dev]
