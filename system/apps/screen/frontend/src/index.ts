@@ -6,7 +6,7 @@
  * remote). The controller's stage size drives the Screen's size (section 7.2), the service's profile drives the
  * video every viewer selects (section 8.1), a hidden viewer releases its media (section 8.2), and audio is off
  * until unmuted (section 8.3). The clipboard crosses both ways while this viewer controls (section 13), a dropped
- * file lands on the Screen at the pointer (section 4.3), and the phone layout pans, zooms and types through its
+ * file lands in the Screen's desktop folder (section 4.3), and the phone layout pans, zooms and types through its
  * own controls (section 14). The media path is rewritten to the endpoints ``connect-info`` names and escalates
  * to a relay, then to the JPEG screencast, when no pair connects (section 5).
  */
@@ -18,7 +18,7 @@ import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/cont
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
 import { PHONE_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { ClipboardBridge, navigatorClipboard, serviceClipboardTransport } from "./clipboard";
-import { uploadDroppedFiles } from "./files";
+import { describeDropOutcome, uploadDroppedFiles } from "./files";
 import { InputRelay, XK_V } from "./input";
 import { keyboardMapForLanguage } from "./keyboard_map";
 import { MobileControls } from "./mobile";
@@ -181,17 +181,16 @@ class Viewer {
     this.stage.addEventListener("dragleave", () => this.stage.classList.remove("screen-stage--dropping"));
     this.stage.addEventListener("drop", (event) => {
       this.stage.classList.remove("screen-stage--dropping");
-      if (!this.canUpload() || !event.dataTransfer || this.session === null || !this.input) return;
+      if (!this.canUpload() || !event.dataTransfer || this.session === null) return;
       event.preventDefault();
       const files = Array.from(event.dataTransfer.files);
-      const at = this.input.pointAt(event.clientX, event.clientY);
-      if (files.length === 0 || at === null) return;
+      if (files.length === 0) return;
       this.showClipboardStatus(
-        files.length === 1 ? "Dropping the file on the Screen" : "Dropping the files on the Screen",
+        files.length === 1 ? "Saving the file to the Screen's desktop" : "Saving the files to the Screen's desktop",
       );
-      uploadDroppedFiles(files, at, this.session.token)
-        .then((isUploaded) => this.showClipboardStatus(isUploaded ? "Dropped on the Screen" : "The drop failed"))
-        .catch(() => this.showClipboardStatus("The drop failed"));
+      uploadDroppedFiles(files, this.session.session_id)
+        .then((outcome) => this.showClipboardStatus(describeDropOutcome(outcome)))
+        .catch(() => this.showClipboardStatus("The drop failed: the Screen could not be reached"));
     });
   }
 

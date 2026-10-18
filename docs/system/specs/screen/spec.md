@@ -101,7 +101,7 @@ Several humans may watch at once, each from their own client; the controller's c
 
 A large mute control in the strip, off by default, toggles audio for this viewer.
 Copy and paste work across the boundary while this viewer holds control: text and HTML both ways, images both ways (section 13).
-Dropping a file onto the viewer uploads it to the Screen's `~/Desktop` and drops it at the pointer (neko's upload route); a file chooser opened on the Screen is left to the Screen.
+Dropping a file onto the viewer saves it in the Screen's desktop folder through the service's own `POST /api/drop`: the XDG desktop directory `xfdesktop` shows as icons (`XDG_DESKTOP_DIR` in `~/.config/user-dirs.dirs`, else `~/Desktop`; `~/Desktop` in the workspace image), the file's name kept and a clash given a numeric suffix, and the strip says where it landed; a file chooser opened on the Screen is left to the Screen.
 
 ### 4.4 Window states
 
@@ -290,12 +290,13 @@ All on `127.0.0.1:8090`, identity from `X-Imbue-Identity`:
 | `POST /api/run` | `screen run` (section 17) |
 | `GET /api/windows`, `POST /api/windows/<id>/activate` | the X window list and raise, through `wmctrl` |
 | `POST /api/clipboard/image` | local-to-remote image (section 13) |
+| `POST /api/drop` | files dropped on the viewer (multipart `session_id` and `files`, at most 64 MiB together), written into the desktop folder (section 4.3) |
 | `POST /launch/browser` | the `browser` launch path: ensure Chromium, open the start page, answer `{"path": "/"}` |
 | `POST /api/open-url` | the `open:url` handler: a tab in Chromium, raised, with the held-URL rule while an agent drives |
 | `/browsers/...`, `GET /json/version` and the CDP proxy | the migrated fleet API (section 16) |
 | `/neko/...` | the reverse proxy to neko, HTTP and WebSocket, with the service's own rate limit on `/neko/api/login` |
 
-A visitor (an identity whose `owner` is false, section 4.6) may call only the viewer's routes, where the lease arbitrates: the page, `/api/state`, `/api/start`, `/api/connect-info`, `/api/ws`, `/api/session`, the human verbs, `/api/input-seen` and `/api/screen-size` with a visitor's session id (the owner's session, whose id the state document carries while it controls, answers a visitor 403), and `/neko/...`.
+A visitor (an identity whose `owner` is false, section 4.6) may call only the viewer's routes, where the lease arbitrates: the page, `/api/state`, `/api/start`, `/api/connect-info`, `/api/ws`, `/api/session`, the human verbs, `/api/input-seen`, `/api/screen-size` and `/api/drop` with a visitor's session id (the owner's session, whose id the state document carries while it controls, answers a visitor 403; a drop needs the session in control), and `/neko/...`.
 Every other route, `/api/run`, the agent verbs, the screenshot, the window tools, the clipboard, a session-less `/api/screen-size`, `/launch/browser`, `/api/open-url` and the whole `/browsers` API, answers a visitor 403; a request with no header is the owner (section 6.3), so agents and the shell, which reach the service over loopback, are not affected.
 
 ### 10.2 Events to viewers
@@ -487,7 +488,7 @@ What the implementers found and verified where the tree departs from the text ab
 - The supervisord group is `screen-stack`, not `screen`: a program outside a group is its own group of that name, and the service program is `screen` (section 9.1).
 - The service's own neko event session is a login with the admin password over the WebSocket, not the API token: the API-token session cannot open a WebSocket (section 6.2).
 - neko sends `clipboard/updated` to the host session alone and with text only, so the viewer reads text and HTML back through the REST clipboard route (`GET /api/room/clipboard`) and sets them through its POST, since `clipboard/set` drops the HTML (section 13).
-- File drop does not land: neko receives the files through `upload/drop`, but its drag emulation never maps its window on Xorg dummy with XFCE and the route answers 500; the viewer reports the failed drop in the strip (section 4.3).
+- File drop lands through the service, not neko: neko's `upload/drop` receives the files, but its drag emulation never maps its window on Xorg dummy with XFCE and the route answers 500, so the viewer posts dropped files to the service's `POST /api/drop`, which writes them into the folder `xfdesktop` shows as icons (`XDG_DESKTOP_DIR` from `~/.config/user-dirs.dirs`, written by `xdg-user-dirs-update` when the session starts, else `~/Desktop`); they appear as desktop icons rather than at the pointer (section 4.3).
 - Taps and long presses on a phone reach the Screen as mouse events: neko's touch events need its xf86 input driver, which this stack does not run (section 14).
 - The pointer-lock control is hidden: neko v3 has no relative-motion event, only absolute `control/move`, so the plumbing waits behind `IS_RELATIVE_MOTION_SUPPORTED` (section 12).
 - The share gateway's loopback route is `GET /connect-info` on its loopback port, as section 15 says, and the desktop's `media-endpoints` spells the protocol upper-case where the connector spells it lower-case; the service lowercases (section 5.2).

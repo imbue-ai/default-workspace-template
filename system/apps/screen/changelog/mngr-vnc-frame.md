@@ -70,3 +70,9 @@ The owner gate:
 - Programs started on the Screen (`screen run` commands, Chromium) no longer inherit the service's `LATCHKEY_GATEWAY_PASSWORD` and `LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE`; nothing launched there needs them, and an agent that does holds them in its own shell.
 
 - `test_screen_integration.py` no longer depends on the order its tests run in: every test takes a `running` fixture that starts the stack over the module's service life on demand (and builds a fresh life after a test quit the service), so each passes alone in its own CI sandbox.
+
+File drop lands on the desktop:
+
+- Dropping files on the viewer now posts them to the service's own `POST /api/drop` (multipart `session_id` and `files`, the controlling session alone, a visitor in control included) instead of neko's `upload/drop`, whose drag emulation never completes on this stack. The service writes them into the Screen's desktop folder, the XDG desktop directory `xfdesktop` shows as icons (`XDG_DESKTOP_DIR` from `~/.config/user-dirs.dirs`, else `~/Desktop`), creating it when missing, keeping each file's name, suffixing a clash (`report-1.pdf`), refusing names with path separators or a leading dot, and answering 413 past 64 MiB for one drop. The strip says where the files landed (`Saved to /home/user/Desktop: report.pdf`).
+
+- `test_screen_integration.py` drops a file through the route in the workspace image and finds it in the desktop folder.

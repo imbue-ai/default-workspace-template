@@ -14,6 +14,7 @@ from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
 from screen.browser_names import is_valid_browser_name
 from screen.errors import InvalidBrowserNameError
+from screen.errors import InvalidDroppedFileNameError
 from screen.errors import InvalidRunCommandError
 from screen.errors import InvalidStartUrlError
 from screen.errors import WindowToolError
@@ -98,6 +99,11 @@ _LOCAL_HOSTNAME_SUFFIX: Final[str] = ".localhost"
 
 # An X window id as wmctrl and xdotool print it: a hex literal.
 _WINDOW_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^0x[0-9a-fA-F]{1,8}$")
+
+# A dropped file keeps its name in the desktop folder (spec section 4.3), so the name must be one plain path
+# segment: the filesystem's length limit, no separators, and no leading dot (a hidden file, ``.`` or ``..``).
+MAX_DROPPED_FILE_NAME_BYTES: Final[int] = 255
+_PATH_SEPARATORS: Final[frozenset[str]] = frozenset({"/", "\\", "\x00"})
 
 
 class AgentId(NonEmptyStr):
@@ -194,6 +200,36 @@ def describe_local_url_problem(value: str) -> str | None:
     if hostname not in _LOCAL_HOSTNAMES and not hostname.endswith(_LOCAL_HOSTNAME_SUFFIX):
         return f"invalid url {_preview(value)}: only an address on this machine (localhost) opens here"
     return None
+
+
+@pure
+def describe_dropped_file_name_problem(value: str) -> str | None:
+    """Why ``value`` cannot name a dropped file in the desktop folder, or None when it can."""
+    if value.strip() == "":
+        return "a dropped file needs a name"
+    if any(character in _PATH_SEPARATORS for character in value):
+        return f"invalid file name {_preview(value)}: a name has no path separators"
+    if value.startswith("."):
+        return f"invalid file name {_preview(value)}: a name does not start with a dot"
+    if any(character < " " or character == "\x7f" for character in value):
+        return f"invalid file name {_preview(value)}: control characters are not allowed"
+    if len(value.encode()) > MAX_DROPPED_FILE_NAME_BYTES:
+        return f"invalid file name {_preview(value)}: over {MAX_DROPPED_FILE_NAME_BYTES} bytes"
+    return None
+
+
+class DroppedFileName(str):
+    """The name a dropped file is saved under: one plain path segment, neither dot-prefixed nor over 255 bytes."""
+
+    def __new__(cls, value: str) -> Self:
+        problem = describe_dropped_file_name_problem(value)
+        if problem is not None:
+            raise InvalidDroppedFileNameError(problem)
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
 class AbsoluteHttpUrl(str):

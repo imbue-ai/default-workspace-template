@@ -15,6 +15,7 @@ from flask.typing import ResponseReturnValue
 from flask_sock import Sock
 from loguru import logger
 from simple_websocket import ConnectionClosed
+from werkzeug.datastructures import FileStorage
 from werkzeug.exceptions import NotFound
 
 from app_manifest.registry import APP_CONTRACT_ROUTE
@@ -25,8 +26,11 @@ from screen.browser_routes import LAUNCH_BROWSER_PATH
 from screen.browser_routes import OPEN_URL_PATH
 from screen.browser_routes import build_browser_blueprint
 from screen.data_types import Lifecycle
+from screen.desktop_files import MAX_DROP_BYTES
 from screen.errors import ClipboardError
 from screen.errors import DisplayModeError
+from screen.errors import FileDropError
+from screen.errors import InvalidDroppedFileNameError
 from screen.errors import InvalidRunCommandError
 from screen.errors import NekoError
 from screen.errors import ScreenError
@@ -37,6 +41,7 @@ from screen.identity import AGENT_NAME_HEADER
 from screen.identity import IDENTITY_HEADER
 from screen.identity import parse_identity_header
 from screen.primitives import AgentId
+from screen.primitives import DroppedFileName
 from screen.primitives import NekoSessionId
 from screen.primitives import RunCommand
 from screen.primitives import XWindowId
@@ -86,6 +91,10 @@ _OWNER_ONLY_PATH_PREFIXES: Final[tuple[str, ...]] = (
     "/browsers",
 )
 _VISITOR_REFUSAL: Final[str] = "this route is the workspace owner's"
+_CONTROLLER_REFUSAL: Final[str] = "only the session in control of the Screen may do this"
+# The multipart fields of a drop: the dropping session and its files.
+_DROP_SESSION_FIELD: Final[str] = "session_id"
+_DROP_FILES_FIELD: Final[str] = "files"
 
 
 def _error(detail: str, status: int) -> Response:
@@ -117,6 +126,18 @@ def _agent_identity() -> tuple[AgentId | None, str | None]:
 def _session_id_from_body() -> NekoSessionId | None:
     raw = _json_body().get("session_id")
     return NekoSessionId(raw) if isinstance(raw, str) and raw else None
+
+
+def _session_id_from_form() -> NekoSessionId | None:
+    raw = request.form.get(_DROP_SESSION_FIELD, "")
+    return NekoSessionId(raw) if raw else None
+
+
+def _upload_size(upload: FileStorage) -> int:
+    upload.stream.seek(0, 2)
+    size = upload.stream.tell()
+    upload.stream.seek(0)
+    return size
 
 
 def _visitor_refusal_for_session(service: ScreenService, session_id: NekoSessionId) -> Response | None:
@@ -364,6 +385,40 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
         except ClipboardError as e:
             return _error(str(e), HTTP_BAD_GATEWAY)
         return Response(status=HTTP_NO_CONTENT)
+
+    # files dropped on the viewer (spec section 4.3)
+
+    @app.post("/api/drop")
+    def drop_files() -> ResponseReturnValue:
+        if request.content_length is not None and request.content_length > MAX_DROP_BYTES:
+            return _error(f"the files are over the {MAX_DROP_BYTES} byte cap", HTTP_PAYLOAD_TOO_LARGE)
+        if service.stack.lifecycle != Lifecycle.RUNNING:
+            return _error("the Screen is not running", HTTP_CONFLICT)
+        session_id = _session_id_from_form()
+        if session_id is None:
+            return _error("session_id is required", HTTP_BAD_REQUEST)
+        refusal = _visitor_refusal_for_session(service, session_id)
+        if refusal is not None:
+            return refusal
+        if not service.is_controller_session(session_id):
+            return _error(_CONTROLLER_REFUSAL, HTTP_FORBIDDEN)
+        uploads = request.files.getlist(_DROP_FILES_FIELD)
+        if not uploads:
+            return _error("no files were sent", HTTP_BAD_REQUEST)
+        try:
+            named = [(DroppedFileName(upload.filename or ""), upload.stream) for upload in uploads]
+        except InvalidDroppedFileNameError as e:
+            return _error(str(e), HTTP_BAD_REQUEST)
+        if sum(_upload_size(upload) for upload in uploads) > MAX_DROP_BYTES:
+            return _error(f"the files are over the {MAX_DROP_BYTES} byte cap", HTTP_PAYLOAD_TOO_LARGE)
+        try:
+            saved = service.save_dropped_files(named)
+        except ScreenNotRunningError as e:
+            return _error(str(e), HTTP_CONFLICT)
+        except FileDropError as e:
+            logger.warning("A dropped file could not be saved: {}", e)
+            return _error(str(e), HTTP_BAD_GATEWAY)
+        return jsonify({"directory": str(service.desktop_dir), "saved": [path.name for path in saved]})
 
     # the display
 

@@ -23,6 +23,7 @@ from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from PIL import Image
@@ -39,6 +40,7 @@ from screen.cdp_proxy import ProxyServer
 from screen.chrome_launcher import SubprocessChromiumLauncher
 from screen.connect_info import ConnectInfoAggregator
 from screen.data_types import Lifecycle
+from screen.desktop_files import DEFAULT_DESKTOP_DIR_NAME
 from screen.events import EVENTS_RELATIVE_PATH
 from screen.interfaces import ProgramState
 from screen.launch import DetachedProcessLauncher
@@ -276,6 +278,32 @@ def test_xeyes_appears_in_the_window_list_and_a_raised_window_titles_the_screen(
     os.kill(xeyes_pid, signal.SIGTERM)
     os.kill(terminal.get_json()["pid"], signal.SIGTERM)
     assert wait_until(lambda: window_of("xfce4-terminal") is None, 10.0)
+
+
+def test_a_dropped_file_lands_in_the_desktop_folder(running: _LiveService) -> None:
+    """A file the controlling session drops is written into the folder xfdesktop shows (spec section 4.3): the XDG
+    desktop directory, which in the workspace image is ``~/Desktop``."""
+    service, client = running.service, running.client
+    session = client.post("/api/session", headers={"X-Imbue-Identity": '{"owner": true, "email": "josh@imbue.com"}'})
+    assert session.status_code == 200, session.get_json()
+    session_id = session.get_json()["session_id"]
+    assert client.post("/api/control/take", json={"session_id": session_id}).status_code == 200
+    name = f"screen-drop-{uuid4().hex[:8]}.txt"
+    content = f"dropped on the Screen {uuid4().hex}\n".encode()
+    answer = client.post(
+        "/api/drop",
+        data={"session_id": session_id, "files": [(io.BytesIO(content), name)]},
+        content_type="multipart/form-data",
+    )
+    landed = service.desktop_dir / name
+    try:
+        assert answer.status_code == 200, answer.get_json()
+        assert answer.get_json() == {"directory": str(service.desktop_dir), "saved": [name]}
+        assert service.desktop_dir == Path.home() / DEFAULT_DESKTOP_DIR_NAME
+        assert landed.read_bytes() == content
+    finally:
+        landed.unlink(missing_ok=True)
+        client.post("/api/control/return", json={"session_id": session_id})
 
 
 class _PageHandler(BaseHTTPRequestHandler):

@@ -50,6 +50,14 @@ class InvalidScreenSizeError(ScreenError, ValueError):
     """A requested size is not a pair of positive integers."""
 
 
+class InvalidDroppedFileNameError(ScreenError, ValueError):
+    """A dropped file's name is not one plain path segment (see ``primitives.describe_dropped_file_name_problem``)."""
+
+
+class FileDropError(ScreenError):
+    """A dropped file could not be written into the desktop folder."""
+
+
 class ServeError(ScreenError):
     """The page server could not bind or shut down as asked."""
 

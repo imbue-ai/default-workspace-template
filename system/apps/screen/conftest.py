@@ -123,7 +123,8 @@ def service(
     proxy_server: ProxyServer,
 ) -> Iterator[ScreenService]:
     """A service over fakes whose stack starts at once, with no event subscription and no clipboard monitor, on a
-    clock the test moves, with a recording xclip and a browser fleet whose Chromium is in memory."""
+    clock the test moves, with a recording xclip, a desktop folder under the test's directory and a browser fleet
+    whose Chromium is in memory."""
     built = ScreenService(
         repo_root=tmp_path,
         state_dir=tmp_path / "state",
@@ -131,6 +132,7 @@ def service(
         window_tools=FakeWindowTools(),
         display_modes=fake_display_modes,
         clipboard=XClipboard(display=":4242", xclip_command=(str(fake_xclip),)),
+        desktop_dir=tmp_path / "Desktop",
         launcher=RecordingLauncher(),
         messenger=recording_messenger,
         connectivity=ConnectInfoAggregator(brokers=fake_brokers, deadline_seconds=1.0),

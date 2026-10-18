@@ -13,6 +13,7 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 from typing import Final
+from typing import IO
 
 from PIL import Image
 from loguru import logger
@@ -41,6 +42,8 @@ from screen.data_types import RequestIdentity
 from screen.data_types import ScreenSize
 from screen.data_types import ScreenState
 from screen.data_types import XWindow
+from screen.desktop_files import desktop_directory
+from screen.desktop_files import save_dropped_file
 from screen.errors import DisplayModeError
 from screen.errors import NekoError
 from screen.errors import ScreenNotRunningError
@@ -57,6 +60,7 @@ from screen.primitives import BROWSER_TITLE
 from screen.primitives import BrowserName
 from screen.primitives import CHROMIUM_WINDOW_CLASS_MARKERS
 from screen.primitives import DEFAULT_TITLE
+from screen.primitives import DroppedFileName
 from screen.primitives import NekoSessionId
 from screen.primitives import VIDEO_ID_WATCH
 from screen.primitives import XWindowId
@@ -165,6 +169,11 @@ class ScreenService(MutableModel):
     window_tools: WindowToolsInterface = Field(frozen=True, description="wmctrl and xdotool on the display")
     display_modes: DisplayModesInterface = Field(frozen=True, description="xrandr on the display")
     clipboard: XClipboard = Field(default_factory=XClipboard, frozen=True, description="xclip on the display")
+    desktop_dir: Path = Field(
+        default_factory=lambda: desktop_directory(Path.home()),
+        frozen=True,
+        description="Where dropped files land: the desktop folder xfdesktop shows as icons",
+    )
     launcher: ProcessLauncherInterface = Field(frozen=True, description="How ``screen run`` starts a command")
     messenger: AgentMessengerInterface = Field(frozen=True, description="Wakes queued agents")
     connectivity: ConnectInfoAggregator = Field(
@@ -653,6 +662,14 @@ class ScreenService(MutableModel):
         if self._clipboard_monitor is not None:
             self._clipboard_monitor.note_written(data)
         self.clipboard.set_contents(data, mime)
+
+    # files dropped on the viewer (spec section 4.3)
+
+    def save_dropped_files(self, files: Sequence[tuple[DroppedFileName, IO[bytes]]]) -> list[Path]:
+        """Write the controller's dropped files into the desktop folder, each under its own name (suffixed on a
+        clash); answers the paths they landed at."""
+        self._require_running()
+        return [save_dropped_file(self.desktop_dir, name, stream) for name, stream in files]
 
     def set_screen_size(self, width: int, height: int) -> ScreenSize:
         """Resize the display (spec section 7.2): quantize and clamp, add the RANDR mode when the server lacks it,

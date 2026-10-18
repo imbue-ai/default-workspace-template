@@ -2,6 +2,7 @@
 the Screen outside the lease refuses an identity whose ``owner`` is false, while the viewer's routes keep answering
 one and a header-less (loopback) request keeps reading as the owner."""
 
+import io
 import json
 from typing import Final
 
@@ -13,6 +14,7 @@ from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import CONTEXT_MENU_ROUTE
 from mock_neko_test import FakeNeko
 from screen.browser_routes import LAUNCH_BROWSER_PATH
+from screen.desktop_files import MAX_DROP_BYTES
 from screen.proxy import NEKO_PROXY_PREFIX
 from screen.service import ScreenService
 from screen.watch import STOPPED_NOTIFICATION_PATH
@@ -69,6 +71,7 @@ _OPEN_RULES: Final[frozenset[str]] = frozenset(
         "/api/control/return",
         "/api/screen-size",
         "/api/input-seen",
+        "/api/drop",
         STOPPED_NOTIFICATION_PATH,
         f"{NEKO_PROXY_PREFIX}/<path:upstream_path>",
         f"{NEKO_PROXY_PREFIX}/api/ws",
@@ -158,6 +161,77 @@ def test_a_visitor_may_not_act_as_the_owners_session(
         client.post("/api/input-seen", json={"session_id": visitor["session_id"]}, headers=_VISITOR).status_code == 204
     )
     assert client.post("/api/input-seen", json={"session_id": "no-such"}, headers=_VISITOR).status_code == 404
+
+
+def _drop(client: FlaskClient, headers: dict[str, str], session_id: str, *files: tuple[str, bytes]):
+    return client.post(
+        "/api/drop",
+        data={"session_id": session_id, "files": [(io.BytesIO(content), name) for name, content in files]},
+        content_type="multipart/form-data",
+        headers=headers,
+    )
+
+
+def test_a_visitor_in_control_drops_files_into_the_desktop_folder(client: FlaskClient, service: ScreenService) -> None:
+    start_service_stack(service)
+    visitor = _session(client, _VISITOR)
+    assert (
+        client.post("/api/control/take", json={"session_id": visitor["session_id"]}, headers=_VISITOR).status_code
+        == 200
+    )
+    answer = _drop(client, _VISITOR, visitor["session_id"], ("notes.txt", b"hello"), ("notes.txt", b"again"))
+    assert answer.status_code == 200, answer.get_json()
+    assert answer.get_json() == {"directory": str(service.desktop_dir), "saved": ["notes.txt", "notes-1.txt"]}
+    assert (service.desktop_dir / "notes.txt").read_bytes() == b"hello"
+    assert (service.desktop_dir / "notes-1.txt").read_bytes() == b"again"
+
+
+def test_a_drop_needs_the_controlling_session_and_refuses_the_owners_session_to_a_visitor(
+    client: FlaskClient, service: ScreenService
+) -> None:
+    start_service_stack(service)
+    owner = _session(client, _OWNER)
+    visitor = _session(client, _VISITOR)
+    assert (
+        client.post("/api/control/take", json={"session_id": owner["session_id"]}, headers=_OWNER).status_code == 200
+    )
+    as_owner = _drop(client, _VISITOR, owner["session_id"], ("notes.txt", b"hello"))
+    assert as_owner.status_code == 403
+    assert as_owner.get_json()["detail"] == "this route is the workspace owner's"
+    not_controlling = _drop(client, _VISITOR, visitor["session_id"], ("notes.txt", b"hello"))
+    assert not_controlling.status_code == 403
+    assert not_controlling.get_json()["detail"] == "only the session in control of the Screen may do this"
+    no_session = client.post(
+        "/api/drop", data={"files": [(io.BytesIO(b"x"), "a.txt")]}, content_type="multipart/form-data"
+    )
+    assert no_session.status_code == 400
+    assert not service.desktop_dir.exists()
+
+
+def test_a_drop_refuses_bad_names_empty_drops_and_oversize_bodies(client: FlaskClient, service: ScreenService) -> None:
+    assert _drop(client, _OWNER, "s1", ("a.txt", b"x")).status_code == 409
+    start_service_stack(service)
+    owner = _session(client, _OWNER)
+    assert (
+        client.post("/api/control/take", json={"session_id": owner["session_id"]}, headers=_OWNER).status_code == 200
+    )
+    for bad_name in ("../escape.txt", "dir/file.txt", ".hidden"):
+        refused = _drop(client, _OWNER, owner["session_id"], (bad_name, b"x"))
+        assert refused.status_code == 400, bad_name
+        assert "invalid file name" in refused.get_json()["detail"]
+    empty = client.post(
+        "/api/drop", data={"session_id": owner["session_id"]}, content_type="multipart/form-data", headers=_OWNER
+    )
+    assert empty.status_code == 400
+    too_large = client.post(
+        "/api/drop",
+        data={"session_id": owner["session_id"], "files": [(io.BytesIO(b"x"), "a.txt")]},
+        content_type="multipart/form-data",
+        headers=_OWNER,
+        environ_overrides={"CONTENT_LENGTH": str(MAX_DROP_BYTES + 1)},
+    )
+    assert too_large.status_code == 413
+    assert not service.desktop_dir.exists()
 
 
 def test_a_size_report_with_no_session_is_the_owners_alone(

@@ -19,8 +19,8 @@ demand and the `screen-watch` event listener ends them together.
 Identity comes from `X-Imbue-Identity` (a header-less request came over loopback and is the
 owner). A visitor, an identity whose `owner` is false, may use only the viewer's routes (the
 page and its assets, `/health`, `/api/state`, `/api/start`, `/api/connect-info`, `/api/ws`,
-`/api/session`, `/api/control/take` and `/return`, `/api/input-seen` and `/api/screen-size`
-with a visitor's session id, and `/neko/`), where the lease arbitrates; naming the owner's
+`/api/session`, `/api/control/take` and `/return`, `/api/input-seen`, `/api/screen-size` and
+`/api/drop` with a visitor's session id, and `/neko/`), where the lease arbitrates; naming the owner's
 session on those (its id is in the state document while the owner controls) answers a visitor
 403, and so does every other route (`/api/run`, the agent verbs, the screenshot, the window
 tools, the clipboard, a session-less `/api/screen-size`, `/launch/browser`, `/api/open-url`
@@ -55,6 +55,10 @@ and the whole `/browsers` API).
 - `POST /api/clipboard/image`, the body an image (`Content-Type: image/...`, at most 10
   MiB): placed on the X clipboard of `:99` with `xclip` (local to remote, spec section
   13).
+- `POST /api/drop`, multipart `session_id` and `files` (at most 64 MiB together, else 413): the
+  controller's dropped files, written into the Screen's desktop folder (below) under their own
+  names (a clash takes `-1`, `-2`, ...; a name with a path separator or a leading dot is refused);
+  answers `{"directory", "saved"}`. A session that does not control the Screen is refused.
 - `POST /api/start`: start the stack (the stopped overlay's Start button).
 - `POST /api/session`: a neko session for the requester's identity (`X-Imbue-Identity`;
   a header-less request is the owner): the service logs the human in to neko with the
@@ -217,16 +221,16 @@ session alone and with text only, so the directions are:
   control (only the host may set it), with the layout `navigator.language` suggests,
   `us` by default.
 
-A file dropped on the viewer by the controller goes to neko's
-`POST /api/room/upload/drop` (multipart `x`, `y` in Screen coordinates, `files`), which
-is meant to drag it onto the Screen at that point so that, dropped on the XFCE desktop,
-it lands in `~/Desktop`. Verified in a local Docker workspace (neko v3.2.0): the files
-reach neko and are written under its `/tmp/neko-drop-*` directory, but neko's drag
-emulation (a GTK popup it drags from the top-left corner with its own pointer moves)
-never maps its window on this stack and the route answers 500 "unable to drop files"
-after neko's one-second wait; moving the XFCE panel away from the corner changed
-nothing. The viewer reports the failure in the strip. Making the drop land is a
-follow-up on neko's side of the boundary.
+A file dropped on the viewer by the controller goes to the service's `POST /api/drop`, which
+writes it into the Screen's desktop folder: the XDG desktop directory `xfdesktop` shows as icons
+(`XDG_DESKTOP_DIR` in `~/.config/user-dirs.dirs`, the file `xdg-user-dirs-update` writes when
+the session starts, else `~/Desktop`; the service and the session share one home, so
+`desktop_files.py` resolves it the same way), created when missing. The strip then says where
+the files landed. neko's own `upload/drop` route is not used: verified in a local Docker
+workspace (neko v3.2.0), the files reach neko but its drag emulation (a GTK popup it drags
+from the top-left corner with its own pointer moves) never maps its window on this stack and
+the route answers 500 after neko's one-second wait, so a dropped file lands as a desktop icon
+rather than at the pointer.
 
 Under the phone layout (the shared `PHONE_MEDIA_QUERY`; the shell gives pages no phone
 signal) the Screen keeps its size and the viewer offers: one-finger drag pans and a pinch
