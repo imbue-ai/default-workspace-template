@@ -573,7 +573,6 @@ def _destroy_workspace(harness: _Harness) -> None:
             **_electron_environment(harness),
             "MNGR_HOST_DIR": str(host_dirs[0]),
             "MNGR_PREFIX": f"{harness.root_name}-",
-            "MNGR_PROJECT_CONFIG_DIR": str(harness.host_config_root / ".mngr"),
         }
         command = ["uv", "run", "--no-sync", "--project", str(harness.mngr_worktree), "mngr", "destroy"]
         command += [harness.workspace_name, "--force"]
