@@ -242,9 +242,14 @@ zooms the drawn video (the viewer's own transform, never a resize), a tap is a l
 click and a long press a right click at the mapped point, a two-finger drag scrolls, a
 bar offers Ctrl, Alt and Shift (each latching for the next key) plus Esc and Tab, and a
 Keyboard button focuses a hidden input whose `input` and `keydown` events become neko
-key events. Taps and long presses reach the Screen as mouse events: neko's touch
-events need its xf86 input driver, which this stack does not run (`desktop.input` is
-off).
+key events. A tap reaches the Screen as a touch: neko's xf86 input driver
+(`neko_drv.so`, the `screen_touchscreen` device `xorg.conf` declares, its socket
+`/tmp/screen-runtime/xf86-input-neko.sock`) is a direct-touch device whose pointer
+emulation also moves the core pointer, and the viewer sends `control/touchbegin` and
+`control/touchend` at the mapped point with the finger's pressure when neko's
+`system/init` says `touch_events`; a long press stays a right click (X touch has no
+second button). The stack waits for the driver's socket before starting neko, which
+dials it once and exits without it.
 
 ## Pointer lock
 
@@ -341,8 +346,10 @@ act in it.
 ## Packaging
 
 The env.d unit `system/scripts/env.d/2000-screen.sh` installs the stack's apt packages
-from the pinned snapshot and the pinned neko binary at `/opt/neko/bin/neko` (and
-Fortress, which moved there from the browser's unit). Until it is satisfied the service
+from the pinned snapshot, the pinned neko binary at `/opt/neko/bin/neko` and neko's Xorg
+input driver at `/usr/lib/xorg/modules/input/neko_drv.so` (both from the pinned neko base
+image, whose driver is built against the same xorg-server the snapshot installs), and
+Fortress, which moved there from the browser's unit. Until it is satisfied the service
 answers `installing`.
 
 The frontend (`frontend/`) is a member of the npm workspace at `system/package.json`,

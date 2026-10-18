@@ -26,10 +26,10 @@ from screen.errors import SupervisorError
 from screen.interfaces import ProgramState
 from screen.interfaces import SupervisorInterface
 from screen.neko_config import PULSE_SOCKET_PATH
-from screen.neko_config import RUNTIME_DIR
 from screen.primitives import DISPLAY
 from screen.primitives import NEKO_PROGRAM
 from screen.primitives import PULSE_PROGRAM
+from screen.primitives import RUNTIME_DIR
 from screen.primitives import SESSION_PROGRAM
 from screen.primitives import STACK_PROGRAMS
 from screen.primitives import XORG_PROGRAM

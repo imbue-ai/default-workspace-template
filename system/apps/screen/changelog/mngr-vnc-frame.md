@@ -82,3 +82,11 @@ Lease arbitration for the paste and the held page's Cancel:
 - `POST /api/clipboard/image` takes multipart `session_id` and `image` and the service accepts it from the session in control alone, so a visitor in control pastes images again; `POST /browsers/<name>/pending-url/cancel` takes `session_id` in its body or query and answers the session in control or the owner (a header-less caller over loopback, an agent or the shell, still works with no session). Both left the owner gate; a visitor's session that does not control gets the lease refusal (403, `only the session in control of the Screen may do this`), and naming the owner's session the owner-gate refusal as before.
 
 - The viewer sends its session id on both calls and offers the held page's Cancel to the sessions the service lets drop it (the session in control, or the owner's); a page is held only while an agent drives, so in practice that is the owner's viewer.
+
+Touch through neko's input driver (spec section 14):
+
+- `xorg.conf` declares neko's `xf86-input-neko` touchscreen (`screen_touchscreen`, `Driver "neko"`, `SocketName /tmp/screen-runtime/xf86-input-neko.sock`, the layout's `CorePointer`) and `neko.yaml` enables `desktop.input` on that socket; the stack waits for the display socket and the driver's socket before starting the other members, removes a stale driver socket before Xorg starts, and reports `installing` until the env.d unit has put `/usr/lib/xorg/modules/input/neko_drv.so` in place.
+
+- The viewer sends a phone's tap as `control/touchbegin` and `control/touchend` at the mapped point with the finger's pressure (a byte, never zero) and a fresh sixteen-bit touch id, when neko's `system/init` says `touch_events`; otherwise, and for a long press (a right click), the mouse path stays.
+
+- `test_screen_integration.py` asserts in the workspace image that Xorg loaded the `neko` driver for the device and accepted neko's connection, that `system/init` carries `touch_events`, and that a touch over neko's WebSocket moves the core pointer to the touched point (read back with `xdotool getmouselocation`).

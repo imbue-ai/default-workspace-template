@@ -190,7 +190,7 @@ Screenshots come from `GET /api/screenshot`, which the service answers from neko
 
 ### 7.1 The X server
 
-Xorg with the dummy driver on `:99`, `xorg.conf` rendered by the service at stack start: `VideoRam` sized for the 1080p cap at 32 bpp with headroom, `Virtual 1920 1080`, a `Modes` list seeded with `1920x1080`, `1600x900`, `1280x720`, and `-noreset -nolisten tcp`.
+Xorg with the dummy driver on `:99`, `xorg.conf` rendered by the service at stack start: `VideoRam` sized for the 1080p cap at 32 bpp with headroom, `Virtual 1920 1080`, a `Modes` list seeded with `1920x1080`, `1600x900`, `1280x720`, neko's `xf86-input-neko` touchscreen as the one configured input device (`Driver "neko"`, its socket under the stack's runtime dir, the layout's `CorePointer`; mouse and keyboard arrive over XTEST), and `-noreset -nolisten tcp`.
 XFCE as neko's image ships it: `startxfce4` with the panel, Thunar and xfwm4 compositing on, PulseAudio with a null sink as the default device.
 The session runs as the workspace user with `HOME` the workspace home, so XFCE and application state ride the persistent volume and the backup.
 
@@ -250,7 +250,7 @@ The manifest's `[wiring] programs` names the four.
 ### 9.2 Start on demand
 
 The service starts the group when it has to: a page load of the viewer (`GET /`), the stopped overlay's Start button, the `browser` launch path, `screen run`, or an agent's `acquire`.
-It renders `xorg.conf` and `neko.yaml`, starts `screen-xorg`, waits for the socket, then `screen-pulse`, `screen-session`, and `screen-neko`, and answers `starting` until neko's health route answers.
+It renders `xorg.conf` and `neko.yaml`, starts `screen-xorg`, waits for the display socket and the input driver's socket (neko dials the driver once at its start and exits without it), then `screen-pulse`, `screen-session`, and `screen-neko`, and answers `starting` until neko's health route answers.
 Programs the user or an agent start on the Screen are launched with `DISPLAY=:99` and tagged `AGENT_SUBPROCESS` by `screen run`, which is the band above the group's (section 9.4).
 
 ### 9.3 The group ends together
@@ -347,8 +347,8 @@ Neko's relative-motion support is verified in the implementation; without it the
 
 ## 14. Mobile
 
-Under the phone layout the viewer keeps the Screen size and offers: pan by one-finger drag outside a control and pinch-zoom of the video; tap as a click at the touch point mapped into Screen coordinates; long press as a right click; two-finger drag as scroll; a modifier bar (Ctrl, Alt, Shift, Esc, Tab, each latching for the next key); a keyboard button focusing a hidden input whose `input` and `keydown` events become neko key events; and the mute and control controls of the strip.
-Neko's touch events are used only when the touch is a direct interaction with the Screen (tap, long press), since pan and zoom are the viewer's own.
+Under the phone layout the viewer keeps the Screen size and offers: pan by one-finger drag outside a control and pinch-zoom of the video; tap as a touch at the touch point mapped into Screen coordinates (`control/touchbegin` and `control/touchend` with the finger's pressure, through neko's `xf86-input-neko` driver, so the Screen sees a touchscreen tap); long press as a right click; two-finger drag as scroll; a modifier bar (Ctrl, Alt, Shift, Esc, Tab, each latching for the next key); a keyboard button focusing a hidden input whose `input` and `keydown` events become neko key events; and the mute and control controls of the strip.
+Neko's touch events are used only when the touch is a direct interaction with the Screen (the tap), since pan and zoom are the viewer's own, and the long press stays a right click because X touch has no second button and a context menu is what the press is for; a neko whose `system/init` says `touch_events` is false gets the tap as a click.
 
 ## 15. The share gateway
 
@@ -367,7 +367,7 @@ While the share stack is up:
 - "The browser" is one Chromium with one profile, started by the `browser` launch path, `screen run`, or an agent's `new`; it is not stopped when its windows close (the user closes it from inside, or Quit ends the stack); its tabs are checkpointed as today and restored when it is next started.
 - Chromium's windows are ordinary X windows: the user may open as many as they like, the window manager places them, and nothing pins or closes them.
   `Browser.setWindowBounds` leaves the CDP block list; `Emulation.setDeviceMetricsOverride` stays blocked.
-- Fortress stays at v151 in the new env.d unit, x64 and arm64 pins alike: v153 was tried, and Playwright 1.58's click hangs on a touch-enabled page in it (the files app's phone-layout tests time out), so the upgrade waits for a Playwright that supports it.
+- Fortress is upgraded to v153 in the new env.d unit, x64 and arm64 alike from the official release (the fork build that supplied arm64 is retired); the Playwright click hang on a touch-enabled page that held it at v151 went with the files app's redesign.
 
 ### 16.2 What goes
 
@@ -398,7 +398,7 @@ The `manage-desktop` skill documents the Screen window and the `FULLSCREEN` stat
 
 ## 18. Packaging
 
-A new env.d unit, `2000-screen.sh`, with a fast satisfied check and no marker file, installs from the pinned apt snapshot: `xserver-xorg-core` (which carries `cvt`), `xserver-xorg-video-dummy`, `xfce4` (the metapackage without the goodies), `pulseaudio`, `gstreamer1.0-plugins-base|good|bad|ugly` (the x264 encoder is in `ugly`), `gstreamer1.0-x`, `gstreamer1.0-pulseaudio`, `xdotool`, `wmctrl`, `xclip`; and the pinned neko v3 release binary for the architecture, checked against its SHA-256, at `/opt/neko/bin/neko`.
+A new env.d unit, `2000-screen.sh`, with a fast satisfied check and no marker file, installs from the pinned apt snapshot: `xserver-xorg-core` (which carries `cvt`), `xserver-xorg-video-dummy`, `xfce4` (the metapackage without the goodies), `pulseaudio`, `gstreamer1.0-plugins-base|good|bad|ugly` (the x264 encoder is in `ugly`), `gstreamer1.0-x`, `gstreamer1.0-pulseaudio`, `xdotool`, `wmctrl`, `xclip`; the pinned neko v3 release binary for the architecture, checked against its SHA-256, at `/opt/neko/bin/neko`; and neko's Xorg input driver from the same image, at `/usr/lib/xorg/modules/input/neko_drv.so` (built against the same xorg-server the snapshot installs).
 Fortress moves into the same unit from `1000-playwright-fortress.sh`, which is deleted; the unit keeps `DWT_SKIP_BROWSER_UNIT`.
 The image bakes nothing new, so the first boot of an existing workspace installs the stack through `env-converge` and the service answers `starting` with "Installing the screen" until the unit is satisfied.
 The package `system/apps/screen` is a uv tool like every app, with `app.toml`:
@@ -489,7 +489,7 @@ What the implementers found and verified where the tree departs from the text ab
 - The service's own neko event session is a login with the admin password over the WebSocket, not the API token: the API-token session cannot open a WebSocket (section 6.2).
 - neko sends `clipboard/updated` to the host session alone and with text only, so the viewer reads text and HTML back through the REST clipboard route (`GET /api/room/clipboard`) and sets them through its POST, since `clipboard/set` drops the HTML (section 13).
 - File drop lands through the service, not neko: neko's `upload/drop` receives the files, but its drag emulation never maps its window on Xorg dummy with XFCE and the route answers 500, so the viewer posts dropped files to the service's `POST /api/drop`, which writes them into the folder `xfdesktop` shows as icons (`XDG_DESKTOP_DIR` from `~/.config/user-dirs.dirs`, written by `xdg-user-dirs-update` when the session starts, else `~/Desktop`); they appear as desktop icons rather than at the pointer (section 4.3).
-- Taps and long presses on a phone reach the Screen as mouse events: neko's touch events need its xf86 input driver, which this stack does not run (section 14).
+- A tap on a phone reaches the Screen as a touch through neko's xf86 input driver, which the stack runs (the module from the pinned neko image, the socket under the runtime dir, the stack waiting for it before neko starts); a long press stays a right click (section 14).
 - The pointer-lock control is hidden: neko v3 has no relative-motion event, only absolute `control/move`, so the plumbing waits behind `IS_RELATIVE_MOTION_SUPPORTED` (section 12).
 - The share gateway's loopback route is `GET /connect-info` on its loopback port, as section 15 says, and the desktop's `media-endpoints` spells the protocol upper-case where the connector spells it lower-case; the service lowercases (section 5.2).
 - neko stops the audio pipeline on its own while every session has audio disabled (measured: PulseAudio and the encoder at 0% with a muted viewer), so the null-device fallback of section 8.3 is not needed.

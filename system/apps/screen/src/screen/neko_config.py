@@ -16,16 +16,17 @@ from screen.primitives import MAX_HEIGHT
 from screen.primitives import MAX_WIDTH
 from screen.primitives import NEKO_HOST
 from screen.primitives import NEKO_PORT
+from screen.primitives import RUNTIME_DIR
 from screen.primitives import VIDEO_IDS
 from screen.primitives import VIDEO_ID_CONTROL
 from screen.primitives import VIDEO_ID_IDLE
 from screen.primitives import VIDEO_ID_WATCH
+from screen.xorg_config import INPUT_SOCKET_PATH
 from screen.xorg_config import MODE_REFRESH_HZ
 
 # The PulseAudio sink neko captures, and where the other members reach the daemon.
 AUDIO_SINK_NAME: Final[str] = "audio_output"
 AUDIO_CAPTURE_DEVICE: Final[str] = f"{AUDIO_SINK_NAME}.monitor"
-RUNTIME_DIR: Final[str] = "/tmp/screen-runtime"
 PULSE_SOCKET_PATH: Final[str] = f"{RUNTIME_DIR}/pulse.sock"
 
 # The JPEG screencast every client falls back to without WebRTC (spec section 5.4).
@@ -80,9 +81,9 @@ def neko_config_document(secrets: NekoSecrets) -> dict[str, Any]:
         "desktop": {
             "display": DISPLAY,
             "screen": f"{MAX_WIDTH}x{MAX_HEIGHT}@{MODE_REFRESH_HZ}",
-            # Touch arrives as mouse events from the viewer; neko's own xf86 input driver is not installed, and
-            # with this on neko refuses to start without its socket.
-            "input": {"enabled": False},
+            # neko's xf86 input driver carries a phone's touches (spec section 14); neko dials its socket once at
+            # start and exits when it is not there, so the stack starts neko only after Xorg has bound it.
+            "input": {"enabled": True, "socket": INPUT_SOCKET_PATH},
             "unminimize": False,
             "upload_drop": True,
             "file_chooser_dialog": False,

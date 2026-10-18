@@ -14,8 +14,8 @@ from screen.brokers import ENV_GATEWAY_PERMISSIONS_OVERRIDE
 from screen.errors import ScreenError
 from screen.interfaces import ProcessLauncherInterface
 from screen.neko_config import PULSE_SOCKET_PATH
-from screen.neko_config import RUNTIME_DIR
 from screen.primitives import DISPLAY
+from screen.primitives import RUNTIME_DIR
 
 # The shell that bands itself and then becomes the command: the band survives execve and is inherited by everything
 # the command spawns, so a program started on the Screen is shed before the stack (spec section 9.4). A shell does

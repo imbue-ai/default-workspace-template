@@ -1,6 +1,6 @@
-/** Human input to neko over its socket: pointer moves and buttons in Screen coordinates, wheel steps, and keys as
- *  X11 keysyms through the Guacamole keyboard. Sent only while this viewer's session is the controller (spec
- *  section 11). */
+/** Human input to neko over its socket: pointer moves and buttons in Screen coordinates, wheel steps, keys as X11
+ *  keysyms through the Guacamole keyboard, and a phone's taps as touches through neko's xf86 input driver when the
+ *  server has it (spec section 14). Sent only while this viewer's session is the controller (spec section 11). */
 
 import GuacamoleKeyboard from "@imbue/workspace-ui/src/guacamole_keyboard.js";
 import type { KeySink } from "./modifier_latch";
@@ -10,6 +10,12 @@ import type { Point, Size, ViewTransform } from "./view_transform";
 
 const MOVE_COALESCE_MS = 16;
 const WHEEL_STEP_PX = 53;
+/** neko's ``pressure`` is a byte; a finger on the glass is never zero, and a browser that reports no pressure says
+ *  0 or 0.5, so the floor keeps a tap from reading as no contact. */
+const MAX_TOUCH_PRESSURE = 255;
+const MIN_TOUCH_PRESSURE = 1;
+/** The touch ids neko's driver reads from its messages are 16 bits wide. */
+const MAX_TOUCH_ID = 0xffff;
 
 export const XK_CONTROL_L = 0xffe3;
 export const XK_CONTROL_R = 0xffe4;
@@ -22,6 +28,12 @@ export const XK_V = 0x0076;
 export const XK_V_UPPER = 0x0056;
 
 export type ScreenGeometry = Size;
+
+/** neko's ``pressure`` byte for a pointer event's pressure (0 to 1). */
+export function touchPressureOf(pressure: number): number {
+  const scaled = Math.round(pressure * MAX_TOUCH_PRESSURE);
+  return Math.min(MAX_TOUCH_PRESSURE, Math.max(MIN_TOUCH_PRESSURE, scaled));
+}
 
 /** Where a pointer event lands on the Screen, given the letterboxed video inside the stage; null outside it. */
 export function screenPointFromStage(
@@ -40,7 +52,10 @@ export class InputRelay implements KeySink {
   private pendingMove: Point | null = null;
   private moveTimer = 0;
   private wheel = { x: 0, y: 0, t: 0 };
+  private nextTouchId = 0;
   isEnabled = false;
+  /** Whether neko runs its xf86 input driver (``touch_events`` of ``system/init``); without it a tap is a click. */
+  isTouchSupported = false;
   screen: ScreenGeometry = { width: 0, height: 0 };
   /** The phone's zoom and pan over the video; identity elsewhere. */
   viewTransform: () => ViewTransform = () => IDENTITY_TRANSFORM;
@@ -137,6 +152,30 @@ export class InputRelay implements KeySink {
     this.socket.send("control/buttondown", { code: button });
     this.socket.send("control/buttonup", { code: button });
     this.onInput();
+  }
+
+  /** A tap at a client point (the phone's): a touch begun and ended there through neko's input driver, so the
+   *  Screen sees a touchscreen tap; a click where the server has no driver. ``pressure`` is the pointer event's. */
+  tapAt(clientX: number, clientY: number, pressure: number): void {
+    if (!this.isEnabled) return;
+    if (!this.isTouchSupported) {
+      this.clickAt(clientX, clientY, 1);
+      return;
+    }
+    const point = this.pointAt(clientX, clientY);
+    if (point === null) return;
+    this.flushMove();
+    const touch = { touch_id: this.allocateTouchId(), ...point, pressure: touchPressureOf(pressure) };
+    this.socket.send("control/touchbegin", touch);
+    this.socket.send("control/touchend", touch);
+    this.onInput();
+  }
+
+  /** A fresh id for one touch: the driver sees sixteen bits of it, and neko refuses an id still begun. */
+  private allocateTouchId(): number {
+    const touchId = this.nextTouchId;
+    this.nextTouchId = (this.nextTouchId + 1) % (MAX_TOUCH_ID + 1);
+    return touchId;
   }
 
   /** Wheel steps (the phone's two-finger scroll). */

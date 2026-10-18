@@ -2,7 +2,7 @@
 /** Pointer mapping into the letterboxed Screen, and what the relay sends to neko and when. */
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { InputRelay, XK_CONTROL_L, XK_W, screenPointFromStage } from "./input";
+import { InputRelay, XK_CONTROL_L, XK_W, screenPointFromStage, touchPressureOf } from "./input";
 import type { NekoSocket } from "./neko_socket";
 
 const SCREEN = { width: 1920, height: 1080 };
@@ -58,6 +58,15 @@ class RecordingSocket {
   }
 }
 
+describe("touchPressureOf", () => {
+  it("scales a pointer event's pressure to neko's byte, never reading as no contact", () => {
+    expect(touchPressureOf(0.5)).toBe(128);
+    expect(touchPressureOf(1)).toBe(255);
+    expect(touchPressureOf(0)).toBe(1);
+    expect(touchPressureOf(2)).toBe(255);
+  });
+});
+
 describe("InputRelay", () => {
   let socket: RecordingSocket;
   let stage: HTMLDivElement;
@@ -96,6 +105,46 @@ describe("InputRelay", () => {
     relay.setEnabled(true);
     stage.getBoundingClientRect = () => rect(0, 0, 1160, 540);
     stage.dispatchEvent(new MouseEvent("mousedown", { clientX: 20, clientY: 270, button: 0 }));
+    expect(socket.sent).toEqual([]);
+  });
+
+  it("sends a tap as a touch begun and ended at the mapped point with the pressure as a byte", () => {
+    relay.setEnabled(true);
+    relay.isTouchSupported = true;
+    relay.tapAt(480, 270, 0.5);
+    const touch = { touch_id: 0, x: 960, y: 540, pressure: 128 };
+    expect(socket.sent).toEqual([
+      { event: "control/touchbegin", payload: touch },
+      { event: "control/touchend", payload: touch },
+    ]);
+  });
+
+  it("gives each tap its own touch id, within the driver's sixteen bits", () => {
+    relay.setEnabled(true);
+    relay.isTouchSupported = true;
+    relay.tapAt(480, 270, 0.5);
+    relay.tapAt(480, 270, 0.5);
+    const ids = socket.sent.map((sent) => (sent.payload as { touch_id: number }).touch_id);
+    expect(ids).toEqual([0, 0, 1, 1]);
+    expect(Math.max(...ids)).toBeLessThanOrEqual(0xffff);
+  });
+
+  it("sends a tap as a left click where neko has no input driver", () => {
+    relay.setEnabled(true);
+    relay.tapAt(480, 270, 0.5);
+    expect(socket.sent).toEqual([
+      { event: "control/move", payload: { x: 960, y: 540 } },
+      { event: "control/buttondown", payload: { code: 1 } },
+      { event: "control/buttonup", payload: { code: 1 } },
+    ]);
+  });
+
+  it("sends no touch for a tap outside the drawn video or while disabled", () => {
+    relay.isTouchSupported = true;
+    relay.tapAt(480, 270, 0.5);
+    relay.setEnabled(true);
+    stage.getBoundingClientRect = () => rect(0, 0, 1160, 540);
+    relay.tapAt(20, 270, 0.5);
     expect(socket.sent).toEqual([]);
   });
 

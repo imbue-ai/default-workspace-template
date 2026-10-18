@@ -1,5 +1,6 @@
 """The ``xorg.conf`` the Screen's X server runs with (docs/system/specs/screen/spec.md section 7.1): Xorg's dummy
-driver on one virtual screen sized to the 1080p cap, seeded with three CVT modes."""
+driver on one virtual screen sized to the 1080p cap, seeded with three CVT modes, and neko's ``xf86-input-neko``
+touchscreen, the device a phone's touches reach the Screen through (section 14)."""
 
 import math
 from typing import Final
@@ -10,6 +11,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from screen.primitives import MAX_HEIGHT
 from screen.primitives import MAX_WIDTH
+from screen.primitives import RUNTIME_DIR
 from screen.primitives import SEEDED_MODES
 
 # The dummy driver's framebuffer, in kilobytes: the 1080p cap at 32 bpp is 8100 KB, so this leaves room for the
@@ -18,6 +20,13 @@ VIDEO_RAM_KB: Final[int] = 65536
 
 # The refresh every mode is computed for; the mode name carries it (``1920x1080_60``).
 MODE_REFRESH_HZ: Final[int] = 60
+
+# neko's Xorg input driver (``neko_drv.so``, the ``neko`` driver): a direct-touch device whose events arrive over a
+# Unix socket the driver binds when Xorg initializes it, and that neko connects to at its start. Mouse and keyboard
+# input stays on XTEST. The identifier is what the Xorg log names the device by.
+INPUT_DRIVER: Final[str] = "neko"
+INPUT_DEVICE_IDENTIFIER: Final[str] = "screen_touchscreen"
+INPUT_SOCKET_PATH: Final[str] = f"{RUNTIME_DIR}/xf86-input-neko.sock"
 
 # The CVT 1.2 constants (VESA Coordinated Video Timings), as ``cvt`` applies them: the blanking formula's
 # parameters, the fixed back porch, and the sync width table by aspect ratio.
@@ -110,8 +119,8 @@ def cvt_modeline(width: int, height: int) -> Modeline:
 
 @pure
 def render_xorg_conf() -> str:
-    """The dummy-driver configuration: one screen at the cap's virtual size, the seeded modes, no input devices
-    (input arrives over XTEST), no VT, no PCI probing."""
+    """The dummy-driver configuration: one screen at the cap's virtual size, the seeded modes, neko's touchscreen as
+    the one configured input device (mouse and keyboard arrive over XTEST), no VT, no PCI probing."""
     modelines = [cvt_modeline(width, height) for width, height in SEEDED_MODES]
     modes_list = " ".join(f'"{modeline.name}"' for modeline in modelines)
     modeline_lines = "\n".join(f"  {modeline.render()}" for modeline in modelines)
@@ -121,6 +130,13 @@ def render_xorg_conf() -> str:
   Option "PciForceNone" "true"
   Option "AutoEnableDevices" "false"
   Option "AutoAddDevices" "false"
+EndSection
+
+Section "InputDevice"
+  Identifier "{INPUT_DEVICE_IDENTIFIER}"
+  Option "SendCoreEvents" "On"
+  Option "SocketName" "{INPUT_SOCKET_PATH}"
+  Driver "{INPUT_DRIVER}"
 EndSection
 
 Section "Device"
@@ -153,5 +169,6 @@ EndSection
 Section "ServerLayout"
   Identifier "screen_layout"
   Screen "screen"
+  InputDevice "{INPUT_DEVICE_IDENTIFIER}" "CorePointer"
 EndSection
 """
