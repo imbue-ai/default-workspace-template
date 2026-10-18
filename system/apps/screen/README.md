@@ -243,7 +243,8 @@ the control on once neko gains such an event.
 
 The stream is ICE over neko's UDP and TCP muxes on port 59000 inside the container (spec
 section 5). Every create template publishes that port (`publish__extend = ["59000/udp",
-"59000/tcp"]`), so the host reaches it at a host port the provider picked; a shared
+"59000/tcp"]`; the `modal` template publishes only `59000/tcp`, since Modal tunnels carry TCP
+alone), so the host reaches it at a host port the provider picked; a shared
 workspace's visitors reach it through the relay's `screen-media` tcp proxy or through TURN.
 Neko itself is told nothing about any of this: its candidates carry the container's own
 address, and the viewer rewrites them.

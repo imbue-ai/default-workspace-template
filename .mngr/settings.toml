@@ -812,9 +812,9 @@ extra_provision_command__extend = [
 # passed to mngr create as the Modal build arg `-b --timeout=<seconds>`) rather than
 # through a template overlay, since a template cannot name a connection instance.
 [create_templates.modal]
-# The Screen's ICE muxes (docs/system/specs/screen/spec.md section 5.1): the workspace's two published
-# ports, on every create template that runs a workspace.
-publish__extend = ["59000/udp", "59000/tcp"]
+# The Screen's ICE muxes (docs/system/specs/screen/spec.md section 5.1). Modal tunnels carry TCP
+# only and mngr refuses a UDP declaration before the sandbox exists, so only the TCP mux is published.
+publish__extend = ["59000/tcp"]
 target_path = "/home/user/workspace/"
 # Disable idle detection entirely -- the host should never auto-shutdown. The
 # sandbox instead runs until the max-age timeout the connection block sets

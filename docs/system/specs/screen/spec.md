@@ -130,7 +130,7 @@ The next open starts a fresh stack; Chromium comes back with its profile and tab
 |---|---|---|
 | Screen service | `127.0.0.1:8090`, registered as the app's URL | HTTP and WebSocket, the viewer's only origin |
 | neko HTTP and WebSocket | `127.0.0.1:8091` | reached only through the service's `/neko/` proxy |
-| neko UDP mux and TCP mux | `0.0.0.0:59000/udp` and `0.0.0.0:59000/tcp` inside the container | the workspace's two published ports, declared by every create template as `publish__extend = ["59000/udp", "59000/tcp"]` |
+| neko UDP mux and TCP mux | `0.0.0.0:59000/udp` and `0.0.0.0:59000/tcp` inside the container | the workspace's two published ports, declared by every create template as `publish__extend = ["59000/udp", "59000/tcp"]` (the `modal` template declares `["59000/tcp"]` alone: Modal tunnels carry TCP only, and mngr refuses a UDP declaration before the sandbox exists) |
 | CDP proxy | `127.0.0.1:8083` | unchanged from the browser app |
 
 ### 5.2 `GET /api/connect-info`
