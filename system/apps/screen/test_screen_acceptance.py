@@ -80,8 +80,11 @@ _ENVIRONMENT_NOT_INHERITED: Final[tuple[str, ...]] = (
 )
 
 _BACKEND_ORIGIN: Final[re.Pattern[str]] = re.compile(r"^(http://localhost:\d+)(?:/|$)")
-# The workspace's own desktop page, with no app label before the workspace coordinate.
-_WORKSPACE_ORIGIN: Final[re.Pattern[str]] = re.compile(r"^https?://(?:host|agent)-[a-f0-9]+\.localhost:\d+(?:/|$)")
+# The workspace's desktop page: the shell app's own origin label before the workspace coordinate (the bare
+# coordinate origin serves nothing; the forwarder answers its loading page there).
+_WORKSPACE_ORIGIN: Final[re.Pattern[str]] = re.compile(
+    r"^https?://system-interface(?:-[a-z0-9]+)?\.(?:host|agent)-[a-f0-9]+\.localhost:\d+(?:/|$)"
+)
 # The Screen's page, served at its own origin label under the workspace (service-per-origin).
 _SCREEN_ORIGIN: Final[re.Pattern[str]] = re.compile(r"^https?://screen(?:-[a-z0-9]+)?\.")
 
