@@ -14,8 +14,8 @@ Built-in apps:
   inside a window's iframe at its own origin. The `chat` package (`chat-app`)
   follows the workspace's agent observer (the `agent-observer` program, one
   `mngr observe` per workspace), serves the chat pages and their API on port
-  8010, and owns the provider accounts. Its frontend, the shell's, and the
-  Getting Started app's are builds of one npm workspace (`system/package.json`)
+  8010, and owns the provider accounts. Its frontend, the shell's, the
+  Getting Started app's and Files' are builds of one npm workspace (`system/package.json`)
   sharing the `system/libs/workspace_ui` library.
 - `getting_started/` - The Getting Started page: the "Start something" intents
   and the "Start from a template" shelves (the published template catalog it
@@ -33,8 +33,10 @@ Built-in apps:
 - `terminal_pty/` - Only the manifest of that ttyd origin (`terminal-pty`,
   internal); the program that registers it is the `terminal-pty` entry point of
   `terminal/`.
-- `files/` - The file viewer: dufs over the container's filesystem, opened at the
-  workspace folder, run from its program line with a vendored, patched frontend.
+- `files/` - Files: a Finder-like browser of the container's filesystem, opened
+  at the workspace folder. Its `files-app` entry point runs a small server that
+  serves the files, and the files shared from the user's computers, with a
+  frontend from that same npm workspace.
 - `browser/` - The live browser: a fleet of Chromium browsers streamed to the
   UI by its daemon (`browser-service`).
 - `system_monitor/` - Memory & disk: one page showing how much memory and disk

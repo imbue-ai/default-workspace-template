@@ -2,7 +2,7 @@
 
 The agent harness UI: live conversations with mngr-managed agents, one page per
 chat, rendered inside a window's iframe at the chat's own registered origin. It
-is an app of the workspace like the terminal or the file viewer (the desktop
+is an app of the workspace like the terminal or Files (the desktop
 interface, `docs/system/blueprint/desktop-interface/`): the shell knows it only
 through its manifest (`app.toml`), its registry row, and the browser-side
 contract; everything about chats lives in this app's own pages and routes.
@@ -114,7 +114,7 @@ messages its manifest registers for (`minds:focus-chat`).
 The chat has no link code of its own: a click on a message's link follows the
 app contract's link rule, as a click in any app does. Rendering a message
 (`frontend/src/markdown.ts`) only says what each link names: an absolute path
-becomes the file's `file:` URL, which the shell opens in the File Viewer
+becomes the file's `file:` URL, which the shell opens in Files
 (`open:file`); a local address (`localhost`, `127.0.0.1`, `[::1]`,
 `*.localhost`) the shell opens as the window of the app on whose
 `<label>.localhost` host or registered port it is, or else in the workspace's
