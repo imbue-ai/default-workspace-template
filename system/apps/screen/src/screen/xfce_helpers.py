@@ -7,6 +7,7 @@ the fleet's Chromium rather than starting a second one."""
 
 import configparser
 import io
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
@@ -27,10 +28,11 @@ _MIMEAPPS_DEFAULTS_SECTION: Final[str] = "Default Applications"
 
 
 class MimeAppsParser(configparser.ConfigParser):
-    """``mimeapps.list`` as an INI file whose keys (MIME types) keep their case."""
+    """``mimeapps.list`` as an INI file whose keys (MIME types) keep their case; a key or section a desktop tool
+    appended twice keeps its last value rather than refusing the file."""
 
     def __init__(self) -> None:
-        super().__init__(interpolation=None, delimiters=("=",))
+        super().__init__(interpolation=None, delimiters=("=",), strict=False)
 
     def optionxform(self, optionstr: str) -> str:
         return optionstr
@@ -102,19 +104,25 @@ def _read_if_present(path: Path) -> str | None:
     return path.read_text() if path.is_file() else None
 
 
+def _write_if_changed(path: Path, render: Callable[[str | None], str]) -> None:
+    existing = _read_if_present(path)
+    text = render(existing)
+    if existing != text:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+
 def write_browser_helper_files(home: Path) -> None:
-    """Render the four entries into ``home``, merging with what is there; a home that cannot be written is logged
-    and left alone, since the Screen itself does not depend on them."""
-    rendered = (
-        (home / HELPER_DESKTOP_RELATIVE_PATH, render_helper_desktop()),
-        (home / APPLICATION_DESKTOP_RELATIVE_PATH, render_application_desktop()),
-        (home / HELPERS_RC_RELATIVE_PATH, render_helpers_rc(_read_if_present(home / HELPERS_RC_RELATIVE_PATH))),
-        (home / MIMEAPPS_RELATIVE_PATH, render_mimeapps_list(_read_if_present(home / MIMEAPPS_RELATIVE_PATH))),
+    """Render the four entries into ``home``, merging with what is there; an entry whose file cannot be read, parsed
+    or written is logged and left alone, since the Screen itself does not depend on them."""
+    entries: tuple[tuple[Path, Callable[[str | None], str]], ...] = (
+        (home / HELPER_DESKTOP_RELATIVE_PATH, lambda _existing: render_helper_desktop()),
+        (home / APPLICATION_DESKTOP_RELATIVE_PATH, lambda _existing: render_application_desktop()),
+        (home / HELPERS_RC_RELATIVE_PATH, render_helpers_rc),
+        (home / MIMEAPPS_RELATIVE_PATH, render_mimeapps_list),
     )
-    for path, text in rendered:
+    for path, render in entries:
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if _read_if_present(path) != text:
-                path.write_text(text)
-        except OSError as e:
+            _write_if_changed(path, render)
+        except (OSError, UnicodeDecodeError, configparser.Error) as e:
             logger.warning("Could not write the Screen's browser entry {}: {}", path, e)

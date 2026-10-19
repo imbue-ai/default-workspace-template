@@ -74,3 +74,21 @@ def test_an_unwritable_home_is_left_alone(tmp_path: Path) -> None:
     not_a_directory.write_text("")
     write_browser_helper_files(not_a_directory)
     assert not_a_directory.read_text() == ""
+
+
+def test_a_mimeapps_list_with_a_repeated_key_keeps_its_last_value() -> None:
+    existing = "[Default Applications]\ntext/plain=mousepad.desktop;\ntext/plain=gedit.desktop;\n"
+    parser = MimeAppsParser()
+    parser.read_string(render_mimeapps_list(existing))
+    assert parser["Default Applications"]["text/plain"] == "gedit.desktop;"
+
+
+def test_an_unparseable_mimeapps_list_is_left_alone_and_the_other_entries_are_still_written(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / MIMEAPPS_RELATIVE_PATH).parent.mkdir(parents=True)
+    (home / MIMEAPPS_RELATIVE_PATH).write_text("not an ini file\n")
+    write_browser_helper_files(home)
+    assert (home / MIMEAPPS_RELATIVE_PATH).read_text() == "not an ini file\n"
+    assert (home / HELPERS_RC_RELATIVE_PATH).read_text() == "WebBrowser=imbue-screen-browser\n"
+    assert (home / HELPER_DESKTOP_RELATIVE_PATH).read_text() == render_helper_desktop()
+    assert "Exec=screen-browser-open %u" in (home / APPLICATION_DESKTOP_RELATIVE_PATH).read_text()
