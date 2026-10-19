@@ -194,6 +194,8 @@ def _restart_program(sup, name: str) -> Callable[[], Optional[str]]:
             # It exited on its own between the state read and the stop.
             if fault.faultCode != _FAULT_NOT_RUNNING:
                 sys.exit(f"error: supervisord could not stop {name}: {fault.faultString}")
+        except OSError as error:
+            sys.exit(f"error: lost supervisord at {SUPERVISOR_SOCKET} while stopping {name} ({error})")
     try:
         sup.startProcess(name, False)
     except xmlrpc.client.Fault as fault:
@@ -202,6 +204,8 @@ def _restart_program(sup, name: str) -> Callable[[], Optional[str]]:
         # ABNORMAL_TERMINATION, ...) is a start that failed at once.
         if fault.faultCode != _FAULT_ALREADY_STARTED:
             sys.exit(f"error: supervisord could not start {name}: {fault.faultString}\n{_stderr_tail(name)}")
+    except OSError as error:
+        sys.exit(f"error: lost supervisord at {SUPERVISOR_SOCKET} while starting {name} ({error})")
 
     def early_death() -> Optional[str]:
         try:

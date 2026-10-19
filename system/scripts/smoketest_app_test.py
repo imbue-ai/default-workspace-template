@@ -135,6 +135,7 @@ class _FakeSupervisor:
         self.stop_fault = stop_fault
         self.start_fault = start_fault
         self.info_error: Exception | None = None
+        self.stop_error: Exception | None = None
         self.calls: list[str] = []
 
     def getProcessInfo(self, name: str) -> dict[str, str]:  # noqa: N802 -- supervisord's RPC name
@@ -144,6 +145,8 @@ class _FakeSupervisor:
 
     def stopProcess(self, name: str, wait: bool) -> bool:  # noqa: N802
         self.calls.append("stop")
+        if self.stop_error is not None:
+            raise self.stop_error
         if self.stop_fault is not None:
             raise xmlrpc.client.Fault(self.stop_fault, "fault")
         return True
@@ -179,6 +182,14 @@ def test_restart_fails_at_once_when_the_start_rpc_reports_a_crash() -> None:
 def test_restart_fails_when_the_stop_rpc_reports_anything_but_not_running() -> None:
     sup = _FakeSupervisor("RUNNING", stop_fault=smoketest_app._FAULT_ALREADY_STARTED)
     with pytest.raises(SystemExit, match="could not stop app"):
+        smoketest_app._restart_program(sup, "app")
+    assert sup.calls == ["stop"]
+
+
+def test_restart_reports_supervisord_going_away_during_the_stop() -> None:
+    sup = _FakeSupervisor("RUNNING")
+    sup.stop_error = ConnectionRefusedError("refused")
+    with pytest.raises(SystemExit, match="lost supervisord .* while stopping app"):
         smoketest_app._restart_program(sup, "app")
     assert sup.calls == ["stop"]
 
