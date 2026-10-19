@@ -52,8 +52,11 @@ export class IcePolicy {
     this.arm();
   }
 
+  /** A peer connected. A late one (its provide arrived after the deadline had already fallen the policy back to the
+   *  screencast) makes the pending screencast retry stale too. */
   connected(): void {
     this.disarm();
+    this.clearRetry();
     this.retryCount = 0;
     this.phase = "connected";
   }
