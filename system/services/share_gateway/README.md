@@ -84,8 +84,8 @@ While the stack is up the gateway also brokers the Screen's stream for visitors
   `{"ice_servers": [...], "candidates": [...]}` to the Screen service: the ICE servers as
   fetched, and as candidates the assignment's `published_endpoints` (the box's own ports,
   for a cloud workspace) plus one `tcp` candidate per relay address at `media_port`, each
-  with its `guest_port`. caddy routes a visitor to this app only for `/_auth/*` and
-  `/_health`, so the credential is never served on a visitor-facing route.
+  with its `guest_port`. caddy routes a visitor to this app only for `/_auth/*`, `/_agent/*`
+  and `/_health`, so the credential is never served on a visitor-facing route.
 
 ## The session
 

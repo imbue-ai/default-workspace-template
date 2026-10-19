@@ -16,7 +16,7 @@ the "Sign-in link expired" page.
 
 ``GET /connect-info`` is the one route for the Screen service alone: it lives on the
 loopback port caddy never routes a visitor to (caddy reaches this app only for
-``/_auth/*`` and ``/_health``), and answers the relay credential and the media candidates.
+``/_auth/*``, ``/_agent/*`` and ``/_health``), and answers the relay credential and the media candidates.
 """
 
 import base64
