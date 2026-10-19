@@ -1,8 +1,8 @@
 /** The media path summary over a stats report built by hand, and the Details rows. */
 import { describe, expect, it } from "vitest";
 
-import { describeDetails, describePath, summarizeStats } from "./stream_details";
-import type { StatsEntry } from "./stream_details";
+import { DetailsPanel, describeDetails, describePath, summarizeStats } from "./stream_details";
+import type { DetailsContext, StatsEntry } from "./stream_details";
 
 function report(options: { isRelay: boolean; protocol: string }): StatsEntry[] {
   return [
@@ -133,5 +133,51 @@ describe("describeDetails", () => {
       "Relay servers: 0 (relay attempt)",
       "Screen: unknown, profile idle",
     ]);
+  });
+});
+
+describe("DetailsPanel", () => {
+  const context: DetailsContext = {
+    isScreencast: false,
+    videoId: "watch",
+    screenSize: { width: 960, height: 816 },
+    connectInfo: { ice_servers: [], candidates: [], expires_at: null },
+    isRelayAttempt: false,
+    screencastFps: 5,
+  };
+
+  /** ``entriesOf`` reads the report through ``forEach`` alone, which a Map of the entries answers. */
+  function reportOf(entries: StatsEntry[]): RTCStatsReport {
+    return new Map(entries.map((entry) => [entry.id, entry])) as unknown as RTCStatsReport;
+  }
+
+  async function flush(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  function rows(panel: DetailsPanel): string[] {
+    return Array.from(panel.element.querySelectorAll("li"), (item) => item.textContent ?? "");
+  }
+
+  it("drops a refresh still awaiting its stats when the panel was closed and reopened meanwhile", async () => {
+    const pending: ((report: RTCStatsReport) => void)[] = [];
+    const panel = new DetailsPanel({
+      getStats: () => new Promise<RTCStatsReport>((resolve) => pending.push(resolve)),
+      context: () => context,
+    });
+    panel.setOpen(true);
+    panel.setOpen(false);
+    panel.setOpen(true);
+    expect(pending.length).toBe(2);
+    expect(panel.element.hidden).toBe(false);
+    // The closed panel's refresh answers first: nothing of it is shown.
+    pending[0](reportOf(report({ isRelay: true, protocol: "udp" })));
+    await flush();
+    expect(rows(panel)).toEqual([]);
+    pending[1](reportOf(report({ isRelay: false, protocol: "udp" })));
+    await flush();
+    expect(rows(panel)[0]).toBe("Path: WebRTC direct over udp to 135.148.34.234:22023");
+    panel.setOpen(false);
+    expect(panel.element.hidden).toBe(true);
   });
 });
