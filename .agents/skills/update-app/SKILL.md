@@ -173,7 +173,18 @@ don't watch their own source, so a code change is **not** live until the
 process restarts:
 
 - **Backend change** (Python / server logic, for an app or a
-  daemon): restart the program.
+  daemon): restart the program. For an app, steps 2 to 4 of this loop are
+  one call -- it restarts without waiting out the program's 30 s `startsecs`
+  window, waits for the port, checks a marker, and refreshes or opens the
+  window:
+
+  ```bash
+  python3 system/scripts/smoketest_app.py <name> --restart --marker "<text unique to your change>" --refresh
+  ```
+
+  A daemon with no port is bounced the same way without the check and the
+  refresh (`--restart` alone is not available for it, so use supervisord
+  directly and accept the 30 s wait only if its block carries `startsecs=30`):
 
   ```bash
   supervisorctl restart <name>
@@ -190,7 +201,7 @@ process restarts:
   ```bash
   uv tool install -e system/apps/<package> --reinstall
   uv sync --all-packages            # the app is also a workspace member; keep the lockfile current
-  supervisorctl restart <name>
+  python3 system/scripts/smoketest_app.py <name> --restart --marker "<text>" --refresh
   ```
 
   (Background services under `system/services/` run from the root venv
@@ -260,9 +271,11 @@ names any channel that did not land on stderr and is never a reason to stop.
 Confirm the change actually does the right thing, exercised as the user
 would (not just "the process is up"):
 
-- **App**: `curl` against the registered backend URL
-  `http://127.0.0.1:<port>/` then a Playwright assertion on a
-  marker unique to your change. The recipe is in
+- **App**: the `smoketest_app.py --restart --marker ... --refresh` call of
+  step 2 is this check (HTTP against the registered backend URL
+  `http://127.0.0.1:<port>/`, the marker unique to your change, `--screenshot`
+  for a rendered page); add one `curl` of a changed route to the same call
+  when the change is an API. The recipe is in
   `build-app`'s [verify reference](../build-app/references/verify.md);
   the symptom-indexed gotchas (connection refused, a window stuck on the
   loading page, broken WebSockets) are in that skill's

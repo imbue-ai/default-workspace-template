@@ -469,19 +469,27 @@ Two cases, two patterns:
   default configs, bundled JSON): `Path(__file__).parent / "assets/..."`
   is the right pattern.
 
-## Step 3: Verify
+## Step 3: Verify (one call)
 
-Both paths use the same verification recipe. See
-[references/verify.md](references/verify.md) -- use `system/scripts/smoketest_app.py`:
+Both paths use the same verification recipe, and in a chat turn it is a single
+tool call. See [references/verify.md](references/verify.md) -- use
+`system/scripts/smoketest_app.py`:
 
 ```bash
-python3 system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>"
+python3 system/scripts/smoketest_app.py <name> --restart --marker "<expected-heading-or-text>" --screenshot /tmp/app.png --open
 ```
 
-Or with a visual screenshot:
-```bash
-python3 system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>" --screenshot /tmp/app.png
-```
+`--restart` bounces the program after a code change without waiting out the
+30 s `startsecs` window (supervisord starts it without waiting and the script
+polls the port, usually ready in under a second; a program that dies on start
+fails the call at once with its stderr log). `--screenshot` renders the page
+headlessly; `--open` is Step 4 folded in (use `--refresh` instead for an app
+already on the user's screen). Leave `--restart` out right after
+`scaffold_flask_lib.py --start`, which already started the app. Never
+`supervisorctl restart` by hand and never `sleep` before a check. If a changed
+API route needs exercising, append one `curl` to the same tool call. Writing
+test files or end-to-end scripts, and running the suite, belong to Step 5's
+background pass, not to the chat turn.
 
 If verification surfaces something unexpected (connection refused,
 a window stuck on the loading page, broken WebSockets), see
@@ -493,7 +501,8 @@ a window stuck on the loading page, broken WebSockets), see
 Once verification passes, tell the workspace UI to actually open the
 new window. Without this step the user would have to discover it via the
 launcher -- skip the surfacing step only for services with no UI
-(pure JSON APIs, webhook receivers, etc.).
+(pure JSON APIs, webhook receivers, etc.). `smoketest_app.py --open` in Step 3
+already does this; run it by hand only when verification was done another way:
 
 ```bash
 uv run --no-sync workspace-layout open <name> --beside
@@ -529,7 +538,7 @@ service) without prompting the user to click Refresh:
 uv run --no-sync workspace-layout refresh --app <name>
 ```
 
-You should always `refresh` services after making changes, to make sure the user can see the updates.
+You should always `refresh` services after making changes, to make sure the user can see the updates; `smoketest_app.py <name> --restart ... --refresh` does the restart, the check and the refresh in one call.
 
 For anything beyond `open` / `refresh` -- placing, focusing, minimizing,
 maximizing, navigating a window to another path, reading the desktops -- see

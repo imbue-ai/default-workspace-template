@@ -9,15 +9,29 @@ so in-container verification targets the local port directly.
 
 Use `system/scripts/smoketest_app.py` for instant verification (<0.1s for HTTP/marker checks,
 ~1.3s for browser rendering & screenshots). It resolves the port automatically from
-the app name:
+the app name, and it restarts and surfaces the app too, so one call covers the whole
+apply-check-show loop:
 
 ```bash
-# Fast HTTP readiness & content marker check (<0.1s):
+# After a code change: restart (no 30 s wait), check, render, and open the window beside the chat:
+python3 system/scripts/smoketest_app.py <name> --restart --marker "<expected-heading-or-text>" --screenshot /tmp/app_mock.png --open
+
+# The same for an app already on the user's screen (reloads its windows instead):
+python3 system/scripts/smoketest_app.py <name> --restart --marker "<expected-heading-or-text>" --refresh
+
+# Fast HTTP readiness & content marker check only (<0.1s):
 python3 system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>"
 
 # Full headless browser render + visual screenshot (~1.3s):
 python3 system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>" --screenshot /tmp/app_mock.png
 ```
+
+`--restart` asks supervisord to stop the program and start it again *without*
+waiting (the `supervisorctl restart` command would block for the program's
+`startsecs=30`), then polls the port, which answers within a second; while it
+polls it watches the program's state, so a crash on start fails the call at
+once with the last lines of `/var/log/supervisor/<name>-stderr.log`. Do not
+`sleep` before or after it.
 
 
 ## Alternative / Manual Checks
