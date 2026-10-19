@@ -105,6 +105,8 @@ The screencast fallback, after the first test on Imbue Cloud (spec sections 5.4 
 
 - No pointer is painted into the screencast any more: neko's global `capture.video.show_pointer`, the flag its screencast pipeline takes (the per-pipeline flag covers the WebRTC pipelines alone), is off in `neko.yaml`, so the browser's own pointer is the one pointer there instead of two, one of them lagging. The screencast runs at 5 fps rather than 10 (each frame is a full JPEG of the display, and the fallback is for seeing the Screen, not for motion), and the viewer polls it at that rate.
 
+- The rate lives in two places (neko's `capture.screencast.rate` in `neko_config.py`, the viewer's `SCREENCAST_FPS` in `frontend/src/screencast.ts`); a `frontend`-marked test now reads the viewer's and fails when the two drift apart.
+
 - The viewer tries WebRTC again from the screencast instead of staying there until a reload: 15 s after the fall, then 30 s, then every 60 s, and at once on the strip's new "Retry now" button, each time with fresh `connect-info?relay=1`; the screencast keeps showing the Screen until a retry's peer connects. The strip's row carries a loud alert while the picture is the screencast ("Low-quality picture: no direct or relay path connected. Retrying.") in place of the quiet "Slow picture" line.
 
 - A screencast retry still pending when the stream asks for a fresh peer on its own (the server dropped a retry's peer) is dropped by the new attempt, rather than firing later and restarting ICE on the peer that connected. A peer that connects late, after its deadline had already fallen the viewer back to the screencast, drops the pending retry the same way.

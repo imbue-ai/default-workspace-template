@@ -1,8 +1,13 @@
+import re
+from pathlib import Path
+
+import pytest
 import yaml
 from inline_snapshot import snapshot
 from pydantic import SecretStr
 
 from screen.data_types import NekoSecrets
+from screen.neko_config import SCREENCAST_RATE
 from screen.neko_config import neko_config_document
 from screen.neko_config import render_neko_yaml
 from screen.neko_config import render_pulse_script
@@ -74,3 +79,16 @@ load-module module-native-protocol-unix socket=/tmp/screen-runtime/pulse.sock au
 load-module module-always-sink
 set-default-sink audio_output
 """)
+
+
+@pytest.mark.frontend
+def test_the_viewer_polls_the_screencast_at_the_rate_neko_encodes_it() -> None:
+    """``screencast.ts`` carries the screencast's rate as its own constant (the bundle cannot read ``neko.yaml``), for
+    the poll interval and the Details panel's row; this pins that copy to ``SCREENCAST_RATE``."""
+    screencast_ts = Path(__file__).parent / "frontend" / "src" / "screencast.ts"
+    declared = re.search(r"^export const SCREENCAST_FPS = (\d+);$", screencast_ts.read_text(), re.MULTILINE)
+    assert declared is not None, f"SCREENCAST_FPS is no longer declared as a plain integer in {screencast_ts}"
+    frames, seconds = SCREENCAST_RATE.split("/")
+    assert int(declared.group(1)) * int(seconds) == int(frames), (
+        f"the viewer's SCREENCAST_FPS ({declared.group(1)}) has drifted from neko's rate ({SCREENCAST_RATE})"
+    )
