@@ -57,7 +57,7 @@ and the still-present path below both work for it.
 
 - **Other Imbue Studio workspaces**: each workspace is a separate host with its own
   `/home/user/.mngr/`. Transcripts from agents in another workspace live there, not here.
-  To read them, SSH into that workspace via the Imbue Studio API: use the `minds-api`
+  To read them, SSH into that workspace via the Imbue Studio API: use the `imbue-studio`
   skill to request the `minds-workspaces-ssh` latchkey permission, then run this
   skill's read commands over SSH on that host.
 

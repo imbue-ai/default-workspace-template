@@ -1,7 +1,7 @@
 ---
 name: migrate-workspace
 description: "Bring everything from another (older, broken, or replaced) workspace of the user's into this one -- their apps, skills, documents, data, scheduled automations, and every past chat. Use when the user says anything like 'move my stuff over from my old workspace', 'I made a new agent, bring everything across', 'my old workspace is broken, start me fresh', 'import my other agent', or -- asked from the OLD side -- 'I'd like to move to a new workspace'. Requires the other workspace to be startable, since the transfer runs over a live connection to it."
-compatibility: Requires latchkey (the minds-api gateway) plus ssh/ssh-keygen for the live session, and mngr for recreating the old chats.
+compatibility: Requires latchkey (the Imbue Studio API gateway) plus ssh/ssh-keygen for the live session, and mngr for recreating the old chats.
 metadata:
   author: imbue
 ---
@@ -39,7 +39,7 @@ an empty or partial result as "nothing there".**
 If you are reading this in the workspace being *left* ("I'd like to move to a new
 workspace"), you do exactly two things and stop:
 
-1. Create the fresh workspace via the `minds-api` skill (`POST
+1. Create the fresh workspace via the `imbue-studio` skill (`POST
    /api/v1/workspaces` with the template `git_url` and a `branch` read from
    `GET /api/v1/app/version`, then poll `operations/create/<op>` until `DONE`).
    Leave every `backup_*` field unset.
@@ -76,7 +76,7 @@ through this skill's tooling; it is built around a live source.
 Grants are keyed to the **host**, so this workspace starts from a deny-all
 baseline no matter what the old one had. File **one** permission request covering
 every verb the whole pass needs, before the user starts using anything -- per the
-`minds-api` skill's `type: "workspace"` request:
+`imbue-studio` skill's `type: "workspace"` request:
 
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
