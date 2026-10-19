@@ -58,6 +58,10 @@ class FileDropError(ScreenError):
     """A dropped file could not be written into the desktop folder."""
 
 
+class XfconfChannelError(ScreenError):
+    """An xfconf channel file in the home is not one the service can merge its settings into."""
+
+
 class ServeError(ScreenError):
     """The page server could not bind or shut down as asked."""
 

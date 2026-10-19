@@ -107,6 +107,8 @@ _WINDOW_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^0x[0-9a-fA-F]{1,8}$")
 # A dropped file keeps its name in the desktop folder (spec section 4.3), so the name must be one plain path
 # segment: the filesystem's length limit, no separators, and no leading dot (a hidden file, ``.`` or ``..``).
 MAX_DROPPED_FILE_NAME_BYTES: Final[int] = 255
+# The file manager a drop opens the desktop folder in (XFCE's own), since the folder's icons are off.
+FILE_MANAGER_COMMAND: Final[str] = "thunar"
 _PATH_SEPARATORS: Final[frozenset[str]] = frozenset({"/", "\\", "\x00"})
 
 

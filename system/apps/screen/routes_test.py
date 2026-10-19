@@ -15,9 +15,11 @@ from flask.testing import FlaskClient
 from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import CONTEXT_MENU_ROUTE
 from mock_chromium_test import FakeCdpConnector
+from mock_messenger_test import RecordingLauncher
 from mock_neko_test import FakeNeko
 from screen.browser_routes import CANCEL_PENDING_URL_RULE
 from screen.desktop_files import MAX_DROP_BYTES
+from screen.primitives import FILE_MANAGER_COMMAND
 from screen.primitives import LAUNCH_BROWSER_PATH
 from screen.proxy import NEKO_PROXY_PREFIX
 from screen.service import ScreenService
@@ -192,6 +194,9 @@ def test_a_visitor_in_control_drops_files_into_the_desktop_folder(client: FlaskC
     assert answer.get_json() == {"directory": str(service.desktop_dir), "saved": ["notes.txt", "notes-1.txt"]}
     assert (service.desktop_dir / "notes.txt").read_bytes() == b"hello"
     assert (service.desktop_dir / "notes-1.txt").read_bytes() == b"again"
+    # The folder's icons are off, so the drop shows the folder in a file manager window on the Screen.
+    assert isinstance(service.launcher, RecordingLauncher)
+    assert service.launcher.commands == [(FILE_MANAGER_COMMAND, str(service.desktop_dir))]
 
 
 def test_a_drop_needs_the_controlling_session_and_refuses_the_owners_session_to_a_visitor(

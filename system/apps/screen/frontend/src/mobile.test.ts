@@ -14,6 +14,8 @@ import type { Point } from "./view_transform";
 class RecordingActions implements MobileActions {
   readonly log: string[] = [];
   isTouchSupported = true;
+  /** Where the drawn video starts: a point above it is the letterbox band, where no touch can begin. */
+  videoTop = 0;
 
   tapAt(clientX: number, clientY: number): void {
     this.log.push(`tap ${clientX},${clientY}`);
@@ -28,7 +30,7 @@ class RecordingActions implements MobileActions {
   }
 
   touchBegin(clientX: number, clientY: number): boolean {
-    if (!this.isTouchSupported) return false;
+    if (!this.isTouchSupported || clientY < this.videoTop) return false;
     this.log.push(`touchbegin ${clientX},${clientY}`);
     return true;
   }
@@ -90,6 +92,25 @@ describe("MobileControls", () => {
     const { actions, stage } = build();
     dragOneFinger(stage);
     expect(actions.log).toEqual([
+      "touchbegin 100,300",
+      `touchmove 100,${300 - MOVE_THRESHOLD_PX - 2}`,
+      "touchmove 100,200",
+      "touchend 100,200",
+    ]);
+  });
+
+  it("begins the touch where the finger first reaches the video when the drag starts in the letterbox band", () => {
+    const { actions, stage } = build();
+    actions.videoTop = 250;
+    stage.dispatchEvent(pointer("pointerdown", 1, 100, 100));
+    stage.dispatchEvent(pointer("pointermove", 1, 100, 100 + MOVE_THRESHOLD_PX + 2));
+    stage.dispatchEvent(pointer("pointermove", 1, 100, 300));
+    stage.dispatchEvent(pointer("pointermove", 1, 100, 350));
+    stage.dispatchEvent(pointer("pointerup", 1, 100, 350));
+    expect(actions.log).toEqual(["touchbegin 100,300", "touchmove 100,350", "touchend 100,350"]);
+    // The next drag starts afresh: its touch begins where the finger came down.
+    dragOneFinger(stage);
+    expect(actions.log.slice(3)).toEqual([
       "touchbegin 100,300",
       `touchmove 100,${300 - MOVE_THRESHOLD_PX - 2}`,
       "touchmove 100,200",

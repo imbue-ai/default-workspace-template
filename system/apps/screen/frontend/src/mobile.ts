@@ -73,6 +73,8 @@ export class MobileControls {
   private lastMovePressure = 0;
   /** Whether a one-finger drag is a touch held on the Screen right now. */
   private isTouchDragging = false;
+  /** Whether this drag has tried to begin its touch where the finger came down. */
+  private isDragStartTried = false;
   private lastInputValue = "";
   isEnabled = false;
 
@@ -210,6 +212,7 @@ export class MobileControls {
       this.apply(this.classifier.down(sampleOf(event)));
       this.cancelLongPress();
       if (this.classifier.pointerCount === 1) {
+        this.isDragStartTried = false;
         this.longPressTimer = this.scheduler.setTimeout(() => {
           this.longPressTimer = null;
           this.apply(this.classifier.longPress());
@@ -264,15 +267,22 @@ export class MobileControls {
         }
         if (!this.isEnabled) return;
         if (!this.isTouchDragging) {
-          this.isTouchDragging = this.actions.touchBegin(gesture.start.x, gesture.start.y, this.lastDownPressure);
+          // The touch begins where the finger came down, or, when that was off the video (the letterbox band
+          // around it), where the finger is now, the first time it is over the video.
+          const origin = this.isDragStartTried ? gesture.at : gesture.start;
+          const pressure = this.isDragStartTried ? this.lastMovePressure : this.lastDownPressure;
+          this.isDragStartTried = true;
+          this.isTouchDragging = this.actions.touchBegin(origin.x, origin.y, pressure);
           if (!this.isTouchDragging) {
             this.setTransform(panBy(this.transform, gesture.delta, stageSize));
             return;
           }
+          if (origin === gesture.at) return;
         }
         this.actions.touchMove(gesture.at.x, gesture.at.y, this.lastMovePressure);
         return;
       case "pan-end":
+        this.isDragStartTried = false;
         if (this.isTouchDragging) {
           this.isTouchDragging = false;
           this.actions.touchEnd(gesture.at.x, gesture.at.y, this.lastMovePressure);

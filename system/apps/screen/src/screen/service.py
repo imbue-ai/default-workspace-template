@@ -61,6 +61,7 @@ from screen.primitives import BrowserName
 from screen.primitives import CHROMIUM_WINDOW_CLASS_MARKERS
 from screen.primitives import DEFAULT_TITLE
 from screen.primitives import DroppedFileName
+from screen.primitives import FILE_MANAGER_COMMAND
 from screen.primitives import NekoSessionId
 from screen.primitives import VIDEO_ID_WATCH
 from screen.primitives import XWindowId
@@ -172,7 +173,7 @@ class ScreenService(MutableModel):
     desktop_dir: Path = Field(
         default_factory=lambda: desktop_directory(Path.home()),
         frozen=True,
-        description="Where dropped files land: the desktop folder xfdesktop shows as icons",
+        description="Where dropped files land: the XDG desktop folder, shown in a file manager window after a drop",
     )
     launcher: ProcessLauncherInterface = Field(frozen=True, description="How ``screen run`` starts a command")
     messenger: AgentMessengerInterface = Field(frozen=True, description="Wakes queued agents")
@@ -667,9 +668,12 @@ class ScreenService(MutableModel):
 
     def save_dropped_files(self, files: Sequence[tuple[DroppedFileName, IO[bytes]]]) -> list[Path]:
         """Write the controller's dropped files into the desktop folder, each under its own name (suffixed on a
-        clash); answers the paths they landed at."""
+        clash), and show the folder in a file manager window on the Screen (its icons are off); answers the paths
+        they landed at."""
         self._require_running()
-        return [save_dropped_file(self.desktop_dir, name, stream) for name, stream in files]
+        saved = [save_dropped_file(self.desktop_dir, name, stream) for name, stream in files]
+        self.launcher.launch((FILE_MANAGER_COMMAND, str(self.desktop_dir)))
+        return saved
 
     def set_screen_size(self, width: int, height: int) -> ScreenSize:
         """Resize the display (spec section 7.2): quantize and clamp, add the RANDR mode when the server lacks it,

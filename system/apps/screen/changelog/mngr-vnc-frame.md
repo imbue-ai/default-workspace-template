@@ -132,3 +132,15 @@ Scrolling on a phone (spec section 14):
 - A one-finger drag on the video is now a touch held and moved on the Screen through neko's input driver (`control/touchbegin`, `control/touchupdate`, `control/touchend` at the mapped points), so a page in the browser scrolls under the finger with the browser's own momentum, as on any phone. Once the video is pinch-zoomed the drag pans the view as before, and without the driver it always does. The two-finger wheel scroll stays.
 
 - The mobile bar gains Scroll Up and Scroll Down buttons, three wheel steps each, for programs on the Screen that ignore touch.
+
+Files and the desktop's icons (spec section 4.3):
+
+- The desktop shows no icons any more: a desktop icon wants a double click, which a phone cannot give, and anything an icon would do belongs in the panel. The service sets the `xfce4-desktop` channel's `desktop-icons/style` to none in `~/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml` before each stack start (`xfdesktop_config.py`, keeping the channel's other properties, and leaving alone a file it cannot read, parse or write).
+
+- A dropped file still lands in the desktop folder, and the service now opens that folder in a Thunar window on the Screen right after the drop (started as `screen run` starts a command), so the file is reachable from a phone and the strip's "Saved to ..." line has a window to point at.
+
+- A one-finger drag that starts in the letterbox band around the video, where no touch can begin, now begins its touch where the finger first reaches the video instead of retrying the start point forever; the next drag starts afresh at its own start.
+
+- The manifest declares a `description`, so the visiting-agent primer describes the Screen rather than listing it with none; the OpenAPI document (`api_schema_path`) stays a follow-up, since the route table it needs covers forty routes.
+
+- Stale text: the spec body now says what the implementation notes said (the 5 fps screencast with no pointer painted into it, the retries from the screencast, the one-finger drag as a touch), `data/.state/README.md` describes `screen/` in place of the browser's screenshots, and `window-bound-resources.md` names the Screen where it named the deleted browser app.

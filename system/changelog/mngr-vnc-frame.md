@@ -29,3 +29,5 @@ Step 9, the document sweep of the Screen spec's section 19: `concepts.md` decisi
 - Every create template that runs a workspace declares the Screen's published ports, `publish__extend = ["59000/udp", "59000/tcp"]` (`.mngr/settings.toml`); the `modal` template declares `["59000/tcp"]` alone, because Modal tunnels carry TCP only and mngr refuses a UDP declaration before the sandbox exists.
 
 - `system/scripts/env.d/2000-screen.sh` also installs the Screen's browser command, `system/apps/screen/scripts/screen-browser-open`, at `/usr/local/bin/screen-browser-open` (re-installed whenever the tree's copy differs) and registers it as the `x-www-browser` alternative, so XFCE's "Web Browser" launcher, an `http(s)` link opened by a program on the Screen, and `sensible-browser` all open the page in the fleet's Chromium through the Screen's browser launch path.
+
+- `system/services/env_converge`'s `UnitRunResult` example names `2000-screen.sh`, the unit that replaced `1000-playwright-fortress.sh`.

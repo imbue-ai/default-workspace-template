@@ -127,7 +127,8 @@ launcher and `exo-open --launch WebBrowser` resolve through `~/.config/xfce4/hel
 helper, and GTK programs resolve an `http(s)` link through `~/.config/mimeapps.list` to an
 application entry; the service renders both, with the helper and application `.desktop` files
 under `~/.local/share/`, at each stack start (`xfce_helpers.py`, merging with what the files
-already hold). They name `screen-browser-open`, the Screen package's one-line script
+already hold; `xfdesktop_config.py` renders the `xfce4-desktop` channel's icon style to none
+beside them, below). They name `screen-browser-open`, the Screen package's one-line script
 (`scripts/screen-browser-open`, `exec screen browser open "$@"`) that the env.d unit installs
 at `/usr/local/bin/screen-browser-open` and registers as the `x-www-browser` alternative, so
 `sensible-browser` lands there too. `screen browser open [URL]` posts to `/launch/browser`.
@@ -240,14 +241,20 @@ session alone and with text only, so the directions are:
   `us` by default.
 
 A file dropped on the viewer by the controller goes to the service's `POST /api/drop`, which
-writes it into the Screen's desktop folder: the XDG desktop directory `xfdesktop` shows as icons
-(`XDG_DESKTOP_DIR` in `~/.config/user-dirs.dirs`, the file `xdg-user-dirs-update` writes when
-the session starts, else `~/Desktop`; the service and the session share one home, so
-`desktop_files.py` resolves it the same way), created when missing. The strip then says where
-the files landed. neko's own `upload/drop` route is not used: verified in a local Docker
+writes it into the Screen's desktop folder: the XDG desktop directory (`XDG_DESKTOP_DIR` in
+`~/.config/user-dirs.dirs`, the file `xdg-user-dirs-update` writes when the session starts, else
+`~/Desktop`; the service and the session share one home, so `desktop_files.py` resolves it the
+same way), created when missing. The service then opens that folder in a Thunar window on the
+Screen (`thunar <folder>`, started as `screen run` starts a command, so it is shed before the
+stack), and the strip says where the files landed. The desktop's own icons are off: `xfdesktop`
+wants a double click for one, which a phone cannot give, and anything an icon would do belongs
+in the panel, so the service sets the `xfce4-desktop` channel's `desktop-icons/style` to none in
+`~/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml` before each stack start
+(`xfdesktop_config.py`, keeping the channel's other properties; xfconfd reads the file when the
+session starts). neko's own `upload/drop` route is not used: verified in a local Docker
 workspace (neko v3.2.0), the files reach neko but its drag emulation (a GTK popup it drags
 from the top-left corner with its own pointer moves) never maps its window on this stack and
-the route answers 500 after neko's one-second wait, so a dropped file lands as a desktop icon
+the route answers 500 after neko's one-second wait, so a dropped file lands in the folder
 rather than at the pointer.
 
 Under the phone layout (a phone-sized viewport with a finger as the primary pointer, the shared

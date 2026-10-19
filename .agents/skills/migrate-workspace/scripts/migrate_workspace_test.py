@@ -106,7 +106,7 @@ def test_map_legacy_path_splits_the_builtin_packages_three_ways() -> None:
         "system/libs/bootstrap/README.md"
     )
     assert migrate_workspace.map_legacy_path("libs/browser/README.md").new_path == (
-        "system/apps/browser/README.md"
+        "system/apps/screen/README.md"
     )
 
 
@@ -143,7 +143,7 @@ def test_map_legacy_path_flags_the_overloaded_prefixes_as_ambiguous() -> None:
 def test_map_legacy_path_leaves_current_layout_paths_alone() -> None:
     for path in (
         ".agents/skills/caretaker/SKILL.md",
-        "system/apps/browser/README.md",
+        "system/apps/screen/README.md",
         "data/memories/note.md",
     ):
         mapping = migrate_workspace.map_legacy_path(path)

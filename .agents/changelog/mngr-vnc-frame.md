@@ -7,3 +7,5 @@ The browser moved onto the Screen (`docs/system/specs/screen/spec.md`, sections 
 - `manage-desktop` names the Screen where it named the browser (the `screen` app's `browser` launch path behind `open https://...`, the Screen's window, the Screen service's stop and start routes), and `build-app` lists the Screen's ports (8083, 8090) among the ones to avoid.
 
 - The `use-screen` skill lists `screen browser open [URL]`, the browser launch path as a verb of the `screen` command.
+
+- `migrate-workspace`'s legacy path map sends the old `libs/browser/` to `system/apps/screen/`, where the browser lives now, rather than to the deleted `system/apps/browser/`.

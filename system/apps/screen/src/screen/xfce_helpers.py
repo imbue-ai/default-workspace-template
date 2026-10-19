@@ -104,7 +104,8 @@ def _read_if_present(path: Path) -> str | None:
     return path.read_text() if path.is_file() else None
 
 
-def _write_if_changed(path: Path, render: Callable[[str | None], str]) -> None:
+def write_if_changed(path: Path, render: Callable[[str | None], str]) -> None:
+    """Write what ``render`` makes of the file's current text, creating the directories, unless it is unchanged."""
     existing = _read_if_present(path)
     text = render(existing)
     if existing != text:
@@ -123,6 +124,6 @@ def write_browser_helper_files(home: Path) -> None:
     )
     for path, render in entries:
         try:
-            _write_if_changed(path, render)
+            write_if_changed(path, render)
         except (OSError, UnicodeDecodeError, configparser.Error) as e:
             logger.warning("Could not write the Screen's browser entry {}: {}", path, e)

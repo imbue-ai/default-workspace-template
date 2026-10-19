@@ -1,6 +1,7 @@
 /** Dropping files onto the viewer (docs/system/specs/screen/spec.md section 4.3): the service's ``/api/drop`` writes
- *  them into the Screen's desktop folder, where xfdesktop shows them as icons, and answers where they landed. The
- *  controlling session alone may drop (the lease arbitrates, so a visitor in control may too). */
+ *  them into the Screen's desktop folder, opens that folder in a file manager window on the Screen, and answers
+ *  where they landed. The controlling session alone may drop (the lease arbitrates, so a visitor in control may
+ *  too). */
 
 import { describeRefusal } from "./service_client";
 
