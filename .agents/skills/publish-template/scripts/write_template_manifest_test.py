@@ -2,6 +2,8 @@
 against the tree's references and the workspace's own files, and rendered into both
 halves of the manifest."""
 
+import shutil
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -232,3 +234,98 @@ def test_main_refuses_an_undeclared_reference_and_writes_nothing(
     assert status == 1
     assert "ghost" in capsys.readouterr().err
     assert not output.exists()
+
+
+_FIXTURES = Path(__file__).resolve().parents[1] / "tests/fixtures"
+
+
+@pytest.mark.parametrize("indent", ["    ", "\t"])
+@pytest.mark.parametrize(
+    ("fixture", "expected"),
+    [
+        ("supervisor-comments.conf", {}),
+        (
+            "supervisor-mixed.conf",
+            {
+                name: ["system/supervisord.conf.d/example.conf"]
+                for name in (
+                    "command-example",
+                    "environment-example",
+                    "hash-value",
+                    "semicolon-value",
+                )
+            },
+        ),
+    ],
+)
+def test_supervisor_comments_are_ignored_but_active_values_are_preserved(
+    tmp_path: Path, fixture: str, expected: dict[str, list[str]], indent: str
+) -> None:
+    dropins = tmp_path / "system/supervisord.conf.d"
+    dropins.mkdir(parents=True)
+    (dropins / "example.conf").write_text(
+        (_FIXTURES / fixture).read_text().replace("    ", indent)
+    )
+    references = writer.collect_references(tmp_path)
+    assert references == expected
+    problems = writer.check_declarations({}, references, None)
+    assert len(problems) == len(expected)
+    for name in expected:
+        assert any(
+            f"/{name}.env" in problem and "no included app.toml" in problem
+            for problem in problems
+        )
+
+
+def test_mcp_json_comment_like_strings_still_require_declarations(
+    tmp_path: Path,
+) -> None:
+    shutil.copyfile(_FIXTURES / "mcp-comment-like.json", tmp_path / "mcp-servers.json")
+    references = writer.collect_references(tmp_path)
+    assert references == {
+        name: ["mcp-servers.json"]
+        for name in ("hash-example", "semicolon-example", "runtime-example")
+    }
+    assert len(writer.check_declarations({}, references, None)) == 3
+
+
+def test_comment_only_configs_allow_manifest_without_secret_requirements(
+    tmp_path: Path,
+) -> None:
+    dropins = tmp_path / "system/supervisord.conf.d"
+    dropins.mkdir(parents=True)
+    shutil.copyfile(_FIXTURES / "supervisor-comments.conf", dropins / "example.conf")
+    app = tmp_path / "system/apps/example"
+    app.mkdir(parents=True)
+    (app / "app.toml").write_text('name = "example"\n')
+    output = tmp_path / "template.toml"
+    lines = tmp_path / "secret-lines.md"
+    assert (
+        writer.main(
+            [
+                "--slug",
+                "example",
+                "--title",
+                "Example",
+                "--description",
+                "Synthetic app",
+                "--version",
+                "v1",
+                "--format",
+                "v2",
+                "--thumbnail",
+                "template.svg",
+                "--include",
+                "system/apps/example",
+                "--repo-root",
+                str(tmp_path),
+                "--output",
+                str(output),
+                "--secret-lines-output",
+                str(lines),
+            ]
+        )
+        == 0
+    )
+    assert not tomllib.loads(output.read_text())["requirements"].get("secret")
+    assert lines.read_text() == ""

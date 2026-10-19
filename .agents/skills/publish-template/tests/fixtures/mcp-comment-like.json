@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "example": {
+      "command": "example",
+      "args": [
+        "# data/.secrets/hash-example.env",
+        "; data/.secrets/semicolon-example.env",
+        "data/.secrets/runtime-example.env"
+      ]
+    }
+  }
+}
