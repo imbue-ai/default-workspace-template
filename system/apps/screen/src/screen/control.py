@@ -229,7 +229,16 @@ class ScreenControl(MutableModel):
         if is_changed:
             with self._lock:
                 self._checkpoint_locked()
-            self.on_changed(self.view())
+            view = self.view()
+            logger.debug(
+                "Lease changed: controller={} agent={} human={} pinned={} waiting={}",
+                view.controller.value,
+                view.agent_name or view.agent_id,
+                view.human_name or view.human_session_id,
+                view.human_pinned,
+                list(view.waiting),
+            )
+            self.on_changed(view)
         for queued in to_wake:
             self.messenger.message_agent(
                 str(queued.agent_id),
