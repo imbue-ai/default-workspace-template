@@ -2206,9 +2206,11 @@ def test_a_whole_collection_asks_mngr_for_the_agent_listing_once(
 def _load_collector_with_short_reserves(
     tmp_path: Path, mngr_stub: Path, agents_dir: Path | None = None
 ) -> ModuleType:
-    """A collector whose finishing reserves are a second or two, so a test can spend a budget quickly.
+    """A collector whose finishing reserves are a few seconds, so a test can spend a budget quickly.
 
-    The scan gate is a clean stub, so whatever the deadline let through ships.
+    The scan still gets most of the finish reserve, so a loaded machine does not
+    time it out and withhold what the deadline let through. The scan gate is a
+    clean stub, so whatever the deadline let through ships.
     """
     gate = tmp_path / "gate"
     _write_stub_scan_gate(gate, exit_code=0)
@@ -2219,9 +2221,14 @@ def _load_collector_with_short_reserves(
         supervisor_log_dir=tmp_path / "supervisor",
         workspace_dir=tmp_path / "workspace",
     )
-    _rebind(module.__dict__, "FINISH_RESERVE_SECONDS", 1.5)
+    _rebind(module.__dict__, "FINISH_RESERVE_SECONDS", 5.5)
     _rebind(module.__dict__, "PACK_RESERVE_SECONDS", 0.5)
     return module
+
+
+def _budget_seconds(module: ModuleType, mngr_seconds: float) -> float:
+    """A budget leaving ``mngr_seconds`` for mngr calls before the finish reserve (none if negative)."""
+    return module.FINISH_RESERVE_SECONDS + mngr_seconds
 
 
 def test_a_deadline_that_runs_out_mid_collection_still_ships_what_it_gathered(
@@ -2246,10 +2253,11 @@ def test_a_deadline_that_runs_out_mid_collection_still_ships_what_it_gathered(
     )
     module = _load_collector_with_short_reserves(tmp_path, stub)
 
+    budget = _budget_seconds(module, mngr_seconds=2.5)
     started_at = time.monotonic()
-    module.main(["--transcript", "--budget-seconds=4"])
+    module.main(["--transcript", "--budget-seconds={}".format(budget)])
 
-    assert time.monotonic() - started_at < 4
+    assert time.monotonic() - started_at < budget
     with _zip_from_stdout(capsys.readouterr().out) as archive:
         assert archive.namelist() == [
             "chats/first-claude.jsonl",
@@ -2279,7 +2287,13 @@ def test_a_spent_deadline_asks_mngr_nothing_and_says_why_the_agents_are_missing(
     )
     module = _load_collector_with_short_reserves(tmp_path, stub)
 
-    module.main(["--logs", "--transcript", "--budget-seconds=1"])
+    module.main(
+        [
+            "--logs",
+            "--transcript",
+            "--budget-seconds={}".format(_budget_seconds(module, mngr_seconds=-0.5)),
+        ]
+    )
 
     with _zip_from_stdout(capsys.readouterr().out) as archive:
         assert not [name for name in archive.namelist() if name.startswith("chats/")]
@@ -2305,7 +2319,12 @@ def test_a_listing_the_deadline_cuts_short_is_noted_rather_than_read_as_no_agent
     )
     module = _load_collector_with_short_reserves(tmp_path, stub)
 
-    module.main(["--transcript", "--budget-seconds=3"])
+    module.main(
+        [
+            "--transcript",
+            "--budget-seconds={}".format(_budget_seconds(module, mngr_seconds=1.5)),
+        ]
+    )
 
     with _zip_from_stdout(capsys.readouterr().out) as archive:
         assert _notes_lines(archive) == [
