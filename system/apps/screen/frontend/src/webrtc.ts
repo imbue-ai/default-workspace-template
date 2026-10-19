@@ -33,6 +33,8 @@ export class NekoStream {
     private readonly socket: NekoSocket,
     private readonly video: HTMLVideoElement,
     private readonly onStatus: (status: StreamStatus) => void,
+    /** The data channel neko opens on every peer (the cursor comes over it, ``remote_cursor.ts``). */
+    private readonly onDataChannel: (channel: RTCDataChannel) => void = () => undefined,
   ) {
     this.policy = new IcePolicy(
       {
@@ -196,6 +198,7 @@ export class NekoStream {
     pc.onconnectionstatechange = () => {
       if (this.pc === pc) this.onPeerState(pc.connectionState);
     };
+    pc.ondatachannel = (event) => this.onDataChannel(event.channel);
     await this.onOffer(String(payload.sdp ?? ""));
   }
 

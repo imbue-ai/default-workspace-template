@@ -253,7 +253,21 @@ emulation also moves the core pointer, and the viewer sends `control/touchbegin`
 second button). The stack waits for the driver's socket before starting neko, which
 dials it once and exits without it.
 
-## Pointer lock
+## The pointer
+
+No cursor is in the video (`show_pointer` is off in every pipeline). neko v3.2.0 sends the X cursor
+over the WebRTC data channel it opens on each peer, not over the WebSocket: on the channel's open and
+on every cursor change, an `OP_CURSOR_IMAGE` (0x02) message with the width, height, hotspot and PNG
+(`server/internal/webrtc/payload/send.go`, `server/internal/webrtc/manager.go`), and to peers that are
+not the host an `OP_CURSOR_POSITION` (0x01) with the pointer's x and y. The viewer reads the channel
+(`frontend/src/remote_cursor.ts`) and, while this session controls (or may take control, with nobody
+holding it), gives the stage's CSS `cursor` the image with its hotspot as a data URI, shrunk with the
+drawn video when the stage shows the desktop smaller than 1:1 and capped at 128 px a side (past which
+Chrome and Firefox ignore a cursor image), with the browser's own pointer as the fallback when the image
+cannot be drawn. A viewer that is watching keeps the default pointer; the position and neko's inactive
+cursors (`session/cursors`) are not drawn. The JPEG screencast fallback shows the pointer painted into
+its frames: neko's global `capture.video.show_pointer` (on by default) sets the screencast pipeline's
+pointer, and the per-pipeline flag only the WebRTC ones.
 
 The viewer carries the pointer-lock plumbing of spec section 12 (`frontend/src/pointer_lock.ts`:
 a strip control that locks the pointer on the stage, the relative motion it yields while locked,

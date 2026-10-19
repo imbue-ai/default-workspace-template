@@ -9,7 +9,8 @@
  * file lands in the Screen's desktop folder (section 4.3), and the phone layout pans, zooms and types through its
  * own controls, with a tap a touch through neko's input driver (section 14). The media path is rewritten to the
  * endpoints ``connect-info`` names and escalates to a relay, then to the JPEG screencast, when no pair connects
- * (section 5).
+ * (section 5). The controller's pointer takes the remote cursor's shape from the image neko sends over the
+ * peer's data channel (section 12).
  */
 
 import "./style.css";
@@ -27,6 +28,7 @@ import { NekoSocket } from "./neko_socket";
 import { Overlays } from "./overlays";
 import { PointerLockControl } from "./pointer_lock";
 import { pageStorage, readNeedsRelay } from "./relay_memory";
+import { RemoteCursor, listenForCursor } from "./remote_cursor";
 import { ResizeReporter } from "./resize_reporter";
 import { windowScheduler } from "./scheduler";
 import { ScreencastPoller } from "./screencast";
@@ -47,6 +49,8 @@ import {
 import type { NekoSessionAnswer, ScreenStateDocument, ServiceEvent } from "./state";
 import { isOwnSessionController } from "./state";
 import { Strip } from "./strip";
+import { fittedVideoRect } from "./view_transform";
+import type { Size } from "./view_transform";
 import { REEVALUATE_INTERVAL_MS, ViewerVisibility } from "./visibility";
 import { NekoStream, type StreamStatus } from "./webrtc";
 
@@ -70,6 +74,7 @@ class Viewer {
   private readonly pointerLock: PointerLockControl;
   private readonly visibility: ViewerVisibility;
   private readonly resizeReporter: ResizeReporter;
+  private readonly remoteCursor: RemoteCursor;
   private readonly clipboard: ClipboardBridge;
   private readonly mobile: MobileControls | null;
   private readonly isPhone: boolean;
@@ -80,6 +85,8 @@ class Viewer {
   private stream: NekoStream | null = null;
   private input: InputRelay | null = null;
   private streamStatus: StreamStatus = "idle";
+  private stageSize: Size = { width: 0, height: 0 };
+  private screenSize: Size = { width: 0, height: 0 };
   private isSigningIn = false;
   private signInError: string | null = null;
   private signInRetryTimer = 0;
@@ -126,6 +133,7 @@ class Viewer {
       windowScheduler,
     );
     this.resizeReporter = new ResizeReporter((size) => this.sendScreenSize(size.width, size.height), windowScheduler);
+    this.remoteCursor = new RemoteCursor(this.stage);
     this.clipboard = new ClipboardBridge(
       serviceClipboardTransport(
         () => this.session?.token ?? null,
@@ -254,8 +262,20 @@ class Viewer {
     } else if (this.session !== null) {
       this.teardownStream();
     }
-    if (this.input && state.screen_size) this.input.screen = state.screen_size;
+    if (state.screen_size) this.setScreenSize(state.screen_size);
     this.render();
+  }
+
+  /** The Screen's mode: where input lands, and how small the stage draws it (the cursor shrinks with it). */
+  private setScreenSize(size: Size): void {
+    this.screenSize = { width: size.width, height: size.height };
+    if (this.input) this.input.screen = this.screenSize;
+    this.syncCursorScale();
+  }
+
+  private syncCursorScale(): void {
+    const fitted = fittedVideoRect(this.stageSize, this.screenSize);
+    if (fitted !== null) void this.remoteCursor.setScale(fitted.width / this.screenSize.width);
   }
 
   private render(): void {
@@ -273,6 +293,7 @@ class Viewer {
     this.overlays.update(this.state, this.streamStatus, this.session, this.signInError);
     this.input?.setEnabled(canSend);
     this.mobile?.setEnabled(canSend);
+    this.remoteCursor.setControlling(mayControl);
     this.clipboard.isActive = isController && this.state.lifecycle === "running";
     this.resizeReporter.setEnabled(isController && this.state.lifecycle === "running" && !this.isPhone);
     this.stage.classList.toggle("screen-stage--not-controlling", !mayControl);
@@ -296,22 +317,32 @@ class Viewer {
       this.session = session;
       const socket = new NekoSocket(session.token, () => this.onNekoOpen());
       this.socket = socket;
-      this.stream = new NekoStream(socket, this.video, (status) => {
-        this.streamStatus = status;
-        this.syncScreencast();
-        this.render();
-      });
+      this.stream = new NekoStream(
+        socket,
+        this.video,
+        (status) => {
+          this.streamStatus = status;
+          // Without a peer there is no cursor image; the screencast paints the pointer into its frames.
+          if (status === "idle" || status === "failed" || status === "screencast") this.remoteCursor.clear();
+          this.syncScreencast();
+          this.render();
+        },
+        (channel) =>
+          listenForCursor(channel, (message) => {
+            if (message.kind === "image") void this.remoteCursor.setImage(message.image);
+          }),
+      );
       this.stream.setAudioEnabled(this.isAudioEnabled);
       this.input = new InputRelay(socket, this.stage, () => this.noteInput());
       if (this.mobile) this.input.viewTransform = () => this.mobile?.viewTransform ?? { zoom: 1, pan: { x: 0, y: 0 } };
-      if (this.state?.screen_size) this.input.screen = this.state.screen_size;
+      this.input.screen = this.screenSize;
       socket.on("clipboard/updated", () => void this.clipboard.onRemoteTextUpdated());
       socket.on("screen/updated", (payload) => {
-        if (this.input) this.input.screen = { width: Number(payload.width), height: Number(payload.height) };
+        this.setScreenSize({ width: Number(payload.width), height: Number(payload.height) });
       });
       socket.on("system/init", (payload) => {
         const size = payload.screen_size as { width?: number; height?: number } | undefined;
-        if (this.input && size?.width && size?.height) this.input.screen = { width: size.width, height: size.height };
+        if (size?.width && size?.height) this.setScreenSize({ width: size.width, height: size.height });
         if (this.input) this.input.isTouchSupported = payload.touch_events === true;
       });
       socket.start();
@@ -405,7 +436,10 @@ class Viewer {
     if (typeof ResizeObserver === "undefined") return;
     new ResizeObserver((entries) => {
       const rect = entries[entries.length - 1]?.contentRect;
-      if (rect) this.resizeReporter.observe(rect.width, rect.height);
+      if (!rect) return;
+      this.resizeReporter.observe(rect.width, rect.height);
+      this.stageSize = { width: rect.width, height: rect.height };
+      this.syncCursorScale();
     }).observe(this.stage);
   }
 
@@ -461,6 +495,7 @@ class Viewer {
     this.session = null;
     this.isNekoOpen = false;
     this.streamStatus = "idle";
+    this.remoteCursor.clear();
     this.visibility.reset();
     this.render();
   }

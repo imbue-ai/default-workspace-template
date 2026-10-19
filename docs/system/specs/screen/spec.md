@@ -216,7 +216,7 @@ Three pipelines in neko's config, all H.264 constrained baseline from x264 with 
 
 The service chooses one profile for everyone from aggregate state: `control` while a human holds control and has sent input in the last 10 seconds, `idle` while nobody has sent input for 60 seconds and no agent holds the lease, `watch` otherwise.
 It announces the choice on its own WebSocket (section 10.2), and every viewer selects it with `signal/video`, so neko runs one encoder.
-`show_pointer` is off per pipeline; the viewer draws the remote cursor from neko's cursor events.
+`show_pointer` is off per pipeline; the controller's pointer takes the remote cursor's shape from the image neko sends over the peer's data channel (section 12).
 
 ### 8.2 Visibility
 
@@ -335,6 +335,11 @@ On macOS the remote window manager's Alt+Tab works without L1 (Option+Tab is not
 
 Shell changes for L2: `WindowState.FULLSCREEN` in `workspace_layout.primitives` and `records.ts`; `PLACEABLE_STATES` and the `place` verb's `--state fullscreen`; `frame_for_state` and `frameForState` answer the backdrop plus the taskbar's band (`{0, 0, 1, 1}` over a backdrop that excludes the taskbar is not enough, so the fullscreen frame is expressed as "the viewport" in both editors and the geometry vectors gain the case); the title bar's state control cycles to it from `MAXIMIZED`'s "restore"; `WindowMenu` gains the row; `Window.ts` draws no title bar and the hover strip in this state; `toggleMaximized` is unchanged; un-snap by drag does not apply (there is no title bar to drag); the window keeps its frame for restore like every state.
 `livePages.ts` adds `fullscreen` to the iframes' `allow` list and `allow-pointer-lock` to their sandbox list.
+
+The pointer: no cursor is in the video (`show_pointer` is off, section 8.1).
+neko sends the X cursor's image (width, height, hotspot and a PNG) to every peer over the WebRTC data channel when the channel opens and whenever the cursor changes, and its position to the peers that are not the host; neither is a WebSocket event.
+The viewer whose session controls (or may take control, with nobody holding it) gives the stage's CSS `cursor` that image with its hotspot (`url(<data URI>) <x> <y>, auto`), shrunk with the drawn video when the stage renders the desktop smaller than 1:1 and capped at 128 px a side, where browsers stop honouring a cursor image; an image the browser will not draw leaves its own pointer.
+Every other viewer keeps the default pointer; the position and neko's inactive cursors (`session/cursors`) are not drawn, and the screencast fallback shows the pointer painted into its frames.
 
 Pointer lock: a viewer control, available while the human holds control, requests pointer lock on the stage for relative-motion programs; Escape releases it, and with L1's lock the held Escape releases both.
 Neko's relative-motion support is verified in the implementation; without it the control is hidden.

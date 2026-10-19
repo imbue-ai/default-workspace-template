@@ -90,3 +90,7 @@ Touch through neko's input driver (spec section 14):
 - The viewer sends a phone's tap as `control/touchbegin` and `control/touchend` at the mapped point with the finger's pressure (a byte, never zero) and a fresh sixteen-bit touch id, when neko's `system/init` says `touch_events`; otherwise, and for a long press (a right click), the mouse path stays.
 
 - `test_screen_integration.py` asserts in the workspace image that Xorg loaded the `neko` driver for the device and accepted neko's connection, that `system/init` carries `touch_events`, and that a touch over neko's WebSocket moves the core pointer to the touched point (read back with `xdotool getmouselocation`).
+
+The pointer (spec section 12):
+
+- The controller's own pointer takes the remote cursor's shape. neko sends the X cursor's image (size, hotspot, PNG) over the peer's WebRTC data channel when the channel opens and on every change, and the viewer sets it as the stage's CSS cursor with its hotspot (a data URI), shrunk with the drawn video when the stage shows the desktop smaller than 1:1 and capped at 128 px a side, with the browser's own pointer as the fallback when the image cannot be drawn. The stage no longer hides the pointer (`cursor: none`), so a viewer that is watching sees the default pointer, and the screencast fallback its painted-in pointer; `show_pointer` stays off in neko's WebRTC pipelines.
