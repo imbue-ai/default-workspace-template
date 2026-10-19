@@ -216,9 +216,8 @@ def _ample_deadline(module: ModuleType) -> Any:
     return module.CollectionDeadline(module.FINISH_RESERVE_SECONDS + 60.0)
 
 
-# The stub mngr, as a python script: the three shapes it answers are easiest to
-# keep faithful to the real CLI in the language that CLI is written in. Its
-# canned answers come in through the json config file named on its first line.
+# The stub mngr. Its canned answers come in through the json config file named
+# on its first line.
 _MNGR_STUB_SCRIPT = """\
 import json
 import os
@@ -450,7 +449,7 @@ def _notes_lines(archive: zipfile.ZipFile) -> list[str]:
     return archive.read("collection-notes.txt").decode("utf-8").splitlines()
 
 
-# --- Caps and contract constants ---
+# Caps and contract constants
 
 
 def test_the_scan_gate_path_points_at_a_gate_that_exists_in_this_repo() -> None:
@@ -518,7 +517,7 @@ def test_select_log_files_drops_logs_not_written_to_in_the_last_day(
     ]
 
 
-# --- No ownership or stream filtering ---
+# No ownership or stream filtering
 
 
 def test_select_log_files_keeps_every_programs_logs_both_streams(
@@ -547,7 +546,7 @@ def test_select_log_files_keeps_every_programs_logs_both_streams(
     ]
 
 
-# --- Chat selection ---
+# Chat selection
 
 
 def test_every_agent_is_a_transcript_candidate(
@@ -855,7 +854,7 @@ def test_transcript_member_names_stay_unique_within_one_archive() -> None:
     assert second.endswith(".jsonl")
 
 
-# --- Zip timestamp clamps ---
+# Zip timestamp clamps
 
 
 def test_zip_records_an_epoch_fallback_mtime_at_the_formats_floor() -> None:
@@ -895,7 +894,7 @@ def test_zip_records_a_far_future_chat_at_the_formats_ceiling() -> None:
         assert archive.infolist()[0].date_time == (2107, 12, 31, 23, 59, 58)
 
 
-# --- Scan verdicts (fail closed) ---
+# Scan verdicts (fail closed)
 
 
 def test_scan_targets_releases_every_file_on_a_clean_scan(tmp_path: Path) -> None:
@@ -1031,7 +1030,7 @@ def test_scan_targets_fails_closed_when_the_scan_times_out(tmp_path: Path) -> No
     }
 
 
-# --- End-to-end output shape ---
+# End-to-end output shape
 
 
 def test_main_prints_only_the_base64_zip_line_with_all_content_on_a_clean_scan(
@@ -1341,7 +1340,7 @@ def test_main_reports_everything_scanner_unavailable_when_the_gate_is_missing(
         ]
 
 
-# --- The size cap ---
+# The size cap
 
 
 def test_main_packs_every_collected_chat_with_no_size_cap(
@@ -1378,7 +1377,7 @@ def test_main_packs_every_collected_chat_with_no_size_cap(
         ]
 
 
-# --- Agent (harness) logs ---
+# Agent (harness) logs
 
 
 def test_agent_logs_are_collected_from_every_shape_a_harness_writes(
@@ -2201,7 +2200,7 @@ def test_a_whole_collection_asks_mngr_for_the_agent_listing_once(
     ], invocations
 
 
-# --- The collection's deadline ---
+# The collection's deadline
 
 
 def _load_collector_with_short_reserves(
