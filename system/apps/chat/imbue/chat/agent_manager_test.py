@@ -5383,28 +5383,6 @@ def _converging_chat(
     return first, successor
 
 
-def test_a_converging_chat_says_whether_its_handoff_is_a_fresh_start(
-    broadcaster: WebSocketBroadcaster, tmp_path: Path
-) -> None:
-    """The page shows a fresh start as the chat starting on the target, not as a handoff, so the snapshot says which."""
-    sent: list[tuple[str, str, str]] = []
-    manager, store, _argv_log = _handoff_manager(broadcaster, tmp_path, sent)
-    first, _successor = _converging_chat(manager, store, phase=HandoffPhase.SUMMARIZING, is_retiring_archived=False)
-    chat_id = ChatId(first)
-    try:
-        state = manager.get_handoff_state(chat_id)
-        assert state is not None and state.is_fresh_start is False
-        record = store.read(chat_id)
-        assert record is not None and record.handoff is not None
-        fresh = record.handoff.model_copy_update(to_update(record.handoff.field_ref().is_fresh_start, True))
-        store.write(record.model_copy_update(to_update(record.field_ref().handoff, fresh)))
-        manager.refresh_chat_records()
-        state = manager.get_handoff_state(chat_id)
-        assert state is not None and state.is_fresh_start is True
-    finally:
-        manager.stop()
-
-
 def test_a_converging_chat_holds_sends_refuses_the_verbs_and_can_be_cancelled(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:

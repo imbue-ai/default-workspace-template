@@ -912,7 +912,7 @@ describe("the combo card", () => {
     // settings one write at a time (the model with no effort, then the effort).
     agentState.agent = chatSnapshotFixture("a1", {
       active_agent: { harness: "claude", account_id: "acct-1" },
-      handoff: handoffStateFixture({ phase: "switching", is_fresh_start: true, held_sends: [] }),
+      handoff: handoffStateFixture({ phase: "switching", held_sends: [] }),
     });
     render();
     expect(ROOT().textContent).toContain("Codex");

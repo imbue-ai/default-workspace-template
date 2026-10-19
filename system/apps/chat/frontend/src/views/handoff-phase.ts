@@ -12,8 +12,6 @@ export function handoffPhaseText(handoff: HandoffState, retiringHarness: string)
   const from = harnessLabel(retiringHarness);
   // A handoff names the harness it moves to; a rebind keeps the harness and names the account.
   const to = handoff.kind === "rebind" ? `${from} on ${handoff.target_label}` : harnessLabel(handoff.target_harness);
-  // A chat with nothing to hand over is only starting on the target: wrapping up the agent it leaves is not news.
-  if (handoff.is_fresh_start && handoff.phase !== "failed") return `Starting ${to}…`;
   switch (handoff.phase) {
     case "draining":
       return `Wrapping up with ${from}…`;

@@ -1360,8 +1360,8 @@ _WELCOME_ONLY_SESSION_EVENTS: list[dict[str, Any]] = [
 @pytest.mark.timeout(90, func_only=False)
 def test_a_chat_with_no_user_turn_switches_at_once_and_leaves_no_handoff_node(tmp_path: Path, page: Page) -> None:
     """A fresh start through the browser: with only the welcome behind it, pressing another account asks nothing
-    and switches at once, the chat reads as starting on the new harness rather than handing off while the switch
-    runs, and once it has landed nothing stands between the two agents' turns."""
+    and switches at once, the live node stands in while the switch runs, and once it has landed nothing stands
+    between the two agents' turns."""
     with _switched_workspace(tmp_path, session_events=_WELCOME_ONLY_SESSION_EVENTS) as server:
         _open_fixture_chat(page, server)
         chat = _chat(page)
@@ -1370,13 +1370,10 @@ def test_a_chat_with_no_user_turn_switches_at_once_and_leaves_no_handoff_node(tm
         _open_provider_menu(chat)
         chat.locator('[data-menu-part="submenu"] button', has_text="OpenAI").first.click()
 
-        # Nothing to hand over, so nothing asks and nothing is armed: the switch runs at once, the strip
-        # says the chat is starting on Codex, the chip names Codex rather than the model it is leaving,
-        # and no handoff node appears.
-        expect(chat.locator('.agent-activity-indicator[data-state^="HANDOFF_"]')).to_contain_text("Starting Codex")
+        # Nothing to hand over, so nothing asks and nothing is armed: the switch runs at once, the
+        # live node reports it while it does, and the chip names Codex rather than the model it is leaving.
+        expect(chat.locator('[data-handoff-status="active"]')).to_contain_text("Handing off to Codex")
         expect(chat.locator(".model-selector-trigger")).to_contain_text("Codex")
-        expect(chat.locator("[data-handoff-status]")).to_have_count(0)
-        expect(chat.locator(".message-list")).not_to_contain_text("Handing off")
         expect(chat.locator(".modal-card")).to_have_count(0)
         expect(chat.locator(".message-input-switch-strip")).to_have_count(0)
 

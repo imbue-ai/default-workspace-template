@@ -484,13 +484,6 @@ class HandoffState(FrozenModel):
     failed_step: HandoffFailedStep | None = Field(
         default=None, description="Which step failed, in the failed phase: the agent's start, or the model pick"
     )
-    is_fresh_start: bool = Field(
-        default=False,
-        description=(
-            "Whether the switch is a handoff off an agent that never received a user turn: nothing is handed over, "
-            "so the page shows the chat starting on the target rather than a handoff"
-        ),
-    )
 
 
 class SwitchChatRequest(SendMessageRequest):

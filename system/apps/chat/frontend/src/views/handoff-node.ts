@@ -180,9 +180,6 @@ export function renderHandoffNode(
 export function renderHandoffTailNode(chatId: string, isOnTranscript: boolean): m.Vnode | null {
   const chat = getChatById(chatId);
   if (chat === undefined || chat.handoff === null || isOnTranscript) return null;
-  // A fresh start hands nothing over, so it gets no node, as it gets none once it has landed: the activity strip says
-  // the chat is starting. A failed one keeps its node, which says what did not start.
-  if (chat.handoff.is_fresh_start && chat.handoff.phase !== "failed") return null;
   const node: HandoffNode = { key: `live-${chatId}`, request: null, events: [], switch: null, prompt: null };
   // Keyed like its siblings in the message list: a keyed list refuses an unkeyed member.
   return m(

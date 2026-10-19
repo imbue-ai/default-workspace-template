@@ -781,7 +781,6 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
         model_pick=transition.model_pick,
         error=transition.error,
         failed_step=transition.failed_step,
-        is_fresh_start=isinstance(transition, ChatHandoffRecord) and transition.is_fresh_start,
     )
 
 

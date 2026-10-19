@@ -183,22 +183,4 @@ describe("the handoff node", () => {
     state.chat = chatWith(null);
     expect(renderHandoffTailNode("agent-a", false)).toBeNull();
   });
-
-  it("stands in for no fresh start, which hands nothing over, unless it failed", () => {
-    for (const phase of ["draining", "summarizing", "switching"] as const) {
-      state.chat = chatWith(handoffStateFixture({ phase, is_fresh_start: true, held_sends: [] }));
-      expect(renderHandoffTailNode("agent-a", false)).toBeNull();
-    }
-    state.chat = chatWith(
-      handoffStateFixture({
-        phase: "failed",
-        is_fresh_start: true,
-        held_sends: [],
-        error: "boom",
-        failed_step: "start",
-      }),
-    );
-    m.render(ROOT(), renderHandoffTailNode("agent-a", false));
-    expect(ROOT().textContent).toContain("Could not hand off to Codex");
-  });
 });

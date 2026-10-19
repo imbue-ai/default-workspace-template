@@ -39,17 +39,6 @@ describe("the words for a chat switching harness", () => {
     );
   });
 
-  it("says only that the target is starting for a fresh start, which hands nothing over", () => {
-    for (const phase of ["draining", "summarizing", "switching"] as const) {
-      expect(handoffPhaseText(handoffStateFixture({ phase, is_fresh_start: true }), "pi-coding")).toBe(
-        "Starting Codex…",
-      );
-    }
-    expect(handoffPhaseText(handoffStateFixture({ phase: "failed", is_fresh_start: true }), "pi-coding")).toBe(
-      "Could not start Codex",
-    );
-  });
-
   it("allows a cancel only until the old agent is stopped", () => {
     expect(isHandoffCancellable(handoffStateFixture({ phase: "draining" }))).toBe(true);
     expect(isHandoffCancellable(handoffStateFixture({ phase: "summarizing" }))).toBe(true);
