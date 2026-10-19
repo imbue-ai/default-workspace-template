@@ -107,6 +107,12 @@ export class IcePolicy {
     if (this.phase === "direct") this.actions.rememberRelay();
     // A connection that worked and then failed is retried through the relay too; it is not remembered as a relay
     // network, since the direct path did connect once.
+    this.fetchRelayThen((info) => this.actions.restartIce(info));
+  }
+
+  /** Fresh relay servers, then ``start`` with them (null when the refetch failed) and the relay attempt's deadline;
+   *  a reset or another attempt meanwhile drops the answer. */
+  private fetchRelayThen(start: (info: ConnectInfo | null) => void): void {
     this.phase = "fetching-relay";
     const generation = this.generation;
     this.actions
@@ -114,7 +120,7 @@ export class IcePolicy {
       .catch(() => null)
       .then((info) => {
         if (generation !== this.generation || this.phase !== "fetching-relay") return;
-        this.actions.restartIce(info);
+        start(info);
         this.attemptStarted(true);
       });
   }
@@ -132,15 +138,6 @@ export class IcePolicy {
   /** From the screencast: fresh relay servers, a fresh peer, the relay attempt's deadline; a failure lands back in
    *  the screencast with the next delay. */
   private retry(): void {
-    this.phase = "fetching-relay";
-    const generation = this.generation;
-    this.actions
-      .fetchRelayInfo()
-      .catch(() => null)
-      .then((info) => {
-        if (generation !== this.generation || this.phase !== "fetching-relay") return;
-        this.actions.retryFromScreencast(info);
-        this.attemptStarted(true);
-      });
+    this.fetchRelayThen((info) => this.actions.retryFromScreencast(info));
   }
 }
