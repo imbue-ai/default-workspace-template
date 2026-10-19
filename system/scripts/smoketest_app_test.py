@@ -5,6 +5,7 @@ import json
 import socketserver
 import threading
 import time
+import xmlrpc.client
 from pathlib import Path
 
 import pytest
@@ -124,3 +125,49 @@ def test_restart_raises_a_short_timeout_and_keeps_a_long_one() -> None:
     assert smoketest_app.effective_timeout(5.0, restart=False) == 5.0
     assert smoketest_app.effective_timeout(5.0, restart=True) == smoketest_app.RESTART_MIN_TIMEOUT
     assert smoketest_app.effective_timeout(60.0, restart=True) == 60.0
+
+
+class _FakeSupervisor:
+    """Records the RPC calls a restart makes and raises the faults it is given."""
+
+    def __init__(self, state: str, stop_fault: int | None = None, start_fault: int | None = None) -> None:
+        self.state = state
+        self.stop_fault = stop_fault
+        self.start_fault = start_fault
+        self.calls: list[str] = []
+
+    def getProcessInfo(self, name: str) -> dict[str, str]:  # noqa: N802 -- supervisord's RPC name
+        return {"statename": self.state}
+
+    def stopProcess(self, name: str, wait: bool) -> bool:  # noqa: N802
+        self.calls.append("stop")
+        if self.stop_fault is not None:
+            raise xmlrpc.client.Fault(self.stop_fault, "fault")
+        return True
+
+    def startProcess(self, name: str, wait: bool) -> bool:  # noqa: N802
+        self.calls.append("start")
+        if self.start_fault is not None:
+            raise xmlrpc.client.Fault(self.start_fault, "fault")
+        self.state = "STARTING"
+        return True
+
+
+def test_restart_tolerates_a_program_that_exited_before_the_stop() -> None:
+    sup = _FakeSupervisor("RUNNING", stop_fault=smoketest_app._FAULT_NOT_RUNNING)
+    early_death = smoketest_app._restart_program(sup, "app")
+    assert sup.calls == ["stop", "start"]
+    assert early_death() is None
+
+
+def test_restart_tolerates_autorestart_winning_the_start() -> None:
+    sup = _FakeSupervisor("EXITED", start_fault=smoketest_app._FAULT_ALREADY_STARTED)
+    smoketest_app._restart_program(sup, "app")
+    assert sup.calls == ["start"]
+
+
+def test_restart_fails_at_once_when_the_start_rpc_reports_a_crash() -> None:
+    spawn_error = 50
+    sup = _FakeSupervisor("STOPPED", start_fault=spawn_error)
+    with pytest.raises(SystemExit, match="could not start app"):
+        smoketest_app._restart_program(sup, "app")
