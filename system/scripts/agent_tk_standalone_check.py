@@ -43,9 +43,6 @@ from tk_command_parsing.parser import parse_command
 _LIFECYCLE_VERBS = ("start", "close")
 # The tk commands that may share a tool call with a start or close.
 _BATCHABLE_VERBS = ("create", "start", "close")
-# Separators that run the next tk command after the previous one finished; a
-# pipe or a background `&` would detach or swallow the transition's output.
-_SEQUENTIAL_TERMINATORS = (None, ";", "&&")
 
 _BEFORE = "another command runs before it (for example a leading `cd`)"
 _REDIRECT = "its output is redirected (`>`, `>>`, `2>`, `&>`, `</dev/null`, ...)"
@@ -55,12 +52,23 @@ _CHAIN = (
 )
 
 
+def _is_sequential(terminator: str | None) -> bool:
+    """True for a separator that runs the next tk command after the previous one finished.
+
+    The parser reads an unquoted newline as `;`, so `;` then a newline, or a
+    blank line, arrives as a run of `;`. A pipe or a background `&` would
+    detach or swallow the transition's output.
+    """
+    return terminator is None or terminator == "&&" or set(terminator) == {";"}
+
+
 def classify(cmd: str) -> str | None:
-    """Return the violation reason if `cmd` is a non-standalone tk start/close.
+    """Return the violation reason if `cmd` mixes a tk start/close with anything but tk.
 
     Returns None when the command is allowed: either it is not a tk start/close
     at all (including `tk create`, or a non-tk command that merely mentions a tk
-    verb inside a quoted string), or it is a clean standalone start/close.
+    verb inside a quoted string), or every command in it is an unredirected tk
+    create/start/close run in sequence.
     """
     parsed = parse_command(cmd)
     if parsed is None:
@@ -79,7 +87,7 @@ def classify(cmd: str) -> str | None:
     if any(seg.tk_verb not in _BATCHABLE_VERBS for seg in segments):
         # Real work shares the call with the transition.
         return _CHAIN
-    if any(seg.terminator not in _SEQUENTIAL_TERMINATORS for seg in segments):
+    if not all(_is_sequential(seg.terminator) for seg in segments):
         # A pipe, `||` or `&` between (or after) the tk commands.
         return _CHAIN
     return None
