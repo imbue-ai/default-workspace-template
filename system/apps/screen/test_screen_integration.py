@@ -68,8 +68,8 @@ from screen.stack import describe_missing_install
 from screen.watch import decide_group_end
 from screen.watch import end_group
 from screen.windows import DisplayWindowTools
-from screen.xfce_helpers import HELPER_DESKTOP_RELATIVE_PATH
 from screen.xfce_helpers import HELPERS_RC_RELATIVE_PATH
+from screen.xfce_helpers import HELPER_DESKTOP_RELATIVE_PATH
 from screen.xorg_config import INPUT_DEVICE_IDENTIFIER
 from screen.xorg_config import INPUT_DRIVER
 from testing import SubprocessSupervisor
@@ -382,58 +382,67 @@ class _PageHandler(BaseHTTPRequestHandler):
         pass
 
 
-@pytest.mark.browser
-def test_the_browser_launch_path_puts_fortress_on_the_screen_and_checkpoints_its_tab(running: _LiveService) -> None:
-    service, client = running.service, running.client
-    missing = describe_missing_browser_install()
-    if missing is not None:
-        pytest.skip(missing)
+@pytest.fixture
+def page_server_url() -> Iterator[str]:
+    """A loopback page for the browser on the Screen to open, served for the test alone."""
     page_server = ThreadingHTTPServer(("127.0.0.1", 0), _PageHandler)
-    serving = threading.Thread(target=page_server.serve_forever, daemon=True)
-    serving.start()
+    threading.Thread(target=page_server.serve_forever, daemon=True).start()
     try:
-        page_url = f"http://127.0.0.1:{page_server.server_address[1]}/start"
-        answer = client.post("/launch/browser", json={"url": page_url})
-        assert answer.status_code == 200, answer.get_json()
-        assert answer.get_json() == {"path": "/"}
-        browser = service.fleet.get(BrowserName("browser-1"))
-        assert wait_until(lambda: browser.is_running, 120.0), browser.lifecycle
-
-        def chromium_window() -> dict | None:
-            windows = client.get("/api/windows").get_json().get("windows", [])
-            return next(
-                (w for w in windows if any(m in w["window_class"].lower() for m in ("tilion", "chrome", "chromium"))),
-                None,
-            )
-
-        assert wait_until(lambda: chromium_window() is not None, 60.0)
-        assert wait_until(lambda: client.get("/api/state").get_json()["title"] == "Browser", 30.0)
-        listed = client.get("/browsers").get_json()["browsers"][0]
-        assert listed["lifecycle"] == "running"
-        assert wait_until(
-            lambda: any(tab["url"] == page_url for tab in client.get("/browsers").get_json()["browsers"][0]["tabs"]),
-            30.0,
-        )
-        attach = client.get("/browsers/browser-1/attach", headers={"X-Mngr-Agent-Id": "chat-live"}).get_json()
-        assert attach["ok"] is True
-        # The proxy answers Chromium's discovery with its own URL in place of the real port.
-        version = json.loads(urllib.request.urlopen(attach["attach_url"] + "/json/version/", timeout=10).read())
-        assert version["webSocketDebuggerUrl"].startswith("ws://127.0.0.1:")
-        assert version["webSocketDebuggerUrl"].endswith(attach["attach_url"].rsplit("/", 1)[1])
-        service.fleet.checkpoint()
-        manifest = service.fleet.manifest_store.read()
-        assert manifest is not None
-        assert manifest.browsers[0].tabs == (page_url,)
-        assert client.post("/browsers/browser-1/stop").get_json() == {"stopped": True}
-        assert wait_until(lambda: chromium_window() is None, 30.0)
-        assert client.get("/api/state").get_json()["chromium"]["state"] == "stopped"
+        yield f"http://127.0.0.1:{page_server.server_address[1]}"
     finally:
         page_server.shutdown()
         page_server.server_close()
 
 
 @pytest.mark.browser
-def test_the_browser_command_opens_a_page_in_the_fleets_chromium(running: _LiveService, tmp_path: Path) -> None:
+def test_the_browser_launch_path_puts_fortress_on_the_screen_and_checkpoints_its_tab(
+    running: _LiveService, page_server_url: str
+) -> None:
+    service, client = running.service, running.client
+    missing = describe_missing_browser_install()
+    if missing is not None:
+        pytest.skip(missing)
+    page_url = f"{page_server_url}/start"
+    answer = client.post("/launch/browser", json={"url": page_url})
+    assert answer.status_code == 200, answer.get_json()
+    assert answer.get_json() == {"path": "/"}
+    browser = service.fleet.get(BrowserName("browser-1"))
+    assert wait_until(lambda: browser.is_running, 120.0), browser.lifecycle
+
+    def chromium_window() -> dict | None:
+        windows = client.get("/api/windows").get_json().get("windows", [])
+        return next(
+            (w for w in windows if any(m in w["window_class"].lower() for m in ("tilion", "chrome", "chromium"))),
+            None,
+        )
+
+    assert wait_until(lambda: chromium_window() is not None, 60.0)
+    assert wait_until(lambda: client.get("/api/state").get_json()["title"] == "Browser", 30.0)
+    listed = client.get("/browsers").get_json()["browsers"][0]
+    assert listed["lifecycle"] == "running"
+    assert wait_until(
+        lambda: any(tab["url"] == page_url for tab in client.get("/browsers").get_json()["browsers"][0]["tabs"]),
+        30.0,
+    )
+    attach = client.get("/browsers/browser-1/attach", headers={"X-Mngr-Agent-Id": "chat-live"}).get_json()
+    assert attach["ok"] is True
+    # The proxy answers Chromium's discovery with its own URL in place of the real port.
+    version = json.loads(urllib.request.urlopen(attach["attach_url"] + "/json/version/", timeout=10).read())
+    assert version["webSocketDebuggerUrl"].startswith("ws://127.0.0.1:")
+    assert version["webSocketDebuggerUrl"].endswith(attach["attach_url"].rsplit("/", 1)[1])
+    service.fleet.checkpoint()
+    manifest = service.fleet.manifest_store.read()
+    assert manifest is not None
+    assert manifest.browsers[0].tabs == (page_url,)
+    assert client.post("/browsers/browser-1/stop").get_json() == {"stopped": True}
+    assert wait_until(lambda: chromium_window() is None, 30.0)
+    assert client.get("/api/state").get_json()["chromium"]["state"] == "stopped"
+
+
+@pytest.mark.browser
+def test_the_browser_command_opens_a_page_in_the_fleets_chromium(
+    running: _LiveService, page_server_url: str, tmp_path: Path
+) -> None:
     """``screen browser open <url>``, what the XFCE session's Web Browser launcher and an http(s) link on the Screen
     run through ``screen-browser-open``, lands the page in the fleet's one Chromium through the launch path."""
     service, client = running.service, running.client
@@ -448,11 +457,8 @@ def test_the_browser_command_opens_a_page_in_the_fleets_chromium(running: _LiveS
     server = make_server("127.0.0.1", 0, build_app(service, tmp_path / "static", NekoProxy()))
     serving = threading.Thread(target=server.serve_forever, daemon=True)
     serving.start()
-    page_server = ThreadingHTTPServer(("127.0.0.1", 0), _PageHandler)
-    page_serving = threading.Thread(target=page_server.serve_forever, daemon=True)
-    page_serving.start()
     try:
-        page_url = f"http://127.0.0.1:{page_server.server_address[1]}/from-the-launcher"
+        page_url = f"{page_server_url}/from-the-launcher"
         completed = subprocess.run(
             [sys.executable, "-m", "screen.cli", "browser", "open", page_url],
             env={**os.environ, "MINDS_SCREEN_SERVICE_URL": f"http://127.0.0.1:{server.server_port}"},
@@ -471,8 +477,6 @@ def test_the_browser_command_opens_a_page_in_the_fleets_chromium(running: _LiveS
         )
         assert client.post("/browsers/browser-1/stop").get_json() == {"stopped": True}
     finally:
-        page_server.shutdown()
-        page_server.server_close()
         server.shutdown()
         serving.join()
 
