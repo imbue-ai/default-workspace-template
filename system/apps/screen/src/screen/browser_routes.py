@@ -102,9 +102,11 @@ def build_browser_blueprint(service: ScreenService) -> Blueprint:
         except UnknownBrowserError as e:
             return _error({"error": str(e)}, HTTP_NOT_FOUND)
 
-    def _start_browser(name: str | None, raw_url: str | None) -> Browser | Response:
+    def _start_browser(name: str | None, raw_url: str | None, is_launch_path: bool) -> Browser | Response:
         """The browser a nameless request means (the one that exists, started again if stopped, else a new one),
-        or the named create, answered at once while Chromium launches in the background."""
+        or the named create, answered at once while Chromium launches in the background. A nameless request is the
+        human's ``browser`` launch path (its start page held while an agent drives) or an agent's ``new`` (its page
+        opened at once), as ``is_launch_path`` says."""
         missing = service.fleet.install_reason()
         if missing is not None:
             return _error({"error": missing}, HTTP_SERVICE_UNAVAILABLE)
@@ -116,7 +118,7 @@ def build_browser_blueprint(service: ScreenService) -> Blueprint:
                 return _error({"error": f"url: {e}"}, HTTP_BAD_REQUEST)
         try:
             if name is None:
-                return service.launch_browser(start_url)
+                return service.launch_browser(start_url) if is_launch_path else service.new_browser(start_url)
             service.ensure_started()
             return service.fleet.create(name, start_url)
         except InvalidBrowserNameError as e:
@@ -136,7 +138,7 @@ def build_browser_blueprint(service: ScreenService) -> Blueprint:
         raw_url = body.get(START_URL_PARAM)
         if raw_url is not None and not isinstance(raw_url, str):
             return _refusal("url: must be a string", HTTP_BAD_REQUEST)
-        started = _start_browser(None, raw_url)
+        started = _start_browser(None, raw_url, is_launch_path=True)
         if isinstance(started, Response):
             return _refusal(
                 str(started.get_json().get("error", "the browser could not be started")), started.status_code
@@ -205,7 +207,9 @@ def build_browser_blueprint(service: ScreenService) -> Blueprint:
         raw_name = body.get("name")
         raw_url = body.get("url")
         started = _start_browser(
-            None if raw_name is None else str(raw_name), None if raw_url is None else str(raw_url)
+            None if raw_name is None else str(raw_name),
+            None if raw_url is None else str(raw_url),
+            is_launch_path=False,
         )
         if isinstance(started, Response):
             return started

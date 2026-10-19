@@ -104,6 +104,26 @@ def test_open_url_holds_the_page_while_an_agent_drives_and_the_viewer_can_cancel
     assert client.get("/api/state").get_json()["control"]["controller"] == "agent"
 
 
+def test_the_launch_paths_start_page_is_held_while_an_agent_drives_but_an_agents_new_opens_at_once(
+    client: FlaskClient, service: ScreenService, fake_cdp_connector: FakeCdpConnector
+) -> None:
+    name = start_browser(client, service)
+    tools = service.window_tools
+    assert isinstance(tools, FakeWindowTools)
+    tools.windows = [_CHROMIUM_WINDOW]
+    assert client.post(f"/browsers/{name}/acquire", json={}, headers=_AGENT_A).get_json()["ok"] is True
+    held = client.post("/launch/browser", json={"url": "https://example.com", "client_id": "c1"})
+    assert held.status_code == 200 and held.get_json() == {"path": "/"}
+    assert client.get("/api/state").get_json()["chromium"]["pending_url"] == "https://example.com"
+    assert fake_cdp_connector.clients[0].created == []
+    # Chromium is not raised over the agent's work for a page that waits for the human.
+    assert tools.activated == []
+    opened = client.post("/browsers", json={"url": "https://agent.example"}, headers=_AGENT_A)
+    assert opened.status_code == 200 and opened.get_json() == {"name": name}
+    assert fake_cdp_connector.clients[0].created == ["https://agent.example"]
+    assert tools.activated == ["0x0000002"]
+
+
 def test_a_held_page_opens_once_the_agent_releases(
     client: FlaskClient, service: ScreenService, fake_cdp_connector: FakeCdpConnector, loopback_shell: LoopbackShell
 ) -> None:

@@ -509,18 +509,14 @@ class BrowserFleet(MutableModel):
         return browser
 
     def ensure_browser(self, start_url: str | None) -> Browser:
-        """What the launch path and a nameless create answer: the one browser, created when there is none,
+        """What a nameless create answers (an agent's ``new``): the one browser, created when there is none,
         started again when it was stopped, with ``start_url`` opened as a new tab when given (held until the
-        launch finishes when Chromium is still coming up, and held while an agent drives the browser, as a page
-        the human asks for is never opened over the agent's work)."""
+        launch finishes when Chromium is still coming up)."""
         browser = self.the_browser()
         if browser is None:
             return self.create(None, start_url)
         if browser.is_running:
-            if start_url is not None and self.control.view().controller == Controller.AGENT:
-                logger.info("Held {} for browser {} while an agent drives it", start_url, browser.name)
-                self.hold_pending_url(browser, start_url)
-            elif start_url is not None:
+            if start_url is not None:
                 browser.open_tab(start_url)
                 self.on_chromium_processes_expected()
             return browser
@@ -534,9 +530,14 @@ class BrowserFleet(MutableModel):
         return browser
 
     def open_url_for_human(self, url: str) -> Browser:
-        """A page the human asked for (``open:url``): a tab in front, except that while an agent drives the browser
-        it is held rather than opened over the agent's work (the viewer offers Take control, which opens it, or
-        Cancel), as ``ensure_browser`` holds the launch path's page."""
+        """A page the human asked for (``open:url``, or the launch path's start page): a tab in front, except that
+        while an agent drives the browser it is held rather than opened over the agent's work (the viewer offers
+        Take control, which opens it, or Cancel)."""
+        browser = self.the_browser()
+        if browser is not None and browser.is_running and self.control.view().controller == Controller.AGENT:
+            logger.info("Held {} for browser {} while an agent drives it", url, browser.name)
+            self.hold_pending_url(browser, url)
+            return browser
         return self.ensure_browser(url)
 
     def hold_pending_url(self, browser: Browser, url: str) -> None:

@@ -191,24 +191,29 @@ def test_a_page_asked_for_while_an_agent_drives_is_held_and_opens_when_the_human
     assert browser.pending_url is None
 
 
-def test_the_launch_paths_page_is_held_while_an_agent_drives_and_opens_when_the_agent_lets_go(tmp_path: Path) -> None:
+def test_the_humans_page_is_held_while_an_agent_drives_but_the_agents_own_opens_at_once(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
     harness.stack_up()
     browser = harness.running_browser()
     harness.control.acquire(
         _AGENT, "Alice", is_reclaim=False, is_wait=False, max_wait_seconds=None, is_enqueue_on_busy=False
     )
-    held = harness.fleet.ensure_browser("https://example.org/")
+    # The launch path's start page is the human's ask.
+    held = harness.fleet.open_url_for_human("https://example.org/")
     assert held is browser
     assert browser.pending_url == "https://example.org/"
     assert harness.cdp().created == []
+    # A nameless create's page (an agent's ``new --url``) is the agent's own and is not held for the human.
+    assert harness.fleet.ensure_browser("https://agent.example/") is browser
+    assert harness.cdp().created == ["https://agent.example/"]
+    assert browser.pending_url == "https://example.org/"
     harness.control.release(_AGENT)
     harness.fleet.open_pending_url()
-    assert harness.cdp().created == ["https://example.org/"]
+    assert harness.cdp().created == ["https://agent.example/", "https://example.org/"]
     assert browser.pending_url is None
-    # With nobody driving, the launch path's page opens at once.
-    harness.fleet.ensure_browser("https://example.net/")
-    assert harness.cdp().created == ["https://example.org/", "https://example.net/"]
+    # With nobody driving, the human's page opens at once.
+    harness.fleet.open_url_for_human("https://example.net/")
+    assert harness.cdp().created == ["https://agent.example/", "https://example.org/", "https://example.net/"]
 
 
 def test_a_cancelled_page_never_opens_and_leaves_the_agent_driving(tmp_path: Path) -> None:

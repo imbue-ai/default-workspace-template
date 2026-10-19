@@ -727,8 +727,20 @@ class ScreenService(MutableModel):
     # the browser (spec section 16)
 
     def launch_browser(self, start_url: str | None) -> Browser:
-        """The ``browser`` launch path: start the stack when it is down, start Chromium when it is not running (or
-        register it to start with the stack), open the start page as a new tab when given, and raise its window."""
+        """The ``browser`` launch path (the human's): start the stack when it is down, start Chromium when it is not
+        running (or register it to start with the stack), open the start page as a new tab when given, and raise its
+        window; a start page asked for while an agent drives is held, as ``open:url``'s is, and nothing is raised."""
+        if start_url is not None:
+            return self.open_url_for_human(start_url)
+        self.ensure_started()
+        browser = self.fleet.ensure_browser(None)
+        if browser.is_running:
+            self.raise_browser_window()
+        return browser
+
+    def new_browser(self, start_url: str | None) -> Browser:
+        """A nameless ``POST /browsers`` (an agent's ``new``): the one browser as the launch path brings it up, with
+        the start page opened at once, since it is the agent's own ask and not a page held for the human."""
         self.ensure_started()
         browser = self.fleet.ensure_browser(start_url)
         if browser.is_running:
