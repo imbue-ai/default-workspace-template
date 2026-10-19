@@ -163,8 +163,9 @@ class PickerMode(StrEnum):
 
 
 class HarnessCatalog(FrozenModel):
-    """The serializable, per-harness static half. IS the ``/api/harnesses`` wire
-    shape (dumped verbatim -- no endpoint-side field selection)."""
+    """The serializable, per-harness static half: the base of each entry ``/api/harnesses``
+    answers, published whole (no endpoint-side field selection); the server's
+    ``HarnessCatalogEntry`` adds the spec's declarations on top."""
 
     # The catalog, in display order.
     options: tuple[ModelOption, ...]

@@ -21,7 +21,6 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import pytest
-from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
 from app_schema.testing import assert_api_schema_describes_app
 from app_manifest.testing import assert_document_policy_admits_page
 from chat_background_tasks.listing import chats_from_agents_payload
@@ -88,7 +87,6 @@ from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.primitives import ChatId
 from imbue.chat.server import COMPACT_WHILE_STOPPED_DETAIL
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
-from imbue.chat.server import _ROUTE_MODELS
 from imbue.chat.server import _agent_switch_options
 from imbue.chat.server import _open_chat_stream
 from imbue.chat.server import _revive_and_retry_send
@@ -4903,23 +4901,3 @@ def test_a_compaction_that_finished_while_no_watcher_ran_ends_when_the_chat_is_o
 
 def test_the_chat_describes_its_api_the_way_its_manifest_says(client: FlaskClient) -> None:
     assert_api_schema_describes_app(client, Path(__file__).resolve().parents[2] / "app.toml")
-
-
-def test_the_document_publishes_the_models_of_every_route_that_validates_with_them(client: FlaskClient) -> None:
-    """Each registered route's operation carries its request and response schemas, so a key that drifts from
-    its route (a renamed path, a changed method) fails here instead of silently dropping the schema."""
-    document = client.get(DEFAULT_API_SCHEMA_PATH).get_json()
-    schemas = document["components"]["schemas"]
-    for (method, path), models in _ROUTE_MODELS.items():
-        assert models.request_model is not None or models.response_model is not None, (method, path)
-        operation = document["paths"][path][method.lower()]
-        if models.request_model is not None:
-            body = operation["requestBody"]["content"]["application/json"]["schema"]
-            assert body == {"$ref": f"#/components/schemas/{models.request_model.__name__}"}
-            assert models.request_model.__name__ in schemas
-        if models.response_model is not None:
-            success = operation["responses"][str(models.success_status)]
-            assert success["content"]["application/json"]["schema"] == {
-                "$ref": f"#/components/schemas/{models.response_model.__name__}"
-            }
-            assert models.response_model.__name__ in schemas

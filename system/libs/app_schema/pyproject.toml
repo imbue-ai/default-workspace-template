@@ -9,6 +9,7 @@ dependencies = [
     "app-manifest",
     "flask>=3.0",
     "imbue-common",
+    "loguru>=0.7",
     "pydantic>=2.0",
 ]
 

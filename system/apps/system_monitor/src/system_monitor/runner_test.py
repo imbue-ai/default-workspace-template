@@ -34,7 +34,13 @@ def test_the_stats_endpoint_answers_the_snapshot_uncached(
 ) -> None:
     snapshot: dict[str, Any] = {
         "memory": {"total": 1, "available": 0, "used": 1},
-        "stops": [],
+        "disk": {"total": 8, "used": 3, "free": 5},
+        "usage": [
+            {"id": "chats", "label": "Chats", "hint": "", "bytes": 1, "items": [{"name": "Inbox", "bytes": 1}]},
+            {"id": "scratch", "label": "Temporary files", "hint": "", "bytes": 0, "items": [], "limit": 2},
+        ],
+        "usage_mode": "exact",
+        "stops": [{"at": "2026-10-17T00:00:00+00:00", "what": "a chat's agent", "command": None}],
     }
     monkeypatch.setattr(runner, "SNAPSHOT", stats.SharedSnapshot(lambda: snapshot))
     history = memory.MemoryHistory(
@@ -45,7 +51,13 @@ def test_the_stats_endpoint_answers_the_snapshot_uncached(
 
     response = client.get("/api/stats")
 
-    assert response.get_json() == {**snapshot, "history": [{"t": 2000, "v": 0.75}]}
+    # Every row carries limit on the wire; only the scratch row has one.
+    chats_row, scratch_row = snapshot["usage"]
+    assert response.get_json() == {
+        **snapshot,
+        "usage": [{**chats_row, "limit": None}, scratch_row],
+        "history": [{"t": 2000, "v": 0.75}],
+    }
     assert response.headers["Cache-Control"] == "no-store"
 
 

@@ -171,11 +171,15 @@ an OpenAPI document built from its routes on every request, which is what a
 visiting agent reads instead of the code (`build-app`, "The app describes its
 own API"). A route the change adds is listed on its own; what the change owes
 the document is a docstring on each new or changed view (its first paragraph is
-the operation's summary, in the user's terms), a `route_models` entry for a route
-that validates a JSON body or answers a pydantic model, and an updated
-`description` in `app.toml` when the change moves what the app is for. The
-app's own test (`runner_test.py` in a scaffolded app) fails when the document
-and the manifest disagree or a view has no docstring, so run it with the change.
+the operation's summary, in the user's terms), an entry in the app's route table
+for each new route (`RouteModels` with the pydantic models it reads through
+`parse_request_body` and answers through `model_response`, or `SchemalessRoute`
+with the reason it exchanges no JSON), the table updated when a route's models
+or status change, and an updated `description` in `app.toml` when the change
+moves what the app is for. A parse or an answer the table does not name fails
+the request, and the app's own test (`runner_test.py` in a scaffolded app) fails
+when the document and the manifest disagree, a view has no docstring, or a
+route is missing from the table, so run it with the change.
 
 ### 2. Apply it so it actually takes effect
 

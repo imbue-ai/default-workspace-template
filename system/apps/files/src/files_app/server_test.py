@@ -415,7 +415,7 @@ class _GarbledGateway(FakeComputer):
 def test_a_gateway_answer_that_is_not_json_says_the_shares_could_not_be_read(tmp_path: Path) -> None:
     response = _app(_GarbledGateway(permissions=[], folders={}), tmp_path).get("/__files/api/connections")
     assert response.status_code == 502
-    assert response.get_data(as_text=True).startswith("Couldn't read your shares")
+    assert json_of(response)["detail"].startswith("Couldn't read your shares")
 
 
 def test_with_no_gateway_there_are_no_shares(tmp_path: Path) -> None:

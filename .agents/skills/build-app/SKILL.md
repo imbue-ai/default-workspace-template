@@ -415,19 +415,41 @@ investing in configuration or integration around it.
 
 Every app with an HTTP API serves an OpenAPI document of its routes at
 `/api/schema` (the manifest's `api_schema_path`), built by
-`app_schema.api_schema.register_api_schema_route(app, DEFAULT_API_SCHEMA_PATH, title=..., description=...)`,
+`app_schema.api_schema.register_api_schema_route(app, DEFAULT_API_SCHEMA_PATH, title=..., description=..., route_table=ROUTE_TABLE)`,
 which the scaffold already calls in `runner.py` with the manifest's
-`display_name` and `description`. The document is built from the live url
-map on each request, so every route you add is described automatically;
-what you owe it is a docstring on each view (its first paragraph, as one
-line, is the operation's summary, the whole of it the operation's description) and, for a route that
-validates a JSON body or answers a pydantic model, an entry in the
-`route_models` argument so the schemas are published. The scaffolded test
-`assert_api_schema_describes_app` keeps the document honest: it fails when
-the manifest's `description` and the document disagree, when a route is
-missing, or when a view has no docstring (its operation would say nothing). This document is how a visiting agent (`.agents/shared/references/visiting-agents.md`)
-and any other agent learns what the app can do without reading its code, so
-keep the docstrings in the user's terms.
+`display_name` and `description` and a starting table. The document is built
+from the live url map on each request, so every route you add is listed
+automatically; what each route owes it is:
+
+- A docstring on the view: its first paragraph, as one line, is the
+  operation's summary, the whole of it the operation's description. Write
+  them in the user's terms.
+- An entry in `ROUTE_TABLE`, keyed by `(method, path)` with path parameters
+  in `{name}` form. A route that reads or answers JSON gets
+  `RouteModels(request_model=..., response_model=..., success_status=...)`
+  (plus `alternate_responses` for a second success under another status, or a
+  failure whose answer is a model richer than the error shape),
+  and the view reads its body only through
+  `app_schema.routes.parse_request_body(Model)` and answers only through
+  `app_schema.routes.model_response(model, status)`; a refusal or a failure is
+  `app_schema.routes.error_response(detail, status)`. A page, a file, a
+  stream, a socket or a redirect gets `SchemalessRoute(reason=...)`. Define the
+  models as `FrozenModel`s with a `Field(description=...)` per attribute; the
+  descriptions are what the document shows.
+
+Never read the body with `request.get_json` or answer JSON with `jsonify` of a
+dict: the helpers check every parse and answer against the table at request
+time, and the app checks every answer, so a route that disagrees with the
+document, answers JSON by hand, or succeeds without reading its body through
+the helper fails its first request instead of shipping a document that lies.
+A failure richer than `{"detail"}` (a model extending `ErrorResponse`) is
+listed among the route's answers like any other. The scaffolded test
+`assert_api_schema_describes_app` keeps the rest honest: it fails when the
+manifest's `description` and the document disagree, when a route is missing,
+when a view has no docstring, when a route is not in the table (or the table
+names a route the app lacks), or when a modelled view reads its body around
+the helper. This document is how a visiting agent (`.agents/shared/references/visiting-agents.md`)
+and any other agent learns what the app can do without reading its code.
 
 Everything from here runs **only after** the user has confirmed the mock. The
 goal of the foreground work is a *usable* site the user can actually try -- not a

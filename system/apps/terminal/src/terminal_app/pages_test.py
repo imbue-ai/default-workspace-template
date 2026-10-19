@@ -193,19 +193,31 @@ def test_a_window_closed_post_names_the_terminal_the_window_showed_and_answers_n
 def test_a_window_closed_post_that_names_no_terminal_still_asks_for_a_sweep(
     pages_client: FlaskClient, window_closed_posts: list[TmuxSessionName | None]
 ) -> None:
-    # A path naming no session, a path naming something no session can be called, a body of another shape, and
-    # no JSON at all: each brings a sweep and marks nothing.
+    # A path naming no session and a path naming something no session can be called: each brings a sweep and
+    # marks nothing.
     nameless = pages_client.post(
         "/api/window-closed", json={"path": "/new?workdir=%2Fsrv", "window_id": "win-0000000000000001", "desktop_id": "home"}
     )
     odd_name = pages_client.post(
         "/api/window-closed", json={"path": "/?session=not%20a%20name", "window_id": "win-0000000000000002", "desktop_id": "home"}
     )
+
+    assert [r.status_code for r in (nameless, odd_name)] == [204, 204]
+    assert window_closed_posts == [None, None]
+
+
+def test_a_window_closed_post_of_another_shape_is_refused_and_brings_no_sweep(
+    pages_client: FlaskClient, window_closed_posts: list[TmuxSessionName | None]
+) -> None:
+    # A body of another shape than the shell's hint, a hint missing its window, and no JSON at all: each is a 400.
     odd_shape = pages_client.post("/api/window-closed", json=["/?session=terminal-1"])
+    partial = pages_client.post("/api/window-closed", json={"path": "/?session=terminal-1"})
     not_json = pages_client.post("/api/window-closed", data="terminal-1", content_type="text/plain")
 
-    assert [r.status_code for r in (nameless, odd_name, odd_shape, not_json)] == [204, 204, 204, 204]
-    assert window_closed_posts == [None, None, None, None]
+    assert [r.status_code for r in (odd_shape, partial, not_json)] == [400, 400, 400]
+    assert "JSON object" in odd_shape.get_json()["detail"]
+    assert "window_id" in partial.get_json()["detail"]
+    assert window_closed_posts == []
 
 
 def test_the_app_contract_module_is_served_from_the_terminals_own_origin(pages_client: FlaskClient) -> None:

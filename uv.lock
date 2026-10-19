@@ -248,6 +248,7 @@ dependencies = [
     { name = "app-manifest" },
     { name = "flask" },
     { name = "imbue-common" },
+    { name = "loguru" },
     { name = "pydantic" },
 ]
 
@@ -267,6 +268,7 @@ requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "flask", specifier = ">=3.0" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=c4164472fceeb83d75a077472a8028d4e805c728" },
+    { name = "loguru", specifier = ">=0.7" },
     { name = "openapi-spec-validator", marker = "extra == 'testing'", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
 ]
@@ -3819,7 +3821,9 @@ dependencies = [
     { name = "app-manifest" },
     { name = "app-schema" },
     { name = "flask" },
+    { name = "imbue-common" },
     { name = "oom-priority" },
+    { name = "pydantic" },
     { name = "werkzeug" },
 ]
 
@@ -3834,7 +3838,9 @@ requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "app-schema", editable = "system/libs/app_schema" },
     { name = "flask", specifier = ">=3.0" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=c4164472fceeb83d75a077472a8028d4e805c728" },
     { name = "oom-priority", editable = "system/services/oom_priority" },
+    { name = "pydantic", specifier = ">=2.0" },
     { name = "werkzeug", specifier = ">=3.0" },
 ]
 

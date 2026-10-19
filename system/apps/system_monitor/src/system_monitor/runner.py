@@ -23,11 +23,19 @@ import os
 from pathlib import Path
 
 from app_manifest.registry import SHELL_MODULE_PATHS
-from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH, register_api_schema_route
-from flask import Flask, Response, abort, jsonify, send_file
+from app_schema.api_schema import (
+    DEFAULT_API_SCHEMA_PATH,
+    RouteModels,
+    RouteTable,
+    SchemalessRoute,
+    register_api_schema_route,
+)
+from app_schema.routes import model_response
+from flask import Flask, Response, abort, send_file
 from werkzeug.serving import run_simple
 
 from system_monitor import memory, stats
+from system_monitor.data_types import HealthResponse, StatsResponse
 
 # Listen address. Defaults to this app's assigned port (below 8080, the first
 # port the build-app scaffold hands a user app) but is overridable via the env
@@ -76,9 +84,19 @@ SNAPSHOT = stats.SharedSnapshot(stats.snapshot)
 # while a window is hidden or reloaded. Sent fresh with every response, outside the snapshot.
 HISTORY = memory.MemoryHistory()
 
+# What every route exchanges, which the app's API document publishes and every answer is checked against.
+ROUTE_TABLE: RouteTable = {
+    ("GET", "/"): SchemalessRoute(reason="the Memory & disk page"),
+    ("GET", "/api/stats"): RouteModels(response_model=StatsResponse),
+    ("GET", "/_static/{basename}"): SchemalessRoute(reason="a browser-side module the shell builds"),
+    ("GET", "/health"): RouteModels(response_model=HealthResponse),
+}
+
 app = Flask("system_monitor", static_folder=None)
 # The app describes its own API: an OpenAPI document of every route below, at the manifest's api_schema_path.
-register_api_schema_route(app, DEFAULT_API_SCHEMA_PATH, title=APP_DISPLAY_NAME, description=APP_DESCRIPTION)
+register_api_schema_route(
+    app, DEFAULT_API_SCHEMA_PATH, title=APP_DISPLAY_NAME, description=APP_DESCRIPTION, route_table=ROUTE_TABLE
+)
 
 
 @app.route("/")
@@ -94,7 +112,7 @@ def index() -> Response:
 def get_stats() -> Response:
     """The latest reading: memory and disk in use, what is using the memory, the memory graph's last 10 minutes, and
     what the memory guard stopped in the last 24 hours."""
-    response = jsonify({**SNAPSHOT.get(), "history": HISTORY.samples()})
+    response = model_response(StatsResponse.model_validate({**SNAPSHOT.get(), "history": HISTORY.samples()}))
     response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -114,7 +132,7 @@ def shell_module(basename: str) -> Response:
 @app.route("/health")
 def health() -> Response:
     """Whether the app is up."""
-    return Response('{"status": "ok"}', mimetype="application/json")
+    return model_response(HealthResponse(status="ok"))
 
 
 def main() -> None:

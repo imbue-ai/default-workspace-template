@@ -35,6 +35,7 @@ import scaffold_flask_lib
 from app_manifest.manifest import load_manifest
 from app_manifest.primitives import MAX_APP_DESCRIPTION_LENGTH, MAX_DISPLAY_NAME_LENGTH
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH, SHELL_CONTEXT_MENU_PATH
+from app_schema.api_schema import NO_SCHEMA_KEY
 
 _SCRIPT = Path(__file__).resolve().parent / "scaffold_flask_lib.py"
 
@@ -535,6 +536,17 @@ def test_the_runner_serves_the_shell_modules_and_nothing_else(
         "description": "inbox status dashboard",
     }
     assert set(document["paths"]) == {"/", "/_csp-report", "/_static/{basename}", "/health"}
+    # The scaffold's route table: the health probe answers its model through the table, and the page and the
+    # shell modules say why they carry no schema.
+    health = client.get("/health")
+    assert (health.status_code, health.get_json()) == (200, {"status": "ok"})
+    assert document["paths"]["/health"]["get"]["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/HealthResponse"
+    }
+    assert "HealthResponse" in document["components"]["schemas"]
+    assert NO_SCHEMA_KEY in document["paths"]["/"]["get"]
+    assert NO_SCHEMA_KEY in document["paths"]["/_static/{basename}"]["get"]
+    assert NO_SCHEMA_KEY in document["paths"]["/_csp-report"]["post"]
     # The page's policy admits its one inline script by the hash of the body as served, and nothing inline beyond it.
     body = page.get_data(as_text=True).split('<script type="module">', 1)[1].split("</script>", 1)[0]
     digest = base64.b64encode(hashlib.sha256(body.encode()).digest()).decode()

@@ -245,7 +245,7 @@ def _pick_port(
 
 
 def _format_dep_list(extras: Iterable[str]) -> str:
-    base = ['"app-schema"', '"flask>=3.0"', '"flask-sock>=0.7"', '"werkzeug>=3.0"']
+    base = ['"app-schema"', '"flask>=3.0"', '"flask-sock>=0.7"', '"imbue-common"', '"pydantic>=2.0"', '"werkzeug>=3.0"']
     extras_lines = [f'"{dep}"' for dep in extras]
     all_lines = base + extras_lines
     return ",\n    ".join(all_lines)
@@ -335,8 +335,17 @@ import os
 import sys
 from pathlib import Path
 
-from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH, register_api_schema_route
+from app_schema.api_schema import (
+    DEFAULT_API_SCHEMA_PATH,
+    RouteModels,
+    RouteTable,
+    SchemalessRoute,
+    register_api_schema_route,
+)
+from app_schema.routes import model_response
 from flask import Flask, Response, abort, request, send_file
+from imbue.imbue_common.frozen_model import FrozenModel
+from pydantic import Field
 from werkzeug.serving import run_simple
 
 # Persistent state for this app lives under DATA_DIR. It defaults to
@@ -409,10 +418,30 @@ CONTENT_SECURITY_POLICY = (
 )
 BROWSER_EXTENSION_SCHEMES = ("chrome-extension:", "moz-extension:", "safari-web-extension:")
 
+
+class HealthResponse(FrozenModel):
+    """What the health probe answers."""
+
+    status: str = Field(description="Always 'ok'")
+
+
+# What every route exchanges, which the app's API document publishes and every parse and answer
+# is checked against (build-app skill, "The app describes its own API"): a route that reads or
+# answers JSON names its pydantic models here and uses ``parse_request_body`` and
+# ``model_response``; a page, a file or a stream is declared schemaless with the reason.
+ROUTE_TABLE: RouteTable = {{
+    ("GET", "/"): SchemalessRoute(reason="the app's page"),
+    ("GET", "/_static/{{basename}}"): SchemalessRoute(reason="a browser-side module the shell builds"),
+    ("GET", "/health"): RouteModels(response_model=HealthResponse),
+    ("POST", "/_csp-report"): SchemalessRoute(reason="the browser's report of what the page's policy blocked"),
+}}
+
 app = Flask("{package}", static_folder=None)
 # The app describes its own API: an OpenAPI document of every route below, served at the
-# manifest's api_schema_path (build-app skill, "The app describes its own API").
-register_api_schema_route(app, DEFAULT_API_SCHEMA_PATH, title={title_literal}, description={description_literal})
+# manifest's api_schema_path.
+register_api_schema_route(
+    app, DEFAULT_API_SCHEMA_PATH, title={title_literal}, description={description_literal}, route_table=ROUTE_TABLE
+)
 
 
 @app.after_request
@@ -482,7 +511,7 @@ def shell_module(basename: str) -> Response:
 @app.route("/health")
 def health() -> Response:
     """Whether the app is up."""
-    return Response('{{"status": "ok"}}', mimetype="application/json")
+    return model_response(HealthResponse(status="ok"))
 
 
 def main() -> None:
