@@ -47,6 +47,8 @@ _ALLOWED = [
     'tk close cod-step-a "did a"; tk start cod-step-b',
     'tk close cod-step-a "did a"\ntk start cod-step-b',
     'tk close cod-step-a "did a";\ntk start cod-step-b',  # `;` then a newline
+    'tk close cod-step-a "did a" &&\ntk start cod-step-b',  # `&&` then a newline
+    'tk close cod-step-a "did a" &&\n\ntk start cod-step-b',  # `&&` then a blank line
     'tk create --step "plan a"\n\ntk start cod-step-a',  # a blank line between them
     'tk close cod-step-a "did a" && tk close cod-step-b "did b" && tk start cod-step-c',
     # The plan and its first start in one call.
@@ -64,6 +66,8 @@ _BLOCKED = [
     'tk close cod-step-x "s" | tee log',
     'tk close cod-step-a "x" || tk start cod-step-b',  # `||` runs the start only on failure
     'tk close cod-step-a "x" & tk start cod-step-b',  # the close is backgrounded
+    'tk close cod-step-a "x" &\ntk start cod-step-b',  # backgrounded, then a newline
+    'tk close cod-step-a "x" ||\ntk start cod-step-b',  # `||` then a newline
     'tk close cod-step-a "x" >/dev/null; tk start cod-step-b',  # the close's output is lost
     "tk start cod-step-x && pytest",  # real work after the start would be hidden with it
     "tk start cod-step-x; sleep 1",

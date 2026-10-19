@@ -55,11 +55,12 @@ _CHAIN = (
 def _is_sequential(terminator: str | None) -> bool:
     """True for a separator that runs the next tk command after the previous one finished.
 
-    The parser reads an unquoted newline as `;`, so `;` then a newline, or a
-    blank line, arrives as a run of `;`. A pipe or a background `&` would
-    detach or swallow the transition's output.
+    The parser reads an unquoted newline as `;`, and shlex joins adjacent
+    operator characters into one token, so `;` or `&&` followed by a newline or
+    a blank line arrives with a run of `;` appended. A pipe or a background `&`
+    would detach or swallow the transition's output.
     """
-    return terminator is None or terminator == "&&" or set(terminator) == {";"}
+    return terminator is None or terminator.rstrip(";") in ("", "&&")
 
 
 def classify(cmd: str) -> str | None:
