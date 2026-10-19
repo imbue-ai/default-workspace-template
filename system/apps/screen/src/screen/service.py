@@ -46,6 +46,7 @@ from screen.desktop_files import desktop_directory
 from screen.desktop_files import save_dropped_file
 from screen.errors import DisplayModeError
 from screen.errors import NekoError
+from screen.errors import ScreenError
 from screen.errors import ScreenNotRunningError
 from screen.errors import WindowToolError
 from screen.identity import display_name_for_identity
@@ -672,7 +673,11 @@ class ScreenService(MutableModel):
         they landed at."""
         self._require_running()
         saved = [save_dropped_file(self.desktop_dir, name, stream) for name, stream in files]
-        self.launcher.launch((FILE_MANAGER_COMMAND, str(self.desktop_dir)))
+        # The window is a convenience on top of a drop that has landed: the paths are answered either way.
+        try:
+            self.launcher.launch((FILE_MANAGER_COMMAND, str(self.desktop_dir)))
+        except ScreenError as e:
+            logger.warning("Could not open the desktop folder {} on the Screen after a drop: {}", self.desktop_dir, e)
         return saved
 
     def set_screen_size(self, width: int, height: int) -> ScreenSize:

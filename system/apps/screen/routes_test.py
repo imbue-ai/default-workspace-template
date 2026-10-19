@@ -199,6 +199,21 @@ def test_a_visitor_in_control_drops_files_into_the_desktop_folder(client: FlaskC
     assert service.launcher.commands == [(FILE_MANAGER_COMMAND, str(service.desktop_dir))]
 
 
+def test_a_drop_lands_even_when_the_file_manager_cannot_be_opened(client: FlaskClient, service: ScreenService) -> None:
+    start_service_stack(service)
+    visitor = _session(client, _VISITOR)
+    assert (
+        client.post("/api/control/take", json={"session_id": visitor["session_id"]}, headers=_VISITOR).status_code
+        == 200
+    )
+    assert isinstance(service.launcher, RecordingLauncher)
+    service.launcher.failure = "no thunar"
+    answer = _drop(client, _VISITOR, visitor["session_id"], ("notes.txt", b"hello"))
+    assert answer.status_code == 200, answer.get_json()
+    assert answer.get_json() == {"directory": str(service.desktop_dir), "saved": ["notes.txt"]}
+    assert (service.desktop_dir / "notes.txt").read_bytes() == b"hello"
+
+
 def test_a_drop_needs_the_controlling_session_and_refuses_the_owners_session_to_a_visitor(
     client: FlaskClient, service: ScreenService
 ) -> None:
