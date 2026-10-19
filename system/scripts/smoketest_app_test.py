@@ -134,9 +134,12 @@ class _FakeSupervisor:
         self.state = state
         self.stop_fault = stop_fault
         self.start_fault = start_fault
+        self.info_error: Exception | None = None
         self.calls: list[str] = []
 
     def getProcessInfo(self, name: str) -> dict[str, str]:  # noqa: N802 -- supervisord's RPC name
+        if self.info_error is not None:
+            raise self.info_error
         return {"statename": self.state}
 
     def stopProcess(self, name: str, wait: bool) -> bool:  # noqa: N802
@@ -171,3 +174,40 @@ def test_restart_fails_at_once_when_the_start_rpc_reports_a_crash() -> None:
     sup = _FakeSupervisor("STOPPED", start_fault=spawn_error)
     with pytest.raises(SystemExit, match="could not start app"):
         smoketest_app._restart_program(sup, "app")
+
+
+def test_restart_fails_when_the_stop_rpc_reports_anything_but_not_running() -> None:
+    sup = _FakeSupervisor("RUNNING", stop_fault=smoketest_app._FAULT_ALREADY_STARTED)
+    with pytest.raises(SystemExit, match="could not stop app"):
+        smoketest_app._restart_program(sup, "app")
+    assert sup.calls == ["stop"]
+
+
+def test_early_death_reports_a_program_that_crashed_after_the_start() -> None:
+    sup = _FakeSupervisor("RUNNING")
+    early_death = smoketest_app._restart_program(sup, "app")
+    sup.state = "BACKOFF"
+    failure = early_death()
+    assert failure is not None
+    assert "app is BACKOFF after the restart" in failure
+    assert "app-stderr.log" in failure
+
+
+def test_early_death_reports_supervisord_going_away() -> None:
+    sup = _FakeSupervisor("RUNNING")
+    early_death = smoketest_app._restart_program(sup, "app")
+    sup.info_error = ConnectionRefusedError("refused")
+    failure = early_death()
+    assert failure is not None
+    assert "lost track of app" in failure
+
+
+def test_poll_http_ends_at_once_when_the_abort_check_reports_a_failure() -> None:
+    with socketserver.TCPServer(("127.0.0.1", 0), _MockHandler) as server:
+        port = server.server_address[1]
+    started = time.monotonic()
+    with pytest.raises(SystemExit, match="error: app died"):
+        smoketest_app._poll_http(
+            f"http://127.0.0.1:{port}/", marker=None, timeout=10.0, interval=0.05, abort_check=lambda: "app died"
+        )
+    assert time.monotonic() - started < 5.0
