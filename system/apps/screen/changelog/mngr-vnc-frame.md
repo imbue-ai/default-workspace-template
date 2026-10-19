@@ -109,6 +109,8 @@ The screencast fallback, after the first test on Imbue Cloud (spec sections 5.4 
 
 - A screencast retry still pending when the stream asks for a fresh peer on its own (the server dropped a retry's peer) is dropped by the new attempt, rather than firing later and restarting ICE on the peer that connected. A peer that connects late, after its deadline had already fallen the viewer back to the screencast, drops the pending retry the same way.
 
+- While the screencast shows the Screen, a peer that fails or is set up again leaves it showing whatever the policy's phase (a late peer that fails, or one failing while a retry's relay servers are fetched, no longer flips the viewer to a blank "Connecting" until the next retry); the stream keeps that rule in one place.
+
 - The strip gains a "Details" toggle: a panel over the stage naming the media path in use (direct or through a relay, udp or tcp, the remote address, from the peer's `getStats()`), the endpoints `connect-info` offered, the relay server count, the Screen's size and profile, and the picture's size, rate, bitrate and round trip; the viewer also logs one "media path" line to the console per connection.
 
 - `GET /api/connect-info` waits up to eight seconds for relay servers (candidates keep their two): the desktop's first `ice-servers` answer mints a credential through the connector and Cloudflare, which took longer than two seconds on the dev tier and left the first relay attempt with no servers, which is how the whole first test ran in the screencast.
