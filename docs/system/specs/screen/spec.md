@@ -399,6 +399,7 @@ The skill says that the browser shares the Screen with everything else the user 
 | `size [WxH]` | reads or sets the Screen size (sets as the controller's viewer would, subject to section 7.2) |
 | `control acquire\|release\|handoff "<reason>"` | the lease verbs, the fleet CLI's exit codes |
 | `open` | opens the Screen window for the user through the shell's `open` op, minimized unless `--show` |
+| `browser open [URL]` | opens the browser on the Screen through the launch path (section 16), URL as a new tab in front; what the XFCE session's Web Browser launcher, an `http(s)` link on the Screen and `sensible-browser` run through `screen-browser-open` |
 
 The `manage-desktop` skill documents the Screen window and the `FULLSCREEN` state; a new `use-screen` skill documents the command, the lease rules (the human always wins), and that xdotool and the CDP proxy are how input is sent.
 
