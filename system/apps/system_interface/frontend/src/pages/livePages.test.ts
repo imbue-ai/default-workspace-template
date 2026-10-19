@@ -187,6 +187,8 @@ describe("creating and positioning", () => {
     const frame = frameOf("win-1");
     expect(frame.getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=1");
     expect(frame.getAttribute("sandbox")).toContain("allow-same-origin");
+    const allowed = (frame.getAttribute("allow") ?? "").split(";").map((part) => part.trim());
+    expect(allowed).toEqual(expect.arrayContaining(["clipboard-read", "clipboard-write", "microphone"]));
     const wrapper = wrapperOf("win-1");
     expect(wrapper.style.left).toBe("100px");
     expect(wrapper.style.top).toBe("60px");
