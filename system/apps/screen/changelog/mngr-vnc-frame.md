@@ -158,3 +158,5 @@ Files and the desktop's icons (spec section 4.3):
 - A service restart ends the stack (spec section 9.3), and the viewer then said "The screen was stopped" with no reason: the stack now records why it ended in `data/.state/screen/stop_reason`, the next service life shows that reason until the next start, and a start wipes it.
 
 - Only the human's asks are held while an agent drives (the launch path's start page and `open:url`): an agent's own `agentic-browser-fleet new --url` (a nameless `POST /browsers`) opens its page at once, as it did before the launch path's page was held, instead of waiting as a page offered to the human. The launch path also no longer raises Chromium over the agent's work when its page was held.
+
+- A start that fails records its reason in `data/.state/screen/stop_reason` as a stop does, so a service restart after a failed start shows why the stack did not start rather than the reason of an earlier stop.

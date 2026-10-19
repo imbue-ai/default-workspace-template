@@ -62,6 +62,8 @@ def test_a_member_that_fails_to_start_stops_the_rest_and_records_why(
     assert "screen-neko refused to start" in service.stack.stop_reason
     assert ("stop", "screen-xorg") in fake_supervisor.calls
     assert fake_neko.api_token is None
+    # The next service life shows this reason too, not whatever an earlier stop recorded.
+    assert (service.state_dir / STOP_REASON_FILENAME).read_text() == service.stack.stop_reason
 
 
 def test_xorg_that_never_binds_the_input_drivers_socket_is_a_failed_start(

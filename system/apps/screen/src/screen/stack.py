@@ -241,7 +241,9 @@ class ScreenStack(MutableModel):
             logger.warning("The Screen's stack did not come up: {}", e)
             self._stop_members()
             self.set_api_token(None)
-            self._set_lifecycle(Lifecycle.STOPPED, None, f"the stack did not start: {e}")
+            reason = f"the stack did not start: {e}"
+            self._remember_stop_reason(reason)
+            self._set_lifecycle(Lifecycle.STOPPED, None, reason)
 
     def _finish_abandoned_start(self, generation: int, cause: Exception) -> None:
         """A start that a stop interrupted: the stop recorded the lifecycle and the reason, so this only cleans up
