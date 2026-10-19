@@ -23,7 +23,6 @@ from app_manifest.registry import CONTEXT_MENU_ROUTE
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import SHELL_CONTEXT_MENU_PATH
 from screen.browser_routes import CANCEL_PENDING_URL_RULE
-from screen.browser_routes import LAUNCH_BROWSER_PATH
 from screen.browser_routes import OPEN_URL_PATH
 from screen.browser_routes import build_browser_blueprint
 from screen.data_types import Lifecycle
@@ -43,6 +42,7 @@ from screen.identity import IDENTITY_HEADER
 from screen.identity import parse_identity_header
 from screen.primitives import AgentId
 from screen.primitives import DroppedFileName
+from screen.primitives import LAUNCH_BROWSER_PATH
 from screen.primitives import RunCommand
 from screen.primitives import XWindowId
 from screen.proxy import NEKO_PROXY_PREFIX

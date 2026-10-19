@@ -17,8 +17,8 @@ from app_manifest.registry import CONTEXT_MENU_ROUTE
 from mock_chromium_test import FakeCdpConnector
 from mock_neko_test import FakeNeko
 from screen.browser_routes import CANCEL_PENDING_URL_RULE
-from screen.browser_routes import LAUNCH_BROWSER_PATH
 from screen.desktop_files import MAX_DROP_BYTES
+from screen.primitives import LAUNCH_BROWSER_PATH
 from screen.proxy import NEKO_PROXY_PREFIX
 from screen.service import ScreenService
 from screen.watch import STOPPED_NOTIFICATION_PATH
