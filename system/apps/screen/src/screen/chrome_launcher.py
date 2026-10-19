@@ -39,8 +39,6 @@ _PORT_POLL_SECONDS: Final[float] = 0.1
 _ORPHAN_REAP_TIMEOUT_SECONDS: Final[float] = 10.0
 _ORPHAN_POLL_SECONDS: Final[float] = 0.2
 _KILL_WAIT_SECONDS: Final[float] = 5.0
-# The window Chromium opens with before the window manager places it.
-INITIAL_WINDOW_SIZE: Final[tuple[int, int]] = (1280, 800)
 
 
 class ChromiumLaunchRequest(FrozenModel):
@@ -226,7 +224,6 @@ class SubprocessChromiumLauncher(ChromiumLauncherInterface):
             *launch_args(
                 user_data_dir=str(request.profile_dir),
                 remote_debugging_port=0,
-                window_size=INITIAL_WINDOW_SIZE,
                 extensions=request.extensions,
                 is_sandbox_disabled=request.is_sandbox_disabled,
             ),

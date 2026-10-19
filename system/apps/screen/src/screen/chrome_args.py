@@ -131,6 +131,10 @@ _SCREEN_ARGS: Final[tuple[str, ...]] = (
     # geolocates the egress IP); the lever there is hl=en in the URL.
     "--lang=en-US",
     "--accept-lang=en-US,en",
+    # Chromium's window fills the Screen: the Screen is sized to the controller's window (spec section 7.2), often
+    # smaller than Chromium's default or the bounds its profile remembers, and xfwm4 never shrinks a window that is
+    # larger than the display. A maximized window also follows the Screen's later size changes.
+    "--start-maximized",
 )
 
 
@@ -138,14 +142,13 @@ _SCREEN_ARGS: Final[tuple[str, ...]] = (
 def launch_args(
     user_data_dir: str,
     remote_debugging_port: int,
-    window_size: tuple[int, int] | None,
     extensions: Sequence[str],
     is_sandbox_disabled: bool,
 ) -> list[str]:
     """The full Chromium argv (excluding the executable and the start URL).
 
-    No viewport emulation: the page fills the real X window the window manager sizes, so a window resize reflows
-    it.
+    No viewport emulation: the page fills the real X window, maximized to the Screen, so a resize of the Screen
+    reflows it.
     """
     arguments = [
         *_BASE_ARGS,
@@ -154,8 +157,6 @@ def launch_args(
         f"--user-data-dir={user_data_dir}",
         f"--remote-debugging-port={remote_debugging_port}",
     ]
-    if window_size is not None:
-        arguments.append(f"--window-size={window_size[0]},{window_size[1]}")
     if extensions:
         arguments.append(f"--load-extension={','.join(extensions)}")
     if is_sandbox_disabled:

@@ -22,7 +22,6 @@ def _args(is_sandbox_disabled: bool = True) -> list[str]:
     return launch_args(
         user_data_dir="/tmp/profile",
         remote_debugging_port=0,
-        window_size=(1280, 800),
         extensions=("/opt/ext/a",),
         is_sandbox_disabled=is_sandbox_disabled,
     )
@@ -37,10 +36,11 @@ def test_launch_args_keep_stealth_suppress_the_bad_flag_infobar_and_declare_engl
     assert "--accept-lang=en-US,en" in arguments
     assert "--user-data-dir=/tmp/profile" in arguments
     assert "--remote-debugging-port=0" in arguments
-    assert "--window-size=1280,800" in arguments
     assert "--load-extension=/opt/ext/a" in arguments
-    # The window manager places Chromium's windows: nothing pins their position.
-    assert not any(argument.startswith("--window-position") for argument in arguments)
+    # Chromium's window fills the Screen, whatever size the controller's window gave it; the window manager places
+    # it, and nothing pins its position or a fixed size.
+    assert "--start-maximized" in arguments
+    assert not any(argument.startswith(("--window-position", "--window-size")) for argument in arguments)
     assert "--no-sandbox" not in _args(is_sandbox_disabled=False)
 
 

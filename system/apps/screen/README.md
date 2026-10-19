@@ -104,7 +104,9 @@ other route (`/api/run`, the agent verbs, the screenshot, the window tools, a se
 The browser is a launch path of the Screen, not an app (spec section 16): one Fortress
 Chromium with one profile, started by the `browser` launch path, `screen run`, or an
 agent's `agentic-browser-fleet new`, its windows ordinary X windows the window manager
-places (the user opens as many as they like; nothing pins or closes them), and never
+places (the user opens as many as they like; nothing pins or closes them; Chromium starts
+maximized, so its window fills whatever size the controller's window gave the Screen and
+follows the Screen's later sizes), and never
 stopped when its windows close (the user quits it from inside, `POST
 /browsers/<name>/stop` ends it, or Quit ends the stack). The fleet keeps the browser
 app's shape: browsers by name (`browser-1`, minted as the first free `browser-<N>`), a

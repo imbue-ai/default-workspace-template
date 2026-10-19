@@ -124,3 +124,5 @@ The browser shortcut on the Screen's desktop (spec section 16):
 The mouse wheel (spec section 11):
 
 - Scrolling was inverted on a conventional mouse: neko's `XScroll` sends X button 4 (wheel up) for a positive `delta_y` and button 6 for a positive `delta_x`, the opposite of the DOM's sign (neko's own client flips it by default). The viewer now flips the sign once, where it sends `control/scroll` (`input.ts`), for the wheel and the phone's two-finger scroll alike; the gesture classifier reports wheel steps in the DOM's sign as before.
+
+- Chromium starts maximized (`--start-maximized`) instead of at a fixed 1280x800: the Screen is sized to the controller's window and is often smaller than that, xfwm4 never shrinks a window larger than the display, and a maximized window follows the Screen's later size changes.
