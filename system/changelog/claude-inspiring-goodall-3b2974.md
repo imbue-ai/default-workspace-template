@@ -1,0 +1,1 @@
+The chat-agent-split plan now describes a handoff's switching step in its new order: the retiring agent is renamed to its archival name first, then stopped while the successor is created, and its final event count is recorded once the stop is done.
