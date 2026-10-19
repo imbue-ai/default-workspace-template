@@ -9,3 +9,5 @@ The browser moved onto the Screen (`docs/system/specs/screen/spec.md`, sections 
 - The `use-screen` skill lists `screen browser open [URL]`, the browser launch path as a verb of the `screen` command.
 
 - `migrate-workspace`'s legacy path map sends the old `libs/browser/` to `system/apps/screen/`, where the browser lives now, rather than to the deleted `system/apps/browser/`.
+
+- The `use-screen` and `agentic-browser-fleet` skills describe `handoff` as the lease does it: the Screen is freed for the human with the agent first in line to resume (the human's first input takes it, their "Give control back" or leaving resumes the agent), rather than "pinned to the human", which the lease never did.
