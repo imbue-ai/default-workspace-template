@@ -49,6 +49,7 @@ _ALLOWED = [
     'tk close cod-step-a "did a";\ntk start cod-step-b',  # `;` then a newline
     'tk close cod-step-a "did a" &&\ntk start cod-step-b',  # `&&` then a newline
     'tk close cod-step-a "did a" &&\n\ntk start cod-step-b',  # `&&` then a blank line
+    'tk close cod-step-a "did a" && \\\ntk start cod-step-b',  # a line continuation
     'tk create --step "plan a"\n\ntk start cod-step-a',  # a blank line between them
     'tk close cod-step-a "did a" && tk close cod-step-b "did b" && tk start cod-step-c',
     # The plan and its first start in one call.
