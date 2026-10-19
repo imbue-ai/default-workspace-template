@@ -1,7 +1,7 @@
 /** The direct-then-relay-then-screencast state machine over a fake clock and fake actions. */
 import { describe, expect, it } from "vitest";
 
-import { CONNECT_DEADLINE_MS, IcePolicy } from "./ice_policy";
+import { CONNECT_DEADLINE_MS, IcePolicy, SCREENCAST_RETRY_DELAYS_MS } from "./ice_policy";
 import type { IcePolicyActions } from "./ice_policy";
 import type { ConnectInfo } from "./state";
 import { FakeScheduler } from "./testing/fakeScheduler";
@@ -29,6 +29,11 @@ class Recorder implements IcePolicyActions {
 
   fallbackToScreencast(): void {
     this.log.push("screencast");
+  }
+
+  retryFromScreencast(info: ConnectInfo | null): void {
+    this.log.push("retry");
+    this.restarted.push(info);
   }
 
   rememberRelay(): void {
@@ -68,7 +73,100 @@ describe("IcePolicy", () => {
     await settle();
     expect(actions.log).toEqual(["screencast"]);
     expect(policy.phase).toBe("screencast");
+    // The retry timer is the one thing armed.
+    expect(clock.pendingCount).toBe(1);
+  });
+
+  it("tries WebRTC again from the screencast on a growing timer, with fresh relay servers each time", async () => {
+    const { policy, clock, actions } = build();
+    policy.attemptStarted(true);
+    clock.advance(CONNECT_DEADLINE_MS);
+    await settle();
+    expect(actions.log).toEqual(["screencast"]);
+    clock.advance(SCREENCAST_RETRY_DELAYS_MS[0] - 1);
+    await settle();
+    expect(actions.log).toEqual(["screencast"]);
+    clock.advance(1);
+    await settle();
+    expect(actions.log).toEqual(["screencast", "fetch", "retry"]);
+    expect(actions.restarted).toEqual([RELAY_INFO]);
+    expect(policy.phase).toBe("relay");
+    // The retry misses its deadline: back to the screencast, with the next, longer delay.
+    clock.advance(CONNECT_DEADLINE_MS);
+    await settle();
+    expect(actions.log).toEqual(["screencast", "fetch", "retry", "screencast"]);
+    clock.advance(SCREENCAST_RETRY_DELAYS_MS[1] - 1);
+    await settle();
+    expect(actions.log.length).toBe(4);
+    clock.advance(1);
+    await settle();
+    expect(actions.log.slice(4)).toEqual(["fetch", "retry"]);
+    // The last delay repeats.
+    for (let round = 0; round < 3; round++) {
+      clock.advance(CONNECT_DEADLINE_MS);
+      await settle();
+      clock.advance(SCREENCAST_RETRY_DELAYS_MS[SCREENCAST_RETRY_DELAYS_MS.length - 1] - 1);
+      await settle();
+      const before = actions.log.length;
+      clock.advance(1);
+      await settle();
+      expect(actions.log.slice(before)).toEqual(["fetch", "retry"]);
+    }
+  });
+
+  it("a retry that connects ends the screencast and starts the delays over on the next fall", async () => {
+    const { policy, clock, actions } = build();
+    policy.attemptStarted(true);
+    clock.advance(CONNECT_DEADLINE_MS);
+    await settle();
+    clock.advance(SCREENCAST_RETRY_DELAYS_MS[0]);
+    await settle();
+    policy.connected();
+    expect(policy.phase).toBe("connected");
     expect(clock.pendingCount).toBe(0);
+    policy.failed();
+    await settle();
+    clock.advance(CONNECT_DEADLINE_MS);
+    await settle();
+    expect(actions.log.slice(-1)).toEqual(["screencast"]);
+    clock.advance(SCREENCAST_RETRY_DELAYS_MS[0]);
+    await settle();
+    expect(actions.log.slice(-2)).toEqual(["fetch", "retry"]);
+  });
+
+  it("Retry now tries at once from the screencast and starts the delays over, and does nothing elsewhere", async () => {
+    const { policy, clock, actions } = build();
+    policy.retryNow();
+    expect(actions.log).toEqual([]);
+    policy.attemptStarted(true);
+    clock.advance(CONNECT_DEADLINE_MS);
+    await settle();
+    clock.advance(SCREENCAST_RETRY_DELAYS_MS[0]);
+    await settle();
+    clock.advance(CONNECT_DEADLINE_MS);
+    await settle();
+    expect(actions.log).toEqual(["screencast", "fetch", "retry", "screencast"]);
+    policy.retryNow();
+    await settle();
+    expect(actions.log.slice(4)).toEqual(["fetch", "retry"]);
+    clock.advance(CONNECT_DEADLINE_MS);
+    await settle();
+    clock.advance(SCREENCAST_RETRY_DELAYS_MS[0]);
+    await settle();
+    expect(actions.log.slice(6)).toEqual(["screencast", "fetch", "retry"]);
+  });
+
+  it("a reset from the screencast drops the pending retry", async () => {
+    const { policy, clock, actions } = build();
+    policy.attemptStarted(true);
+    clock.advance(CONNECT_DEADLINE_MS);
+    await settle();
+    policy.reset();
+    expect(clock.pendingCount).toBe(0);
+    clock.advance(SCREENCAST_RETRY_DELAYS_MS[0]);
+    await settle();
+    expect(actions.log).toEqual(["screencast"]);
+    expect(policy.phase).toBe("idle");
   });
 
   it("walks direct, relay, screencast when nothing ever connects", async () => {

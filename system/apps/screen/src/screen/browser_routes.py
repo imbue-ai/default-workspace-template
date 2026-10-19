@@ -20,6 +20,7 @@ from screen.errors import InvalidStartUrlError
 from screen.errors import UnknownBrowserError
 from screen.identity import AGENT_ID_HEADER
 from screen.identity import AGENT_NAME_HEADER
+from screen.primitives import LAUNCH_BROWSER_PATH
 from screen.primitives import APP_NAME
 from screen.primitives import AbsoluteHttpUrl
 from screen.primitives import AgentId
@@ -39,7 +40,6 @@ from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import WindowPath
 from workspace_layout.shell_url import shell_base_url
 
-LAUNCH_BROWSER_PATH: Final[str] = "/launch/browser"
 OPEN_URL_PATH: Final[str] = "/api/open-url"
 # The one fleet rule the lease arbitrates rather than the owner gate: dropping a held page is the controller's or
 # the owner's (section 4.2), and the owner over loopback carries no session.

@@ -91,7 +91,9 @@ def test_no_brokers_answer_empty_lists() -> None:
 def test_a_slow_broker_is_left_out_within_the_deadline() -> None:
     slow = _gateway()
     slow.release.clear()
-    aggregator = ConnectInfoAggregator(brokers=(_desktop(), slow), deadline_seconds=0.3)
+    aggregator = ConnectInfoAggregator(
+        brokers=(_desktop(), slow), deadline_seconds=0.3, ice_servers_deadline_seconds=0.3
+    )
     started = time.monotonic()
     answer = aggregator.fetch(is_relay=True)
     elapsed = time.monotonic() - started
@@ -99,6 +101,19 @@ def test_a_slow_broker_is_left_out_within_the_deadline() -> None:
     assert answer.candidates == (_UDP, _TCP)
     assert answer.ice_servers == (_STUN, _TURN)
     assert elapsed < 1.5
+
+
+def test_relay_servers_get_a_longer_bound_than_candidates() -> None:
+    slow = _gateway()
+    slow.release.clear()
+    aggregator = ConnectInfoAggregator(brokers=(slow,), deadline_seconds=0.2, ice_servers_deadline_seconds=3.0)
+    threading.Timer(0.6, slow.release.set).start()
+    started = time.monotonic()
+    answer = aggregator.fetch(is_relay=True)
+    elapsed = time.monotonic() - started
+    assert answer.candidates == ()
+    assert answer.ice_servers == (_TURN,)
+    assert 0.5 < elapsed < 2.5
 
 
 def test_merge_keeps_candidates_without_a_guest_port() -> None:

@@ -3,8 +3,10 @@
  *  the WebSocket meanwhile. */
 
 export const SCREENCAST_PATH = "/neko/api/room/screen/cast.jpg";
-// neko encodes the screencast at 10 fps (capture.screencast.rate), so polling faster only repeats a frame.
-const POLL_INTERVAL_MS = 100;
+// neko encodes the screencast at this rate (capture.screencast.rate in neko_config.py), so polling faster only
+// repeats a frame.
+export const SCREENCAST_FPS = 5;
+const POLL_INTERVAL_MS = 1000 / SCREENCAST_FPS;
 const RETRY_INTERVAL_MS = 1000;
 
 export class ScreencastPoller {

@@ -17,6 +17,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import urllib.request
 from collections.abc import Iterator
@@ -31,6 +32,7 @@ from PIL import Image
 from flask.testing import FlaskClient
 from pydantic import Field
 from websockets.sync.client import connect as connect_websocket
+from werkzeug.serving import make_server
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
@@ -66,6 +68,8 @@ from screen.stack import describe_missing_install
 from screen.watch import decide_group_end
 from screen.watch import end_group
 from screen.windows import DisplayWindowTools
+from screen.xfce_helpers import HELPER_DESKTOP_RELATIVE_PATH
+from screen.xfce_helpers import HELPERS_RC_RELATIVE_PATH
 from screen.xorg_config import INPUT_DEVICE_IDENTIFIER
 from screen.xorg_config import INPUT_DRIVER
 from testing import SubprocessSupervisor
@@ -182,6 +186,7 @@ def _build_live_service(base: Path, supervisor: SubprocessSupervisor) -> _LiveSe
         supervisor=supervisor,
         neko=neko,
         state_dir=state_dir,
+        home=base / "home",
         on_lifecycle_changed=service.on_lifecycle_changed,
         on_running=service.on_running,
         set_api_token=service.set_api_token,
@@ -425,6 +430,51 @@ def test_the_browser_launch_path_puts_fortress_on_the_screen_and_checkpoints_its
     finally:
         page_server.shutdown()
         page_server.server_close()
+
+
+@pytest.mark.browser
+def test_the_browser_command_opens_a_page_in_the_fleets_chromium(running: _LiveService, tmp_path: Path) -> None:
+    """``screen browser open <url>``, what the XFCE session's Web Browser launcher and an http(s) link on the Screen
+    run through ``screen-browser-open``, lands the page in the fleet's one Chromium through the launch path."""
+    service, client = running.service, running.client
+    missing = describe_missing_browser_install()
+    if missing is not None:
+        pytest.skip(missing)
+    # The stack start rendered the session's browser entries into its home.
+    home = service.stack.home
+    assert (home / HELPERS_RC_RELATIVE_PATH).read_text().strip().endswith("WebBrowser=imbue-screen-browser")
+    assert "X-XFCE-Category=WebBrowser" in (home / HELPER_DESKTOP_RELATIVE_PATH).read_text()
+    # The command speaks HTTP, so the service gets a real listener for this test.
+    server = make_server("127.0.0.1", 0, build_app(service, tmp_path / "static", NekoProxy()))
+    serving = threading.Thread(target=server.serve_forever, daemon=True)
+    serving.start()
+    page_server = ThreadingHTTPServer(("127.0.0.1", 0), _PageHandler)
+    page_serving = threading.Thread(target=page_server.serve_forever, daemon=True)
+    page_serving.start()
+    try:
+        page_url = f"http://127.0.0.1:{page_server.server_address[1]}/from-the-launcher"
+        completed = subprocess.run(
+            [sys.executable, "-m", "screen.cli", "browser", "open", page_url],
+            env={**os.environ, "MINDS_SCREEN_SERVICE_URL": f"http://127.0.0.1:{server.server_port}"},
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+        assert completed.returncode == 0, (completed.stdout, completed.stderr)
+        assert completed.stdout.strip() == f"opened the browser on the Screen at {page_url}"
+        browser = service.fleet.get(BrowserName("browser-1"))
+        assert wait_until(lambda: browser.is_running, 120.0), browser.lifecycle
+        assert wait_until(
+            lambda: any(tab["url"] == page_url for tab in client.get("/browsers").get_json()["browsers"][0]["tabs"]),
+            60.0,
+        )
+        assert client.post("/browsers/browser-1/stop").get_json() == {"stopped": True}
+    finally:
+        page_server.shutdown()
+        page_server.server_close()
+        server.shutdown()
+        serving.join()
 
 
 def test_a_members_death_ends_the_group_and_records_the_event(running: _LiveService) -> None:

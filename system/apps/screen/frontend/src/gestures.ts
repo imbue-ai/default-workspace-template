@@ -140,7 +140,8 @@ export class GestureClassifier {
       x: this.scrollRemainder.x - steps.x * SCROLL_STEP_PX,
       y: this.scrollRemainder.y - steps.y * SCROLL_STEP_PX,
     };
-    // Fingers moving down pull the content down, which is scrolling up: the wheel's sign is the opposite.
+    // Fingers moving down pull the content down, which is scrolling up: the steps are the wheel's, the opposite of
+    // the fingers' travel, in the DOM's sign (the input relay turns that into neko's).
     return { kind: "scroll", steps: { x: -steps.x, y: -steps.y } };
   }
 

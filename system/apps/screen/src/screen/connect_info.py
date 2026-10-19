@@ -1,5 +1,6 @@
-"""``GET /api/connect-info`` (docs/system/specs/screen/spec.md section 5.2): the brokers asked in parallel with a
-two-second bound each, and the union of what they answered in time, held in memory only."""
+"""``GET /api/connect-info`` (docs/system/specs/screen/spec.md section 5.2): the brokers asked in parallel, each
+bounded (two seconds for candidates, longer for relay servers, whose first mint goes through the connector to
+Cloudflare), and the union of what they answered in time, held in memory only."""
 
 import time
 from collections.abc import Callable
@@ -22,6 +23,9 @@ from screen.interfaces import ConnectivityBrokerInterface
 from screen.primitives import ICE_MUX_PORT
 
 BROKER_DEADLINE_SECONDS: Final[float] = 2.0
+# Relay servers are asked for only after the direct path has already failed, so the viewer is waiting anyway; the
+# desktop's first answer mints a credential through the connector and Cloudflare, which has taken more than two seconds.
+ICE_SERVERS_DEADLINE_SECONDS: Final[float] = 8.0
 
 T = TypeVar("T")
 
@@ -58,7 +62,12 @@ class ConnectInfoAggregator(MutableModel):
 
     brokers: tuple[ConnectivityBrokerInterface, ...] = Field(frozen=True, description="The brokers to ask")
     deadline_seconds: float = Field(
-        default=BROKER_DEADLINE_SECONDS, frozen=True, description="How long each broker's answer is waited for"
+        default=BROKER_DEADLINE_SECONDS, frozen=True, description="How long each broker's candidates are waited for"
+    )
+    ice_servers_deadline_seconds: float = Field(
+        default=ICE_SERVERS_DEADLINE_SECONDS,
+        frozen=True,
+        description="How long each broker's relay servers are waited for",
     )
 
     def fetch(self, is_relay: bool) -> ConnectInfo:
@@ -74,29 +83,37 @@ class ConnectInfoAggregator(MutableModel):
         # The pool is abandoned rather than joined once the deadline passes, so a broker that hangs costs the viewer
         # nothing beyond the bound; its request times out on its own soon after.
         executor = ThreadPoolExecutor(max_workers=call_count, thread_name_prefix="screen-connect-info")
-        deadline = time.monotonic() + self.deadline_seconds
+        started = time.monotonic()
+        candidates_deadline = started + self.deadline_seconds
+        ice_servers_deadline = started + self.ice_servers_deadline_seconds
         try:
             candidate_futures = [(name, executor.submit(call)) for name, call in candidate_calls]
             ice_server_futures = [(name, executor.submit(call)) for name, call in ice_server_calls]
             candidate_answers = tuple(
                 answer
-                for answer in (self._await(name, future, deadline) for name, future in candidate_futures)
+                for answer in (
+                    self._await(name, future, candidates_deadline, self.deadline_seconds)
+                    for name, future in candidate_futures
+                )
                 if answer
             )
             ice_server_answers = tuple(
                 answer
-                for answer in (self._await(name, future, deadline) for name, future in ice_server_futures)
+                for answer in (
+                    self._await(name, future, ice_servers_deadline, self.ice_servers_deadline_seconds)
+                    for name, future in ice_server_futures
+                )
                 if answer
             )
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
         return merge_connect_info(candidate_answers, ice_server_answers, ICE_MUX_PORT)
 
-    def _await(self, name: str, future: Future[T], deadline: float) -> T | None:
+    def _await(self, name: str, future: Future[T], deadline: float, bound_seconds: float) -> T | None:
         try:
             return future.result(timeout=max(0.0, deadline - time.monotonic()))
         except FutureTimeoutError:
-            logger.debug("The {} did not answer within {}s; answering without it", name, self.deadline_seconds)
+            logger.debug("The {} did not answer within {}s; answering without it", name, bound_seconds)
         except ConnectivityBrokerError as e:
             logger.debug("The {} are unavailable: {}", name, e)
         return None

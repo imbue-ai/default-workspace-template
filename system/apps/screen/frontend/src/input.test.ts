@@ -148,6 +148,27 @@ describe("InputRelay", () => {
     expect(socket.sent).toEqual([]);
   });
 
+  it("sends a wheel's steps in neko's sign, the opposite of the DOM's", () => {
+    relay.setEnabled(true);
+    // A positive deltaY scrolls the content down in the DOM; neko's positive delta_y is wheel up (X button 4).
+    stage.dispatchEvent(new WheelEvent("wheel", { deltaY: 100, deltaX: 0, deltaMode: 0, cancelable: true }));
+    stage.dispatchEvent(new WheelEvent("wheel", { deltaY: 0, deltaX: 100, deltaMode: 0, cancelable: true }));
+    expect(socket.sent).toEqual([
+      { event: "control/scroll", payload: { delta_x: 0, delta_y: -1, control_key: false } },
+      { event: "control/scroll", payload: { delta_x: -1, delta_y: 0, control_key: false } },
+    ]);
+  });
+
+  it("sends the phone's scroll steps in neko's sign too", () => {
+    relay.setEnabled(true);
+    relay.scroll({ x: 0, y: 2 });
+    relay.scroll({ x: -1, y: 0 });
+    expect(socket.sent).toEqual([
+      { event: "control/scroll", payload: { delta_x: 0, delta_y: -2, control_key: false } },
+      { event: "control/scroll", payload: { delta_x: 1, delta_y: 0, control_key: false } },
+    ]);
+  });
+
   it("sends the close chord as Ctrl+W, pressed and released in order", () => {
     relay.setEnabled(true);
     relay.sendCloseChord();

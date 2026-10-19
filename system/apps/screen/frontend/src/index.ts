@@ -9,7 +9,8 @@
  * file lands in the Screen's desktop folder (section 4.3), and the phone layout pans, zooms and types through its
  * own controls, with a tap a touch through neko's input driver (section 14). The media path is rewritten to the
  * endpoints ``connect-info`` names and escalates to a relay, then to the JPEG screencast, when no pair connects
- * (section 5). The controller's pointer takes the remote cursor's shape from the image neko sends over the
+ * (section 5), tried again from the screencast on a timer and on the strip's Retry; the strip's Details panel says
+ * which path is in use. The controller's pointer takes the remote cursor's shape from the image neko sends over the
  * peer's data channel (section 12).
  */
 
@@ -31,6 +32,7 @@ import { RemoteCursor, listenForCursor } from "./remote_cursor";
 import { ResizeReporter } from "./resize_reporter";
 import { windowScheduler } from "./scheduler";
 import { ScreencastPoller } from "./screencast";
+import { SCREENCAST_FPS } from "./screencast";
 import {
   ServiceEvents,
   ServiceRequestError,
@@ -47,6 +49,7 @@ import {
 } from "./service_client";
 import type { NekoSessionAnswer, ScreenStateDocument, ServiceEvent } from "./state";
 import { isOwnSessionController } from "./state";
+import { DetailsPanel, describePath, entriesOf, summarizeStats } from "./stream_details";
 import { Strip } from "./strip";
 import { fittedVideoRect } from "./view_transform";
 import type { Size } from "./view_transform";
@@ -69,6 +72,7 @@ class Viewer {
   private readonly cast = document.createElement("img");
   private screencast: ScreencastPoller | null = null;
   private readonly strip: Strip;
+  private readonly details: DetailsPanel;
   private readonly overlays: Overlays;
   private readonly pointerLock: PointerLockControl;
   private readonly visibility: ViewerVisibility;
@@ -105,6 +109,19 @@ class Viewer {
       onReturnControl: () => this.returnControl(),
       pointerLockButton: this.pointerLock.button,
       onToggleAudio: () => this.setAudioEnabled(!this.isAudioEnabled),
+      onRetry: () => this.stream?.retryNow(),
+      onToggleDetails: (isOpen) => this.details.setOpen(isOpen),
+    });
+    this.details = new DetailsPanel({
+      getStats: () => this.stream?.getStats() ?? null,
+      context: () => ({
+        isScreencast: this.streamStatus === "screencast",
+        videoId: this.state?.video_id ?? "",
+        screenSize: this.screenSize.width > 0 ? this.screenSize : null,
+        connectInfo: this.stream?.lastConnectInfo ?? { ice_servers: [], candidates: [], expires_at: null },
+        isRelayAttempt: this.stream?.isRelay ?? false,
+        screencastFps: SCREENCAST_FPS,
+      }),
     });
     this.overlays = new Overlays(
       () => void postStart(),
@@ -121,7 +138,7 @@ class Viewer {
     this.cast.alt = "";
     this.cast.hidden = true;
     this.cast.dataset.screenScreencast = "true";
-    this.stage.append(this.video, this.cast, this.overlays.dimElement, this.overlays.element);
+    this.stage.append(this.video, this.cast, this.overlays.dimElement, this.overlays.element, this.details.element);
     this.root.append(this.strip.element, this.stage);
     mount.append(this.root);
     // A phone never resizes the Screen (spec D7); the shell gives pages no phone signal, so the shared queries
@@ -320,9 +337,11 @@ class Viewer {
         socket,
         this.video,
         (status) => {
+          const wasConnected = this.streamStatus === "connected";
           this.streamStatus = status;
-          // Without a peer there is no cursor image; the screencast paints the pointer into its frames.
+          // Without a peer there is no cursor image: the pointer is the browser's own meanwhile.
           if (status === "idle" || status === "failed" || status === "screencast") this.remoteCursor.clear();
+          if (status === "connected" && !wasConnected) void this.logMediaPath();
           this.syncScreencast();
           this.render();
         },
@@ -467,6 +486,18 @@ class Viewer {
     this.strip.setAudioEnabled(isEnabled);
     this.stream?.setAudioEnabled(isEnabled);
     if (!this.stream) this.video.muted = !isEnabled;
+  }
+
+  /** One console line per connection naming the path (direct or relayed, udp or tcp, the address), so a report of a
+   *  slow Screen can say how it was connected. */
+  private async logMediaPath(): Promise<void> {
+    const stats = this.stream?.getStats() ?? null;
+    if (stats === null) return;
+    try {
+      console.info("[screen] media path:", describePath(summarizeStats(entriesOf(await stats), null)));
+    } catch (error) {
+      console.warn("[screen] stats failed", error);
+    }
   }
 
   /** The screencast runs exactly while the stream says no media path connected (spec section 5.4). */

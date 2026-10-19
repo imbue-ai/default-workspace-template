@@ -28,6 +28,7 @@ uv run --no-sync screen control acquire        # take the control lease (starts 
 uv run --no-sync screen control release        # give it back
 uv run --no-sync screen control handoff "<reason>"   # hand the Screen to the human and stop
 uv run --no-sync screen open [--show]          # open the Screen's window on the user's desktop (minimized unless --show)
+uv run --no-sync screen browser open [URL]     # open the browser on the Screen (the fleet's one Chromium), URL as a new tab
 ```
 
 `run` answers as soon as the program is started; a GUI program takes a moment to map its window,

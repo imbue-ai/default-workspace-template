@@ -434,11 +434,42 @@ _install_extensions() {
     return "$rc"
 }
 
+# The browser command the Screen's XFCE session runs (system/apps/screen/scripts/
+# screen-browser-open, the Screen's own browser launch path): on PATH for the
+# helper entry the Screen service renders into the home, and the x-www-browser
+# alternative, so sensible-browser and anything else that asks Debian for the
+# browser lands in the fleet's Chromium too. Re-installed whenever the source
+# in the tree differs from the installed copy.
+readonly _BROWSER_OPEN_SOURCE="$REPO_ROOT/system/apps/screen/scripts/screen-browser-open"
+readonly _BROWSER_OPEN_INSTALL_PATH="/usr/local/bin/screen-browser-open"
+readonly _BROWSER_OPEN_ALTERNATIVE_PRIORITY=200
+
+_install_browser_command() {
+    local alternative
+    alternative="$(update-alternatives --query x-www-browser 2>/dev/null | sed -n 's/^Value: //p')"
+    if cmp -s "$_BROWSER_OPEN_SOURCE" "$_BROWSER_OPEN_INSTALL_PATH" \
+        && [ "$alternative" = "$_BROWSER_OPEN_INSTALL_PATH" ]; then
+        _log "browser command: already installed, satisfied"
+        return 0
+    fi
+    if ! install -D -m 755 "$_BROWSER_OPEN_SOURCE" "$_BROWSER_OPEN_INSTALL_PATH"; then
+        _log "browser command: could not install $_BROWSER_OPEN_INSTALL_PATH; the next converge retries"
+        return 1
+    fi
+    if ! update-alternatives --install /usr/bin/x-www-browser x-www-browser \
+        "$_BROWSER_OPEN_INSTALL_PATH" "$_BROWSER_OPEN_ALTERNATIVE_PRIORITY"; then
+        _log "browser command: could not register the x-www-browser alternative; the next converge retries"
+        return 1
+    fi
+    _log "browser command: install complete ($_BROWSER_OPEN_INSTALL_PATH)"
+}
+
 main() {
     local rc=0
     _install_screen_packages || rc=$?
     _install_neko || rc=$?
     _install_fortress || rc=$?
+    _install_browser_command || rc=$?
     # Extensions are a nice-to-have: a failure here must not fail the unit, because a
     # browser without an ad blocker still works and the converge retries next boot.
     _install_extensions || _log "extensions: not installed this pass; will retry next converge"

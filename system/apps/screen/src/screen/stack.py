@@ -38,6 +38,7 @@ from screen.primitives import RUNTIME_DIR
 from screen.primitives import SESSION_PROGRAM
 from screen.primitives import STACK_PROGRAMS
 from screen.primitives import XORG_PROGRAM
+from screen.xfce_helpers import write_browser_helper_files
 from screen.xorg_config import INPUT_SOCKET_PATH
 from screen.xorg_config import render_xorg_conf
 
@@ -121,6 +122,9 @@ class ScreenStack(MutableModel):
     supervisor: SupervisorInterface = Field(frozen=True, description="supervisord, for the group's programs")
     neko: NekoInterface = Field(frozen=True, description="neko's REST client; its token follows each start")
     state_dir: Path = Field(frozen=True, description="data/.state/screen")
+    home: Path = Field(
+        default_factory=Path.home, frozen=True, description="The session's home, where its browser entries are rendered"
+    )
     runtime_dir: Path = Field(default=Path(RUNTIME_DIR), frozen=True, description="The members' XDG runtime dir")
     display_socket_path: Path = Field(default=Path(DISPLAY_SOCKET_PATH), frozen=True, description="Xorg's socket")
     input_socket_path: Path = Field(
@@ -290,6 +294,7 @@ class ScreenStack(MutableModel):
         neko_yaml.touch(mode=0o600, exist_ok=True)
         neko_yaml.chmod(0o600)
         neko_yaml.write_text(render_neko_yaml(new_secrets))
+        write_browser_helper_files(self.home)
 
     def _wait_for_xorg(self, abort: threading.Event) -> None:
         """Until Xorg has opened the display and bound the input driver's socket, which neko dials once at its

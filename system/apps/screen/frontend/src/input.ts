@@ -10,6 +10,12 @@ import type { Point, Size, ViewTransform } from "./view_transform";
 
 const MOVE_COALESCE_MS = 16;
 const WHEEL_STEP_PX = 53;
+/** neko's ``XScroll`` sends X button 4 (wheel up) for a positive ``delta_y`` and button 6 for a positive ``delta_x``,
+ *  the opposite of the DOM's sign (a positive ``deltaY`` scrolls the content down), so the sign flips once, here,
+ *  for every scroll the viewer sends (neko's own client does the same with its ``scroll.inverse`` default). */
+export function nekoScrollDelta(domSteps: number): number {
+  return domSteps === 0 ? 0 : -domSteps;
+}
 /** neko's ``pressure`` is a byte; a finger on the glass is never zero, and a browser that reports no pressure says
  *  0 or 0.5, so the floor keeps a tap from reading as no contact. */
 const MAX_TOUCH_PRESSURE = 255;
@@ -178,11 +184,20 @@ export class InputRelay implements KeySink {
     return touchId;
   }
 
-  /** Wheel steps (the phone's two-finger scroll). */
+  /** Wheel steps in the DOM's sign (the phone's two-finger scroll: fingers moving down scroll up, as a wheel's
+   *  travel does). */
   scroll(steps: Point): void {
     if (!this.isEnabled || (steps.x === 0 && steps.y === 0)) return;
-    this.socket.send("control/scroll", { delta_x: steps.x, delta_y: steps.y, control_key: false });
+    this.sendScroll(steps.x, steps.y, false);
     this.onInput();
+  }
+
+  private sendScroll(dx: number, dy: number, isControlHeld: boolean): void {
+    this.socket.send("control/scroll", {
+      delta_x: nekoScrollDelta(dx),
+      delta_y: nekoScrollDelta(dy),
+      control_key: isControlHeld,
+    });
   }
 
   /** The screen point under a client point, or null outside the drawn video. */
@@ -255,7 +270,7 @@ export class InputRelay implements KeySink {
     if (dy) this.wheel.y -= isFirst ? this.wheel.y : dy * WHEEL_STEP_PX;
     if (dx || dy) {
       this.flushMove();
-      this.socket.send("control/scroll", { delta_x: dx, delta_y: dy, control_key: event.ctrlKey });
+      this.sendScroll(dx, dy, event.ctrlKey);
       this.onInput();
     }
   }

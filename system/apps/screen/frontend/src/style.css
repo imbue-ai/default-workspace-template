@@ -188,3 +188,64 @@
 .screen-strip__status[data-screen-clipboard-status] {
   opacity: 0.9;
 }
+
+/* The screencast alert in the strip's row (spec section 5.4): loud, with Retry beside it. */
+.screen-strip__alert {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 0.375rem;
+  background: #b4452a;
+  color: #fff;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.screen-strip__alert[hidden] {
+  display: none;
+}
+
+.screen-button--alert {
+  padding: 0.1rem 0.5rem;
+  border-color: #fff;
+  background: #fff;
+  color: #7a2a16;
+  font-weight: 600;
+}
+
+.screen-button--alert:hover {
+  background: #ffe7df;
+}
+
+.screen-button--quiet {
+  opacity: 0.7;
+}
+
+.screen-button--quiet[aria-pressed="true"] {
+  opacity: 1;
+  background: #2c3540;
+}
+
+/* The Details panel over the top of the stage: read-only rows, input passes through it. */
+.screen-details {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 0.5rem 0.75rem;
+  background: rgba(22, 26, 31, 0.92);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  pointer-events: none;
+}
+
+.screen-details[hidden] {
+  display: none;
+}
+
+.screen-details ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}

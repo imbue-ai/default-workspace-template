@@ -29,9 +29,11 @@ DISPLAY_SOCKET_PATH: Final[str] = "/tmp/.X11-unix/X99"
 # The members' XDG runtime dir, where the stack's own sockets live (PulseAudio's, the input driver's).
 RUNTIME_DIR: Final[str] = "/tmp/screen-runtime"
 
-# Where the service, neko and the ICE muxes listen (spec section 5.1).
+# Where the service, neko and the ICE muxes listen (spec section 5.1), and the browser launch path's route (spec
+# section 16), which the ``screen browser open`` command and the XFCE session's browser entries call.
 SERVICE_HOST: Final[str] = "127.0.0.1"
 SERVICE_PORT: Final[int] = 8090
+LAUNCH_BROWSER_PATH: Final[str] = "/launch/browser"
 NEKO_HOST: Final[str] = "127.0.0.1"
 NEKO_PORT: Final[int] = 8091
 ICE_MUX_PORT: Final[int] = 59000

@@ -32,8 +32,9 @@ _HEADER_PERMISSIONS_OVERRIDE: Final[str] = "X-Latchkey-Gateway-Permissions-Overr
 # The share gateway's loopback port (system/services/share_gateway/README.md) and its route to the Screen service.
 SHARE_GATEWAY_CONNECT_INFO_URL: Final[str] = "http://127.0.0.1:8791/connect-info"
 
-# Every broker answers inside the two-second bound the aggregator gives it, so a request is bounded the same way.
+# A request is bounded as the aggregator bounds the answer: two seconds for candidates, longer for relay servers.
 BROKER_TIMEOUT_SECONDS: Final[float] = 2.0
+ICE_SERVERS_TIMEOUT_SECONDS: Final[float] = 8.0
 
 
 @pure
@@ -85,9 +86,9 @@ def parse_ice_servers_answer(document: Any) -> IceServersAnswer:
     )
 
 
-def _get_json(url: str, headers: dict[str, str], broker_name: str) -> Any:
+def _get_json(url: str, headers: dict[str, str], broker_name: str, timeout_seconds: float) -> Any:
     try:
-        response = httpx.get(url, headers=headers, timeout=BROKER_TIMEOUT_SECONDS)
+        response = httpx.get(url, headers=headers, timeout=timeout_seconds)
     except httpx.HTTPError as e:
         raise ConnectivityBrokerError(f"the {broker_name} could not be reached: {e}") from e
     if response.status_code != 200:
@@ -136,13 +137,15 @@ class DesktopBroker(ConnectivityBrokerInterface):
         return headers
 
     def fetch_candidates(self) -> tuple[MediaCandidate, ...]:
-        document = _get_json(self._url("media-endpoints"), self._headers(), self.name)
+        document = _get_json(self._url("media-endpoints"), self._headers(), self.name, BROKER_TIMEOUT_SECONDS)
         if not isinstance(document, dict):
             raise ConnectivityBrokerError("the desktop answered no media endpoints document")
         return parse_candidates(document.get("candidates"))
 
     def fetch_ice_servers(self) -> IceServersAnswer:
-        return parse_ice_servers_answer(_get_json(self._url("ice-servers"), self._headers(), self.name))
+        return parse_ice_servers_answer(
+            _get_json(self._url("ice-servers"), self._headers(), self.name, ICE_SERVERS_TIMEOUT_SECONDS)
+        )
 
 
 class ShareGatewayBroker(ConnectivityBrokerInterface):
@@ -152,17 +155,17 @@ class ShareGatewayBroker(ConnectivityBrokerInterface):
     name: str = Field(default="share gateway", frozen=True, description="What the broker is called in logs")
     url: str = Field(default=SHARE_GATEWAY_CONNECT_INFO_URL, frozen=True, description="The loopback route")
 
-    def _fetch(self) -> dict[str, Any]:
-        document = _get_json(self.url, {}, self.name)
+    def _fetch(self, timeout_seconds: float) -> dict[str, Any]:
+        document = _get_json(self.url, {}, self.name, timeout_seconds)
         if not isinstance(document, dict):
             raise ConnectivityBrokerError("the share gateway answered no connect-info document")
         return document
 
     def fetch_candidates(self) -> tuple[MediaCandidate, ...]:
-        return parse_candidates(self._fetch().get("candidates"))
+        return parse_candidates(self._fetch(BROKER_TIMEOUT_SECONDS).get("candidates"))
 
     def fetch_ice_servers(self) -> IceServersAnswer:
-        return parse_ice_servers_answer(self._fetch())
+        return parse_ice_servers_answer(self._fetch(ICE_SERVERS_TIMEOUT_SECONDS))
 
 
 def brokers_from_environ(environ: Mapping[str, str]) -> tuple[ConnectivityBrokerInterface, ...]:

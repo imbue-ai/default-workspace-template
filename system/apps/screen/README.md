@@ -120,6 +120,16 @@ flag), and a workspace whose manifest is lost registers the profiles on disk as 
 browsers rather than launching a Chromium nobody asked for. Chromium's processes are
 remapped into the shared-browser band by the band sweep (below).
 
+Opening a browser from the Screen itself lands in the same Chromium. XFCE's "Web Browser"
+launcher and `exo-open --launch WebBrowser` resolve through `~/.config/xfce4/helpers.rc` to a
+helper, and GTK programs resolve an `http(s)` link through `~/.config/mimeapps.list` to an
+application entry; the service renders both, with the helper and application `.desktop` files
+under `~/.local/share/`, at each stack start (`xfce_helpers.py`, merging with what the files
+already hold). They name `screen-browser-open`, the Screen package's one-line script
+(`scripts/screen-browser-open`, `exec screen browser open "$@"`) that the env.d unit installs
+at `/usr/local/bin/screen-browser-open` and registers as the `x-www-browser` alternative, so
+`sensible-browser` lands there too. `screen browser open [URL]` posts to `/launch/browser`.
+
 The fleet API (`/browsers`): `GET /browsers` lists the browser with its lifecycle
 (`init`, `running`, `crashed`, `stopped`), the Screen's lease as the fleet CLI reads it
 (`controller` is `human`, `agent` or `nobody`), and its tabs; `POST /browsers` (`name`
@@ -267,9 +277,10 @@ holding it), gives the stage's CSS `cursor` the image with its hotspot as a data
 drawn video when the stage shows the desktop smaller than 1:1 and capped at 128 px a side (past which
 Chrome and Firefox ignore a cursor image), with the browser's own pointer as the fallback when the image
 cannot be drawn. A viewer that is watching keeps the default pointer; the position and neko's inactive
-cursors (`session/cursors`) are not drawn. The JPEG screencast fallback shows the pointer painted into
-its frames: neko's global `capture.video.show_pointer` (on by default) sets the screencast pipeline's
-pointer, and the per-pipeline flag only the WebRTC ones.
+cursors (`session/cursors`) are not drawn. No picture has a pointer painted into it: neko's global
+`capture.video.show_pointer` (on by default, and the flag the JPEG screencast pipeline takes, where the
+per-pipeline flag covers the WebRTC pipelines alone) is set off in `neko.yaml` too, so in the screencast
+the browser's own pointer is the one pointer.
 
 The viewer carries the pointer-lock plumbing of spec section 12 (`frontend/src/pointer_lock.ts`:
 a strip control that locks the pointer on the stage, the relative motion it yields while locked,
@@ -291,8 +302,10 @@ workspace's visitors reach it through the relay's `screen-media` tcp proxy or th
 Neko itself is told nothing about any of this: its candidates carry the container's own
 address, and the viewer rewrites them.
 
-`GET /api/connect-info` asks two brokers in parallel, each bounded to two seconds, and
-answers the union:
+`GET /api/connect-info` asks two brokers in parallel, each bounded (two seconds for candidates,
+eight for relay servers: they are asked for only once the direct path has failed, and the
+desktop's first answer mints a credential through the connector and Cloudflare, which has taken
+longer than two seconds), and answers the union:
 
 - The desktop, through the latchkey gateway's `minds-api-proxy`
   (`$LATCHKEY_GATEWAY/minds-api-proxy/api/v1/agents/$MNGR_AGENT_ID/media-endpoints`, and
@@ -321,9 +334,17 @@ foundation, dropping the original (unless `candidates` is empty). A connection t
 servers to the peer and asks neko for an ICE restart (`signal/restart`); the viewer then
 remembers `screen:needs-relay` in `localStorage` and fetches with `relay=1` first on the
 next load. When the relay attempt fails the same way, the viewer shows neko's JPEG
-screencast (`capture.screencast`, 10 fps at quality 60, polled at
-`/neko/api/room/screen/cast.jpg`) with input still over the WebSocket, and the strip says
-"Slow picture: no media path connected".
+screencast (`capture.screencast`, 5 fps at quality 60, polled at
+`/neko/api/room/screen/cast.jpg`) with input still over the WebSocket, and the strip's row
+carries a loud alert ("Low-quality picture: no direct or relay path connected. Retrying.")
+with a "Retry now" button. From the screencast the viewer tries WebRTC again on its own,
+15 s after the fall, then 30 s, then every 60 s, each time with fresh `connect-info?relay=1`
+(the usual cause is a relay credential that was not ready in time); the screencast keeps
+showing the Screen until a retry's peer connects. The strip's "Details" toggle opens a
+panel over the stage naming the path in use (direct or through a relay, udp or tcp, the
+remote address, from the peer's `getStats()`), the endpoints `connect-info` offered, the
+relay server count, the Screen's size and profile, and the picture's size, rate, bitrate and
+round trip; the viewer also logs one "media path" line to the console per connection.
 
 ## The lease
 
@@ -349,7 +370,7 @@ life), `events/screen/events.jsonl` (the `screen_stopped` events the watcher app
 `uv run --no-sync screen` is the agent-facing command (spec section 17): `run`,
 `windows`, `activate`, `shot`, `size [WxH]` (reads the size, or sets it through
 `POST /api/screen-size` as the controller's viewer would), `control
-acquire|release|handoff`, `open`. Its
+acquire|release|handoff`, `open`, `browser open [URL]` (the browser launch path). Its
 exit codes are the fleet CLI's: 0 ok, 1 error, 2 preempted (a human has or took
 control; end the turn), 3 busy, 4 timed out, 64 usage, 69 no service.
 
@@ -366,8 +387,9 @@ act in it.
 The env.d unit `system/scripts/env.d/2000-screen.sh` installs the stack's apt packages
 from the pinned snapshot, the pinned neko binary at `/opt/neko/bin/neko` and neko's Xorg
 input driver at `/usr/lib/xorg/modules/input/neko_drv.so` (both from the pinned neko base
-image, whose driver is built against the same xorg-server the snapshot installs), and
-Fortress, which moved there from the browser's unit. Until it is satisfied the service
+image, whose driver is built against the same xorg-server the snapshot installs),
+Fortress, which moved there from the browser's unit, and the `screen-browser-open`
+command with its `x-www-browser` alternative. Until it is satisfied the service
 answers `installing`.
 
 The frontend (`frontend/`) is a member of the npm workspace at `system/package.json`,

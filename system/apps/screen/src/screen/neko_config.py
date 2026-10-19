@@ -29,8 +29,9 @@ AUDIO_SINK_NAME: Final[str] = "audio_output"
 AUDIO_CAPTURE_DEVICE: Final[str] = f"{AUDIO_SINK_NAME}.monitor"
 PULSE_SOCKET_PATH: Final[str] = f"{RUNTIME_DIR}/pulse.sock"
 
-# The JPEG screencast every client falls back to without WebRTC (spec section 5.4).
-SCREENCAST_RATE: Final[str] = "10/1"
+# The JPEG screencast every client falls back to without WebRTC (spec section 5.4): a low rate, since each frame is a
+# full JPEG of the display and the fallback is for seeing the Screen, not for smooth motion.
+SCREENCAST_RATE: Final[str] = "5/1"
 SCREENCAST_QUALITY: Final[str] = "60"
 
 
@@ -94,6 +95,9 @@ def neko_config_document(secrets: NekoSecrets) -> dict[str, Any]:
                 "codec": "h264",
                 "ids": list(VIDEO_IDS),
                 "pipelines": {profile.video_id: _pipeline_config(profile) for profile in VIDEO_PROFILES},
+                # The screencast pipeline takes this global flag (the per-pipeline one covers the WebRTC pipelines
+                # alone), and the viewer draws its own pointer, so no cursor is painted into any picture.
+                "show_pointer": False,
             },
             "audio": {"device": AUDIO_CAPTURE_DEVICE, "codec": "opus"},
             "screencast": {"enabled": True, "rate": SCREENCAST_RATE, "quality": SCREENCAST_QUALITY},

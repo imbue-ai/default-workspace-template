@@ -100,3 +100,21 @@ Sizing from a small desktop window (spec sections 7.2 and 14):
 - A phone is now a phone-sized viewport with a finger as the primary pointer (the shared `PHONE_MEDIA_QUERY` and `TOUCH_MEDIA_QUERY` both), so a Screen window that is merely small on a desktop reports its stage size and the Screen resizes to fit it instead of being scaled down to a tiny 1920x1080; real phones keep the mobile controls and never resize the Screen.
 
 - The controller's latest stage size goes out as soon as its session controls with the stack running, whether or not it matches the last report (the Screen may have been sized by someone else meanwhile).
+
+The screencast fallback, after the first test on Imbue Cloud (spec sections 5.4 and 12):
+
+- No pointer is painted into the screencast any more: neko's global `capture.video.show_pointer`, the flag its screencast pipeline takes (the per-pipeline flag covers the WebRTC pipelines alone), is off in `neko.yaml`, so the browser's own pointer is the one pointer there instead of two, one of them lagging. The screencast runs at 5 fps rather than 10 (each frame is a full JPEG of the display, and the fallback is for seeing the Screen, not for motion), and the viewer polls it at that rate.
+
+- The viewer tries WebRTC again from the screencast instead of staying there until a reload: 15 s after the fall, then 30 s, then every 60 s, and at once on the strip's new "Retry now" button, each time with fresh `connect-info?relay=1`; the screencast keeps showing the Screen until a retry's peer connects. The strip's row carries a loud alert while the picture is the screencast ("Low-quality picture: no direct or relay path connected. Retrying.") in place of the quiet "Slow picture" line.
+
+- The strip gains a "Details" toggle: a panel over the stage naming the media path in use (direct or through a relay, udp or tcp, the remote address, from the peer's `getStats()`), the endpoints `connect-info` offered, the relay server count, the Screen's size and profile, and the picture's size, rate, bitrate and round trip; the viewer also logs one "media path" line to the console per connection.
+
+- `GET /api/connect-info` waits up to eight seconds for relay servers (candidates keep their two): the desktop's first `ice-servers` answer mints a credential through the connector and Cloudflare, which took longer than two seconds on the dev tier and left the first relay attempt with no servers, which is how the whole first test ran in the screencast.
+
+The browser shortcut on the Screen's desktop (spec section 16):
+
+- XFCE's "Web Browser" launcher failed on a fresh Screen (`exo-open --launch WebBrowser` found no helper and `sensible-browser` no `x-www-browser`). The service now renders the session's browser entries into the home at each stack start (`xfce_helpers.py`): `~/.config/xfce4/helpers.rc` naming a `WebBrowser` helper, the helper's `.desktop` under `~/.local/share/xfce4/helpers/`, an application `.desktop` under `~/.local/share/applications/`, and `~/.config/mimeapps.list` pointing the `http` and `https` scheme handlers at it, each merged with what the file already holds. All of them run `screen-browser-open`, a one-line script of the package that calls the new `screen browser open [URL]` verb, which posts to `/launch/browser`: the page opens in the fleet's one Chromium (its profile, its CDP proxy, the lease, the held-URL rule while an agent drives) rather than in a second browser. The integration suite runs the verb against a real listener and sees the tab.
+
+The mouse wheel (spec section 11):
+
+- Scrolling was inverted on a conventional mouse: neko's `XScroll` sends X button 4 (wheel up) for a positive `delta_y` and button 6 for a positive `delta_x`, the opposite of the DOM's sign (neko's own client flips it by default). The viewer now flips the sign once, where it sends `control/scroll` (`input.ts`), for the wheel and the phone's two-finger scroll alike; the gesture classifier reports wheel steps in the DOM's sign as before.

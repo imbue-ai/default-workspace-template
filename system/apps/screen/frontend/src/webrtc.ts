@@ -27,20 +27,27 @@ export class NekoStream {
   private isReleased = false;
   private connectInfo: ConnectInfo = EMPTY_CONNECT_INFO;
   private isRelayAttempt = false;
+  private status: StreamStatus = "idle";
   readonly policy: IcePolicy;
+  private readonly onStatus: (status: StreamStatus) => void;
 
   constructor(
     private readonly socket: NekoSocket,
     private readonly video: HTMLVideoElement,
-    private readonly onStatus: (status: StreamStatus) => void,
+    onStatusChanged: (status: StreamStatus) => void,
     /** The data channel neko opens on every peer (the cursor comes over it, ``remote_cursor.ts``). */
     private readonly onDataChannel: (channel: RTCDataChannel) => void = () => undefined,
   ) {
+    this.onStatus = (status) => {
+      this.status = status;
+      onStatusChanged(status);
+    };
     this.policy = new IcePolicy(
       {
         fetchRelayInfo: () => fetchConnectInfo(true),
-        restartIce: (info) => this.restartIce(info),
+        restartIce: (info) => this.restartIce(info, true),
         fallbackToScreencast: () => this.fallbackToScreencast(),
+        retryFromScreencast: (info) => this.restartIce(info, false),
         rememberRelay: () => rememberNeedsRelay(pageStorage()),
       },
       windowScheduler,
@@ -69,7 +76,7 @@ export class NekoStream {
       if (this.pc === null || this.isReleased) return;
       this.pc.close();
       this.pc = null;
-      this.onStatus("connecting");
+      if (this.status !== "screencast") this.onStatus("connecting");
       window.clearTimeout(this.retryTimer);
       this.retryTimer = window.setTimeout(
         () => this.request(this.videoId, this.connectInfo, this.isRelayAttempt),
@@ -86,7 +93,8 @@ export class NekoStream {
     this.isRelayAttempt = isRelay;
     this.pending = [];
     this.isReleased = false;
-    this.onStatus("connecting");
+    // A re-request while the screencast shows the Screen (the server dropped a retry's peer) keeps it showing.
+    if (this.status !== "screencast") this.onStatus("connecting");
     this.socket.send("signal/request", {
       video: { selector: { id: videoId, type: "exact" } },
       audio: { disabled: !this.isAudioEnabled },
@@ -97,6 +105,25 @@ export class NekoStream {
   /** Whether a peer is up or being set up. */
   get hasPeer(): boolean {
     return this.pc !== null;
+  }
+
+  /** What ``connect-info`` last told this stream, and whether the attempt in flight carries relay servers. */
+  get lastConnectInfo(): ConnectInfo {
+    return this.connectInfo;
+  }
+
+  get isRelay(): boolean {
+    return this.isRelayAttempt;
+  }
+
+  /** The peer's statistics, or null without a peer. */
+  getStats(): Promise<RTCStatsReport> | null {
+    return this.pc === null ? null : this.pc.getStats();
+  }
+
+  /** The user asked for another WebRTC try from the screencast. */
+  retryNow(): void {
+    this.policy.retryNow();
   }
 
   selectVideo(videoId: string): void {
@@ -141,8 +168,10 @@ export class NekoStream {
   }
 
   /** Relay servers arrived: give them to the live peer and have neko restart ICE (``signal/restart`` answers with
-   *  an ICE-restart offer); a peer that cannot take them, or none, gets a fresh offer instead. */
-  private restartIce(info: ConnectInfo | null): void {
+   *  an ICE-restart offer); a peer that cannot take them, or none, gets a fresh offer instead. A retry from the
+   *  screencast (``isStatusShown`` false) leaves the status alone, so the screencast keeps showing the Screen until
+   *  the new peer connects. */
+  private restartIce(info: ConnectInfo | null, isStatusShown: boolean): void {
     if (info !== null) this.connectInfo = info;
     this.isRelayAttempt = true;
     this.pending = [];
@@ -150,7 +179,7 @@ export class NekoStream {
       try {
         this.pc.setConfiguration(this.configuration());
         this.socket.send("signal/restart");
-        this.onStatus("connecting");
+        if (isStatusShown) this.onStatus("connecting");
         return;
       } catch (error) {
         console.warn("[screen] the peer could not take new ICE servers; asking for a fresh one", error);
@@ -158,7 +187,7 @@ export class NekoStream {
     }
     this.pc?.close();
     this.pc = null;
-    this.onStatus("connecting");
+    if (isStatusShown) this.onStatus("connecting");
     this.socket.send("signal/request", {
       video: { selector: { id: this.videoId, type: "exact" } },
       audio: { disabled: !this.isAudioEnabled },
@@ -212,13 +241,14 @@ export class NekoStream {
   }
 
   private onPeerState(state: RTCPeerConnectionState): void {
+    const isScreencastRetry = this.policy.phase === "relay" && this.status === "screencast";
     if (state === "connected") {
       this.policy.connected();
       this.onStatus("connected");
     } else if (state === "disconnected") {
-      this.onStatus("connecting");
+      if (!isScreencastRetry) this.onStatus("connecting");
     } else if (state === "failed") {
-      this.onStatus("connecting");
+      if (!isScreencastRetry) this.onStatus("connecting");
       this.policy.failed();
     }
   }

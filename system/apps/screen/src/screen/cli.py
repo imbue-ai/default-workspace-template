@@ -22,6 +22,7 @@ from screen.errors import InvalidScreenSizeError
 from screen.identity import AGENT_ID_HEADER
 from screen.identity import AGENT_NAME_HEADER
 from screen.primitives import APP_NAME
+from screen.primitives import LAUNCH_BROWSER_PATH
 from screen.primitives import SERVICE_HOST
 from screen.primitives import SERVICE_PORT
 from workspace_layout.client import ShellLayoutClient
@@ -314,6 +315,27 @@ def size(size: str | None) -> None:
         _err(f"the Screen is {answer.body.get('lifecycle')}; it has no size yet")
         raise SystemExit(EXIT_BUSY)
     _out(f"{screen_size.get('width')}x{screen_size.get('height')}@{screen_size.get('rate')}")
+
+
+@main.group()
+def browser() -> None:
+    """The browser on the Screen: one Chromium with the fleet's profile (the agentic-browser-fleet command drives it)."""
+
+
+@browser.command("open")
+@click.argument("url", required=False)
+def browser_open(url: str | None) -> None:
+    """Open the browser on the Screen (starting the Screen and the browser when needed), with URL as a new tab in front
+    when given. What the XFCE session's Web Browser launcher and an http(s) link opened on the Screen run."""
+    body: dict[str, Any] = {"url": url} if url is not None else {}
+    answer = request_service("POST", LAUNCH_BROWSER_PATH, body, is_identity_required=False)
+    if answer.status == HTTP_SERVICE_UNAVAILABLE:
+        _err(_detail(answer, "the browser is still installing; try again in a moment"))
+        raise SystemExit(EXIT_BUSY)
+    if answer.status != 200:
+        _err(_detail(answer, f"browser open failed ({answer.status})"))
+        raise SystemExit(EXIT_ERROR)
+    _out("opened the browser on the Screen" + (f" at {url}" if url else ""))
 
 
 @main.group()

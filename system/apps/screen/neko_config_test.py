@@ -36,7 +36,8 @@ def test_neko_yaml_round_trips_and_carries_the_session_rules_and_pipelines() -> 
     assert document["desktop"]["display"] == ":99"
     assert document["desktop"]["input"] == {"enabled": True, "socket": "/tmp/screen-runtime/xf86-input-neko.sock"}
     assert document["capture"]["video"]["ids"] == ["idle", "watch", "control"]
-    assert document["capture"]["screencast"] == {"enabled": True, "rate": "10/1", "quality": "60"}
+    assert document["capture"]["screencast"] == {"enabled": True, "rate": "5/1", "quality": "60"}
+    assert document["capture"]["video"]["show_pointer"] is False
     assert document["capture"]["audio"]["device"] == "audio_output.monitor"
 
 

@@ -5,3 +5,5 @@ The browser moved onto the Screen (`docs/system/specs/screen/spec.md`, sections 
 - A new `use-screen` skill documents the `screen` command (`run`, `windows`, `activate`, `shot`, `size`, `control acquire|release|handoff`, `open`), the lease rules with the human always winning, and xdotool on `DISPLAY=:99` and the CDP proxy as the two input paths.
 
 - `manage-desktop` names the Screen where it named the browser (the `screen` app's `browser` launch path behind `open https://...`, the Screen's window, the Screen service's stop and start routes), and `build-app` lists the Screen's ports (8083, 8090) among the ones to avoid.
+
+- The `use-screen` skill lists `screen browser open [URL]`, the browser launch path as a verb of the `screen` command.
