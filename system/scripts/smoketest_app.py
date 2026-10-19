@@ -128,7 +128,7 @@ class _UnixSocketTransport(xmlrpc.client.Transport):
         super().__init__()
         self._socket_path = socket_path
 
-    def make_connection(self, host: str) -> http.client.HTTPConnection:
+    def make_connection(self, host: str | tuple[str, dict[str, str]]) -> http.client.HTTPConnection:
         socket_path = self._socket_path
 
         class _Connection(http.client.HTTPConnection):
