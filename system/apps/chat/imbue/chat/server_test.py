@@ -4080,8 +4080,10 @@ def test_a_failed_handoff_retries_the_create_through_the_route(tmp_path: Path) -
     assert retried.get_json() == {"status": "converging", "phase": "switching"}
     wait_for(lambda: manager.get_handoff_state(ChatId(first)) is None, timeout=15.0)
     argv = log_path.read_text().splitlines()
-    assert [line.split(" ")[0] for line in argv] == ["stop", "rename", "create"]
-    assert f"--id {successor}" in argv[2] and "--type codex" in argv[2]
+    verbs = [line.split(" ")[0] for line in argv]
+    assert verbs[0] == "rename" and sorted(verbs[1:]) == ["create", "stop"]
+    create = argv[verbs.index("create")]
+    assert f"--id {successor}" in create and "--type codex" in create
     listed_after = client.get("/api/chats").get_json()["chats"]
     assert [(chat["chat_id"], chat["active_agent"]["agent_id"], chat["agent_ids"]) for chat in listed_after] == [
         (first, successor, [first, successor])
