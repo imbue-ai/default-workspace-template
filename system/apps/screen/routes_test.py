@@ -95,6 +95,14 @@ def _session(client: FlaskClient, headers: dict[str, str]) -> dict:
     return answer.get_json()
 
 
+def _controlling_session(client: FlaskClient, headers: dict[str, str]) -> dict:
+    """A new session for ``headers`` that has taken control of the Screen."""
+    session = _session(client, headers)
+    taken = client.post("/api/control/take", json={"session_id": session["session_id"]}, headers=headers)
+    assert taken.status_code == 200, taken.get_json()
+    return session
+
+
 def test_every_route_is_either_the_owners_or_open_to_a_visitor(app: Flask) -> None:
     rules = frozenset(rule.rule for rule in app.url_map.iter_rules())
     owner_only_rules = frozenset(rule for _, rule, _ in _OWNER_ONLY_REQUESTS)
@@ -184,11 +192,7 @@ def _drop(client: FlaskClient, headers: dict[str, str], session_id: str, *files:
 
 def test_a_visitor_in_control_drops_files_into_the_desktop_folder(client: FlaskClient, service: ScreenService) -> None:
     start_service_stack(service)
-    visitor = _session(client, _VISITOR)
-    assert (
-        client.post("/api/control/take", json={"session_id": visitor["session_id"]}, headers=_VISITOR).status_code
-        == 200
-    )
+    visitor = _controlling_session(client, _VISITOR)
     answer = _drop(client, _VISITOR, visitor["session_id"], ("notes.txt", b"hello"), ("notes.txt", b"again"))
     assert answer.status_code == 200, answer.get_json()
     assert answer.get_json() == {"directory": str(service.desktop_dir), "saved": ["notes.txt", "notes-1.txt"]}
@@ -201,11 +205,7 @@ def test_a_visitor_in_control_drops_files_into_the_desktop_folder(client: FlaskC
 
 def test_a_drop_lands_even_when_the_file_manager_cannot_be_opened(client: FlaskClient, service: ScreenService) -> None:
     start_service_stack(service)
-    visitor = _session(client, _VISITOR)
-    assert (
-        client.post("/api/control/take", json={"session_id": visitor["session_id"]}, headers=_VISITOR).status_code
-        == 200
-    )
+    visitor = _controlling_session(client, _VISITOR)
     assert isinstance(service.launcher, RecordingLauncher)
     service.launcher.failure = "no thunar"
     answer = _drop(client, _VISITOR, visitor["session_id"], ("notes.txt", b"hello"))
@@ -239,10 +239,7 @@ def test_a_drop_needs_the_controlling_session_and_refuses_the_owners_session_to_
 def test_a_drop_refuses_bad_names_empty_drops_and_oversize_bodies(client: FlaskClient, service: ScreenService) -> None:
     assert _drop(client, _OWNER, "s1", ("a.txt", b"x")).status_code == 409
     start_service_stack(service)
-    owner = _session(client, _OWNER)
-    assert (
-        client.post("/api/control/take", json={"session_id": owner["session_id"]}, headers=_OWNER).status_code == 200
-    )
+    owner = _controlling_session(client, _OWNER)
     for bad_name in ("../escape.txt", "dir/file.txt", ".hidden"):
         refused = _drop(client, _OWNER, owner["session_id"], (bad_name, b"x"))
         assert refused.status_code == 400, bad_name
@@ -308,11 +305,7 @@ def test_a_visitor_in_control_pastes_an_image_and_may_cancel_a_held_page(
     client: FlaskClient, service: ScreenService, fake_xclip: Path, loopback_shell: LoopbackShell
 ) -> None:
     name = start_browser(client, service)
-    visitor = _session(client, _VISITOR)
-    assert (
-        client.post("/api/control/take", json={"session_id": visitor["session_id"]}, headers=_VISITOR).status_code
-        == 200
-    )
+    visitor = _controlling_session(client, _VISITOR)
     pasted = _paste(client, _VISITOR, visitor["session_id"])
     assert pasted.status_code == 204, pasted.get_json()
     assert (fake_xclip.parent / "xclip-record" / "set.bytes").read_bytes() == _PNG_HEADER

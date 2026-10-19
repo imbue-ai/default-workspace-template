@@ -148,3 +148,5 @@ Files and the desktop's icons (spec section 4.3):
 - A drop whose Thunar window cannot be opened (the launch fails) still answers the folder and the saved names: the failure is logged at warning and the files are on disk either way, where before the route answered 500 after saving them.
 
 - `desktop_files.py` and the drop tests describe the desktop folder as the XDG desktop directory a drop shows in a file manager window, no longer as the folder `xfdesktop` shows as icons.
+
+- `routes_test.py` opens a session that holds control through one helper (`_controlling_session`) in the drop and paste tests, in place of the same take-control preamble repeated in each.
