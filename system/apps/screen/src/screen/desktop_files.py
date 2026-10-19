@@ -1,8 +1,8 @@
 """Files dropped on the viewer land in the Screen's desktop folder (docs/system/specs/screen/spec.md section 4.3):
-the folder ``xfdesktop`` shows as icons, which is the XDG desktop directory (``XDG_DESKTOP_DIR`` in
-``~/.config/user-dirs.dirs``, the file ``xdg-user-dirs-update`` writes when the session starts) and ``~/Desktop``
-without one. Each file keeps its name; a clash takes a numeric suffix, settled by an exclusive create so two drops
-never write the same file."""
+the XDG desktop directory (``XDG_DESKTOP_DIR`` in ``~/.config/user-dirs.dirs``, the file ``xdg-user-dirs-update``
+writes when the session starts) and ``~/Desktop`` without one, which the service then shows in a file manager window
+since the desktop's own icons are off. Each file keeps its name; a clash takes a numeric suffix, settled by an
+exclusive create so two drops never write the same file."""
 
 import os
 import shutil
@@ -46,7 +46,7 @@ def parse_desktop_dir(user_dirs_text: str, home: Path) -> Path | None:
 
 
 def desktop_directory(home: Path) -> Path:
-    """Where ``xfdesktop`` shows icons from for this home: the user-dirs file's desktop entry, else ``~/Desktop``."""
+    """This home's desktop folder: the user-dirs file's desktop entry, else ``~/Desktop``."""
     user_dirs_path = home / USER_DIRS_RELATIVE_PATH
     try:
         text = user_dirs_path.read_text() if user_dirs_path.is_file() else None

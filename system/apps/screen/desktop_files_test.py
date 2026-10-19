@@ -1,5 +1,5 @@
-"""Where a dropped file lands and under what name: the desktop folder xfdesktop shows, the name checks, and the
-suffix a clash takes."""
+"""Where a dropped file lands and under what name: the home's desktop folder, the name checks, and the suffix a
+clash takes."""
 
 import io
 from pathlib import Path

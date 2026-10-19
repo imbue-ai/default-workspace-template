@@ -146,3 +146,5 @@ Files and the desktop's icons (spec section 4.3):
 - Stale text: the spec body now says what the implementation notes said (the 5 fps screencast with no pointer painted into it, the retries from the screencast, the one-finger drag as a touch), `data/.state/README.md` describes `screen/` in place of the browser's screenshots, and `window-bound-resources.md` names the Screen where it named the deleted browser app.
 
 - A drop whose Thunar window cannot be opened (the launch fails) still answers the folder and the saved names: the failure is logged at warning and the files are on disk either way, where before the route answered 500 after saving them.
+
+- `desktop_files.py` and the drop tests describe the desktop folder as the XDG desktop directory a drop shows in a file manager window, no longer as the folder `xfdesktop` shows as icons.

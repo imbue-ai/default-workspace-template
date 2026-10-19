@@ -292,8 +292,8 @@ def test_xeyes_appears_in_the_window_list_and_a_raised_window_titles_the_screen(
 
 
 def test_a_dropped_file_lands_in_the_desktop_folder(running: _LiveService) -> None:
-    """A file the controlling session drops is written into the folder xfdesktop shows (spec section 4.3): the XDG
-    desktop directory, which in the workspace image is ``~/Desktop``."""
+    """A file the controlling session drops is written into the desktop folder (spec section 4.3): the XDG desktop
+    directory, which in the workspace image is ``~/Desktop``."""
     service, client = running.service, running.client
     session = client.post("/api/session", headers={"X-Imbue-Identity": '{"owner": true, "email": "josh@imbue.com"}'})
     assert session.status_code == 200, session.get_json()
