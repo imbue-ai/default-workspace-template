@@ -2,7 +2,8 @@
 # env.d unit: the Screen's stack (Xorg with the dummy driver, XFCE, PulseAudio,
 # GStreamer with x264, xdotool, wmctrl, xclip) and the pinned neko v3 server
 # binary, plus Fortress (stealth Chromium, the Screen's browser) with its apt
-# system libs and the two Chrome extensions. Too heavy to bake into the Docker
+# system libs and the two Chrome extensions, and the screen-browser-open command
+# (the x-www-browser alternative). Too heavy to bake into the Docker
 # image, and no boot-time service execs any of it directly (the Screen service
 # answers "installing" until this unit is satisfied, and its browser launch path
 # "Chromium is still installing" until Fortress arrives), so it installs on
