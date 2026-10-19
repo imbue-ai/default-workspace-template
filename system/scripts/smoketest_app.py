@@ -204,7 +204,10 @@ def _restart_program(sup, name: str) -> Callable[[], Optional[str]]:
             sys.exit(f"error: supervisord could not start {name}: {fault.faultString}\n{_stderr_tail(name)}")
 
     def early_death() -> Optional[str]:
-        statename = sup.getProcessInfo(name)["statename"]
+        try:
+            statename = sup.getProcessInfo(name)["statename"]
+        except (OSError, xmlrpc.client.Fault) as error:
+            return f"lost track of {name} in supervisord after the restart: {error}"
         if is_dead_after_start(statename):
             return f"{name} is {statename} after the restart: it died before answering.\n{_stderr_tail(name)}"
         return None
