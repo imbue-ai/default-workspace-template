@@ -48,7 +48,7 @@ import {
   type VerbOutcome,
 } from "./service_client";
 import type { NekoSessionAnswer, ScreenStateDocument, ServiceEvent } from "./state";
-import { isOwnSessionController } from "./state";
+import { EMPTY_CONNECT_INFO, isOwnSessionController } from "./state";
 import { DetailsPanel, describePath, entriesOf, summarizeStats } from "./stream_details";
 import { Strip } from "./strip";
 import { fittedVideoRect } from "./view_transform";
@@ -118,7 +118,7 @@ class Viewer {
         isScreencast: this.streamStatus === "screencast",
         videoId: this.state?.video_id ?? "",
         screenSize: this.screenSize.width > 0 ? this.screenSize : null,
-        connectInfo: this.stream?.lastConnectInfo ?? { ice_servers: [], candidates: [], expires_at: null },
+        connectInfo: this.stream?.lastConnectInfo ?? EMPTY_CONNECT_INFO,
         isRelayAttempt: this.stream?.isRelay ?? false,
         screencastFps: SCREENCAST_FPS,
       }),
