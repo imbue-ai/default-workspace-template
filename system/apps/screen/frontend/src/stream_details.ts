@@ -176,7 +176,9 @@ export class DetailsPanel {
   private readonly list = document.createElement("ul");
   private timer = 0;
   private lastSample: BytesSample | null = null;
-  private isOpen = false;
+  /** Bumped by every open and close, so a refresh still awaiting its stats when the panel was toggled stops instead
+   *  of running on beside the one the reopen started. */
+  private generation = 0;
 
   constructor(private readonly source: DetailsSource) {
     this.element.className = "screen-details";
@@ -186,18 +188,17 @@ export class DetailsPanel {
   }
 
   setOpen(isOpen: boolean): void {
-    this.isOpen = isOpen;
+    this.generation += 1;
     this.element.hidden = !isOpen;
     window.clearTimeout(this.timer);
     this.timer = 0;
     this.lastSample = null;
-    if (isOpen) void this.refresh();
+    if (isOpen) void this.refresh(this.generation);
   }
 
-  private async refresh(): Promise<void> {
-    if (!this.isOpen) return;
+  private async refresh(generation: number): Promise<void> {
     const summary = await this.summarize();
-    if (!this.isOpen) return;
+    if (generation !== this.generation) return;
     this.lastSample = summary.sample;
     const rows = describeDetails(summary, this.source.context());
     this.list.replaceChildren(
@@ -207,7 +208,7 @@ export class DetailsPanel {
         return item;
       }),
     );
-    this.timer = window.setTimeout(() => void this.refresh(), REFRESH_MS);
+    this.timer = window.setTimeout(() => void this.refresh(generation), REFRESH_MS);
   }
 
   private async summarize(): Promise<PathSummary> {
