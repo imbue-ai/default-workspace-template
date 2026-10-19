@@ -182,9 +182,9 @@ process restarts:
   python3 system/scripts/smoketest_app.py <name> --restart --marker "<text unique to your change>" --refresh
   ```
 
-  A daemon with no port is bounced the same way without the check and the
-  refresh (`--restart` alone is not available for it, so use supervisord
-  directly and accept the 30 s wait only if its block carries `startsecs=30`):
+  A daemon with no port cannot use `smoketest_app.py` (it needs a port to
+  check), so bounce it with supervisord directly; the call waits out the
+  program's `startsecs`, which is 30 s only if its block sets `startsecs=30`:
 
   ```bash
   supervisorctl restart <name>
