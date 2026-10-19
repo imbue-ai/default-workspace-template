@@ -58,7 +58,15 @@ describe("app launches", () => {
     expect(launchRowKindOf(buddy, buddy.launch_paths[3])).toBe("text");
     // A POST at the pin's path starts something, so it is never the focus row.
     expect(launchRowKindOf(buddy, buddy.launch_paths[4])).toBe("new");
-    expect(launchRowKindOf(plain, plain.launch_paths[0])).toBe("new");
+    // Every row of an app whose default shortcut focuses (a one-window app) lands in its one window.
+    expect(launchRowKindOf(plain, plain.launch_paths[0])).toBe("one");
+    const manyWindowed = appRecord("many", {
+      default_shortcut: { launch: "open", mode: "new" },
+      launch_paths: plain.launch_paths,
+    });
+    expect(launchRowKindOf(manyWindowed, manyWindowed.launch_paths[0])).toBe("new");
+    const undeclared = appRecord("undeclared", { default_shortcut: null, launch_paths: plain.launch_paths });
+    expect(launchRowKindOf(undeclared, undeclared.launch_paths[0])).toBe("new");
     expect(launchRowKindOf(docs, docs.launch_paths[0])).toBe("text");
   });
 

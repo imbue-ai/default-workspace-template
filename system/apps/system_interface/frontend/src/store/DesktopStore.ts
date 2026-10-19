@@ -1641,7 +1641,9 @@ export class DesktopStore {
         this.restoreWindow(run.windowId);
         return;
       case "open":
-        await this.launchAt(run.app, run.launch, {}, { kind: "new" });
+        // A focus shortcut whose window this client has never placed still has one on the desktop when another
+        // client opened it: the shell finds it at the launch path and raises it here rather than opening a second.
+        await this.launchAt(run.app, run.launch, {}, { kind: mode === "focus" ? "focus" : "new" });
         return;
       case "connecting":
         this.toast(STILL_CONNECTING_NOTICE);
@@ -1668,18 +1670,21 @@ export class DesktopStore {
   }
 
   /** Run a launch-path row (launcher plan section 3.3): a GET launch path at its app's pin path raises the pinned
-   *  window on the active desktop and opens nothing; every other launches into a new window. */
+   *  window on the active desktop and opens nothing; a row of a one-window app launches into the window the
+   *  desktop already holds (whichever client opened it; the shell raises it here) and opens one only when there
+   *  is none; every other launches into a new window. */
   async runLaunchRow(appName: string, launchId: string): Promise<void> {
     const found = this.launchOf(appName, launchId);
     if (found === null) return;
-    if (launchRowKindOf(found.app, found.launchPath) === "focus") {
+    const kind = launchRowKindOf(found.app, found.launchPath);
+    if (kind === "focus") {
       const pinned = pinnedWindowOf(this.state, found.app.name);
       if (pinned !== null) {
         this.restoreWindow(pinned.id);
         return;
       }
     }
-    await this.launchAt(found.app.name, found.launchPath.id, {}, { kind: "new" });
+    await this.launchAt(found.app.name, found.launchPath.id, {}, { kind: kind === "one" ? "focus" : "new" });
   }
 
   /** Run a free-text row with ``text`` (launcher plan section 3.2, post-launch-paths plan section 4.1),

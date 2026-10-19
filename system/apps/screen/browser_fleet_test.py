@@ -191,6 +191,26 @@ def test_a_page_asked_for_while_an_agent_drives_is_held_and_opens_when_the_human
     assert browser.pending_url is None
 
 
+def test_the_launch_paths_page_is_held_while_an_agent_drives_and_opens_when_the_agent_lets_go(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+    harness.stack_up()
+    browser = harness.running_browser()
+    harness.control.acquire(
+        _AGENT, "Alice", is_reclaim=False, is_wait=False, max_wait_seconds=None, is_enqueue_on_busy=False
+    )
+    held = harness.fleet.ensure_browser("https://example.org/")
+    assert held is browser
+    assert browser.pending_url == "https://example.org/"
+    assert harness.cdp().created == []
+    harness.control.release(_AGENT)
+    harness.fleet.open_pending_url()
+    assert harness.cdp().created == ["https://example.org/"]
+    assert browser.pending_url is None
+    # With nobody driving, the launch path's page opens at once.
+    harness.fleet.ensure_browser("https://example.net/")
+    assert harness.cdp().created == ["https://example.org/", "https://example.net/"]
+
+
 def test_a_cancelled_page_never_opens_and_leaves_the_agent_driving(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
     harness.stack_up()

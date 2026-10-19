@@ -11,3 +11,5 @@ The shell gains the Screen spec's `FULLSCREEN` placement state and immersive mod
 - `place --state FULLSCREEN` round-trips through the op route and the placements files like every other state.
 
 The layout pipeline test for `workspace-layout open https://...` expects the Screen app to be named when it is not registered, since a bare URL opens through the Screen's `browser` launch path now.
+
+- The launcher's rows for a one-window app (an unpinned app whose default shortcut focuses: the Screen, Getting Started, Memory & disk) launch with the `focus` target, so a second client pressing "Screen" or "Browser" lands in the Screen window the desktop already holds (raised in that client's layout) instead of opening another; before, every client that opened the Screen from the launcher got its own window, and the taskbar filled with them. A focus shortcut whose window this client never placed does the same instead of opening a second.

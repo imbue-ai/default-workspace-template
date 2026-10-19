@@ -480,8 +480,28 @@ describe("opening", () => {
     expect(api.calls.filter((call) => call.startsWith("launch"))).toEqual([]);
     await store.switchDesktop("work");
     await store.runLaunch("docs", "new", "focus");
-    expect(api.calls).toContain("launch:work:docs:new:{}:new");
-    expect(api.calls).toContain("openWindow:work:docs:/new:new");
+    // The launch asks the shell to find the app's window on the desktop (one another client opened counts) and
+    // opens only when there is none.
+    expect(api.calls).toContain("launch:work:docs:new:{}:focus");
+    expect(api.calls).toContain("openWindow:work:docs:/new:focus");
+  });
+
+  it("a launch-path row of a one-window app lands in the window the desktop holds, whichever client opened it", async () => {
+    api.apps = [
+      appRecord("screen", {
+        default_shortcut: { launch: "screen", mode: "focus" },
+        launch_paths: [launchPathRecord({ id: "screen", label: "Screen", path: "/" })],
+      }),
+    ];
+    api.desktops = [desktopRecord("home", { windows: [windowRecord("win-7", "screen", "/")] })];
+    // This client never placed win-7: another client opened it.
+    api.writeLayout("home", CLIENT, { updated_at: null, placements: [] });
+    const store = await startedStore();
+    await store.runLaunchRow("screen", "screen");
+    expect(api.calls).toContain("launch:home:screen:screen:{}:focus");
+    expect(api.calls).toContain("openWindow:home:screen:/:focus");
+    expect(activeFocusedWindowId(store.getState())).toBe("win-7");
+    expect(store.getState().desktops.find((desktop) => desktop.id === "home")?.windows).toHaveLength(1);
   });
 
   /** A store whose home desktop holds buddy's independent pinned window, win-9, minimized for this client. */
@@ -499,6 +519,7 @@ describe("opening", () => {
 
   it("a launch-path row opens a new window, or raises the pinned window when its path is the pin's", async () => {
     const store = await storeWithPinnedBuddy();
+    socket.deliver().onAppsUpdated([appRecord("docs", { default_shortcut: { launch: "new", mode: "new" } })]);
     await store.runLaunchRow("docs", "new");
     expect(api.calls).toContain("launch:home:docs:new:{}:new");
     socket.deliver().onAppsUpdated([
