@@ -18,8 +18,8 @@ demand and the `screen-watch` event listener ends them together.
 
 Identity comes from `X-Imbue-Identity` (a header-less request came over loopback and is the
 owner). A visitor, an identity whose `owner` is false, may use only the viewer's routes (the
-page and its assets, `/health`, `/api/state`, `/api/start`, `/api/connect-info`, `/api/ws`,
-`/api/session`, `/api/control/take` and `/return`, `/api/input-seen`, `/api/screen-size`,
+page and its assets, `/health`, `/api/schema`, `/api/state`, `/api/start`, `/api/connect-info`,
+`/api/ws`, `/api/session`, `/api/control/take` and `/return`, `/api/input-seen`, `/api/screen-size`,
 `/api/clipboard/image`, `/api/drop` and `/browsers/<name>/pending-url/cancel` with a visitor's
 session id, and `/neko/`), where the lease arbitrates: a paste and a drop need the session in
 control, a cancel the session in control or the owner. Naming the owner's session on those (its
@@ -98,6 +98,9 @@ other route (`/api/run`, the agent verbs, the screenshot, the window tools, a se
 - `GET /_static/app_contract.js` and `/_static/context_menu.js`: the shell's modules,
   served from this origin as every app serves them.
 - `GET /health`: `{"status", "lifecycle"}`.
+- `GET /api/schema`: the OpenAPI document of this API, built from the routes (the manifest's
+  `api_schema_path`; `system/libs/app_schema`), for an agent that reaches the Screen from inside
+  the workspace or over a share.
 
 ## The browser
 

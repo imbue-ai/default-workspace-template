@@ -3524,6 +3524,7 @@ version = "0.1.0"
 source = { editable = "system/apps/screen" }
 dependencies = [
     { name = "app-manifest" },
+    { name = "app-schema" },
     { name = "click" },
     { name = "flask" },
     { name = "flask-sock" },
@@ -3544,6 +3545,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "app-schema", extra = ["testing"] },
     { name = "coverage" },
     { name = "inline-snapshot" },
     { name = "pytest" },
@@ -3557,6 +3559,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
+    { name = "app-schema", editable = "system/libs/app_schema" },
     { name = "click", specifier = ">=8.1" },
     { name = "flask", specifier = ">=3.0" },
     { name = "flask-sock", specifier = ">=0.7" },
@@ -3577,6 +3580,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
     { name = "coverage" },
     { name = "inline-snapshot", specifier = ">=0.13" },
     { name = "pytest", specifier = ">=9.0" },

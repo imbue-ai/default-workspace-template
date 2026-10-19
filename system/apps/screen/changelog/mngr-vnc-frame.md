@@ -132,3 +132,7 @@ Scrolling on a phone (spec section 14):
 - A one-finger drag on the video is now a touch held and moved on the Screen through neko's input driver (`control/touchbegin`, `control/touchupdate`, `control/touchend` at the mapped points), so a page in the browser scrolls under the finger with the browser's own momentum, as on any phone. Once the video is pinch-zoomed the drag pans the view as before, and without the driver it always does. The two-finger wheel scroll stays.
 
 - The mobile bar gains Scroll Up and Scroll Down buttons, three wheel steps each, for programs on the Screen that ignore touch.
+
+The app's self-description (the workspace app model's contracts section 2):
+
+- The manifest declares `description` and `api_schema_path = "/api/schema"`, and the service serves the OpenAPI document of its API there, built from its routes with every route's docstring as the operation's summary, so the visiting-agent primer describes the Screen and links its API like every other app's. The route is a visitor's, under no owner-only prefix.
