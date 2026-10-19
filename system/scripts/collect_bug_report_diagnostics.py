@@ -1276,26 +1276,16 @@ def stage_for_scan(staging_dir: str, key: str, content: str) -> str | None:
     return path
 
 
-def parse_scan_timeout(flags: Sequence[str]) -> float:
-    """The host's --scan-timeout=<seconds> override, or the default when absent or unusable."""
+def parse_seconds_flag(flags: Sequence[str], name: str, default: float) -> float:
+    """The host's --<name>=<seconds>, or ``default`` when absent or unusable."""
+    prefix = "--{}=".format(name)
     for flag in flags:
-        if flag.startswith("--scan-timeout="):
+        if flag.startswith(prefix):
             try:
-                return float(flag.split("=", 1)[1])
+                return float(flag[len(prefix) :])
             except ValueError:
-                return DEFAULT_SCAN_TIMEOUT_SECONDS
-    return DEFAULT_SCAN_TIMEOUT_SECONDS
-
-
-def parse_budget_seconds(flags: Sequence[str]) -> float:
-    """The host's --budget-seconds=<seconds>, or the default when absent or unusable."""
-    for flag in flags:
-        if flag.startswith("--budget-seconds="):
-            try:
-                return float(flag.split("=", 1)[1])
-            except ValueError:
-                return DEFAULT_BUDGET_SECONDS
-    return DEFAULT_BUDGET_SECONDS
+                return default
+    return default
 
 
 def stage_members(
@@ -1321,8 +1311,12 @@ def stage_members(
 
 def main(argv: Sequence[str]) -> None:
     flags = set(argv)
-    deadline = CollectionDeadline(parse_budget_seconds(list(flags)))
-    scan_timeout_seconds = parse_scan_timeout(list(flags))
+    deadline = CollectionDeadline(
+        parse_seconds_flag(argv, "budget-seconds", DEFAULT_BUDGET_SECONDS)
+    )
+    scan_timeout_seconds = parse_seconds_flag(
+        argv, "scan-timeout", DEFAULT_SCAN_TIMEOUT_SECONDS
+    )
     # Plain-words lines for the notes member: whenever something requested is
     # not in the archive, one line here says so. The archive is the only
     # channel back to the report.
