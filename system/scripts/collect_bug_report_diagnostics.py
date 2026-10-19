@@ -832,14 +832,13 @@ def run_mngr_for_each_target(
     """Ask one mngr command about every target in a single call, within the deadline.
 
     One call rather than one per target because each mngr call costs a Python
-    start and a discovery pass -- seconds apiece under gVisor, which is what
-    used to run a busy workspace's collection past the host's budget.
+    start and a discovery pass, seconds apiece under gVisor.
 
     With several targets mngr writes one JSONL record per target, each as soon
     as that target is done, so a call the deadline cuts short still yields
     every target it finished; ``render_envelope`` turns a record into the text
     a single-target call would have printed. A single target gets mngr's plain
-    output instead, which is what a lone target has always printed.
+    output instead.
     """
     if not targets:
         return TargetAnswers({}, 0)
