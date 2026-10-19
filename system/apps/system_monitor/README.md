@@ -67,4 +67,8 @@ Two known limits:
   servers (`programs.CODE_CHECKER_MARKERS`); one not in that list counts under
   the chat or program that started it.
 
+The app describes its own HTTP API at `GET /api/schema` (the manifest's
+`api_schema_path`), an OpenAPI document built from its routes by
+`system/libs/app_schema`.
+
 Served on port 8040 by the `system-monitor` program.

@@ -56,6 +56,10 @@ what its grants match); one that predates that serves them with no id
 (`/minds-api-proxy/api/v1/files<path>`). Either way the device also goes in the
 `X-Latchkey-Device` header, which routes the request to it.
 
+`/__files/api/schema` is the OpenAPI document of the app's routes, built from its
+url map (`system/libs/app_schema`); the manifest's `api_schema_path`, which the
+visiting-agent primer links.
+
 ## The frontend
 
 `frontend/` is a Mithril app on the shared `system/libs/workspace_ui` library,

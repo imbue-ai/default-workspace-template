@@ -119,6 +119,36 @@ def test_a_pin_follows_the_launch_path_rule_and_the_three_vocabularies(pin: dict
         AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg", "pin": pin})
 
 
+@pytest.mark.parametrize("description", ["", "   ", "two\nlines", "x" * 201])
+def test_a_description_is_one_non_empty_line_of_at_most_200_characters(
+    description: str,
+) -> None:
+    with pytest.raises(ValidationError):
+        AppManifest.model_validate(
+            {**_full_manifest_data(), "description": description}
+        )
+
+
+def test_a_manifest_reads_its_description_and_api_schema_path() -> None:
+    manifest = AppManifest.model_validate(
+        {
+            **_full_manifest_data(),
+            "description": "Keeps notes.",
+            "api_schema_path": "/api/schema",
+        }
+    )
+    assert manifest.description == "Keeps notes."
+    assert manifest.api_schema_path == "/api/schema"
+    assert AppManifest.model_validate(_full_manifest_data()).description is None
+    assert AppManifest.model_validate(_full_manifest_data()).api_schema_path is None
+    with pytest.raises(ValidationError):
+        AppManifest.model_validate(
+            {**_full_manifest_data(), "api_schema_path": "api/schema?x=1"}
+        )
+    with pytest.raises(ValidationError, match="also declares description"):
+        AppManifest.model_validate({**_full_manifest_data(), "api_schema_path": "/api/schema"})
+
+
 def test_window_closed_path_follows_the_launch_path_rule() -> None:
     with pytest.raises(ValidationError, match="no query string"):
         AppManifest.model_validate({**_full_manifest_data(), "window_closed_path": "/closed?x=1"})

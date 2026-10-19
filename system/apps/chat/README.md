@@ -93,6 +93,10 @@ observe`, its own supervised service) writes, and serves:
   after the restart. `agent_events` (`{"is_stream_healthy", "detail"}`) says
   whether lifecycle events are actually reaching this instance; `status` stays
   `ok` either way.
+- `GET /api/schema`: the OpenAPI document of these routes, built from the app's url map
+  (`system/libs/app_schema`), with the request and response models of the routes that
+  validate with pydantic published as schemas; the manifest's `api_schema_path`, which the
+  visiting-agent primer links.
 - Agent-authored files by their absolute on-disk path (`file_serving.py`), so a
   chat's markdown can show an image the agent wrote.
 

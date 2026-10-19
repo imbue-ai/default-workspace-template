@@ -26,6 +26,8 @@ Parsed by `app_manifest` with `extra = "forbid"`.
 |---|---|---|---|---|
 | `name` | string | yes | | An app name; equals the `--name` at registration. |
 | `display_name` | string | yes | | Non-empty, at most 64 characters. |
+| `description` | string | no | absent | One non-empty line, at most 200 characters: what the app is for, in the person's terms; shown wherever the app is described to an agent. |
+| `api_schema_path` | string | no | absent | A path shaped like a launch path that answers an OpenAPI document of the app's HTTP API (`/api/schema` by convention); requires `description`, which the document carries as its own (the workspace app model's contracts section 2). |
 | `icon` | string | unless `internal` | | `.svg` beside the manifest. |
 | `critical` | bool | no | `false` | No Quit verb; never stopped or parked by the shell; snapshot-and-rollback target in the apply. |
 | `stop_when_no_windows` | bool | no | `false` | Whether the shell may stop the app's program once no window on any desktop shows it, a minute after the last one closes (`docs/system/specs/stop-when-no-windows.md`); `critical = true` forces it `false`, and a manifest declaring both fails to load. |
@@ -67,7 +69,7 @@ The critical built-ins declare their `[preview]` tables (the workspace app model
 ## 3. The registry (`data/.state/apps.toml`)
 
 Written only by `forward_port.py`.
-Each `[[apps]]` row carries `name`, `url`, `label`, `icon`, `internal`, `program` from the registration and `display_name`, `critical`, `stop_when_no_windows`, `system`, `priority`, `default_shortcut` (inline table `{launch, mode}`), `launch_paths` (array of inline tables `{id, label, path, method?, params?, presets?, text_param?, draft_param?}` with `params` as the array of names, `method` written when the manifest gives it, and `presets` only when non-empty), `launcher_rank`, `pin` (inline table `{path, style?, scope?, default_mode?}`, each absent key reading as the manifest's default), `window_closed_path`, and `message_handlers` (array of inline tables `{type, path}` or `{type, show, showing?}`, as the manifest gives them) from the manifest.
+Each `[[apps]]` row carries `name`, `url`, `label`, `icon`, `internal`, `program` from the registration and `display_name`, `description`, `api_schema_path`, `critical`, `stop_when_no_windows`, `system`, `priority`, `default_shortcut` (inline table `{launch, mode}`), `launch_paths` (array of inline tables `{id, label, path, method?, params?, presets?, text_param?, draft_param?}` with `params` as the array of names, `method` written when the manifest gives it, and `presets` only when non-empty), `launcher_rank`, `pin` (inline table `{path, style?, scope?, default_mode?}`, each absent key reading as the manifest's default), `window_closed_path`, and `message_handlers` (array of inline tables `{type, path}` or `{type, show, showing?}`, as the manifest gives them) from the manifest.
 `instances`, `instances_url`, and `actions` are no longer written; a row that still carries them (an app not yet re-registered) is read with those keys ignored.
 The shell validates every row on read and skips one that fails, with a warning.
 

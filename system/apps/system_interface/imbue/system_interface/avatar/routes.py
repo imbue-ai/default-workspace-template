@@ -44,6 +44,7 @@ def _shell() -> ShellState:
 
 
 def list_avatars() -> ResponseReturnValue:
+    """The avatar designs the workspace can show, which one is selected, and the default."""
     shell = _shell()
     return jsonify(
         {
@@ -55,6 +56,7 @@ def list_avatars() -> ResponseReturnValue:
 
 
 def register_avatar() -> ResponseReturnValue:
+    """Add an avatar design (an SVG with its framing) to the catalog; loopback only, for an agent inside the workspace."""
     refusal = require_loopback()
     if refusal is not None:
         return refusal
@@ -120,6 +122,7 @@ def avatar_icon(design_id: str) -> ResponseReturnValue:
 
 
 def avatar_source(design_id: str) -> ResponseReturnValue:
+    """The design's original SVG, as a download."""
     source = _shell().avatar_catalog.source(design_id)
     if source is None:
         return detail_response(f"No avatar design {design_id!r}", HTTP_NOT_FOUND)
@@ -131,6 +134,7 @@ def avatar_source(design_id: str) -> ResponseReturnValue:
 
 
 def select_avatar() -> ResponseReturnValue:
+    """Make a design the workspace's avatar; every client is told."""
     selection = parse_request_body(AvatarSelection)
     shell = _shell()
     if shell.avatar_catalog.source(selection.design) is None:

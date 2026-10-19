@@ -50,6 +50,8 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   `imbue/system_interface/static/`; `/assets/<path>` for its bundle.
 - `/api/health`: `{"status", "is_frontend_built"}`, the probe the update
   apply and the preview flow poll.
+- `GET /api/schema`: the OpenAPI document of the shell's routes, built from its
+  url map (`system/libs/app_schema`); the manifest's `api_schema_path`.
 - `/_static/app_contract.js` and `/_static/context_menu.js`: the browser-side
   contract module and the element context menu module (sources in
   `system/libs/workspace_ui/src/app_contract.ts` and `context_menu.ts`), built

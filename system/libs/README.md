@@ -8,6 +8,9 @@ README for details.
 - `app_manifest/` - The app manifest (`system/apps/<package>/app.toml`) and
   app registry (`data/.state/apps.toml`) models every app is described by,
   and the `app-manifest validate-manifest` command.
+- `app_schema/` - An app's self-description: the OpenAPI document of its HTTP
+  API, built from its Flask routes and served at the path its manifest names
+  in `api_schema_path`, and the assertion an app's tests make about it.
 - `workspace_layout/` - The shell's layout routes as one typed client the
   apps share, and the agent-facing `uv run --no-sync workspace-layout` command that
   reads and arranges the desktop.

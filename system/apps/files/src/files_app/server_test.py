@@ -6,6 +6,7 @@ import zipfile
 from pathlib import Path
 
 import httpx
+from app_schema.testing import assert_api_schema_describes_app
 from werkzeug.test import TestResponse
 
 from files_app.connections import shared_paths
@@ -18,6 +19,7 @@ from files_app.testing import propfind_body
 from files_app.webdav import parse_propfind
 
 NARROW_NAME = "Screenshot at 4.16.34\u202fPM.png"
+_MANIFEST_PATH = Path(__file__).resolve().parents[2] / "app.toml"
 
 
 def _app(computer: FakeComputer | None, tmp_path: Path):
@@ -431,3 +433,7 @@ def test_a_real_listing_from_the_computer_reads_names_kinds_and_sizes() -> None:
         ("a.otf", False, 9),
     ]
     assert entries[2].content_type == "text/plain"
+
+
+def test_the_app_describes_its_api_the_way_its_manifest_says(tmp_path: Path) -> None:
+    assert_api_schema_describes_app(_app(None, tmp_path), _MANIFEST_PATH)

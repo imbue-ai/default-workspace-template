@@ -1,0 +1,1 @@
+The manifest and the registry row gain two optional keys: `description`, one line (at most 200 characters) saying what the app is for, and `api_schema_path`, the path under the app's origin that answers an OpenAPI document describing its HTTP API (contracts.md sections 2 and 3). `forward_port.py` copies both onto the row.

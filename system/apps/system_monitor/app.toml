@@ -7,6 +7,8 @@
 name = "system-monitor"
 display_name = "Memory & disk"
 icon = "icon.svg"
+description = "How much memory and disk the workspace is using, what is holding the memory, and what the memory guard stopped."
+api_schema_path = "/api/schema"
 critical = false
 # The shell stops it a minute after no window shows it and starts it again on the next request,
 # so it costs nothing while unseen. Its one background job, recording the memory graph's last

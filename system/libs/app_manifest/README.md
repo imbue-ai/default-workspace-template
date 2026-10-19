@@ -1,9 +1,10 @@
 # app_manifest
 
-The models behind a workspace app's two descriptions:
+The models behind a workspace app's two descriptions (a third, the OpenAPI document of its HTTP API, is `system/libs/app_schema`):
 
 - **The manifest**, `system/apps/<package>/app.toml`: an app's static
-  declarations (name, display name, icon, its memory-shedding priority, whether
+  declarations (name, display name, a one-line description, the path of its
+  API document, icon, its memory-shedding priority, whether
   it is critical, whether it stops once no window shows it, whether it is part
   of the workspace itself (which the minds Share tab lists under its System
   group), its supervisord program, the launch paths the desktop opens windows

@@ -5,7 +5,8 @@ relay bytes into its local HTTPS port), asks the gateway's ``/_auth/verify``
 about every request (forward_auth), and routes by Host: each registered
 service's unguessable ``<label>.<domain>`` origin to that service's local
 backend, the dedicated ``auth-<rand>.<domain>`` label to the gateway's public
-``/_auth/*`` surface (the login callback), and unknown-but-plausible service
+``/_auth/*`` surface (the login callback) and the ``/_agent/*`` surface
+(visiting agents), and unknown-but-plausible service
 origins to the gateway's auto-retrying loading page, which a registered service
 caddy cannot reach gets too (the moment between an app stopping and the shell
 parking its port, or between the shell releasing the port and the app binding
@@ -33,7 +34,16 @@ from urllib.parse import urlsplit
 class RegisteredApp:
     """One ``[[apps]]`` row from ``data/.state/apps.toml``."""
 
-    def __init__(self, name: str, label: str, backend_host: str, backend_port: int, is_grantable: bool) -> None:
+    def __init__(
+        self,
+        name: str,
+        label: str,
+        backend_host: str,
+        backend_port: int,
+        is_grantable: bool,
+        description: str = "",
+        api_schema_path: str = "",
+    ) -> None:
         self.name = name
         self.label = label
         self.backend_host = backend_host
@@ -41,6 +51,10 @@ class RegisteredApp:
         # Whether a per-service grant may admit a visitor to this app; an
         # internal app is reachable only through a workspace-level grant.
         self.is_grantable = is_grantable
+        # What the app's manifest says it is for, and where on its origin it
+        # describes its API (contracts.md section 2); both empty when undeclared.
+        self.description = description
+        self.api_schema_path = api_schema_path
 
 
 def parse_registered_apps(apps_toml_text: str) -> list[RegisteredApp]:
@@ -65,6 +79,8 @@ def parse_registered_apps(apps_toml_text: str) -> list[RegisteredApp]:
             continue
         # A missing key or a literal ``false`` is grantable; any other value reads as internal.
         is_grantable = entry.get("internal", False) is False
+        description = entry.get("description", "")
+        api_schema_path = entry.get("api_schema_path", "")
         apps.append(
             RegisteredApp(
                 name=name,
@@ -72,6 +88,8 @@ def parse_registered_apps(apps_toml_text: str) -> list[RegisteredApp]:
                 backend_host=parsed.hostname,
                 backend_port=parsed.port,
                 is_grantable=is_grantable,
+                description=description if isinstance(description, str) else "",
+                api_schema_path=api_schema_path if isinstance(api_schema_path, str) else "",
             )
         )
     return apps
@@ -85,6 +103,9 @@ def build_label_to_name(apps: Sequence[RegisteredApp]) -> dict[str, str]:
 def build_grantable_service_names(apps: Sequence[RegisteredApp]) -> frozenset[str]:
     """The names of the registered services a per-service grant may admit a visitor to."""
     return frozenset(app.name for app in apps if app.is_grantable)
+
+
+APPS_TOML_PATH = Path("data/.state/apps.toml")
 
 
 def read_registered_apps(apps_toml_path: Path) -> list[RegisteredApp]:
@@ -160,7 +181,14 @@ def render_caddyfile(
             f"""\
     @{matcher} host {app.label}.{workspace_domain}
     handle @{matcher} {{
-        reverse_proxy {app.backend_host}:{app.backend_port}
+        reverse_proxy {app.backend_host}:{app.backend_port} {{
+            # A visiting agent's admission token rides the Authorization header
+            # for the gateway alone; the service never sees it, as it never
+            # sees the session cookie. No app reads an inbound Authorization
+            # header over the share, and owner-exec's signature headers are
+            # separate and untouched.
+            header_up -Authorization
+        }}
     }}
 """
         )
@@ -239,6 +267,12 @@ https://*.{workspace_domain}:{https_port} {{
     @auth host {auth_label}.{workspace_domain}
     handle @auth {{
         handle /_auth/* {{
+            reverse_proxy {gateway_backend}
+        }}
+        # The visiting-agent surface (join, orientation, invites, the grant
+        # list): the gateway authenticates each request itself, by session
+        # cookie or bearer admission token.
+        handle /_agent/* {{
             reverse_proxy {gateway_backend}
         }}
         handle {{

@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+from app_schema.testing import assert_api_schema_describes_app
 from app_manifest.testing import assert_document_policy_admits_page
 from flask.testing import FlaskClient
 
@@ -255,3 +256,11 @@ def test_render_page_leaves_a_placeholders_text_in_the_title_alone() -> None:
     start = page_html.index('id="terminal-config">') + len('id="terminal-config">')
     assert json.loads(page_html[start : page_html.index("</script>", start)])["page"]["title"] == title
     assert 'import("/_static/app_contract.js")' in page_html
+
+
+def test_the_app_describes_its_api_the_way_its_manifest_says(
+    pages_client: FlaskClient,
+) -> None:
+    assert_api_schema_describes_app(
+        pages_client, Path(__file__).resolve().parents[2] / "app.toml"
+    )

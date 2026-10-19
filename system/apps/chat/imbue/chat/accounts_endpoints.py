@@ -196,6 +196,10 @@ def account_model_options(account_id: str) -> Response:
 
 
 def start_flow() -> Response:
+    """Start signing in to a provider (``lane_id``, ``method_id``), or signing an existing account in again.
+
+    Answers the flow's id and what it asks the user for next (a browser to open, a code to paste, a key).
+    """
     payload = parse_json_object_body()
     if isinstance(payload, Response):
         return payload
@@ -216,6 +220,7 @@ def start_flow() -> Response:
 
 
 def poll_flow(flow_id: str) -> Response:
+    """Where a sign-in flow stands: pending, done with its account, or failed with the reason."""
     try:
         return _json_response(get_state().auth_flows.poll(flow_id).model_dump())
     except FlowError as e:
@@ -276,6 +281,7 @@ def relay_flow_callback(flow_id: str) -> Response:
 
 
 def abort_flow(flow_id: str) -> Response:
+    """Abandon a sign-in flow (the dialog was closed); always answers ok."""
     # Abort is what a closed modal calls on its way out, so it has to succeed even when the
     # flow it is abandoning is in a bad state -- a folder deleted underneath it, an unreadable
     # index. A 500 here reaches a UI that has already gone, and the user sees a failed request

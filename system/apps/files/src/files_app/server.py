@@ -6,6 +6,8 @@
   its bytes, ``?zip`` a folder as a zip, and PUT, MKCOL, MOVE, and DELETE change it.
 - ``/__files/assets/`` is the frontend's build, ``/__files/api/connections`` what the user has shared with the
   workspace from their computers.
+- ``/__files/api/schema`` is the OpenAPI document of these routes, built from the url map (``app_schema``); the
+  manifest's ``api_schema_path``, which the visiting-agent primer links.
 """
 
 import base64
@@ -23,6 +25,7 @@ from flask import request
 from flask import send_from_directory
 from loguru import logger
 
+from app_schema.api_schema import register_api_schema_route
 from files_app.connections import SYNCED_FOLDERS
 from files_app.connections import list_connections
 from files_app.device_files import DeviceFiles
@@ -33,6 +36,10 @@ from files_app.sources import FilesError
 from files_app.sources import PageData
 
 API_PREFIX: Final[str] = "/__files/api"
+APP_DISPLAY_NAME: Final[str] = "Files"
+APP_DESCRIPTION: Final[str] = (
+    "The workspace's file browser: the files here and on the person's connected computers, to open, upload and share."
+)
 ASSETS_PREFIX: Final[str] = "/__files/assets"
 REMOTE_PREFIX: Final[str] = "/__remote"
 
@@ -71,6 +78,7 @@ def create_app(
     synced_root: Path = SYNCED_FOLDERS,
 ) -> Flask:
     app = Flask(__name__, static_folder=None)
+    register_api_schema_route(app, f"{API_PREFIX}/schema", title=APP_DISPLAY_NAME, description=APP_DESCRIPTION)
     # Absolute, as Flask would read a relative one from its own package rather than the working directory.
     static_directory = static_directory.resolve()
     local = LocalFiles(root)
@@ -133,6 +141,7 @@ def create_app(
 
     @app.get(f"{ASSETS_PREFIX}/<path:name>")
     def asset(name: str) -> Response:
+        """A file of the frontend's build; one named from its content is cached for good."""
         is_hashed = _HASHED_ASSET.search(name) is not None
         response = send_from_directory(static_directory, name, max_age=_A_YEAR_IN_SECONDS if is_hashed else None)
         if not is_hashed:
@@ -141,6 +150,12 @@ def create_app(
 
     @app.get(f"{API_PREFIX}/connections")
     def connections() -> Response:
+        """The computers connected to this workspace and what each shares with it.
+
+        Each share says how it reaches the workspace (live, or a synced copy and whether the copy has kept up).
+        Nothing is listed while the workspace is not connected to Imbue Studio; a 502 says when Imbue Studio could
+        not be read.
+        """
         if gateway is None:
             return _json({"devices": [], "shares": []})
         try:
@@ -155,6 +170,12 @@ def create_app(
     @app.route(f"{REMOTE_PREFIX}/<device>/", defaults={"path": ""}, methods=_METHODS)
     @app.route(f"{REMOTE_PREFIX}/<device>/<path:path>", methods=_METHODS)
     def remote(device: str, path: str) -> Response:
+        """A file or folder shared from one of the person's computers, read and changed live on it.
+
+        The same verbs and answers as a workspace path (``?json`` the page data: a folder's entries, each with
+        ``name``, ``is_folder``, ``is_symlink``, ``size`` and ``mtime``, or a file's ``is_text``); a 503 while the
+        workspace is not connected to Imbue Studio, and moving onto or off a computer is not supported.
+        """
         if gateway is None:
             return _text("This workspace isn't connected to Imbue Studio, so it can't reach your computers.", 503)
         prefix = f"{REMOTE_PREFIX}/{device}"
@@ -168,6 +189,14 @@ def create_app(
     @app.route("/", defaults={"path": ""}, methods=_METHODS)
     @app.route("/<path:path>", methods=_METHODS)
     def workspace(path: str) -> Response:
+        """A file or folder of the workspace.
+
+        GET answers a folder's page (or ``?json`` its page data: ``{"kind": "folder", "entries": [...]}``, each entry
+        with ``name``, ``is_folder``, ``is_symlink``, ``size`` and ``mtime``), a file's bytes (``?view`` or ``?edit``
+        its page, ``?json`` ``{"kind": "file", "is_text": ...}``), or ``?zip`` a folder as a zip. PUT writes a file
+        from the body, MKCOL makes a folder, MOVE (to the ``Destination`` header) renames, DELETE removes. A refusal
+        is plain words under its status.
+        """
         return answer(local, "", _requested_path())
 
     return app

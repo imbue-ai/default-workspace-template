@@ -1,8 +1,11 @@
-"""Tests for the routes: the page with the shell script injected, the stats endpoint, the shell modules, and health."""
+"""Tests for the routes: the page with the shell script injected, the stats endpoint, the shell modules, health, and
+the API document."""
 
+from pathlib import Path
 from typing import Any
 
 import pytest
+from app_schema.testing import assert_api_schema_describes_app
 from flask.testing import FlaskClient
 
 from system_monitor import memory, runner, stats
@@ -53,3 +56,7 @@ def test_only_the_two_shell_modules_are_served(client: FlaskClient) -> None:
 
 def test_health_answers_ok(client: FlaskClient) -> None:
     assert client.get("/health").get_json() == {"status": "ok"}
+
+
+def test_the_app_describes_its_api_the_way_its_manifest_says(client: FlaskClient) -> None:
+    assert_api_schema_describes_app(client, Path(__file__).resolve().parents[2] / "app.toml")

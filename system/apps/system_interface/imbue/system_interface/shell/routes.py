@@ -160,6 +160,7 @@ def _entry_or_raise(name: str) -> AppInventoryEntry:
 
 
 def client_activity_route() -> ResponseReturnValue:
+    """Record what a client did (a message sent from a chat page), for the shell's activity log; loopback only."""
     refusal = require_loopback()
     if refusal is not None:
         return refusal
@@ -222,6 +223,7 @@ def _stoppable_program_or_raise(shell: ShellState, entry: AppInventoryEntry) -> 
 
 
 def stop_app(name: str) -> ResponseReturnValue:
+    """Stop an app's program; refused for a critical app or one with no supervised program, and in a preview."""
     return _lifecycle(name, AppLifecycleAction.STOP)
 
 
@@ -242,6 +244,7 @@ def quit_app(name: str) -> ResponseReturnValue:
 
 
 def start_app(name: str) -> ResponseReturnValue:
+    """Start a stopped app's program and answer whether it is running; refused as a stop is."""
     return _lifecycle(name, AppLifecycleAction.START)
 
 
@@ -249,6 +252,7 @@ def start_app(name: str) -> ResponseReturnValue:
 
 
 def list_clients() -> ResponseReturnValue:
+    """Every client known to the workspace (a browser or desktop that opened it), with whether it is connected now."""
     shell = _shell()
     desktops = shell.list_desktops()
     connected = shell.broadcaster.connected_client_ids()
@@ -262,6 +266,7 @@ def list_clients() -> ResponseReturnValue:
 
 
 def inventory_route() -> ResponseReturnValue:
+    """The one document of everything the workspace shows: its name, its desktops, its apps, and its clients."""
     return jsonify(inventory_document(_shell()).model_dump(mode="json"))
 
 
@@ -388,6 +393,7 @@ def rollback_pending_update() -> ResponseReturnValue:
 
 
 def layout_broadcast() -> ResponseReturnValue:
+    """Run one layout verb for an agent inside the workspace (open, show, place, close, refresh, ...); loopback only."""
     refusal = require_loopback()
     if refusal is not None:
         return refusal

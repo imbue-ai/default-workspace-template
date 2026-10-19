@@ -20,6 +20,7 @@ from typing import Final
 from app_manifest.content_security_policy import attach_document_policy
 from app_manifest.primitives import AppName
 from app_manifest.registry import APP_CONTRACT_ROUTE, read_origin_label
+from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH, register_api_schema_route
 from flask import Blueprint, Response, jsonify, request, send_file
 from flask.typing import ResponseReturnValue
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -47,6 +48,8 @@ from terminal_app.sessions import TmuxSessionSource
 BLUEPRINT_NAME: Final[str] = "terminal_pages"
 NEW_PATH: Final[str] = "/new"
 HEALTH_PATH: Final[str] = "/api/health"
+APP_DISPLAY_NAME: Final[str] = "Terminal"
+APP_DESCRIPTION: Final[str] = "Web terminals inside the workspace, one per window."
 # Where the shell posts a closed window of the terminal (the manifest's ``window_closed_path``): a sweep runs at once.
 WINDOW_CLOSED_PATH: Final[str] = "/api/window-closed"
 HTTP_NO_CONTENT: Final[int] = 204
@@ -393,6 +396,12 @@ def build_pages_blueprint(
     the page refreshes from, the health probe, and
     the app contract module at ``contract_path`` (the shell's build output, served from this origin)."""
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
+    register_api_schema_route(
+        blueprint,
+        DEFAULT_API_SCHEMA_PATH,
+        title=APP_DISPLAY_NAME,
+        description=APP_DESCRIPTION,
+    )
     attach_document_policy(blueprint)
 
     def session_page(name: TmuxSessionName) -> SessionPage:
@@ -407,6 +416,7 @@ def build_pages_blueprint(
 
     @blueprint.get("/")
     def wrapper_page() -> ResponseReturnValue:
+        """The page framing one terminal (``?session=<name>``), or the bare page when no session is named."""
         raw_session = request.args.get(SESSION_QUERY_KEY, "")
         session = _session_name(raw_session) if raw_session != "" else None
         config = PageConfig(session=session, page=session_page(session) if session is not None else None)
@@ -416,19 +426,23 @@ def build_pages_blueprint(
 
     @blueprint.post(NEW_PATH)
     def new_terminal() -> ResponseReturnValue:
+        """Open a new terminal (its tmux session, in ``workdir`` when given) and answer the path of its page."""
         created = source.create_terminal(_workdir(_launch_body().get(WORKDIR_PARAM)))
         return jsonify({"path": session_page_path(created.name)})
 
     @blueprint.get(SESSION_API_PATH)
     def session_json(name: str) -> ResponseReturnValue:
+        """One terminal as its page frames it: its title and where on the pty origin it attaches."""
         return jsonify(session_page(_session_name(name)).model_dump(mode="json"))
 
     @blueprint.get(HEALTH_PATH)
     def health() -> ResponseReturnValue:
+        """Whether the app is up."""
         return jsonify({"status": "ok"})
 
     @blueprint.post(WINDOW_CLOSED_PATH)
     def window_closed() -> ResponseReturnValue:
+        """The shell says a terminal window closed; the terminals no window shows any more are swept now."""
         # The body says which window closed, which is proof a window showed its terminal; what is shown now
         # is still read from the shell.
         on_window_closed(closed_window_terminal(request.get_json(silent=True)))
@@ -436,6 +450,7 @@ def build_pages_blueprint(
 
     @blueprint.get(APP_CONTRACT_ROUTE)
     def app_contract() -> ResponseReturnValue:
+        """The app contract module: how the page talks to the shell framing it."""
         if not contract_path.is_file():
             return (
                 jsonify({"detail": f"the workspace shell's frontend is not built: {contract_path} is missing"}),

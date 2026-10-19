@@ -23,6 +23,10 @@ from app_manifest.content_security_policy import attach_document_policy
 from app_manifest.primitives import AppName
 from app_manifest.registry import read_origin_label
 from app_manifest.registry_location import registry_path
+from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
+from app_schema.api_schema import RouteModels
+from app_schema.api_schema import RouteModelsByRoute
+from app_schema.api_schema import register_api_schema_route
 from flask import Flask
 from flask import Response
 from flask import current_app
@@ -89,6 +93,8 @@ from imbue.chat.errors import ChatAppError
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.file_serving import try_serve_file
 from imbue.chat.harnesses.account_binding import BindingError
+from imbue.chat.harnesses.auth_flows import FlowStart
+from imbue.chat.harnesses.auth_flows import FlowStatus
 from imbue.chat.harnesses.binding import resolve_binding
 from imbue.chat.harnesses.claude import auth_endpoints
 from imbue.chat.harnesses.interrupt import restart_drain
@@ -144,6 +150,7 @@ from imbue.chat.models import IntakeRequest
 from imbue.chat.models import IntakeResponse
 from imbue.chat.models import IntakeTarget
 from imbue.chat.models import InterruptAgentResponse
+from imbue.chat.models import LatchkeyScopeInfo
 from imbue.chat.models import ModelOptionsResponse
 from imbue.chat.models import PendingIntakeView
 from imbue.chat.models import PoweredByResponse
@@ -2233,6 +2240,7 @@ def _serve_file_or_document(path: str) -> Response:
 
 
 def _favicon() -> Response:
+    """The page's icon."""
     favicon_path = get_state().static_directory / "favicon.ico"
     if favicon_path.exists():
         return send_file(favicon_path, mimetype="image/x-icon")
@@ -2361,6 +2369,75 @@ def _add_chat_route(
     application.add_url_rule(f"/api/chats/<chat_id>/{suffix}", view_func=view_func, methods=list(methods))
 
 
+APP_DISPLAY_NAME: Final[str] = "Chat"
+APP_DESCRIPTION: Final[str] = (
+    "The chats with the workspace's agents: one page per chat, where messages are sent and an agent's work is followed."
+)
+# The routes that validate a JSON body with a pydantic model or answer one, the sibling modules' routes among
+# them, keyed by (method, OpenAPI path): the API document publishes these as their request and response schemas.
+# A route that builds its answer by hand (the events, the screen capture, the harness catalogs, the sign-in
+# callback relay) is listed without a schema rather than given a model it does not use. ``/api/chats/create``
+# carries its response only: its body holds ``project_id`` beside ``CreateChatRequest``, which forbids extra
+# keys, so the model alone would advertise a body that refuses a key the route takes. ``/api/focus-chat`` carries
+# its request only: its answer is the shell's, built by hand.
+_ROUTE_MODELS: Final[RouteModelsByRoute] = {
+    ("GET", "/api/agents"): RouteModels(response_model=AgentListResponse),
+    ("GET", "/api/chats"): RouteModels(response_model=ChatListResponse),
+    ("POST", "/api/chats/create"): RouteModels(response_model=CreateChatResponse, success_status=201),
+    ("POST", "/api/chats/seed"): RouteModels(
+        request_model=SeedChatRequest, response_model=CreateChatResponse, success_status=201
+    ),
+    ("POST", "/api/chats/awaiting"): RouteModels(response_model=CreateChatResponse),
+    ("POST", "/api/chats/intake"): RouteModels(request_model=IntakeRequest, response_model=IntakeResponse),
+    ("GET", "/api/chats/intakes/{token}"): RouteModels(response_model=PendingIntakeView),
+    ("POST", "/api/chats/intakes/{token}/apply"): RouteModels(
+        request_model=IntakeApplyRequest, response_model=IntakeApplyResponse
+    ),
+    ("POST", "/api/uploads"): RouteModels(response_model=AttachmentUploadResponse, success_status=201),
+    ("GET", "/api/accounts/{account_id}/model-options"): RouteModels(response_model=ModelOptionsResponse),
+    ("POST", "/api/accounts"): RouteModels(response_model=FlowStart),
+    ("GET", "/api/accounts/flow/{flow_id}"): RouteModels(response_model=FlowStatus),
+    ("POST", "/api/accounts/flow/{flow_id}"): RouteModels(response_model=FlowStatus),
+    ("GET", "/api/latchkey/scopes/{scope}"): RouteModels(response_model=LatchkeyScopeInfo),
+    ("POST", "/api/focus-chat"): RouteModels(request_model=focus_chat.FocusChatRequest),
+    ("POST", "/api/chats/{chat_id}/destroy"): RouteModels(response_model=DestroyAgentResponse),
+    ("POST", "/api/chats/{chat_id}/start"): RouteModels(response_model=StartAgentResponse),
+    ("POST", "/api/chats/{chat_id}/stop"): RouteModels(response_model=StopAgentResponse),
+    ("GET", "/api/chats/{chat_id}/model-options"): RouteModels(response_model=ModelOptionsResponse),
+    ("GET", "/api/chats/{chat_id}/powered-by"): RouteModels(response_model=PoweredByResponse),
+    ("POST", "/api/chats/{chat_id}/interrupt"): RouteModels(response_model=InterruptAgentResponse),
+    ("POST", "/api/chats/{chat_id}/flush-queue"): RouteModels(response_model=SendMessageResponse),
+    ("POST", "/api/chats/{chat_id}/shoulder-tap-atomic"): RouteModels(response_model=ShoulderTapAtomicResponse),
+    ("POST", "/api/chats/{chat_id}/drain-to-composer"): RouteModels(response_model=DrainToComposerResponse),
+    ("POST", "/api/chats/{chat_id}/handoff"): RouteModels(
+        request_model=SwitchChatRequest, response_model=SwitchChatResponse, success_status=202
+    ),
+    ("POST", "/api/chats/{chat_id}/handoff/cancel"): RouteModels(response_model=HandoffCancelResponse),
+    ("POST", "/api/chats/{chat_id}/handoff/retry"): RouteModels(
+        request_model=HandoffRetryRequest, response_model=HandoffRetryResponse, success_status=202
+    ),
+    ("GET", "/api/settings"): RouteModels(response_model=ChatSettingsResponse),
+    ("PUT", "/api/settings"): RouteModels(request_model=ChatSettings, response_model=ChatSettingsResponse),
+    ("POST", "/api/chats/{chat_id}/message"): RouteModels(
+        request_model=SendMessageRequest, response_model=SendMessageResponse
+    ),
+    ("POST", "/api/chats/{chat_id}/model"): RouteModels(
+        request_model=SetModelChoiceRequest, response_model=SendMessageResponse
+    ),
+    ("POST", "/api/chats/{chat_id}/rename"): RouteModels(
+        request_model=RenameChatRequest, response_model=RenameChatResponse
+    ),
+    ("GET", "/api/chats/{chat_id}/fast-mode"): RouteModels(response_model=FastModeStateResponse),
+    ("PUT", "/api/chats/{chat_id}/fast-mode"): RouteModels(
+        request_model=ChatFastModeState, response_model=FastModeStateResponse
+    ),
+    ("GET", "/api/chats/{chat_id}/autocompact"): RouteModels(response_model=AutocompactStateResponse),
+    ("PUT", "/api/chats/{chat_id}/autocompact"): RouteModels(
+        request_model=ChatAutocompactState, response_model=AutocompactStateResponse
+    ),
+}
+
+
 def create_application(state: ChatAppState) -> Flask:
     """Assemble the chat app around an already-built ``ChatAppState``.
 
@@ -2384,6 +2461,13 @@ def create_application(state: ChatAppState) -> Flask:
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
     application.add_url_rule("/assets/<path:filename>", view_func=_serve_asset, methods=["GET"])
     application.add_url_rule("/api/health", view_func=_health_endpoint, methods=["GET"])
+    register_api_schema_route(
+        application,
+        DEFAULT_API_SCHEMA_PATH,
+        title=APP_DISPLAY_NAME,
+        description=APP_DESCRIPTION,
+        route_models=_ROUTE_MODELS,
+    )
     sock.route("/api/ws")(_ws_endpoint)
     application.add_url_rule("/plugins/<basename>", view_func=_serve_static_file, methods=["GET"])
     application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
