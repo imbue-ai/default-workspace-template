@@ -123,7 +123,9 @@ class ScreenStack(MutableModel):
     neko: NekoInterface = Field(frozen=True, description="neko's REST client; its token follows each start")
     state_dir: Path = Field(frozen=True, description="data/.state/screen")
     home: Path = Field(
-        default_factory=Path.home, frozen=True, description="The session's home, where its browser entries are rendered"
+        default_factory=Path.home,
+        frozen=True,
+        description="The session's home, where its browser entries are rendered",
     )
     runtime_dir: Path = Field(default=Path(RUNTIME_DIR), frozen=True, description="The members' XDG runtime dir")
     display_socket_path: Path = Field(default=Path(DISPLAY_SOCKET_PATH), frozen=True, description="Xorg's socket")

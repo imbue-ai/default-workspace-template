@@ -3,8 +3,8 @@ from pathlib import Path
 from inline_snapshot import snapshot
 
 from screen.xfce_helpers import APPLICATION_DESKTOP_RELATIVE_PATH
-from screen.xfce_helpers import HELPER_DESKTOP_RELATIVE_PATH
 from screen.xfce_helpers import HELPERS_RC_RELATIVE_PATH
+from screen.xfce_helpers import HELPER_DESKTOP_RELATIVE_PATH
 from screen.xfce_helpers import MIMEAPPS_RELATIVE_PATH
 from screen.xfce_helpers import MimeAppsParser
 from screen.xfce_helpers import render_helper_desktop
@@ -39,7 +39,9 @@ WebBrowser=imbue-screen-browser
 
 
 def test_mimeapps_list_sets_the_url_schemes_and_keeps_the_other_associations() -> None:
-    existing = "[Default Applications]\ntext/plain=mousepad.desktop;\n\n[Added Associations]\nimage/png=ristretto.desktop;\n"
+    existing = (
+        "[Default Applications]\ntext/plain=mousepad.desktop;\n\n[Added Associations]\nimage/png=ristretto.desktop;\n"
+    )
     parser = MimeAppsParser()
     parser.read_string(render_mimeapps_list(existing))
     assert dict(parser["Default Applications"]) == {

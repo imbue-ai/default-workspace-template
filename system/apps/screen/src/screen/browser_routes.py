@@ -20,11 +20,11 @@ from screen.errors import InvalidStartUrlError
 from screen.errors import UnknownBrowserError
 from screen.identity import AGENT_ID_HEADER
 from screen.identity import AGENT_NAME_HEADER
-from screen.primitives import LAUNCH_BROWSER_PATH
 from screen.primitives import APP_NAME
 from screen.primitives import AbsoluteHttpUrl
 from screen.primitives import AgentId
 from screen.primitives import BrowserName
+from screen.primitives import LAUNCH_BROWSER_PATH
 from screen.primitives import LocalHttpUrl
 from screen.primitives import NekoSessionId
 from screen.route_guards import CONTROLLER_REFUSAL
