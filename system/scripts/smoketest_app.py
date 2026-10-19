@@ -287,6 +287,20 @@ def _poll_http(
     sys.exit(f"error: failed to connect to {url} within {timeout}s (last error: {last_error})")
 
 
+def _reexec_under_venv_without_playwright(repo_root: Path) -> None:
+    """Re-run this script under the workspace venv when the current interpreter lacks Playwright.
+
+    Called before any side effect: the re-exec repeats ``main()`` from the top,
+    so doing it after ``--restart`` would bounce the program a second time.
+    """
+    try:
+        import playwright.sync_api  # noqa: F401
+    except ImportError:
+        venv_py = repo_root / ".venv/bin/python"
+        if venv_py.exists() and sys.executable != str(venv_py):
+            os.execv(str(venv_py), [str(venv_py), *sys.argv])
+
+
 def _run_playwright_check(
     url: str,
     marker: Optional[str],
@@ -297,11 +311,6 @@ def _run_playwright_check(
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        # Re-exec with repo root .venv python if playwright is not in current environment
-        repo_root = _find_repo_root()
-        venv_py = repo_root / ".venv/bin/python"
-        if venv_py.exists() and sys.executable != str(venv_py):
-            os.execv(str(venv_py), [str(venv_py), *sys.argv])
         sys.exit("error: playwright is not installed. Run with `uv run python ...` or activate workspace .venv.")
 
     executable_path = str(DEFAULT_FORTRESS_PATH) if DEFAULT_FORTRESS_PATH.exists() else None
@@ -360,6 +369,8 @@ def main() -> None:
     port, app_name, runner_path = _resolve_target(args.target, repo_root)
     if (args.restart or args.open or args.refresh) and app_name is None:
         sys.exit("error: --restart, --open and --refresh need the app's name, not a port or URL")
+    if args.screenshot:
+        _reexec_under_venv_without_playwright(repo_root)
     timeout = effective_timeout(args.timeout, args.restart)
 
     t0 = time.time()
