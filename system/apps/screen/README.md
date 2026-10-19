@@ -374,7 +374,9 @@ is recorded. The lease is checkpointed to `data/.state/screen/control.json`.
 
 `data/.state/screen/`: `xorg.conf`, `neko.yaml` (mode 600, this start's passwords and
 API token), `pulse.pa`, `control.json`, `modes.json` (the RANDR modes added this stack
-life), `events/screen/events.jsonl` (the `screen_stopped` events the watcher appends).
+life), `stop_reason` (why the stack last ended, shown by the next service life until the next
+start, since a service restart ends the stack), `events/screen/events.jsonl` (the
+`screen_stopped` events the watcher appends).
 
 ## The commands
 

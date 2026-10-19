@@ -21,6 +21,7 @@ from screen.interfaces import ProgramState
 from screen.neko_config import render_neko_yaml
 from screen.primitives import STACK_PROGRAMS
 from screen.service import ScreenService
+from screen.stack import STOP_REASON_FILENAME
 from screen.stack import ScreenStack
 from screen.stack import secrets_from_neko_yaml
 from testing import start_service_stack
@@ -292,6 +293,34 @@ def test_a_running_stack_is_adopted_from_its_neko_yaml(
     fake_supervisor.stop_program("screen-neko")
     third = second.model_copy()
     assert third.adopt_running_stack() is False
+
+
+def test_a_stops_reason_outlives_the_service_life_until_the_next_start(
+    service: ScreenService, fake_supervisor: FakeSupervisor, fake_neko: FakeNeko, tmp_path: Path
+) -> None:
+    start_service_stack(service)
+    service.stack.stop("the Screen service is restarting")
+    assert (tmp_path / "state" / STOP_REASON_FILENAME).read_text() == "the Screen service is restarting"
+    second = ScreenStack(
+        supervisor=fake_supervisor,
+        neko=fake_neko,
+        state_dir=tmp_path / "state",
+        home=tmp_path / "home",
+        runtime_dir=tmp_path / "runtime",
+        display_socket_path=tmp_path / "x11" / "X99",
+        input_socket_path=tmp_path / "runtime" / "xf86-input-neko.sock",
+        install_check=lambda: None,
+        on_lifecycle_changed=lambda: None,
+        on_running=lambda _secrets, _session: None,
+        set_api_token=fake_neko.set_api_token,
+    )
+    assert second.adopt_running_stack() is False
+    assert second.lifecycle == Lifecycle.STOPPED
+    assert second.stop_reason == "the Screen service is restarting"
+    # The next start wipes the recorded reason, so a later life does not show a stale one.
+    start_service_stack(service)
+    assert service.stack.stop_reason is None
+    assert not (tmp_path / "state" / STOP_REASON_FILENAME).exists()
 
 
 def test_secrets_are_read_back_from_a_rendered_neko_yaml() -> None:

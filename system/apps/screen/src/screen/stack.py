@@ -46,6 +46,9 @@ from screen.xorg_config import render_xorg_conf
 XORG_CONF_FILENAME: Final[str] = "xorg.conf"
 NEKO_YAML_FILENAME: Final[str] = "neko.yaml"
 PULSE_SCRIPT_FILENAME: Final[str] = "pulse.pa"
+# Why the stack last ended, kept for the next service life (a service restart ends the stack, and the viewer
+# would otherwise say the Screen was stopped with no reason).
+STOP_REASON_FILENAME: Final[str] = "stop_reason"
 NEKO_BINARY_PATH: Final[Path] = Path("/opt/neko/bin/neko")
 # neko's Xorg input driver, in the server's input module directory, where the env.d unit installs it beside the
 # binary (Xorg loads it as the ``neko`` driver of the touchscreen xorg.conf declares).
@@ -286,6 +289,7 @@ class ScreenStack(MutableModel):
             self.install_reason = None
             self.stop_reason = None
             self.on_running(new_secrets, service_session)
+        self._forget_stop_reason()
         self.on_lifecycle_changed()
 
     def _render_configuration(self, new_secrets: NekoSecrets) -> None:
@@ -334,6 +338,7 @@ class ScreenStack(MutableModel):
         self.set_api_token(None)
         with self._lock:
             self.secrets = None
+        self._remember_stop_reason(reason)
         self._set_lifecycle(Lifecycle.STOPPED, None, reason)
 
     def is_any_member_running(self) -> bool:
@@ -349,14 +354,41 @@ class ScreenStack(MutableModel):
         self.set_api_token(None)
         with self._lock:
             self.secrets = None
+        self._remember_stop_reason(reason)
         self._set_lifecycle(Lifecycle.STOPPED, None, reason)
+
+    def _remember_stop_reason(self, reason: str) -> None:
+        try:
+            self.state_dir.mkdir(parents=True, exist_ok=True)
+            (self.state_dir / STOP_REASON_FILENAME).write_text(reason)
+        except OSError as e:
+            logger.warning("Could not record why the stack stopped under {}: {}", self.state_dir, e)
+
+    def _forget_stop_reason(self) -> None:
+        try:
+            (self.state_dir / STOP_REASON_FILENAME).unlink(missing_ok=True)
+        except OSError as e:
+            logger.warning("Could not clear the recorded stop reason under {}: {}", self.state_dir, e)
+
+    def _recall_stop_reason(self) -> str | None:
+        """Why the stack ended in a previous service life, when that life recorded it."""
+        try:
+            return (self.state_dir / STOP_REASON_FILENAME).read_text().strip() or None
+        except FileNotFoundError:
+            return None
+        except OSError as e:
+            logger.warning("Could not read the recorded stop reason under {}: {}", self.state_dir, e)
+            return None
 
     def adopt_running_stack(self) -> bool:
         """At service start: when every member is RUNNING and neko answers, take the stack over from the previous
-        service life with the secrets its neko.yaml carries. Otherwise leave the lifecycle stopped."""
+        service life with the secrets its neko.yaml carries. Otherwise leave the lifecycle stopped, with the reason
+        the previous life recorded when it has one."""
         neko_yaml = self.state_dir / NEKO_YAML_FILENAME
         states = {program: self.supervisor.program_state(program) for program in STACK_PROGRAMS}
         if any(state != ProgramState.RUNNING for state in states.values()) or not neko_yaml.is_file():
+            with self._lock:
+                self.stop_reason = self._recall_stop_reason()
             return False
         try:
             found_secrets = secrets_from_neko_yaml(neko_yaml.read_text())

@@ -154,3 +154,5 @@ Files and the desktop's icons (spec section 4.3):
 - The `browser` launch path's start page is held while an agent drives the browser, as the README said and as `open:url` already did: `workspace-layout open https://...` (or the launcher's "Browser" row with a start page) no longer opens a tab over the agent's work; the viewer's agent overlay offers to take control and open it, or to cancel, and the page opens when the agent lets go.
 
 - The service logs every lease transition at debug (controller, agent, human, pinned, the queue), so a lease that moved while nobody was watching can be reconstructed from the service log.
+
+- A service restart ends the stack (spec section 9.3), and the viewer then said "The screen was stopped" with no reason: the stack now records why it ended in `data/.state/screen/stop_reason`, the next service life shows that reason until the next start, and a start wipes it.
