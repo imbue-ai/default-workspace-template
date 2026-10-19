@@ -43,8 +43,11 @@ export class IcePolicy {
     private readonly retryDelaysMs: readonly number[] = SCREENCAST_RETRY_DELAYS_MS,
   ) {}
 
-  /** A peer connection was requested; ``isRelay`` says whether it already carries relay servers. */
+  /** A peer connection was requested; ``isRelay`` says whether it already carries relay servers. An attempt the
+   *  stream started on its own (the server dropped a peer and a fresh one was asked for) makes a pending screencast
+   *  retry stale, so it is dropped here rather than restarting ICE on the peer that connects. */
   attemptStarted(isRelay: boolean): void {
+    this.clearRetry();
     this.phase = isRelay ? "relay" : "direct";
     this.arm();
   }

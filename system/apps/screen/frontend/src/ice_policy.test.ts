@@ -156,6 +156,24 @@ describe("IcePolicy", () => {
     expect(actions.log.slice(6)).toEqual(["screencast", "fetch", "retry"]);
   });
 
+  it("an attempt the stream starts on its own from the screencast drops the pending retry", async () => {
+    // The server closed a retry's peer and the stream asked for a fresh one 1.5 s later, after the deadline had
+    // already fallen the policy back to the screencast.
+    const { policy, clock, actions } = build();
+    policy.attemptStarted(true);
+    clock.advance(CONNECT_DEADLINE_MS);
+    await settle();
+    expect(actions.log).toEqual(["screencast"]);
+    policy.attemptStarted(true);
+    expect(clock.pendingCount).toBe(1);
+    policy.connected();
+    expect(clock.pendingCount).toBe(0);
+    clock.advance(SCREENCAST_RETRY_DELAYS_MS[SCREENCAST_RETRY_DELAYS_MS.length - 1]);
+    await settle();
+    expect(actions.log).toEqual(["screencast"]);
+    expect(policy.phase).toBe("connected");
+  });
+
   it("a reset from the screencast drops the pending retry", async () => {
     const { policy, clock, actions } = build();
     policy.attemptStarted(true);

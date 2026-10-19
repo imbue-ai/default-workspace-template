@@ -107,6 +107,8 @@ The screencast fallback, after the first test on Imbue Cloud (spec sections 5.4 
 
 - The viewer tries WebRTC again from the screencast instead of staying there until a reload: 15 s after the fall, then 30 s, then every 60 s, and at once on the strip's new "Retry now" button, each time with fresh `connect-info?relay=1`; the screencast keeps showing the Screen until a retry's peer connects. The strip's row carries a loud alert while the picture is the screencast ("Low-quality picture: no direct or relay path connected. Retrying.") in place of the quiet "Slow picture" line.
 
+- A screencast retry still pending when the stream asks for a fresh peer on its own (the server dropped a retry's peer) is dropped by the new attempt, rather than firing later and restarting ICE on the peer that connected.
+
 - The strip gains a "Details" toggle: a panel over the stage naming the media path in use (direct or through a relay, udp or tcp, the remote address, from the peer's `getStats()`), the endpoints `connect-info` offered, the relay server count, the Screen's size and profile, and the picture's size, rate, bitrate and round trip; the viewer also logs one "media path" line to the console per connection.
 
 - `GET /api/connect-info` waits up to eight seconds for relay servers (candidates keep their two): the desktop's first `ice-servers` answer mints a credential through the connector and Cloudflare, which took longer than two seconds on the dev tier and left the first relay attempt with no servers, which is how the whole first test ran in the screencast.
