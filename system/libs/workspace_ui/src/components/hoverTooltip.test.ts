@@ -278,6 +278,22 @@ describe("hoverTooltipAttrs", () => {
     unhoverTooltip(belowTrigger);
   });
 
+  it("wraps at the width a trigger asks for, and at the shared one otherwise", () => {
+    vi.useFakeTimers();
+    m.render(root, m("button", { ...hoverTooltipAttrs("A longer explanation", "right", { maxWidth: 220 }) }));
+    const narrow = root.firstElementChild as HTMLElement;
+    hoverTooltip(narrow);
+    const bubble = document.querySelector<HTMLElement>(".hover-tooltip")!;
+    expect(bubble.style.maxWidth).toBe("220px");
+    unhoverTooltip(narrow);
+
+    m.render(root, m("button", { ...hoverTooltipAttrs("Plan") }));
+    const plain = root.firstElementChild as HTMLElement;
+    hoverTooltip(plain);
+    expect(bubble.style.maxWidth).toBe("");
+    unhoverTooltip(plain);
+  });
+
   it("stops offering a tooltip an imperative caller takes back", () => {
     vi.useFakeTimers();
     const button = document.createElement("button");

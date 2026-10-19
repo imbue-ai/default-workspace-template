@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "app-manifest",
+    "chat-background-tasks",
     "concurrency-group",
     "flask>=3.0",
     "flask-sock>=0.7",

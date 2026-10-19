@@ -2,10 +2,11 @@
 
 The workspace frontends' shared JavaScript library: what the shell
 (`system/apps/system_interface/frontend`), the chat page
-(`system/apps/chat/frontend`), and the Getting Started page
-(`system/apps/getting_started/frontend`) have in common. Source only: there is
+(`system/apps/chat/frontend`), the Getting Started page
+(`system/apps/getting_started/frontend`), and Files
+(`system/apps/files/frontend`) have in common. Source only: there is
 no build here, each app's vite build compiles the modules it imports
-(`@imbue/workspace-ui/src/<module>`), and the four packages are one npm
+(`@imbue/workspace-ui/src/<module>`), and the five packages are one npm
 workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
 
 - `src/base.css`: the design system's token layer (colour and type tokens, the
@@ -14,13 +15,13 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   `system/apps/system_interface/frontend/style_guide.md` is the rule for all of
   them.
 - `src/components/`: the shared Mithril recipes (Button, Modal, NoticeDialog,
-  the Menu, the Dropdown that picks a value, icons, badges, tooltips, the modal
-  backdrop); beside it at `src/`, `DestroyConfirmDialog.ts`, `portal.ts`, and
+  the Menu, the Dropdown that picks a value, the SegmentedControl, icons,
+  badges, tooltips, toasts, the modal backdrop); beside it at `src/`, `DestroyConfirmDialog.ts`, `portal.ts`, and
   `menu-position.ts` (the pure geometry the Menu and the Dropdown place
   themselves with).
 - `src/base-path.ts`, `src/origin.ts`, and
   `src/models/` (`ClientIdentity`, `http`, `backoff`, `ws-json`,
-  `request-error`): the base helpers every page shares.
+  `request-error`, and `toasts`, the queue `components/toasts.ts` draws): the base helpers every page shares.
 - `src/app_contract.ts`: an app page's side of the browser-side contract
   (contracts.md section 10 of the workspace app model, extended by section 7
   of the desktop interface's contracts.md), which the shell's frontend also

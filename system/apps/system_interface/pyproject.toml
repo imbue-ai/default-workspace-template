@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "app-manifest",
+    "chat-background-tasks",
     # The staleness tracker runs git through concurrency_group's subprocess helper.
     "concurrency-group",
     # The avatar designs' validator parses registered SVG with DTDs and entities refused.

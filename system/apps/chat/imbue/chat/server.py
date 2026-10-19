@@ -62,6 +62,7 @@ from imbue.chat.attachments import delete_upload
 from imbue.chat.attachments import get_uploads_directory
 from imbue.chat.attachments import resolve_upload_path
 from imbue.chat.attachments import store_uploaded_file
+from imbue.chat.background_tasks import unreported_runner_ends_notice
 from imbue.chat.chat_autocompact import ChatAutocompactState
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_handoffs import converging_detail
@@ -781,11 +782,50 @@ def _send_to_chat(
             _composer_compact_handling_of(agent_info, send_message_request.message)
             is ComposerCompactHandling.REQUESTED_FROM_MNGR
         )
+        _report_unreported_runner_ends(state, chat_id)
     record_client_message_activity(state.shell, chat_id, send_message_request, state.is_secondary)
     # Recorded after the delivery, once the revived process (if any) is up and its pid can be
     # found.
     agent_manager.record_message_sent(chat_id)
     return _SendAccepted(held_phase=held_phase, is_compaction_requested=is_compaction_requested)
+
+
+def _report_unreported_runner_ends(state: ChatAppState, chat_id: ChatId) -> None:
+    """After a message reaches a chat, tell its agent which of its ``run_in_background.py`` commands will never report.
+
+    A runner stopped before it reported (Imbue Studio ending a chat's commands, a restart) leaves its marker behind
+    and its agent waiting on a report that will not come. The notice follows the message rather than preceding it, on
+    a thread of its own so the send it follows is not held up.
+    """
+    ended = state.agent_manager.claim_unreported_runner_ends(chat_id)
+    if not ended:
+        return
+    threading.Thread(
+        target=_deliver_unreported_runner_ends_notice,
+        args=(current_app.app_context(), state, chat_id, unreported_runner_ends_notice(ended)),
+        daemon=True,
+        name="unreported-runner-ends",
+    ).start()
+
+
+def _deliver_unreported_runner_ends_notice(
+    app_context: AppContext, state: ChatAppState, chat_id: ChatId, notice: str
+) -> None:
+    """Send the notice under the app's context, which the send path resolves the agent through."""
+    message_id = uuid4().hex
+    with app_context:
+        accepted = _send_to_chat(
+            state,
+            chat_id,
+            SendMessageRequest(message=notice, message_id=message_id),
+            message_id,
+            # The commands were the agent's own, so it hears of them whatever account it runs on.
+            is_refused_on_signed_out_account=False,
+        )
+    if isinstance(accepted, Response):
+        logger.warning(
+            "Could not tell chat {} of its unreported background commands: {}", chat_id, accepted.get_json()
+        )
 
 
 def _send_message_endpoint(chat_id: str) -> Response:
@@ -1940,10 +1980,36 @@ def _discover_with_filters() -> list[AgentInfo]:
 
 
 def _list_agents_endpoint() -> Response:
-    """List all mngr-managed agents (the loopback callers' listing: the evals bridge, the deployment tests)."""
-    agents = _discover_with_filters()
-    items = [AgentListItem(id=agent.id, name=agent.name, state=agent.state) for agent in agents]
-    return json_response(AgentListResponse(agents=items).model_dump())
+    """List all mngr-managed agents, each with its chat, whether it is busy, and its chat's pending background tasks.
+
+    By default a fresh discovery, under the app's agent filters: the loopback callers that wait on an
+    agent's lifecycle (the evals bridge, the deployment tests) read its state from mngr itself, and see an
+    agent before this app tracks it. ``?tracked=true`` answers from the agent list this app already folds from
+    the observe stream instead (every agent, workers included, unfiltered), with no discovery: what
+    ``system/scripts/background_tasks.py`` asks, from inside a probe that has just run ``mngr list`` itself.
+    It answers 503 until that list has been read once.
+    """
+    agent_manager: AgentManager = get_state().agent_manager
+    if request.args.get("tracked") == "true":
+        if not agent_manager.is_agent_list_known():
+            return _agent_list_not_known_response()
+        listed = [(agent.id, agent.name, agent.state, agent.labels) for agent in agent_manager.get_agents()]
+    else:
+        listed = [(agent.id, agent.name, agent.state, agent.labels) for agent in _discover_with_filters()]
+    items: list[AgentListItem] = []
+    for agent_id, name, state, labels in listed:
+        busy = agent_manager.busy_state_of_agent(agent_id, labels)
+        items.append(
+            AgentListItem(
+                id=agent_id,
+                name=name,
+                state=state,
+                chat_id=busy.chat_id,
+                is_busy=busy.is_busy,
+                background_tasks=busy.background_tasks,
+            )
+        )
+    return json_response(AgentListResponse(agents=items).model_dump(mode="json"))
 
 
 def _list_chats_endpoint() -> Response:

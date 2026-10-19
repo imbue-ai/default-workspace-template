@@ -191,7 +191,7 @@ def chat_agent_oom_score_adj(
 # terminal) come first, then the UI and the chat app, then the sharing stack,
 # then the runtime-state sync (github-sync, opt-in) and the host backup, then
 # the job scheduler, then the browser stack (its X display, then the
-# coordinator), then the file viewer, and last the two single-page apps
+# coordinator), then the Files app, and last the two single-page apps
 # (Getting Started, then Memory & disk).
 # ``user`` is the single band every *user-created* service shares;
 # it sits above every built-in service so a user's own service is shed before any
@@ -269,8 +269,8 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # below SHARED_BROWSER, where those Chromium processes live: a coordinator
     # ranked above them would be picked first every time and free nothing.
     "browser": 70,
-    # The file viewer: dufs, the tiny static file server the program runs
-    # directly. It holds little memory and supervisord restarts it if shed.
+    # The Files app: a small Flask server over the workspace's files. It
+    # holds little memory and supervisord restarts it if shed.
     "files": 75,
     # The Getting Started page: one static page and a cached catalog. A shed costs
     # one reload of a window that shows nothing of the user's.

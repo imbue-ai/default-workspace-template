@@ -64,7 +64,7 @@ import type {
   WindowState,
 } from "../model/records";
 import { isSameCell, isSameWindowPaths, shortcutKey } from "../model/records";
-import { ToastQueue } from "../model/Toasts";
+import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
 import { OwnIdMinter, PAGE_ID_PREFIX, REPORT_ID_PREFIX, SAVE_ID_PREFIX, mintHex } from "../model/ownIds";
 import { isPreviewShell } from "../model/PreviewShell";
 import { noticeFromWire } from "../model/UpdateNotice";
@@ -1144,7 +1144,7 @@ export class DesktopStore {
     return true;
   }
 
-  /** Open a link where it belongs in this workspace: a file in the File Viewer (``open:file``), a local URL on an
+  /** Open a link where it belongs in this workspace: a file in Files (``open:file``), a local URL on an
    *  app's ``<label>.localhost`` (or ``<name>.localhost``) host, or else at its registered backend port, as that app's
    *  window at its path, any other local URL in the workspace's browser
    *  (``open:url``), one of this workspace's app addresses (on its share domain too) as that app's window at its

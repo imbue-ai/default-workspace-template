@@ -120,11 +120,38 @@ describe("startInnerFrameRelay", () => {
 });
 
 describe("passing the chrome's answers down", () => {
-  it("passes only the chrome's answer to an inner page's ask, and only from the parent", () => {
+  it("passes only the chrome's answers to an inner page's asks, and only from the parent", () => {
     expect(isForwardedToInnerFrames({ type: "minds:provider-sign-in-ack", relay: true })).toBe(true);
+    expect(
+      isForwardedToInnerFrames({
+        type: "minds:permission-resolutions",
+        resolutions: [{ requestId: "req-1", resolution: "granted" }],
+      }),
+    ).toBe(true);
     expect(isForwardedToInnerFrames({ type: "minds:focus-chat", chatId: "agent-1" })).toBe(false);
-    expect(isForwardedToInnerFrames({ type: "minds:permission-resolutions", resolutions: [] })).toBe(false);
     expect(isForwardedToInnerFrames(null)).toBe(false);
+  });
+
+  it("hands a permission verdict from the shell to every inner page, so a card flips and the strip covers the wait", () => {
+    const parent = framed();
+    const pageA = { postMessage: vi.fn() };
+    const pageB = { postMessage: vi.fn() };
+    startInnerFrameRelay(
+      () => false,
+      () => [pageA, pageB] as unknown as Window[],
+      () => undefined,
+    );
+    const verdict = {
+      type: "minds:permission-resolutions",
+      resolutions: [{ requestId: "req-1", resolution: "granted" }],
+    };
+
+    deliver(verdict, parent);
+    deliver(verdict, { name: "stranger" });
+
+    expect(pageA.postMessage.mock.calls).toEqual([[verdict, "*"]]);
+    expect(pageB.postMessage.mock.calls).toEqual([[verdict, "*"]]);
+    expect(parent.postMessage).not.toHaveBeenCalled();
   });
 
   it("hands the sign-in answer from the shell to every inner page, and ignores it from anyone else", () => {

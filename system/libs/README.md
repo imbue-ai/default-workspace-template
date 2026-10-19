@@ -20,6 +20,8 @@ README for details.
   automation-agent waker (see the manage-scheduled-tasks skill).
 - `bootstrap/` - First-boot setup; then launches supervisord, which supervises
   the apps and services.
+- `chat_background_tasks/` - The marker files recording the background tasks
+  each chat waits on, and their readers.
 - `github_sync/` - The opt-in GitHub auto-push wiring (a git hook, not a
   daemon; see the github-sync skill).
 - `mngr_cli_contract/` - Shared validator that checks mngr CLI argvs against

@@ -43,6 +43,30 @@ export interface ActiveAgent {
   // A send is in flight and waiting for the agent to come up: the Connecting sub-state of
   // Sending, shown beside the model bar.
   is_connecting: boolean;
+  // The agent will resume on its own: a turn is in flight, or a background task is pending.
+  is_busy: boolean;
+  // The background tasks the chat waits on, oldest first. Rendered as given.
+  background_tasks: BackgroundTask[];
+}
+
+/** Who recorded a background task: the workspace's runner (``run_in_background.py``), which outlives the agent and
+ *  reports how its command ended to the chat, or the harness's own task list, whose tasks end with the agent's
+ *  process, unreported. */
+export type BackgroundTaskSource = "run_in_background" | "harness";
+
+/** One background task a chat waits on (the backend's ``BackgroundTaskSnapshot``): a command the agent
+ *  started whose completion will start its next turn. */
+export interface BackgroundTask {
+  id: string;
+  source: BackgroundTaskSource;
+  // The harness that recorded a "harness" task ("claude", ...); empty for the runner's.
+  harness: string;
+  // The harness's type for a "harness" task; empty for the runner's.
+  kind: string;
+  description: string;
+  // When it started (ISO 8601, UTC); for a "harness" task, when its turn-end hook first recorded it, at the
+  // end of the turn that started it.
+  started_at: string;
 }
 
 /** A handoff runs draining, summarizing, switching; a rebind runs draining, restarting; both can end failed. */

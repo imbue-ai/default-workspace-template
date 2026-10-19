@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import pytest
+from chat_background_tasks.listing import chats_from_agents_payload
 from flask import Flask
 from flask.testing import FlaskClient
 from mngr_cli_contract.contract import assert_mngr_argv_valid
@@ -46,6 +47,7 @@ from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
+from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_transcript import agent_switch_event_id
@@ -109,6 +111,7 @@ from imbue.chat.testing import open_ws
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import seed_failed_chat
 from imbue.chat.testing import serve_app
+from imbue.chat.testing import write_background_task_marker
 from imbue.chat.testing import utc_iso_seconds_ago
 from imbue.chat.testing import write_compacting_marker
 from imbue.chat.testing import write_recording_mngr_binary
@@ -185,6 +188,88 @@ def test_list_agents_endpoint(client: FlaskClient) -> None:
     assert len(data["agents"]) == 1
     assert data["agents"][0]["name"] == "test-agent"
     assert data["agents"][0]["state"] == "RUNNING"
+
+
+def _busy_fields_by_agent(payload: dict[str, Any]) -> dict[str, tuple[Any, ...]]:
+    return {
+        agent["id"]: (agent["chat_id"], agent["is_busy"], agent["background_tasks"]) for agent in payload["agents"]
+    }
+
+
+def test_the_agent_and_chat_listings_carry_each_chats_busy_verdict_and_pending_tasks(
+    config: Config, tmp_path: Path
+) -> None:
+    """``/api/agents`` is what ``system/scripts/background_tasks.py`` asks first, so its answer is checked through the
+    script's own parser; ``/api/chats`` carries the same facts on each snapshot."""
+    reader = BackgroundTaskReader(root=tmp_path / "background_tasks")
+    manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path / "chats", background_tasks=reader)
+    state = build_test_state(config=config, agent_manager=manager)
+    manager.note_agent_list_known()
+    seed_agent_state(manager, "agent-waiting", name="Waiting", state="WAITING", activity_state=ActivityState.IDLE)
+    seed_agent_state(manager, "agent-turn", name="Turn", activity_state=ActivityState.THINKING)
+    seed_agent_state(manager, "agent-idle", name="Idle", state="WAITING", activity_state=ActivityState.IDLE)
+    write_background_task_marker(reader, "agent-waiting", "task-1", os.getpid())
+    manager._background_tasks_poller.poll_once()
+    discovered = [
+        AgentInfo(
+            id=agent_id,
+            name=agent_id,
+            state="RUNNING",
+            agent_state_dir=tmp_path / agent_id,
+            claude_config_dir=tmp_path / ".claude",
+        )
+        for agent_id in ("agent-waiting", "agent-turn", "agent-idle")
+    ]
+    client = create_application(state).test_client()
+    try:
+        with patch("imbue.chat.server.discover_agents", return_value=discovered):
+            agents_payload = client.get("/api/agents").get_json()
+        # The tracked view answers from the app's own agent list, with no discovery.
+        with patch("imbue.chat.server.discover_agents", side_effect=AssertionError("discovered")):
+            tracked_payload = client.get("/api/agents?tracked=true").get_json()
+        chats_payload = client.get("/api/chats").get_json()
+    finally:
+        state.shutdown()
+
+    assert _busy_fields_by_agent(tracked_payload) == _busy_fields_by_agent(agents_payload)
+    # The tracked view's states are the app's own, not discovery's.
+    assert {agent["id"]: agent["state"] for agent in tracked_payload["agents"]}["agent-waiting"] == "WAITING"
+
+    by_id = {agent["id"]: agent for agent in agents_payload["agents"]}
+    assert {agent_id: (agent["chat_id"], agent["is_busy"]) for agent_id, agent in by_id.items()} == {
+        "agent-waiting": ("agent-waiting", True),
+        "agent-turn": ("agent-turn", True),
+        "agent-idle": ("agent-idle", False),
+    }
+    (task,) = by_id["agent-waiting"]["background_tasks"]
+    assert (task["source"], task["id"], task["pid"]) == ("run_in_background", "task-1", os.getpid())
+    parsed = {chat.chat_id: chat for chat in chats_from_agents_payload(agents_payload)}
+    assert [task.id for task in parsed["agent-waiting"].tasks] == ["task-1"]
+    assert parsed["agent-turn"].is_busy and not parsed["agent-turn"].tasks
+
+    chats = {chat["chat_id"]: chat for chat in chats_payload["chats"]}
+    assert {chat_id: chat["status"] for chat_id, chat in chats.items()} == {
+        "agent-waiting": "background",
+        "agent-turn": "working",
+        "agent-idle": "idle",
+    }
+    assert chats["agent-waiting"]["active_agent"]["is_busy"] is True
+    assert chats["agent-waiting"]["active_agent"]["background_tasks"] == [
+        {
+            "id": "task-1",
+            "source": "run_in_background",
+            "harness": "",
+            "kind": "",
+            "description": "Rebuild the worker image",
+            "started_at": "2026-10-08T12:00:00+00:00",
+        }
+    ]
+
+
+def test_the_tracked_agent_listing_waits_for_the_agent_list(config: Config) -> None:
+    """Before the app has read its agent list, the tracked view has nothing true to say; the CLI reads the files."""
+    client = create_application(build_test_state(config=config)).test_client()
+    assert client.get("/api/agents?tracked=true").status_code == 503
 
 
 def test_health_reports_whether_lifecycle_events_are_arriving(client: FlaskClient) -> None:
@@ -683,6 +768,7 @@ def _fake_watcher(
     """A stand-in for ``build_watcher``'s result: no-op queue hooks around the given seed, start, and stop."""
     return SimpleNamespace(
         set_queue_snapshot_callback=lambda _callback: None,
+        set_finished_tasks_callback=lambda _callback: None,
         notify_idle=lambda: [],
         notify_busy=lambda: None,
         set_flush_hooks=lambda _send, _is_alive: None,

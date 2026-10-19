@@ -2201,9 +2201,13 @@ def test_read_app_tools_lists_every_python_app_in_the_tree() -> None:
     assert terminal.directory == "system/apps/terminal"
     assert terminal.executable == "terminal-app"
     assert terminal.is_critical is True
-    # A manifest-only app (the files viewer is the dufs binary behind a vendored frontend, the
-    # terminal's pty origin an entry point of the terminal) has no tool of its own.
-    assert "files-app" not in by_name
+    files = by_name["files-app"]
+    assert files.directory == "system/apps/files"
+    assert files.executable == "files-app"
+    assert files.plugin_key == "files"
+    assert files.is_critical is False
+    # A manifest-only app (the terminal's pty origin, an entry point of the
+    # terminal) has no tool of its own.
     assert "terminal-pty" not in by_name
 
 
@@ -2273,9 +2277,9 @@ def test_read_app_tools_skips_an_app_it_cannot_describe(tmp_path: Path, capsys) 
         ("system/apps/browser/src/browser/static/app.js", set()),
         ("system/apps/terminal/src/terminal_app/main.py", {"terminal-app"}),
         ("system/apps/terminal/terminal_tmux.conf", {"terminal-app"}),
-        # The files viewer has no Python package: dufs serves its vendored frontend as-is.
-        ("system/apps/files/assets/index.js", set()),
-        ("system/apps/files/app.toml", set()),
+        ("system/apps/files/src/files_app/server.py", {"files-app"}),
+        ("system/apps/files/app.toml", {"files-app"}),
+        ("system/apps/files/frontend/src/index.ts", set()),
         # A shared backend manifest is part of every app tool's closure: the
         # pinned mngr packages an app depends on, and the plugin table that
         # assigns plugins to its tool.
@@ -2370,12 +2374,14 @@ def test_plan_apply_does_not_mistake_nested_paths_for_manifests(path: str) -> No
         "system/apps/system_interface/frontend/vite.config.ts",
         "system/apps/system_interface/frontend/tsconfig.json",
         "system/apps/system_interface/frontend/public/logo.svg",
-        # The chat's and the Getting Started app's frontends and the library all compile into a
-        # bundle; so does the tooling every build reads.
+        # Every other frontend and the library compile into a bundle too; so does the tooling every
+        # build reads.
         "system/apps/chat/frontend/src/index.ts",
         "system/apps/chat/frontend/chat.html",
         "system/apps/getting_started/frontend/src/index.ts",
         "system/apps/getting_started/frontend/index.html",
+        "system/apps/files/frontend/src/index.ts",
+        "system/apps/files/frontend/vite.config.ts",
         "system/libs/workspace_ui/src/base.css",
         "system/tsconfig.base.json",
     ],
@@ -2392,6 +2398,7 @@ def test_plan_apply_counts_every_frontend_file_not_just_src(path: str) -> None:
         "system/package-lock.json",
         "system/apps/chat/frontend/package.json",
         "system/apps/getting_started/frontend/package.json",
+        "system/apps/files/frontend/package.json",
         "system/libs/workspace_ui/package.json",
     ],
 )
@@ -4180,17 +4187,17 @@ def test_provisioner_inputs_are_read_off_the_entry_point(tmp_path: Path) -> None
         'bash "$sources_dir/write_apt_sources.sh"\n'
         "# Keep the pins in sync with seed_home_skeleton.sh.\n"
         'bash /tmp/install_claude.sh "${CLAUDE_CODE_VERSION}"\n'
-        'if [ -f "$setup_dir/install_dufs.sh" ]; then\n'
-        '    bash "$setup_dir/install_dufs.sh"\n'
+        'if [ -f "$setup_dir/install_earlyoom.sh" ]; then\n'
+        '    bash "$setup_dir/install_earlyoom.sh"\n'
         "else\n"
-        '    bash "$setup_dir/default-workspace-template-install-dufs"\n'
+        '    bash "$setup_dir/default-workspace-template-install-earlyoom"\n'
         "fi\n"
     )
     for name in (
         "_provision_guard.sh",
         "write_apt_sources.sh",
         "seed_home_skeleton.sh",
-        "install_dufs.sh",
+        "install_earlyoom.sh",
     ):
         (scripts / name).write_text("")
 
@@ -4201,7 +4208,7 @@ def test_provisioner_inputs_are_read_off_the_entry_point(tmp_path: Path) -> None
         "system/scripts/_provision_guard.sh",
         "system/scripts/write_apt_sources.sh",
         # Run, inside a branch.
-        "system/scripts/install_dufs.sh",
+        "system/scripts/install_earlyoom.sh",
         # Not: mentioned only in a comment (seed_home_skeleton.sh), a /tmp
         # download (install_claude.sh), an image-baked name without a sibling.
     }
