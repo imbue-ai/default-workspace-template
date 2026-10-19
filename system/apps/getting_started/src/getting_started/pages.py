@@ -18,6 +18,8 @@ from flask import send_from_directory
 from flask.typing import ResponseReturnValue
 from werkzeug.exceptions import NotFound
 
+from app_manifest.content_security_policy import attach_document_policy
+from app_manifest.content_security_policy import url_origin
 from app_manifest.registry import APP_CONTRACT_ROUTE
 from getting_started.template_catalog import TemplateCatalogAvailability
 from getting_started.template_catalog import TemplateCatalogStore
@@ -43,6 +45,12 @@ _NOT_BUILT_PAGE: Final[str] = (
 
 def build_pages_blueprint(static_directory: Path, catalog: TemplateCatalogStore, contract_path: Path) -> Blueprint:
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
+    # The template drawings live beside the catalog (catalog/README.md), so the page admits images from the
+    # catalog's origin besides its own; with no catalog there is no templates section and nothing to admit.
+    image_sources = "'self' data: blob:"
+    if catalog.catalog_url != "":
+        image_sources = f"{image_sources} {url_origin(catalog.catalog_url)}"
+    attach_document_policy(blueprint, {"img-src": image_sources})
 
     @blueprint.get("/")
     def page() -> ResponseReturnValue:

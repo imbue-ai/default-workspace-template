@@ -6,6 +6,7 @@ import pytest
 from flask import Flask
 from flask.testing import FlaskClient
 
+from app_manifest.testing import assert_document_policy_admits_page
 from getting_started.pages import build_pages_blueprint
 from getting_started.template_catalog import TemplateCatalogStore
 from getting_started.testing import FakeTemplateCatalogFetcher
@@ -35,6 +36,7 @@ def test_the_page_says_it_is_not_built_until_the_bundle_exists_and_then_serves_i
     response = client.get("/")
     assert response.status_code == 200
     assert b"not been built" in response.data
+    assert_document_policy_admits_page(response)
     assert client.get("/api/health").get_json() == {"status": "ok", "is_frontend_built": False}
 
     (tmp_path / "static" / "assets").mkdir(parents=True)
@@ -43,10 +45,21 @@ def test_the_page_says_it_is_not_built_until_the_bundle_exists_and_then_serves_i
     built = client.get("/")
     assert built.data == b"<!doctype html><title>Getting Started</title>"
     assert built.headers["Cache-Control"] == "no-store"
+    assert_document_policy_admits_page(built)
     assert client.get("/api/health").get_json() == {"status": "ok", "is_frontend_built": True}
     assert client.get("/assets/index.js").data == b"console.log(1)"
     assert client.get("/assets/missing.js").status_code == 404
     assert client.get("/assets/../index.html").status_code == 404
+
+
+def test_the_page_admits_images_from_the_catalogs_origin_and_only_its_own_without_a_catalog(tmp_path: Path) -> None:
+    """A template's drawing is fetched from where the catalog is, so the page's policy names that origin; an
+    app with no catalog configured names only itself."""
+    policy = _client(tmp_path).get("/").headers["Content-Security-Policy"]
+    assert "img-src 'self' data: blob: https://example.test;" in policy
+
+    policy_without_catalog = _client(tmp_path / "no-catalog", catalog_url="").get("/").headers["Content-Security-Policy"]
+    assert "img-src 'self' data: blob:;" in policy_without_catalog
 
 
 def test_the_catalog_route_answers_the_catalog_with_resolved_thumbnails(tmp_path: Path) -> None:

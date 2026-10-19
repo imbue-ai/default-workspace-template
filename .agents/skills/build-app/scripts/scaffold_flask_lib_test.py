@@ -19,11 +19,15 @@ writes, asserting only what holds whatever this machine is listening on.
 from __future__ import annotations
 
 import ast
+import base64
 import configparser
+import hashlib
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 import scaffold_flask_lib
@@ -461,10 +465,8 @@ def test_the_shell_module_paths_match_the_library() -> None:
     )
 
 
-def test_the_runner_serves_the_shell_modules_and_nothing_else(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The scaffolded app answers the two shell-built modules from its own origin, and 404s any other name."""
+def _import_scaffolded_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+    """Write a scaffolded runner.py into ``tmp_path``, with one shell module beside it, and import it."""
     source = scaffold_flask_lib._lib_runner(
         "inbox-status", "inbox_status", "inbox status dashboard", 8081
     )
@@ -480,7 +482,14 @@ def test_the_runner_serves_the_shell_modules_and_nothing_else(
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    client = module.app.test_client()
+    return module
+
+
+def test_the_runner_serves_the_shell_modules_and_nothing_else(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The scaffolded app answers the two shell-built modules from its own origin, and 404s any other name."""
+    client = _import_scaffolded_runner(tmp_path, monkeypatch).app.test_client()
     served = client.get("/_static/app_contract.js")
     assert served.status_code == 200
     assert served.mimetype == "text/javascript"
@@ -491,6 +500,82 @@ def test_the_runner_serves_the_shell_modules_and_nothing_else(
     page = client.get("/")
     assert page.status_code == 200
     assert b'from "/_static/context_menu.js"' in page.data
+    # The page's policy admits its one inline script by the hash of the body as served, and nothing inline beyond it.
+    body = page.get_data(as_text=True).split('<script type="module">', 1)[1].split("</script>", 1)[0]
+    digest = base64.b64encode(hashlib.sha256(body.encode()).digest()).decode()
+    policy = page.headers["Content-Security-Policy"]
+    assert f"script-src 'self' 'report-sample' 'sha256-{digest}';" in policy
+    assert policy.startswith("default-src 'self'; ")
+    assert "; img-src 'self' data: blob:; " in policy
+    assert policy.endswith("; report-uri /_csp-report")
+    assert "Content-Security-Policy" not in client.get("/health").headers
+
+
+def test_the_runner_logs_what_its_policy_blocked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A browser's report of a blocked resource lands on stderr naming the resource, the page and the directive.
+
+    That line is how an agent learns a page pulled in something the policy does not admit: the
+    page itself shows nothing server-side, and the supervisor log is what check-app-errors reads.
+    A blocked inline script is reported only as "inline", so the line adds where it is and how it
+    starts (the sample the policy's 'report-sample' asks the browser for) and names the hash remedy.
+    A block caused by a browser extension is the policy working and stays out of the log, and a
+    body that is not a report is answered without a trace.
+    """
+    client = _import_scaffolded_runner(tmp_path, monkeypatch).app.test_client()
+    report = client.post(
+        "/_csp-report",
+        data=json.dumps(
+            {
+                "csp-report": {
+                    "document-uri": "http://127.0.0.1:8081/",
+                    "blocked-uri": "https://cdn.jsdelivr.net/npm/chart.js",
+                    "effective-directive": "script-src-elem",
+                    "violated-directive": "script-src-elem",
+                }
+            }
+        ),
+        content_type="application/csp-report",
+    )
+    assert report.status_code == 204
+    logged = capsys.readouterr().err
+    assert logged.splitlines() == [
+        "ERROR Content-Security-Policy blocked 'https://cdn.jsdelivr.net/npm/chart.js' on "
+        "'http://127.0.0.1:8081/' (script-src-elem); "
+        "add its origin to CONTENT_SECURITY_POLICY if the page needs it"
+    ]
+
+    inline = {
+        "csp-report": {
+            "document-uri": "http://127.0.0.1:8081/stats",
+            "blocked-uri": "inline",
+            "effective-directive": "script-src-elem",
+            "source-file": "http://127.0.0.1:8081/stats",
+            "line-number": 42,
+            "column-number": 3,
+            "script-sample": "const chart = new Chart(document.getElemen",
+        }
+    }
+    assert client.post("/_csp-report", json=inline).status_code == 204
+    assert capsys.readouterr().err.splitlines() == [
+        "ERROR Content-Security-Policy blocked 'inline' on 'http://127.0.0.1:8081/stats' (script-src-elem) "
+        "at http://127.0.0.1:8081/stats:42 starting 'const chart = new Chart(document.getElemen'; "
+        "add its inline_script_source to CONTENT_SECURITY_POLICY if the page needs it"
+    ]
+
+    from_extension = {
+        "csp-report": {
+            "document-uri": "http://127.0.0.1:8081/",
+            "blocked-uri": "inline",
+            "source-file": "chrome-extension://abcdef/content.js",
+            "effective-directive": "script-src-elem",
+        }
+    }
+    assert client.post("/_csp-report", json=from_extension).status_code == 204
+    assert client.post("/_csp-report", json=["not", "a", "report"]).status_code == 204
+    assert client.post("/_csp-report", data=b"\x00garbage").status_code == 204
+    assert capsys.readouterr().err == ""
 
 
 def test_the_runner_does_not_use_reloader() -> None:

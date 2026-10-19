@@ -317,10 +317,13 @@ unmodified -- nothing rewrites anything. Use ``flask_sock`` if you need
 WebSockets.
 """
 
+import base64
+import hashlib
 import os
+import sys
 from pathlib import Path
 
-from flask import Flask, Response, abort, send_file
+from flask import Flask, Response, abort, request, send_file
 from werkzeug.serving import run_simple
 
 # Persistent state for this app lives under DATA_DIR. It defaults to
@@ -352,8 +355,7 @@ SHELL_STATIC_MODULE_NAMES = {SHELL_STATIC_MODULE_NAMES!r}
 # this app's window at the same place, and installs the element context menu.
 # A page visited outside the shell runs it harmlessly: nothing arrives, and the
 # menu's Explain and Modify rows grey out.
-SHELL_PAGE_SCRIPT = """\
-<script type="module">
+SHELL_PAGE_SCRIPT_BODY = """
   import {{ connectToShell }} from "/_static/app_contract.js";
   import {{ installElementContextMenu }} from "/_static/context_menu.js";
   let handshake = null;
@@ -364,9 +366,44 @@ SHELL_PAGE_SCRIPT = """\
     }},
   }});
   installElementContextMenu({{ connection, handshake: () => handshake }});
-</script>"""
+"""
+SHELL_PAGE_SCRIPT = f'<script type="module">{{SHELL_PAGE_SCRIPT_BODY}}</script>'
+
+
+def inline_script_source(body: str) -> str:
+    """The Content-Security-Policy source admitting one inline <script> whose body is exactly ``body``."""
+    return "'sha256-" + base64.b64encode(hashlib.sha256(body.encode()).digest()).decode() + "'"
+
+
+# Every HTML page is served under this policy (the app is reachable from the
+# internet once the workspace is shared): scripts only from this origin plus the
+# inline blocks listed here by hash, fetches, sockets and images only from this
+# origin, inline styles, frames of any http(s) page, no plugins. Anything else a
+# page pulls in (a CDN script, Google Fonts, an image hosted elsewhere, a
+# third-party API called from the browser) is blocked until its origin is added
+# to the matching directive; a new inline <script> needs its
+# ``inline_script_source`` added.
+# The browser posts every block to ``/_csp-report`` below, which logs it on
+# stderr (the supervisor log), so a blocked resource is never silent; the
+# ``'report-sample'`` makes the browser include where a blocked inline script
+# is and how it starts, since the report otherwise names it only as "inline".
+CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; "
+    f"script-src 'self' 'report-sample' {{inline_script_source(SHELL_PAGE_SCRIPT_BODY)}}; "
+    "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; frame-src http: https:; "
+    "object-src 'none'; base-uri 'self'; form-action 'self'; "
+    "report-uri /_csp-report"
+)
+BROWSER_EXTENSION_SCHEMES = ("chrome-extension:", "moz-extension:", "safari-web-extension:")
 
 app = Flask("{package}", static_folder=None)
+
+
+@app.after_request
+def add_content_security_policy(response: Response) -> Response:
+    if response.mimetype == "text/html":
+        response.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+    return response
 
 
 @app.route("/")
@@ -379,6 +416,36 @@ def index() -> Response:
         + "</body></html>",
         mimetype="text/html",
     )
+
+
+@app.route("/_csp-report", methods=["POST"])
+def content_security_policy_report() -> Response:
+    # The browser's report of one thing the policy blocked on a page. A block
+    # caused by a browser extension is the policy doing its job and is not logged.
+    body = request.get_json(force=True, silent=True)
+    report = body.get("csp-report") if isinstance(body, dict) else None
+    if not isinstance(report, dict):
+        return Response(status=204)
+    blocked, page, source, directive, line, sample = (
+        str(report.get(key, ""))[:500]
+        for key in ("blocked-uri", "document-uri", "source-file", "effective-directive", "line-number", "script-sample")
+    )
+    if blocked.startswith(BROWSER_EXTENSION_SCHEMES) or source.startswith(BROWSER_EXTENSION_SCHEMES):
+        return Response(status=204)
+    # An inline script or style is reported as "inline": say where it is and how it starts instead.
+    where = f" at {{source}}:{{line}}" if source and line else ""
+    starting = f" starting {{sample!r}}" if sample else ""
+    remedy = (
+        "add its inline_script_source to CONTENT_SECURITY_POLICY if the page needs it"
+        if blocked == "inline"
+        else "add its origin to CONTENT_SECURITY_POLICY if the page needs it"
+    )
+    print(
+        f"ERROR Content-Security-Policy blocked {{blocked!r}} on {{page!r}} ({{directive}}){{where}}{{starting}}; {{remedy}}",
+        file=sys.stderr,
+        flush=True,
+    )
+    return Response(status=204)
 
 
 @app.route("/_static/<basename>")
