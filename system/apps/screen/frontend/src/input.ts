@@ -59,6 +59,9 @@ export class InputRelay implements KeySink {
   private moveTimer = 0;
   private wheel = { x: 0, y: 0, t: 0 };
   private nextTouchId = 0;
+  /** The touch of the phone's one-finger drag while it lasts, and where it last landed on the Screen. */
+  private dragTouchId: number | null = null;
+  private dragPoint: Point | null = null;
   isEnabled = false;
   /** Whether neko runs its xf86 input driver (``touch_events`` of ``system/init``); without it a tap is a click. */
   isTouchSupported = false;
@@ -98,7 +101,10 @@ export class InputRelay implements KeySink {
   }
 
   setEnabled(isEnabled: boolean): void {
-    if (this.isEnabled && !isEnabled) this.releaseHeld();
+    if (this.isEnabled && !isEnabled) {
+      this.releaseHeld();
+      this.endTouchDrag(null, null, 0);
+    }
     this.isEnabled = isEnabled;
   }
 
@@ -175,6 +181,51 @@ export class InputRelay implements KeySink {
     this.socket.send("control/touchbegin", touch);
     this.socket.send("control/touchend", touch);
     this.onInput();
+  }
+
+  /** The phone's one-finger drag as a touch held on the Screen (spec section 14): the Screen's programs scroll it
+   *  themselves, as a phone's page does under a finger. Answers whether a touch began: not without neko's input
+   *  driver, and not from outside the drawn video. */
+  beginTouchDrag(clientX: number, clientY: number, pressure: number): boolean {
+    if (!this.isEnabled || !this.isTouchSupported) return false;
+    const point = this.pointAt(clientX, clientY);
+    if (point === null) return false;
+    this.endTouchDrag(null, null, pressure);
+    this.flushMove();
+    const touchId = this.allocateTouchId();
+    this.dragTouchId = touchId;
+    this.dragPoint = point;
+    this.socket.send("control/touchbegin", { touch_id: touchId, ...point, pressure: touchPressureOf(pressure) });
+    this.onInput();
+    return true;
+  }
+
+  /** The dragging finger moved; a sample outside the drawn video is skipped and the touch stays where it was. */
+  moveTouchDrag(clientX: number, clientY: number, pressure: number): void {
+    if (this.dragTouchId === null || !this.isEnabled) return;
+    const point = this.pointAt(clientX, clientY);
+    if (point === null) return;
+    this.dragPoint = point;
+    this.socket.send("control/touchupdate", {
+      touch_id: this.dragTouchId,
+      ...point,
+      pressure: touchPressureOf(pressure),
+    });
+    this.onInput();
+  }
+
+  /** The dragging finger lifted (null coordinates: wherever the touch last was, as when control is lost). */
+  endTouchDrag(clientX: number | null, clientY: number | null, pressure: number): void {
+    if (this.dragTouchId === null || this.dragPoint === null) return;
+    const lifted = clientX !== null && clientY !== null ? this.pointAt(clientX, clientY) : null;
+    const point = lifted ?? this.dragPoint;
+    this.socket.send("control/touchend", {
+      touch_id: this.dragTouchId,
+      ...point,
+      pressure: touchPressureOf(pressure),
+    });
+    this.dragTouchId = null;
+    this.dragPoint = null;
   }
 
   /** A fresh id for one touch: the driver sees sixteen bits of it, and neko refuses an id still begun. */

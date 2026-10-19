@@ -32,14 +32,40 @@ describe("GestureClassifier", () => {
     expect(classifier.up(sample(1, 40, 60, 400))).toEqual({ kind: "none" });
   });
 
-  it("one finger travelling past the threshold pans by its movement and never taps", () => {
+  it("one finger travelling past the threshold pans by its movement, ends where it lifts, and never taps", () => {
     const classifier = new GestureClassifier();
     classifier.down(sample(1, 100, 100, 0));
     expect(classifier.move(sample(1, 104, 100, 20))).toEqual({ kind: "none" });
-    expect(classifier.move(sample(1, 120, 100, 40))).toEqual({ kind: "pan", delta: { x: 16, y: 0 } });
-    expect(classifier.move(sample(1, 125, 110, 60))).toEqual({ kind: "pan", delta: { x: 5, y: 10 } });
+    expect(classifier.move(sample(1, 120, 100, 40))).toEqual({
+      kind: "pan",
+      start: { x: 100, y: 100 },
+      at: { x: 120, y: 100 },
+      delta: { x: 16, y: 0 },
+    });
+    expect(classifier.move(sample(1, 125, 110, 60))).toEqual({
+      kind: "pan",
+      start: { x: 100, y: 100 },
+      at: { x: 125, y: 110 },
+      delta: { x: 5, y: 10 },
+    });
     expect(classifier.longPress()).toEqual({ kind: "none" });
-    expect(classifier.up(sample(1, 125, 110, 80))).toEqual({ kind: "none" });
+    expect(classifier.up(sample(1, 125, 110, 80))).toEqual({ kind: "pan-end", at: { x: 125, y: 110 } });
+  });
+
+  it("a pan ends where the finger was when a second finger joins or the pointer is cancelled", () => {
+    const joined = new GestureClassifier();
+    joined.down(sample(1, 100, 100, 0));
+    joined.move(sample(1, 130, 100, 20));
+    expect(joined.down(sample(2, 200, 100, 30))).toEqual({ kind: "pan-end", at: { x: 130, y: 100 } });
+    expect(joined.up(sample(2, 200, 100, 40))).toEqual({ kind: "none" });
+    expect(joined.up(sample(1, 130, 100, 50))).toEqual({ kind: "none" });
+    const cancelled = new GestureClassifier();
+    cancelled.down(sample(1, 100, 100, 0));
+    cancelled.move(sample(1, 130, 100, 20));
+    expect(cancelled.cancel(1)).toEqual({ kind: "pan-end", at: { x: 130, y: 100 } });
+    const stillTap = new GestureClassifier();
+    stillTap.down(sample(1, 100, 100, 0));
+    expect(stillTap.cancel(1)).toEqual({ kind: "none" });
   });
 
   it("two fingers moving together scroll in wheel steps against their travel", () => {

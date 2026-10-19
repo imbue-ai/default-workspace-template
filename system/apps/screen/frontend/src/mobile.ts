@@ -1,10 +1,11 @@
 /**
  * The phone layout's controls (docs/system/specs/screen/spec.md section 14): touch on the stage classified into
- * taps, long presses, pans, pinches and scrolls; a modifier bar with Ctrl, Alt, Shift (latching for the next key),
- * Esc and Tab; and a keyboard button focusing a hidden input whose ``input`` and ``keydown`` events become neko key
- * events. Pan and zoom move the drawn video (the Screen keeps its size); a tap reaches the Screen as a touch at the
- * mapped point (through neko's input driver), a long press as a right click there, since X touch has no second
- * button and a context menu is what the press is for.
+ * taps, long presses, drags, pinches and two-finger scrolls; a bar with Ctrl, Alt, Shift (latching for the next
+ * key), Esc, Tab, Scroll Up and Scroll Down; and a keyboard button focusing a hidden input whose ``input`` and
+ * ``keydown`` events become neko key events. A tap reaches the Screen as a touch at the mapped point (through neko's
+ * input driver), a long press as a right click there (X touch has no second button and a context menu is what the
+ * press is for), and a one-finger drag as a touch held and moved on the Screen, so a page scrolls under the finger
+ * as on any phone; once the video is pinch-zoomed the drag pans the view instead (the Screen keeps its size).
  */
 
 import { PHONE_MEDIA_QUERY, TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
@@ -22,10 +23,17 @@ export interface MobileActions {
   tapAt(clientX: number, clientY: number, pressure: number): void;
   /** A click at a client point: left (1) or right (3) button. */
   clickAt(clientX: number, clientY: number, button: number): void;
+  /** Wheel steps in the DOM's sign (positive y scrolls down). */
   scroll(steps: Point): void;
+  /** A touch held on the Screen from a client point; false when none began (no input driver, or off the video). */
+  touchBegin(clientX: number, clientY: number, pressure: number): boolean;
+  touchMove(clientX: number, clientY: number, pressure: number): void;
+  touchEnd(clientX: number, clientY: number, pressure: number): void;
 }
 
 const X_BUTTON_RIGHT = 3;
+/** How many wheel steps one tap of Scroll Up or Scroll Down sends: about a third of a page in a browser. */
+export const SCROLL_BUTTON_STEPS = 3;
 
 /** Whether this viewer is a phone: a phone-sized viewport (the shared query the shell switches on) with a finger as
  *  the primary pointer. A desktop window that is merely small is not one; it reports its size and the Screen fits
@@ -61,6 +69,10 @@ export class MobileControls {
   private longPressTimer: number | null = null;
   /** The pressure of the finger that went down last, for the tap it may turn out to be. */
   private lastDownPressure = 0;
+  /** The pressure the moving finger last reported, for the touch drag it feeds. */
+  private lastMovePressure = 0;
+  /** Whether a one-finger drag is a touch held on the Screen right now. */
+  private isTouchDragging = false;
   private lastInputValue = "";
   isEnabled = false;
 
@@ -91,6 +103,12 @@ export class MobileControls {
     escape.addEventListener("click", () => this.tapKey(XK_ESCAPE));
     const tab = this.makeButton("Tab");
     tab.addEventListener("click", () => this.tapKey(XK_TAB));
+    const scrollUp = this.makeButton("Scroll Up");
+    scrollUp.dataset.screenScroll = "up";
+    scrollUp.addEventListener("click", () => this.scrollBy(-SCROLL_BUTTON_STEPS));
+    const scrollDown = this.makeButton("Scroll Down");
+    scrollDown.dataset.screenScroll = "down";
+    scrollDown.addEventListener("click", () => this.scrollBy(SCROLL_BUTTON_STEPS));
     const keyboard = this.makeButton("Keyboard");
     keyboard.dataset.screenKeyboard = "true";
     keyboard.addEventListener("click", () => this.keyboardInput.focus());
@@ -107,6 +125,8 @@ export class MobileControls {
   setEnabled(isEnabled: boolean): void {
     this.isEnabled = isEnabled;
     if (!isEnabled) {
+      // The input relay ends a held touch itself when it is disabled; the drag is over here too.
+      this.isTouchDragging = false;
       this.latch.releaseAll();
       for (const button of this.modifierButtons.values()) button.setAttribute("aria-pressed", "false");
     }
@@ -129,6 +149,11 @@ export class MobileControls {
     if (!this.isEnabled) return;
     this.latch.tap(keysym);
     this.syncModifierButtons();
+  }
+
+  private scrollBy(steps: number): void {
+    if (!this.isEnabled) return;
+    this.actions.scroll({ x: 0, y: steps });
   }
 
   private syncModifierButtons(): void {
@@ -194,6 +219,7 @@ export class MobileControls {
     });
     this.stage.addEventListener("pointermove", (event) => {
       if (event.pointerType !== "touch") return;
+      this.lastMovePressure = event.pressure;
       const gesture = this.classifier.move(sampleOf(event));
       if (gesture.kind !== "none") this.cancelLongPress();
       this.apply(gesture);
@@ -230,7 +256,27 @@ export class MobileControls {
         if (this.isEnabled) this.actions.clickAt(gesture.at.x, gesture.at.y, X_BUTTON_RIGHT);
         return;
       case "pan":
-        this.setTransform(panBy(this.transform, gesture.delta, stageSize));
+        // Zoomed in, the finger moves the view; at the Screen's own scale it is a touch on the Screen, which is
+        // what makes a page scroll. Without neko's input driver (no touch began) the view is panned as before.
+        if (this.transform.zoom > 1) {
+          this.setTransform(panBy(this.transform, gesture.delta, stageSize));
+          return;
+        }
+        if (!this.isEnabled) return;
+        if (!this.isTouchDragging) {
+          this.isTouchDragging = this.actions.touchBegin(gesture.start.x, gesture.start.y, this.lastDownPressure);
+          if (!this.isTouchDragging) {
+            this.setTransform(panBy(this.transform, gesture.delta, stageSize));
+            return;
+          }
+        }
+        this.actions.touchMove(gesture.at.x, gesture.at.y, this.lastMovePressure);
+        return;
+      case "pan-end":
+        if (this.isTouchDragging) {
+          this.isTouchDragging = false;
+          this.actions.touchEnd(gesture.at.x, gesture.at.y, this.lastMovePressure);
+        }
         return;
       case "pinch":
         this.setTransform(

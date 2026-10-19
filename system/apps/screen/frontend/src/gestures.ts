@@ -1,9 +1,9 @@
 /**
  * The phone's touch gestures over the stage (docs/system/specs/screen/spec.md section 14), classified from
  * pointer events: a tap is a click at the point, a press held still is a right click, one finger moving is a pan
- * of the view, two fingers moving together scroll the Screen, two fingers moving apart or together zoom. Pan and
- * zoom are the viewer's own; a tap reaches the Screen as a touch through neko's input driver and a long press as a
- * right click.
+ * (of the view when zoomed in, else a touch drag on the Screen, which is how a page scrolls), two fingers moving
+ * together scroll the Screen in wheel steps, two fingers moving apart or together zoom. A tap reaches the Screen as a
+ * touch through neko's input driver and a long press as a right click.
  */
 
 import type { Point } from "./view_transform";
@@ -25,7 +25,10 @@ export interface PointerSample {
 export type Gesture =
   | { kind: "tap"; at: Point }
   | { kind: "long-press"; at: Point }
-  | { kind: "pan"; delta: Point }
+  /** One finger moving: where it started, where it is, and how far it moved since the last sample. */
+  | { kind: "pan"; start: Point; at: Point; delta: Point }
+  /** The finger of a pan lifted (or a second finger joined it), where it was last. */
+  | { kind: "pan-end"; at: Point }
   | { kind: "scroll"; steps: Point }
   | { kind: "pinch"; factor: number; about: Point }
   | { kind: "none" };
@@ -60,10 +63,14 @@ export class GestureClassifier {
       this.twoFingerMode = "undecided";
       this.scrollRemainder = { x: 0, y: 0 };
     } else if (this.pointers.size === 2) {
-      // A second finger makes the sequence two-finger for good: no tap or long press comes of it.
+      // A second finger makes the sequence two-finger for good: no tap or long press comes of it, and a pan the
+      // first finger had begun is over.
+      const wasPanning = this.isMoved && !this.isTwoFinger;
+      const [first] = this.pointers.values();
       this.isTwoFinger = true;
       this.lastDistance = this.distance();
       this.lastCentre = this.centre();
+      if (wasPanning) return { kind: "pan-end", at: { x: first.last.x, y: first.last.y } };
     }
     return { kind: "none" };
   }
@@ -78,7 +85,12 @@ export class GestureClassifier {
     const travelled = Math.hypot(sample.x - pointer.start.x, sample.y - pointer.start.y);
     if (!this.isMoved && travelled < MOVE_THRESHOLD_PX) return { kind: "none" };
     this.isMoved = true;
-    return { kind: "pan", delta: { x: sample.x - previous.x, y: sample.y - previous.y } };
+    return {
+      kind: "pan",
+      start: { x: pointer.start.x, y: pointer.start.y },
+      at: { x: sample.x, y: sample.y },
+      delta: { x: sample.x - previous.x, y: sample.y - previous.y },
+    };
   }
 
   up(sample: PointerSample): Gesture {
@@ -90,14 +102,18 @@ export class GestureClassifier {
       this.isTwoFinger = true;
       return { kind: "none" };
     }
-    if (this.isTwoFinger || this.isMoved || this.isLongPressFired) return { kind: "none" };
+    if (this.isTwoFinger || this.isLongPressFired) return { kind: "none" };
+    if (this.isMoved) return { kind: "pan-end", at: { x: sample.x, y: sample.y } };
     if (sample.timeMs - pointer.start.timeMs > TAP_MAX_MS) return { kind: "none" };
     return { kind: "tap", at: { x: pointer.start.x, y: pointer.start.y } };
   }
 
   cancel(pointerId: number): Gesture {
+    const pointer = this.pointers.get(pointerId);
     this.pointers.delete(pointerId);
+    const wasPanning = pointer !== undefined && this.pointers.size === 0 && this.isMoved && !this.isTwoFinger;
     this.isTwoFinger = this.isTwoFinger || this.pointers.size > 0;
+    if (wasPanning) return { kind: "pan-end", at: { x: pointer.last.x, y: pointer.last.y } };
     return { kind: "none" };
   }
 

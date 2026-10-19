@@ -253,19 +253,21 @@ rather than at the pointer.
 Under the phone layout (a phone-sized viewport with a finger as the primary pointer, the shared
 `PHONE_MEDIA_QUERY` and `TOUCH_MEDIA_QUERY` both; the shell gives pages no phone signal, and a
 desktop window that is merely small is not a phone: it reports its size and the Screen resizes to
-fit it) the Screen keeps its size and the viewer offers: one-finger drag pans and a pinch
-zooms the drawn video (the viewer's own transform, never a resize), a tap is a left
-click and a long press a right click at the mapped point, a two-finger drag scrolls, a
-bar offers Ctrl, Alt and Shift (each latching for the next key) plus Esc and Tab, and a
-Keyboard button focuses a hidden input whose `input` and `keydown` events become neko
-key events. A tap reaches the Screen as a touch: neko's xf86 input driver
+fit it) the Screen keeps its size and the viewer offers: a one-finger drag is a touch held and
+moved on the Screen, so a page scrolls under the finger as on any phone (once the video is
+pinch-zoomed the drag pans the view instead; a pinch zooms the drawn video, the viewer's own
+transform, never a resize), a tap is a left click and a long press a right click at the mapped
+point, a two-finger drag scrolls in wheel steps, a bar offers Ctrl, Alt and Shift (each latching
+for the next key), Esc, Tab, Scroll Up and Scroll Down (three wheel steps each, for programs that
+ignore touch), and a Keyboard button focuses a hidden input whose `input` and `keydown` events
+become neko key events. Taps and drags reach the Screen as touches: neko's xf86 input driver
 (`neko_drv.so`, the `screen_touchscreen` device `xorg.conf` declares, its socket
 `/tmp/screen-runtime/xf86-input-neko.sock`) is a direct-touch device whose pointer
-emulation also moves the core pointer, and the viewer sends `control/touchbegin` and
-`control/touchend` at the mapped point with the finger's pressure when neko's
-`system/init` says `touch_events`; a long press stays a right click (X touch has no
-second button). The stack waits for the driver's socket before starting neko, which
-dials it once and exits without it.
+emulation also moves the core pointer, and the viewer sends `control/touchbegin`,
+`control/touchupdate` and `control/touchend` at the mapped points with the finger's pressure
+when neko's `system/init` says `touch_events` (without the driver a drag pans the view as a tap
+is a click); a long press stays a right click (X touch has no second button). The stack waits
+for the driver's socket before starting neko, which dials it once and exits without it.
 
 ## The pointer
 

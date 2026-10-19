@@ -129,6 +129,37 @@ describe("InputRelay", () => {
     expect(Math.max(...ids)).toBeLessThanOrEqual(0xffff);
   });
 
+  it("holds a touch drag on the Screen: begun where the finger started, moved with it, ended where it lifted", () => {
+    relay.setEnabled(true);
+    relay.isTouchSupported = true;
+    expect(relay.beginTouchDrag(480, 270, 0.5)).toBe(true);
+    relay.moveTouchDrag(480, 200, 0.25);
+    // A sample off the drawn video is skipped; the touch stays where it was.
+    relay.moveTouchDrag(-50, 200, 0.25);
+    relay.endTouchDrag(480, 100, 0);
+    expect(socket.sent).toEqual([
+      { event: "control/touchbegin", payload: { touch_id: 0, x: 960, y: 540, pressure: 128 } },
+      { event: "control/touchupdate", payload: { touch_id: 0, x: 960, y: 400, pressure: 64 } },
+      { event: "control/touchend", payload: { touch_id: 0, x: 960, y: 200, pressure: 1 } },
+    ]);
+    // Nothing more goes out once the drag has ended.
+    relay.moveTouchDrag(480, 150, 0.5);
+    relay.endTouchDrag(480, 150, 0.5);
+    expect(socket.sent.length).toBe(3);
+  });
+
+  it("ends a held touch where it last was when control is lost, and begins none without the driver", () => {
+    relay.setEnabled(true);
+    expect(relay.beginTouchDrag(480, 270, 0.5)).toBe(false);
+    relay.isTouchSupported = true;
+    expect(relay.beginTouchDrag(480, 270, 0.5)).toBe(true);
+    relay.moveTouchDrag(480, 200, 0.5);
+    relay.setEnabled(false);
+    expect(socket.sent.slice(-1)).toEqual([
+      { event: "control/touchend", payload: { touch_id: 0, x: 960, y: 400, pressure: 1 } },
+    ]);
+  });
+
   it("sends a tap as a left click where neko has no input driver", () => {
     relay.setEnabled(true);
     relay.tapAt(480, 270, 0.5);
