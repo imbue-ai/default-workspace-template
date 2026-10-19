@@ -238,8 +238,10 @@ from the top-left corner with its own pointer moves) never maps its window on th
 the route answers 500 after neko's one-second wait, so a dropped file lands as a desktop icon
 rather than at the pointer.
 
-Under the phone layout (the shared `PHONE_MEDIA_QUERY`; the shell gives pages no phone
-signal) the Screen keeps its size and the viewer offers: one-finger drag pans and a pinch
+Under the phone layout (a phone-sized viewport with a finger as the primary pointer, the shared
+`PHONE_MEDIA_QUERY` and `TOUCH_MEDIA_QUERY` both; the shell gives pages no phone signal, and a
+desktop window that is merely small is not a phone: it reports its size and the Screen resizes to
+fit it) the Screen keeps its size and the viewer offers: one-finger drag pans and a pinch
 zooms the drawn video (the viewer's own transform, never a resize), a tap is a left
 click and a long press a right click at the mapped point, a two-finger drag scrolls, a
 bar offers Ctrl, Alt and Shift (each latching for the next key) plus Esc and Tab, and a

@@ -47,24 +47,37 @@ describe("ResizeReporter", () => {
     reporter.setEnabled(false);
     expect(sent).toEqual([]);
     reporter.setEnabled(true);
-    scheduler.advance(300);
+    scheduler.advance(299);
+    expect(sent).toEqual([]);
+    scheduler.advance(1);
     expect(sent).toEqual([{ width: 900, height: 500 }]);
   });
 
-  it("enabling again with an unchanged size sends nothing until forget", () => {
+  it("enabling again reports the size even when it matches the last report, and staying enabled does not", () => {
     const { scheduler, sent, reporter } = build();
     reporter.setEnabled(true);
     reporter.observe(900, 500);
     scheduler.advance(300);
-    reporter.setEnabled(false);
     reporter.setEnabled(true);
     scheduler.advance(300);
     expect(sent).toHaveLength(1);
-    reporter.forget();
     reporter.setEnabled(false);
     reporter.setEnabled(true);
     scheduler.advance(300);
-    expect(sent).toHaveLength(2);
+    expect(sent).toEqual([
+      { width: 900, height: 500 },
+      { width: 900, height: 500 },
+    ]);
+  });
+
+  it("enabling with no measurement yet reports the first one", () => {
+    const { scheduler, sent, reporter } = build();
+    reporter.setEnabled(true);
+    scheduler.advance(1000);
+    expect(sent).toEqual([]);
+    reporter.observe(1280, 720);
+    scheduler.advance(300);
+    expect(sent).toEqual([{ width: 1280, height: 720 }]);
   });
 
   it("disabling cancels a pending send", () => {

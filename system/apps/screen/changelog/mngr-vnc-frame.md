@@ -94,3 +94,9 @@ Touch through neko's input driver (spec section 14):
 The pointer (spec section 12):
 
 - The controller's own pointer takes the remote cursor's shape. neko sends the X cursor's image (size, hotspot, PNG) over the peer's WebRTC data channel when the channel opens and on every change, and the viewer sets it as the stage's CSS cursor with its hotspot (a data URI), shrunk with the drawn video when the stage shows the desktop smaller than 1:1 and capped at 128 px a side, with the browser's own pointer as the fallback when the image cannot be drawn. The stage no longer hides the pointer (`cursor: none`), so a viewer that is watching sees the default pointer, and the screencast fallback its painted-in pointer; `show_pointer` stays off in neko's WebRTC pipelines.
+
+Sizing from a small desktop window (spec sections 7.2 and 14):
+
+- A phone is now a phone-sized viewport with a finger as the primary pointer (the shared `PHONE_MEDIA_QUERY` and `TOUCH_MEDIA_QUERY` both), so a Screen window that is merely small on a desktop reports its stage size and the Screen resizes to fit it instead of being scaled down to a tiny 1920x1080; real phones keep the mobile controls and never resize the Screen.
+
+- The controller's latest stage size goes out as soon as its session controls with the stack running, whether or not it matches the last report (the Screen may have been sized by someone else meanwhile).

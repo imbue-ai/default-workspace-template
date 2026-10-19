@@ -196,7 +196,8 @@ The session runs as the workspace user with `HOME` the workspace home, so XFCE a
 
 ### 7.2 Sizing
 
-- The controller's viewer reports its stage size in CSS pixels on resize, debounced 300 ms, to `POST /api/screen-size`; a non-controlling viewer's report is ignored; a phone's is never sent (D7).
+- The controller's viewer reports its stage size in CSS pixels on resize, debounced 300 ms, to `POST /api/screen-size`, and its latest size as soon as its session controls with the stack running; a non-controlling viewer's report is ignored; a phone's is never sent (D7).
+  A phone is a phone-sized viewport with a finger as the primary pointer (the shared `PHONE_MEDIA_QUERY` and `TOUCH_MEDIA_QUERY` both); a desktop window that is merely small is not one, and the Screen resizes to fit it.
 - The service rounds width and height down to multiples of 16, clamps to `[640x480, 1920x1080]`, and if the size differs from the current one: adds a mode named `<w>x<h>_60` with `xrandr --newmode` (a `cvt`-computed modeline) and `--addmode` on the dummy output when it is not already there, then `POST /neko/api/room/screen` with it.
   Neko restarts the capture and broadcasts `screen/updated`; viewers letterbox the new aspect.
 - Added modes are kept for the stack's life; they cost nothing.
@@ -352,7 +353,7 @@ Neko's relative-motion support is verified in the implementation; without it the
 
 ## 14. Mobile
 
-Under the phone layout the viewer keeps the Screen size and offers: pan by one-finger drag outside a control and pinch-zoom of the video; tap as a touch at the touch point mapped into Screen coordinates (`control/touchbegin` and `control/touchend` with the finger's pressure, through neko's `xf86-input-neko` driver, so the Screen sees a touchscreen tap); long press as a right click; two-finger drag as scroll; a modifier bar (Ctrl, Alt, Shift, Esc, Tab, each latching for the next key); a keyboard button focusing a hidden input whose `input` and `keydown` events become neko key events; and the mute and control controls of the strip.
+Under the phone layout (a phone-sized viewport whose primary pointer is a finger, section 7.2; a small desktop window is not one) the viewer keeps the Screen size and offers: pan by one-finger drag outside a control and pinch-zoom of the video; tap as a touch at the touch point mapped into Screen coordinates (`control/touchbegin` and `control/touchend` with the finger's pressure, through neko's `xf86-input-neko` driver, so the Screen sees a touchscreen tap); long press as a right click; two-finger drag as scroll; a modifier bar (Ctrl, Alt, Shift, Esc, Tab, each latching for the next key); a keyboard button focusing a hidden input whose `input` and `keydown` events become neko key events; and the mute and control controls of the strip.
 Neko's touch events are used only when the touch is a direct interaction with the Screen (the tap), since pan and zoom are the viewer's own, and the long press stays a right click because X touch has no second button and a context menu is what the press is for; a neko whose `system/init` says `touch_events` is false gets the tap as a click.
 
 ## 15. The share gateway

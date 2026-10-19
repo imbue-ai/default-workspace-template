@@ -1,7 +1,9 @@
 /**
  * The controller's stage size, reported to the service debounced (docs/system/specs/screen/spec.md section 7.2).
- * Only a change from the last report is sent, and only while enabled (this session controls, and this is not a
- * phone); ``forget`` makes the next size go out regardless, for when the stage was laid out again.
+ * Only a change from the last report is sent, and only while enabled (this session controls, the stack runs, and
+ * this is not a phone). The latest measurement is kept across disabled spells and goes out as soon as the reporter
+ * is enabled, whether or not it matches the last report (the Screen may have been sized by someone else meanwhile);
+ * ``forget`` makes the next size go out regardless, for when the stage was laid out again.
  */
 
 import type { Scheduler } from "./scheduler";
@@ -31,8 +33,12 @@ export class ResizeReporter {
   setEnabled(isEnabled: boolean): void {
     const wasEnabled = this.isEnabled;
     this.isEnabled = isEnabled;
-    if (!isEnabled) this.cancel();
-    else if (!wasEnabled && this.latest !== null) this.schedule();
+    if (!isEnabled) {
+      this.cancel();
+    } else if (!wasEnabled) {
+      this.lastSent = null;
+      if (this.latest !== null) this.schedule();
+    }
   }
 
   /** A new stage measurement; the send waits for the debounce window to pass without another. */

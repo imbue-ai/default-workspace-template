@@ -7,6 +7,7 @@
  * button and a context menu is what the press is for.
  */
 
+import { PHONE_MEDIA_QUERY, TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { GestureClassifier, LONG_PRESS_MS } from "./gestures";
 import type { Gesture, PointerSample } from "./gestures";
 import { ModifierLatch, XK_BACKSPACE, XK_ESCAPE, XK_RETURN, XK_TAB } from "./modifier_latch";
@@ -25,6 +26,13 @@ export interface MobileActions {
 }
 
 const X_BUTTON_RIGHT = 3;
+
+/** Whether this viewer is a phone: a phone-sized viewport (the shared query the shell switches on) with a finger as
+ *  the primary pointer. A desktop window that is merely small is not one; it reports its size and the Screen fits
+ *  it, while a phone keeps the Screen's size and gets these controls (spec section 14). */
+export function isPhoneViewer(matches: (query: string) => boolean): boolean {
+  return matches(PHONE_MEDIA_QUERY) && matches(TOUCH_MEDIA_QUERY);
+}
 
 /** The non-character keys a soft keyboard sends through ``keydown`` with a name, as X keysyms. */
 const NAMED_KEYSYMS: Record<string, number> = {

@@ -18,12 +18,11 @@ import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
-import { PHONE_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { ClipboardBridge, navigatorClipboard, serviceClipboardTransport } from "./clipboard";
 import { describeDropOutcome, uploadDroppedFiles } from "./files";
 import { InputRelay, XK_V } from "./input";
 import { keyboardMapForLanguage } from "./keyboard_map";
-import { MobileControls } from "./mobile";
+import { MobileControls, isPhoneViewer } from "./mobile";
 import { NekoSocket } from "./neko_socket";
 import { Overlays } from "./overlays";
 import { PointerLockControl } from "./pointer_lock";
@@ -125,9 +124,9 @@ class Viewer {
     this.stage.append(this.video, this.cast, this.overlays.dimElement, this.overlays.element);
     this.root.append(this.strip.element, this.stage);
     mount.append(this.root);
-    // A phone never resizes the Screen (spec D7); the shell gives pages no phone signal, so the shared query
-    // the shell itself switches on decides.
-    this.isPhone = window.matchMedia(PHONE_MEDIA_QUERY).matches;
+    // A phone never resizes the Screen (spec D7); the shell gives pages no phone signal, so the shared queries
+    // the shell itself switches on decide.
+    this.isPhone = isPhoneViewer((query) => window.matchMedia(query).matches);
     this.visibility = new ViewerVisibility(
       { onRelease: () => this.releaseMedia(), onRequest: () => this.requestMedia() },
       windowScheduler,
@@ -515,8 +514,7 @@ class Viewer {
   private async takeControl(): Promise<void> {
     if (this.session === null) return;
     this.showNotice(await postTakeControl(this.session.session_id));
-    // The new controller's stage decides the Screen's size from here, and its layout the keyboard map.
-    this.resizeReporter.forget();
+    // The new controller's layout decides the keyboard map (its stage the Screen's size, through the reporter).
     this.sendKeyboardMap();
     this.stage.focus();
   }
