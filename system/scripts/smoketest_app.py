@@ -370,7 +370,12 @@ def main() -> None:
     parser.add_argument("--marker", default=None, help="expected string in the response or DOM")
     parser.add_argument("--screenshot", default=None, help="path to write page screenshot (PNG)")
     parser.add_argument("--path", default="/", help="URL path to test (defaults to '/')")
-    parser.add_argument("--timeout", type=float, default=5.0, help="timeout in seconds (default: 5.0)")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=5.0,
+        help=f"timeout in seconds (default: 5.0; at least {RESTART_MIN_TIMEOUT:g} with --restart)",
+    )
     parser.add_argument("--poll-interval", type=float, default=0.05, help="retry interval in seconds (default: 0.05)")
     parser.add_argument("--wait-reload", action="store_true", help="verify /health reload timestamp against runner mtime")
     parser.add_argument(
