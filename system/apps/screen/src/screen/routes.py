@@ -22,8 +22,6 @@ from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import CONTEXT_MENU_ROUTE
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import SHELL_CONTEXT_MENU_PATH
-from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
-from app_schema.api_schema import register_api_schema_route
 from screen.browser_routes import CANCEL_PENDING_URL_RULE
 from screen.browser_routes import OPEN_URL_PATH
 from screen.browser_routes import build_browser_blueprint
@@ -42,8 +40,6 @@ from screen.identity import AGENT_ID_HEADER
 from screen.identity import AGENT_NAME_HEADER
 from screen.identity import IDENTITY_HEADER
 from screen.identity import parse_identity_header
-from screen.primitives import APP_DESCRIPTION
-from screen.primitives import APP_DISPLAY_NAME
 from screen.primitives import AgentId
 from screen.primitives import DroppedFileName
 from screen.primitives import LAUNCH_BROWSER_PATH
@@ -143,7 +139,6 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
     app = Flask(__name__, static_folder=None)
     app.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": 25}
     sock = Sock(app)
-    register_api_schema_route(app, DEFAULT_API_SCHEMA_PATH, title=APP_DISPLAY_NAME, description=APP_DESCRIPTION)
 
     # the owner gate
 
@@ -167,7 +162,6 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.get("/")
     def page() -> ResponseReturnValue:
-        """The viewer page, from the frontend's build; a page load starts the stack when it is down."""
         service.ensure_started()
         document = static_directory / PAGE_DOCUMENT_FILENAME
         if not document.is_file():
@@ -178,7 +172,6 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.get("/assets/<path:filename>")
     def asset(filename: str) -> ResponseReturnValue:
-        """One file of the viewer's built bundle, by name."""
         try:
             return send_from_directory((static_directory / "assets").absolute(), filename)
         except NotFound:
@@ -189,39 +182,26 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
             return _error(f"the workspace shell's frontend is not built: {path} is missing", HTTP_NOT_FOUND)
         return send_file(path.absolute(), mimetype="text/javascript")
 
-    @app.get(APP_CONTRACT_ROUTE)
-    def app_contract() -> ResponseReturnValue:
-        """The app contract module: how the page talks to the shell framing it."""
-        return _shell_module(SHELL_APP_CONTRACT_PATH)
-
-    @app.get(CONTEXT_MENU_ROUTE)
-    def context_menu() -> ResponseReturnValue:
-        """The element context menu module: the right-click menu that hands an element on a page to a chat."""
-        return _shell_module(SHELL_CONTEXT_MENU_PATH)
+    app.add_url_rule(APP_CONTRACT_ROUTE, "app_contract", lambda: _shell_module(SHELL_APP_CONTRACT_PATH))
+    app.add_url_rule(CONTEXT_MENU_ROUTE, "context_menu", lambda: _shell_module(SHELL_CONTEXT_MENU_PATH))
 
     @app.get("/health")
     def health() -> ResponseReturnValue:
-        """Whether the service is up, with the stack's lifecycle."""
         return jsonify({"status": "ok", "lifecycle": service.stack.lifecycle.value.lower()})
 
     # state and the service's events
 
     @app.get("/api/state")
     def state() -> ResponseReturnValue:
-        """The state document: the lifecycle, the lease, the frontmost window's title, the video profile, the
-        Screen's size and the browser's state."""
         return jsonify(service.state_document())
 
     @app.post("/api/start")
     def start() -> ResponseReturnValue:
-        """Start the stack when it is down, and answer the lifecycle."""
         lifecycle = service.ensure_started()
         return jsonify({"lifecycle": lifecycle.value.lower()})
 
     @app.get("/api/connect-info")
     def connect_info() -> ResponseReturnValue:
-        """Where this viewer's WebRTC can reach the Screen (candidates) and the ICE servers to use; ``?relay=1`` asks
-        the brokers for relay servers too."""
         is_relay = request.args.get("relay", "") == "1"
         response = jsonify(service.connectivity.fetch(is_relay).document())
         # A relay credential is a bearer token: nothing between the service and the viewer may keep it.
@@ -230,8 +210,6 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @sock.route("/api/ws")
     def events_socket(ws: Any) -> None:
-        """The service's events to a viewer: ``state`` on connect and on every change, ``profile``, ``stopped`` and
-        ``handoff_request``."""
         client_queue = service.broadcaster.register()
         try:
             ws.send(service.broadcaster_state_text())
@@ -257,8 +235,6 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.post("/api/session")
     def create_session() -> ResponseReturnValue:
-        """Log the requester in to neko as a session named from ``X-Imbue-Identity`` (a header-less request is the
-        owner); answers the session id, its token and name, and whether it is the owner's."""
         identity = parse_identity_header(request.headers.get(IDENTITY_HEADER))
         try:
             session = service.create_session(identity)
@@ -279,7 +255,6 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.post("/api/control/take")
     def take_control() -> ResponseReturnValue:
-        """The human verb: the session named by ``session_id`` takes control of the Screen through the lease."""
         session_id = session_id_from_request()
         if session_id is None:
             return _error("session_id is required", HTTP_BAD_REQUEST)
@@ -294,7 +269,6 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.post("/api/control/return")
     def return_control() -> ResponseReturnValue:
-        """The human verb: the session named by ``session_id`` gives control of the Screen back."""
         session_id = session_id_from_request()
         if session_id is None:
             return _error("session_id is required", HTTP_BAD_REQUEST)
@@ -308,7 +282,6 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.post("/api/control/acquire")
     def acquire() -> ResponseReturnValue:
-        """The agent verb: the agent named by ``X-Mngr-Agent-Id`` acquires the lease (``reclaim`` to take it back)."""
         agent_id, agent_name = _agent_identity()
         if agent_id is None:
             return _error(f"{AGENT_ID_HEADER} header required", HTTP_BAD_REQUEST)
@@ -319,7 +292,6 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.post("/api/control/release")
     def release() -> ResponseReturnValue:
-        """The agent verb: the agent named by ``X-Mngr-Agent-Id`` releases the lease."""
         agent_id, _ = _agent_identity()
         if agent_id is None:
             return _error(f"{AGENT_ID_HEADER} header required", HTTP_BAD_REQUEST)
@@ -327,7 +299,6 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.post("/api/control/handoff")
     def handoff() -> ResponseReturnValue:
-        """The agent verb: the agent holding the lease hands the Screen to the human, with a ``reason``."""
         agent_id, agent_name = _agent_identity()
         if agent_id is None:
             return _error(f"{AGENT_ID_HEADER} header required", HTTP_BAD_REQUEST)
@@ -338,8 +309,6 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.post("/api/screen-size")
     def screen_size() -> ResponseReturnValue:
-        """Resize the Screen to the controller's stage size (``width`` and ``height`` in CSS pixels); a report from a
-        session that does not control the Screen is not applied."""
         body = _json_body()
         width, height = body.get("width"), body.get("height")
         if not (isinstance(width, int) and isinstance(height, int) and width > 0 and height > 0):
@@ -375,7 +344,6 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.post("/api/input-seen")
     def input_seen() -> ResponseReturnValue:
-        """The viewer's input relay reporting activity for its session, the profile chooser's clock."""
         session_id = session_id_from_request()
         if session_id is None:
             return _error("session_id is required", HTTP_BAD_REQUEST)
@@ -421,8 +389,6 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.post("/api/drop")
     def drop_files() -> ResponseReturnValue:
-        """The controller's dropped files (multipart ``session_id`` and ``files``), written into the Screen's desktop
-        folder under their own names."""
         _cap_request_body(MAX_DROP_BYTES)
         if service.stack.lifecycle != Lifecycle.RUNNING:
             return _error("the Screen is not running", HTTP_CONFLICT)
@@ -452,7 +418,6 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.get("/api/screenshot")
     def screenshot() -> ResponseReturnValue:
-        """The display as an image (``format`` png or jpeg, ``quality`` 1 to 100), from neko's screenshot route."""
         raw_quality = request.args.get("quality", str(DEFAULT_SCREENSHOT_QUALITY))
         if not raw_quality.isdigit() or not 1 <= int(raw_quality) <= 100:
             return _error("quality must be an integer from 1 to 100", HTTP_BAD_REQUEST)
@@ -472,7 +437,6 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.get("/api/windows")
     def windows() -> ResponseReturnValue:
-        """The X windows on the display, through ``wmctrl``."""
         agent_id, _ = _agent_identity()
         if agent_id is not None:
             service.touch(agent_id)
@@ -486,7 +450,6 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.post("/api/windows/<window_id>/activate")
     def activate_window(window_id: str) -> ResponseReturnValue:
-        """Raise and focus the X window with this id."""
         agent_id, _ = _agent_identity()
         if agent_id is not None:
             service.touch(agent_id)
@@ -500,7 +463,6 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.post("/api/run")
     def run() -> ResponseReturnValue:
-        """Launch a ``command`` on the display, detached, starting the stack first when it is down; answers the pid."""
         agent_id, _ = _agent_identity()
         try:
             command = RunCommand(_json_body().get("command"))
@@ -526,8 +488,6 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.post(STOPPED_NOTIFICATION_PATH)
     def stopped() -> ResponseReturnValue:
-        """The watcher's notification that a member of the stack exited (loopback only): the service records the stop
-        with its reason."""
         if not _is_loopback_request():
             return _error("loopback only", HTTP_FORBIDDEN)
         body = _json_body()
@@ -541,12 +501,10 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.route(f"{NEKO_PROXY_PREFIX}/<path:upstream_path>", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
     def neko_http(upstream_path: str) -> ResponseReturnValue:
-        """The reverse proxy to neko's HTTP API."""
         return proxy.relay_http(request, upstream_path)
 
     @sock.route(f"{NEKO_PROXY_PREFIX}/api/ws")
     def neko_socket(ws: Any) -> None:
-        """The reverse proxy to neko's WebSocket."""
         proxy.relay_websocket(ws, request.query_string.decode("latin-1"))
 
     return app

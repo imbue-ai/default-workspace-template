@@ -1,7 +1,5 @@
 name = "screen"
 display_name = "Screen"
-description = "The workspace's one streamed Linux desktop, a window the person or an agent drives, one at a time; the browser runs on it."
-api_schema_path = "/api/schema"
 icon = "icon.svg"
 critical = false
 # The stack never stops for emptiness: it starts on first demand and ends only under memory

@@ -14,8 +14,6 @@ from flask.testing import FlaskClient
 
 from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import CONTEXT_MENU_ROUTE
-from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
-from app_schema.testing import assert_api_schema_describes_app
 from mock_chromium_test import FakeCdpConnector
 from mock_neko_test import FakeNeko
 from screen.browser_routes import CANCEL_PENDING_URL_RULE
@@ -70,7 +68,6 @@ _OPEN_RULES: Final[frozenset[str]] = frozenset(
         APP_CONTRACT_ROUTE,
         CONTEXT_MENU_ROUTE,
         "/health",
-        DEFAULT_API_SCHEMA_PATH,
         "/api/state",
         "/api/start",
         "/api/connect-info",
@@ -94,10 +91,6 @@ def _session(client: FlaskClient, headers: dict[str, str]) -> dict:
     answer = client.post("/api/session", headers=headers)
     assert answer.status_code == 200, answer.get_json()
     return answer.get_json()
-
-
-def test_the_app_describes_its_api_the_way_its_manifest_says(client: FlaskClient) -> None:
-    assert_api_schema_describes_app(client, Path(__file__).resolve().parent / "app.toml")
 
 
 def test_every_route_is_either_the_owners_or_open_to_a_visitor(app: Flask) -> None:

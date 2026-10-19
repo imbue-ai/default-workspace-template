@@ -130,8 +130,6 @@ def build_browser_blueprint(service: ScreenService) -> Blueprint:
 
     @blueprint.post(LAUNCH_BROWSER_PATH)
     def launch_browser() -> ResponseReturnValue:
-        """The ``browser`` launch path: start the stack and Chromium when needed, open ``url`` as a tab in front when
-        given, and answer the Screen's page."""
         body = request.get_json(force=True, silent=True)
         if not isinstance(body, dict):
             return _refusal("the launch body must be a JSON object", HTTP_BAD_REQUEST)
@@ -189,7 +187,6 @@ def build_browser_blueprint(service: ScreenService) -> Blueprint:
 
     @blueprint.get("/browsers")
     def list_browsers() -> ResponseReturnValue:
-        """Every browser of the fleet with its state, and whether another can be created."""
         missing = service.fleet.install_reason()
         view = service.control.view()
         return jsonify(
@@ -204,8 +201,6 @@ def build_browser_blueprint(service: ScreenService) -> Blueprint:
 
     @blueprint.post("/browsers")
     def create_browser() -> ResponseReturnValue:
-        """Create a browser (``name`` and ``url`` optional) and answer its name at once; Chromium launches in the
-        background."""
         body = _body()
         raw_name = body.get("name")
         raw_url = body.get("url")
@@ -218,7 +213,6 @@ def build_browser_blueprint(service: ScreenService) -> Blueprint:
 
     @blueprint.delete("/browsers/<raw_name>")
     def close_browser(raw_name: str) -> ResponseReturnValue:
-        """End the browser and forget it: its profile, with its logins, is deleted."""
         name = _browser_name(raw_name)
         if name is None:
             return _error({"error": "invalid browser name"}, HTTP_NOT_FOUND)
@@ -227,7 +221,6 @@ def build_browser_blueprint(service: ScreenService) -> Blueprint:
 
     @blueprint.post("/browsers/<raw_name>/stop")
     def stop_browser(raw_name: str) -> ResponseReturnValue:
-        """End the browser's Chromium, keeping the browser, its profile and its tabs for a later start."""
         browser = _resolve(raw_name)
         if isinstance(browser, Response):
             return browser
@@ -239,7 +232,6 @@ def build_browser_blueprint(service: ScreenService) -> Blueprint:
 
     @blueprint.post("/browsers/<raw_name>/start")
     def start_browser(raw_name: str) -> ResponseReturnValue:
-        """Start a stopped browser again on its saved tabs, starting the stack first when it is down."""
         browser = _resolve(raw_name)
         if isinstance(browser, Response):
             return browser
@@ -255,7 +247,6 @@ def build_browser_blueprint(service: ScreenService) -> Blueprint:
 
     @blueprint.post("/browsers/<raw_name>/close-tab")
     def close_active_tab(raw_name: str) -> ResponseReturnValue:
-        """Close the browser's tab in front, keeping Chromium up."""
         browser = _resolve(raw_name)
         if isinstance(browser, Response):
             return browser
@@ -289,8 +280,6 @@ def build_browser_blueprint(service: ScreenService) -> Blueprint:
 
     @blueprint.get("/browsers/<raw_name>/attach")
     def attach(raw_name: str) -> ResponseReturnValue:
-        """An attach URL for the agent named by ``X-Mngr-Agent-Id`` to drive this browser through the CDP proxy, or
-        why it cannot have one."""
         agent_id, agent_name = _agent_identity()
         if agent_id is None:
             return _error({"error": f"{AGENT_ID_HEADER} header required"}, HTTP_BAD_REQUEST)
@@ -301,8 +290,6 @@ def build_browser_blueprint(service: ScreenService) -> Blueprint:
 
     @blueprint.post("/browsers/<raw_name>/acquire")
     def acquire(raw_name: str) -> ResponseReturnValue:
-        """The agent verb over a browser: acquire the Screen's lease (``reclaim`` to take it back); a browser that is
-        not running answers the attach instead."""
         agent_id, agent_name = _agent_identity()
         if agent_id is None:
             return _error({"error": f"{AGENT_ID_HEADER} header required"}, HTTP_BAD_REQUEST)
@@ -318,7 +305,6 @@ def build_browser_blueprint(service: ScreenService) -> Blueprint:
 
     @blueprint.post("/browsers/<raw_name>/release")
     def release(raw_name: str) -> ResponseReturnValue:
-        """The agent verb over a browser: release the Screen's lease."""
         agent_id, _ = _agent_identity()
         if agent_id is None:
             return _error({"error": f"{AGENT_ID_HEADER} header required"}, HTTP_BAD_REQUEST)
@@ -329,7 +315,6 @@ def build_browser_blueprint(service: ScreenService) -> Blueprint:
 
     @blueprint.post("/browsers/<raw_name>/handoff")
     def handoff(raw_name: str) -> ResponseReturnValue:
-        """The agent verb over a browser: hand the Screen to the human, with a ``reason``."""
         agent_id, agent_name = _agent_identity()
         if agent_id is None:
             return _error({"error": f"{AGENT_ID_HEADER} header required"}, HTTP_BAD_REQUEST)

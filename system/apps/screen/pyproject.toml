@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "app-manifest",
-    "app-schema",
     "click>=8.1",
     "flask>=3.0",
     "flask-sock>=0.7",
@@ -32,7 +31,6 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "app-schema[testing]",
     "pytest>=9.0",
     "pytest-cov>=7.0.0",
     "pytest-timeout>=2.3.0",
@@ -112,7 +110,6 @@ known-first-party = [
     "screen",
     "imbue",
     "app_manifest",
-    "app_schema",
     "oom_priority",
     "workspace_layout",
 ]
