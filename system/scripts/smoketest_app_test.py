@@ -186,6 +186,23 @@ def test_restart_fails_when_the_stop_rpc_reports_anything_but_not_running() -> N
     assert sup.calls == ["stop"]
 
 
+def test_restart_fails_before_any_change_when_supervisord_is_unreachable() -> None:
+    sup = _FakeSupervisor("RUNNING")
+    sup.info_error = ConnectionRefusedError("refused")
+    with pytest.raises(SystemExit, match="cannot reach supervisord"):
+        smoketest_app._restart_program(sup, "app")
+    assert sup.calls == []
+
+
+def test_restart_fails_before_any_change_for_a_program_supervisord_does_not_know() -> None:
+    bad_name = 10
+    sup = _FakeSupervisor("RUNNING")
+    sup.info_error = xmlrpc.client.Fault(bad_name, "BAD_NAME: app")
+    with pytest.raises(SystemExit, match="supervisord knows no program 'app'.*supervisorctl update"):
+        smoketest_app._restart_program(sup, "app")
+    assert sup.calls == []
+
+
 def test_restart_reports_supervisord_going_away_during_the_stop() -> None:
     sup = _FakeSupervisor("RUNNING")
     sup.stop_error = ConnectionRefusedError("refused")
