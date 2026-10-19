@@ -28,6 +28,24 @@ from testing import start_service_stack
 from testing import wait_until
 
 
+def _second_service_life(fake_supervisor: FakeSupervisor, fake_neko: FakeNeko, tmp_path: Path) -> ScreenStack:
+    """A stack of a second service life over the same supervisord, neko and state directory as the ``service``
+    fixture's."""
+    return ScreenStack(
+        supervisor=fake_supervisor,
+        neko=fake_neko,
+        state_dir=tmp_path / "state",
+        home=tmp_path / "home",
+        runtime_dir=tmp_path / "runtime",
+        display_socket_path=tmp_path / "x11" / "X99",
+        input_socket_path=tmp_path / "runtime" / "xf86-input-neko.sock",
+        install_check=lambda: None,
+        on_lifecycle_changed=lambda: None,
+        on_running=lambda _secrets, _session: None,
+        set_api_token=fake_neko.set_api_token,
+    )
+
+
 def test_start_renders_the_configuration_and_brings_the_members_up_in_order(
     service: ScreenService, fake_supervisor: FakeSupervisor, fake_neko: FakeNeko, tmp_path: Path
 ) -> None:
@@ -275,20 +293,7 @@ def test_a_running_stack_is_adopted_from_its_neko_yaml(
 ) -> None:
     start_service_stack(service)
     token_before = fake_neko.api_token
-    # A second service life over the same supervisord and neko.
-    second = ScreenStack(
-        supervisor=fake_supervisor,
-        neko=fake_neko,
-        state_dir=tmp_path / "state",
-        home=tmp_path / "home",
-        runtime_dir=tmp_path / "runtime",
-        display_socket_path=tmp_path / "x11" / "X99",
-        input_socket_path=tmp_path / "runtime" / "xf86-input-neko.sock",
-        install_check=lambda: None,
-        on_lifecycle_changed=lambda: None,
-        on_running=lambda _secrets, _session: None,
-        set_api_token=fake_neko.set_api_token,
-    )
+    second = _second_service_life(fake_supervisor, fake_neko, tmp_path)
     assert second.adopt_running_stack() is True
     assert second.lifecycle == Lifecycle.RUNNING
     assert fake_neko.api_token == token_before
@@ -303,19 +308,7 @@ def test_a_stops_reason_outlives_the_service_life_until_the_next_start(
     start_service_stack(service)
     service.stack.stop("the Screen service is restarting")
     assert (tmp_path / "state" / STOP_REASON_FILENAME).read_text() == "the Screen service is restarting"
-    second = ScreenStack(
-        supervisor=fake_supervisor,
-        neko=fake_neko,
-        state_dir=tmp_path / "state",
-        home=tmp_path / "home",
-        runtime_dir=tmp_path / "runtime",
-        display_socket_path=tmp_path / "x11" / "X99",
-        input_socket_path=tmp_path / "runtime" / "xf86-input-neko.sock",
-        install_check=lambda: None,
-        on_lifecycle_changed=lambda: None,
-        on_running=lambda _secrets, _session: None,
-        set_api_token=fake_neko.set_api_token,
-    )
+    second = _second_service_life(fake_supervisor, fake_neko, tmp_path)
     assert second.adopt_running_stack() is False
     assert second.lifecycle == Lifecycle.STOPPED
     assert second.stop_reason == "the Screen service is restarting"

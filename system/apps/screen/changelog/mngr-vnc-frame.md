@@ -160,3 +160,5 @@ Files and the desktop's icons (spec section 4.3):
 - Only the human's asks are held while an agent drives (the launch path's start page and `open:url`): an agent's own `agentic-browser-fleet new --url` (a nameless `POST /browsers`) opens its page at once, as it did before the launch path's page was held, instead of waiting as a page offered to the human. The launch path also no longer raises Chromium over the agent's work when its page was held.
 
 - A start that fails records its reason in `data/.state/screen/stop_reason` as a stop does, so a service restart after a failed start shows why the stack did not start rather than the reason of an earlier stop.
+
+- `stack_test.py` builds the second service life's stack through one helper (`_second_service_life`) in the adoption and stop-reason tests, in place of the same construction repeated in each.
