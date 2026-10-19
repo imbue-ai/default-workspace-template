@@ -3085,8 +3085,17 @@ class AgentManager:
         for agent_id in tracked:
             with self._lock:
                 session = self._session_by_agent.get(agent_id)
+                agent_state = self._agents.get(agent_id)
             if session is not None:
-                session.ensure_live()
+                # A dead agent (STOPPED/DONE/EXITED) has no live daemon to reach; build() returns
+                # None and ensure_live() would retry every 10s forever (it treats "unreachable"
+                # as a transient startup, not a permanent stop), logging "daemon not reachable"
+                # on a loop. Skip while the observe stream reports the agent dead; the sweep
+                # resumes ensure_live on the next tick after it transitions back to
+                # RUNNING/WAITING. Tracking itself is NOT torn down here (that is the observe
+                # path's job), so a restarted agent re-connects normally.
+                if agent_state is None or not is_lifecycle_dead(agent_state.state):
+                    session.ensure_live()
             # Recompute AND broadcast: options arriving from a late connect change the
             # derived choice with no state-file write to wake the poller, so this sweep
             # is what turns a late connect into a rendered bar.
