@@ -171,20 +171,29 @@ class Browser(MutableModel):
                 logger.debug("A page asked for while {} launched was not opened: {}", self.name, e)
 
     def mark_stopped_by_user(self) -> None:
-        """The stop verb: stopped on purpose, so a stack start leaves it stopped; a held page is dropped."""
+        """The stop verb: stopped on purpose, so a stack start leaves it stopped; a held page and the pages queued
+        for the launch are dropped."""
         with self._lock:
             self.lifecycle = BrowserLifecycle.STOPPED
             self.is_stopped_by_user = True
             self.pending_url = None
+            self.launch_tabs = []
 
     def mark_stopped_with_stack(self) -> None:
         """The stack ended under it: stopped for this stack life and, unless the user had stopped it, launched again
-        when the stack next runs; a held page is dropped."""
+        when the stack next runs; a held page and the pages queued for the launch are dropped."""
         with self._lock:
             if self.lifecycle != BrowserLifecycle.STOPPED:
                 self.is_launch_wanted = True
             self.lifecycle = BrowserLifecycle.STOPPED
             self.pending_url = None
+            self.launch_tabs = []
+
+    def mark_stopped_after_failed_launch(self) -> None:
+        """A relaunch that failed: kept stopped with its tabs, the pages queued for the launch dropped."""
+        with self._lock:
+            self.lifecycle = BrowserLifecycle.STOPPED
+            self.launch_tabs = []
 
     def mark_crashed(self) -> bool:
         """Chromium died under a running browser; answers whether it was running (a stopped one has not crashed)."""
@@ -626,7 +635,7 @@ class BrowserFleet(MutableModel):
                     browser.mark_stopped_with_stack()
                 elif is_kept_stopped_on_failure:
                     logger.warning("Browser {} failed to relaunch ({}); leaving it stopped", browser.name, e)
-                    browser.lifecycle = BrowserLifecycle.STOPPED
+                    browser.mark_stopped_after_failed_launch()
                 else:
                     logger.warning("Browser {} failed to launch ({}); removing it", browser.name, e)
                     with self._lock:

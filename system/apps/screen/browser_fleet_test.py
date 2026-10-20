@@ -441,6 +441,9 @@ def test_a_launch_the_stack_ends_under_is_ended_and_the_browser_launches_with_th
     harness.launcher.release.clear()
     browser = harness.fleet.create(None, "https://a.example")
     assert harness.launcher.entered.wait(5.0)
+    # A page asked for during the launch is queued for it, and goes with the launch the stack cuts short.
+    harness.fleet.ensure_browser("https://later.example")
+    assert browser.launch_tabs == ["https://later.example"]
     harness.fleet.on_stack_stopped()
     harness.launcher.release.set()
     # The Chromium that came up on a dead display is ended, never attached, and the browser is kept for the next
@@ -448,11 +451,13 @@ def test_a_launch_the_stack_ends_under_is_ended_and_the_browser_launches_with_th
     assert wait_until(lambda: len(harness.launcher.handles) == 1 and harness.launcher.handles[0].kills == 1)
     assert harness.connector.connected == []
     assert wait_until(lambda: browser.lifecycle == BrowserLifecycle.STOPPED and browser.is_launch_wanted)
+    assert browser.launch_tabs == []
     assert harness.fleet.browsers() == [browser]
     assert harness.proxy_server.lookup("browser-1") is None
     harness.fleet.on_stack_running()
     assert wait_until(lambda: browser.is_running and len(harness.launcher.requests) == 2)
     assert harness.launcher.requests[1].start_url == "https://a.example"
+    assert harness.cdp().created == []
 
 
 def test_the_gate_lets_the_token_owner_drive_takes_a_free_screen_on_the_first_frame_and_refuses_a_human(
