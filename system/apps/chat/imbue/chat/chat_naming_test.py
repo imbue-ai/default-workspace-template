@@ -118,6 +118,7 @@ class _NamingHarness:
         ("“Kid’s birthday party – at home”", "Kid's birthday party - at home"),
         ("Short name: Wiki contributions system", "Wiki contributions system"),
         ('Title: "Simple map app"', "Simple map app"),
+        ("**Simple map app**", "Simple map app"),
     ],
 )
 def test_parse_generated_chat_name_keeps_a_short_title(answer: str, expected: str) -> None:
@@ -128,6 +129,10 @@ def test_parse_generated_chat_name_keeps_a_short_title(answer: str, expected: st
     "answer",
     [
         "NONE",
+        "NONE.",
+        "None",
+        "**NONE**",
+        "`NONE`",
         "",
         "Map app: build a simple map application",
         "Five days in Rome\nA second line",

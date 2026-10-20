@@ -458,8 +458,8 @@ repeated after it, and the system prompt says it is text to title: a small model
 handed a bare "what's 2+2?" answers "4" rather than naming the chat. The title
 names the subject in two to five words, short enough for the chat list to show
 whole. A leading label ("Title: ") is dropped from the answer, and an answer
-with a colon is refused: it is the older "Short name: description" form, whose
-two halves restate each other ("Map app: build a simple map application").
+with a colon is refused: a "Short name: description" title's two halves restate
+each other ("Map app: build a simple map application").
 
 Names are ASCII. A chat's true name is the ASCII part of its name, so a name in
 another script would leave it a fragment ("React 待办应用" -> "React") or nothing,
