@@ -9,7 +9,9 @@ exists. It sets its *own* ``oom_score_adj`` (the value survives ``execve`` and i
 inherited across fork/exec by children), then ``exec``s the real command with its
 arguments untouched. Mirrors ``agent_oom_launch.py`` (self-tag, then exec).
 
-The first argument is a service key from ``oom_priority.bands.SERVICE_BANDS``.
+The first argument is a service key from ``oom_priority.bands.SERVICE_BANDS``, or
+the program name of a built-in whose band is outside the service bands
+(``bands._NON_SERVICE_PROGRAM_BANDS``, the Screen's stack members).
 Built-in services pass their own name (``system_interface``, ``share-gateway``,
 ...); user-created services pass ``user`` so they are shed before any built-in
 service under memory pressure. An unknown key is tagged with the user-service
@@ -42,7 +44,7 @@ def main() -> None:
         sys.exit(2)
     service_key = sys.argv[1]
     command = sys.argv[2:]
-    adj = bands.SERVICE_BANDS.get(service_key)
+    adj = bands.tag_key_band(service_key)
     if adj is None:
         adj = bands.USER_SERVICE
         print(

@@ -171,7 +171,10 @@ browser fleet's were.
 
 ## Bands
 
-Programs started from the Screen itself (the XFCE menu, a terminal on it) inherit the
+The stack's four programs and the watcher sit at `SCREEN_STACK` (850): above every agent,
+since the desktop is something an agent or the user launched, and below the programs on it,
+since ending the X server takes all of them along. Programs started from the Screen itself
+(the XFCE menu, a terminal on it) inherit the
 session's band, the stack's own, so the service runs a raise-only sweep every ten
 seconds (`band_sweep.py`, spec section 9.4): every descendant of `screen-session` whose
 executable is not one of the session's own (`startxfce4`, `xfce4-session`, `xfwm4`,

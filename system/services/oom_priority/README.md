@@ -68,8 +68,9 @@ ever acting on a laptop with swap.
   `priority` an app's manifest declares; the chat app sits at 25, just above
   the agent observer at 24, itself just above the shell) <
   user-created services (`USER_SERVICE`, 200) < user agent (300) < worker agent
-  (600) < agent subprocess (900) < Chromium's own processes (910-1000, renderers
-  at the ceiling). Chat agents occupy a *dynamic* range that straddles the worker
+  (600) < the Screen's stack (`SCREEN_STACK`, 850: the desktop an agent or the user
+  launched, so it goes before any agent and after the programs on it) < agent
+  subprocess (900) < Chromium's own processes (910-1000, renderers at the ceiling). Chat agents occupy a *dynamic* range that straddles the worker
   band: `CHAT_AGENT_FLOOR` (300, a chat being engaged with right now) through
   `CHAT_AGENT_BASE` (560, idle but recently used, and the launch band) up to
   `CHAT_AGENT_STALE_CEILING` (800, untouched long enough to count as abandoned).
@@ -106,7 +107,8 @@ without inspecting the process tree:
 | a workspace terminal's shell (a `terminal-N` tmux session's pane, and everything run in it) | session creation | `terminal-session` (the user-service level, 200) | `system/services/oom_priority/bin/oom_tag_service.py terminal-session bash -l`, the session command the terminal app gives `tmux new-session` (a pane otherwise inherits the tmux server's protected 0) |
 | an agent's main process | launch | chat -> the idle-but-fresh chat band (560); worker or unidentifiable -> worker agent | `system/services/oom_priority/bin/agent_oom_launch.py` |
 | an agent's subprocesses | each Bash tool call | agent subprocess (most expendable) | `system/scripts/agent_rewrite_bash_command.py` (PreToolUse; also sets the commit identity) |
-| the Screen service and the four programs of its stack (`screen-xorg`, `screen-session`, `screen-pulse`, `screen-neko`) and its watcher | launch | `screen` (72, an ordinary service band; Files and Getting Started sit above it); the members resolve to it by program name through `_NON_SERVICE_PROGRAM_BANDS` | `system/services/oom_priority/bin/oom_tag_service.py screen` (command prefix) |
+| the Screen service | launch | `screen` (72, an ordinary service band; Files and Getting Started sit above it) | `system/services/oom_priority/bin/oom_tag_service.py screen` (command prefix) |
+| the four programs of the Screen's stack (`screen-xorg`, `screen-session`, `screen-pulse`, `screen-neko`) and its watcher | launch | `SCREEN_STACK` (850), by program name through `_NON_SERVICE_PROGRAM_BANDS` | `system/services/oom_priority/bin/oom_tag_service.py <program name>` (command prefix) |
 | a program started on the Screen by `screen run` | launch | agent subprocess (900) | the Screen service's launcher (`oom_tag_shell_prefix`) |
 | a program started from the Screen itself (the XFCE menu, a terminal on it) | the Screen service's sweep, every 10 s | agent subprocess (900) | the Screen service's band sweep (`screen.band_sweep`) -- see "The Chromium exception" below |
 | Chromium's own processes | the same sweep, with a burst after a launch or a new tab | `[SHARED_BROWSER_FLOOR, SHARED_BROWSER]` (910-1000), renderers at the ceiling | the Screen service's band sweep -- see "The Chromium exception" below |
@@ -210,8 +212,9 @@ idempotent. The same sweep is what raises everything else started from the Scree
 (the XFCE menu, a terminal on it), which inherits the session's band, to
 `AGENT_SUBPROCESS`, leaving only the session's own programs (`xfce4-session`,
 `xfwm4`, `xfce4-panel`, `xfdesktop`, `xfsettingsd`, `xfconfd`, the D-Bus daemon)
-in the stack's band; under pressure the order is Chromium's renderers, then the
-programs on the Screen, then the stack (the Screen spec, section 9.4).
+in the stack's band (`SCREEN_STACK`, 850); under pressure the order is Chromium's
+renderers, then the programs on the Screen, then the stack, then the agents (the
+Screen spec, section 9.4).
 
 The input range is Chrome's own gradation (0-300), **not** 0-1000. Scaling
 against 1000 would compress every Chromium process into 910-937, the bottom

@@ -8,7 +8,7 @@ from screen.band_sweep import target_band
 from testing import ManualClock
 from testing import wait_until
 
-_SESSION_BAND = bands.SERVICE_BANDS["screen"]
+_SESSION_BAND = bands.SCREEN_STACK
 
 
 def _tree() -> FakeProcessTree:

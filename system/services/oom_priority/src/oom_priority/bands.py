@@ -48,6 +48,15 @@ PRIMARY_AGENT: Final[int] = PROTECTED
 USER_AGENT: Final[int] = 300
 WORKER_AGENT: Final[int] = 600
 AGENT_SUBPROCESS: Final[int] = 900
+# The Screen's stack (Xorg, XFCE, PulseAudio, neko and the watcher that ends them
+# together): the desktop an agent or the user launched, so it is shed before any
+# agent, even an abandoned chat at its stale ceiling, and after the programs on
+# it (an agent's subprocesses, and Chromium above them), since ending the X
+# server takes every program on the Screen with it while ending one program
+# may free enough. The Screen service that starts the stack is an ordinary
+# service (``SERVICE_BANDS["screen"]``): it holds little memory and brings the
+# stack back with Chromium's tabs.
+SCREEN_STACK: Final[int] = 850
 
 # Dynamic chat-agent band. A chat launches at ``CHAT_AGENT_BASE`` and is re-tagged
 # at runtime from live activity (see the chat app's ``ChatOomPrioritizer``)
@@ -190,8 +199,8 @@ def chat_agent_oom_score_adj(
 # hurts: the two authority paths into the workspace (owner-exec, then the
 # terminal) come first, then the UI and the chat app, then the sharing stack,
 # then the runtime-state sync (github-sync, opt-in) and the host backup, then
-# the job scheduler, then the Screen (the streamed desktop the browser runs on),
-# then the Files app, and last the two single-page apps (Getting Started, then
+# the job scheduler, then the Screen service (the stack it starts sits far above,
+# at SCREEN_STACK), then the Files app, and last the two single-page apps (Getting Started, then
 # Memory & disk).
 # ``user`` is the single band every *user-created* service shares;
 # it sits above every built-in service so a user's own service is shed before any
@@ -255,16 +264,13 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # command is the stock ``/usr/sbin/cron`` binary, not a workspace entry
     # point), so this band reaches it via the backstop listener instead.
     "cron": 55,
-    # The Screen: the service that owns the workspace's one streamed desktop and the
-    # four programs of its stack (Xorg, XFCE, PulseAudio, neko), which share the key
-    # through _NON_SERVICE_PROGRAM_BANDS below, and that launches the browser's
-    # Chromium. Below the Files app (docs/system/specs/screen/spec.md section 9.4):
-    # the programs the user runs on the Screen sit in AGENT_SUBPROCESS and Chromium's
-    # processes in the shared-browser band, so by the time the service bands are shed
-    # every one of them is gone and the stack holds only its own memory. The service
-    # itself holds little memory and must stay well below SHARED_BROWSER, where the
-    # Chromium processes it launched live: ranked above them it would be picked first
-    # every time and free nothing.
+    # The Screen service: the lease, the fleet and the CDP proxy of the workspace's
+    # one streamed desktop, which launches the browser's Chromium. Its stack (Xorg,
+    # XFCE, PulseAudio, neko) is not here: it sits at SCREEN_STACK, shed before any
+    # agent (docs/system/specs/screen/spec.md section 9.4). The service itself holds
+    # little memory, brings the stack back with Chromium's tabs, and must stay well
+    # below SHARED_BROWSER, where the Chromium processes it launched live: ranked
+    # above them it would be picked first every time and free nothing.
     "screen": 72,
     # The Files app: a small Flask server over the workspace's files. It
     # holds little memory and supervisord restarts it if shed.
@@ -360,14 +366,23 @@ _NON_SERVICE_PROGRAM_BANDS: Final[dict[str, int]] = {
     # service origin and exits; shedding it mid-run would leave the registration
     # half-done, and it holds no memory worth reclaiming.
     "vm-exec-register": PROTECTED,
-    # The Screen's stack and its watcher share the Screen service's band: the group ends
-    # together, so no member is worth more or less than the service that starts it.
-    "screen-xorg": SERVICE_BANDS["screen"],
-    "screen-session": SERVICE_BANDS["screen"],
-    "screen-pulse": SERVICE_BANDS["screen"],
-    "screen-neko": SERVICE_BANDS["screen"],
-    "screen-watch": SERVICE_BANDS["screen"],
+    # The Screen's stack and its watcher: the group ends together, so every member
+    # shares the one band, and it is the stack's own rather than the Screen service's
+    # (see SCREEN_STACK). Each program passes its own name to the tagging wrapper.
+    "screen-xorg": SCREEN_STACK,
+    "screen-session": SCREEN_STACK,
+    "screen-pulse": SCREEN_STACK,
+    "screen-neko": SCREEN_STACK,
+    "screen-watch": SCREEN_STACK,
 }
+
+
+def tag_key_band(service_key: str) -> int | None:
+    """The band the tagging wrapper gives a program that names ``service_key``: a service's own key, or the
+    program name of a built-in outside the service bands; None for a key neither table knows."""
+    if service_key in SERVICE_BANDS:
+        return SERVICE_BANDS[service_key]
+    return _NON_SERVICE_PROGRAM_BANDS.get(service_key)
 
 
 def supervisord_program_band(

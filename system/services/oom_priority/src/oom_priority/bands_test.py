@@ -116,7 +116,7 @@ def test_supervisord_program_bands_preserve_the_shedding_order() -> None:
     assert (
         bands.supervisord_program_band("publish_cgroup_meminfo", {}) == bands.PROTECTED
     )
-    # The Screen's stack members and watcher resolve to the Screen service's own band.
+    # The Screen's stack members and watcher resolve to the stack's band, not the service's.
     for member in (
         "screen-xorg",
         "screen-session",
@@ -124,9 +124,7 @@ def test_supervisord_program_bands_preserve_the_shedding_order() -> None:
         "screen-neko",
         "screen-watch",
     ):
-        assert (
-            bands.supervisord_program_band(member, {}) == bands.SERVICE_BANDS["screen"]
-        ), member
+        assert bands.supervisord_program_band(member, {}) == bands.SCREEN_STACK, member
     assert bands.SHARED_BROWSER > bands.AGENT_SUBPROCESS
     # The `screen` program launches Chromium but is not Chromium: it resolves to its
     # service band, never to the shared-browser band its children occupy.
@@ -223,6 +221,19 @@ def test_the_screen_service_is_shed_after_the_chromium_it_launches() -> None:
     assert service < bands.shared_browser_oom_score_adj(0)
     assert service < bands.USER_AGENT
     assert service < bands.AGENT_SUBPROCESS
+
+
+def test_the_screen_stack_is_shed_after_every_agent_and_before_the_programs_on_it() -> (
+    None
+):
+    # The desktop an agent or the user launched goes before any agent, an abandoned chat
+    # at its stale ceiling included, and after what runs on it: an agent's subprocesses
+    # (the programs `screen run` starts and the sweep raises) and Chromium above them.
+    assert bands.CHAT_AGENT_STALE_CEILING < bands.SCREEN_STACK
+    assert bands.WORKER_AGENT < bands.SCREEN_STACK
+    assert bands.SCREEN_STACK < bands.AGENT_SUBPROCESS
+    assert bands.SCREEN_STACK < bands.SHARED_BROWSER_FLOOR
+    assert bands.SERVICE_BANDS["screen"] < bands.SCREEN_STACK
 
 
 def test_browser_remap_output_is_never_below_the_floor() -> None:
