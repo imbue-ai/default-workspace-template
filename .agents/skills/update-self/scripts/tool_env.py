@@ -215,9 +215,9 @@ def _is_editable_install_under(environment: Path, directory: Path) -> bool:
         if not isinstance(requirement, dict):
             continue
         source = requirement.get("editable")
-        if _canonical_name(str(requirement.get("name", ""))) != own_name or not isinstance(
-            source, str
-        ):
+        if _canonical_name(
+            str(requirement.get("name", ""))
+        ) != own_name or not isinstance(source, str):
             continue
         return Path(source).resolve().is_relative_to(directory)
     return False

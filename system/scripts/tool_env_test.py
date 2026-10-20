@@ -283,9 +283,7 @@ def _install_receipted_tool(
     environment's own bin/, and a symlink to it in the home's bin directory."""
     env_dir = tool_env.tools_dir(home) / tool_name
     (env_dir / "bin").mkdir(parents=True)
-    (env_dir / tool_env.RECEIPT).write_text(
-        f"[tool]\nrequirements = [{requirement}]\n"
-    )
+    (env_dir / tool_env.RECEIPT).write_text(f"[tool]\nrequirements = [{requirement}]\n")
     links: list[Path] = []
     for script in scripts:
         env_script = env_dir / "bin" / script

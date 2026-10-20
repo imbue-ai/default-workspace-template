@@ -5078,7 +5078,9 @@ def test_only_the_hungry_forward_steps_are_expendable_and_recovery_is_not(
     # sync are what recovery has to rebuild untagged.
     recovery_installs = [c for c in unwrapped if c[:3] == ["uv", "tool", "install"]]
     recovery_syncs = [c for c in unwrapped if c[:2] == ["uv", "sync"]]
-    assert len(recovery_installs) == 1, "recovery should reinstall the mngr tool untagged"
+    assert len(recovery_installs) == 1, (
+        "recovery should reinstall the mngr tool untagged"
+    )
     assert recovery_syncs, "recovery should re-sync the venv untagged"
 
 
@@ -5652,7 +5654,12 @@ def _old_layout(apply_repo: Path, runtime_home: Path) -> tuple[list[Path], Path]
     app_paths: list[Path] = []
     for home, package, tool_name, scripts in (
         (pinned_home, "system_interface", "system-interface", ["system-interface"]),
-        (pinned_home, "browser", "browser", ["browser-service", "agentic-browser-fleet"]),
+        (
+            pinned_home,
+            "browser",
+            "browser",
+            ["browser-service", "agentic-browser-fleet"],
+        ),
         (runtime_home, "system_interface", "system-interface", ["system-interface"]),
     ):
         environment, links = _install_app_tool(

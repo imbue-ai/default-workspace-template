@@ -832,4 +832,3 @@ def refresh_backend_dependencies(
         timeout=timeout,
     )
     _fetch_mngr_assets(repo_root, runner, expend, timeout)
-
