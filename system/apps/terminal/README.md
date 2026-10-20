@@ -1,9 +1,9 @@
 # terminal
 
 The terminal app: a web terminal served by [ttyd](https://github.com/tsl0922/ttyd),
-run as two supervisord programs declared in `system/supervisord.conf.d/` and both
-installed as entry points of this package's uv tool (`system/scripts/build_workspace.sh`,
-like every Python app with a manifest):
+run as two supervisord programs declared in `system/supervisord.conf.d/`, each
+running one of this package's entry points from the workspace venv
+(`.venv/bin/terminal-app`, `.venv/bin/terminal-pty`), like every Python app:
 
 - `terminal` (`terminal-app`) is the terminal origin. It serves the **wrapper pages**
   on 7681 (`pages.py`): `/?session=<name>` frames the session's ttyd page from the
