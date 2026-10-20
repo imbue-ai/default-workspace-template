@@ -10,6 +10,4 @@ The browser moved onto the Screen (`docs/system/specs/screen/spec.md`, sections 
 
 - `migrate-workspace`'s legacy path map sends the old `libs/browser/` to `system/apps/screen/`, where the browser lives now, rather than to the deleted `system/apps/browser/`.
 
-- The `use-screen` and `agentic-browser-fleet` skills describe `handoff` as the lease does it: the Screen is freed for the human with the agent first in line to resume (the human's first input takes it, their "Give control back" or leaving resumes the agent), rather than "pinned to the human", which the lease never did.
-
-- The `use-screen` and `agentic-browser-fleet` skills describe `handoff` as pinned again: the Screen goes to the human and no other agent can take it until they give it back.
+- The `use-screen` and `agentic-browser-fleet` skills describe `handoff` as the lease does it: the Screen goes to the human pinned (no other agent can take it until they give it back), with the agent first in line to resume; the human's first input claims it, and their "Give control back" or leaving hands it to the agent.
