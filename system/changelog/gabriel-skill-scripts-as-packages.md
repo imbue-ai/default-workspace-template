@@ -32,4 +32,4 @@ This release turns the workspace's scripts into packages. An existing workspace'
 
 - The gcp and azure create templates no longer forward `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` and `GH_TOKEN` into the workspace's host env. Every other template stopped in July (Claude auth moved into accounts, and GitHub sync became an opt-in skill); these two were added on a parallel branch and kept the old line.
 
-- `system/scripts/stdlib_only_scripts_test.py` checks every module of `workspace_bare_scripts` instead of a hand-kept list of scripts. That brings in the rewrite hook's `agent_rewrite_bash_command`, so `oom_priority`, which it imports, is now held to the stdlib-only rule as `chat_background_tasks` is; no script on the old list imported it, so its code had not been checked.
+- `system/scripts/stdlib_only_scripts_test.py` checks every module of `workspace_bare_scripts` instead of a hand-kept list of scripts, so the modules that list left out -- the four guard checks, the rewrite hook's `agent_rewrite_bash_command` and `with_secrets` -- are now held to the stdlib-only rule on their own.
