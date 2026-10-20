@@ -142,7 +142,7 @@ def test_a_held_page_opens_once_the_agent_releases(
             {"client_id": "c-link", "url": "https://example.com/"}, "only an address on this machine", id="external"
         ),
         pytest.param({"client_id": "c-link", "url": "ftp://localhost/"}, "absolute http or https URL", id="not-http"),
-        pytest.param({"client_id": "c-link", "url": 7}, "url: must be a string", id="not-a-string"),
+        pytest.param({"client_id": "c-link", "url": 7}, "field 'url'", id="not-a-string"),
         pytest.param({"client_id": "not a client", "url": "http://localhost:3000/"}, "client_id", id="bad-client"),
     ],
 )

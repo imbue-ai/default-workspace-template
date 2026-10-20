@@ -22,6 +22,12 @@ from screen.errors import WindowToolError
 # The app's registered name (what its manifest, system/apps/screen/app.toml, declares and the
 # supervisord program line registers).
 APP_NAME: Final[AppName] = AppName("screen")
+# The manifest's display name and description, which the API document repeats (system/apps/screen/app.toml).
+APP_DISPLAY_NAME: Final[str] = "Screen"
+APP_DESCRIPTION: Final[str] = (
+    "The workspace's one streamed Linux desktop, a window the person or an agent drives, one at a time; the browser "
+    "runs on it."
+)
 
 # The one display (docs/system/specs/screen/spec.md D16), taken from the browser's Xvfb.
 DISPLAY: Final[str] = ":99"

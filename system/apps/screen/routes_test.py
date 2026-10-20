@@ -14,6 +14,8 @@ from flask.testing import FlaskClient
 
 from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import CONTEXT_MENU_ROUTE
+from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
+from app_schema.testing import assert_api_schema_describes_app
 from mock_chromium_test import FakeCdpConnector
 from mock_messenger_test import RecordingLauncher
 from mock_neko_test import FakeNeko
@@ -72,6 +74,7 @@ _OPEN_RULES: Final[frozenset[str]] = frozenset(
         "/assets/<path:filename>",
         APP_CONTRACT_ROUTE,
         CONTEXT_MENU_ROUTE,
+        DEFAULT_API_SCHEMA_PATH,
         "/health",
         "/api/state",
         "/api/start",
@@ -106,6 +109,10 @@ def _controlling_session(client: FlaskClient, headers: dict[str, str]) -> dict:
     return session
 
 
+def test_the_app_describes_its_api_the_way_its_manifest_says(client: FlaskClient) -> None:
+    assert_api_schema_describes_app(client, Path(__file__).resolve().parent / "app.toml")
+
+
 def test_every_route_is_either_the_owners_or_open_to_a_visitor(app: Flask) -> None:
     rules = frozenset(rule.rule for rule in app.url_map.iter_rules())
     owner_only_rules = frozenset(rule for _, rule, _ in _OWNER_ONLY_REQUESTS)
@@ -117,7 +124,7 @@ def test_a_visitor_is_refused_on_an_owner_route(client: FlaskClient, method: str
     answer = client.open(path, method=method, headers={**_VISITOR, **_AGENT})
     assert answer.status_code == 403
     body = answer.get_json()
-    assert body["detail"] == body["error"] == "this route is the workspace owner's"
+    assert body["detail"] == "this route is the workspace owner's"
 
 
 @pytest.mark.parametrize(("method", "path"), [(method, path) for method, _, path in _OWNER_ONLY_REQUESTS])
@@ -367,7 +374,7 @@ def test_a_visitor_who_does_not_control_gets_the_lease_refusal(
         refused_cancel = client.post(f"/browsers/{name}/pending-url/cancel{query}", json=body, headers=_VISITOR)
         assert refused_cancel.status_code == 403, (body, query)
         assert refused_cancel.get_json()["detail"] == "only the session in control of the Screen may do this"
-        assert refused_cancel.get_json()["error"] == refused_cancel.get_json()["detail"]
+        assert refused_cancel.get_json()["detail"]
     # Naming the owner's session is the owner-gate refusal, as on every viewer route.
     as_owner = client.post(
         f"/browsers/{name}/pending-url/cancel", json={"session_id": owner["session_id"]}, headers=_VISITOR

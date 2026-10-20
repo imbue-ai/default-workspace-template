@@ -74,7 +74,7 @@ def request(method: str, path: str, body: dict[str, Any] | None = None) -> tuple
         with urllib.request.urlopen(http_request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
             return response.status, _parse(response.read())
     except urllib.error.HTTPError as e:
-        return e.code, _parse(e.read()) or {"error": e.reason}
+        return e.code, _parse(e.read()) or {"detail": e.reason}
     except urllib.error.URLError as e:
         _err(f"cannot reach the Screen service at {service_url()} ({e.reason}). Is it running?")
         raise SystemExit(EXIT_NO_SERVICE) from e
@@ -160,7 +160,7 @@ def render_action(payload: dict[str, Any], browser_name: str, kind: str) -> tupl
         )
     if status == "timed_out":
         return f"browser {browser_name} stayed busy; gave up.", EXIT_TIMEOUT, False
-    return str(payload.get("error") or payload.get("detail") or f"command failed ({status})"), EXIT_ERROR, False
+    return str(payload.get("detail") or payload.get("error") or f"command failed ({status})"), EXIT_ERROR, False
 
 
 def _print_action(payload: dict[str, Any], browser_name: str, kind: str) -> int:
@@ -213,7 +213,7 @@ def cmd_ls(is_including_tabs: bool) -> None:
     """List the browser, who holds it, and its tabs."""
     status, payload = request("GET", "/browsers")
     if status != 200:
-        _err(str(payload.get("error", f"ls failed ({status})")))
+        _err(str(payload.get("detail") or payload.get("error") or f"ls failed ({status})"))
         raise SystemExit(EXIT_ERROR)
     browsers = payload.get("browsers", [])
     if not browsers:
@@ -248,7 +248,7 @@ def cmd_new(name: str | None, url: str | None) -> None:
         _out(f"started browser {payload['name']}")
         _print_attach(str(payload["name"]))
         return
-    _err(str(payload.get("error", f"new failed ({status})")))
+    _err(str(payload.get("detail") or payload.get("error") or f"new failed ({status})"))
     if status == HTTP_BAD_REQUEST:
         raise SystemExit(EXIT_USAGE)
     raise SystemExit(EXIT_BUSY if status in (HTTP_CONFLICT, HTTP_SERVICE_UNAVAILABLE) else EXIT_ERROR)
@@ -260,7 +260,7 @@ def cmd_close(name: str) -> None:
     """End the browser and DELETE its profile (every login); for one tab use `playwright-cli tab-close`."""
     status, payload = request("DELETE", f"/browsers/{name}")
     if status != 200:
-        _err(str(payload.get("error", f"close failed ({status})")))
+        _err(str(payload.get("detail") or payload.get("error") or f"close failed ({status})"))
         raise SystemExit(EXIT_BUSY if status == HTTP_SERVICE_UNAVAILABLE else EXIT_ERROR)
     _out(f"closed browser {name}")
 
@@ -277,7 +277,7 @@ def cmd_acquire(name: str, reclaim: bool) -> None:
     """Reserve the browser (the Screen's lease) and reprint the attach line."""
     status, payload = request("POST", f"/browsers/{name}/acquire", {"reclaim": reclaim})
     if status == HTTP_NOT_FOUND:
-        _err(str(payload.get("error", f"no browser {name}")))
+        _err(str(payload.get("detail") or payload.get("error") or f"no browser {name}"))
         raise SystemExit(EXIT_ERROR)
     if payload.get("ok"):
         open_screen_window(is_minimized=True)
@@ -290,7 +290,7 @@ def cmd_acquire(name: str, reclaim: bool) -> None:
 def _release(name: str) -> None:
     status, payload = request("POST", f"/browsers/{name}/release")
     if status != 200:
-        _err(str(payload.get("error", f"release failed ({status})")))
+        _err(str(payload.get("detail") or payload.get("error") or f"release failed ({status})"))
         raise SystemExit(EXIT_ERROR)
     _out(f"released browser {name}" if payload.get("released") else f"browser {name} was not yours to release")
 
@@ -312,7 +312,7 @@ def cmd_unlock(name: str) -> None:
 def _handoff(name: str, reason: str) -> None:
     status, payload = request("POST", f"/browsers/{name}/handoff", {"reason": reason})
     if status == HTTP_NOT_FOUND:
-        _err(str(payload.get("error", f"no browser {name}")))
+        _err(str(payload.get("detail") or payload.get("error") or f"no browser {name}"))
         raise SystemExit(EXIT_ERROR)
     if payload.get("ok"):
         # The human has to act in it, so the Screen's window is shown rather than parked.

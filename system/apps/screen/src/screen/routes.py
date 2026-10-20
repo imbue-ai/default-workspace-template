@@ -7,7 +7,6 @@ from typing import Final
 
 from flask import Flask
 from flask import Response
-from flask import jsonify
 from flask import request
 from flask import send_file
 from flask import send_from_directory
@@ -22,6 +21,37 @@ from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import CONTEXT_MENU_ROUTE
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import SHELL_CONTEXT_MENU_PATH
+from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
+from app_schema.api_schema import RouteModels
+from app_schema.api_schema import RouteTable
+from app_schema.api_schema import SchemalessRoute
+from app_schema.api_schema import merge_route_tables
+from app_schema.api_schema import register_api_schema_route
+from app_schema.routes import error_response
+from app_schema.routes import model_response
+from app_schema.routes import parse_request_body
+from screen.api_models import AcquireAnswer
+from screen.api_models import AcquireRequest
+from screen.api_models import ActivatedAnswer
+from screen.api_models import ConnectInfoAnswer
+from screen.api_models import ControlAnswer
+from screen.api_models import DropAnswer
+from screen.api_models import HandoffAnswer
+from screen.api_models import HandoffRequest
+from screen.api_models import HealthAnswer
+from screen.api_models import ReleaseAnswer
+from screen.api_models import RunAnswer
+from screen.api_models import RunRequest
+from screen.api_models import ScreenSizeAnswer
+from screen.api_models import ScreenSizeDocument
+from screen.api_models import ScreenSizeRequest
+from screen.api_models import SessionAnswer
+from screen.api_models import SessionRequest
+from screen.api_models import StartAnswer
+from screen.api_models import StateDocument
+from screen.api_models import StoppedNotification
+from screen.api_models import WindowsAnswer
+from screen.browser_routes import BROWSER_ROUTE_TABLE
 from screen.browser_routes import CANCEL_PENDING_URL_RULE
 from screen.browser_routes import OPEN_URL_PATH
 from screen.browser_routes import build_browser_blueprint
@@ -31,7 +61,6 @@ from screen.errors import ClipboardError
 from screen.errors import DisplayModeError
 from screen.errors import FileDropError
 from screen.errors import InvalidDroppedFileNameError
-from screen.errors import InvalidRunCommandError
 from screen.errors import NekoError
 from screen.errors import ScreenError
 from screen.errors import ScreenNotRunningError
@@ -40,10 +69,12 @@ from screen.identity import AGENT_ID_HEADER
 from screen.identity import AGENT_NAME_HEADER
 from screen.identity import IDENTITY_HEADER
 from screen.identity import parse_identity_header
+from screen.primitives import APP_DESCRIPTION
+from screen.primitives import APP_DISPLAY_NAME
 from screen.primitives import AgentId
 from screen.primitives import DroppedFileName
 from screen.primitives import LAUNCH_BROWSER_PATH
-from screen.primitives import RunCommand
+from screen.primitives import NekoSessionId
 from screen.primitives import XWindowId
 from screen.proxy import NEKO_PROXY_PREFIX
 from screen.proxy import NekoProxy
@@ -101,20 +132,60 @@ _LEASE_ARBITRATED_RULES: Final[frozenset[str]] = frozenset({CANCEL_PENDING_URL_R
 _DROP_FILES_FIELD: Final[str] = "files"
 _CLIPBOARD_IMAGE_FIELD: Final[str] = "image"
 
+# What every route exchanges (spec section 10.1), for the API document and the checks on every parse and answer. A
+# session verb reads ``session_id`` from the body or the query itself (``session_id_from_request``); a multipart
+# route carries no JSON request model.
+_NEKO_PROXY_RULE: Final[str] = f"{NEKO_PROXY_PREFIX}/{{upstream_path}}"
+_SESSION_VERB: Final[RouteModels] = RouteModels(
+    request_model=SessionRequest, response_model=ControlAnswer, is_body_parsed_by_view=True
+)
+ROUTE_TABLE: Final[RouteTable] = {
+    ("GET", "/"): SchemalessRoute(reason="the viewer page"),
+    ("GET", "/assets/{filename}"): SchemalessRoute(reason="a file of the viewer's built bundle"),
+    ("GET", APP_CONTRACT_ROUTE): SchemalessRoute(reason="the shell's app contract module, a script"),
+    ("GET", CONTEXT_MENU_ROUTE): SchemalessRoute(reason="the shell's context menu module, a script"),
+    ("GET", "/health"): RouteModels(response_model=HealthAnswer),
+    ("GET", "/api/state"): RouteModels(response_model=StateDocument),
+    ("POST", "/api/start"): RouteModels(response_model=StartAnswer),
+    ("GET", "/api/connect-info"): RouteModels(response_model=ConnectInfoAnswer),
+    ("GET", "/api/ws"): SchemalessRoute(reason="the service's events to a viewer, a WebSocket"),
+    ("POST", "/api/session"): RouteModels(response_model=SessionAnswer),
+    ("POST", "/api/control/take"): _SESSION_VERB,
+    ("POST", "/api/control/return"): _SESSION_VERB,
+    ("POST", "/api/control/acquire"): RouteModels(request_model=AcquireRequest, response_model=AcquireAnswer),
+    ("POST", "/api/control/release"): RouteModels(response_model=ReleaseAnswer),
+    ("POST", "/api/control/handoff"): RouteModels(request_model=HandoffRequest, response_model=HandoffAnswer),
+    ("POST", "/api/screen-size"): RouteModels(request_model=ScreenSizeRequest, response_model=ScreenSizeAnswer),
+    ("POST", "/api/input-seen"): RouteModels(
+        request_model=SessionRequest, is_body_parsed_by_view=True, success_status=HTTP_NO_CONTENT
+    ),
+    ("POST", "/api/clipboard/image"): RouteModels(success_status=HTTP_NO_CONTENT),
+    ("POST", "/api/drop"): RouteModels(response_model=DropAnswer),
+    ("GET", "/api/screenshot"): SchemalessRoute(reason="the display as a PNG or JPEG image"),
+    ("GET", "/api/windows"): RouteModels(response_model=WindowsAnswer),
+    ("POST", "/api/windows/{window_id}/activate"): RouteModels(response_model=ActivatedAnswer),
+    ("POST", "/api/run"): RouteModels(request_model=RunRequest, response_model=RunAnswer),
+    ("POST", STOPPED_NOTIFICATION_PATH): RouteModels(
+        request_model=StoppedNotification, success_status=HTTP_NO_CONTENT
+    ),
+    **{
+        (method, _NEKO_PROXY_RULE): SchemalessRoute(reason="the reverse proxy to neko's HTTP API")
+        for method in ("GET", "POST", "PUT", "DELETE", "PATCH")
+    },
+    ("GET", f"{NEKO_PROXY_PREFIX}/api/ws"): SchemalessRoute(reason="the reverse proxy to neko's WebSocket"),
+}
+
 
 def _error(detail: str, status: int) -> Response:
-    response = jsonify({"detail": detail, "error": detail})
-    response.status_code = status
-    return response
+    return error_response(detail, status)
 
 
 def _is_owner_only_path(path: str) -> bool:
     return any(path == prefix or path.startswith(f"{prefix}/") for prefix in _OWNER_ONLY_PATH_PREFIXES)
 
 
-def _json_body() -> dict[str, Any]:
-    body = request.get_json(force=True, silent=True)
-    return body if isinstance(body, dict) else {}
+def _control_answer(is_ok: bool, control: dict[str, Any]) -> Response:
+    return model_response(ControlAnswer.model_validate({"ok": is_ok, **control}))
 
 
 def _agent_identity() -> tuple[AgentId | None, str | None]:
@@ -162,6 +233,7 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.get("/")
     def page() -> ResponseReturnValue:
+        """The viewer page, from the frontend's build; a page load starts the stack when it is down."""
         service.ensure_started()
         document = static_directory / PAGE_DOCUMENT_FILENAME
         if not document.is_file():
@@ -172,6 +244,7 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.get("/assets/<path:filename>")
     def asset(filename: str) -> ResponseReturnValue:
+        """One file of the viewer's built bundle, by name."""
         try:
             return send_from_directory((static_directory / "assets").absolute(), filename)
         except NotFound:
@@ -182,34 +255,49 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
             return _error(f"the workspace shell's frontend is not built: {path} is missing", HTTP_NOT_FOUND)
         return send_file(path.absolute(), mimetype="text/javascript")
 
-    app.add_url_rule(APP_CONTRACT_ROUTE, "app_contract", lambda: _shell_module(SHELL_APP_CONTRACT_PATH))
-    app.add_url_rule(CONTEXT_MENU_ROUTE, "context_menu", lambda: _shell_module(SHELL_CONTEXT_MENU_PATH))
+    @app.get(APP_CONTRACT_ROUTE)
+    def app_contract() -> ResponseReturnValue:
+        """The app contract module: how the page talks to the shell framing it."""
+        return _shell_module(SHELL_APP_CONTRACT_PATH)
+
+    @app.get(CONTEXT_MENU_ROUTE)
+    def context_menu() -> ResponseReturnValue:
+        """The element context menu module: the right-click menu that hands an element on a page to a chat."""
+        return _shell_module(SHELL_CONTEXT_MENU_PATH)
 
     @app.get("/health")
     def health() -> ResponseReturnValue:
-        return jsonify({"status": "ok", "lifecycle": service.stack.lifecycle.value.lower()})
+        """Whether the service is up, with the stack's lifecycle."""
+        return model_response(HealthAnswer(status="ok", lifecycle=service.stack.lifecycle.value.lower()))
 
     # state and the service's events
 
     @app.get("/api/state")
     def state() -> ResponseReturnValue:
-        return jsonify(service.state_document())
+        """The state document: the lifecycle, the lease, the frontmost window's title, the video profile, the
+        Screen's size and the browser's state."""
+        return model_response(StateDocument.model_validate(service.state_document()))
 
     @app.post("/api/start")
     def start() -> ResponseReturnValue:
+        """Start the stack when it is down, and answer the lifecycle."""
         lifecycle = service.ensure_started()
-        return jsonify({"lifecycle": lifecycle.value.lower()})
+        return model_response(StartAnswer(lifecycle=lifecycle.value.lower()))
 
     @app.get("/api/connect-info")
     def connect_info() -> ResponseReturnValue:
+        """Where this viewer's WebRTC can reach the Screen (candidates) and the ICE servers to use; ``?relay=1`` asks
+        the brokers for relay servers too."""
         is_relay = request.args.get("relay", "") == "1"
-        response = jsonify(service.connectivity.fetch(is_relay).document())
+        response = model_response(ConnectInfoAnswer.model_validate(service.connectivity.fetch(is_relay).document()))
         # A relay credential is a bearer token: nothing between the service and the viewer may keep it.
         response.headers["Cache-Control"] = "no-store"
         return response
 
     @sock.route("/api/ws")
     def events_socket(ws: Any) -> None:
+        """The service's events to a viewer: ``state`` on connect and on every change, ``profile``, ``stopped`` and
+        ``handoff_request``."""
         client_queue = service.broadcaster.register()
         try:
             ws.send(service.broadcaster_state_text())
@@ -235,6 +323,8 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.post("/api/session")
     def create_session() -> ResponseReturnValue:
+        """Log the requester in to neko as a session named from ``X-Imbue-Identity`` (a header-less request is the
+        owner); answers the session id, its token and name, and whether it is the owner's."""
         identity = parse_identity_header(request.headers.get(IDENTITY_HEADER))
         try:
             session = service.create_session(identity)
@@ -244,17 +334,18 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
         except NekoError as e:
             logger.warning("Could not log a viewer in to neko: {}", e)
             return _error(f"neko refused the login: {e}", HTTP_BAD_GATEWAY)
-        return jsonify(
-            {
-                "session_id": session.session_id,
-                "token": str(session.token),
-                "name": str(session.name),
-                "is_owner": session.is_owner,
-            }
+        return model_response(
+            SessionAnswer(
+                session_id=str(session.session_id),
+                token=str(session.token),
+                name=str(session.name),
+                is_owner=session.is_owner,
+            )
         )
 
     @app.post("/api/control/take")
     def take_control() -> ResponseReturnValue:
+        """The human verb: the session named by ``session_id`` takes control of the Screen through the lease."""
         session_id = session_id_from_request()
         if session_id is None:
             return _error("session_id is required", HTTP_BAD_REQUEST)
@@ -265,10 +356,12 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
             return _error("the Screen is not running", HTTP_CONFLICT)
         if not service.take_control(session_id):
             return _error("no such session", HTTP_NOT_FOUND)
-        return jsonify({"ok": True, **service.state_document()["control"]})
+        return _control_answer(True, service.state_document()["control"])
 
     @app.post("/api/control/return")
     def return_control() -> ResponseReturnValue:
+        """The human verb: the session named by ``session_id`` gives control of the Screen back; the owner may give
+        back a handoff nobody has claimed."""
         session_id = session_id_from_request()
         if session_id is None:
             return _error("session_id is required", HTTP_BAD_REQUEST)
@@ -276,46 +369,54 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
         if refusal is not None:
             return _error(refusal, HTTP_FORBIDDEN)
         returned = service.return_control(session_id)
-        return jsonify({"ok": returned, **service.state_document()["control"]})
+        return _control_answer(returned, service.state_document()["control"])
 
     # the agent verbs (the fleet API's shape)
 
     @app.post("/api/control/acquire")
     def acquire() -> ResponseReturnValue:
+        """The agent verb: the agent named by ``X-Mngr-Agent-Id`` acquires the lease (``reclaim`` to take it back);
+        a stopped Screen is started and answers ``starting``."""
         agent_id, agent_name = _agent_identity()
         if agent_id is None:
             return _error(f"{AGENT_ID_HEADER} header required", HTTP_BAD_REQUEST)
-        answer = service.acquire(agent_id, agent_name, is_reclaim=bool(_json_body().get("reclaim", False)))
+        body = parse_request_body(AcquireRequest)
+        answer = service.acquire(agent_id, agent_name, is_reclaim=body.reclaim)
         if answer["ok"]:
             service.touch(agent_id)
-        return jsonify(answer)
+        return model_response(AcquireAnswer.model_validate(answer))
 
     @app.post("/api/control/release")
     def release() -> ResponseReturnValue:
+        """The agent verb: the agent named by ``X-Mngr-Agent-Id`` releases the lease."""
         agent_id, _ = _agent_identity()
         if agent_id is None:
             return _error(f"{AGENT_ID_HEADER} header required", HTTP_BAD_REQUEST)
-        return jsonify({"released": service.release(agent_id), **service.state_document()["control"]})
+        released = service.release(agent_id)
+        return model_response(
+            ReleaseAnswer.model_validate({"released": released, **service.state_document()["control"]})
+        )
 
     @app.post("/api/control/handoff")
     def handoff() -> ResponseReturnValue:
+        """The agent verb: the agent holding the lease hands the Screen to the human, pinned, with a ``reason``."""
         agent_id, agent_name = _agent_identity()
         if agent_id is None:
             return _error(f"{AGENT_ID_HEADER} header required", HTTP_BAD_REQUEST)
-        reason = str(_json_body().get("reason", "")).strip() or "human verification needed"
-        return jsonify(service.handoff(agent_id, agent_name, reason))
+        reason = parse_request_body(HandoffRequest).reason.strip() or "human verification needed"
+        return model_response(HandoffAnswer.model_validate(service.handoff(agent_id, agent_name, reason)))
 
     # sizing and the profile's input clock
 
     @app.post("/api/screen-size")
     def screen_size() -> ResponseReturnValue:
-        body = _json_body()
-        width, height = body.get("width"), body.get("height")
-        if not (isinstance(width, int) and isinstance(height, int) and width > 0 and height > 0):
-            return _error("width and height must be positive integers", HTTP_BAD_REQUEST)
+        """Resize the Screen to the controller's stage size (``width`` and ``height`` in CSS pixels); a report from a
+        session that does not control the Screen is not applied."""
+        body = parse_request_body(ScreenSizeRequest)
+        width, height = body.width, body.height
         if service.stack.lifecycle != Lifecycle.RUNNING:
             return _error("the Screen is not running", HTTP_CONFLICT)
-        session_id = session_id_from_request()
+        session_id = NekoSessionId(body.session_id) if body.session_id else None
         current = service.screen_size
         # A viewer's report counts only while its session controls the Screen; a report with no session (the
         # ``screen size`` command) is the controller's by definition (spec sections 7.2 and 17), so only the owner
@@ -327,12 +428,12 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
             if refusal is not None:
                 return _error(refusal, HTTP_FORBIDDEN)
         if session_id is not None and not service.is_controller_session(session_id):
-            return jsonify(
-                {
-                    "applied": False,
-                    "reason": "not the controller",
-                    "screen_size": current.model_dump() if current is not None else None,
-                }
+            return model_response(
+                ScreenSizeAnswer(
+                    applied=False,
+                    reason="not the controller",
+                    screen_size=ScreenSizeDocument.model_validate(current.model_dump()) if current else None,
+                )
             )
         try:
             applied = service.set_screen_size(width, height)
@@ -340,10 +441,15 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
             return _error(str(e), HTTP_CONFLICT)
         except DisplayModeError as e:
             return _error(str(e), HTTP_BAD_GATEWAY)
-        return jsonify({"applied": True, "reason": None, "screen_size": applied.model_dump()})
+        return model_response(
+            ScreenSizeAnswer(
+                applied=True, reason=None, screen_size=ScreenSizeDocument.model_validate(applied.model_dump())
+            )
+        )
 
     @app.post("/api/input-seen")
     def input_seen() -> ResponseReturnValue:
+        """The viewer's input relay reporting activity for its session, the profile chooser's clock."""
         session_id = session_id_from_request()
         if session_id is None:
             return _error("session_id is required", HTTP_BAD_REQUEST)
@@ -389,6 +495,8 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.post("/api/drop")
     def drop_files() -> ResponseReturnValue:
+        """The controller's dropped files (multipart ``session_id`` and ``files``), written into the Screen's desktop
+        folder under their own names."""
         _cap_request_body(MAX_DROP_BYTES)
         if service.stack.lifecycle != Lifecycle.RUNNING:
             return _error("the Screen is not running", HTTP_CONFLICT)
@@ -412,12 +520,13 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
         except FileDropError as e:
             logger.warning("A dropped file could not be saved: {}", e)
             return _error(str(e), HTTP_BAD_GATEWAY)
-        return jsonify({"directory": str(service.desktop_dir), "saved": [path.name for path in saved]})
+        return model_response(DropAnswer(directory=str(service.desktop_dir), saved=[path.name for path in saved]))
 
     # the display
 
     @app.get("/api/screenshot")
     def screenshot() -> ResponseReturnValue:
+        """The display as an image (``format`` png or jpeg, ``quality`` 1 to 100), from neko's screenshot route."""
         raw_quality = request.args.get("quality", str(DEFAULT_SCREENSHOT_QUALITY))
         if not raw_quality.isdigit() or not 1 <= int(raw_quality) <= 100:
             return _error("quality must be an integer from 1 to 100", HTTP_BAD_REQUEST)
@@ -437,6 +546,7 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.get("/api/windows")
     def windows() -> ResponseReturnValue:
+        """The X windows on the display, through ``wmctrl``."""
         agent_id, _ = _agent_identity()
         if agent_id is not None:
             service.touch(agent_id)
@@ -446,10 +556,11 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
             return _error(str(e), HTTP_CONFLICT)
         except WindowToolError as e:
             return _error(str(e), HTTP_BAD_GATEWAY)
-        return jsonify({"windows": [window.model_dump() for window in listed]})
+        return model_response(WindowsAnswer(windows=listed))
 
     @app.post("/api/windows/<window_id>/activate")
     def activate_window(window_id: str) -> ResponseReturnValue:
+        """Raise and focus the X window with this id."""
         agent_id, _ = _agent_identity()
         if agent_id is not None:
             service.touch(agent_id)
@@ -459,15 +570,13 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
             return _error(str(e), HTTP_CONFLICT)
         except WindowToolError as e:
             return _error(str(e), HTTP_BAD_REQUEST)
-        return jsonify({"activated": True})
+        return model_response(ActivatedAnswer(activated=True))
 
     @app.post("/api/run")
     def run() -> ResponseReturnValue:
+        """Launch a ``command`` on the display, detached, starting the stack first when it is down; answers the pid."""
         agent_id, _ = _agent_identity()
-        try:
-            command = RunCommand(_json_body().get("command"))
-        except InvalidRunCommandError as e:
-            return _error(str(e), HTTP_BAD_REQUEST)
+        command = parse_request_body(RunRequest).command
         if service.stack.lifecycle != Lifecycle.RUNNING:
             service.ensure_started()
             if not service.wait_until_running(_RUN_START_WAIT_SECONDS):
@@ -478,7 +587,7 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
             pid = service.run_command(command)
         except ScreenError as e:
             return _error(str(e), HTTP_BAD_GATEWAY)
-        return jsonify({"pid": pid})
+        return model_response(RunAnswer(pid=pid))
 
     # the browser: its launch path, the open:url handler and the fleet API (spec section 16)
 
@@ -488,11 +597,13 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.post(STOPPED_NOTIFICATION_PATH)
     def stopped() -> ResponseReturnValue:
+        """The watcher's notification that a member of the stack exited (loopback only): the service records the stop
+        with its reason."""
         if not _is_loopback_request():
             return _error("loopback only", HTTP_FORBIDDEN)
-        body = _json_body()
-        member = str(body.get("member", "")).strip() or "a member"
-        reason = str(body.get("reason", "")).strip() or f"{member} stopped"
+        body = parse_request_body(StoppedNotification)
+        member = body.member.strip() or "a member"
+        reason = body.reason.strip() or f"{member} stopped"
         if not service.notify_stopped(member, reason):
             return _error("the group is still running", HTTP_CONFLICT)
         return Response(status=HTTP_NO_CONTENT)
@@ -501,10 +612,21 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
 
     @app.route(f"{NEKO_PROXY_PREFIX}/<path:upstream_path>", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
     def neko_http(upstream_path: str) -> ResponseReturnValue:
+        """The reverse proxy to neko's HTTP API."""
         return proxy.relay_http(request, upstream_path)
 
     @sock.route(f"{NEKO_PROXY_PREFIX}/api/ws")
     def neko_socket(ws: Any) -> None:
+        """The reverse proxy to neko's WebSocket."""
         proxy.relay_websocket(ws, request.query_string.decode("latin-1"))
+
+    # the API document (the manifest's api_schema_path), a visitor's route like the page
+    register_api_schema_route(
+        app,
+        DEFAULT_API_SCHEMA_PATH,
+        title=APP_DISPLAY_NAME,
+        description=APP_DESCRIPTION,
+        route_table=merge_route_tables(ROUTE_TABLE, BROWSER_ROUTE_TABLE),
+    )
 
     return app
