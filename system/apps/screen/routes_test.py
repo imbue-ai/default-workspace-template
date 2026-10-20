@@ -374,7 +374,6 @@ def test_a_visitor_who_does_not_control_gets_the_lease_refusal(
         refused_cancel = client.post(f"/browsers/{name}/pending-url/cancel{query}", json=body, headers=_VISITOR)
         assert refused_cancel.status_code == 403, (body, query)
         assert refused_cancel.get_json()["detail"] == "only the session in control of the Screen may do this"
-        assert refused_cancel.get_json()["detail"]
     # Naming the owner's session is the owner-gate refusal, as on every viewer route.
     as_owner = client.post(
         f"/browsers/{name}/pending-url/cancel", json={"session_id": owner["session_id"]}, headers=_VISITOR
