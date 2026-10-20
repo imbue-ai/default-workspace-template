@@ -208,7 +208,8 @@ def _is_editable_install_under(environment: Path, directory: Path) -> bool:
         receipt = tomllib.loads((environment / RECEIPT).read_text())
     except (OSError, tomllib.TOMLDecodeError):
         return False
-    requirements = receipt.get("tool", {}).get("requirements", [])
+    tool = receipt.get("tool")
+    requirements = tool.get("requirements", []) if isinstance(tool, dict) else []
     own_name = _canonical_name(environment.name)
     for requirement in requirements if isinstance(requirements, list) else []:
         if not isinstance(requirement, dict):

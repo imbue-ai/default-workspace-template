@@ -355,14 +355,16 @@ def test_every_app_tool_goes_from_every_home_and_nothing_else_does(
 def test_an_environment_the_receipt_does_not_describe_is_left_alone(
     tmp_path: Path,
 ) -> None:
-    """A receipt that will not parse, or one whose editable requirement is a different
-    package (an app pulled in as a plugin of some other tool), proves nothing about the
-    environment it sits in, and a deletion needs proof."""
+    """A receipt that will not parse, one that parses into some other shape, or one whose
+    editable requirement is a different package (an app pulled in as a plugin of some other
+    tool), proves nothing about the environment it sits in, and a deletion needs proof."""
     apps = tmp_path / "workspace" / "system" / "apps"
     (apps / "chat").mkdir(parents=True)
     home = tmp_path / "root"
     unreadable_env, _ = _install_receipted_tool(home, "chat", "", ("chat-app",))
     (unreadable_env / tool_env.RECEIPT).write_text("[tool\n")
+    misshapen_env, _ = _install_receipted_tool(home, "files-app", "", ("files-app",))
+    (misshapen_env / tool_env.RECEIPT).write_text('tool = "files-app"\n')
     host_env, _ = _install_receipted_tool(
         home,
         "host-tool",
@@ -371,7 +373,7 @@ def test_an_environment_the_receipt_does_not_describe_is_left_alone(
     )
 
     assert tool_env.remove_app_tool_installs([home], apps) == []
-    assert unreadable_env.is_dir() and host_env.is_dir()
+    assert unreadable_env.is_dir() and misshapen_env.is_dir() and host_env.is_dir()
 
 
 def test_the_build_entry_point_drops_the_app_tools_of_the_checkout_it_builds(
