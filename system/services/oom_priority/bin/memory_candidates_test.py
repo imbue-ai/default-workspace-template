@@ -378,6 +378,7 @@ def test_an_agent_whose_chat_waits_on_a_background_task_is_not_a_candidate(
         )
     )
 
+    assert report.agents.candidates is not None
     assert [a.name for a in report.agents.candidates] == ["finished"]
 
 
