@@ -31,7 +31,7 @@ def _launch_path_params() -> list[dict[str, object]]:
 def _launch_path_data() -> dict[str, object]:
     return {
         "id": "new",
-        "label": "New File Viewer",
+        "label": "Files",
         "path": "/",
         "params": _launch_path_params(),
         "text_param": "path",
@@ -41,7 +41,7 @@ def _launch_path_data() -> dict[str, object]:
 def _full_manifest_data() -> dict[str, object]:
     return {
         "name": "files",
-        "display_name": "File Viewer",
+        "display_name": "Files",
         "icon": "icon.svg",
         "critical": False,
         "stop_when_no_windows": True,
@@ -60,7 +60,7 @@ def test_full_manifest_round_trips_every_field() -> None:
     manifest = AppManifest.model_validate(_full_manifest_data())
 
     assert manifest.name == "files"
-    assert manifest.display_name == "File Viewer"
+    assert manifest.display_name == "Files"
     assert manifest.icon == "icon.svg"
     assert manifest.priority == "files"
     assert manifest.program == "files"
@@ -117,6 +117,36 @@ def test_a_pin_takes_the_plain_linked_bar_defaults_and_needs_only_a_path() -> No
 def test_a_pin_follows_the_launch_path_rule_and_the_three_vocabularies(pin: dict[str, object], field: str) -> None:
     with pytest.raises(ValidationError, match=field):
         AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg", "pin": pin})
+
+
+@pytest.mark.parametrize("description", ["", "   ", "two\nlines", "x" * 201])
+def test_a_description_is_one_non_empty_line_of_at_most_200_characters(
+    description: str,
+) -> None:
+    with pytest.raises(ValidationError):
+        AppManifest.model_validate(
+            {**_full_manifest_data(), "description": description}
+        )
+
+
+def test_a_manifest_reads_its_description_and_api_schema_path() -> None:
+    manifest = AppManifest.model_validate(
+        {
+            **_full_manifest_data(),
+            "description": "Keeps notes.",
+            "api_schema_path": "/api/schema",
+        }
+    )
+    assert manifest.description == "Keeps notes."
+    assert manifest.api_schema_path == "/api/schema"
+    assert AppManifest.model_validate(_full_manifest_data()).description is None
+    assert AppManifest.model_validate(_full_manifest_data()).api_schema_path is None
+    with pytest.raises(ValidationError):
+        AppManifest.model_validate(
+            {**_full_manifest_data(), "api_schema_path": "api/schema?x=1"}
+        )
+    with pytest.raises(ValidationError, match="also declares description"):
+        AppManifest.model_validate({**_full_manifest_data(), "api_schema_path": "/api/schema"})
 
 
 def test_window_closed_path_follows_the_launch_path_rule() -> None:

@@ -22,8 +22,11 @@
  * (``handHandshakeDown``), so a page's app contract knows a shell stands above it; a page under a
  * root opened on its own gets none, and leaves its links to the browser. And the minds chrome
  * answers some of an inner page's asks, and its answer reaches the root, which the shell frames,
- * not the page that asked: those answers (``minds:provider-sign-in-ack``) are passed down to the
- * root's inner frames. Everything else the chrome sends is the root's own to handle.
+ * not the page that asked: those answers (``minds:provider-sign-in-ack``, and
+ * ``minds:permission-resolutions``, the verdict on a permission request a page asked the chrome
+ * to open, which the page's card flips on and whose activity strip covers the wait for the agent
+ * to be told) are passed down to the root's inner frames. Everything else the chrome sends is
+ * the root's own to handle.
  *
  * Trust: a message going up counts only when its source is one of the root's own inner frames,
  * and is forwarded only to ``window.parent``; a message going down counts only when its source is
@@ -39,7 +42,7 @@ import {
   SHELL_OPEN_LINK,
 } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
-import { PROVIDER_SIGN_IN_ACK } from "@imbue/workspace-ui/src/embed";
+import { PERMISSION_RESOLUTIONS, PROVIDER_SIGN_IN_ACK } from "@imbue/workspace-ui/src/embed";
 import { selectionFromSearch } from "./selection";
 
 const MINDS_PREFIX = "minds:";
@@ -50,7 +53,7 @@ const FORWARDED_SHELL_TYPES: ReadonlySet<string> = new Set([
   SHELL_MESSAGE,
   SHELL_OPEN_LINK,
 ]);
-const FORWARDED_TO_INNER_TYPES: ReadonlySet<string> = new Set([PROVIDER_SIGN_IN_ACK]);
+const FORWARDED_TO_INNER_TYPES: ReadonlySet<string> = new Set([PROVIDER_SIGN_IN_ACK, PERMISSION_RESOLUTIONS]);
 
 /** Whether a posted message is one the root passes up to the shell. */
 export function isForwardedToShell(data: unknown): boolean {
@@ -60,7 +63,7 @@ export function isForwardedToShell(data: unknown): boolean {
   return type.startsWith(MINDS_PREFIX) || FORWARDED_SHELL_TYPES.has(type);
 }
 
-/** Whether a message from the parent is the chrome's answer to an inner page, which the root passes down. */
+/** Whether a message from the parent is one of the chrome's answers to an inner page, which the root passes down. */
 export function isForwardedToInnerFrames(data: unknown): boolean {
   if (data === null || typeof data !== "object") return false;
   const type = (data as { type?: unknown }).type;

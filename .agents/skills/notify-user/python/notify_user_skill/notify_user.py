@@ -38,7 +38,7 @@ Environment:
                                 VPS-hosted one never injects it).
 
 The gateway is addressed directly with the same headers the in-app callers send
-rather than through ``latchkey curl`` (the ``minds-api`` skill's usual route), so
+rather than through ``latchkey curl`` (the ``imbue-studio`` skill's usual route), so
 the script does not depend on the latchkey CLI being on the PATH of whatever tool
 environment runs it.
 """

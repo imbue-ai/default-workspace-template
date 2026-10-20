@@ -51,7 +51,7 @@ const BTN_BASE =
   `${TEXT_BODY_SIZE} leading-none whitespace-nowrap border ` +
   "transition-[color,background-color,border-color] duration-(--dur-base) ease-[ease] " +
   "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent " +
-  "disabled:opacity-50 disabled:cursor-not-allowed " +
+  "disabled:opacity-40 disabled:cursor-not-allowed " +
   "not-disabled:not-aria-disabled:active:translate-y-px";
 
 // Cursor and the aria-disabled treatment, resolved in the builder: an
@@ -60,7 +60,7 @@ const BTN_BASE =
 // deliberately and explained by a tooltip, not a fault to grey out. The
 // variants' hover tints are guarded off aria-disabled below, so marking the
 // element silences them at runtime either way.
-const BTN_INTERACTIVE = "cursor-pointer aria-disabled:opacity-50 aria-disabled:cursor-not-allowed";
+const BTN_INTERACTIVE = "cursor-pointer aria-disabled:opacity-40 aria-disabled:cursor-not-allowed";
 const BTN_READONLY = "cursor-default";
 
 const BTN_VARIANTS: Record<ButtonVariant, string> = {

@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 import pytest
 from browser import fleet
 from workspace_layout.testing import LoopbackShell
@@ -104,16 +106,14 @@ def test_parser_accepts_the_ownership_verbs() -> None:
         ({"ok": False, "status": "busy_human", "enqueued": False}, "state", fleet._EXIT_BUSY),
         ({"ok": False, "status": "busy_agent", "enqueued": True}, "click", fleet._EXIT_BUSY),
         ({"ok": False, "status": "busy_agent", "enqueued": False}, "state", fleet._EXIT_BUSY),
-        # the fleet is still restoring saved browsers -> try again (busy), not a hard error.
-        ({"ok": False, "status": "initializing"}, "click", fleet._EXIT_BUSY),
         # the browser itself is still launching (init) -> try again (busy), non-fatal.
         ({"ok": False, "status": "starting"}, "click", fleet._EXIT_BUSY),
         ({"ok": False, "status": "crashed"}, "state", fleet._EXIT_ERROR),
         ({"ok": False, "status": "lost_control", "enqueued": True}, "click", fleet._EXIT_PREEMPTED),
         ({"ok": False, "status": "lost_control", "enqueued": False}, "state", fleet._EXIT_BUSY),
-        ({"ok": False, "status": "stale_index", "error": "run state"}, "click", fleet._EXIT_ERROR),
+        ({"ok": False, "status": "stale_index", "detail": "run state"}, "click", fleet._EXIT_ERROR),
         ({"ok": False, "status": "timed_out"}, "state", fleet._EXIT_TIMEOUT),
-        ({"ok": False, "status": "error", "error": "boom"}, "click", fleet._EXIT_ERROR),
+        ({"ok": False, "status": "error", "detail": "boom"}, "click", fleet._EXIT_ERROR),
     ],
 )
 def test_render_action_exit_codes(payload: dict, kind: str, expected: int) -> None:
@@ -191,9 +191,9 @@ def test_cmd_new_sends_chosen_name_and_maps_errors(monkeypatch: pytest.MonkeyPat
     assert fleet.cmd_new(args) == fleet._EXIT_OK
     assert sent == [{"name": "my-browser"}]
 
-    monkeypatch.setattr(fleet, "_request", lambda *a, **k: (400, {"error": "bad name"}))
+    monkeypatch.setattr(fleet, "_request", lambda *a, **k: (400, {"detail": "bad name"}))
     assert fleet.cmd_new(fleet._build_parser().parse_args(["new", "Bad Name"])) == fleet._EXIT_USAGE
-    monkeypatch.setattr(fleet, "_request", lambda *a, **k: (409, {"error": "already in use"}))
+    monkeypatch.setattr(fleet, "_request", lambda *a, **k: (409, {"detail": "already in use"}))
     assert fleet.cmd_new(fleet._build_parser().parse_args(["new", "dup"])) == fleet._EXIT_BUSY
 
 
@@ -229,6 +229,24 @@ def test_cmd_handoff_not_owner_still_tells_agent_to_stop(monkeypatch: pytest.Mon
     assert fleet.cmd_handoff(args) == fleet._EXIT_PREEMPTED
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param(lambda: fleet.cmd_acquire(fleet._build_parser().parse_args(["acquire", "alex-smith"])), id="acquire"),
+        pytest.param(lambda: fleet.cmd_handoff(fleet._build_parser().parse_args(["handoff", "alex-smith"])), id="handoff"),
+    ],
+)
+def test_every_ownership_verb_reads_the_gates_refusal_as_try_again_and_an_unknown_browser_as_an_error(
+    monkeypatch: pytest.MonkeyPatch, command: Callable[[], int]
+) -> None:
+    monkeypatch.setattr(fleet, "_open_viewer_window", lambda name, is_minimized: None)
+    monkeypatch.setattr(fleet, "_print_attach", lambda name: None)
+    monkeypatch.setattr(fleet, "_request", lambda *a, **k: (503, {"detail": "Browser fleet is still restoring"}))
+    assert command() == fleet._EXIT_BUSY
+    monkeypatch.setattr(fleet, "_request", lambda *a, **k: (404, {"detail": "no browser alex-smith"}))
+    assert command() == fleet._EXIT_ERROR
+
+
 def test_attach_url_waits_only_while_the_browser_is_starting(monkeypatch: pytest.MonkeyPatch) -> None:
     # `new` returns before Chromium is up, so the attach URL has to be polled -- but ONLY
     # while the daemon says "starting". Anything else will never become an attach URL, and
@@ -249,7 +267,7 @@ def test_attach_url_waits_only_while_the_browser_is_starting(monkeypatch: pytest
 
 
 def test_attach_url_bails_immediately_on_anything_but_starting(monkeypatch: pytest.MonkeyPatch) -> None:
-    for status, payload in [(404, {"error": "no browser"}), (200, {"ok": False, "status": "crashed"})]:
+    for status, payload in [(404, {"detail": "no browser"}), (200, {"ok": False, "status": "crashed"})]:
         calls: list[int] = []
         monkeypatch.setattr(fleet.time, "sleep", lambda s: (_ for _ in ()).throw(AssertionError("must not sleep")))
         monkeypatch.setattr(fleet, "_request", lambda *a, s=status, p=payload, **k: (calls.append(1), (s, p))[1])

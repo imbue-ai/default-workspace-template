@@ -326,7 +326,11 @@ def test_an_unregistered_terminal_and_pty_serve_but_register_and_sweep_nothing(
         pages_url = f"http://{LOOPBACK_HOST}:{app.pages_port}"
         assert httpx.get(f"{pages_url}/api/health", timeout=5.0).json() == {"status": "ok"}
         # A close hint is taken, but with no sweep running it collects nothing.
-        closed = httpx.post(f"{pages_url}/api/window-closed", json={"path": "/?session=terminal-1"}, timeout=5.0)
+        closed = httpx.post(
+            f"{pages_url}/api/window-closed",
+            json={"path": "/?session=terminal-1", "window_id": "win-0000000000000001", "desktop_id": "home"},
+            timeout=5.0,
+        )
         assert closed.status_code == 204
         assert not terminal_environment.registry_path.exists()
         assert not (app.agent_state_dir / "events" / "servers" / "events.jsonl").exists()

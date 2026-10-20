@@ -29,7 +29,10 @@ _BARE_CALLS: tuple[tuple[Path, tuple[str, ...]], ...] = (
     (SYSTEM_SCRIPTS / "forward_port.py", ("--help",)),
     (SYSTEM_SCRIPTS / "provision_backups.py", ("--help",)),
     (SYSTEM_SCRIPTS / "set_mngr_pin.py", ("--help",)),
+    (SYSTEM_SCRIPTS / "vendor_mngr_skill.py", ("--help",)),
     (SYSTEM_SCRIPTS / "run_in_background.py", ("--help",)),
+    (SYSTEM_SCRIPTS / "background_tasks.py", ("--help",)),
+    (SYSTEM_SCRIPTS / "claude_background_task_hooks.py", ("--help",)),
     # Outside a workspace (no agent id in the environment) the gate lets everything through.
     (SYSTEM_SCRIPTS / "require_create_account.py", ()),
     (UPDATE_SELF_SCRIPTS / "update_self.py", ("--help",)),

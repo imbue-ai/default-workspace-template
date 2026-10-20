@@ -96,6 +96,12 @@ _DELIBERATE_SYNCS: tuple[tuple[str, str], ...] = (
     # The migration reference quotes the forms an existing workspace's files still use.
     (".agents/skills/update-self/references/python-packaging-migration.md", "runs `uv run <name>`"),
     (".agents/skills/update-self/references/python-packaging-migration.md", "a plain `uv run X` becomes"),
+    # Starts Imbue Studio from a source checkout of the mngr repo on the user's machine, which
+    # keeps no synced venv of its own; nothing about the workspace's venv applies there.
+    (
+        ".agents/skills/imbue-studio/SKILL.md",
+        "uv run minds run --no-browser",
+    ),
 )
 
 
@@ -754,7 +760,7 @@ def _sys_path_editors(repo_root: Path) -> list[str]:
 
 def test_prevent_sys_path_edits() -> None:
     offenders = _sys_path_editors(REPO_ROOT)
-    assert len(offenders) <= snapshot(15), (
+    assert len(offenders) <= snapshot(17), (
         "These edit the import path (sys.path, PYTHONPATH, or a pytest pythonpath setting). Import the package instead: a skill's modules live in its python/ "
         "project and a system script's beside it, all importable from the root venv:\n"
         + "\n".join(offenders)

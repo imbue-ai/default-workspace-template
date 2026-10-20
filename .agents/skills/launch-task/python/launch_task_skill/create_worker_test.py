@@ -17,12 +17,16 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
 import pytest
+from chat_background_tasks import markers
+from chat_background_tasks.markers import TaskSource
+from chat_background_tasks.testing import runner_task
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority.ledger import append_shed_record
 
@@ -1062,9 +1066,6 @@ def test_resolved_lead_agent_used_as_fallback_without_env(
     assert "lead_agent: lead" in task.read_text()
 
 
-# --- task_file stamping -----------------------------------------------------
-
-
 def _toplevel_result(path: Path) -> _StubResult:
     """What ``git rev-parse --show-toplevel`` prints for a repo at ``path``."""
     return _StubResult(stdout=f"{path}\n")
@@ -1216,9 +1217,6 @@ def test_launch_stamps_the_path_as_given_when_git_cannot_answer(
 
     assert rc == 0
     assert f"task_file: {task.as_posix()}" in task.read_text()
-
-
-# --- the lead_agent label ---------------------------------------------------
 
 
 def test_lead_agent_label_carries_the_resolved_lead_not_the_file_value(
@@ -1519,9 +1517,6 @@ def test_main_picks_up_state_dir_env(
     assert len(flush_calls) == 1
 
 
-# --- await subcommand -----------------------------------------------------
-
-
 class _FakeClock:
     """Monotonic clock that advances by a fixed step on every read.
 
@@ -1700,7 +1695,7 @@ def test_await_returns_idle_code_when_worker_idle_without_report(
     assert len(idle_polls) == create_worker_mod._IDLE_POLLS_BEFORE_GIVING_UP
     assert out.getvalue() == ""
     err = capsys.readouterr().err
-    assert "ended its turn" in err and "worktree" in err
+    assert "no longer busy" in err and "worktree" in err
 
 
 def test_await_transient_idle_does_not_end_the_poll(tmp_path: Path) -> None:
@@ -1762,9 +1757,6 @@ def test_await_report_wins_over_pending_shed(tmp_path: Path) -> None:
 
     assert rc == 0
     assert "finished first" in out.getvalue()
-
-
-# --- await: consuming the report it printed ---------------------------------
 
 
 def _report_in(tmp_path: Path) -> Path:
@@ -1869,9 +1861,6 @@ def test_a_relaunch_after_an_awaited_gate_is_not_blocked_by_that_report(
 
     assert rc == 0
     assert any(c.argv[:2] == ["mngr", "create"] for c in runner.calls)
-
-
-# --- idle detection with sub-workers ----------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -2040,6 +2029,66 @@ def test_an_unreadable_listing_answers_not_idle() -> None:
     )
 
 
+def test_a_worker_whose_own_chat_is_busy_is_not_idle() -> None:
+    """A worker that ended its turn to wait on a background command of its own
+    reads WAITING, but the command's completion starts its next turn. A worker
+    is its own chat, so the busy question is asked about its own agent id."""
+    worker = _unique("worker")
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _listing(_agent_record(worker, "WAITING")))
+    asked: list[str] = []
+
+    def _busy(chat_id: str) -> bool:
+        asked.append(chat_id)
+        return True
+
+    assert (
+        create_worker_mod._worker_is_idle(
+            worker,
+            runner,
+            pending_shed_check=lambda _name: False,
+            chat_busy_check=_busy,
+        )
+        is False
+    )
+    assert asked == [_agent_id(worker)]
+
+
+def _write_marker(root: Path, chat_id: str, task_id: str, pid: int) -> None:
+    markers.write_marker(
+        root, chat_id, runner_task(task_id, "2026-10-08T09:00:00+00:00", pid=pid)
+    )
+
+
+def test_the_default_busy_check_reads_the_worker_markers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without an injected check, the idle check reads the same marker files the
+    background runner writes: a live marker keeps the worker busy, and once it
+    is gone -- or its runner has died -- the worker is idle."""
+    root = tmp_path / "background_tasks"
+    monkeypatch.setenv(markers.MARKER_ROOT_ENV, str(root))
+    worker = _unique("worker")
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _listing(_agent_record(worker, "WAITING")))
+
+    def _is_idle() -> bool:
+        return create_worker_mod._worker_is_idle(
+            worker, runner, pending_shed_check=lambda _name: False
+        )
+
+    _write_marker(root, _agent_id(worker), "tests", os.getpid())
+    assert _is_idle() is False
+    markers.remove_marker(
+        root, _agent_id(worker), TaskSource.RUN_IN_BACKGROUND, "tests"
+    )
+    assert _is_idle() is True
+    exited = subprocess.Popen([sys.executable, "-c", "pass"])
+    exited.wait()
+    _write_marker(root, _agent_id(worker), "killed", exited.pid)
+    assert _is_idle() is True
+
+
 def test_a_non_agent_row_with_the_same_name_is_not_mistaken_for_the_worker() -> None:
     """``mngr list`` emits more than agents (hosts, and whatever it grows next);
     only ``resource_type: agent`` rows are agent state, so a same-named row of
@@ -2176,9 +2225,6 @@ def test_parse_duration_rejects_invalid(bad: str) -> None:
         create_worker_mod._parse_duration(bad)
 
 
-# --- launch-sync / destroy / report parsing -------------------------------------
-
-
 def _write_launch_sync_task(task_file: Path, report_path: Path) -> None:
     """Write a task file whose frontmatter points the wait at ``report_path``."""
     task_file.write_text(
@@ -2212,9 +2258,6 @@ def test_parse_report_tolerates_malformed_yaml() -> None:
     assert result.report_type is None
     assert result.name is None
     assert result.raw == text
-
-
-# --- teardown: destroy and stop ---------------------------------------------
 
 
 def _mngr_argvs(runner: _RecordingRunner, *subcommands: str) -> list[list[str]]:
@@ -2665,9 +2708,6 @@ def test_main_destroy_and_stop_flags_reach_the_functions() -> None:
     assert create_worker_mod.main(["destroy", "--name", "x"], runner=runner) == 1
 
 
-# --- the stuck-worker edge case ----------------------------------------------
-
-
 def test_an_archived_stopped_child_does_not_hold_its_parent_busy() -> None:
     """A lead that stopped its stuck sibling (``stop`` leaves it STOPPED with
     ``archived_at``) reads as idle once its own turn ends -- exactly like a
@@ -2687,9 +2727,6 @@ def test_an_archived_stopped_child_does_not_hold_its_parent_busy() -> None:
     assert create_worker_mod._worker_is_idle(
         worker, runner, pending_shed_check=lambda _name: False
     )
-
-
-# --- the runtime_dir label ---------------------------------------------------
 
 
 def test_launch_labels_the_runtime_dir_relative_to_the_repo_root(
@@ -2736,9 +2773,6 @@ def test_launch_labels_the_runtime_dir_relative_to_the_repo_root(
         assert [c.argv for c in runner.calls].count(
             ["git", "rev-parse", "--show-toplevel"]
         ) == 1
-
-
-# --- the sync sources have to be under data/ --------------------------------
 
 
 def _launch_from_repo_root(
@@ -3285,9 +3319,6 @@ def test_main_destroy_invokes_mngr(tmp_path: Path) -> None:
     assert _destroy_argvs(runner) == [["mngr", "destroy", "demo-worker", "--force"]]
 
 
-# --- launch: a refused mngr create ------------------------------------------
-
-
 def test_a_refused_mngr_create_is_reported_not_raised(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -3336,9 +3367,6 @@ def test_a_failed_task_send_is_reported_not_raised(
     err = capsys.readouterr().err
     assert "the task message to demo-worker failed (messenger exit code 1)" in err
     assert "create_worker.py destroy --name demo-worker" in err
-
-
-# --- report subcommand: the worker's side of the contract -------------------
 
 
 def _write_worker_task(task: Path, report_path: str, lead_work_dir: str | None) -> None:
@@ -3671,8 +3699,6 @@ def test_report_fails_loudly_when_the_report_path_cannot_be_relativized(
     assert "type: status" in absolute_report.read_text()
 
 
-# --- await: milestone reports --------------------------------------------
-#
 # A worker drops non-blocking milestone reports under ``milestones/`` beside
 # ``report.md``. ``await`` returns one like a report, and archives it under its
 # *own* name: the worker keeps its copy and re-delivers it with every later
@@ -4007,9 +4033,6 @@ def test_launch_sync_collects_the_terminal_report_despite_a_milestone(
     assert second_rc == 0
 
 
-# --- reply ------------------------------------------------------------------
-
-
 def _stamped_task_file(tmp_path: Path) -> Path:
     """A task file carrying the worker id ``launch`` stamps, which ``reply`` addresses."""
     task = tmp_path / "task.md"
@@ -4185,8 +4208,6 @@ def test_created_agent_id_reads_the_created_event(
     assert create_worker_mod._created_agent_id(stdout) == expected
 
 
-# --- the git bookkeeping a provisional milestone merge relies on ---------------
-#
 # create_worker.py only delivers a milestone; the lead merges the pinned commit.
 # These two tests run real git to prove the spec's two claims about what follows:
 # a provisional merge advances the merge-base so `done` brings only the

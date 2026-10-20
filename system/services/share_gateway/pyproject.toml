@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 share-gateway = "share_gateway.runner:main"
+agent-access = "share_gateway.agent_cli:main"
 
 [build-system]
 requires = ["hatchling"]

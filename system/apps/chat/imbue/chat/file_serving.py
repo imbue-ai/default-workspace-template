@@ -4,7 +4,7 @@ An agent (Claude Code) running in this container can write files and read them
 back, but the browser rendering the chat cannot reach the container's
 filesystem. Markdown like ``![chart](/home/user/workspace/data/images/chart.png)``
 (an inline image) makes the browser issue an HTTP GET for that path (a link to a
-file is rendered as its ``file:`` URL and opens in the File Viewer instead); the
+file is rendered as its ``file:`` URL and opens in Files instead); the
 chat app runs in the same container as the agent, so it answers the GET by
 streaming the file's bytes. The absolute on-disk path
 therefore doubles as the URL -- no rewriting, no dedicated directory, no separate

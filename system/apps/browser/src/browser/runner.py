@@ -21,8 +21,8 @@ kept), never deleted.
 Agents drive the fleet over HTTP (see the ``agentic-browser-fleet`` CLI):
 
 * ``GET  /browsers``            -- list every browser, its owner, and its tabs.
-* ``POST /browsers``            -- the one browser (body ``{"name": ...}`` optional; returns
-  ``{"name": ...}``): with no name, the browser that exists (started again if it was stopped),
+* ``POST /browsers``            -- the one browser (body a JSON object, ``{}`` or ``{"name": ...}``;
+  returns ``{"name": ...}``): with no name, the browser that exists (started again if it was stopped),
   else a new one; with a name, a create (400 invalid name, 409 duplicate name or fleet full).
 * ``GET  /browsers/{name}/attach`` -- the gated CDP URL to point `playwright-cli` at.
 * ``POST /browsers/{name}/acquire`` -- reserve a browser (and get the exit code an agent
@@ -60,8 +60,17 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
+from app_manifest.content_security_policy import attach_document_policy
 from app_manifest.registry import APP_CONTRACT_ROUTE, SHELL_APP_CONTRACT_PATH
-from flask import Flask, Response, jsonify, request, send_file
+from app_schema.api_schema import (
+    DEFAULT_API_SCHEMA_PATH,
+    RouteModels,
+    RouteTable,
+    SchemalessRoute,
+    register_api_schema_route,
+)
+from app_schema.routes import error_response, model_response, parse_request_body
+from flask import Flask, Response, request, send_file
 from flask.typing import ResponseReturnValue
 from flask_sock import Sock
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -73,8 +82,35 @@ from workspace_layout.errors import InvalidLayoutValueError, ShellOpError
 from workspace_layout.ops import ShowArgs
 from workspace_layout.primitives import ClientId, WindowPath
 from workspace_layout.shell_url import shell_base_url
+from workspace_layout.windows import WindowClosedHint
 
 from browser import mediastream, telemetry
+from browser.api_models import (
+    AcquireAnswer,
+    AcquireRequest,
+    AttachAnswer,
+    BrowserClosed,
+    BrowserCreated,
+    BrowserReleased,
+    BrowserStarted,
+    BrowserStopped,
+    BrowserSummary,
+    ClientTelemetryBatch,
+    ClipboardPasted,
+    CreateBrowserRequest,
+    FleetListing,
+    HandoffAnswer,
+    HandoffRequest,
+    HealthStatus,
+    InitStatus,
+    LaunchedPage,
+    LaunchRequest,
+    OpenedUrl,
+    OpenUrlRequest,
+    PendingUrlCancelled,
+    TabClosed,
+    TelemetryAccepted,
+)
 from browser.cdp_proxy import ProxyServer
 from browser.errors import (
     BrowserNotDrivableError,
@@ -121,9 +157,6 @@ HTTP_NO_CONTENT = 204
 OPEN_URL_PATH = "/api/open-url"
 # Short, since the shell answers a ``show`` at once and the relay that posted the message bounds the whole delivery.
 _SHELL_SHOW_TIMEOUT_SECONDS = 5.0
-# The launch path's one parameter (the manifest's ``params``): the start page. The shell posts it
-# in a JSON object beside its own envelope fields, which are ignored here.
-START_URL_PARAM = "url"
 
 # Errors raised when Chromium can't be launched (install not finished, CDP failure).
 # CDP failures surface as these built-ins.
@@ -154,17 +187,59 @@ _WS_CLOSE_TERMINATED = 4001
 bridge = AsyncLoopBridge()
 manager = BrowserSessionManager()
 
+APP_DISPLAY_NAME = "Browser"
+APP_DESCRIPTION = "Live Chromium browsers inside the workspace, each driven by one chat or by the person, with pages to watch them."
+
+# What every route exchanges, published by the API document and checked against every parse and
+# answer at request time (``app_schema``). A browser's routes carry its name as ``{browser_id}``.
+ROUTE_TABLE: RouteTable = {
+    ("GET", "/"): SchemalessRoute(reason="the viewer page"),
+    ("GET", APP_CONTRACT_ROUTE): SchemalessRoute(reason="the shell's app contract module, a JavaScript file"),
+    ("POST", NEW_PATH): RouteModels(request_model=LaunchRequest, response_model=LaunchedPage),
+    ("POST", OPEN_URL_PATH): RouteModels(request_model=OpenUrlRequest, response_model=OpenedUrl),
+    ("POST", WINDOW_CLOSED_PATH): RouteModels(request_model=WindowClosedHint, success_status=HTTP_NO_CONTENT),
+    ("GET", "/health"): RouteModels(response_model=HealthStatus),
+    ("GET", "/init-status"): RouteModels(response_model=InitStatus),
+    ("GET", "/browsers"): RouteModels(response_model=FleetListing),
+    ("POST", "/browsers"): RouteModels(request_model=CreateBrowserRequest, response_model=BrowserCreated),
+    ("DELETE", "/browsers/{browser_id}"): RouteModels(response_model=BrowserClosed),
+    ("POST", "/browsers/{browser_id}/stop"): RouteModels(response_model=BrowserStopped),
+    ("POST", "/browsers/{browser_id}/start"): RouteModels(response_model=BrowserStarted),
+    ("POST", "/browsers/{browser_id}/close-tab"): RouteModels(response_model=TabClosed),
+    ("POST", "/browsers/{browser_id}/release"): RouteModels(response_model=BrowserReleased),
+    ("POST", "/browsers/{browser_id}/pending-url/cancel"): RouteModels(response_model=PendingUrlCancelled),
+    ("GET", "/browsers/{browser_id}/attach"): RouteModels(response_model=AttachAnswer),
+    ("POST", "/browsers/{browser_id}/acquire"): RouteModels(request_model=AcquireRequest, response_model=AcquireAnswer),
+    ("POST", "/browsers/{browser_id}/handoff"): RouteModels(request_model=HandoffRequest, response_model=HandoffAnswer),
+    # The viewer posts a JSON list under a byte cap, which the view reads from the stream itself.
+    ("POST", "/browsers/{browser_id}/telemetry/client"): RouteModels(
+        request_model=ClientTelemetryBatch, response_model=TelemetryAccepted, is_body_parsed_by_view=True
+    ),
+    ("POST", "/browsers/{browser_id}/clipboard/paste"): RouteModels(response_model=ClipboardPasted),
+    ("GET", "/browsers/{browser_id}/clipboard/out"): SchemalessRoute(
+        reason="the bytes of the browser's last copy, under their own content type"
+    ),
+    ("GET", "/browsers/{browser_id}/cast"): SchemalessRoute(reason="the control WebSocket (ownership state out, take/return control in)"),
+    ("GET", "/browsers/{browser_id}/stream"): SchemalessRoute(reason="the media WebSocket (pixels and audio out, input in)"),
+    ("GET", "/browsers/{browser_id}/telemetry"): SchemalessRoute(reason="the read-only telemetry WebSocket"),
+}
+
 application = Flask(__name__, static_folder=None)
+register_api_schema_route(
+    application, DEFAULT_API_SCHEMA_PATH, title=APP_DISPLAY_NAME, description=APP_DESCRIPTION, route_table=ROUTE_TABLE
+)
 application.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": 25}
 # Clipboard paste-in bodies carry raw image bytes over HTTP (the WS proxy's ~1 MiB cap
 # is why clipboard rides HTTP, not the stream socket). Bound it so a giant paste is
 # rejected before it's read into memory rather than wedging Chromium.
 application.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
+# The viewer page runs its audio playback as an AudioWorklet module built from a blob: URL.
+attach_document_policy(application, {"script-src": "'self' blob:", "worker-src": "'self' blob:"})
 sock = Sock(application)
 
 # Init gate: cleared at import, set when startup restore finishes (always, even on
-# failure -- see _startup). State-changing routes return 503 "initializing" until
-# then; read-only routes (state/ls/health) stay open so the user can watch the
+# failure -- see _startup). State-changing routes answer a 503 whose detail says the
+# fleet is still restoring until then; read-only routes (state/ls/health) stay open so the user can watch the
 # fleet come back. A threading.Event (not asyncio.Event) because it is read on
 # Flask threads and set from the loop's _startup finally -- both thread-safe.
 _init_done = threading.Event()
@@ -175,38 +250,29 @@ _init_done = threading.Event()
 # the lock-guarded functions swap the value without the ``global`` keyword. See
 # _publish_init_status / _read_init_status.
 _init_status_lock = threading.Lock()
-_init_status_holder: list[dict[str, Any]] = [{"phase": "initializing"}]
+_init_status_holder: list[InitStatus] = [InitStatus(phase="initializing")]
+
+# What the init gate answers a state-changing route with until the restore finishes; the fleet CLI
+# reads a 503 as "try again shortly".
+_RESTORING_DETAIL = "Browser fleet is still restoring your saved browsers; try again in a moment."
 
 
-def _publish_init_status(status: dict[str, Any]) -> None:
+def _publish_init_status(status: InitStatus) -> None:
     """Publish the startup status under the lock (called on the loop thread)."""
     with _init_status_lock:
         _init_status_holder[0] = status
 
 
-def _read_init_status() -> dict[str, Any]:
+def _read_init_status() -> InitStatus:
     """Snapshot the startup status under the lock (called on a Flask reader thread)."""
     with _init_status_lock:
         return _init_status_holder[0]
 
 
-def _error(payload: dict[str, Any], status: int) -> Response:
-    """A JSON error Response with an explicit status code (Flask-idiomatic single value)."""
-    response = jsonify(payload)
-    response.status_code = status
-    return response
-
-
 def _require_ready() -> Response | None:
     """503 while the fleet is still restoring saved browsers; None once ready."""
     if not _init_done.is_set():
-        return _error(
-            {
-                "error": "Browser fleet is still restoring your saved browsers; try again in a moment.",
-                "status": "initializing",
-            },
-            503,
-        )
+        return error_response(_RESTORING_DETAIL, 503)
     return None
 
 
@@ -222,13 +288,13 @@ async def _startup() -> None:
         if not ready:
             # Chromium isn't installed yet; don't block. The fleet starts empty and the
             # first create() (once the install marker appears) brings a browser up.
-            _publish_init_status({"phase": "waiting_for_chromium", "reason": reason})
+            _publish_init_status(InitStatus(phase="waiting_for_chromium", reason=reason))
             return
         await manager.restore()
-        _publish_init_status({"phase": "ready"})
+        _publish_init_status(InitStatus(phase="ready"))
     except _STARTUP_ERRORS as e:
         logger.error("browser fleet restore failed ({}); serving an empty fleet", e)
-        _publish_init_status({"phase": "ready", "error": str(e)})
+        _publish_init_status(InitStatus(phase="ready", error=str(e)))
     finally:
         # Always run the periodic manifest checkpoint -- including the waiting-for-
         # chromium and restore-failed paths, where the fleet comes up lazily later;
@@ -249,9 +315,9 @@ def _resolve_sync(browser_id: str) -> "LiveBrowser | Response":
     try:
         return bridge.run(manager.resolve(browser_id), timeout=_ROUTE_TIMEOUT)
     except UnknownBrowserError as e:
-        return _error({"error": str(e)}, 404)
+        return error_response(str(e), 404)
     except _STARTUP_ERRORS as e:
-        return _error({"error": f"Could not start browser {browser_id}: {e}"}, 503)
+        return error_response(f"Could not start browser {browser_id}: {e}", 503)
 
 
 def _agent_identity() -> tuple[str | None, str | None]:
@@ -262,10 +328,6 @@ def _agent_identity() -> tuple[str | None, str | None]:
     # a non-spoofable per-agent identity would require a token minted by the proxy/manager, which
     # this daemon has no way to verify today.
     return request.headers.get("x-mngr-agent-id"), request.headers.get("x-mngr-agent-name")
-
-
-def _body() -> dict[str, Any]:
-    return request.get_json(silent=True) or {}
 
 
 # read-only routes (no init gate)
@@ -281,14 +343,13 @@ def index() -> Response:
 def app_contract() -> Response:
     """The shell's built app contract module, served from this origin (see ``SHELL_APP_CONTRACT_PATH`` for why)."""
     if not SHELL_APP_CONTRACT_PATH.is_file():
-        return _error({"error": f"the workspace shell's frontend is not built: {SHELL_APP_CONTRACT_PATH} is missing"}, 404)
+        return error_response(f"the workspace shell's frontend is not built: {SHELL_APP_CONTRACT_PATH} is missing", 404)
     # Flask resolves a relative path against the package directory, not the repo root the path names.
     return send_file(SHELL_APP_CONTRACT_PATH.absolute(), mimetype="text/javascript")
 
 
 class _StartRefusal(FrozenModel):
-    """Why a browser could not be answered, with the status the route answers it under; each route shapes the
-    body for its own reader (``error`` for the fleet API, ``detail`` for the shell's launch route)."""
+    """Why a browser could not be answered, with the status the route answers it under."""
 
     reason: str = Field(description="What was wrong, in words for the caller")
     status: int = Field(description="The HTTP status: 400 for a bad request, 409 for a conflict, 503 while unable")
@@ -327,12 +388,6 @@ def _start_browser(name: str | None, raw_url: str | None) -> "LiveBrowser | _Sta
         return _StartRefusal(reason=f"Could not start browser: {e}", status=503)
 
 
-def _launch_refusal(reason: str, status: int) -> Response:
-    """A refusal of the ``new`` launch path, as the shell's launch route reads one: a 4xx whose ``detail`` is passed
-    on to the caller as the app's own reason (post-launch-paths plan section 3.2)."""
-    return _error({"detail": reason}, status)
-
-
 def new_browser() -> Response:
     """``POST /new``, the ``new`` launch path: the browser, as the path of its viewer page.
 
@@ -340,18 +395,14 @@ def new_browser() -> Response:
     opens a window at the browser's page. The body is a JSON object with an optional ``url``;
     anything else in it (the shell's envelope) is ignored. A refusal (a body that is not an
     object, a ``url`` that is not an absolute http(s) URL, Chromium not installed) is answered
-    with its reason under ``detail``, the key the shell's launch route passes on.
+    with its reason under ``detail``, the key the shell's launch route passes on
+    (post-launch-paths plan section 3.2).
     """
-    body = request.get_json(force=True, silent=True)
-    if not isinstance(body, dict):
-        return _launch_refusal("the launch body must be a JSON object", 400)
-    raw_url = body.get(START_URL_PARAM)
-    if raw_url is not None and not isinstance(raw_url, str):
-        return _launch_refusal("url: must be a string", 400)
-    started = _start_browser(None, raw_url)
+    body = parse_request_body(LaunchRequest)
+    started = _start_browser(None, body.url)
     if isinstance(started, _StartRefusal):
-        return _launch_refusal(started.reason, started.status)
-    return jsonify({"path": browser_page_path(BrowserName(started.browser_id))})
+        return error_response(started.reason, started.status)
+    return model_response(LaunchedPage(path=browser_page_path(BrowserName(started.browser_id))))
 
 
 def open_url() -> Response:
@@ -365,61 +416,56 @@ def open_url() -> Response:
     machine or a bad client is 400, a fleet with no room 409, Chromium not installed (or the fleet still restoring)
     503, and a window the shell would not show 502.
     """
-    if not _init_done.is_set():
-        return _launch_refusal("The browser is still restoring its saved browsers; try again in a moment.", 503)
-    body = request.get_json(force=True, silent=True)
-    if not isinstance(body, dict):
-        return _launch_refusal("the message body must be a JSON object", 400)
-    raw_url = body.get(START_URL_PARAM)
-    if not isinstance(raw_url, str):
-        return _launch_refusal("url: must be a string", 400)
+    if (gate := _require_ready()) is not None:
+        return gate
+    body = parse_request_body(OpenUrlRequest)
     try:
-        url = LocalHttpUrl(raw_url)
+        url = LocalHttpUrl(body.url)
     except InvalidStartUrlError as e:
-        return _launch_refusal(f"url: {e}", 400)
-    raw_client_id = body.get("client_id")
+        return error_response(f"url: {e}", 400)
     try:
-        client_id = ClientId(raw_client_id if isinstance(raw_client_id, str) else "")
+        client_id = ClientId(body.client_id)
     except InvalidLayoutValueError as e:
-        return _launch_refusal(f"client_id: {e}", 400)
+        return error_response(f"client_id: {e}", 400)
     ready, reason = deferred_install_ready()
     if not ready:
-        return _launch_refusal(reason, 503)
+        return error_response(reason, 503)
     try:
         browser = bridge.run(manager.open_url_for_human(str(url)), timeout=_ROUTE_TIMEOUT)
     except FleetFullError as e:
-        return _launch_refusal(str(e), 409)
+        return error_response(str(e), 409)
     except _STARTUP_ERRORS as e:
         logger.error("could not open {} for the human: {}", url, e)
-        return _launch_refusal(f"Could not start the browser: {e}", 503)
+        return error_response(f"Could not start the browser: {e}", 503)
     page = browser_page_path(BrowserName(browser.browser_id))
     shell = ShellLayoutClient(shell_url=shell_base_url(), requester=None, timeout_seconds=_SHELL_SHOW_TIMEOUT_SECONDS)
     try:
         shown = shell.show(ShowArgs(app=APP_NAME, path=WindowPath(page), client=client_id))
     except ShellOpError as e:
         logger.warning("Opened {} in browser {} but could not show its window: {}", url, browser.browser_id, e)
-        return _launch_refusal(f"The browser has the page, but its window could not be shown: {e}", 502)
-    return jsonify({"browser": browser.browser_id, "window_id": shown.window_id, "shown": shown.shown})
+        return error_response(f"The browser has the page, but its window could not be shown: {e}", 502)
+    return model_response(OpenedUrl(browser=browser.browser_id, window_id=str(shown.window_id), shown=str(shown.shown)))
 
 
 async def _cancel_pending_url(browser: LiveBrowser) -> bool:
     return browser.cancel_pending_url()
 
 
-def cancel_pending_url(browser_id: str) -> ResponseReturnValue:
+def cancel_pending_url(browser_id: str) -> Response:
     """``POST /browsers/<name>/pending-url/cancel``: drop the page the human asked for and the browser is holding
     (the viewer's Cancel on the agent overlay), leaving whoever drives the browser as they were."""
     if not is_valid_browser_name(browser_id):
-        return jsonify({"error": "invalid browser name"}), 404
+        return error_response("invalid browser name", 404)
     browser = _resolve_sync(browser_id)
     if isinstance(browser, Response):
         return browser
     is_cancelled = bridge.run(_cancel_pending_url(browser), timeout=_ROUTE_TIMEOUT)
-    return jsonify({"cancelled": is_cancelled})
+    return model_response(PendingUrlCancelled(cancelled=is_cancelled))
 
 
 def health() -> Response:
-    return jsonify({"status": "ok", "initializing": not _init_done.is_set()})
+    """Whether the daemon is up, and whether it is still starting its browsers."""
+    return model_response(HealthStatus(status="ok", initializing=not _init_done.is_set()))
 
 
 def window_closed() -> Response:
@@ -429,14 +475,14 @@ def window_closed() -> Response:
     (a window that opened and closed between two sweeps is otherwise never seen); what is shown now is still
     read from the shell's desktops.
     """
-    closed_name = closed_window_browser(request.get_json(silent=True))
+    closed_name = closed_window_browser(parse_request_body(WindowClosedHint))
     bridge.submit(manager.sweep_after_window_closed(closed_name, shell_base_url()))
     return Response("", status=HTTP_NO_CONTENT)
 
 
 def init_status() -> Response:
     """Restore progress: phase is initializing / waiting_for_chromium / ready."""
-    return jsonify(_read_init_status())
+    return model_response(_read_init_status())
 
 
 def list_browsers() -> Response:
@@ -458,14 +504,15 @@ def list_browsers() -> Response:
         can_create, create_reason = False, install_reason or "installing browser support"
     else:
         can_create, create_reason = True, ""
-    return jsonify(
-        {
-            "browsers": bridge.run(manager.list_browsers(), timeout=_ROUTE_TIMEOUT),
-            "can_create": can_create,
-            "create_reason": create_reason,
-            "browser_count": count,
-            "browser_max": cap,
-        }
+    described = bridge.run(manager.list_browsers(), timeout=_ROUTE_TIMEOUT)
+    return model_response(
+        FleetListing(
+            browsers=[BrowserSummary.model_validate(browser) for browser in described],
+            can_create=can_create,
+            create_reason=create_reason,
+            browser_count=count,
+            browser_max=cap,
+        )
     )
 
 
@@ -491,15 +538,15 @@ def create_browser() -> Response:
     Response ``{"name": <chosen-name>}``. Errors: 400 invalid name or url, 409 duplicate name or
     fleet full, 503 Chromium installing. The attach URL is NOT returned here: the launch is
     still in flight, so the CLI polls for it (see ``fleet.cmd_new``)."""
-    body = _body()
-    raw_url = body.get("url")
-    started = _start_browser(body.get("name"), None if raw_url is None else str(raw_url))
+    body = parse_request_body(CreateBrowserRequest)
+    started = _start_browser(body.name, body.url)
     if isinstance(started, _StartRefusal):
-        return _error({"error": started.reason}, started.status)
-    return jsonify({"name": started.browser_id})
+        return error_response(started.reason, started.status)
+    return model_response(BrowserCreated(name=started.browser_id))
 
 
-def close_browser(browser_id: str) -> ResponseReturnValue:
+def close_browser(browser_id: str) -> Response:
+    """Close a browser for good: its Chromium exits, its profile is deleted, and its name is retired."""
     if (gate := _require_ready()) is not None:
         return gate
     # Validate the name before it reaches manager.close / forget_profile_dir, which build a
@@ -507,70 +554,71 @@ def close_browser(browser_id: str) -> ResponseReturnValue:
     # slashes, but an explicit guard is the real defense against a crafted id escaping the
     # profile directory (defense in depth for the delete path).
     if not is_valid_browser_name(browser_id):
-        return jsonify({"error": "invalid browser name"}), 404
+        return error_response("invalid browser name", 404)
     bridge.run(manager.close_and_forget(browser_id), timeout=_ROUTE_TIMEOUT)
-    return jsonify({"closed": True})
+    return model_response(BrowserClosed(closed=True))
 
 
-def stop_browser(browser_id: str) -> ResponseReturnValue:
+def stop_browser(browser_id: str) -> Response:
     """Stop a browser's Chromium while keeping the browser, its profile, and its tabs."""
     if (gate := _require_ready()) is not None:
         return gate
     if not is_valid_browser_name(browser_id):
-        return jsonify({"error": "invalid browser name"}), 404
+        return error_response("invalid browser name", 404)
     try:
         bridge.run(manager.stop_browser(browser_id), timeout=_ROUTE_TIMEOUT)
     except UnknownBrowserError as e:
-        return _error({"error": str(e)}, 404)
+        return error_response(str(e), 404)
     except BrowserNotDrivableError as e:
-        return _error({"error": str(e)}, 409)
-    return jsonify({"stopped": True})
+        return error_response(str(e), 409)
+    return model_response(BrowserStopped(stopped=True))
 
 
-def close_active_tab(browser_id: str) -> ResponseReturnValue:
+def close_active_tab(browser_id: str) -> Response:
     """Close the tab the pane is showing (the viewer's close chord); the browser itself stays up."""
     if (gate := _require_ready()) is not None:
         return gate
     if not is_valid_browser_name(browser_id):
-        return jsonify({"error": "invalid browser name"}), 404
+        return error_response("invalid browser name", 404)
     browser = _resolve_sync(browser_id)
     if isinstance(browser, Response):
         return browser
     try:
         bridge.run(browser.close_active_tab(), timeout=_ROUTE_TIMEOUT)
     except BrowserNotDrivableError as e:
-        return _error({"error": str(e)}, 409)
-    return jsonify({"closed": True})
+        return error_response(str(e), 409)
+    return model_response(TabClosed(closed=True))
 
 
-def start_browser(browser_id: str) -> ResponseReturnValue:
+def start_browser(browser_id: str) -> Response:
     """Relaunch a stopped browser on its saved tabs from its profile."""
     if (gate := _require_ready()) is not None:
         return gate
     if not is_valid_browser_name(browser_id):
-        return jsonify({"error": "invalid browser name"}), 404
+        return error_response("invalid browser name", 404)
     ready, reason = deferred_install_ready()
     if not ready:
-        return _error({"error": reason}, 503)
+        return error_response(reason, 503)
     try:
         bridge.run(manager.start_browser(browser_id), timeout=_ROUTE_TIMEOUT)
     except UnknownBrowserError as e:
-        return _error({"error": str(e)}, 404)
+        return error_response(str(e), 404)
     except FleetFullError as e:
-        return _error({"error": str(e)}, 409)
-    return jsonify({"started": True})
+        return error_response(str(e), 409)
+    return model_response(BrowserStarted(started=True))
 
 
 def release_browser(browser_id: str) -> Response:
+    """Give up the calling agent's (``X-Mngr-Agent-Id``) control of a browser, so the next in line takes it."""
     if (gate := _require_ready()) is not None:
         return gate
     agent_id, _ = _agent_identity()
     if not agent_id:
-        return _error({"error": "X-Mngr-Agent-Id header required"}, 400)
+        return error_response("X-Mngr-Agent-Id header required", 400)
     resolved = _resolve_sync(browser_id)
     if isinstance(resolved, Response):
         return resolved
-    return jsonify({"released": bridge.run(resolved.release(agent_id), timeout=_ROUTE_TIMEOUT)})
+    return model_response(BrowserReleased(released=bridge.run(resolved.release(agent_id), timeout=_ROUTE_TIMEOUT)))
 
 
 def _direct_target(
@@ -578,8 +626,8 @@ def _direct_target(
 ) -> "tuple[LiveBrowser, str, str | None] | Response":
     """Resolve (browser, agent_id, agent_name) for an ownership command, or an error Response.
 
-    ``gated`` (default True) blocks the command with 503 "initializing" while the fleet is
-    still restoring. Note this is the ONLY place agent identity is read: it comes from the
+    ``gated`` (default True) blocks the command with the 503 that says the fleet is still
+    restoring. Note this is the ONLY place agent identity is read: it comes from the
     ``X-Mngr-Agent-Id`` header the fleet CLI sets. A raw CDP client sends no such header,
     which is exactly why the proxy authenticates with a capability token instead.
     """
@@ -587,7 +635,7 @@ def _direct_target(
         return gate
     agent_id, agent_name = _agent_identity()
     if not agent_id:
-        return _error({"error": "X-Mngr-Agent-Id header required"}, 400)
+        return error_response("X-Mngr-Agent-Id header required", 400)
     resolved = _resolve_sync(browser_id)
     if isinstance(resolved, Response):
         return resolved
@@ -609,7 +657,8 @@ def cmd_attach(browser_id: str) -> Response:
     if isinstance(target, Response):
         return target
     session, agent_id, agent_name = target
-    return jsonify(bridge.run(session.attach_for(agent_id, agent_name), timeout=_ROUTE_TIMEOUT))
+    answer = bridge.run(session.attach_for(agent_id, agent_name), timeout=_ROUTE_TIMEOUT)
+    return model_response(AttachAnswer.model_validate(answer))
 
 
 def cmd_acquire(browser_id: str) -> Response:
@@ -619,14 +668,14 @@ def cmd_acquire(browser_id: str) -> Response:
     if isinstance(target, Response):
         return target
     session, agent_id, agent_name = target
-    body = _body()
+    body = parse_request_body(AcquireRequest)
     # acquire AND read the control-state snapshot in ONE on-loop coroutine: the snapshot
     # reads loop-mutated ownership fields, so it must run on the loop (via the bridge),
     # not directly on this Flask thread (finding [4]).
     result = bridge.run(
         session.acquire_with_state(
             agent_id, agent_name,
-            reclaim=bool(body.get("reclaim", False)),
+            reclaim=body.reclaim,
             # `acquire` is the fast reserve-or-queue verb: it never blocks. A busy browser
             # enqueues the agent (woken when it frees) and returns immediately -- matching
             # what the CLI tells the agent ("you're queued ... messaged when it frees").
@@ -638,7 +687,7 @@ def cmd_acquire(browser_id: str) -> Response:
         ),
         timeout=_ROUTE_TIMEOUT,
     )
-    return jsonify(result)
+    return model_response(AcquireAnswer.model_validate(result))
 
 
 def cmd_handoff(browser_id: str) -> Response:
@@ -649,12 +698,11 @@ def cmd_handoff(browser_id: str) -> Response:
     if isinstance(target, Response):
         return target
     session, agent_id, agent_name = target
-    body = _body()
-    reason = str(body.get("reason", "")).strip() or "human verification needed"
+    reason = parse_request_body(HandoffRequest).reason.strip() or "human verification needed"
     # handoff AND its control-state snapshot in ONE on-loop coroutine (finding [4]): the
     # snapshot reads loop-mutated ownership fields, so it must not run on the Flask thread.
     result = bridge.run(session.handoff_with_state(agent_id, agent_name, reason), timeout=_ROUTE_TIMEOUT)
-    return jsonify(result)
+    return model_response(HandoffAnswer.model_validate(result))
 
 
 def cmd_clipboard_paste(browser_id: str) -> ResponseReturnValue:
@@ -681,7 +729,7 @@ def cmd_clipboard_out(browser_id: str) -> ResponseReturnValue:
     if isinstance(resolved, Response):
         return resolved
     if not resolved.input_allowed:
-        return jsonify({"error": "clipboard is readable only while you hold control"}), 403
+        return error_response("clipboard is readable only while you hold control", 403)
     return mediastream.clipboard_out(browser_id)
 
 
@@ -871,31 +919,36 @@ def stream_socket(ws: Any, browser_id: str) -> None:
     mediastream.serve_stream(ws, browser_id, display, session)
 
 
-def telemetry_client(browser_id: str) -> ResponseReturnValue:
+def telemetry_client(browser_id: str) -> Response:
     """Sink for the viewer's own per-stripe decode/paint timings (Rung 2). Watch-only:
     it just forwards each client record into the same hub so the lens can join them to
     the server's sent/ack by (fid, y) and subtract client render from the round trip.
-    Never touches the stream; a bad body is dropped, not fatal."""
+    Never touches the stream; a bad body is dropped, not fatal.
+
+    The body is a JSON list of records (``ClientTelemetryBatch``; one record on its own
+    is taken as a list of one), read here from the request stream under a byte cap rather
+    than through ``parse_request_body``: only the numeric fields of each record are kept,
+    so a hostile post cannot pin anything else in the telemetry rings."""
     # Cap on the bytes actually READ (not the declared content_length, which a chunked
     # request omits): read at most 512KiB+1 and reject anything larger, so a hostile client
     # can't stream an unbounded body into memory through this watch-only sink.
     raw = request.stream.read(512 * 1024 + 1)
     if len(raw) > 512 * 1024:
-        return jsonify({"error": "too large"}), 413
+        return error_response("too large", 413)
     try:
         records = json.loads(raw) if raw else []
     except (ValueError, TypeError):
-        return jsonify({"error": "expected JSON"}), 400
+        return error_response("expected JSON", 400)
     if isinstance(records, dict):
         records = [records]
     if not isinstance(records, list):
-        return jsonify({"error": "expected a JSON list"}), 400
+        return error_response("expected a JSON list", 400)
     if not is_valid_browser_name(browser_id):
-        return jsonify({"error": "invalid browser name"}), 404
+        return error_response("invalid browser name", 404)
     for record in records[:5000]:  # bound the batch: a client reports a handful of stripes per post
         if isinstance(record, dict):
             telemetry.hub.emit(browser_id, _clean_client_record(record))
-    return jsonify({"ok": True})
+    return model_response(TelemetryAccepted(ok=True))
 
 
 # The only fields the lens joins on / renders for a client record. Coercing to just these

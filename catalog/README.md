@@ -49,7 +49,10 @@ of a template.
 ```
 
 - `thumbnail` is a path relative to the catalog file (an absolute URL is kept as
-  it is); the app resolves it against the URL it fetched the catalog from.
+  it is); the app resolves it against the URL it fetched the catalog from. The
+  page admits images from the catalog's origin and its own, so a drawing on any
+  other origin is blocked and the card shows its placeholder: keep the drawings
+  beside the catalog.
 - Slugs are unique. A shelf names templates by slug; a slug a shelf names that
   no template carries is dropped from the row.
 - The shelves are shown in this order, followed by an "All templates" row the

@@ -11,8 +11,9 @@ from typing import assert_never
 from app_manifest.manifest import ShortcutMode
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
+from app_schema.routes import model_response
+from app_schema.routes import parse_request_body
 from flask import Flask
-from flask import jsonify
 from flask import request
 from flask import send_file
 from flask.typing import ResponseReturnValue
@@ -87,6 +88,11 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.app_context import get_state
+from imbue.system_interface.shell.api_models import ClientArrivalResponse
+from imbue.system_interface.shell.api_models import DesktopDeletedResponse
+from imbue.system_interface.shell.api_models import LaunchResponse
+from imbue.system_interface.shell.api_models import PlacementsSavedResponse
+from imbue.system_interface.shell.api_models import WindowOpenedResponse
 from imbue.system_interface.shell.client_activity import summarize_client_activity
 from imbue.system_interface.shell.clients import client_view
 from imbue.system_interface.shell.data_types import ClientArrivalOutcome
@@ -125,9 +131,7 @@ from imbue.system_interface.shell.errors import WindowPoppedOutError
 from imbue.system_interface.shell.route_helpers import HTTP_CREATED
 from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
 from imbue.system_interface.shell.route_helpers import HTTP_NO_CONTENT
-from imbue.system_interface.shell.route_helpers import HTTP_OK
 from imbue.system_interface.shell.route_helpers import detail_response
-from imbue.system_interface.shell.route_helpers import parse_request_body
 from imbue.system_interface.shell.route_helpers import request_identity
 from imbue.system_interface.shell.route_helpers import require_client
 from imbue.system_interface.shell.route_helpers import resolve_client
@@ -135,9 +139,9 @@ from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.wallpapers import BUNDLED_WALLPAPERS_DIRNAME
 from imbue.system_interface.shell.wallpapers import WALLPAPER_ROUTE_PREFIX
 from imbue.system_interface.shell.wallpapers import WallpaperDirectories
+from imbue.system_interface.shell.wallpapers import WallpapersListing
 from imbue.system_interface.shell.wallpapers import list_wallpapers
 from imbue.system_interface.shell.wallpapers import resolve_wallpaper_file
-from imbue.system_interface.shell.wallpapers import wallpaper_listing_wire_json
 
 
 class DesktopMetadataRequest(FrozenModel):
@@ -212,91 +216,100 @@ def _existing_wallpaper(wallpaper: Wallpaper | None) -> Wallpaper | None:
 
 
 def list_desktops() -> ResponseReturnValue:
+    """Every desktop of the workspace, with its windows and shortcuts."""
     shell = _shell()
-    return jsonify(DesktopsListing(desktops=tuple(shell.desktop_views(shell.list_desktops()))).model_dump(mode="json"))
+    return model_response(DesktopsListing(desktops=tuple(shell.desktop_views(shell.list_desktops()))))
 
 
 def create_desktop() -> ResponseReturnValue:
+    """Add a desktop with a name, a colour, and a glyph."""
     body = parse_request_body(DesktopMetadataRequest)
     shell = _shell()
     desktop = shell.create_desktop(body.name, body.color, body.glyph)
-    return jsonify(shell.desktop_view(desktop).model_dump(mode="json")), HTTP_CREATED
+    return model_response(shell.desktop_view(desktop), HTTP_CREATED)
 
 
 def update_desktop_settings(desktop_id: str) -> ResponseReturnValue:
+    """Rename a desktop or change its colour or glyph."""
     body = parse_request_body(DesktopSettingsRequest)
     shell = _shell()
     desktop = shell.desktops.update_settings(desktop_id, body.name, body.color, body.glyph)
     shell.broadcast_desktops_updated()
-    return jsonify(shell.desktop_view(desktop).model_dump(mode="json"))
+    return model_response(shell.desktop_view(desktop))
 
 
 def set_desktop_wallpaper(desktop_id: str) -> ResponseReturnValue:
+    """Set a desktop's wallpaper to a bundled or uploaded image, or back to the default."""
     body = parse_request_body(DesktopWallpaperRequest)
     shell = _shell()
     desktop = shell.desktops.set_wallpaper(desktop_id, _existing_wallpaper(body.wallpaper))
     shell.broadcast_desktops_updated()
-    return jsonify(shell.desktop_view(desktop).model_dump(mode="json"))
+    return model_response(shell.desktop_view(desktop))
 
 
 def delete_desktop(desktop_id: str) -> ResponseReturnValue:
+    """Remove a desktop and answer the one its clients fall back to; the last desktop cannot be removed."""
     outcome = _shell().delete_desktop(desktop_id)
-    return jsonify({"fallback_desktop_id": str(outcome.fallback_desktop_id)})
+    return model_response(DesktopDeletedResponse(fallback_desktop_id=str(outcome.fallback_desktop_id)))
 
 
 def set_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
+    """Put a shortcut to an app's launch path in a cell of a desktop's grid."""
     body = parse_request_body(DesktopShortcutRequest)
     shell = _shell()
     shortcut = DesktopShortcut(target=_validated_target(shell, body.target), mode=body.mode, cell=body.cell)
     desktop = shell.desktops.set_shortcut(desktop_id, shortcut)
     shell.broadcast_desktops_updated()
-    return jsonify(shell.desktop_view(desktop).model_dump(mode="json"))
+    return model_response(shell.desktop_view(desktop))
 
 
 def move_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
+    """Move a desktop's shortcut to another cell."""
     body = parse_request_body(ShortcutMoveRequest)
     shell = _shell()
     desktop = shell.desktops.move_shortcut(desktop_id, body.app, body.launch, body.cell)
     shell.broadcast_desktops_updated()
-    return jsonify(shell.desktop_view(desktop).model_dump(mode="json"))
+    return model_response(shell.desktop_view(desktop))
 
 
 def remove_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
+    """Take a shortcut off a desktop."""
     body = parse_request_body(ShortcutRemoveRequest)
     shell = _shell()
     desktop = shell.desktops.remove_shortcut(desktop_id, body.app, body.launch)
     shell.broadcast_desktops_updated()
-    return jsonify(shell.desktop_view(desktop).model_dump(mode="json"))
+    return model_response(shell.desktop_view(desktop))
 
 
 # Section 5.3: windows
 
 
 def open_window(desktop_id: str) -> ResponseReturnValue:
+    """Open a window of an app at a path on a desktop, or answer the one already at that path; 201 when it is new."""
     body = parse_request_body(WindowOpenRequest)
     shell = _shell()
     outcome = shell.open_window(desktop_id, body)
-    return (
-        jsonify(
-            {
-                "window": shell.window_view(outcome.window).model_dump(mode="json"),
-                "is_new": outcome.is_new,
-                "has_no_desktop_window": not body.minimized and _has_no_desktop_window(shell, body.client_id),
-            }
+    return model_response(
+        WindowOpenedResponse(
+            window=shell.window_view(outcome.window),
+            is_new=outcome.is_new,
+            has_no_desktop_window=not body.minimized and _has_no_desktop_window(shell, body.client_id),
         ),
-        HTTP_CREATED if outcome.is_new else HTTP_OK,
+        HTTP_CREATED if outcome.is_new else 200,
     )
 
 
 def close_window(desktop_id: str, window_id: str) -> ResponseReturnValue:
+    """Close a window on every client."""
     _shell().close_window(desktop_id, WindowId(window_id))
     return "", HTTP_NO_CONTENT
 
 
 def report_window_location(desktop_id: str, window_id: str) -> ResponseReturnValue:
+    """Record where a window's page is now (its path and title), as the page reports it through the app contract."""
     body = parse_request_body(WindowLocationReport)
     window = _shell().report_window_location(desktop_id, WindowId(window_id), body.client_id, body.path, body.title)
-    return jsonify(_shell().window_view(window).model_dump(mode="json"))
+    return model_response(_shell().window_view(window))
 
 
 def launch(desktop_id: str) -> ResponseReturnValue:
@@ -304,15 +317,9 @@ def launch(desktop_id: str) -> ResponseReturnValue:
     answer the window showing its page, the page's path, and whether the window was opened."""
     body = parse_request_body(LaunchRequest)
     outcome = _shell().launch(desktop_id, body)
-    return (
-        jsonify(
-            {
-                "window": _shell().window_view(outcome.window).model_dump(mode="json"),
-                "path": str(outcome.path),
-                "is_new": outcome.is_new,
-            }
-        ),
-        HTTP_CREATED if outcome.is_new else HTTP_OK,
+    return model_response(
+        LaunchResponse(window=_shell().window_view(outcome.window), path=str(outcome.path), is_new=outcome.is_new),
+        HTTP_CREATED if outcome.is_new else 200,
     )
 
 
@@ -327,56 +334,56 @@ def _layout_view(shell: ShellState, desktop: Desktop, client_id: ClientId) -> De
 
 
 def get_placements(desktop_id: str) -> ResponseReturnValue:
+    """Where one client (``?client=``) has placed a desktop's windows: frames, order, minimized and popped-out state."""
     client_id = ClientId(request.args.get("client", ""))
     shell = _shell()
-    return jsonify(_layout_view(shell, shell.get_desktop(desktop_id), client_id).model_dump(mode="json"))
+    return model_response(_layout_view(shell, shell.get_desktop(desktop_id), client_id))
 
 
 def save_placements(desktop_id: str) -> ResponseReturnValue:
+    """Save one client's placement of a desktop's windows; a stale save (an older layout) is refused."""
     body = parse_request_body(PlacementsSaveRequest)
     saved = _shell().save_browser_placements(desktop_id, body)
     # The stamp is spelled as the read route spells it, so the window compares like with like.
-    return jsonify(
-        {
-            "updated_at": desktop_layout_view(saved, {}).model_dump(mode="json")["updated_at"]
+    return model_response(
+        PlacementsSavedResponse(
+            updated_at=desktop_layout_view(saved, {}).model_dump(mode="json")["updated_at"]
             if saved is not None
             else None
-        }
+        )
     )
 
 
 # Section 5.5: the arrival, wallpapers, and the inventory document
 
 
-def arrival_wire_json(shell: ShellState, outcome: ClientArrivalOutcome | None) -> dict[str, Any]:
+def arrival_answer(shell: ShellState, outcome: ClientArrivalOutcome | None) -> ClientArrivalResponse:
     """The answer of ``POST /api/clients/<client_id>/arrive`` (desktop contracts.md section 5.5); None (no desktop
     yet) answers three nulls."""
     if outcome is None:
-        return {"desktop_id": None, "created_desktop": None, "replaced_desktop_name": None}
-    return {
-        "desktop_id": str(outcome.desktop_id),
-        "created_desktop": (
-            shell.desktop_view(outcome.created_desktop).model_dump(mode="json")
-            if outcome.created_desktop is not None
-            else None
+        return ClientArrivalResponse(desktop_id=None, created_desktop=None, replaced_desktop_name=None)
+    return ClientArrivalResponse(
+        desktop_id=str(outcome.desktop_id),
+        created_desktop=(
+            shell.desktop_view(outcome.created_desktop) if outcome.created_desktop is not None else None
         ),
-        "replaced_desktop_name": outcome.replaced_desktop_name,
-    }
+        replaced_desktop_name=outcome.replaced_desktop_name,
+    )
 
 
 def arrive_client(client_id: str) -> ResponseReturnValue:
     """A shell page has loaded for ``client_id``: settle the desktop it lands on from the requester's identity."""
     shell = _shell()
-    return jsonify(arrival_wire_json(shell, shell.arrive_client(ClientId(client_id), request_identity())))
+    return model_response(arrival_answer(shell, shell.arrive_client(ClientId(client_id), request_identity())))
 
 
 def list_wallpapers_route() -> ResponseReturnValue:
-    return jsonify(
-        {"wallpapers": [wallpaper_listing_wire_json(listing) for listing in list_wallpapers(_wallpaper_directories())]}
-    )
+    """The wallpapers a desktop can wear: the bundled ones and the images in the workspace's wallpaper folder."""
+    return model_response(WallpapersListing(wallpapers=tuple(list_wallpapers(_wallpaper_directories()))))
 
 
 def serve_wallpaper(kind: str, name: str) -> ResponseReturnValue:
+    """One wallpaper image, bundled or from the wallpaper folder."""
     try:
         wallpaper = Wallpaper(kind=WallpaperKind(kind), name=WallpaperName(name))
     except ValueError as e:
@@ -727,7 +734,7 @@ def _open_unplaced(shell: ShellState, arguments: OpenArgs, requester: OpRequeste
         layout=None,
         window_id=outcome.window.id,
     )
-    return jsonify(answer.model_dump(mode="json"))
+    return model_response(answer)
 
 
 def _answer_document(
@@ -765,7 +772,7 @@ def _applied(
         target.client_id,
         _logged(body.args),
     )
-    return jsonify(_answer_document(shell, target, window_id, notes).model_dump(mode="json"))
+    return model_response(_answer_document(shell, target, window_id, notes))
 
 
 _ShortcutBody = ShortcutsBody | ShortcutSetBody | ShortcutMoveBody | ShortcutRemoveBody | WallpaperBody
@@ -1053,7 +1060,7 @@ def _show(
             "shown": result.outcome,
         }
     )
-    return jsonify(answer.model_dump(mode="json"))
+    return model_response(answer)
 
 
 def show_page_for_client(
@@ -1184,7 +1191,7 @@ def _open(
 def _op_context(shell: ShellState, requester: OpRequester | None) -> ResponseReturnValue:
     clients = summarize_client_activity(shell.activity.read_events(), shell.broadcaster.get_connected_client_infos())
     logger.info("layout op=context requester={} clients={}", requester, len(clients))
-    return jsonify(ContextAnswer(clients=tuple(clients)).model_dump(mode="json"))
+    return model_response(ContextAnswer(clients=tuple(clients)))
 
 
 def dispatch_desktop_op(shell: ShellState, body: OpBody) -> ResponseReturnValue:
@@ -1198,7 +1205,7 @@ def dispatch_desktop_op(shell: ShellState, body: OpBody) -> ResponseReturnValue:
         case InventoryBody():
             document = inventory_document(shell)
             logger.info("layout op={} requester={} desktops={}", body.op, requester, len(document.desktops))
-            return jsonify(InventoryOpAnswer.model_validate(dict(document)).model_dump(mode="json"))
+            return model_response(InventoryOpAnswer.model_validate(dict(document)))
         case ReloadSystemInterfaceBody():
             return _reload_system_interface(shell, requester)
         case RefreshAppBody(args=arguments):
@@ -1268,7 +1275,7 @@ def _announce_window_op(
 
 
 def _transient_answer(target_client_id: ClientId | None) -> ResponseReturnValue:
-    return jsonify(TransientOpAnswer(target_client_id=target_client_id).model_dump(mode="json"))
+    return model_response(TransientOpAnswer(target_client_id=target_client_id))
 
 
 def _reload_system_interface(shell: ShellState, requester: OpRequester | None) -> ResponseReturnValue:

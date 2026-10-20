@@ -5,7 +5,7 @@
  * - A web link off this machine (and ``mailto:``, ``tel:``) is **external**, by the app contract's ``isExternalUrl``,
  *   which a shared fixture holds to the Imbue Studio desktop app's rule: an app registered for its message
  *   (``open:web``, ``open:mailto``, ``open:tel``) opens it, else the user's own browser or mail or phone app.
- * - A ``file:`` URL on this machine is a **file** of the workspace, opened in the File Viewer (``open:file``).
+ * - A ``file:`` URL on this machine is a **file** of the workspace, opened in Files (``open:file``).
  * - A URL on a local host (``localhost``, ``127.0.0.1``, ``[::1]``, ``*.localhost``) is a **local URL**: on an app's
  *   ``<label>.localhost`` host, or on a bare host name at the port the app registered, that app's window, else the
  *   workspace's browser (``open:url``). That is unless it is the address of an app of a workspace: one of this

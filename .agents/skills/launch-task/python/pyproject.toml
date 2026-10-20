@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "Launches, awaits and tears down worker agents"
 requires-python = ">=3.12"
 dependencies = [
+    # Reads whether a worker's chat is parked on a background task.
+    "chat-background-tasks",
     # Reads the OOM shed ledger for a worker it is about to revive.
     "oom-priority",
     "pyyaml>=6",

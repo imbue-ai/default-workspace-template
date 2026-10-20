@@ -58,12 +58,12 @@ import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from imbue.imbue_common.mutable_model import MutableModel
 from loguru import logger
 from pydantic import PrivateAttr
-from workspace_layout.windows import parse_window_closed_hint, read_app_window_paths, window_query_value
+from workspace_layout.windows import WindowClosedHint, read_app_window_paths, window_query_value
 
 from browser import chrome_launcher
 from browser import manifest as fleet_manifest
@@ -72,24 +72,12 @@ from browser.cdp_proxy import BrowserProxy, ProxyServer
 from browser.errors import BrowserNotDrivableError, UnknownBrowserError
 from browser.names import first_free_numbered_browser_name, is_valid_browser_name
 from browser.oom_retag import notify_chromium_processes_expected
-from browser.primitives import APP_NAME, SESSION_QUERY_KEY
+from browser.primitives import APP_NAME, SESSION_QUERY_KEY, ControlOwner, Lifecycle
 
 # Errors expected when a target/CDP session goes away underneath us (tab closed,
 # navigation, browser killed). The bounded CDP helpers additionally catch broadly
 # (best-effort, must never wedge the loop).
 _BROWSER_ERRORS = (RuntimeError, ConnectionError, OSError)
-
-ControlOwner = Literal["human", "agent"]
-
-# Explicit per-browser lifecycle. A browser is REGISTERED in the fleet the instant
-# create() is called (so the viewer/CLI can address it at once), but its Chromium is
-# launched asynchronously and serialized, so it starts in ``init`` and flips to
-# ``running`` only once Chromium is up and the active tab is foregrounded. ``crashed`` is
-# terminal (Chromium died -- OOM/segfault). Driving/ownership only applies once
-# ``running``; the viewer renders deterministically off this field.
-# ``stopped``: the user ended this browser's Chromium but kept the browser (its record, profile,
-# and last known tabs); a start relaunches it from those. Unlike ``crashed`` it is not terminal.
-Lifecycle = Literal["init", "running", "crashed", "stopped"]
 
 # Fortress's fixed install path (see the env.d unit
 # system/scripts/env.d/1000-playwright-fortress.sh). A stealth, C++-patched
@@ -1945,15 +1933,11 @@ class LiveBrowser(MutableModel):
             await asyncio.to_thread(_stop_xvfb, xvfb)
 
 
-def closed_window_browser(hint_body: object) -> str | None:
+def closed_window_browser(hint: WindowClosedHint) -> str | None:
     """The browser a closed window showed, from the ``path`` of the shell's close hint.
 
-    None for a path with no browser (the root, or one naming something that is not a browser name), or a body of
-    another shape than the shell posts.
+    None for a path with no browser (the root, or one naming something that is not a browser name).
     """
-    hint = parse_window_closed_hint(hint_body)
-    if hint is None:
-        return None
     return window_query_value(hint.path, SESSION_QUERY_KEY)
 
 

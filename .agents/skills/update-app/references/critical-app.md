@@ -72,8 +72,8 @@ time" describes. Three deltas:
   only on the user's call, never silently.
 
 **Check for an open notice.** If a "recently updated" notice from an earlier
-apply is still open (`GET /api/updates/pending` on the shell answers a record
-rather than `null`; its `apps` are the apps the banner names, or empty when
+apply is still open (`GET /api/updates/pending` on the shell answers a `notice` that
+is a record rather than `null`; its `apps` are the apps the banner names, or empty when
 that apply changed only how the workspace starts), the previous update is
 unconfirmed. Proceed, but tell the user so,
 and that this pass's apply will replace that rollback point, whichever apps it

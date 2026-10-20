@@ -738,6 +738,10 @@ _LEAVE_OPERATIONS = frozenset({"dequeue", "remove", "popAll"})
 # starts with this marker (or is blank) is added as a PHANTOM slot: it occupies a
 # FIFO position so leaves stay aligned, but it is filtered from the snapshot.
 TASK_NOTIFICATION_CONTENT_PREFIX = "<task-notification>"
+_TASK_NOTIFICATION_ID_RE = re.compile(r"<task-id>\s*([^<\s]+)\s*</task-id>")
+_TASK_NOTIFICATION_STATUS_RE = re.compile(r"<status>\s*([^<\s]+)\s*</status>")
+# The statuses Claude Code gives a task that is over; any other one leaves its marker standing.
+_FINISHED_TASK_STATUSES = frozenset({"completed", "failed", "killed"})
 
 
 class QueueSignalKind(UpperCaseStrEnum):
@@ -806,3 +810,18 @@ def parse_queue_signals(line: str) -> QueueSignal | None:
     if operation in _LEAVE_OPERATIONS:
         return QueueSignal(kind=QueueSignalKind.LEAVE, session_id=_record_session_id(raw))
     return None
+
+
+def finished_task_id(content: str) -> str | None:
+    """The background task a ``<task-notification>`` reports as over, or None for any other content.
+
+    Claude Code enqueues the notice the moment the task ends, whatever then happens to the turn it
+    wakes, so it is the one record of the end that an interrupted or failed turn cannot lose.
+    """
+    if not content.lstrip().startswith(TASK_NOTIFICATION_CONTENT_PREFIX):
+        return None
+    task_id = _TASK_NOTIFICATION_ID_RE.search(content)
+    status = _TASK_NOTIFICATION_STATUS_RE.search(content)
+    if task_id is None or status is None or status.group(1) not in _FINISHED_TASK_STATUSES:
+        return None
+    return task_id.group(1)

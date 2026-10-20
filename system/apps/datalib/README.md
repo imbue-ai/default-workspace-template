@@ -21,8 +21,8 @@ An app is listed only once its program has registered it, so the Datalib app
 appears in a workspace when the install script first starts it, and stays
 listed from then on.
 
-The app is a manifest, an icon, and that launcher; like the file viewer it is
-not a Python package, and it is excluded from the uv workspace in the root
+The app is a manifest, an icon, and that launcher; it is not a Python package,
+and it is excluded from the uv workspace in the root
 `pyproject.toml`. The launcher uses only the standard library, so the app does
 not depend on the root venv being intact.
 
