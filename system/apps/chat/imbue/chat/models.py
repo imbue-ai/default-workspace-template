@@ -36,6 +36,18 @@ class AgentCreationError(ValueError):
     ...
 
 
+class NoProviderAccountError(AgentCreationError):
+    """Raised when a create names no account and none is signed in: the user has to choose a provider first."""
+
+    ...
+
+
+class SignedOutAccountError(AgentCreationError):
+    """Raised when a create names an account that has been signed out since the caller read the account list."""
+
+    ...
+
+
 class AgentEventsStatus(FrozenModel):
     """Whether the agent-lifecycle event stream is actually feeding this chat instance.
 
@@ -505,6 +517,13 @@ class HandoffState(FrozenModel):
     error: str | None = Field(default=None, description="Why the switch failed, in the failed phase")
     failed_step: HandoffFailedStep | None = Field(
         default=None, description="Which step failed, in the failed phase: the agent's start, or the model pick"
+    )
+    is_fresh_start: bool = Field(
+        default=False,
+        description=(
+            "Whether the chat had no user turn to carry over, so the switch only starts it on the target: the page "
+            "shows no handoff for it"
+        ),
     )
 
 

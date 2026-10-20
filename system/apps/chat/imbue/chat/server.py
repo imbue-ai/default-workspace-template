@@ -160,6 +160,7 @@ from imbue.chat.models import IntakeResponse
 from imbue.chat.models import IntakeTarget
 from imbue.chat.models import InterruptAgentResponse
 from imbue.chat.models import ModelOptionsResponse
+from imbue.chat.models import NoProviderAccountError
 from imbue.chat.models import OkResponse
 from imbue.chat.models import PendingIntakeView
 from imbue.chat.models import PoweredByResponse
@@ -174,6 +175,7 @@ from imbue.chat.models import SendMessageRequest
 from imbue.chat.models import SendMessageResponse
 from imbue.chat.models import SetModelChoiceRequest
 from imbue.chat.models import ShoulderTapAtomicResponse
+from imbue.chat.models import SignedOutAccountError
 from imbue.chat.models import StartAgentResponse
 from imbue.chat.models import StopAgentResponse
 from imbue.chat.models import SwitchChatRequest
@@ -730,6 +732,11 @@ def _consider_naming_chat(state: ChatAppState, chat_id: ChatId, message: str) ->
 # offers "Choose a provider" in place of the input from the account list, so only a page whose
 # list has not caught up with the sign-out sends and meets this.
 ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND: Final[str] = "account_signed_out"
+
+# The kind of a create refused because nothing is signed in: the caller opens the chat awaiting its first send, whose
+# page asks for a provider, rather than showing the refusal. A create naming a signed-out account answers
+# ``ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND``, like a send to a chat on one.
+NO_PROVIDER_ACCOUNT_CREATE_REFUSAL_KIND: Final[str] = "no_provider_account"
 
 
 def _is_account_signed_out(agent_info: AgentInfo) -> bool:
@@ -1588,11 +1595,16 @@ def _get_screen_capture(chat_id: str) -> Response:
 
 def _created_chat_or_refusal(create: Callable[[], CreatedChat]) -> CreatedChat | Response:
     """Run one create of a chat: the chat, else its refusal as the create route answers it (a taken name is a 409,
-    anything else the manager refused a 400 with its reason)."""
+    anything else the manager refused a 400 with its reason, and a ``kind`` beside it when the account is the
+    reason)."""
     try:
         return create()
     except AgentNameConflictError as e:
         return error_response(str(e), 409)
+    except NoProviderAccountError as e:
+        return model_response(SendFailureResponse(detail=str(e), kind=NO_PROVIDER_ACCOUNT_CREATE_REFUSAL_KIND), 400)
+    except SignedOutAccountError as e:
+        return model_response(SendFailureResponse(detail=str(e), kind=ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND), 400)
     except (AgentCreationError, OSError, ValueError) as e:
         return error_response(str(e), 400)
 
@@ -2340,6 +2352,8 @@ _SEND_FAILURES: Final[tuple[AlternateResponse, ...]] = (
     AlternateResponse(status=409, model=SendFailureResponse),
     AlternateResponse(status=500, model=SendFailureResponse),
 )
+# A create refused for its account (nothing signed in, or a signed-out account named), with the refusal's kind.
+_CREATE_REFUSAL: Final[AlternateResponse] = AlternateResponse(status=400, model=SendFailureResponse)
 
 # The events exchange JSON but are schemaless: their shape is the harness's, not a model's.
 _LOOSE_EVENTS_REASON: Final[str] = (
@@ -2357,14 +2371,19 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ("GET", "/api/agents"): RouteModels(response_model=AgentListResponse),
     ("GET", "/api/chats"): RouteModels(response_model=ChatListResponse),
     ("POST", "/api/chats/create"): RouteModels(
-        request_model=CreateChatRequest, response_model=CreateChatResponse, success_status=201
+        request_model=CreateChatRequest,
+        response_model=CreateChatResponse,
+        success_status=201,
+        alternate_responses=(_CREATE_REFUSAL,),
     ),
     ("POST", "/api/chats/seed"): RouteModels(
         request_model=SeedChatRequest, response_model=CreateChatResponse, success_status=201
     ),
     ("POST", "/api/chats/awaiting"): RouteModels(response_model=CreateChatResponse),
     ("POST", "/api/chats/intake"): RouteModels(
-        request_model=IntakeRequest, response_model=IntakeResponse, alternate_responses=_SEND_FAILURES
+        request_model=IntakeRequest,
+        response_model=IntakeResponse,
+        alternate_responses=(*_SEND_FAILURES, _CREATE_REFUSAL),
     ),
     ("GET", "/api/chats/intakes/{token}"): RouteModels(response_model=PendingIntakeView),
     ("POST", "/api/chats/intakes/{token}/apply"): RouteModels(

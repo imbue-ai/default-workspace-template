@@ -342,6 +342,27 @@ def test_create_chat_broadcasts_provisional_chat_created(
     assert proto_msg["phase"] == "creating"
 
 
+def test_a_change_to_the_account_index_tells_every_page_to_read_the_account_list_again(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    """Removing an account (from any page or process) is pushed at once, so a chat on it shows it before its next send."""
+    account_id, _ = mint_account_dir()
+    commit_account(account_id, "anthropic", "Anthropic")
+    agent_manager._accounts_index_poller.poll_once()
+    q = broadcaster.register()
+
+    agent_manager._accounts_index_poller.poll_once()
+    assert q.empty()
+
+    delete_account(account_id)
+    agent_manager._accounts_index_poller.poll_once()
+
+    raw = q.get_nowait()
+    assert raw is not None
+    assert json.loads(raw) == {"type": "accounts_updated"}
+    assert q.empty()
+
+
 def test_create_codex_chat_broadcasts_provisional_chat_created_with_its_account(
     agent_manager: AgentManager,
     broadcaster: WebSocketBroadcaster,
@@ -5114,6 +5135,31 @@ def test_a_handoff_moves_a_chat_to_a_new_agent_on_another_harness(
         manager.stop()
 
 
+def test_a_fresh_start_switch_is_pushed_as_one_so_the_page_shows_no_handoff(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """Every snapshot pushed while a chat with no user turn moves to another provider says it is a fresh start."""
+    sent: list[tuple[str, str, str]] = []
+    manager, store, _argv_log = _handoff_manager(broadcaster, tmp_path, sent, has_user_turn=False)
+    first = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
+    pushes = broadcaster.register()
+    try:
+        manager.begin_handoff(ChatId(first), _openai_account(), "", "m-1", HeldSendOrigin.CLIENT)
+        _wait_until_settled(store, ChatId(first))
+    finally:
+        manager.stop()
+    switching = []
+    while not pushes.empty():
+        raw = pushes.get_nowait()
+        assert raw is not None
+        message = json.loads(raw)
+        if message["type"] == "chats_updated":
+            switching.extend(chat["handoff"] for chat in message["chats"] if chat["handoff"] is not None)
+    assert switching
+    assert all(handoff["is_fresh_start"] for handoff in switching)
+
+
 def test_a_handoff_off_an_agent_with_no_user_turn_is_a_fresh_start(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
@@ -5649,6 +5695,30 @@ def test_a_switch_to_an_account_on_the_chats_own_lane_rebinds_the_agent_in_place
         assert sent == [(agent_id, "Carry on here", "m-1")]
         assert store.read(chat_id) is None
         assert read_index().mru == second_account
+    finally:
+        manager.stop()
+
+
+def test_a_rebind_made_with_nothing_to_say_sends_nothing_once_the_agent_is_back(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A switch picked from the provider menu carries no message: the restarted agent is sent nothing, rather than
+    an empty message whose delivery could never be confirmed."""
+    sent: list[tuple[str, str, str]] = []
+    manager, _store, _argv_log, agent_id, _first_account, second_account = _rebind_manager(
+        broadcaster, tmp_path, monkeypatch, sent
+    )
+    chat_id = ChatId(agent_id)
+    try:
+        kind, _phase, _block = manager.begin_switch(chat_id, second_account, "", "m-1", HeldSendOrigin.CLIENT)
+        assert kind is TransitionKind.REBIND
+        state = manager.get_handoff_state(chat_id)
+        assert state is None or state.held_sends == ()
+        wait_for(lambda: manager.get_handoff_state(chat_id) is None, timeout=15.0)
+
+        snapshot = manager.get_chat_snapshot(agent_id)
+        assert snapshot is not None and snapshot.active_agent.account_id == second_account
+        assert sent == []
     finally:
         manager.stop()
 

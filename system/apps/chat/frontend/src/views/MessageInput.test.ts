@@ -54,6 +54,8 @@ const mocks = vi.hoisted(() => {
     setPendingAccount: vi.fn(),
     openSwitchDialog: vi.fn(),
     beginSwitchToAccountId: vi.fn(),
+    // What the composer registered to hear of a model pick the chat app refused.
+    modelChoiceFailureListener: null as ((chatId: string, detail: string) => void) | null,
     // The account ids that read as signed out; empty at rest.
     signedOutAccountIds: new Set<string>(),
     loadAccounts: vi.fn(async () => {}),
@@ -138,6 +140,9 @@ vi.mock("@imbue/workspace-ui/src/models/request-error", () => ({
     typeof e === "object" && e !== null && "kind" in e ? (e as { kind: string }).kind : "unknown",
 }));
 vi.mock("../models/ModelSettings", () => ({
+  addModelChoiceFailureListener: (listener: (chatId: string, detail: string) => void) => {
+    mocks.modelChoiceFailureListener = listener;
+  },
   effectiveChoice: () => null,
   isPickInFlight: () => false,
   setModelChoice: vi.fn(),
@@ -1037,6 +1042,19 @@ describe("MessageInput send failure notice", () => {
     expect(renderedText(after)).not.toContain("Couldn't send your message");
   });
 
+  it("shows a model pick the chat app refused in the chat's notice, with its reason", () => {
+    const component = MessageInput();
+    mocks.modelChoiceFailureListener!("agent-1", "This chat is switching to Claude 2; try again once it has.");
+
+    const tree = component.view!({ attrs: { chatId: "agent-1" } } as never);
+
+    const text = renderedText(tree);
+    expect(text).toContain("Couldn't change the model");
+    expect(text).toContain("This chat is switching to Claude 2; try again once it has.");
+    expect(text).not.toContain("[object Object]");
+    expect(text).not.toContain("Retry");
+  });
+
   it("offers Cancel, Retry and Force for a failed send", async () => {
     mocks.sendMessage.mockRejectedValueOnce("nope");
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
@@ -1643,6 +1661,33 @@ describe("MessageInput on a chat whose account was signed out", () => {
     const tree = component.view!({ attrs: { chatId: "agent-signed-out" } } as never);
     expect(findButton(tree, "Choose a provider")).toBeDefined();
     expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
+  });
+
+  it("offers choosing a provider instead of Retry and Force when a send is refused for a signed-out account", async () => {
+    mocks.signedOutAccountIds.clear();
+    mocks.sendMessage.mockRejectedValueOnce({
+      response: { kind: "account_signed_out" },
+      toString: () => "You signed out of the account this chat runs on. Choose a provider to continue it on.",
+    });
+    const component = MessageInput();
+
+    const after = await typeAndSend(component, "agent-signed-out", "are you still there?");
+
+    const text = renderedText(after);
+    expect(text).toContain("Couldn't send your message");
+    expect(text).toContain("You signed out of the account this chat runs on.");
+    expect(text).not.toContain("Retry");
+    expect(text).not.toContain("Force");
+    expect(text).not.toContain("open the agent's terminal");
+    (findButton(after, "Choose a provider")!.attrs!.onclick as () => void)();
+    const dismissed = component.view!({ attrs: { chatId: "agent-signed-out" } } as never);
+    expect(renderedText(dismissed)).not.toContain("Couldn't send your message");
+    expect(mocks.openProviderChooser).toHaveBeenCalledTimes(1);
+    const intent = mocks.openProviderChooser.mock.calls[0][0] as { onSignedIn: (accountId: string) => void };
+    intent.onSignedIn("account-chosen-5522");
+    expect(mocks.beginSwitchToAccountId).toHaveBeenCalledWith("agent-signed-out", "account-chosen-5522");
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem("message-text:agent-signed-out")).toContain("are you still there?");
   });
 
   it("leaves the account list alone when a send fails for any other reason", async () => {

@@ -12,6 +12,7 @@ import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import type { ModelChoice, ModelIdentity } from "./ModelSettings";
 import type { CompactionCause, UserMessageEvent } from "./Response";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
+import { loadAccounts } from "./Providers";
 
 /** The agent-level facts about a chat's active agent that the pages render (the backend's
  *  ``ActiveAgentSnapshot``). */
@@ -106,6 +107,8 @@ export interface HandoffState {
   error: string | null;
   // Which step failed, in the failed phase: the agent's start, or the model picked for it.
   failed_step: "start" | "model" | null;
+  // Whether the chat had no user turn to carry over, so the switch only starts it on the target: no handoff to show.
+  is_fresh_start: boolean;
 }
 
 /** Whether the switch can still be called off: a handoff only until the old agent is stopped (spec 5.6);
@@ -177,7 +180,8 @@ export interface ProvisionalChat {
 type WsEvent =
   | { type: "chats_updated"; chats: ChatSnapshot[] }
   | ({ type: "provisional_chat_created" } & ProvisionalChat)
-  | { type: "provisional_chat_completed"; chat_id: string; success: boolean; error: string | null };
+  | { type: "provisional_chat_completed"; chat_id: string; success: boolean; error: string | null }
+  | { type: "accounts_updated" };
 
 export type ChatsUpdatedListener = (chats: ChatSnapshot[]) => void;
 /**
@@ -209,6 +213,8 @@ let chatsUpdatedListeners: ChatsUpdatedListener[] = [];
 let chatActivityListeners: ChatActivityListener[] = [];
 let chatActiveAgentListeners: ChatActiveAgentListener[] = [];
 let ws: WebSocket | null = null;
+// Whether the socket has opened before, so an open is a reconnect.
+let hasConnectedBefore = false;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let connected = false;
 
@@ -224,6 +230,9 @@ function connect(): void {
     connected = true;
     console.info("[chat-ws] connected");
     reconnectBackoff.reset();
+    // A change to the account list while the socket was down was pushed to no one.
+    if (hasConnectedBefore) rereadAccounts();
+    hasConnectedBefore = true;
     // The app replays what it holds (its provisional chats, then its chat list) on every
     // connection; the list ends the replay and must be handled even when nothing changed.
     replayedProvisionalIds = new Set();
@@ -264,8 +273,20 @@ function scheduleReconnect(): void {
   }, delayMs);
 }
 
+/** Read the account list again because it changed outside this page (a sign-in or a removal in another chat or
+ *  window), so a chat whose account was removed shows it at once; a failed read keeps the list read before. */
+function rereadAccounts(): void {
+  loadAccounts().then(
+    () => m.redraw(),
+    (error: unknown) => console.warn("[chat-ws] could not re-read the account list", error),
+  );
+}
+
 function handleEvent(event: WsEvent): void {
   switch (event.type) {
+    case "accounts_updated":
+      rereadAccounts();
+      break;
     case "chats_updated": {
       isChatListReceived = true;
       // The backend can broadcast the same snapshot many times during a turn (transcript
@@ -465,6 +486,18 @@ export function buildAgentTerminalUrl(agentName: string): string {
   return `${baseUrl}${separator}arg=_&arg=agent&arg=${encodeURIComponent(agentName)}`;
 }
 
+/** A create the chat app refused, with its reason in words and, when the account is the reason, the refusal's kind:
+ *  ``no_provider_account`` when nothing is signed in, ``account_signed_out`` when the named account was removed. */
+export class CreateChatRefusedError extends Error {
+  readonly kind: string | null;
+
+  constructor(detail: string, kind: string | null) {
+    super(detail);
+    this.name = "CreateChatRefusedError";
+    this.kind = kind;
+  }
+}
+
 /** A freshly-created chat's identity: its id and its name pair. */
 export interface CreatedChat {
   chatId: string;
@@ -479,7 +512,7 @@ export interface CreatedChat {
  * shows up as provisional until mngr registers it). The display name is minted server-side.
  * ``projectId`` becomes the agent's ``project`` label and is empty for a chat started outside
  * any project; ``message`` is the chat's first message, sent once it runs (empty sends none).
- * Throws with the server's detail on rejection.
+ * Throws a ``CreateChatRefusedError`` with the server's detail on rejection.
  */
 export function createChat(
   projectId: string,
@@ -519,8 +552,8 @@ async function postCreateChat(body: Record<string, string | ModelIdentity | null
     body: JSON.stringify(body),
   });
   if (!response.ok) {
-    const data = (await response.json().catch(() => ({}))) as { detail?: string };
-    throw new Error(data.detail ?? `HTTP ${response.status}`);
+    const data = (await response.json().catch(() => ({}))) as { detail?: string; kind?: string };
+    throw new CreateChatRefusedError(data.detail ?? `HTTP ${response.status}`, data.kind ?? null);
   }
   const created = (await response.json()) as { chat_id?: string; name?: string; display_name?: string };
   if (!created.chat_id) {

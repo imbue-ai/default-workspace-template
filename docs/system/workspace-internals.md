@@ -90,7 +90,13 @@ in that app's folder and is named `<app>-<role>`.
   merges, the mngr side exports the branch's public subset to the mirror and the
   pin moves to that public commit (`just dwt-mngr-pin-export` in the mngr repo):
   CI's `pin-is-public` job, which `main` requires, refuses a private pin, and a
-  `minds-v*` tag never carries one (`release-pin-gate.yml`).
+  `minds-v*` tag never carries one (`release-pin-gate.yml`). One mngr file is
+  committed here rather than fetched at build time: `.agents/skills/imbue-studio/SKILL.md`
+  is a verbatim copy of the published Imbue Studio skill at the pinned commit, so
+  every harness that reads the skills tree has it. The mngr side's pin move copies
+  it with the pin through `system/scripts/vendor_mngr_skill.py --write`, the file's one
+  writer, and the same CI job checks the copy against the pinned commit with its
+  `--check`; edit it in the mngr repo, never here.
 - `system/vendor/tk/` - A vendored copy of the
   [tk](https://github.com/wedow/ticket) ticket tracker. The `ticket` script
   (also callable as `tk`) manages tickets stored as markdown. We point

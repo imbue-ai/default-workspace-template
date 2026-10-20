@@ -34,6 +34,7 @@ _SCRIPTS_RUN_WITH_SYSTEM_PYTHON = (
     "seed_welcome_chat.py",
     "set_mngr_pin.py",
     "tool_env.py",
+    "vendor_mngr_skill.py",
 )
 
 # The stdlib-only workspace libraries a script may put on ``sys.path`` and import, by package,
