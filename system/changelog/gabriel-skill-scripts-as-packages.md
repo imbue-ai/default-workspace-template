@@ -6,6 +6,8 @@ This release turns the workspace's scripts into packages. An existing workspace'
 
 - The four guard hooks (pipe into tail/head, latchkey request, secrets, tk standalone) run their checks through one entry, `system/scripts/agent_hook_check.py <check>`, instead of a wrapper each. Only it, the rewrite hook's entry and the skill entry files that run with no venv (update-self's, and publish-template's two manifest tools) still edit `sys.path`.
 
+- `background_tasks.py`, `claude_background_task_hooks.py` and `vendor_mngr_skill.py` move into `workspace_bare_scripts`, with their tests beside them. Each keeps its path as an entry file, since all three run by that path under the system `python3`: Imbue Studio and its admin and eval tools run `background_tasks.py`, Claude's Stop and SessionStart hooks run `claude_background_task_hooks.py`, and CI and mngr's pin bump run `vendor_mngr_skill.py`. `system/test_external_entry_paths.py` now runs all three. The two background-task entry files put `system/libs/chat_background_tasks` on `sys.path` (the hooks' entry also puts `oom_priority` there, for the rewrite hook's command parsing), so they are counted among the import-path edits. The modules import the library normally.
+
 - `forward_port` has a `register()` / `remove()` API, which its command line now runs, and `message_chat` a `send()`. The shared preview script registers its servers and launch-task sends its messages through them in-process instead of starting `python3` on the scripts.
 
 - The root workspace adds the `system/scripts`, `.agents/shared/scripts` and `.agents/skills/*/python` members, so skill dependencies resolve in the one `uv.lock`.
