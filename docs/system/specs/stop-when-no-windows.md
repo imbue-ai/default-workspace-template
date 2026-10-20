@@ -31,7 +31,7 @@ Facts this design builds on, as of `main` at `02eb68c02` (2026-09-28).
   Stopped before anyone has visited, it would never deliver that window.
 - The `app-watcher` service is a 40 MB process whose one job is to diff `data/.state/apps.toml` on change and append `service_registered` and `service_deregistered` events to `$MNGR_AGENT_STATE_DIR/events/services/events.jsonl`, which the minds desktop reads to discover an app's origins.
   The shell watches the same file with the same intent (`shell/inventory.py`).
-- A scaffolded user app registers itself as the first half of its own program command (`forward_port.py --manifest ... && <entry>`), runs its uv tool entry point directly (no `uv run`), and carries `startsecs = 30` and `startretries = 5`.
+- A scaffolded user app registers itself as the first half of its own program command (`forward_port.py --manifest ... && <entry>`), execs its entry point from the workspace venv (`.venv/bin/<name>`, no `uv run`), and carries `startsecs = 30` and `startretries = 5`.
 
 ## 2. Decisions
 
