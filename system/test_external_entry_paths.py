@@ -28,6 +28,7 @@ _BARE_CALLS: tuple[tuple[Path, tuple[str, ...]], ...] = (
     (_SYSTEM_SCRIPTS / "provision_backups.py", ("--help",)),
     (_SYSTEM_SCRIPTS / "set_mngr_pin.py", ("--help",)),
     (_SYSTEM_SCRIPTS / "run_in_background.py", ("--help",)),
+    (_SYSTEM_SCRIPTS / "background_tasks.py", ("--help",)),
     # Outside a workspace (no agent id in the environment) the gate lets everything through.
     (_SYSTEM_SCRIPTS / "require_create_account.py", ()),
     (_UPDATE_SELF_SCRIPTS / "update_self.py", ("--help",)),

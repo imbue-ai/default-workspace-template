@@ -17,7 +17,7 @@ from chat_background_tasks.testing import runner_task
 
 _CHAT_ID = "agent-0123456789abcdef0123456789abcdef"
 _OTHER_CHAT_ID = "agent-fedcba9876543210fedcba9876543210"
-_SCRIPT = Path(__file__).parent / "background_tasks.py"
+_SCRIPT = Path(__file__).resolve().parents[1] / "background_tasks.py"
 
 
 def _run_cli(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
