@@ -9,7 +9,7 @@ page opens and sends.
 """
 
 import math
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Final, Literal
 
@@ -81,7 +81,7 @@ def _framed_viewer(
     module_browser: Browser,
     visibility_at_load: Literal["shown", "hidden"],
     is_contract_served: bool,
-) -> Iterator[tuple[Page, Frame, _Viewer]]:
+) -> Generator[tuple[Page, Frame, _Viewer], None, None]:
     viewer = _Viewer()
 
     def answer(route: Route) -> None:
