@@ -12,12 +12,6 @@
       "sourceType": "github",
       "skillPath": "skills/blueprint-generate/SKILL.md",
       "computedHash": "124966d02ff7211171fea90325e300d185bd591eb6ac8fea9f985a6f7fdc72d8"
-    },
-    "imbue-studio": {
-      "source": "imbue-ai/imbue-skills",
-      "sourceType": "github",
-      "skillPath": "plugins/imbue-studio-skills/skills/imbue-studio/SKILL.md",
-      "computedHash": "10988cc877e8121cc0e9dcd967605ebf682b57410a246485b4cfe4d369a42a6d"
     }
   }
 }
