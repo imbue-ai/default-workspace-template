@@ -362,7 +362,7 @@ Neko's touch events carry every direct interaction with the Screen (the tap and 
 While the share stack is up:
 
 - It fetches `GET /turn/ice-servers` with the relay token at start and at half life (the TURN spec, section 7).
-- It renders the `screen-media` `tcp` proxy in every relay's frpc config, `localPort` 59000, `remotePort` the assignment's `media_port` (the integration spec, section 6).
+- It renders the `screen-media` `tcp` proxy in every relay's frpc config, `localIP` the workspace's own interface address (neko's ICE stack reads a TCP connection only at an address it gathered a candidate for, which loopback never is), `localPort` 59000, `remotePort` the assignment's `media_port` (the integration spec, section 6).
 - It serves `GET /connect-info` on its loopback port to the Screen service: `ice_servers` as fetched, and `candidates` as the assignment's `published_endpoints` (the box's own port, for a cloud workspace) plus one TCP candidate per relay address at `media_port`.
 - A per-app grant on `screen` admits a visitor to the viewer origin as any app grant does; `system = true` changes nothing (contracts section 2).
 

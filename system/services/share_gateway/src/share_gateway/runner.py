@@ -72,6 +72,7 @@ from share_gateway.frpc_config import render_frpc_toml
 from share_gateway.handoff import JwksCache
 from share_gateway.handoff import SingleUseJtiRegistry
 from share_gateway.identity import AgentIdentity
+from share_gateway.local_address import primary_address
 from share_gateway.log import log as _log
 from share_gateway.materials import ShareMaterials
 from share_gateway.materials import discard_signing_secret
@@ -236,8 +237,17 @@ class ShareStack:
             local_https_port=materials_module.CADDY_HTTPS_PORT,
             admin_port=self.admin_port_for(relay_id),
             media_port=self.assignment.media_port,
+            local_media_address=self._media_proxy_address(),
             local_media_port=SCREEN_MEDIA_LOCAL_PORT,
         )
+
+    def _media_proxy_address(self) -> str | None:
+        if self.assignment.media_port is None:
+            return None
+        address = primary_address()
+        if address is None:
+            _log("No routable address for the screen-media proxy; the relay media path is not offered")
+        return address
 
     def connect_info(self) -> dict[str, object]:
         """The loopback ``GET /connect-info`` answer for the Screen service, from the current assignment and

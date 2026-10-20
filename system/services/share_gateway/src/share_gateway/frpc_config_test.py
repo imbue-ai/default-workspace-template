@@ -5,7 +5,9 @@ from share_gateway.frpc_config import render_frpc_toml
 _DOMAIN = "host-" + "a" * 32 + "." + "b" * 32 + ".us1.imbueminds.com"
 
 
-def _render(service_labels: list[str], media_port: int | None = None) -> dict:
+def _render(
+    service_labels: list[str], media_port: int | None = None, local_media_address: str | None = "172.17.0.3"
+) -> dict:
     rendered = render_frpc_toml(
         relay_host="relay-us1.infra.imbue.com",
         relay_port=7000,
@@ -16,6 +18,7 @@ def _render(service_labels: list[str], media_port: int | None = None) -> dict:
         local_https_port=8443,
         admin_port=7401,
         media_port=media_port,
+        local_media_address=local_media_address,
         local_media_port=59000,
     )
     return tomllib.loads(rendered)
@@ -76,10 +79,17 @@ def test_frpc_config_renders_the_screen_media_tcp_proxy_when_the_assignment_has_
     assert media == {
         "name": "screen-media",
         "type": "tcp",
-        "localIP": "127.0.0.1",
+        "localIP": "172.17.0.3",
         "localPort": 59000,
         "remotePort": 40123,
     }
+
+
+def test_frpc_config_renders_no_media_proxy_without_a_local_address() -> None:
+    # neko reads a connection only at the interface address its ICE stack gathered, so a workspace without one
+    # is not offered the relay media path rather than a proxy to loopback nothing would answer.
+    parsed = _render(["terminal-bbbb2222"], media_port=40123, local_media_address=None)
+    assert [proxy["name"] for proxy in parsed["proxies"]] == ["share"]
 
 
 def test_frpc_config_renders_no_media_proxy_without_a_media_port() -> None:
@@ -95,5 +105,6 @@ def test_frpc_config_renders_no_media_proxy_without_a_media_port() -> None:
         local_https_port=8443,
         admin_port=7401,
         media_port=None,
+        local_media_address="172.17.0.3",
         local_media_port=59000,
     )
