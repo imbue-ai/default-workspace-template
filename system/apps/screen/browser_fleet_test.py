@@ -169,6 +169,25 @@ def test_a_browser_asked_for_while_the_stack_is_down_launches_when_the_stack_com
     assert browser.launch_tabs == []
 
 
+def test_a_page_is_opened_at_once_on_a_running_browser_and_queued_on_one_still_launching(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+    browser = harness.fleet.ensure_browser(None)
+    assert browser.lifecycle == BrowserLifecycle.INIT
+    assert browser.open_tab_or_queue_for_launch("https://queued.example") is False
+    assert browser.launch_tabs == ["https://queued.example"]
+    harness.stack_up()
+    assert wait_until(lambda: browser.is_running)
+    assert wait_until(lambda: harness.cdp().created == ["https://queued.example"])
+    # Once Chromium is up the page goes straight to it, and the fleet is told to expect its processes.
+    kicks = harness.kicks
+    assert browser.open_tab_or_queue_for_launch("https://now.example") is True
+    assert browser.launch_tabs == []
+    assert harness.cdp().created == ["https://queued.example", "https://now.example"]
+    harness.fleet.ensure_browser("https://again.example")
+    assert harness.cdp().created == ["https://queued.example", "https://now.example", "https://again.example"]
+    assert harness.kicks == kicks + 1
+
+
 def test_a_page_asked_for_while_an_agent_drives_is_held_and_opens_when_the_human_takes_control(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
     harness.stack_up()

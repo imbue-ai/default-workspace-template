@@ -155,10 +155,16 @@ class Browser(MutableModel):
             self.last_known_tabs.append(url)
             self.last_known_active_tab = len(self.last_known_tabs) - 1
 
-    def queue_tab_for_launch(self, url: str) -> None:
-        """A page asked for while Chromium is still coming up: opened in front once the launch finishes."""
+    def open_tab_or_queue_for_launch(self, url: str) -> bool:
+        """Open ``url`` in front when Chromium is up, else queue it for the launch still coming up; answers whether it
+        was opened now. Decided under the lock: a launch that finishes meanwhile either drains the queue after the
+        append or is seen as running, so the page is never queued behind a drain that will not come again."""
         with self._lock:
+            if self.is_running:
+                self.open_tab(url)
+                return True
             self.launch_tabs.append(url)
+            return False
 
     def open_queued_tabs(self) -> None:
         """Open what was asked for during the launch, the last in front; a tab Chromium refuses is logged."""
@@ -542,14 +548,9 @@ class BrowserFleet(MutableModel):
         browser = self.the_browser()
         if browser is None:
             return self.create(None, start_url)
-        if browser.is_running:
-            if start_url is not None:
-                browser.open_tab(start_url)
+        if browser.is_running or browser.lifecycle == BrowserLifecycle.INIT:
+            if start_url is not None and browser.open_tab_or_queue_for_launch(start_url):
                 self.on_chromium_processes_expected()
-            return browser
-        if browser.lifecycle == BrowserLifecycle.INIT:
-            if start_url is not None:
-                browser.queue_tab_for_launch(start_url)
             return browser
         if start_url is not None:
             browser.remember_tab_in_front(start_url)
