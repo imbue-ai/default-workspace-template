@@ -178,6 +178,7 @@ class _FakeChatAppHandler(BaseHTTPRequestHandler):
 
 class _FakeChatAppServer(ThreadingHTTPServer):
     answers: list[tuple[int, Any]]
+    get_answers: dict[str, tuple[int, Any]]
     posted: list[tuple[str, Any]]
     drop_connections: bool
 
