@@ -24,3 +24,5 @@ Each skill's Python now lives in its own uv project, `.agents/skills/<name>/pyth
 - **Docs:** `spec-summary.md` and `type-skill.md` describe the layout and the lazy-import rule. `running-python.md` describes the bare and venv tiers. update-app's `SKILL.md` says a preview syncs its worktree `--frozen` before every boot, so a dependency change there needs `uv lock` before `refresh`.
 
 - **Going live with a merged skill:** a skill with a `python/` project runs from the workspace venv, so `lead-proxy.md`'s provisional go-live and the crystallize, heal and update go-live steps run `uv sync --all-packages --frozen` after the merge.
+
+- **Workers parked on a background task:** launch-task's idle check imports the `chat_background_tasks` library as a package dependency of `launch-task-skill` and finds the marker directory through it, instead of putting the library on `sys.path` from the launcher's checkout.

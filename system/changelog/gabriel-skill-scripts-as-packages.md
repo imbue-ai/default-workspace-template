@@ -31,3 +31,5 @@ This release turns the workspace's scripts into packages. An existing workspace'
 - `system/scripts/migrate_claude_auth.py` is deleted. It was a manual, one-time move of Claude keys out of the mngr host env file, from when auth moved into accounts. Without it, `workspace-scripts` no longer depends on the chat app or mngr, so chat's tests can depend on it without a dependency cycle.
 
 - The gcp and azure create templates no longer forward `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` and `GH_TOKEN` into the workspace's host env. Every other template stopped in July (Claude auth moved into accounts, and GitHub sync became an opt-in skill); these two were added on a parallel branch and kept the old line.
+
+- `system/scripts/stdlib_only_scripts_test.py` holds `oom_priority` to the stdlib-only rule as it does `chat_background_tasks`; it had been exempt from the check.
