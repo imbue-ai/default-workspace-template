@@ -29,6 +29,7 @@ from screen.primitives import APP_NAME
 from screen.primitives import BROWSER_MANIFEST_PATH
 from screen.primitives import BROWSER_PROFILE_ROOT
 from screen.primitives import DESKTOP_FOLDER_RELATIVE_PATH
+from screen.primitives import DOWNLOAD_FOLDER_RELATIVE_PATH
 from screen.primitives import FORTRESS_EXECUTABLE
 from screen.primitives import SERVICE_HOST
 from screen.primitives import SERVICE_PORT
@@ -66,6 +67,7 @@ class ScreenServiceArguments(FrozenModel):
 def build_service(arguments: ScreenServiceArguments, proxy_server: ProxyServer) -> ScreenService:
     repo_root = Path.cwd()
     desktop_dir = repo_root / DESKTOP_FOLDER_RELATIVE_PATH
+    download_dir = repo_root / DOWNLOAD_FOLDER_RELATIVE_PATH
     neko = NekoClient()
     supervisor = SupervisorctlClient()
     service = ScreenService(
@@ -107,6 +109,7 @@ def build_service(arguments: ScreenServiceArguments, proxy_server: ProxyServer) 
         neko=neko,
         state_dir=arguments.state_dir,
         desktop_dir=desktop_dir,
+        download_dir=download_dir,
         on_lifecycle_changed=service.on_lifecycle_changed,
         on_running=service.on_running,
         set_api_token=service.set_api_token,

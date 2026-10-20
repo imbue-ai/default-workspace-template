@@ -188,6 +188,7 @@ def _build_live_service(base: Path, supervisor: SubprocessSupervisor) -> _LiveSe
         state_dir=state_dir,
         home=base / "home",
         desktop_dir=base / "Desktop",
+        download_dir=base / "Downloads",
         on_lifecycle_changed=service.on_lifecycle_changed,
         on_running=service.on_running,
         set_api_token=service.set_api_token,

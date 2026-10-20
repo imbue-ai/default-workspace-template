@@ -133,8 +133,9 @@ class ScreenStack(MutableModel):
         description="The session's home, where its browser entries and desktop settings are rendered",
     )
     desktop_dir: Path = Field(
-        frozen=True, description="The Screen's desktop and download folder, named in the session's user-dirs file"
+        frozen=True, description="The Screen's desktop folder, named in the session's user-dirs file"
     )
+    download_dir: Path = Field(frozen=True, description="Chromium's download folder, named beside it")
     runtime_dir: Path = Field(default=Path(RUNTIME_DIR), frozen=True, description="The members' XDG runtime dir")
     display_socket_path: Path = Field(default=Path(DISPLAY_SOCKET_PATH), frozen=True, description="Xorg's socket")
     input_socket_path: Path = Field(
@@ -309,7 +310,7 @@ class ScreenStack(MutableModel):
         neko_yaml.write_text(render_neko_yaml(new_secrets))
         write_browser_helper_files(self.home)
         write_xfdesktop_channel(self.home)
-        write_user_dirs(self.home, self.desktop_dir)
+        write_user_dirs(self.home, self.desktop_dir, self.download_dir)
 
     def _wait_for_xorg(self, abort: threading.Event) -> None:
         """Until Xorg has opened the display and bound the input driver's socket, which neko dials once at its

@@ -250,10 +250,12 @@ session alone and with text only, so the directions are:
 
 A file dropped on the viewer by the controller goes to the service's `POST /api/drop`, which
 writes it into the Screen's desktop folder, `data/Desktop` under the workspace, where the Files
-app shows it. The service names that folder as both the desktop and the download directory in
-the session's `~/.config/user-dirs.dirs` before each stack start (`user_dirs.py`, keeping the
-file's other entries, with `xdg-user-dirs-update` turned off in `user-dirs.conf` so the session
-never moves them back), so Chromium's downloads land there too. The service then shows the
+app shows it. The service names that folder as the desktop directory, and `data/Downloads` as
+the download directory, in the session's `~/.config/user-dirs.dirs` before each stack start
+(`user_dirs.py`, keeping the file's other entries, with `xdg-user-dirs-update` turned off in
+`user-dirs.conf` so the session never moves them back), so Chromium's downloads land under
+`data/` too. They are two folders because Chromium resets a download directory that equals the
+desktop directory to its own default. The service then shows the
 folder in a Thunar window on the Screen (raising the Thunar window already showing it, else
 `thunar <folder>`, started as `screen run` starts a command, so it is shed before the stack),
 and the strip says where the files landed. The desktop's own icons are off: `xfdesktop`
