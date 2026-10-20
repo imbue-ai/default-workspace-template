@@ -17,8 +17,8 @@ import pytest
 from browser.testing import (
     BELT_SETTLE_MS,
     STREAM_URL,
-    VIEWER_PATH,
     VIEWER_URL,
+    fulfill_with_viewer,
     wait_until,
 )
 from playwright.sync_api import (
@@ -89,9 +89,7 @@ def _framed_viewer(
         if url.startswith(_SHELL_URL):
             route.fulfill(status=200, content_type="text/html", body=_SHELL_PAGE)
         elif url == VIEWER_URL:
-            route.fulfill(
-                status=200, content_type="text/html", body=VIEWER_PATH.read_text()
-            )
+            fulfill_with_viewer(route)
         elif url == _CONTRACT_URL and is_contract_served:
             route.fulfill(
                 status=200, content_type="text/javascript", body=_CONTRACT_MODULE

@@ -10,8 +10,8 @@ import pytest
 from browser.testing import (
     BELT_SETTLE_MS,
     STREAM_URL,
-    VIEWER_PATH,
     VIEWER_URL,
+    fulfill_with_viewer,
     wait_until,
 )
 from playwright.sync_api import BrowserContext, Route, WebSocketRoute
@@ -30,9 +30,7 @@ def test_the_pane_fills_a_phone_and_a_rotation_reports_its_size_again(
 
     def answer(route: Route) -> None:
         if route.request.url == VIEWER_URL:
-            route.fulfill(
-                status=200, content_type="text/html", body=VIEWER_PATH.read_text()
-            )
+            fulfill_with_viewer(route)
         else:
             route.fulfill(status=404, body="")
 
