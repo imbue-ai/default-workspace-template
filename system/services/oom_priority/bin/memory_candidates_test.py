@@ -8,13 +8,15 @@ import string
 import subprocess
 import sys
 import urllib.error
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import pytest
+from chat_background_tasks import markers
+from chat_background_tasks.testing import runner_task
 from imbue.mngr.cli.field_catalog import FieldContext, build_list_field_catalog
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 
@@ -31,19 +33,27 @@ _PROFILE_ROOT = "/home/user/.mngr/browser-profiles"
 
 
 def _fake_process(
-    proc_dir: Path, pid: int, rss_kib: int, children: Sequence[int] = (), argv: Sequence[str] = ("python3",)
+    proc_dir: Path,
+    pid: int,
+    rss_kib: int,
+    children: Sequence[int] = (),
+    argv: Sequence[str] = ("python3",),
 ) -> None:
     """One process in the fake ``/proc``: its status (VmRSS), children, and argv."""
     task_dir = proc_dir / str(pid) / "task" / str(pid)
     task_dir.mkdir(parents=True)
     (task_dir / "children").write_text(" ".join(str(child) for child in children) + " ")
-    (proc_dir / str(pid) / "status").write_text(f"Name:\t{Path(argv[0]).name}\nVmRSS:\t   {rss_kib} kB\n")
+    (proc_dir / str(pid) / "status").write_text(
+        f"Name:\t{Path(argv[0]).name}\nVmRSS:\t   {rss_kib} kB\n"
+    )
     (proc_dir / str(pid) / "cmdline").write_bytes("\0".join(argv).encode() + b"\0")
 
 
 def _write_meminfo(proc_dir: Path, fields: Mapping[str, int]) -> None:
     proc_dir.mkdir(parents=True, exist_ok=True)
-    (proc_dir / "meminfo").write_text("".join(f"{key}:{value:>12} kB\n" for key, value in fields.items()))
+    (proc_dir / "meminfo").write_text(
+        "".join(f"{key}:{value:>12} kB\n" for key, value in fields.items())
+    )
 
 
 def _agent_record(
@@ -88,7 +98,9 @@ def _render_like_mngr(template: str, record: Mapping[str, Any]) -> str:
 def _register_pid(runtime_dir: Path, pid: int, agent_id: str) -> None:
     directory = runtime_dir / "agent_pids"
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / f"{pid}.json").write_text(json.dumps({"agent_name": "x", "is_worker": False, "agent_id": agent_id}))
+    (directory / f"{pid}.json").write_text(
+        json.dumps({"agent_name": "x", "is_worker": False, "agent_id": agent_id})
+    )
 
 
 class _FakeMngr:
@@ -109,15 +121,23 @@ class _FakeMngr:
         self.error = error
         self.extra_lines = extra_lines
 
-    def __call__(self, argv: Sequence[str], timeout_seconds: float) -> "subprocess.CompletedProcess[str]":
+    def __call__(
+        self, argv: Sequence[str], timeout_seconds: float
+    ) -> "subprocess.CompletedProcess[str]":
         if self.error is not None:
             raise self.error
         options = dict(zip(argv[2::2], argv[3::2]))
         provider = options.get("--provider")
-        listed = [r for r in self.records if provider is None or r["host"]["provider_name"] == provider]
+        listed = [
+            r
+            for r in self.records
+            if provider is None or r["host"]["provider_name"] == provider
+        ]
         rendered = [_render_like_mngr(options["--format"], record) for record in listed]
         stdout = "".join(f"{line}\n" for line in [*rendered, *self.extra_lines])
-        return subprocess.CompletedProcess(list(argv), self.returncode, stdout=stdout, stderr=self.stderr)
+        return subprocess.CompletedProcess(
+            list(argv), self.returncode, stdout=stdout, stderr=self.stderr
+        )
 
 
 class _FakeHttp:
@@ -134,10 +154,17 @@ class _FakeHttp:
 
 
 def _fleet(*browsers: Mapping[str, object]) -> dict[str, object]:
-    return {"browsers": list(browsers), "can_create": True, "browser_count": len(browsers), "browser_max": 1}
+    return {
+        "browsers": list(browsers),
+        "can_create": True,
+        "browser_count": len(browsers),
+        "browser_max": 1,
+    }
 
 
-def _browser(name: str, lifecycle: str, tabs: Sequence[tuple[str, bool]] = ()) -> dict[str, object]:
+def _browser(
+    name: str, lifecycle: str, tabs: Sequence[tuple[str, bool]] = ()
+) -> dict[str, object]:
     return {
         "id": name,
         "lifecycle": lifecycle,
@@ -147,7 +174,10 @@ def _browser(name: str, lifecycle: str, tabs: Sequence[tuple[str, bool]] = ()) -
         "human_pinned": False,
         "waiting": [],
         "crashed": False,
-        "tabs": [{"index": i, "title": "", "url": url, "active": active} for i, (url, active) in enumerate(tabs)],
+        "tabs": [
+            {"index": i, "title": "", "url": url, "active": active}
+            for i, (url, active) in enumerate(tabs)
+        ],
     }
 
 
@@ -155,7 +185,16 @@ def _desktops(*windows: Mapping[str, object]) -> dict[str, object]:
     return {"desktops": [{"id": "desktop-1", "windows": list(windows)}]}
 
 
-def _sources(proc_dir: Path, mngr: _FakeMngr, http: _FakeHttp) -> object:
+def _never_busy(chat_id: str) -> bool:
+    return False
+
+
+def _sources(
+    proc_dir: Path,
+    mngr: _FakeMngr,
+    http: _FakeHttp,
+    is_chat_busy: Callable[[str], bool] = _never_busy,
+) -> object:
     return memory_candidates.Sources(
         proc_dir=proc_dir,
         run_command=mngr,
@@ -163,6 +202,16 @@ def _sources(proc_dir: Path, mngr: _FakeMngr, http: _FakeHttp) -> object:
         browser_service_url=_BROWSER_URL,
         shell_url=_SHELL_URL,
         now=_NOW,
+        is_chat_busy=is_chat_busy,
+    )
+
+
+def _write_marker(root: Path, chat_id: str, pid: int) -> None:
+    """A ``run_in_background`` marker for ``chat_id``, written by the library that owns the format."""
+    markers.write_marker(
+        root,
+        chat_id,
+        runner_task(f"task-{uuid4().hex[:8]}", "2026-09-24T10:00:00+00:00", pid=pid),
     )
 
 
@@ -177,10 +226,29 @@ def test_lists_idle_chats_and_workers_with_last_activity_and_the_memory_of_their
     tmp_path: Path, runtime_dir: Path
 ) -> None:
     proc = tmp_path / "proc"
-    _write_meminfo(proc, {"MemTotal": 4 * 1024 * 1024, "MemFree": 300 * 1024, "MemAvailable": 300 * 1024})
+    _write_meminfo(
+        proc,
+        {
+            "MemTotal": 4 * 1024 * 1024,
+            "MemFree": 300 * 1024,
+            "MemAvailable": 300 * 1024,
+        },
+    )
     chat_activity = _NOW - timedelta(hours=2, minutes=5)
-    chat = _agent_record("chat-a", "WAITING", {"user_created": "true", "display_name": "Trip plan"}, chat_activity, 100)
-    worker = _agent_record("fix-login", "WAITING", {"agent_created": "true"}, _NOW - timedelta(minutes=30), 200)
+    chat = _agent_record(
+        "chat-a",
+        "WAITING",
+        {"user_created": "true", "display_name": "Trip plan"},
+        chat_activity,
+        100,
+    )
+    worker = _agent_record(
+        "fix-login",
+        "WAITING",
+        {"agent_created": "true"},
+        _NOW - timedelta(minutes=30),
+        200,
+    )
     # The chat's harness runs a second registered process (codex's app-server) mngr does not report.
     _fake_process(proc, 100, 1000, children=[101])
     _fake_process(proc, 101, 500)
@@ -190,7 +258,11 @@ def test_lists_idle_chats_and_workers_with_last_activity_and_the_memory_of_their
     _fake_process(proc, 200, 300)
 
     report = memory_candidates.collect_report(
-        _sources(proc, _FakeMngr([chat, worker]), _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()}))
+        _sources(
+            proc,
+            _FakeMngr([chat, worker]),
+            _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()}),
+        )
     )
 
     agents = report.agents.candidates
@@ -204,7 +276,10 @@ def test_lists_idle_chats_and_workers_with_last_activity_and_the_memory_of_their
     assert agents[1].rss_kib == 300
     assert report.agents.notes == ()
     table = memory_candidates.render_table(report)
-    assert "Free memory: 300 MiB (MemAvailable from /proc/meminfo; MemTotal 4096 MiB)" in table
+    assert (
+        "Free memory: 300 MiB (MemAvailable from /proc/meminfo; MemTotal 4096 MiB)"
+        in table
+    )
     assert "chat    chat-a     Trip plan  2h 05m  2026-09-24 09:55" in table
 
 
@@ -225,40 +300,132 @@ def test_lists_only_idle_local_chats_and_workers_never_infrastructure_or_active_
     old = _NOW - timedelta(days=2)
     records = [
         _agent_record("busy-chat", "RUNNING", {"user_created": "true"}, old, 10),
-        _agent_record("just-answered", "WAITING", {"user_created": "true"}, _NOW - timedelta(minutes=5), 11),
-        _agent_record("services", "WAITING", {"is_primary": "true", "user_created": "true"}, old, 12),
+        _agent_record(
+            "just-answered",
+            "WAITING",
+            {"user_created": "true"},
+            _NOW - timedelta(minutes=5),
+            11,
+        ),
+        _agent_record(
+            "services",
+            "WAITING",
+            {"is_primary": "true", "user_created": "true"},
+            old,
+            12,
+        ),
         _agent_record("caretaker", "WAITING", {"automation": "caretaker"}, old, 13),
         _agent_record("stopped-chat", "STOPPED", {"user_created": "true"}, old),
         _agent_record("done-worker", "DONE", {"agent_created": "true"}, old),
-        _agent_record("remote-chat", "WAITING", {"user_created": "true"}, old, 14, provider="modal"),
+        _agent_record(
+            "remote-chat",
+            "WAITING",
+            {"user_created": "true"},
+            old,
+            14,
+            provider="modal",
+        ),
     ]
 
     report = memory_candidates.collect_report(
-        _sources(proc, _FakeMngr(records), _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()}))
+        _sources(
+            proc, _FakeMngr(records), _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()})
+        )
     )
 
     assert report.agents.candidates == ()
     assert report.browsers.candidates == ()
     table = memory_candidates.render_table(report)
-    assert "(waiting, no activity for 15m or more):\n  none" in table
+    assert (
+        "(waiting, not on a background task, no activity for 15m or more):\n  none"
+        in table
+    )
     assert "Browsers no window shows (running):\n  none" in table
 
 
-def test_lists_running_browsers_no_window_shows_with_their_chromium_memory(tmp_path: Path, runtime_dir: Path) -> None:
+def test_an_agent_whose_chat_waits_on_a_background_task_is_not_a_candidate(
+    tmp_path: Path, runtime_dir: Path
+) -> None:
+    proc = tmp_path / "proc"
+    _write_meminfo(proc, {"MemTotal": 4 * 1024 * 1024, "MemAvailable": 100 * 1024})
+    old = _NOW - timedelta(hours=2)
+    lead = _agent_record("lead", "WAITING", {"user_created": "true"}, old, 10)
+    # A chat's successor carries the chat's id as a label; its markers are filed under that id, not its own.
+    successor = _agent_record(
+        "successor",
+        "WAITING",
+        {"user_created": "true", "chat_id": "agent-chat-1"},
+        old,
+        11,
+    )
+    worker = _agent_record("fix-login", "WAITING", {"agent_created": "true"}, old, 12)
+    finished = _agent_record("finished", "WAITING", {"agent_created": "true"}, old, 13)
+    for pid in (10, 11, 12, 13):
+        _fake_process(proc, pid, 100)
+    root = tmp_path / "background_tasks"
+    _write_marker(root, str(lead["id"]), os.getpid())
+    _write_marker(root, "agent-chat-1", os.getpid())
+    _write_marker(root, str(worker["id"]), os.getpid())
+    # A marker whose runner has exited is stale: that chat is no longer busy.
+    exited = subprocess.Popen([sys.executable, "-c", "pass"])
+    exited.wait()
+    _write_marker(root, str(finished["id"]), exited.pid)
+    is_chat_busy = memory_candidates.busy_chat_check(
+        {markers.MARKER_ROOT_ENV: str(root)}
+    )
+    mngr = _FakeMngr([lead, successor, worker, finished])
+
+    report = memory_candidates.collect_report(
+        _sources(
+            proc, mngr, _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()}), is_chat_busy
+        )
+    )
+
+    assert [a.name for a in report.agents.candidates] == ["finished"]
+
+
+def test_lists_running_browsers_no_window_shows_with_their_chromium_memory(
+    tmp_path: Path, runtime_dir: Path
+) -> None:
     proc = tmp_path / "proc"
     # browser-1's Chromium (a renderer beneath it); browser-10 is shown, so its match must not leak into browser-1.
-    _fake_process(proc, 300, 400, children=[301], argv=("tilion", f"--user-data-dir={_PROFILE_ROOT}/browser-use-user-data-dir-browser-1"))
+    _fake_process(
+        proc,
+        300,
+        400,
+        children=[301],
+        argv=(
+            "tilion",
+            f"--user-data-dir={_PROFILE_ROOT}/browser-use-user-data-dir-browser-1",
+        ),
+    )
     _fake_process(proc, 301, 600, argv=("tilion", "--type=renderer"))
-    _fake_process(proc, 310, 900, argv=("tilion", f"--user-data-dir={_PROFILE_ROOT}/browser-use-user-data-dir-browser-10"))
+    _fake_process(
+        proc,
+        310,
+        900,
+        argv=(
+            "tilion",
+            f"--user-data-dir={_PROFILE_ROOT}/browser-use-user-data-dir-browser-10",
+        ),
+    )
     fleet = _fleet(
-        _browser("browser-1", "running", tabs=[("https://a.test/", False), ("https://b.test/", True)]),
+        _browser(
+            "browser-1",
+            "running",
+            tabs=[("https://a.test/", False), ("https://b.test/", True)],
+        ),
         _browser("browser-10", "running", tabs=[("https://c.test/", True)]),
         _browser("browser-2", "stopped"),
         _browser("browser-3", "init"),
     )
     # browser-10 is shown only in one client's own path of a window whose home path names no browser.
     desktops = _desktops(
-        {"app": "browser", "path": "/new", "client_paths": {"client-1": "/?session=browser-10"}},
+        {
+            "app": "browser",
+            "path": "/new",
+            "client_paths": {"client-1": "/?session=browser-10"},
+        },
         {"app": "chat", "path": "/?session=browser-1"},
     )
 
@@ -266,7 +433,12 @@ def test_lists_running_browsers_no_window_shows_with_their_chromium_memory(tmp_p
         _sources(
             proc,
             _FakeMngr([]),
-            _FakeHttp({f"{_BROWSER_URL}/browsers": fleet, f"{_SHELL_URL}/api/desktops": desktops}),
+            _FakeHttp(
+                {
+                    f"{_BROWSER_URL}/browsers": fleet,
+                    f"{_SHELL_URL}/api/desktops": desktops,
+                }
+            ),
         )
     )
 
@@ -278,77 +450,126 @@ def test_lists_running_browsers_no_window_shows_with_their_chromium_memory(tmp_p
     assert browsers[0].rss_kib == 1000
 
 
-def test_a_failed_mngr_list_reports_agents_as_unknown_and_still_lists_browsers(tmp_path: Path, runtime_dir: Path) -> None:
+def test_a_failed_mngr_list_reports_agents_as_unknown_and_still_lists_browsers(
+    tmp_path: Path, runtime_dir: Path
+) -> None:
     proc = tmp_path / "proc"
     fleet = _fleet(_browser("browser-1", "running"))
-    http = _FakeHttp({f"{_BROWSER_URL}/browsers": fleet, f"{_SHELL_URL}/api/desktops": _desktops()})
+    http = _FakeHttp(
+        {f"{_BROWSER_URL}/browsers": fleet, f"{_SHELL_URL}/api/desktops": _desktops()}
+    )
 
     report = memory_candidates.collect_report(
-        _sources(proc, _FakeMngr([], error=FileNotFoundError(2, "No such file or directory", "mngr")), http)
+        _sources(
+            proc,
+            _FakeMngr(
+                [], error=FileNotFoundError(2, "No such file or directory", "mngr")
+            ),
+            http,
+        )
     )
 
     assert report.agents.candidates is None
     assert len(report.agents.notes) == 1
     assert report.agents.notes[0].startswith("could not run `mngr list`: ")
     assert [b.name for b in report.browsers.candidates] == ["browser-1"]
-    assert "Idle chats and workers (waiting, no activity for 15m or more):\n  unknown\n  note: could not run" in (
-        memory_candidates.render_table(report)
+    assert (
+        "Idle chats and workers (waiting, not on a background task, no activity for 15m or more):\n  unknown\n  note: could not run"
+        in (memory_candidates.render_table(report))
     )
 
 
-def test_a_listing_error_keeps_the_agents_mngr_did_list_and_notes_the_error(tmp_path: Path, runtime_dir: Path) -> None:
+def test_a_listing_error_keeps_the_agents_mngr_did_list_and_notes_the_error(
+    tmp_path: Path, runtime_dir: Path
+) -> None:
     proc = tmp_path / "proc"
-    chat = _agent_record("chat-a", "WAITING", {"user_created": "true"}, _NOW - timedelta(hours=1), 100)
-    mngr = _FakeMngr([chat], returncode=1, stderr="Errors while listing:\n  host-2: ssh timed out\n")
+    chat = _agent_record(
+        "chat-a", "WAITING", {"user_created": "true"}, _NOW - timedelta(hours=1), 100
+    )
+    mngr = _FakeMngr(
+        [chat], returncode=1, stderr="Errors while listing:\n  host-2: ssh timed out\n"
+    )
 
-    report = memory_candidates.collect_report(_sources(proc, mngr, _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()})))
+    report = memory_candidates.collect_report(
+        _sources(proc, mngr, _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()}))
+    )
 
     assert [a.name for a in report.agents.candidates] == ["chat-a"]
-    assert report.agents.notes == ("mngr list exited 1: Errors while listing:; host-2: ssh timed out",)
+    assert report.agents.notes == (
+        "mngr list exited 1: Errors while listing:; host-2: ssh timed out",
+    )
 
 
-def test_a_listing_that_fails_with_no_agents_is_unknown_not_empty(tmp_path: Path, runtime_dir: Path) -> None:
+def test_a_listing_that_fails_with_no_agents_is_unknown_not_empty(
+    tmp_path: Path, runtime_dir: Path
+) -> None:
     proc = tmp_path / "proc"
     mngr = _FakeMngr([], returncode=1, stderr="Error: cannot load the local provider\n")
 
-    report = memory_candidates.collect_report(_sources(proc, mngr, _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()})))
+    report = memory_candidates.collect_report(
+        _sources(proc, mngr, _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()}))
+    )
 
     assert report.agents.candidates is None
-    assert report.agents.notes == ("mngr list exited 1: Error: cannot load the local provider",)
+    assert report.agents.notes == (
+        "mngr list exited 1: Error: cannot load the local provider",
+    )
 
 
-def test_a_listing_none_of_whose_lines_parse_is_unknown_not_empty(tmp_path: Path, runtime_dir: Path) -> None:
+def test_a_listing_none_of_whose_lines_parse_is_unknown_not_empty(
+    tmp_path: Path, runtime_dir: Path
+) -> None:
     proc = tmp_path / "proc"
-    mngr = _FakeMngr([], extra_lines=["NAME  STATE  (an output shape this command does not read)"])
+    mngr = _FakeMngr(
+        [], extra_lines=["NAME  STATE  (an output shape this command does not read)"]
+    )
 
-    report = memory_candidates.collect_report(_sources(proc, mngr, _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()})))
+    report = memory_candidates.collect_report(
+        _sources(proc, mngr, _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()}))
+    )
 
     assert report.agents.candidates is None
     assert len(report.agents.notes) == 1
-    assert report.agents.notes[0].startswith("1 line(s) of `mngr list` output did not parse as an agent")
+    assert report.agents.notes[0].startswith(
+        "1 line(s) of `mngr list` output did not parse as an agent"
+    )
 
 
 def test_the_listing_argv_and_every_template_field_exist_in_the_pinned_mngr() -> None:
     assert_mngr_argv_valid(memory_candidates.MNGR_LIST_ARGV)
     template_fields = {
-        row.key.replace("$KEY", "") for row in build_list_field_catalog() if FieldContext.TEMPLATE in row.contexts
+        row.key.replace("$KEY", "")
+        for row in build_list_field_catalog()
+        if FieldContext.TEMPLATE in row.contexts
     }
     for field in memory_candidates.MNGR_LIST_FIELDS:
         label_prefix = "labels."
-        assert (field if not field.startswith(label_prefix) else label_prefix) in template_fields, field
+        assert (
+            field if not field.startswith(label_prefix) else label_prefix
+        ) in template_fields, field
 
 
 def test_an_unreachable_browser_service_reports_browsers_as_unknown_and_still_lists_agents(
     tmp_path: Path, runtime_dir: Path
 ) -> None:
     proc = tmp_path / "proc"
-    chat = _agent_record("chat-a", "WAITING", {"user_created": "true"}, _NOW - timedelta(hours=1), 100)
-    http = _FakeHttp({f"{_BROWSER_URL}/browsers": urllib.error.URLError(ConnectionRefusedError(61, "Connection refused"))})
+    chat = _agent_record(
+        "chat-a", "WAITING", {"user_created": "true"}, _NOW - timedelta(hours=1), 100
+    )
+    http = _FakeHttp(
+        {
+            f"{_BROWSER_URL}/browsers": urllib.error.URLError(
+                ConnectionRefusedError(61, "Connection refused")
+            )
+        }
+    )
 
     report = memory_candidates.collect_report(_sources(proc, _FakeMngr([chat]), http))
 
     assert report.browsers.candidates is None
-    assert report.browsers.notes[0].startswith(f"could not reach the browser service at {_BROWSER_URL}/browsers:")
+    assert report.browsers.notes[0].startswith(
+        f"could not reach the browser service at {_BROWSER_URL}/browsers:"
+    )
     assert [a.name for a in report.agents.candidates] == ["chat-a"]
 
 
@@ -357,20 +578,36 @@ def test_an_unreadable_shell_leaves_browsers_unknown_rather_than_calling_them_un
 ) -> None:
     proc = tmp_path / "proc"
     fleet = _fleet(_browser("browser-1", "running"))
-    malformed_browser_window = _desktops({"app": "browser", "path": None, "client_paths": {"c": "/?session=browser-1"}})
-    for desktops_answer in (urllib.error.URLError("timed out"), {"unexpected": "shape"}, malformed_browser_window):
-        http = _FakeHttp({f"{_BROWSER_URL}/browsers": fleet, f"{_SHELL_URL}/api/desktops": desktops_answer})
+    malformed_browser_window = _desktops(
+        {"app": "browser", "path": None, "client_paths": {"c": "/?session=browser-1"}}
+    )
+    for desktops_answer in (
+        urllib.error.URLError("timed out"),
+        {"unexpected": "shape"},
+        malformed_browser_window,
+    ):
+        http = _FakeHttp(
+            {
+                f"{_BROWSER_URL}/browsers": fleet,
+                f"{_SHELL_URL}/api/desktops": desktops_answer,
+            }
+        )
 
         report = memory_candidates.collect_report(_sources(proc, _FakeMngr([]), http))
 
         assert report.browsers.candidates is None
-        assert "so which browsers no window shows is unknown" in report.browsers.notes[0]
+        assert (
+            "so which browsers no window shows is unknown" in report.browsers.notes[0]
+        )
 
 
 @pytest.mark.parametrize(
     ("fields", "expected"),
     [
-        ({"MemTotal": 8192, "MemFree": 1024, "MemAvailable": 2048}, ("MemAvailable", 2048, 8192)),
+        (
+            {"MemTotal": 8192, "MemFree": 1024, "MemAvailable": 2048},
+            ("MemAvailable", 2048, 8192),
+        ),
         ({"MemTotal": 8192, "MemFree": 1024}, ("MemFree", 1024, 8192)),
     ],
 )
@@ -386,12 +623,27 @@ def test_free_memory_names_the_meminfo_field_it_read(
 def test_json_report_shape(tmp_path: Path, runtime_dir: Path) -> None:
     proc = tmp_path / "proc"
     _write_meminfo(proc, {"MemTotal": 4096, "MemAvailable": 1024})
-    chat = _agent_record("chat-a", "WAITING", {"user_created": "true"}, _NOW - timedelta(hours=1), 100)
+    chat = _agent_record(
+        "chat-a", "WAITING", {"user_created": "true"}, _NOW - timedelta(hours=1), 100
+    )
     _fake_process(proc, 100, 2048)
-    _fake_process(proc, 300, 512, argv=("tilion", f"--user-data-dir={_PROFILE_ROOT}/browser-use-user-data-dir-browser-1"))
+    _fake_process(
+        proc,
+        300,
+        512,
+        argv=(
+            "tilion",
+            f"--user-data-dir={_PROFILE_ROOT}/browser-use-user-data-dir-browser-1",
+        ),
+    )
     browser = _browser("browser-1", "running", tabs=[("https://a.test/", True)])
     browser.update({"controller": "agent", "owner_name": "chat-b"})
-    http = _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet(browser), f"{_SHELL_URL}/api/desktops": _desktops()})
+    http = _FakeHttp(
+        {
+            f"{_BROWSER_URL}/browsers": _fleet(browser),
+            f"{_SHELL_URL}/api/desktops": _desktops(),
+        }
+    )
 
     report = memory_candidates.collect_report(_sources(proc, _FakeMngr([chat]), http))
     document = json.loads(json.dumps(memory_candidates.report_to_json(report)))
@@ -399,7 +651,12 @@ def test_json_report_shape(tmp_path: Path, runtime_dir: Path) -> None:
     assert document == {
         "generated_at": "2026-09-24T12:00:00Z",
         "idle_after_seconds": 900.0,
-        "free_memory": {"field": "MemAvailable", "free_kib": 1024, "total_kib": 4096, "source": "/proc/meminfo"},
+        "free_memory": {
+            "field": "MemAvailable",
+            "free_kib": 1024,
+            "total_kib": 4096,
+            "source": "/proc/meminfo",
+        },
         "agents": {
             "candidates": [
                 {
@@ -433,29 +690,48 @@ def test_json_report_shape(tmp_path: Path, runtime_dir: Path) -> None:
 
 
 def test_the_script_runs_under_a_plain_python3_and_prints_json(tmp_path: Path) -> None:
-    """End to end through the real wiring: a fake ``mngr`` on PATH printing one rendered agent, and a browser
-    service nothing listens on."""
+    """End to end through the real wiring: a fake ``mngr`` on PATH printing two rendered agents, one of whose chats
+    waits on a background task, and a browser service nothing listens on."""
     bindir = tmp_path / "bin"
     bindir.mkdir()
-    record = _agent_record("chat-a", "WAITING", {"user_created": "true"}, datetime.now(timezone.utc) - timedelta(hours=3))
-    line = _render_like_mngr(memory_candidates.MNGR_LIST_ARGV[-1], record)
+    long_ago = datetime.now(timezone.utc) - timedelta(hours=3)
+    record = _agent_record("chat-a", "WAITING", {"user_created": "true"}, long_ago)
+    waiting_on_a_task = _agent_record(
+        "chat-b", "WAITING", {"user_created": "true"}, long_ago
+    )
+    _write_marker(
+        tmp_path / "background_tasks", str(waiting_on_a_task["id"]), os.getpid()
+    )
+    lines = "\n".join(
+        _render_like_mngr(memory_candidates.MNGR_LIST_ARGV[-1], r)
+        for r in (record, waiting_on_a_task)
+    )
     fake_mngr = bindir / "mngr"
-    fake_mngr.write_text(f"#!/bin/sh\ncat <<'EOF'\n{line}\nEOF\n")
+    fake_mngr.write_text(f"#!/bin/sh\ncat <<'EOF'\n{lines}\nEOF\n")
     fake_mngr.chmod(0o755)
     env = {
         **os.environ,
         "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
         "OOM_PRIORITY_RUNTIME_DIR": str(tmp_path / "runtime"),
         "MINDS_BROWSER_SERVICE_URL": "http://127.0.0.1:9",
+        markers.MARKER_ROOT_ENV: str(tmp_path / "background_tasks"),
     }
 
     result = subprocess.run(
         # -S keeps site-packages off the path, so a non-stdlib import fails here as it would under python3.
-        [sys.executable, "-S", str(_SCRIPT), "--json"], env=env, capture_output=True, text=True, timeout=60
+        [sys.executable, "-S", str(_SCRIPT), "--json"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
 
     assert result.returncode == 0, result.stderr
     document = json.loads(result.stdout)
-    assert [(a["name"], a["kind"]) for a in document["agents"]["candidates"]] == [("chat-a", "chat")]
+    assert [(a["name"], a["kind"]) for a in document["agents"]["candidates"]] == [
+        ("chat-a", "chat")
+    ]
     assert document["browsers"]["candidates"] is None
-    assert document["browsers"]["notes"][0].startswith("could not reach the browser service at http://127.0.0.1:9/browsers")
+    assert document["browsers"]["notes"][0].startswith(
+        "could not reach the browser service at http://127.0.0.1:9/browsers"
+    )

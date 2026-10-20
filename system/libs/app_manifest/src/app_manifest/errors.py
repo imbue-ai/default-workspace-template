@@ -10,6 +10,10 @@ class PageTemplateFieldError(AppManifestError, ValueError):
     """A message cannot fill a page template: a field it names is missing, not a string, or leaves no rooted path."""
 
 
+class PolicySourceError(AppManifestError, ValueError):
+    """A URL cannot name a Content-Security-Policy source: it has no scheme or host to take an origin from."""
+
+
 class ManifestLoadError(AppManifestError):
     """An app.toml file cannot be read, parsed, or validated."""
 

@@ -22,11 +22,15 @@ rather than being swallowed.
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any
+from typing import Final
 
 import httpx
+from app_schema.api_schema import RouteModels
+from app_schema.api_schema import RouteTable
+from app_schema.routes import error_response
+from app_schema.routes import model_response
 from flask import Flask
 from flask import Response
 from loguru import logger as _loguru_logger
@@ -44,10 +48,7 @@ logger = _loguru_logger
 ServiceCatalog = tuple[dict[str, Any], ...]
 CatalogCache = dict[str, ServiceCatalog | None]
 
-
-def _json_response(content: object, status_code: int = 200) -> Response:
-    body = json.dumps(content, separators=(",", ":"), ensure_ascii=False)
-    return Response(body, status=status_code, mimetype="application/json")
+SCOPE_INFO_ROUTE: Final[str] = "/api/latchkey/scopes/<scope>"
 
 
 def candidate_services(scope: str) -> list[str]:
@@ -150,7 +151,7 @@ def get_scope_info(scope: str) -> Response:
     """
     gateway = GatewayAccess.from_environ(os.environ)
     if gateway is None:
-        return _json_response({"detail": "latchkey gateway is not configured"}, status_code=503)
+        return error_response("latchkey gateway is not configured", 503)
     state = get_state()
     client: httpx.Client = state.latchkey_http_client
     cache: CatalogCache = state.latchkey_catalog_cache
@@ -161,12 +162,17 @@ def get_scope_info(scope: str) -> Response:
             info = resolve_scope_info(client, gateway, scope, cache)
     except httpx.HTTPError as error:
         logger.warning("latchkey gateway request for scope {!r} failed: {}", scope, error)
-        return _json_response({"detail": "latchkey gateway request failed"}, status_code=502)
+        return error_response("latchkey gateway request failed", 502)
     if info is None:
-        return _json_response({"detail": f"no catalog entry for scope {scope!r}"}, status_code=404)
-    return _json_response(info.model_dump())
+        return error_response(f"no catalog entry for scope {scope!r}", 404)
+    return model_response(info)
+
+
+ROUTE_TABLE: Final[RouteTable] = {
+    ("GET", "/api/latchkey/scopes/{scope}"): RouteModels(response_model=LatchkeyScopeInfo),
+}
 
 
 def register_routes(application: Flask) -> None:
     """Wire `/api/latchkey/*` endpoints onto the Flask application."""
-    application.add_url_rule("/api/latchkey/scopes/<scope>", view_func=get_scope_info, methods=["GET"])
+    application.add_url_rule(SCOPE_INFO_ROUTE, view_func=get_scope_info, methods=["GET"])

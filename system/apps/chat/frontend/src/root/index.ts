@@ -18,6 +18,7 @@ import "../style.css";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
+import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
 import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
 import { scopeOfHandshake } from "@imbue/workspace-ui/src/element_reference";
@@ -29,7 +30,6 @@ import {
   addChatsUpdatedListener,
   applyPendingIntake,
   awaitingChatForEmptyList,
-  createChat,
   discardPendingIntake,
   fetchPendingIntake,
   getChatById,
@@ -41,12 +41,7 @@ import {
   removeChatsUpdatedListener,
 } from "../models/Chats";
 import type { AppliedIntake, PendingIntake } from "../models/Chats";
-import {
-  accountForFirstSend,
-  getSelectedAccount,
-  loadAccountsWithRetry,
-  whenAccountsReadyToChoose,
-} from "../models/Providers";
+import { accountForFirstSend, loadAccountsWithRetry, whenAccountsReadyToChoose } from "../models/Providers";
 import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { COMPACT_MEDIA_QUERY } from "../compactLayout";
 import { ChatDrawer } from "./ChatDrawer";
@@ -56,6 +51,7 @@ import type { ChatRailAttrs } from "./ChatRail";
 import { SendPicker } from "./SendPicker";
 import { initChatUnread, markRead, noteStatuses } from "./chatUnread";
 import { initRailWidth } from "./railWidth";
+import { startNewChat } from "./newChat";
 import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
 import { groupedRows, rowsFromSnapshots } from "./rows";
@@ -173,37 +169,22 @@ function openChatForEmptyList(): void {
     });
 }
 
-async function createOnAccountAndSelect(accountId: string): Promise<void> {
-  const created = await createChat("", accountId);
-  startedHere.add(created.chatId);
-  awaitingListing.add(created.chatId);
-  select(created.chatId);
-}
+// Why the last click on New chat started nothing, shown as a notice until dismissed; null otherwise.
+let newChatRefusal: string | null = null;
+const newChatRefusalNotice = makeNoticeDialog();
 
-/** The New chat button: a chat on the selected account, or with nothing signed in the chat awaiting its first
- *  send, whose page asks for a provider. */
-async function startNewChat(): Promise<void> {
-  await whenAccountsReadyToChoose();
-  const account = getSelectedAccount();
-  if (account !== null) {
-    try {
-      await createOnAccountAndSelect(account.id);
-      return;
-    } catch (error) {
-      // An account the chat app no longer has: the chat awaiting its first send shows what is needed instead.
-      console.warn(
-        "[chat-root] could not create a chat on the selected account; opening one awaiting a provider",
-        error,
-      );
-    }
+/** The New chat button: a chat on the account the chat app picks, or with nothing signed in the chat awaiting its
+ *  first send, whose page asks for a provider. A create the chat app refuses says why rather than opening a chat. */
+async function openNewChat(): Promise<void> {
+  const outcome = await startNewChat();
+  if (outcome.kind === "refused") {
+    newChatRefusal = outcome.detail;
+    m.redraw();
+    return;
   }
-  try {
-    const chatId = await awaitingChatForEmptyList();
-    awaitingListing.add(chatId);
-    select(chatId);
-  } catch (error) {
-    alert(`Failed to create chat: ${(error as Error).message}`);
-  }
+  if (outcome.kind === "created") startedHere.add(outcome.chatId);
+  awaitingListing.add(outcome.chatId);
+  select(outcome.chatId);
 }
 
 /** Show ``chatId`` once the pending intake is applied or given up, reporting the selection even when it is the one
@@ -400,6 +381,16 @@ const ChatRoot: m.Component = {
               },
             })
           : null,
+        newChatRefusal === null
+          ? null
+          : m(newChatRefusalNotice, {
+              title: "Couldn't start a new chat",
+              body: [newChatRefusal],
+              dismissLabel: "OK",
+              onDismiss: () => {
+                newChatRefusal = null;
+              },
+            }),
         pendingPick === null
           ? null
           : m(SendPicker, {
@@ -421,7 +412,7 @@ function railAttrs(rows: readonly ChatRow[], isCompact: boolean): ChatRailAttrs 
     isInDrawer: isCompact,
     isTouch: isCompact && touchQuery.matches,
     onPick: (chatId: string) => select(chatId),
-    onNew: () => void startNewChat(),
+    onNew: () => void openNewChat(),
     referenceScope: scopeOfHandshake(handshake),
     onDraftReference: draftReference,
     isReferenceDraftAvailable: isReferenceDraftAvailable(),

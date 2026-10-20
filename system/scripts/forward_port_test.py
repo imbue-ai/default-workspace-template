@@ -28,8 +28,9 @@ from app_manifest.primitives import (
 
 _SCRIPT = Path(__file__).parent / "forward_port.py"
 
-# ``<name>-<8 lowercase base36 chars>``.
-_LABEL_RE = re.compile(r"^[a-z0-9_-]+-[a-z0-9]{8}$")
+# ``<name>-<8 lowercase base36 chars>``, with the name's underscores hyphenated:
+# a label is a strict hostname label.
+_LABEL_RE = re.compile(r"^[a-z0-9-]+-[a-z0-9]{8}$")
 
 
 def _run(script_args: list[str], apps_file: Path) -> subprocess.CompletedProcess[str]:
@@ -79,9 +80,28 @@ def test_valid_names_register_and_are_persisted(tmp_path: Path, name: str) -> No
     assert len(rows) == 1
     assert rows[0]["name"] == name
     assert rows[0]["url"] == "http://localhost:7681"
-    # A registered service gets an unguessable ``<name>-<rand>`` origin label.
-    assert rows[0]["label"].startswith(f"{name}-")
+    # A registered service gets an unguessable ``<name>-<rand>`` origin label
+    # that is a valid hostname label: an underscore in the name is hyphenated.
+    assert rows[0]["label"].startswith(name.replace("_", "-") + "-")
     assert _LABEL_RE.match(rows[0]["label"])
+
+
+def test_legacy_underscore_label_survives_re_registration(tmp_path: Path) -> None:
+    """A label minted before underscores were hyphenated stays as it is.
+
+    Share links and bookmarks carry the label, so re-registering (every boot
+    does) must not move a service to a new origin.
+    """
+    apps_file = tmp_path / "apps.toml"
+    apps_file.write_text(
+        '[[apps]]\nname = "system_interface"\nurl = "http://localhost:8000"\nlabel = "system_interface-abcd1234"\n'
+    )
+    result = _run(["--name", "system_interface", "--url", "http://localhost:8001", "--no-icon"], apps_file)
+    assert result.returncode == 0, result.stderr
+    rows = _read_apps(apps_file)
+    assert len(rows) == 1
+    assert rows[0]["url"] == "http://localhost:8001"
+    assert rows[0]["label"] == "system_interface-abcd1234"
 
 
 @pytest.mark.parametrize(
@@ -733,7 +753,9 @@ def _write_manifest(tmp_path: Path, body: str, icon: str | None = _ICON) -> Path
 
 _FULL_MANIFEST = """
 name = "files"
-display_name = "File Viewer"
+display_name = "Files"
+description = "Browse and open the files in this workspace."
+api_schema_path = "/api/schema"
 icon = "icon.svg"
 critical = false
 stop_when_no_windows = true
@@ -748,7 +770,7 @@ mode = "focus"
 
 [[launch_paths]]
 id = "new"
-label = "New File Viewer"
+label = "Files"
 path = "/"
 params = [{name = "path", label = "Path", required = false}]
 text_param = "path"
@@ -800,7 +822,7 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     assert row["url"] == "http://localhost:8300"
     assert _LABEL_RE.match(row["label"])
     assert row["icon"] == _ICON
-    assert row["display_name"] == "File Viewer"
+    assert row["display_name"] == "Files"
     assert "instances" not in row and "instances_url" not in row
     assert row["critical"] is False
     assert row["stop_when_no_windows"] is True
@@ -813,11 +835,13 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     assert list(row["default_shortcut"]) == ["launch", "mode"]
     assert row["launcher_rank"] == 20
     assert row["window_closed_path"] == "/api/window-closed"
+    assert row["description"] == "Browse and open the files in this workspace."
+    assert row["api_schema_path"] == "/api/schema"
     assert "actions" not in row
     # The row carries each launch path's param NAMES (the launcher reads them), its presets, and its method, text
     # and draft params, and none of those keys at all for a launch path that declares none of them.
     assert row["launch_paths"] == [
-        {"id": "new", "label": "New File Viewer", "path": "/", "params": ["path"], "text_param": "path"},
+        {"id": "new", "label": "Files", "path": "/", "params": ["path"], "text_param": "path"},
         {"id": "recent", "label": "Recent files", "path": "/recent"},
         {
             "id": "draft",
@@ -961,6 +985,8 @@ def test_manifest_registration_is_authoritative_on_every_call(tmp_path: Path) ->
     assert row["program"] == "files-sidecar"
     assert row["critical"] is True
     for stale_key in (
+        "description",
+        "api_schema_path",
         "instances",
         "instances_url",
         "stop_when_no_windows",
@@ -1175,7 +1201,7 @@ def test_registration_ignores_the_manifests_references_and_scope_tables(
     assert "scope" not in row
     assert "wiring" not in row
     # The keys the manifest does own still land, so this is not a vacuous pass.
-    assert row["display_name"] == "File Viewer"
+    assert row["display_name"] == "Files"
     assert row["priority"] == "files"
 
 

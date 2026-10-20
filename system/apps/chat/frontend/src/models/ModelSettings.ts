@@ -15,6 +15,7 @@
 
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
+import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 import { getChatById } from "./Chats";
 import type { CatalogModelOption } from "./HarnessCatalog";
 
@@ -42,6 +43,14 @@ interface PendingPick {
 // The optimistic overlay per chat, and the tail of each chat's apply chain.
 const pendingByChat = new Map<string, PendingPick>();
 const applyChainByChat = new Map<string, Promise<void>>();
+
+/** Told when the chat app refuses a pick, with the chat and the refusal's reason in words. */
+export type ModelChoiceFailureListener = (chatId: string, detail: string) => void;
+const modelChoiceFailureListeners = new Set<ModelChoiceFailureListener>();
+
+export function addModelChoiceFailureListener(listener: ModelChoiceFailureListener): void {
+  modelChoiceFailureListeners.add(listener);
+}
 
 // How long an optimistic pick is held before it is forcefully reset to the live
 // truth, if no matching live choice ever arrives (e.g. a switch the harness
@@ -159,8 +168,16 @@ async function postModelChoice(chatId: string, identity: ModelIdentity, axes: st
       body: { model_id: identity.model_id, effort: identity.effort, fast: identity.fast, axes },
     });
   } catch (error) {
-    // The pushed live choice (or the timeout) reconciles the display back to truth.
-    console.warn(`Failed to set model for chat ${chatId}`, error);
+    const detail = describeRequestError(error);
+    console.warn(`Failed to set model for chat ${chatId}: ${detail}`);
+    // A refused pick changes nothing the chat app pushes, so no live choice will come to settle the overlay: the bar
+    // goes back to what the chat runs on now.
+    const pending = pendingByChat.get(chatId);
+    if (pending !== undefined && pickIdentityEquals(pending.identity, identity)) {
+      pendingByChat.delete(chatId);
+      m.redraw();
+    }
+    for (const listener of modelChoiceFailureListeners) listener(chatId, detail);
   }
 }
 

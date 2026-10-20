@@ -35,7 +35,7 @@ def test_prevent_global_keyword() -> None:
 
 
 def test_prevent_bare_print() -> None:
-    rc.check_bare_print(_DIR, snapshot(1))
+    rc.check_bare_print(_DIR, snapshot(2))
 
 
 # --- Exception handling ---

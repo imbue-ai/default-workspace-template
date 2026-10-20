@@ -2,6 +2,8 @@
 # hosts every other app's windows, so it is never offered as a window itself.
 name = "system_interface"
 display_name = "Workspace"
+description = "The workspace's shell: its windows, desktops and apps, and who is here."
+api_schema_path = "/api/schema"
 internal = true
 critical = true
 priority = "system_interface"

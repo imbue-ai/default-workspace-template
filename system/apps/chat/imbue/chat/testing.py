@@ -50,6 +50,8 @@ import httpx
 import pexpect
 import pytest
 import simple_websocket
+from chat_background_tasks import markers
+from chat_background_tasks.markers import TaskSource
 from flask import Flask
 from flask import request
 from pydantic import Field
@@ -64,6 +66,7 @@ from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_records import ChatAgentEntry
 from imbue.chat.chat_records import ChatHandoffRecord
@@ -406,6 +409,33 @@ def make_chat_agent_entry(
 CONTINUE_CHAT_TEMPLATE_PATH: Final[Path] = (
     Path(__file__).parents[5] / ".agents" / "shared" / "references" / "continue-chat.md"
 )
+
+
+def write_background_task_marker(
+    reader: BackgroundTaskReader,
+    chat_id: str,
+    task_id: str,
+    pid: int,
+    description: str = "Rebuild the worker image",
+    started_at: str = "2026-10-08T12:00:00+00:00",
+    harness: str = "",
+) -> None:
+    """Write a marker into the chat's directory with the library's own writer: ``run_in_background``'s, or the
+    named harness's."""
+    task = markers.BackgroundTask(
+        source=TaskSource.HARNESS if harness else TaskSource.RUN_IN_BACKGROUND,
+        id=task_id,
+        description=description,
+        started_at=started_at,
+        pid=pid,
+        harness=harness,
+    )
+    markers.write_marker(reader.root, chat_id, task)
+
+
+def remove_background_task_marker(reader: BackgroundTaskReader, chat_id: str, task_id: str) -> None:
+    """Remove a ``run_in_background`` marker, as the runner does once its report is delivered."""
+    markers.remove_marker(reader.root, chat_id, TaskSource.RUN_IN_BACKGROUND, task_id)
 
 
 def write_summary_for_request(text: str) -> None:
@@ -1044,6 +1074,8 @@ def make_chat_snapshot(chat_id: str, last_messaged_at: float | None = None, name
             queued_messages=(),
             shoulder_tap_available=False,
             is_connecting=False,
+            is_busy=False,
+            background_tasks=(),
         ),
         last_messaged_at=last_messaged_at,
     )
@@ -1125,6 +1157,7 @@ def running_workspace(
     is_account_signed_in: bool = True,
     additional_accounts: Sequence[tuple[str, str]] = (),
     messenger: MngrMessenger | None = None,
+    background_tasks_root: Path | None = None,
     # Further registry rows beside the chat's, for apps a test serves itself.
     extra_rows: Sequence[str] = (),
 ) -> Generator[RunningWorkspace, None, None]:
@@ -1138,7 +1171,9 @@ def running_workspace(
     root offers the provider chooser instead. ``additional_accounts`` sign further
     accounts in (a chat switches harness to one of them); ``messenger`` replaces the recording
     messenger the manager sends through. The chat's layout client is the served shell, so a route that asks the
-    shell for a window lands it there.
+    shell for a window lands it there. ``background_tasks_root`` is where the chat reads its chats'
+    background-task markers, and the agents' runner and hooks write them (``CHAT_BACKGROUND_TASKS_DIR``);
+    without it the chat reads none.
     """
     shell_url = f"http://127.0.0.1:{shell_port}"
     chat_url = f"http://127.0.0.1:{chat_port}"
@@ -1206,6 +1241,7 @@ def running_workspace(
                 "MNGR_PROJECT_CONFIG_DIR": str(tmp_path / "project-config"),
                 "MINDS_APPS_FILE": str(registry_path),
                 "MINDS_WORKSPACE_SERVER_URL": shell_url,
+                **({} if background_tasks_root is None else {"CHAT_BACKGROUND_TASKS_DIR": str(background_tasks_root)}),
             },
         ),
         patch("imbue.chat.server.discover_agents", return_value=agents),
@@ -1229,6 +1265,9 @@ def running_workspace(
             # The successor's prompt template is cwd-relative in production (the repo root); the
             # suite runs from the chat package, so it is named outright.
             prompt_template_path=CONTINUE_CHAT_TEMPLATE_PATH,
+            background_tasks=None
+            if background_tasks_root is None
+            else BackgroundTaskReader(root=background_tasks_root),
         )
         # The agents carry the signed-in account's label, as a chat the app created would, so the
         # page's provider row names it.

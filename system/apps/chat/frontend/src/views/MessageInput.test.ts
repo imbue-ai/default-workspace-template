@@ -54,6 +54,8 @@ const mocks = vi.hoisted(() => {
     setPendingAccount: vi.fn(),
     openSwitchDialog: vi.fn(),
     beginSwitchToAccountId: vi.fn(),
+    // What the composer registered to hear of a model pick the chat app refused.
+    modelChoiceFailureListener: null as ((chatId: string, detail: string) => void) | null,
     // The account ids that read as signed out; empty at rest.
     signedOutAccountIds: new Set<string>(),
     loadAccounts: vi.fn(async () => {}),
@@ -138,6 +140,9 @@ vi.mock("@imbue/workspace-ui/src/models/request-error", () => ({
     typeof e === "object" && e !== null && "kind" in e ? (e as { kind: string }).kind : "unknown",
 }));
 vi.mock("../models/ModelSettings", () => ({
+  addModelChoiceFailureListener: (listener: (chatId: string, detail: string) => void) => {
+    mocks.modelChoiceFailureListener = listener;
+  },
   effectiveChoice: () => null,
   isPickInFlight: () => false,
   setModelChoice: vi.fn(),
@@ -484,6 +489,159 @@ describe("MessageInput placeholder", () => {
     mocks.agent.activity_state = "COMPACTING";
     const textarea = findByTag(MessageInput().view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
     expect(textarea?.attrs?.placeholder).toBe("Type to queue more messages...");
+  });
+});
+
+describe("MessageInput attachment chips", () => {
+  const render = () => MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
+
+  beforeEach(() => {
+    mocks.agent.activity_state = undefined;
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    mocks.getComposerAttachments.mockReturnValue([]);
+  });
+
+  function chip(tree: unknown, fileName: string): AnyVnode | undefined {
+    return flatten(tree).find(
+      (vnode) =>
+        typeof vnode.attrs?.className === "string" &&
+        vnode.attrs.className.includes("composer-attachment--") &&
+        flatten(vnode).some((inner) => inner.attrs?.alt === fileName || renderedText(inner).includes(fileName)),
+    );
+  }
+
+  it("puts the attachments inside the text's row, marked so it lays them out between the text and the buttons", () => {
+    const withoutAttachments = findByClass(render(), "message-input-row");
+    expect(withoutAttachments?.attrs?.["data-attachments"]).toBeUndefined();
+    expect(findByClass(withoutAttachments, "composer-attachment")).toBeUndefined();
+
+    mocks.getComposerAttachments.mockReturnValue([
+      { localId: "a1", fileName: "notes.txt", isImage: false, status: "uploading", localSize: 7 },
+    ]);
+    const row = findByClass(render(), "message-input-row");
+    expect(row?.attrs?.["data-attachments"]).toBe("");
+    expect(chip(row, "notes.txt")).toBeDefined();
+  });
+
+  it("shows an uploading image as its own pixels under a spinner, with no way to remove it yet", () => {
+    mocks.getComposerAttachments.mockReturnValue([
+      { localId: "a1", fileName: "photo.png", isImage: true, status: "uploading", previewUrl: "blob:local" },
+    ]);
+    const image = chip(render(), "photo.png");
+    expect(findByTag(image, "img")?.attrs?.src).toBe("blob:local");
+    expect(findByAttr(image, "aria-label", "Uploading")).toBeDefined();
+    expect(findByAttr(image, "aria-label", "Remove attachment")).toBeUndefined();
+  });
+
+  it("shows an uploading file by name and local size, with a spinner where its icon goes", () => {
+    mocks.getComposerAttachments.mockReturnValue([
+      { localId: "a1", fileName: "notes.txt", isImage: false, status: "uploading", localSize: 7 },
+    ]);
+    const file = chip(render(), "notes.txt");
+    expect(findByTag(file, "img")).toBeUndefined();
+    expect(findByAttr(findByClass(file, "composer-attachment-icon"), "aria-label", "Uploading")).toBeDefined();
+    expect(findByClass(file, "composer-attachment-summary")).toBeDefined();
+    expect(findByAttr(file, "aria-label", "Remove attachment")).toBeUndefined();
+  });
+
+  it("shows a ready image as its uploaded thumbnail alone, removable", () => {
+    mocks.getComposerAttachments.mockReturnValue([
+      {
+        localId: "a1",
+        fileName: "photo.png",
+        isImage: true,
+        status: "ready",
+        uploaded: { path: "/uploads/photo.png", name: "photo.png", size: 6, isImage: true, url: "/files/photo.png" },
+      },
+    ]);
+    const image = chip(render(), "photo.png");
+    expect(findByTag(image, "img")?.attrs?.src).toBe("/files/photo.png");
+    expect(findByClass(image, "composer-attachment-name")).toBeUndefined();
+    expect(findByAttr(image, "aria-label", "Uploading")).toBeUndefined();
+    expect(findByAttr(image, "aria-label", "Remove attachment")).toBeDefined();
+  });
+
+  it("says a failed upload failed, even for an image, and lets it be removed", () => {
+    mocks.getComposerAttachments.mockReturnValue([
+      { localId: "a1", fileName: "photo.png", isImage: true, status: "error", error: "boom" },
+    ]);
+    const failed = chip(render(), "photo.png");
+    expect(findByTag(failed, "img")).toBeUndefined();
+    expect(renderedText(failed)).toContain("Upload failed");
+    expect(findByAttr(failed, "aria-label", "Remove attachment")).toBeDefined();
+  });
+});
+
+describe("MessageInput send button", () => {
+  beforeEach(() => {
+    mocks.agent.activity_state = undefined;
+    localStorage.clear();
+  });
+
+  it("stays in place, disabled, with nothing to send, and is enabled once there is text", () => {
+    const component = MessageInput();
+    const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(findByAttr(render(), "aria-label", "Send message")?.attrs?.disabled).toBe(true);
+    const oninput = findByTag(render(), "textarea")?.attrs?.oninput as (event: unknown) => void;
+    oninput({ target: { value: "hello", style: {}, scrollHeight: 10 } });
+    expect(findByAttr(render(), "aria-label", "Send message")?.attrs?.disabled).toBe(false);
+  });
+});
+
+describe("MessageInput layout with attachments", () => {
+  beforeEach(() => {
+    mocks.agent.activity_state = undefined;
+    localStorage.clear();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe(): void {}
+        disconnect(): void {}
+      },
+    );
+  });
+
+  afterEach(() => {
+    mocks.getComposerAttachments.mockReturnValue([]);
+    vi.unstubAllGlobals();
+  });
+
+  /** Lay the composer out, as the browser would, for one line of text that fits; returns whether the row stacked. */
+  function stacksOneLineOfText(): boolean {
+    const tree = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
+    const rowVnode = findByClass(tree, "message-input-row");
+    const attributes = new Set<string>();
+    if (rowVnode?.attrs?.["data-attachments"] !== undefined) attributes.add("data-attachments");
+    const row = {
+      clientWidth: 600,
+      style: {},
+      getBoundingClientRect: () => ({ height: 36 }),
+      hasAttribute: (name: string) => attributes.has(name),
+      removeAttribute: (name: string) => attributes.delete(name),
+      toggleAttribute: (name: string, force: boolean) => {
+        if (force) attributes.add(name);
+        else attributes.delete(name);
+        return force;
+      },
+    };
+    const textarea = { style: {}, scrollHeight: 28, clientHeight: 28, focus: () => undefined };
+    (rowVnode?.attrs?.oncreate as (vnode: unknown) => void)({ dom: row });
+    (findByTag(tree, "textarea")?.attrs?.onupdate as (vnode: unknown) => void)({ dom: textarea });
+    return attributes.has("data-stacked");
+  }
+
+  it("keeps one line of text beside its buttons with no attachments", () => {
+    expect(stacksOneLineOfText()).toBe(false);
+  });
+
+  it("stacks the row whenever it holds attachments, even for one line of text", () => {
+    mocks.getComposerAttachments.mockReturnValue([
+      { localId: "a1", fileName: "notes.txt", isImage: false, status: "uploading", localSize: 7 },
+    ]);
+    expect(stacksOneLineOfText()).toBe(true);
   });
 });
 
@@ -882,6 +1040,19 @@ describe("MessageInput send failure notice", () => {
   it("shows nothing when the send succeeds", async () => {
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
     expect(renderedText(after)).not.toContain("Couldn't send your message");
+  });
+
+  it("shows a model pick the chat app refused in the chat's notice, with its reason", () => {
+    const component = MessageInput();
+    mocks.modelChoiceFailureListener!("agent-1", "This chat is switching to Claude 2; try again once it has.");
+
+    const tree = component.view!({ attrs: { chatId: "agent-1" } } as never);
+
+    const text = renderedText(tree);
+    expect(text).toContain("Couldn't change the model");
+    expect(text).toContain("This chat is switching to Claude 2; try again once it has.");
+    expect(text).not.toContain("[object Object]");
+    expect(text).not.toContain("Retry");
   });
 
   it("offers Cancel, Retry and Force for a failed send", async () => {
@@ -1344,6 +1515,8 @@ describe("MessageInput on a chat awaiting its first send with nothing signed in"
 
     expect(renderedText(tree)).toContain("Connect an AI provider to start chatting.");
     expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
+    // Send keeps its place opposite the disabled paperclip, greyed out.
+    expect(findByAttr(tree, "aria-label", "Send message")?.attrs?.disabled).toBe(true);
     const chooseButton = findButton(tree, "Choose a provider");
     expect(chooseButton).toBeDefined();
     (chooseButton!.attrs!.onclick as () => void)();
@@ -1488,6 +1661,33 @@ describe("MessageInput on a chat whose account was signed out", () => {
     const tree = component.view!({ attrs: { chatId: "agent-signed-out" } } as never);
     expect(findButton(tree, "Choose a provider")).toBeDefined();
     expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
+  });
+
+  it("offers choosing a provider instead of Retry and Force when a send is refused for a signed-out account", async () => {
+    mocks.signedOutAccountIds.clear();
+    mocks.sendMessage.mockRejectedValueOnce({
+      response: { kind: "account_signed_out" },
+      toString: () => "You signed out of the account this chat runs on. Choose a provider to continue it on.",
+    });
+    const component = MessageInput();
+
+    const after = await typeAndSend(component, "agent-signed-out", "are you still there?");
+
+    const text = renderedText(after);
+    expect(text).toContain("Couldn't send your message");
+    expect(text).toContain("You signed out of the account this chat runs on.");
+    expect(text).not.toContain("Retry");
+    expect(text).not.toContain("Force");
+    expect(text).not.toContain("open the agent's terminal");
+    (findButton(after, "Choose a provider")!.attrs!.onclick as () => void)();
+    const dismissed = component.view!({ attrs: { chatId: "agent-signed-out" } } as never);
+    expect(renderedText(dismissed)).not.toContain("Couldn't send your message");
+    expect(mocks.openProviderChooser).toHaveBeenCalledTimes(1);
+    const intent = mocks.openProviderChooser.mock.calls[0][0] as { onSignedIn: (accountId: string) => void };
+    intent.onSignedIn("account-chosen-5522");
+    expect(mocks.beginSwitchToAccountId).toHaveBeenCalledWith("agent-signed-out", "account-chosen-5522");
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem("message-text:agent-signed-out")).toContain("are you still there?");
   });
 
   it("leaves the account list alone when a send fails for any other reason", async () => {

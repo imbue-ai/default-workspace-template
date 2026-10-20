@@ -1,5 +1,7 @@
 name = "browser"
 display_name = "Browser"
+description = "Live Chromium browsers inside the workspace, each driven by one chat or by the person, with pages to watch them."
+api_schema_path = "/api/schema"
 icon = "icon.svg"
 critical = false
 # Chromium stops on the close hint below, but the coordinator stays: agents drive browsers with no

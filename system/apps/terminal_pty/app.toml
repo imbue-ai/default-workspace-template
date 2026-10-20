@@ -3,6 +3,7 @@
 # exists so ttyd has an origin the wrapper can embed (desktop-interface contracts.md section 2).
 name = "terminal-pty"
 display_name = "Terminal PTY"
+description = "The terminal's pty origin (ttyd), framed by the terminal app's pages."
 internal = true
 critical = true
 priority = "terminal"

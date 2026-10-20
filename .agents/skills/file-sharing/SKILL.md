@@ -49,11 +49,13 @@ no copy here.
 ### Whether your writes reach the user
 
 Only if you were granted **write** access to that path. Check before you rely
-on it -- the rules list names each permission `minds-file-server-read-<path>`
-or `minds-file-server-write-<path>`:
+on it -- the rules list names each permission
+`minds-file-server-read-<device ID>:<path>` or
+`minds-file-server-write-<device ID>:<path>` (a computer whose Imbue Studio
+predates per-device grants names them with no `<device ID>:`):
 
 ```bash
-latchkey curl http://latchkey-self.invalid/permissions/self | jq .rules
+latchkey curl -H "X-Latchkey-Device: <device ID>" http://latchkey-self.invalid/permissions/self | jq .rules
 ```
 
 With **read and write**, changes travel both ways: what you write here reaches
@@ -150,4 +152,4 @@ latchkey curl -H "X-Latchkey-Device: <device ID>" -XPOST http://latchkey-self.in
 ## Notes
 
 - Users may run macOS or Linux, possible even other OSes.
-- In the permission request dialog that pops up in the Imbue Studio app on their machine, users can adjust the path, overriding the originally requested one, and switch the synchronized copy on or off. There are no other sharing settings the user can configure.
+- In the permission request dialog that pops up in the Imbue Studio app on their computer, users can adjust the path, overriding the originally requested one, and switch the synchronized copy on or off. There are no other sharing settings the user can configure.

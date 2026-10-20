@@ -1,0 +1,36 @@
+[project]
+name = "system-monitor"
+version = "0.1.0"
+description = "The Memory & disk app: how much memory and disk the workspace is using, what is holding the memory, and what the memory guard stopped"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "app-manifest",
+    "app-schema",
+    "flask>=3.0",
+    "imbue-common",
+    "oom-priority",
+    "pydantic>=2.0",
+    "werkzeug>=3.0",
+]
+
+[dependency-groups]
+dev = [
+    # What the API-document test validates the served document with.
+    "app-schema[testing]",
+    # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
+    "ty==0.0.85",
+]
+
+[project.scripts]
+system-monitor = "system_monitor.runner:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/system_monitor"]
+
+# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
+[tool.ty]

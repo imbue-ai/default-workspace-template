@@ -57,8 +57,9 @@ jobs:
   # The mngr pin must name the public mirror before a branch merges: a private
   # pin builds only with a credential, which no user's machine and no CI here
   # holds (docs/system/workspace-internals.md). Its own job so main's branch
-  # protection can require exactly this check; the same script also refuses a
-  # tree whose BuildKit lines disagree with the pin.
+  # protection can require exactly "the tree agrees with its pin": the pin
+  # writer also refuses BuildKit lines that disagree with the pin, and the
+  # vendored skill must be the one at the pinned commit.
   pin-is-public:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -67,6 +68,9 @@ jobs:
 
       - name: The mngr pin names the public mirror and the tree agrees with it
         run: python3 system/scripts/set_mngr_pin.py --require-public
+
+      - name: The vendored imbue-studio skill matches the pinned mngr commit
+        run: python3 system/scripts/vendor_mngr_skill.py --check
 
   test:
     runs-on: ubuntu-latest
@@ -200,7 +204,7 @@ jobs:
       # The runner's offload and the one built into the image (OFFLOAD_VERSION in
       # system/scripts/offload_sandbox_init.sh) talk to each other, so they stay
       # in lockstep; system/test_offload_configs.py checks that.
-      OFFLOAD_VERSION: "0.9.14"
+      OFFLOAD_VERSION: "0.10.0"
     steps:
       - name: Fetch the Modal token from Vault
         uses: imbue-ai/use-vault-secrets@main

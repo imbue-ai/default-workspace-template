@@ -33,6 +33,32 @@ describe("requestedAtUrl", () => {
   });
 });
 
+describe("renderMarkdown embeds", () => {
+  it("keeps a cross-origin image, video and audio embed, which the page policy admits from anywhere", () => {
+    // The chat page's Content-Security-Policy opens img-src and media-src to every origin because the
+    // sanitizer renders these three tags; a tag added here needs the policy's matching directive opened too
+    // (server.py's attach_document_policy), and a tag the policy does not admit is better stripped here.
+    const html = renderMarkdown(
+      '<img src="https://cdn.example.com/a.png">\n' +
+        '<video src="https://cdn.example.com/a.mp4" controls></video>\n' +
+        '<audio src="https://cdn.example.com/a.mp3" controls></audio>',
+    );
+    expect(html).toContain('<img src="https://cdn.example.com/a.png">');
+    expect(html).toContain('<video src="https://cdn.example.com/a.mp4" controls="">');
+    expect(html).toContain('<audio src="https://cdn.example.com/a.mp3" controls="">');
+  });
+
+  it("strips the embeds the policy would block: frames, plugins and scripts", () => {
+    const html = renderMarkdown(
+      '<iframe src="https://evil.example.com/"></iframe>' +
+        '<object data="https://evil.example.com/x.swf"></object>' +
+        '<embed src="https://evil.example.com/x.swf">' +
+        '<script src="https://evil.example.com/x.js"></script>',
+    );
+    expect(html).not.toMatch(/<(iframe|object|embed|script)/);
+  });
+});
+
 describe("renderMarkdown links", () => {
   function render(source: string): HTMLElement {
     const container = document.createElement("div");
