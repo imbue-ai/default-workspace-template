@@ -159,7 +159,8 @@ def observer_holding_the_lock(events_base_dir: Path) -> Generator[None, None, No
 
 
 class StandInAnthropicApi:
-    """A loopback stand-in for the Anthropic API, to point Claude Code at with ``ANTHROPIC_BASE_URL``.
+    """A loopback stand-in for the Anthropic API, to point Claude Code at with ``ANTHROPIC_BASE_URL`` (or pi with a
+    ``models.json`` ``baseUrl`` for its ``anthropic`` provider).
 
     It records every request's path, auth headers and body. With ``reply_for`` set, ``POST /v1/messages`` gets a
     valid answer carrying the text ``reply_for`` picks from the request body: the server-sent events of a streamed
@@ -563,6 +564,14 @@ def put_stand_in_cli_on_path(tmp_path: Path, name: str, body: str, monkeypatch: 
     script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     return log_path
+
+
+def make_pi_account_with_anthropic_key(tmp_path: Path, api_key: str = "sk-ant-5813") -> Path:
+    """A pi account folder at ``tmp_path/account`` whose ``auth.json`` holds an Anthropic API key."""
+    account_dir = tmp_path / "account"
+    account_dir.mkdir()
+    (account_dir / "auth.json").write_text(json.dumps({"anthropic": {"type": "api_key", "key": api_key}}))
+    return account_dir
 
 
 class InlineExecutor(Executor):
