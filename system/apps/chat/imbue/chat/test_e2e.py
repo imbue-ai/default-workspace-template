@@ -87,6 +87,8 @@ pytestmark = [
     ),
 ]
 
+_TRIGGER_TIMEOUT_MS = 20000
+
 # The default desktop every shell starts with, where the chat's seeded shortcut and every window here live.
 _HOME_DESKTOP_ID = slugify_desktop_name(DEFAULT_DESKTOP_NAME)
 # The chat root's path with the fixture chat selected: what a link, and the agent's auto-open, open.
