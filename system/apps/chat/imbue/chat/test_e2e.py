@@ -1324,6 +1324,47 @@ def test_a_send_mngr_could_not_confirm_asks_the_user_to_check_before_sending_aga
 
 
 @pytest.mark.timeout(120, func_only=False)
+def test_an_unconfirmed_message_whose_turn_lands_leaves_the_composer_and_closes_its_notice(
+    tmp_path: Path, page: Page
+) -> None:
+    """A send mngr could not confirm goes back in the composer with its notice, and when the agent's turn for it
+    reaches the transcript after all, the copy comes out of the composer and the notice closes, so nothing is left
+    to send a second time."""
+    text = "did you get this?"
+    messenger = RecordingMngrMessenger(
+        succeeds=False,
+        failure_reason="Timeout waiting for message submission evidence",
+        failure_kind="submission_unconfirmed",
+    )
+    with running_workspace(tmp_path, find_free_port(), find_free_port(), messenger=messenger) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        expect(chat.locator(".message-input-textbox")).to_be_editable(timeout=15000)
+        chat.locator(".message-input-textbox").fill(text)
+        chat.locator(".message-input-textbox").press("Enter")
+        notice = chat.locator(".modal-card")
+        expect(notice).to_contain_text("Couldn't confirm your message arrived", timeout=15000)
+        expect(chat.locator(".message-input-textbox")).to_have_value(text)
+
+        with open(server.session_file, "a") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "type": "user",
+                        "uuid": "unconfirmed-u-landed",
+                        "timestamp": "2026-01-01T00:02:00Z",
+                        "message": {"role": "user", "content": text},
+                    }
+                )
+                + "\n"
+            )
+
+        expect(chat.locator(".modal-card")).to_have_count(0, timeout=15000)
+        expect(chat.locator(".message-input-textbox")).to_have_value("")
+        assert [message for _agent_id, message in messenger.sent] == [text]
+
+
+@pytest.mark.timeout(120, func_only=False)
 def test_a_chat_awaiting_its_first_send_with_nothing_signed_in_offers_a_provider_in_place_of_the_composer(
     tmp_path: Path, page: Page
 ) -> None:

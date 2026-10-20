@@ -1,1 +1,1 @@
-`docs/specs/chat-send-failure-system.md` covers mngr's `submission_unconfirmed` and `agent_not_found` send-failure kinds: what the chat's failure notice offers for each, and why an unconfirmed send gets Send again and no Force.
+`docs/specs/chat-send-failure-system.md` covers mngr's `submission_unconfirmed` and `agent_not_found` send-failure kinds: what the chat's failure notice offers for each, why an unconfirmed send gets Send again and no Force, and how the chat takes its composer copy back out once the agent's turn for it arrives.

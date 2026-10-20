@@ -14,7 +14,15 @@ import {
 import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
 import { stageElementReferences } from "../models/elementReferences";
-import { drainToComposer, getEventsForChat, interruptAgent, mintMessageId, sendMessage } from "../models/Response";
+import {
+  drainToComposer,
+  getEventsForChat,
+  hasUserTurnLandedSince,
+  interruptAgent,
+  mintMessageId,
+  sendMessage,
+  sentUserTurnIds,
+} from "../models/Response";
 import type { SendStatus } from "../models/Response";
 import { cancelHandoff, switchChat } from "../models/Handoffs";
 import { addModelChoiceFailureListener } from "../models/ModelSettings";
@@ -393,6 +401,17 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   const authCommandNotice = makeNoticeDialog();
   // mngr's classification of the failure, which decides which recoveries are worth offering.
   let actionFailureKind: SendFailureKind = "unknown";
+  // A send mngr typed into the agent but could not confirm: its text went back to the composer
+  // like any failed send's, but the agent may still take it. Once its turn reaches the transcript
+  // the copy comes back out and its notice closes, so the user does not send it a second time.
+  // Kept past Cancel, which leaves the copy in the composer just the same.
+  let unconfirmedSend: { recovery: SendRecovery; priorTurnIds: ReadonlySet<string> } | null = null;
+
+  function watchForUnconfirmedTurn(err: unknown, recovery: SendRecovery, priorTurnIds: ReadonlySet<string>): void {
+    if (describeRequestErrorKind(err) === "submission_unconfirmed") {
+      unconfirmedSend = { recovery, priorTurnIds };
+    }
+  }
   // Whether the chat app refused the send because the chat's account was signed out: sending again cannot help, so
   // the notice offers choosing a provider instead of Retry and Force.
   let isActionFailureOnSignedOutAccount = false;
@@ -598,6 +617,20 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         messageText = pendingPrepend;
       }
 
+      // After the hand-back above is adopted: the failed send's copy arrives through it.
+      const unconfirmed = unconfirmedSend;
+      if (
+        unconfirmed !== null &&
+        hasUserTurnLandedSince(unconfirmed.recovery.chatId, unconfirmed.recovery.sentText, unconfirmed.priorTurnIds)
+      ) {
+        unconfirmedSend = null;
+        clearRestoredMessage(unconfirmed.recovery.chatId, unconfirmed.recovery.text, unconfirmed.recovery.attachments);
+        // Only its own notice, and not out from under a Send again already on its way.
+        if (actionFailureRecovery === unconfirmed.recovery && actionFailureInFlight === null) {
+          clearActionFailureNotice();
+        }
+      }
+
       /** What a send (or a switch) puts on the wire, with what to put back if it fails. */
       interface PreparedSend {
         /** What the user typed, for the bubble and for restoring the composer. */
@@ -717,6 +750,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         const messageId = mintMessageId();
         const outgoingId = addOutgoing(chatId, sentText, messageId);
         m.redraw();
+        let priorTurnIds: ReadonlySet<string> = new Set();
 
         try {
           // A chat awaiting its first send (a seeded one, one an intake minted, or the one an empty
@@ -753,6 +787,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // "Sending…" until the create lands, and the send goes out then. A create that
           // fails rejects here and the message goes back to the composer like any failed send.
           await whenChatRegistered(chatId);
+          priorTurnIds = sentUserTurnIds(chatId);
           const status = await sendMessage(chatId, finalText, messageId);
           // The send resolved: the message is now real (committed, queued, or held for the
           // agent the chat is switching to), so its "Sending…" bubble is removed by the arriving
@@ -772,6 +807,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // would take the message with it (contract A1a). A repeat send removes that copy once
           // it has landed.
           restoreFailedMessageToComposer(chatId, sentText, sentAttachments);
+          const recovery = { chatId, text: sentText, sentText: finalText, attachments: sentAttachments };
+          watchForUnconfirmedTurn(err, recovery, priorTurnIds);
           catchUpOnSignedOutAccount(err);
           // Notices only if they are still on the agent that failed -- this catch runs after an
           // await, so they may have switched and the switch-clear has already gone by.
@@ -783,7 +820,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
               actionFailureDetail = detail;
               actionFailureKind = describeRequestErrorKind(err);
               isActionFailureOnSignedOutAccount = sendFailureKind(err) === ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND;
-              actionFailureRecovery = { chatId, text: sentText, sentText: finalText, attachments: sentAttachments };
+              actionFailureRecovery = recovery;
             }
           }
           m.redraw();
@@ -1029,7 +1066,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           .trimEnd();
       }
 
-      /** Remove just the restored copy once a repeat send has landed, leaving the rest alone. */
+      /** Remove just the restored copy once a repeat send (or an unconfirmed one's turn) has landed, leaving the rest alone. */
       function clearRestoredMessage(
         forChatId: string,
         restoredText: string,
@@ -1052,6 +1089,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           localStorage.setItem(messageTextKey(forChatId), withoutRestored);
         } else {
           localStorage.removeItem(messageTextKey(forChatId));
+        }
+        // A hand-back the chat's composer has not taken in yet (the chat is not on screen) still
+        // carries the copy, and would put it back when the chat is shown.
+        if (pendingComposerPrepends.has(forChatId)) {
+          pendingComposerPrepends.set(forChatId, withoutRestored);
         }
         // The delivered attachments go regardless of whether text remains. Keying this off the
         // text emptying meant a Retry after the user had typed something left the files behind,
@@ -1130,16 +1172,22 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         // not simply absent from the transcript until the backend catches up.
         const messageId = mintMessageId();
         const outgoingId = addOutgoing(recovery.chatId, recovery.text, messageId);
+        let priorTurnIds: ReadonlySet<string> = new Set();
         try {
           await whenChatRegistered(recovery.chatId);
+          priorTurnIds = sentUserTurnIds(recovery.chatId);
           const status = await sendMessage(recovery.chatId, recovery.sentText, messageId);
           dropOutgoingOfRequestedCompaction(recovery.chatId, outgoingId, status);
           // Landed, so take the restored copy back out of the composer.
           clearRestoredMessage(recovery.chatId, recovery.text, recovery.attachments);
+          if (unconfirmedSend?.recovery === recovery) {
+            unconfirmedSend = null;
+          }
           clearActionFailureNotice();
           focusMessageTextarea();
         } catch (err) {
           dropOutgoing(recovery.chatId, outgoingId);
+          watchForUnconfirmedTurn(err, recovery, priorTurnIds);
           catchUpOnSignedOutAccount(err);
           // Failed again. Only re-open the notice if they are still on that agent -- otherwise
           // it would surface this agent's error over a different chat, with no way to act on it.

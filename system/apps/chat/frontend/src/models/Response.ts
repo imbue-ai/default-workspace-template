@@ -710,9 +710,40 @@ function mergeLateSubagentMetadata(prior: TranscriptEvent, incoming: TranscriptE
  *  Not a successor's handoff prompt (the chat app's own message; the message it folds in is the
  *  switch marker's to show), and not a seed segment's turns (written before any page existed). */
 function arrivedUserEventIds(events: readonly TranscriptEvent[]): string[] {
-  return events
-    .filter((event) => event.type === "user_message" && event.source !== SEED_SOURCE && !isHandoffPromptChip(event))
-    .map((event) => event.event_id);
+  return events.filter(isSentUserTurn).map((event) => event.event_id);
+}
+
+function isSentUserTurn(event: TranscriptEvent): event is UserMessageEvent {
+  return event.type === "user_message" && event.source !== SEED_SOURCE && !isHandoffPromptChip(event);
+}
+
+/** The user turns the chat's loaded transcript holds now, so a turn that lands later can be told apart. */
+export function sentUserTurnIds(chatId: string): ReadonlySet<string> {
+  return new Set(arrivedUserEventIds(getEventsForChat(chatId)));
+}
+
+/**
+ * Whether a user turn holding exactly ``text`` has reached the chat's transcript since ``priorTurnIds``
+ * were read. Matched on the text, not by position: another turn landing meanwhile (a queued message, a
+ * send from another window) is not this one.
+ */
+export function hasUserTurnLandedSince(chatId: string, text: string, priorTurnIds: ReadonlySet<string>): boolean {
+  const wanted = text.trim();
+  const events = getEventsForChat(chatId);
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (!isSentUserTurn(event)) {
+      continue;
+    }
+    // Everything before a turn that was already there was already there too.
+    if (priorTurnIds.has(event.event_id)) {
+      return false;
+    }
+    if (event.content.trim() === wanted) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function appendEvents(chatId: string, newEvents: TranscriptEvent[]): void {

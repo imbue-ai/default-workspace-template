@@ -69,6 +69,8 @@ const mocks = vi.hoisted(() => {
     // deferred promise.
     waitForComposerUploads: vi.fn(async (_chatId: string) => {}),
     interruptAgent: vi.fn(async () => {}),
+    // Whether the agent's turn for a message has reached the transcript; none has, at rest.
+    hasUserTurnLandedSince: vi.fn((_chatId: string, _text: string, _priorTurnIds: ReadonlySet<string>) => false),
     openProviderChooser: vi.fn(),
     // Resolved at once by default: the agent exists. A test of a chat still being created
     // swaps in a deferred promise.
@@ -88,6 +90,8 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("../models/Response", () => ({
   getEventsForChat: () => [],
+  hasUserTurnLandedSince: mocks.hasUserTurnLandedSince,
+  sentUserTurnIds: () => new Set(["turn-before-the-send"]),
   sendMessage: mocks.sendMessage,
   drainToComposer: mocks.drainToComposer,
   interruptAgent: mocks.interruptAgent,
@@ -1029,6 +1033,79 @@ describe("MessageInput send failure notice", () => {
 
     (findButton(tree, "Send again")!.attrs!.onclick as () => void)();
     expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes an unconfirmed message out of the composer and closes its notice once its turn lands", async () => {
+    mocks.hasUserTurnLandedSince.mockClear();
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "submission_unconfirmed", toString: () => "unconfirmed" });
+    const component = MessageInput();
+    const after = await typeAndSend(component, "agent-1", "hello");
+    expect(renderedText(after)).toContain("Couldn't confirm your message arrived");
+    expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
+
+    mocks.hasUserTurnLandedSince.mockReturnValueOnce(true);
+    const landed = component.view!({ attrs: { chatId: "agent-1" } } as never);
+
+    // Looked for among the turns that were not there before the send, by the text that was sent.
+    expect(mocks.hasUserTurnLandedSince).toHaveBeenLastCalledWith(
+      "agent-1",
+      "hello",
+      new Set(["turn-before-the-send"]),
+    );
+    expect(renderedText(landed)).not.toContain("Couldn't confirm your message arrived");
+    expect(findByTag(landed, "textarea")?.attrs?.value).toBe("");
+    expect(localStorage.getItem("message-text:agent-1") ?? "").not.toContain("hello");
+  });
+
+  it("still takes an unconfirmed message out of the composer when its turn lands after Cancel", async () => {
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "submission_unconfirmed", toString: () => "unconfirmed" });
+    const component = MessageInput();
+    const after = await typeAndSend(component, "agent-1", "hello");
+    (findByClass(after, "notice-dismiss")!.attrs!.onclick as () => void)();
+    const dismissed = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(findByTag(dismissed, "textarea")?.attrs?.value).toBe("hello");
+
+    mocks.hasUserTurnLandedSince.mockReturnValueOnce(true);
+    const landed = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(findByTag(landed, "textarea")?.attrs?.value).toBe("");
+  });
+
+  it("takes an unconfirmed message out of its chat's composer when its turn lands while another chat is shown", async () => {
+    const component = MessageInput();
+    const render = (chatId: string) => component.view!({ attrs: { chatId } } as never);
+    mocks.sendMessage.mockImplementationOnce(async () => {
+      // The user moves to another chat while the send is out.
+      render("agent-2");
+      throw { kind: "submission_unconfirmed", toString: () => "unconfirmed" };
+    });
+    const oninput = findByTag(render("agent-1"), "textarea")?.attrs?.oninput as (event: unknown) => void;
+    oninput({ target: { value: "hello", style: {}, scrollHeight: 10 } });
+    await (findByAttr(render("agent-1"), "aria-label", "Send message")!.attrs!.onclick as () => Promise<void>)();
+
+    mocks.hasUserTurnLandedSince.mockReturnValueOnce(true);
+    render("agent-2");
+    expect(findByTag(render("agent-1"), "textarea")?.attrs?.value).toBe("");
+    expect(localStorage.getItem("message-text:agent-1") ?? "").not.toContain("hello");
+  });
+
+  it("shows no notice for an unconfirmed message whose turn landed before the failure came back", async () => {
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "submission_unconfirmed", toString: () => "unconfirmed" });
+    mocks.hasUserTurnLandedSince.mockReturnValueOnce(true);
+    const after = await typeAndSend(MessageInput(), "agent-1", "hello");
+    expect(renderedText(after)).not.toContain("Couldn't confirm your message arrived");
+    expect(findByTag(after, "textarea")?.attrs?.value).toBe("");
+  });
+
+  it("leaves any other failed send's copy in the composer, whatever reaches the transcript", async () => {
+    // Only an unconfirmed send is watched for its turn.
+    mocks.hasUserTurnLandedSince.mockClear();
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "input_blocked", toString: () => "a dialog is open" });
+    const component = MessageInput();
+    await typeAndSend(component, "agent-1", "hello");
+    const later = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(mocks.hasUserTurnLandedSince).not.toHaveBeenCalled();
+    expect(renderedText(later)).toContain("Couldn't send your message");
+    expect(findByTag(later, "textarea")?.attrs?.value).toBe("hello");
   });
 
   it.each([
