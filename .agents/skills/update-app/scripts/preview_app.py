@@ -76,9 +76,9 @@ REGISTRY_PLACEHOLDER = "{registry}"
 # The shell's app name: the one preview whose registry copy other previews are framed through.
 SHELL_APP_NAME = "system_interface"
 
-# Every app's tool runs from the repo root; a worktree's app runs from the worktree root
-# through its own environment, which is what makes the preview serve the worktree's code
-# rather than the live tool's.
+# The live app runs from the repo root's venv; a worktree's app runs from the worktree root
+# through the worktree's own venv, which is what makes the preview serve the worktree's
+# code rather than the live app's.
 LAUNCHER = ("uv", "run")
 
 # An app that declares ``[[secrets]]`` runs under the wrapper, which is the only reader

@@ -86,13 +86,10 @@ package = false
 # The globs cover every package in the three-way system/ split -- built-in
 # libraries, background services, and apps (built-in and user-built alike) --
 # so a newly scaffolded or adopted app joins the workspace without editing
-# this list. An app with an app.toml manifest does not RUN from this
-# workspace's venv: it is installed as its own uv tool from its own pyproject
-# (see system/scripts/build_workspace.sh), and its supervisord program runs the
-# tool's entry point. An app with no app.toml runs `uv run <name>` from this
-# venv. Both kinds are members: one lockfile keeps every environment on the
-# same versions, and a user-built app never has to edit this file; an app's own
-# tool environment keeps it running while this venv is rewritten or broken.
+# this list. Every app runs from this workspace's venv, its one install: its
+# supervisord program execs its entry point from .venv/bin. One lockfile keeps
+# every package on the same versions, and a user-built app never has to edit
+# this file.
 members = ["system/libs/*", "system/services/*", "system/apps/*"]
 # system/libs/workspace_ui is a JavaScript library (the frontends' shared code), not a Python
 # package; system/apps/terminal_pty is a manifest alone (the terminal's pty origin), whose

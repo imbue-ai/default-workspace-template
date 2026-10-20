@@ -8,11 +8,11 @@
 Creates `system/apps/<package>/` with a Flask starter (synchronous; flask-sock
 is available for WebSockets) and its `app.toml` manifest, writes a
 `[program:<name>]` block to its own `system/supervisord.conf.d/<name>.conf`
-whose command registers the manifest and runs the app's own entry point,
-installs the app as its own uv tool environment (`uv tool install -e
-system/apps/<package>`), and runs `uv sync --all-packages` so the root lockfile
-covers the new workspace member (the `system/apps/*` member glob picks the
-package up automatically; the root pyproject.toml is not edited).
+whose command registers the manifest and runs the app's entry point from the
+workspace venv, and runs `uv sync --all-packages`, which installs that entry
+point into the venv and has the root lockfile cover the new workspace member
+(the `system/apps/*` member glob picks the package up automatically; the root
+pyproject.toml is not edited).
 
 No shared file is *authored*: the supervisord program lives in its own file
 rather than being appended to a config shared with every other creation. That is
@@ -804,9 +804,10 @@ def _entry_point_command(name: str, secrets_file: str | None) -> str:
     connect-external-service skill): it loads the file into the child's environment
     and execs the app, so the value appears in no config file and no command line.
     """
+    entry_point = f".venv/bin/{name}"
     if secrets_file is None:
-        return name
-    return f"python3 system/scripts/with_secrets.py data/.secrets/{secrets_file}.env -- {name}"
+        return entry_point
+    return f"python3 system/scripts/with_secrets.py data/.secrets/{secrets_file}.env -- {entry_point}"
 
 
 def _write_supervisord_program(
@@ -820,8 +821,9 @@ def _write_supervisord_program(
     shed before any built-in app or service under memory pressure (see
     system/services/oom_priority/README.md).
 
-    The app runs as its own tool's entry point (installed by _install_app_tool),
-    not through `uv run`, so the root venv is never on its path.
+    The app runs its entry point from the workspace venv (written by _run_uv_sync),
+    like every Python app, not through `uv run`, so no uv process stays resident as
+    its parent.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -854,21 +856,10 @@ def _validate_manifest(repo_root: Path, package: str) -> None:
     )
 
 
-def _install_app_tool(repo_root: Path, package: str) -> None:
-    # Every Python app runs from its own uv tool environment, built from its own
-    # pyproject (see system/scripts/build_workspace.sh, which does the same for
-    # every app at image build). The install runs from the repo root so uv
-    # resolves the workspace's path dependencies.
-    _run_checked(
-        ["uv", "tool", "install", "-e", f"system/apps/{package}"],
-        repo_root,
-        f"uv tool install -e system/apps/{package}",
-    )
-
-
 def _run_uv_sync(repo_root: Path) -> None:
-    # The app is also a workspace member (the root pyproject's system/apps/*
-    # glob), so the root lockfile must learn about it or the next
+    # The app is a workspace member (the root pyproject's system/apps/* glob):
+    # the sync installs its entry point into the venv its program runs from, and
+    # the root lockfile must learn about it or the next
     # `uv sync --all-packages --frozen` (the update-self apply) refuses.
     _run_checked(["uv", "sync", "--all-packages"], repo_root, "uv sync --all-packages")
 
@@ -950,7 +941,7 @@ def main() -> None:
     parser.add_argument(
         "--skip-uv-sync",
         action="store_true",
-        help="skip the manifest check, the tool install and `uv sync --all-packages` after generation (for tests/dry runs)",
+        help="skip the manifest check and `uv sync --all-packages` after generation (for tests/dry runs)",
     )
     parser.add_argument(
         "--start",
@@ -989,7 +980,6 @@ def main() -> None:
 
     if not args.skip_uv_sync:
         _validate_manifest(repo_root, package)
-        _install_app_tool(repo_root, package)
         _run_uv_sync(repo_root)
 
     if args.start:

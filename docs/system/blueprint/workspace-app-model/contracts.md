@@ -360,16 +360,13 @@ Unknown or stale targets are ignored silently.
 The browser applies these itself through the paths a click takes, before it reports its first `client_state`; the `view` wins over the stored active view.
 The minds chrome does not forward a deep link's query to the shell frame; that lands with the switcher (deferred, see the meta spec).
 
-## 14. Tool environments
+## 14. Python environments
 
-- The manifest is the discriminator: every directory under `system/apps/` with both a `pyproject.toml` and an `app.toml` is a Python app that runs from its own uv tool: `uv tool install -e system/apps/<package> [--with-editable <plugin path>]...`, with the plugin list from `system/config/mngr_plugins.toml` where the app's manifest `name` appears in a plugin's `tools`.
-- A directory with a `pyproject.toml` and no manifest is a pre-manifest app; it runs `uv run <name>` from the root venv, untouched by the build and the apply. There are exactly these two forms, both supported indefinitely, so no code path ever handles a third.
-- The tool's entry point is named after the program and is what the supervisord line runs.
-- `system/scripts/build_workspace.sh` loops over the manifest directories.
-- The update apply reinstalls the tool of every manifest app whose directory changed in the merge (excluding paths under `frontend/` and `static/`), and of every manifest app when a shared backend manifest changed, and snapshots the tool directory of every `critical` app before it does.
-- `system/apps/*` is in the root workspace's member glob, so one lockfile covers the tree, a pre-manifest app's `{ workspace = true }` source in the root pyproject resolves, and a user-built app needs no root-pyproject edit; `uv sync --all-packages` therefore also installs the manifest apps into the root venv, unused, which uv's shared cache makes nearly free. Membership and the tool environments answer different questions: the lock keeps every environment on the same versions, and a tool environment keeps its app running while the root venv is rewritten or broken.
-- The `app_manifest` and `app_schema` libraries are workspace members that apps depend on by path, so a tool install pulls them in editable.
-- Services run from the root venv under `uv run <name>`.
+- Every Python package under `system/apps/` is a member of the root uv workspace (the `system/apps/*` glob) and runs from the workspace venv that `uv sync --all-packages --frozen` writes: one install per app, resolved from the one lockfile. A user-built app needs no root-pyproject edit, and a pre-manifest app's `{ workspace = true }` source in the root pyproject resolves.
+- An app's supervisord program line execs its entry point from `.venv/bin` (`exec .venv/bin/<name>`, or `oom_tag_service.py <band> .venv/bin/<name>`), never under `uv run` and never by a bare name that a PATH could resolve to some other install. The entry point is named after the program. Services run the same way.
+- The update apply re-syncs the venv when a backend manifest changed (`uv.lock`, the root `pyproject.toml`, `system/config/mngr_plugins.toml`, or any app's `pyproject.toml`), copying it aside first, and pre-flights the shell and the chat from the same `.venv/bin` entry points before the restart.
+- The `app_manifest` and `app_schema` libraries are workspace members that apps depend on by path, so the venv carries them editable.
+- Apps once also had per-app uv tools (`uv tool install -e system/apps/<package>`). The program lines never ran them -- `uv run bootstrap` put `.venv/bin` first on supervisord's PATH -- while the update's pre-flight did, so a stale tool rolled back a good update. The build and a landed update remove any that remain (`tool_env.remove_app_tool_installs`).
 
 ## 15. Memory priority
 

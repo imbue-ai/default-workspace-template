@@ -229,7 +229,7 @@ What gets generated:
   under `[[references]]` with a `note` naming the surface it uses.
 - `system/apps/<package>/pyproject.toml` -- declares
   `[project.scripts] <name> = "<package>.runner:main"`, the entry point
-  the app's own tool environment exposes, and makes the directory its own
+  `uv sync --all-packages` installs into the workspace venv, and makes the directory its own
   `ty` project (an empty `[tool.ty]` table and a pinned `ty` dev dependency)
   for the ratchets' type check.
 - `system/apps/<package>/src/<package>/__init__.py` -- empty.
@@ -286,7 +286,7 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
 
   ```ini
   [program:<name>]
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && exec <name>"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && exec .venv/bin/<name>"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
@@ -300,15 +300,13 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   FATAL rather than restarting a broken app several times a second for the life
   of the workspace. Built-in services deliberately retry forever instead.
 
-  The command ends in `exec` of the app's own name, not `uv run <name>`, so
-  the app is the process supervisord tagged rather than a child of a wrapper;
-  supervisord resolves that name on PATH. The copy it finds is the console script
-  `uv sync --all-packages` writes into the workspace venv -- `uv tool install
-  -e` puts the tool's own entry point under your HOME, which supervisord's
-  children do not have on PATH. So always sync with `--all-packages`: a
-  root-closure-scoped `uv sync` prunes the member (a scaffolded app is not a
-  root dependency), deletes that script, and the next restart is a spawn error
-  with nothing to recover it.
+  The command ends in `exec .venv/bin/<name>`, not `uv run <name>`, so the
+  app is the process supervisord tagged rather than a child of a wrapper. That
+  is the console script `uv sync --all-packages` writes into the workspace venv,
+  the one install of the app (and of every Python app). So always sync with
+  `--all-packages`: a root-closure-scoped `uv sync` prunes the member (a
+  scaffolded app is not a root dependency), deletes that script, and the next
+  restart is a spawn error with nothing to recover it.
 
   An app that needs a credential (an API key the user supplied through the
   `connect-external-service` skill's secret card) declares it in `app.toml` and
@@ -328,7 +326,7 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   ```
 
   ```ini
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && exec python3 system/scripts/with_secrets.py data/.secrets/example.env -- <name>"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && exec python3 system/scripts/with_secrets.py data/.secrets/example.env -- .venv/bin/<name>"
   ```
 
   A preview (`update-app`'s `preview_app.py`) runs the app under the same
@@ -344,15 +342,12 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   `oom_tag_service.py user` prefix tags this user-created app so it is
   shed before any built-in service under memory pressure (see
   `system/services/oom_priority/README.md`).
-- The app's own uv tool environment: the scaffold runs
-  `uv tool install -e system/apps/<package>`, which is what puts the
-  `<name>` entry point the program line runs on PATH. Every Python app
-  runs from its own tool rather than the root venv (the root venv is for
-  background services, agents, skills, and scripts), so a dependency you
-  add later needs `uv tool install -e system/apps/<package> --reinstall`
-  (see `update-app`). The root `pyproject.toml` is not edited: the
-  `system/apps/*` member glob already covers the package, and the final
-  `uv sync --all-packages` keeps the root lockfile current for it.
+- The workspace venv: the scaffold's final `uv sync --all-packages` installs
+  the package (editable) and its `<name>` entry point into `.venv`, which is
+  what the program line runs. A dependency you add later, or a new console
+  script, takes another `uv sync --all-packages` (see `update-app`). The
+  root `pyproject.toml` is not edited: the `system/apps/*` member glob already
+  covers the package.
 
 If you passed `--start` to `scaffold_flask_lib.py`, the service is already registered and running healthy.
 If you ran without `--start`, tell supervisord to pick up the new program:

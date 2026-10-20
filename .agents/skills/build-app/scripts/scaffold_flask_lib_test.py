@@ -169,7 +169,7 @@ def test_scaffold_authors_only_its_own_files(tmp_path: Path) -> None:
 
     program = (root / "system/supervisord.conf.d/news.conf").read_text()
     assert "[program:news]" in program
-    # The app registers its own manifest and runs its own tool entry point, so
+    # The app registers its own manifest and runs its own entry point, so
     # nothing about it lives in a file another creation also writes.
     assert "--manifest system/apps/news/app.toml" in program
     assert (root / "system/apps/news/src/news/runner.py").exists()
@@ -452,7 +452,7 @@ def test_a_secrets_file_that_is_not_a_slug_is_refused_before_anything_is_written
     ok = _scaffold(root, "news", "--secrets-file", "news-api")
     assert ok.returncode == 0, ok.stderr
     assert (
-        "data/.secrets/news-api.env -- news"
+        "data/.secrets/news-api.env -- .venv/bin/news"
         in (root / "system/supervisord.conf.d/news.conf").read_text()
     )
 
@@ -466,13 +466,13 @@ def test_a_declared_secrets_file_wraps_the_entry_point_in_with_secrets(
     scaffold_flask_lib._write_supervisord_program(
         plain, "widget-app", "widget_app", 8090, None
     )
-    assert '&& exec widget-app"' in plain.read_text()
+    assert '&& exec .venv/bin/widget-app"' in plain.read_text()
     wrapped = tmp_path / "wrapped.conf"
     scaffold_flask_lib._write_supervisord_program(
         wrapped, "widget-app", "widget_app", 8090, "widget"
     )
     assert (
-        '&& exec python3 system/scripts/with_secrets.py data/.secrets/widget.env -- widget-app"'
+        '&& exec python3 system/scripts/with_secrets.py data/.secrets/widget.env -- .venv/bin/widget-app"'
         in wrapped.read_text()
     )
 
