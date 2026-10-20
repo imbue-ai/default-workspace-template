@@ -4,6 +4,4 @@ Chat names are shorter and no longer repeat themselves. A name used to come in t
 
 Chats opened in Japanese, Chinese, Korean, Russian, Arabic or another non-Latin script now get a name. Such a name used to come back in that script, which a chat's name cannot hold, so the chat kept "Chat N". The name is now written in English for those messages, and in the message's own language without accents (for example "Vacances en Italie") for languages that use the Latin alphabet.
 
-Chats on Pi now name themselves too. The name comes from the newest Haiku, Luna or Flash model the Pi account's provider offers. Providers without one use Pi's own default model for that account. The call is always paid by the chat's own account: if Pi can also see other credentials on the machine (an AWS profile, say), a Pi account without one of those small models keeps "Chat N" rather than risk naming the chat on someone else's credentials.
-
 Claude chats are still named on the `haiku` alias, which the pinned Claude Code resolves to Claude Haiku 5.5, and Codex chats on the newest Luna model the account offers; neither needed a model change. When Haiku fails, a Claude chat is now retried only on the account's default model, no longer on Sonnet first, so a failure that no model can fix (a rate limit, an expired login) costs at most two calls instead of three.
