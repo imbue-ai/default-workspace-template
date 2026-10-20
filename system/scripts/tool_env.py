@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Where this workspace's uv-managed tools live, and removal of copies that shadow them.
+"""Where this workspace's uv-managed tools live, and removal of copies that shadow them
+or that the workspace no longer runs.
 
 uv's tool directories follow ``$HOME``, and the programs that install tools run under two
 of them: the image build's ``/root``, and ``/home/user`` on a live create (root's passwd
@@ -34,6 +35,7 @@ import argparse
 import os
 import shutil
 import sys
+import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -167,6 +169,72 @@ def _remove_scripts_into(scripts_dir: Path, environment: Path) -> list[Path]:
     return removed
 
 
+# CLEANUP: remove this function, its two callers (build_workspace.sh's `drop-app-tools` and
+# the update apply) and its tests once no supported workspace or baked image can still carry
+# the per-app tool installs that builds before the single-install change made.
+def remove_app_tool_installs(homes: Sequence[Path], apps_dir: Path) -> list[Path]:
+    """Delete every tool environment under ``homes`` that uv installed editable from a
+    directory in ``apps_dir``, and every console script into it; return what was removed.
+
+    Builds once installed each app as its own uv tool besides the workspace venv, which is
+    the copy every app actually runs from; the tool was a second install that only the
+    update's pre-flight and a login shell ever reached. An environment is an app's tool
+    when its receipt names its own package as an editable install from under ``apps_dir``,
+    so a user-built app goes too and nothing installed any other way is touched. Paths are
+    compared after ``resolve()``, because the receipt spells the checkout the way the build
+    reached it.
+    """
+    apps = apps_dir.resolve()
+    removed: list[Path] = []
+    for home in homes:
+        tools = tools_dir(home)
+        try:
+            environments = sorted(tools.iterdir()) if tools.is_dir() else []
+        except PermissionError:
+            # A home this process cannot read (a non-root run) holds nothing to remove.
+            environments = []
+        for environment in environments:
+            if not _is_editable_install_under(environment, apps):
+                continue
+            removed.extend(_remove_scripts_into(bin_dir(home), environment.resolve()))
+            shutil.rmtree(environment)
+            removed.append(environment)
+    return removed
+
+
+def _is_editable_install_under(environment: Path, directory: Path) -> bool:
+    """Whether ``environment``'s receipt installs its own package editable from under
+    ``directory`` (already resolved)."""
+    try:
+        receipt = tomllib.loads((environment / RECEIPT).read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+    requirements = receipt.get("tool", {}).get("requirements", [])
+    own_name = _canonical_name(environment.name)
+    for requirement in requirements if isinstance(requirements, list) else []:
+        if not isinstance(requirement, dict):
+            continue
+        source = requirement.get("editable")
+        if _canonical_name(str(requirement.get("name", ""))) != own_name or not isinstance(
+            source, str
+        ):
+            continue
+        return Path(source).resolve().is_relative_to(directory)
+    return False
+
+
+def _canonical_name(name: str) -> str:
+    """A distribution name normalized the way uv names its environment directory."""
+    return name.replace("_", "-").lower()
+
+
+def _drop_app_tools(repo_root: Path) -> list[Path]:
+    """The build's call: sweep the pinned home and the home the build runs under."""
+    home = os.environ.get("HOME")
+    homes = [tool_home(), *([Path(home)] if home else [])]
+    return remove_app_tool_installs(homes, repo_root / "system" / "apps")
+
+
 def _drop_shadowing_mngr() -> list[Path]:
     """The build's call: keep the pinned installation, sweep the home the build runs under."""
     home = os.environ.get("HOME")
@@ -186,7 +254,18 @@ def main(argv: list[str] | None = None) -> int:
         "drop-shadowing-mngr",
         help="Remove any mngr tool install outside the pinned one that would shadow it.",
     )
-    parser.parse_args(argv)
+    drop_app_tools = subcommands.add_parser(
+        "drop-app-tools",
+        help="Remove the per-app uv tool installs older builds made beside the workspace venv.",
+    )
+    drop_app_tools.add_argument("--repo-root", type=Path, required=True)
+    args = parser.parse_args(argv)
+    if args.command == "drop-app-tools":
+        for removed in _drop_app_tools(args.repo_root):
+            sys.stderr.write(
+                f"[tool-env] removed {removed}, an app tool the workspace venv replaces\n"
+            )
+        return 0
     for removed in _drop_shadowing_mngr():
         sys.stderr.write(
             f"[tool-env] removed {removed}, which shadowed {tool_home()}/.local\n"

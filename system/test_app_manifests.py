@@ -25,6 +25,10 @@ _SUPERVISORD_CONF = _REPO_ROOT / "system" / "supervisord.conf"
 
 _MANIFEST_FLAG = re.compile(r"--manifest\s+(\S+)")
 
+# Where every app's console scripts are installed: the workspace venv, which
+# ``uv sync --all-packages`` writes and every app's program runs its entry point from.
+_VENV_BIN_PREFIX = ".venv/bin/"
+
 
 # The apps the template ships. Only these are checked: a workspace built from the
 # template may carry user-built apps (with a manifest whose priority is ``user``,
@@ -120,9 +124,17 @@ def _script_entry_points(script_name: str) -> list[tuple[Path, str]]:
     ]
 
 
+def _entry_point_script(command: str) -> str | None:
+    """The console script a program's command ends by running from the workspace venv, by name;
+    ``None`` for a command that ends in anything else."""
+    words = command.split()
+    last = words[-1].strip('"') if words else ""
+    return last.removeprefix(_VENV_BIN_PREFIX) if last.startswith(_VENV_BIN_PREFIX) else None
+
+
 def _package_running_program(program: str, command_by_program: dict[str, str]) -> Path | None:
     """The app package that runs a supervisord program: the sole declarer of the console script
-    its command ends in, whose script is therefore the only one of the apps' on PATH.
+    its command ends in, whose script is therefore the only one of that name in the venv.
 
     ``None``, so excusing nothing: a program with no block, one whose command runs something
     other than an app's entry point, and one whose script several packages declare -- which of
@@ -130,10 +142,10 @@ def _package_running_program(program: str, command_by_program: dict[str, str]) -
     name by ``test_no_two_app_packages_declare_the_same_console_script``, since the collision
     this silence leaves standing says nothing about the duplicated declaration behind it.
     """
-    command = command_by_program.get(program, "")
-    if not command:
+    script = _entry_point_script(command_by_program.get(program, ""))
+    if script is None:
         return None
-    entry_points = _script_entry_points(command.split()[-1])
+    entry_points = _script_entry_points(script)
     if len(entry_points) != 1:
         return None
     return entry_points[0][0]
@@ -142,13 +154,14 @@ def _package_running_program(program: str, command_by_program: dict[str, str]) -
 def _entry_point_manifest_paths(command: str) -> list[str]:
     """The manifest an app's own entry point registers with, when the program's command ends in one.
 
-    A Python app runs its tool's console script and registers from inside it (the terminal's
-    entry point calls ``app_manifest.registry.register_app`` with its manifest), so the manifest
-    path is a constant the script's module exports as ``MANIFEST_PATH`` rather than a flag on the
-    command line.
+    A Python app runs its console script from the workspace venv and registers from inside it
+    (the terminal's entry point calls ``app_manifest.registry.register_app`` with its manifest),
+    so the manifest path is a constant the script's module exports as ``MANIFEST_PATH`` rather
+    than a flag on the command line.
     """
+    script = _entry_point_script(command)
     manifest_paths: list[str] = []
-    for package_directory, entry_point in _script_entry_points(command.split()[-1]):
+    for package_directory, entry_point in _script_entry_points(script) if script else []:
         module_name = entry_point.partition(":")[0]
         module_relative = Path(*module_name.split(".")).with_suffix(".py")
         for module_file in (
@@ -255,13 +268,11 @@ def test_no_app_claims_another_apps_program_as_a_sidecar() -> None:
 
 
 def test_no_two_app_packages_declare_the_same_console_script() -> None:
-    # An app carrying a manifest installs as its own uv tool (``build_workspace.sh``), and
-    # ``_tool_env.sh`` points every one of those installs at a single ``UV_TOOL_BIN_DIR``, so
-    # two packages declaring one script name leave one file there for whichever installed
-    # last. It is also what lets a supervisord command ending in a bare script name be
-    # traced back to the package that runs it, which the sidecar guard above rests on.
-    # Checked over every app package, user-built apps included: their tools land in the
-    # same directory.
+    # Every app package installs into the one workspace venv, so two packages declaring one
+    # script name leave one file in its bin directory for whichever installed last. It is also
+    # what lets a supervisord command ending in a script name be traced back to the package
+    # that runs it, which the sidecar guard above rests on. Checked over every app package,
+    # user-built apps included: they install into the same venv.
     packages_by_script: dict[str, list[str]] = {}
     for package, scripts in _scripts_by_package().items():
         for script_name in scripts:
@@ -320,6 +331,21 @@ def test_built_in_manifest_validates_and_matches_its_program(
     ), (
         f"program {manifest.program!r} does not register with --manifest {expected_relative}: {manifest_flags}"
     )
+
+
+@pytest.mark.parametrize(
+    "manifest_path", _built_in_manifest_paths(), ids=lambda path: path.parent.name
+)
+def test_built_in_app_runs_its_entry_point_from_the_workspace_venv(manifest_path: Path) -> None:
+    # The venv is an app's only install. A bare entry point is resolved through PATH, and an
+    # agent's PATH and supervisord's have reached different installs of the same app before:
+    # the update's pre-flight boots ``.venv/bin/<script>``, so that is what the program runs.
+    manifest = load_manifest(manifest_path)
+    command = _command_by_program()[manifest.program]
+    script = _entry_point_script(command)
+
+    assert script is not None, f"program {manifest.program!r} does not exec from {_VENV_BIN_PREFIX}: {command}"
+    assert _script_entry_points(script), f"no app package declares the console script {script!r}"
 
 
 @pytest.mark.parametrize(

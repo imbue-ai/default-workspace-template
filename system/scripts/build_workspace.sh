@@ -2,8 +2,9 @@
 # Shared workspace build for default-workspace-template hosts.
 #
 # Builds the workspace from full source: builds the frontend, installs the mngr
-# tool and one tool per Python app (with their mngr plugins), registers the
-# editable workspace + the pinned mngr packages, and exposes the tk ticket tracker. Needs the full repo
+# tool (with its plugins), syncs the workspace venv every Python app and service
+# runs from (the editable workspace + the pinned mngr packages), and exposes the
+# tk ticket tracker. Needs the full repo
 # present, so the Dockerfile runs it after copying all source and the Lima
 # provider runs it after the repo is synced into the VM. Runs as root and is
 # idempotent.
@@ -33,8 +34,8 @@ tool_env_pin
 # SIGILLs in `_armv8_sve_get_vl_bytes`. OPENSSL_armcap=0 falls back to
 # NEON-only paths, which run on both real M-series silicon and the VZ guest.
 # The same env var rides the agent's runtime env via .mngr/settings.toml
-# `host_env__extend`; this export covers the build-time `uv tool install`s
-# below, which run before /home/user/.mngr/env is sourced.
+# `host_env__extend`; this export covers the build-time installs below, which
+# run before /home/user/.mngr/env is sourced.
 export OPENSSL_armcap=0
 
 # Pin uv to a Python that satisfies the lockfile (>=3.12). The Docker base ships
@@ -55,27 +56,19 @@ git config --global --add safe.directory "$REPO_ROOT"
 # system/package.json lists the members), each into the static/ directory its backend serves.
 ( cd "$REPO_ROOT/system" && npm run build )
 
-# Install mngr as a tool, then every Python app (each system/apps/<package>/
-# with both a pyproject.toml and an app.toml manifest) as its own tool from its
-# own pyproject, so no app runs from the root venv and one app's pins never
-# constrain another's. The manifest is the discriminator: an app with a
-# pyproject but no manifest runs `uv run <name>` from the root venv, and both
-# forms are supported. Each tool also gets the mngr plugins
-# system/config/mngr_plugins.toml assigns to it -- `mngr` for the mngr tool,
-# an app's manifest name for that app's -- as extras, so it can parse
-# plugin-specific config. mngr and every plugin come from the public-repo commit
-# pyproject.toml's [tool.uv.sources] pins imbue-mngr to. The update-self apply
-# reads the same table, so a release adding a plugin
-# registers it in existing workspaces as well as here. mngr_modal is intentionally
-# not registered (providers.modal.is_enabled=false).
+# Install mngr as a tool, with the mngr plugins system/config/mngr_plugins.toml
+# assigns it as extras, so it can parse plugin-specific config. mngr and every
+# plugin come from the public-repo commit pyproject.toml's [tool.uv.sources] pins
+# imbue-mngr to. The update-self apply reads the same table, so a release adding
+# a plugin registers it in existing workspaces as well as here. mngr_modal is
+# intentionally not registered (providers.modal.is_enabled=false).
 mngr_git_auth_run python3 "$REPO_ROOT/system/scripts/install_mngr.py" --repo-root "$REPO_ROOT"
 
-for app_dir in "$REPO_ROOT"/system/apps/*/; do
-    [ -f "$app_dir/pyproject.toml" ] && [ -f "$app_dir/app.toml" ] || continue
-    app_name="$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["name"])' "$app_dir/app.toml")"
-    mapfile -t APP_PLUGIN_ARGS < <(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --tool "$app_name" --repo-root "$REPO_ROOT")
-    mngr_git_auth_run uv tool install -e "$app_dir" "${APP_PLUGIN_ARGS[@]}"
-done
+# Every Python app runs from the workspace venv the sync below writes, which is
+# the only install of it. Older builds also installed each app as its own uv
+# tool, a second copy nothing kept in step; drop any such copy an image baked
+# before this change still carries (see tool_env.py).
+python3 "$REPO_ROOT/system/scripts/tool_env.py" drop-app-tools --repo-root "$REPO_ROOT"
 
 # Drop an mngr install left under a different $HOME by a create that ran before the pin
 # above: it shadows the pinned one on every login shell's PATH and no update refreshes it.
