@@ -67,6 +67,12 @@ _DELIBERATE_SYNCS: tuple[tuple[str, str], ...] = (
         ".agents/skills/update-self/references/update-self-worker.md",
         "uv run --frozen --package app-manifest app-manifest",
     ),
+    # Starts Imbue Studio from a source checkout of the mngr repo on the user's machine, which
+    # keeps no synced venv of its own; nothing about the workspace's venv applies there.
+    (
+        ".agents/skills/imbue-studio/SKILL.md",
+        "uv run minds run --no-browser",
+    ),
 )
 
 
