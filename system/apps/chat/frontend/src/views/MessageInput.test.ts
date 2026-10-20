@@ -217,7 +217,13 @@ vi.mock("../models/Providers", () => ({
 import { jsonBlock } from "@imbue/workspace-ui/src/element_reference";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
-import { MessageInput, prependToComposer, restoreComposerDraft, takeComposerDraft } from "./MessageInput";
+import {
+  MessageInput,
+  prependToComposer,
+  raiseFailureNotice,
+  restoreComposerDraft,
+  takeComposerDraft,
+} from "./MessageInput";
 
 type AnyVnode = { tag?: unknown; attrs?: Record<string, unknown>; children?: unknown; text?: unknown };
 
@@ -969,6 +975,60 @@ describe("MessageInput send failure notice", () => {
     const text = renderedText(after);
     expect(text).toContain("Retry");
     expect(text).toContain("Force");
+  });
+
+  it("asks the user to check the agent before sending an unconfirmed message again", async () => {
+    // The text was typed and Enter sent, so the agent may already have it: a plain Retry or a
+    // Force (restart and resend) could deliver it twice. mngr's reason is diagnostics, not copy.
+    mocks.sendMessage.mockRejectedValueOnce({
+      kind: "submission_unconfirmed",
+      toString: () => "Timeout waiting for message submission evidence: pane content: ❯ hello",
+    });
+    const after = await typeAndSend(MessageInput(), "agent-1", "hello");
+    const text = renderedText(after);
+    expect(text).toContain("Couldn't confirm your message arrived");
+    expect(text).toContain("The agent may already have it, so check its terminal before you send it again.");
+    expect(text).not.toContain("Couldn't send your message");
+    expect(text).not.toContain("Timeout waiting");
+    expect(text).toContain("Cancel");
+    expect(findButton(after, "Send again")).toBeTruthy();
+    expect(findButton(after, "Retry")).toBeUndefined();
+    expect(findButton(after, "Force")).toBeUndefined();
+    expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
+  });
+
+  it("sends an unconfirmed message again only when the user asks", async () => {
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "submission_unconfirmed", toString: () => "unconfirmed" });
+    const component = MessageInput();
+    const after = await typeAndSend(component, "agent-1", "hello");
+    await flushAsync();
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
+
+    (findButton(after, "Send again")!.attrs!.onclick as () => void)();
+    await flushAsync();
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(2);
+    expect(mocks.sendMessage).toHaveBeenLastCalledWith("agent-1", "hello", expect.stringMatching(/^m-/));
+    const settled = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(renderedText(settled)).not.toContain("Couldn't confirm your message arrived");
+  });
+
+  it("words a sibling's unconfirmed send the same way", () => {
+    const retry = vi.fn(async () => undefined);
+    const component = MessageInput();
+    raiseFailureNotice("agent-1", {
+      title: "Couldn't send the queued messages",
+      detail: "unconfirmed",
+      kind: "submission_unconfirmed",
+      retry,
+    });
+    const tree = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    const text = renderedText(tree);
+    expect(text).toContain("Couldn't confirm your message arrived");
+    expect(text).toContain("check its terminal before you send it again");
+    expect(findButton(tree, "Retry")).toBeUndefined();
+
+    (findButton(tree, "Send again")!.attrs!.onclick as () => void)();
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 
   it.each([

@@ -89,9 +89,15 @@ Below all four sits the tmux pipeline the send-keys harnesses drive (claude and 
 | `agent_unreachable` | the pane is gone | Cancel, Force -- Retry withheld, it cannot work |
 | `input_blocked` | a dialog or shell mode holds the input | Cancel, Retry, Force |
 | `not_ready` | the harness is still coming up | Cancel, Retry |
+| `submission_unconfirmed` | the text was typed and Enter sent, but nothing confirmed the agent took it | Cancel, Send again -- Force withheld, and the notice says to check the agent's terminal first |
+| `agent_not_found` | the agent was not where the chat looked; nothing was typed | read as `unknown` |
 | `unknown` | unclassified | Cancel, Retry, Force (today's behaviour) |
 
 **Built.** `MessageResult.failures` carries one `AgentSendFailure` per agent (name, reason, kind), with `failed_agents` kept as a derived view so `mngr message`'s exit code and output are unchanged. The reason carries no "failed to send to X" framing: every consumer has the name already and adds its own. The kind travels through `SendFailure`, the send endpoint returns it beside the detail, and the chat maps it: `agent_unreachable` withholds Retry, since a pane that is gone will not be there on the next attempt, and offers Force, which is the only thing that can help. Anything unclassified reads as `unknown` and behaves exactly as it did before kinds existed.
+
+`submission_unconfirmed` is the one kind where sending again can deliver the message twice: the agent may already hold it in its input, or be running a turn on it. The chat app never resends it on its own, and the notice does not offer a plain Retry either. It is titled "Couldn't confirm your message arrived", says the agent may already have the message and to check its terminal before sending it again, and offers Send again, which is Retry under a name that says what it does. Force is withheld because restarting would cut off a turn the agent may be running on this message and then send it a second time. mngr's reason for this kind is its diagnostics, the whole pane included, so the notice shows its own sentence instead of the detail. The message is back in the composer either way.
+
+`agent_not_found` reaches the notice only when the chat app's own lookup and resend missed too. Nothing was typed, so the `unknown` kind's plain Retry is already the right offer, so the chat gives it no handling of its own.
 
 ## What Retry and Force actually are
 

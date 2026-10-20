@@ -1222,20 +1222,29 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         // anything unclassified -- keeps it.
         const canRetryHelp = actionFailureKind !== "agent_unreachable";
         const isRepeatable = (recovery !== null || externalRetry !== null) && canRetryHelp;
+        // The text was typed and Enter sent, but nothing confirmed the agent took it, so it may
+        // already be in the agent's input or turn and a resend can deliver it twice. mngr's reason
+        // here is its diagnostics (the whole pane included), not something to show the user.
+        const isUnconfirmed = actionFailureKind === "submission_unconfirmed";
+        const retryWording = isUnconfirmed
+          ? { label: "Send again", inFlight: "Sending…", tooltip: "Sends the message again, even if the agent has it" }
+          : { label: "Retry", inFlight: "Retrying…", tooltip: "Tries the same thing again" };
         return m(actionFailureNotice, {
-          title: actionFailureTitle,
-          body: [
-            detail,
-            // Only when the detail does not already say what to do. An input_blocked reason is
-            // the dialog's own advice ("press Enter in its terminal to run it") -- following it
-            // with a vaguer paraphrase of the same instruction is the third time one screen has
-            // told the reader to go look at their terminal.
-            actionFailureKind === "agent_unreachable"
-              ? "The agent's terminal is gone, so restarting it is the only way to deliver this."
-              : isRepeatable && actionFailureKind !== "input_blocked"
-                ? "You can open the agent's terminal, fix it there, then Retry."
-                : null,
-          ],
+          title: isUnconfirmed ? "Couldn't confirm your message arrived" : actionFailureTitle,
+          body: isUnconfirmed
+            ? ["The agent may already have it, so check its terminal before you send it again."]
+            : [
+                detail,
+                // Only when the detail does not already say what to do. An input_blocked reason is
+                // the dialog's own advice ("press Enter in its terminal to run it") -- following it
+                // with a vaguer paraphrase of the same instruction is the third time one screen has
+                // told the reader to go look at their terminal.
+                actionFailureKind === "agent_unreachable"
+                  ? "The agent's terminal is gone, so restarting it is the only way to deliver this."
+                  : isRepeatable && actionFailureKind !== "input_blocked"
+                    ? "You can open the agent's terminal, fix it there, then Retry."
+                    : null,
+              ],
           dismissLabel: isRepeatable || recovery !== null ? "Cancel" : "OK",
           isDismissable: actionFailureInFlight === null,
           onDismiss: dismissActionFailureNotice,
@@ -1243,8 +1252,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             ...(isRepeatable
               ? [
                   {
-                    label: actionFailureInFlight === "retry" ? "Retrying…" : "Retry",
-                    tooltip: "Tries the same thing again",
+                    label: actionFailureInFlight === "retry" ? retryWording.inFlight : retryWording.label,
+                    tooltip: retryWording.tooltip,
                     isDisabled: actionFailureInFlight !== null,
                     run: () => void retryFailedSend(),
                   },
@@ -1252,9 +1261,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
               : []),
             // Force needs a message to send afterwards, so it is offered only for our own send --
             // and never for an agent that is merely still starting, where restarting would
-            // discard the session it was about to finish bringing up. It is the only thing that
-            // helps an agent that is GONE, which is why it survives Retry being withheld.
-            ...(recovery === null || actionFailureKind === "not_ready"
+            // discard the session it was about to finish bringing up, or for one that may already
+            // be working on this message, where it would cut that turn off and send it twice. It
+            // is the only thing that helps an agent that is GONE, which is why it survives Retry
+            // being withheld.
+            ...(recovery === null || actionFailureKind === "not_ready" || isUnconfirmed
               ? []
               : [
                   {
