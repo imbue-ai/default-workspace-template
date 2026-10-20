@@ -24,9 +24,12 @@ from workspace_layout.client import DisconnectedShell
 
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import AccountError
+from imbue.chat.accounts import NoAccountsError
+from imbue.chat.accounts import UnknownAccountError
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import account_label_for
 from imbue.chat.accounts import harness_for
+from imbue.chat.accounts import index_path
 from imbue.chat.accounts import resolve_account
 from imbue.chat.accounts import set_mru
 from imbue.chat.activity_state import ActivityState
@@ -161,9 +164,11 @@ from imbue.chat.models import HeldSendSnapshot
 from imbue.chat.models import ModelApplyError
 from imbue.chat.models import ModelPick
 from imbue.chat.models import ModelPickRejectedError
+from imbue.chat.models import NoProviderAccountError
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
+from imbue.chat.models import SignedOutAccountError
 from imbue.chat.models import TransitionKind
 from imbue.chat.naming import AUTO_NAME_WORD
 from imbue.chat.naming import canonical_agent_name
@@ -781,6 +786,7 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
         model_pick=transition.model_pick,
         error=transition.error,
         failed_step=transition.failed_step,
+        is_fresh_start=isinstance(transition, ChatHandoffRecord) and transition.is_fresh_start,
     )
 
 
@@ -1081,6 +1087,9 @@ class AgentManager:
     # re-reads a chat's tasks whenever its directory's entries change, and after every pass rechecks
     # the pids of every chat with markers, since a marker going stale touches no file.
     _background_tasks_poller: AgentFilePoller
+    # The poller over the account index, whichever process writes it: every page is told the account list changed, so
+    # a chat whose account was removed elsewhere shows it at once rather than on its next send.
+    _accounts_index_poller: AgentFilePoller
     # Reads each chat's background-task markers; None (tests that need none) reads no tasks.
     _background_tasks: BackgroundTaskReader | None
     # Per chat, its live background tasks as the poller last read them; a chat with none has no
@@ -1245,6 +1254,11 @@ class AgentManager:
             thread_name="background-tasks-poll",
             on_pass_complete=manager._recheck_busy_chats,
         )
+        manager._accounts_index_poller = AgentFilePoller.build(
+            list_paths=lambda: {"accounts": index_path()},
+            on_file_changed=lambda _key: manager._broadcaster.broadcast_accounts_updated(),
+            thread_name="accounts-index-poll",
+        )
         manager._model_state_poller = AgentFilePoller.build(
             list_paths=manager._list_model_state_paths,
             on_file_changed=manager._on_model_state_changed,
@@ -1344,6 +1358,7 @@ class AgentManager:
         self._seed_oom_prioritizer()
         self._oom_prioritizer.start()
         self._background_tasks_poller.start()
+        self._accounts_index_poller.start()
         self._model_state_poller.start()
         self._compacting_marker_poller.start()
         if not self._is_secondary:
@@ -1365,6 +1380,7 @@ class AgentManager:
         self._autocompactor.stop()
         self._auto_open.stop()
         self._background_tasks_poller.stop()
+        self._accounts_index_poller.stop()
         self._model_state_poller.stop()
         self._compacting_marker_poller.stop()
 
@@ -2070,8 +2086,8 @@ class AgentManager:
         now: datetime,
         model_pick: ModelPick | None,
     ) -> ChatRebindRecord:
-        """Write the chat's rebind entry in the draining phase, with the trigger message as its first held
-        send; a chat that is still its one agent gets its record here. Lock held."""
+        """Write the chat's rebind entry in the draining phase, with the trigger message (when there is one) as its
+        first held send; a chat that is still its one agent gets its record here. Lock held."""
         existing = self._chat_record_by_id.get(chat_id)
         record = existing if existing is not None else self._first_record_locked(chat_id, agent_state, now)
         previous_account_id = agent_state.labels.get("account", "")
@@ -2088,7 +2104,9 @@ class AgentManager:
             previous_lane=_lane_of_account_label(previous_account_id),
             trigger_message_id=message_id,
             trigger_text=message,
-            held_sends=(HeldSend(message_id=message_id, text=message, origin=origin, received_at=now),),
+            held_sends=(
+                (HeldSend(message_id=message_id, text=message, origin=origin, received_at=now),) if message else ()
+            ),
             model_pick=model_pick,
         )
         self._write_record_locked(record.with_converging(rebind))
@@ -3396,8 +3414,9 @@ class AgentManager:
         collision mngr itself would reject).
 
         ``account_id`` binds the chat to one signed-in account; empty picks the most recently
-        used one. With no accounts at all the create is refused (the chat root offers the
-        provider chooser before it creates).
+        used one. With no accounts at all the create is refused with ``NoProviderAccountError``
+        (the chat root offers the provider chooser before it creates), and one naming an account
+        that has since been signed out with ``SignedOutAccountError``.
 
         ``message`` is the first message the chat sends once it runs, delivered by ``mngr
         create --message`` after the harness signals readiness; a chat that starts with no
@@ -3421,6 +3440,12 @@ class AgentManager:
         extra_labels = dict(labels or {})
         try:
             account = resolve_binding(account_id)
+        except NoAccountsError as e:
+            raise NoProviderAccountError("Connect an AI provider to start chatting.") from e
+        except UnknownAccountError as e:
+            raise SignedOutAccountError(
+                "The account this chat was going to start on was signed out. Choose a provider to start it on."
+            ) from e
         except (AccountError, BindingError) as e:
             raise AgentCreationError(str(e)) from e
         harness = harness_for(account)

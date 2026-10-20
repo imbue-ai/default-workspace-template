@@ -30,8 +30,16 @@ observe`, its own supervised service) writes, and serves:
   composer, which stays in view (holding any draft) but disabled, and opens the
   provider chooser as that notice appears; this is the one place the chooser
   opens for a missing provider (the New chat button opens the awaiting chat, and
-  an intake's first message goes into its composer, with no dialog). Which
-  account a chat starts on is decided from a fresh read of the account list.
+  an intake's first message goes into its composer, with no dialog). Whether
+  anything is signed in is decided from a fresh read of the account list; the
+  New chat button then names no account, so the chat app picks it as the create
+  runs and an account signed out since the page read the list is never the one
+  a new chat starts on. A create the chat app refuses for any other reason shows
+  its reason in a notice rather than opening a chat. Every page is told when the
+  account list changes (`accounts_updated` on `/api/ws`, from a poll of the
+  account index) and reads it again, so a chat whose account was removed
+  elsewhere shows the signed-out notice at once; a send refused for it anyway
+  offers "Choose a provider" in place of Retry.
   The list's right edge drags to resize it (100px to 480px, 180px by default,
   kept per browser). On a phone-sized touchscreen (the shell's rule: a short side at
   most 500px and a long side at most 1000px, either way round), or a window at
@@ -78,8 +86,9 @@ observe`, its own supervised service) writes, and serves:
 - `/api/ws`: the chat pages' socket, carrying `chats_updated` (a `ChatSnapshot`
   per chat, the agent-level facts under `active_agent` and the epoch seconds of
   its last message as `last_messaged_at`, which the chat root's list orders on)
-  and the provisional-chat events (`provisional_chat_created`,
-  `provisional_chat_completed`).
+  the provisional-chat events (`provisional_chat_created`,
+  `provisional_chat_completed`), and `accounts_updated` whenever the account
+  index changes, whichever process wrote it.
 - `POST /api/focus-chat`: what the shell posts for the Imbue Studio app's `minds:focus-chat` (the user opened a
   chat's notification), since the manifest registers the type under `[[message_handlers]]`. It takes the
   message's `chatId` and the `client_id` the shell adds, and asks the shell's `show` op

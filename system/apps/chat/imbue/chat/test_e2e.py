@@ -35,6 +35,7 @@ from playwright.sync_api import ViewportSize
 from playwright.sync_api import expect
 
 from imbue.chat.accounts import account_dir
+from imbue.chat.accounts import delete_account
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.auto_open import chat_root_path
@@ -1212,6 +1213,79 @@ def test_the_new_chat_button_with_nothing_signed_in_opens_a_chat_that_asks_for_a
 
 
 @pytest.mark.timeout(120, func_only=False)
+def test_the_new_chat_button_starts_on_a_signed_in_account_once_the_most_recent_one_is_removed(
+    tmp_path: Path, page: Page
+) -> None:
+    """An account removed after the chat list read the account list is never the one New chat starts on: the chat
+    starts on the account still signed in, with no refusal shown."""
+    with _switched_workspace(tmp_path, additional_accounts=(("anthropic", "Anthropic"),)) as server:
+        kept, removed = server.account_ids
+        _open_fixture_chat(page, server)
+        delete_account(removed)
+        manager = server.chat_state.agent_manager
+
+        with page.expect_response(lambda response: response.url.endswith("/api/chats/create")) as created:
+            _chat_root(page).locator(".chat-rail-new").first.click()
+
+        assert created.value.status == 201
+        chat_id = created.value.json()["chat_id"]
+
+        def account_of_new_chat() -> str | None:
+            provisional = manager.get_provisional_chat(chat_id)
+            if provisional is not None:
+                return provisional.account_id
+            listed = [chat for chat in manager.get_chat_snapshots() if str(chat.chat_id) == chat_id]
+            return listed[0].active_agent.account_id if listed else None
+
+        wait_for(lambda: account_of_new_chat() is not None, timeout=15.0)
+        assert account_of_new_chat() == kept
+        expect(_chat_root(page).locator(".modal-card")).to_have_count(0)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_chat_shows_its_account_was_removed_elsewhere_without_a_send(tmp_path: Path, page: Page) -> None:
+    """Removing a chat's account outside its page (another chat, another window) is pushed to the page, which shows
+    the signed-out notice in place of the composer straight away, before anything is typed."""
+    with _running_e2e_server(tmp_path) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        expect(chat.locator(".message-input-textbox")).to_be_editable(timeout=15000)
+        expect(chat.locator(".message-input-signed-out")).to_have_count(0)
+
+        delete_account(server.account_ids[0])
+        server.chat_state.agent_manager._accounts_index_poller.poll_once()
+
+        expect(chat.locator(".message-input-signed-out")).to_contain_text(
+            "You signed out of the account this chat runs on.", timeout=15000
+        )
+        expect(chat.locator(".message-input-textbox")).to_be_disabled()
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_send_refused_for_a_removed_account_offers_a_provider_instead_of_retry(tmp_path: Path, page: Page) -> None:
+    """A message sent into a chat whose account was removed after the page read the account list is refused, and
+    the notice leads to the provider chooser rather than a Retry that would be refused the same way; the message
+    stays in the composer."""
+    with _running_e2e_server(tmp_path) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        expect(chat.locator(".message-input-textbox")).to_be_editable(timeout=15000)
+        delete_account(server.account_ids[0])
+
+        chat.locator(".message-input-textbox").fill("are you still there?")
+        chat.locator(".message-input-textbox").press("Enter")
+
+        notice = chat.locator(".modal-card")
+        expect(notice).to_contain_text("Couldn't send your message", timeout=15000)
+        expect(notice).to_contain_text("You signed out of the account this chat runs on.")
+        expect(notice.get_by_role("button", name="Retry")).to_have_count(0)
+        expect(notice.get_by_role("button", name="Force")).to_have_count(0)
+        notice.get_by_role("button", name="Choose a provider").click()
+        expect(chat.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+        expect(chat.locator(".message-input-textbox")).to_have_value("are you still there?")
+
+
+@pytest.mark.timeout(120, func_only=False)
 def test_a_chat_awaiting_its_first_send_with_nothing_signed_in_offers_a_provider_in_place_of_the_composer(
     tmp_path: Path, page: Page
 ) -> None:
@@ -1496,8 +1570,9 @@ _WELCOME_ONLY_SESSION_EVENTS: list[dict[str, Any]] = [
 @pytest.mark.timeout(90, func_only=False)
 def test_a_chat_with_no_user_turn_switches_at_once_and_leaves_no_handoff_node(tmp_path: Path, page: Page) -> None:
     """A fresh start through the browser: with only the welcome behind it, pressing another account asks nothing
-    and switches at once, the live node stands in while the switch runs, and once it has landed nothing stands
-    between the two agents' turns."""
+    and switches at once. With nothing to hand off, the conversation shows no handoff node while the switch runs,
+    only the line by the composer saying the new agent is starting, and once it has landed nothing stands between
+    the two agents' turns."""
     with _switched_workspace(tmp_path, session_events=_WELCOME_ONLY_SESSION_EVENTS) as server:
         _open_fixture_chat(page, server)
         chat = _chat(page)
@@ -1506,9 +1581,10 @@ def test_a_chat_with_no_user_turn_switches_at_once_and_leaves_no_handoff_node(tm
         _open_provider_menu(chat)
         chat.locator('[data-menu-part="submenu"] button', has_text="OpenAI").first.click()
 
-        # Nothing to hand over, so nothing asks and nothing is armed: the switch runs at once, and the
-        # live node reports it while it does.
-        expect(chat.locator('[data-handoff-status="active"]')).to_contain_text("Handing off to Codex")
+        # Nothing to hand over, so nothing asks and nothing is armed: the switch runs at once, and only the
+        # line by the composer reports it while it does.
+        expect(chat.locator('.agent-activity-indicator[data-state^="HANDOFF_"]')).to_contain_text("Starting Codex")
+        expect(chat.locator("[data-handoff-status]")).to_have_count(0)
         expect(chat.locator(".modal-card")).to_have_count(0)
         expect(chat.locator(".message-input-switch-strip")).to_have_count(0)
 
