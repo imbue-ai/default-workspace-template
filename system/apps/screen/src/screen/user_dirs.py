@@ -17,7 +17,7 @@ DESKTOP_DIR_KEY: Final[str] = "XDG_DESKTOP_DIR"
 DOWNLOAD_DIR_KEY: Final[str] = "XDG_DOWNLOAD_DIR"
 _RENDERED_KEYS: Final[tuple[str, ...]] = (DESKTOP_DIR_KEY, DOWNLOAD_DIR_KEY)
 _USER_DIRS_HEADER: Final[str] = (
-    "# Rendered by the Screen service before each stack start; the two folders below are its.\n"
+    "# Rendered by the Screen service before each stack start; the two folders below are its."
 )
 USER_DIRS_CONF_TEXT: Final[str] = "enabled=False\n"
 
@@ -28,11 +28,9 @@ def render_user_dirs(existing: str | None, desktop_dir: Path, download_dir: Path
     kept = [
         line
         for line in (existing or "").splitlines()
-        if not any(line.strip().startswith(f"{key}=") for key in _RENDERED_KEYS)
-        and line.strip() != _USER_DIRS_HEADER.strip()
+        if not any(line.strip().startswith(f"{key}=") for key in _RENDERED_KEYS) and line.strip() != _USER_DIRS_HEADER
     ]
-    rendered = [_USER_DIRS_HEADER.rstrip("\n"), *kept] if kept else [_USER_DIRS_HEADER.rstrip("\n")]
-    rendered += [f'{DESKTOP_DIR_KEY}="{desktop_dir}"', f'{DOWNLOAD_DIR_KEY}="{download_dir}"']
+    rendered = [_USER_DIRS_HEADER, *kept, f'{DESKTOP_DIR_KEY}="{desktop_dir}"', f'{DOWNLOAD_DIR_KEY}="{download_dir}"']
     return "\n".join(rendered) + "\n"
 
 
