@@ -9,8 +9,8 @@ path needing no network, no package manager, and no working ``mngr``.
 It serves every update flow, not just update-self: the careful flow for a critical app
 hands it an ordinary merge and its own already-built bundle, so both flows
 land the same way. What it must protect is therefore whole-repo -- the root
-venv, the uv tool environments (the mngr tool and each critical app's own),
-``node_modules`` and the built bundle are all copied aside first -- and what it
+venv every app runs from, the mngr tool environment, ``node_modules`` and the
+built bundle are all copied aside first -- and what it
 must survive includes its own death,
 which is what the persistent marker and ``recover`` are for.
 """
