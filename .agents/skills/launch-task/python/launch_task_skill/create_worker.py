@@ -1269,7 +1269,7 @@ def _chat_is_busy(chat_id: str) -> bool:
     The files are enough here: the chat app's busy verdict adds only a turn in
     flight, which an agent in an idle state has not got.
     """
-    return markers.is_busy(markers.marker_root(os.environ, _repo_root()), chat_id)
+    return markers.is_busy(markers.marker_root(os.environ), chat_id)
 
 
 # The lifecycle state mngr reports after ``mngr stop``.
