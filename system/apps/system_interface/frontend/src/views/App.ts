@@ -11,6 +11,7 @@
 import m from "mithril";
 import { createMenu } from "@imbue/workspace-ui/src/components/menu";
 import type { MenuRow } from "@imbue/workspace-ui/src/components/menu";
+import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
 import { anchorForEvent, anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
 import type { MenuAlign, MenuAnchor } from "@imbue/workspace-ui/src/menu-position";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
@@ -61,7 +62,6 @@ import { SNAP_PREVIEW_ATTRIBUTE, applySnapPreviewStyle } from "./SnapPreview";
 import { PhoneLayout, phoneMountPolicy } from "./phone/PhoneLayout";
 import { SoloView } from "./SoloView";
 import { Taskbar } from "./Taskbar";
-import { Toasts } from "./Toast";
 import type { WindowControl } from "./TitleBar";
 import { UpdateNoticeBanner } from "./UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "./UpdateStalenessBanner";

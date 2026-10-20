@@ -37,7 +37,7 @@
 import m from "mithril";
 
 import { Button, buttonClass } from "@imbue/workspace-ui/src/components/Button";
-import { icon, loginSpinnerIcon, warningIcon } from "@imbue/workspace-ui/src/components/icons";
+import { icon, spinnerIcon, warningIcon } from "@imbue/workspace-ui/src/components/icons";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { MODAL_OVERLAY_CLASS } from "@imbue/workspace-ui/src/components/Modal";
 import { backdropDismissAttrs } from "@imbue/workspace-ui/src/components/modalBackdrop";
@@ -330,7 +330,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   ): m.Vnode {
     const glyph =
       kind === "pending"
-        ? loginSpinnerIcon(24)
+        ? spinnerIcon(24)
         : kind === "success"
           ? icon("check", { size: 20, strokeWidth: 2.5 })
           : warningIcon(20);

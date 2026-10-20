@@ -220,6 +220,7 @@ from pathlib import Path
 from typing import Callable, Mapping, NamedTuple, Sequence, TextIO
 
 import yaml
+from chat_background_tasks import markers
 from workspace_bare_scripts import message_chat
 
 _COMMON_TRANSCRIPT_REL = Path("commands/common_transcript.sh")
@@ -241,10 +242,10 @@ _AWAIT_TIMEOUT_RC = 124
 # from "still running, just slow".
 _AWAIT_SHED_RC = 75
 # Distinct exit code for an await that stopped early because the worker's agent
-# went idle (ended its turn) without the report ever appearing -- a finished or
-# stalled worker whose delivery failed will never report, so waiting out the
-# full timeout only hides the problem. The message points at the worker's own
-# worktree, where an undelivered report usually sits.
+# went idle (ended its turn, and is no longer busy) without the report ever
+# appearing -- a finished or stalled worker whose delivery failed will never
+# report, so waiting out the full timeout only hides the problem. The message
+# points at the worker's own worktree, where an undelivered report usually sits.
 _AWAIT_IDLE_RC = 76
 # Consecutive idle observations required before concluding the worker ended its
 # turn without reporting. Multiple observations (spaced by the poll interval)
@@ -1260,6 +1261,17 @@ def _worker_has_pending_shed(worker_name: str) -> bool:
     return has_pending_shed(worker_name)
 
 
+def _chat_is_busy(chat_id: str) -> bool:
+    """Whether a live background task will wake the chat's agent: a command it
+    started through ``run_in_background.py``, or one of Claude's own.
+
+    Read from the marker files through the ``chat_background_tasks`` library.
+    The files are enough here: the chat app's busy verdict adds only a turn in
+    flight, which an agent in an idle state has not got.
+    """
+    return markers.is_busy(markers.marker_root(os.environ, _repo_root()), chat_id)
+
+
 # The lifecycle state mngr reports after ``mngr stop``.
 _STOPPED_STATE = "STOPPED"
 # The states in which an agent has ended its turn and is doing no further work
@@ -1401,8 +1413,16 @@ def _worker_is_idle(
     worker_name: str,
     runner: Runner,
     pending_shed_check: Callable[[str], bool] = _worker_has_pending_shed,
+    chat_busy_check: Callable[[str], bool] = _chat_is_busy,
 ) -> bool:
-    """Whether the worker has ended its turn *and* has no sub-worker still alive.
+    """Whether the worker has ended its turn, is not busy, *and* has no
+    sub-worker still alive.
+
+    A worker that ends its turn to wait on a background command of its own
+    reads WAITING, but the command's completion starts its next turn, so its
+    chat is busy and it is not idle. A worker is its own chat, so its chat id
+    is its own agent id. ``chat_busy_check`` is injected (defaulting to the
+    marker reader) so tests can drive it without writing marker files.
 
     A worker may itself be a lead. While it waits on a sub-worker it has ended
     its own turn, so its state alone reads as idle -- and a lead that trusted
@@ -1426,6 +1446,8 @@ def _worker_is_idle(
     if own is None or _record_field(own, "state") not in _IDLE_STATES:
         return False
     own_id = _record_field(own, "id")
+    if own_id is not None and chat_busy_check(own_id):
+        return False
     for record in records:
         if own_id is None or _record_label(record, _LEAD_AGENT_LABEL) != own_id:
             continue
@@ -1653,7 +1675,8 @@ def await_report(
     a shed agent also reads as not-running, and the shed diagnosis is the more
     specific (and differently-recovered) one. ``_worker_is_idle`` -- the check
     the CLI wires in -- counts a worker that is waiting on a live sub-worker of
-    its own as busy, so a nested dispatch is never mistaken for a stalled one.
+    its own, or on a background command of its own, as busy, so neither a
+    nested dispatch nor a parked worker is mistaken for a stalled one.
 
     ``sleeper``/``clock`` are injected so tests can drive the poll loop without
     real time. The file is checked before the first sleep, so a report already
@@ -1711,11 +1734,13 @@ def await_report(
             )
             if consecutive_idle_count >= _IDLE_POLLS_BEFORE_GIVING_UP:
                 print(
-                    f"create_worker: worker '{worker_name}' has ended its turn "
-                    f"(idle for {consecutive_idle_count} consecutive polls) but no "
-                    f"report has appeared at {report_path}. A worker still waiting "
-                    "on a live sub-worker of its own does NOT count as idle, so "
-                    "this is not a nested dispatch in flight. Either it finished "
+                    f"create_worker: worker '{worker_name}' has ended its turn and "
+                    "is no longer busy (idle for "
+                    f"{consecutive_idle_count} consecutive polls) but no report has "
+                    f"appeared at {report_path}. A worker still waiting on a live "
+                    "sub-worker of its own, or on a background command of its own, "
+                    "does NOT count as idle, so this is neither a nested dispatch "
+                    "nor a command in flight. Either it finished "
                     "and the report delivery failed (look for the report inside the "
                     "worker's own worktree -- its `work_dir` in `mngr list "
                     f"--format jsonl` for {worker_name} -- under the report's "

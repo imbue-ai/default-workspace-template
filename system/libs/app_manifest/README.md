@@ -1,9 +1,10 @@
 # app_manifest
 
-The models behind a workspace app's two descriptions:
+The models behind a workspace app's two descriptions (a third, the OpenAPI document of its HTTP API, is `system/libs/app_schema`):
 
 - **The manifest**, `system/apps/<package>/app.toml`: an app's static
-  declarations (name, display name, icon, its memory-shedding priority, whether
+  declarations (name, display name, a one-line description, the path of its
+  API document, icon, its memory-shedding priority, whether
   it is critical, whether it stops once no window shows it, whether it is part
   of the workspace itself (which the minds Share tab lists under its System
   group), its supervisord program, the launch paths the desktop opens windows
@@ -73,6 +74,21 @@ The models behind a workspace app's two descriptions:
   its own origin (a cross-origin module import carries no cookie, and the
   forwarder refuses it); `SHELL_CONTEXT_MENU_PATH` and `CONTEXT_MENU_ROUTE` are
   the same for the element context menu module built beside it.
+- `app_manifest.content_security_policy`: `attach_document_policy(app_or_blueprint,
+  overrides=None)` stamps a `Content-Security-Policy` on every HTML response that
+  does not set one itself: scripts from the page's own origin plus the page's own
+  inline `<script>` blocks (admitted by hash, computed from each response), inline
+  styles, images from the page's own origin (plus `data:` and `blob:`), frames of any
+  http(s) page, same-origin fetches
+  and sockets, no plugins, no `<base>` retargeting, no cross-origin form posts.
+  `overrides` replace whole directives for an app that needs more (the browser
+  app's `blob:` worklet, the chat's images and media from anywhere, Getting
+  Started's thumbnails from the catalog's origin, which `url_origin(url)` gives). `frame-ancestors` is left to the proxy in front of the
+  workspace, which appends its own policy. `build_document_policy(html,
+  overrides)`, `inline_script_hashes(html)` and `inline_source(text)` (the
+  `'sha256-...'` source for one inline script or stylesheet, which the shell's
+  parked-port page uses for its stylesheet) are the pieces; a built document
+  served with `send_file` is not read and must carry no inline script.
 - `app_manifest.scope`: the footprint computation. `compute_app_scope`,
   `compute_skill_scope`, `with_diff_against_base`, and `render_scope_file` build
   the scope file described below; `find_wiring_sections` reads the app's own

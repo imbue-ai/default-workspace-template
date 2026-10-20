@@ -18,7 +18,9 @@ Signals, and where each comes from:
   stream via ``record_running_chats``. Entering a running state counts as
   engagement (it is the only evidence of a message sent outside the UI -- by
   ``mngr message`` or by another agent), and staying in one marks the chat
-  mid-turn, which suspends its staleness climb until the turn ends.
+  mid-turn, which suspends its staleness climb until the turn ends. The chat app
+  also reports a chat waiting on one of its harness's own background tasks as
+  mid-turn, but not one waiting only on ``run_in_background`` commands.
 
 Idle time is measured against the most recent of those events, wall-clock, with
 the agent's own process-start time as a floor so a freshly revived chat counts as
@@ -184,13 +186,16 @@ class ChatOomPrioritizer:
     def record_running_chats(self, running_ids: Iterable[ChatId]) -> None:
         """Record which chats are currently mid-turn, then re-tag if it changed.
 
-        Called from the observe stream on every lifecycle change. Both edges of a
-        turn stamp engagement: entering a running state means something addressed
-        the chat (for one driven from outside the UI this is the only evidence it
-        is still in use), and leaving one means it was active up to that moment --
-        without the second stamp a chat that ran for three days would read as
-        three days idle the instant its turn ended, and jump straight to the stale
-        ceiling. Between the two edges the chat is exempt from the climb entirely.
+        A chat waiting on one of its harness's own background tasks counts as mid-turn:
+        a shed would end the task unreported. One waiting only on ``run_in_background``
+        commands does not, since the runner outlives a shed and its report revives the
+        chat. Called on every lifecycle change and whenever a chat's pending background
+        tasks change. Both edges of a turn stamp engagement: entering a running state
+        means something addressed the chat (for one driven from outside the UI this is
+        the only evidence it is still in use), and leaving one means it was active up
+        to that moment -- without the second stamp a chat that ran for three days would
+        read as three days idle the instant its turn ended, and jump straight to the
+        stale ceiling. Between the two edges the chat is exempt from the climb entirely.
 
         The ids may include workers and the primary agent (own chats under the own-chat
         rule); they are ignored by ``reapply``, which only iterates the managed chats.

@@ -20,6 +20,7 @@ from app_manifest.manifest import LaunchPathMethod
 from app_manifest.manifest import MessageHandler
 from app_manifest.manifest import Pin
 from app_manifest.manifest import describe_validation_error
+from app_manifest.primitives import AppDescription
 from app_manifest.primitives import AppName
 from app_manifest.primitives import AppUrl
 from app_manifest.primitives import DisplayName
@@ -101,6 +102,14 @@ class RegistryRow(FrozenModel):
     )
     program: str | None = Field(default=None, description="The supervisord program that runs the app, when supervised")
     display_name: DisplayName | None = Field(default=None, description="What users see; absent on manifest-less rows")
+    description: AppDescription | None = Field(
+        default=None,
+        description="One line saying what the app is for, when its manifest declares one",
+    )
+    api_schema_path: LaunchPathValue | None = Field(
+        default=None,
+        description="The path under the app's origin answering its OpenAPI document, when it declares one",
+    )
     critical: bool = Field(
         default=False,
         description="No Quit verb; never stopped or parked by the shell; snapshot-and-rollback target in the "

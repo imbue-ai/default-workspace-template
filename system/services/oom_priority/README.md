@@ -106,7 +106,7 @@ without inspecting the process tree:
 | a workspace terminal's shell (a `terminal-N` tmux session's pane, and everything run in it) | session creation | `terminal-session` (the user-service level, 200) | `system/services/oom_priority/bin/oom_tag_service.py terminal-session bash -l`, the session command the terminal app gives `tmux new-session` (a pane otherwise inherits the tmux server's protected 0) |
 | an agent's main process | launch | chat -> the idle-but-fresh chat band (560); worker or unidentifiable -> worker agent | `system/services/oom_priority/bin/agent_oom_launch.py` |
 | an agent's subprocesses | each Bash tool call | agent subprocess (most expendable) | `system/scripts/agent_rewrite_bash_command.py` (PreToolUse; also sets the commit identity) |
-| the browser coordinator | launch | its `SERVICE_BANDS` value (70, an ordinary service band; the file viewer and Getting Started sit above it) | `system/services/oom_priority/bin/oom_tag_service.py browser` (command prefix) |
+| the browser coordinator | launch | its `SERVICE_BANDS` value (70, an ordinary service band; Files and Getting Started sit above it) | `system/services/oom_priority/bin/oom_tag_service.py browser` (command prefix) |
 | Chromium's own processes | on fleet events (launch, new page, navigation) | `[SHARED_BROWSER_FLOOR, SHARED_BROWSER]` (910-1000), renderers at the ceiling | the browser service's re-tagging sweep (`browser.oom_retag`) -- see "The Chromium exception" below |
 
 Each supervisord service tags itself the same way an agent's main process does:
@@ -263,7 +263,11 @@ The exception is a chat that is **mid-turn** (a running lifecycle state): it is
 doing work right now that a shed would destroy rather than defer, so its
 staleness climb is suspended for the duration of the turn and it stays below the
 worker band. Both edges of the turn count as engagement, so a chat that ran for
-three days starts aging from when its turn *ended*, not when it began.
+three days starts aging from when its turn *ended*, not when it began. A chat
+whose turn has ended to wait on one of its harness's own background tasks (one
+of Claude's, say) counts as mid-turn too, since a shed would end that task
+unreported. One waiting only on `run_in_background.py` commands does not: the
+runner outlives a shed, and its report revives the chat.
 
 Idle time is measured from the most recent of: a message sent through the UI, the
 moment its tab was switched to, either edge of a turn, or -- as a floor -- its own
@@ -340,6 +344,13 @@ It lists:
     example) are never listed;
   - is `WAITING`, meaning its turn has ended. A `RUNNING` agent is mid-turn, and
     a `STOPPED` or `DONE` agent holds no memory to free;
+  - is in a chat that is not busy. An agent that ended its turn to wait on a
+    background task (a command started through `run_in_background.py`, or one
+    of Claude's own) is `WAITING` too, but the task's completion will start its
+    next turn, so stopping it would lose work in flight. The chat is the
+    agent's `chat_id` label, else the agent's own id, and it is busy while it
+    holds a live marker under the chats' marker root, read through
+    `system/libs/chat_background_tasks`;
   - has had no activity for `IDLE_AFTER_SECONDS` (15 minutes). Its last
     activity is the latest of mngr's `user_activity_time`, `agent_activity_time`
     and `start_time`. mngr's own `idle_seconds` is not used, because it also

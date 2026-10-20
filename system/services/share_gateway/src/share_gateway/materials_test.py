@@ -1,6 +1,7 @@
 import hashlib
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -130,6 +131,18 @@ def test_auth_label_replaces_a_malformed_stored_value(tmp_path: Path) -> None:
     label_path.write_text("not-a-valid-auth-label")
     regenerated = load_or_create_auth_label(label_path)
     assert re.match(r"^auth-[a-z0-9]{8}$", regenerated)
+    assert sorted(entry.name for entry in tmp_path.iterdir()) == ["share_auth_label"]
+
+
+def test_concurrent_creators_of_the_auth_label_all_answer_the_one_that_was_stored(tmp_path: Path) -> None:
+    """The gateway's stack start and the agent-access CLI can both create the label on a first publish."""
+    label_path = tmp_path / "share_auth_label"
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        labels = list(pool.map(lambda _: load_or_create_auth_label(label_path), range(16)))
+    assert len(set(labels)) == 1
+    assert label_path.read_text() == labels[0]
+    assert (label_path.stat().st_mode & 0o777) == 0o600
+    assert sorted(entry.name for entry in tmp_path.iterdir()) == ["share_auth_label"]
 
 
 def test_the_share_domain_is_recorded_once_and_replaced_only_by_another_share(tmp_path: Path) -> None:

@@ -2394,9 +2394,9 @@ def _repo_root(app: Flask) -> Path:
 
 
 def test_the_pending_update_is_the_kept_rollback_point_or_null(client: FlaskClient, app: Flask) -> None:
-    assert client.get("/api/updates/pending").get_json() is None
+    assert client.get("/api/updates/pending").get_json() == {"notice": None}
     write_rollback_point(_repo_root(app), apps=["terminal", "system_interface"], needs_system_services_restart=True)
-    notice = client.get("/api/updates/pending").get_json()
+    notice = client.get("/api/updates/pending").get_json()["notice"]
     assert notice["apps"] == ["terminal", "system_interface"]
     assert notice["needs_system_services_restart"] is True
     assert notice["progress"] is None and notice["outcome"] is None
@@ -2409,7 +2409,7 @@ def test_confirming_the_pending_update_closes_it_through_the_script(client: Flas
     assert client.post("/api/updates/pending/confirm").status_code == 204
 
     assert [call["argv"] for call in read_stub_update_self_calls(_repo_root(app))] == [["confirm-last"]]
-    assert client.get("/api/updates/pending").get_json() is None
+    assert client.get("/api/updates/pending").get_json() == {"notice": None}
     # Nothing left to confirm: a second click is told so rather than run the script again.
     refused = client.post("/api/updates/pending/confirm")
     assert refused.status_code == 409 and "no update notice" in refused.get_json()["detail"]
@@ -2421,7 +2421,7 @@ def test_a_failing_confirm_names_the_failure_and_keeps_the_notice(client: FlaskC
     failed = client.post("/api/updates/pending/confirm")
     assert failed.status_code == 500
     assert "told to fail" in failed.get_json()["detail"]
-    assert client.get("/api/updates/pending").get_json() is not None
+    assert client.get("/api/updates/pending").get_json()["notice"] is not None
 
 
 @pytest.mark.timeout(30)
@@ -2449,7 +2449,7 @@ def test_a_rollback_the_script_refuses_answers_conflict_with_the_scripts_reason(
 
     assert refused.status_code == 409
     assert "told to fail" in refused.get_json()["detail"]
-    assert client.get("/api/updates/pending").get_json()["progress"] is None
+    assert client.get("/api/updates/pending").get_json()["notice"]["progress"] is None
 
 
 def test_a_rollback_is_refused_while_one_runs_and_once_the_point_settled(client: FlaskClient, app: Flask) -> None:
@@ -2477,12 +2477,12 @@ def test_a_preview_shell_reads_the_notice_but_refuses_to_close_or_roll_it_back(
     write_rollback_point(_repo_root(application))
     client = application.test_client()
 
-    assert client.get("/api/updates/pending").get_json()["apps"] == ["terminal"]
+    assert client.get("/api/updates/pending").get_json()["notice"]["apps"] == ["terminal"]
     for verb in ("confirm", "rollback"):
         refusal = client.post(f"/api/updates/pending/{verb}")
         assert refusal.status_code == 403 and "preview" in refusal.get_json()["detail"]
     assert read_stub_update_self_calls(_repo_root(application)) == []
-    assert client.get("/api/updates/pending").get_json() is not None
+    assert client.get("/api/updates/pending").get_json()["notice"] is not None
 
 
 # The launch route (post-launch-paths plan section 5.3)

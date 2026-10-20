@@ -22,6 +22,7 @@ from mock_cdp_client_test import (
     RecordingCdpClient,
     TabClosingCdpClient,
 )
+from workspace_layout.windows import WindowClosedHint
 
 
 async def _noop_wake(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
@@ -2012,12 +2013,8 @@ def test_a_close_hint_marks_the_browser_it_names_so_the_sweep_it_brings_stops_it
 
 def test_closed_window_browser_reads_the_hints_path_and_nothing_else() -> None:
     hint = {"path": "/?session=browser-1", "window_id": "win-0000000000000001", "desktop_id": "home"}
-    assert bsession.closed_window_browser(hint) == "browser-1"
-    assert bsession.closed_window_browser({**hint, "path": "/new?url=https%3A%2F%2Fx"}) is None
-    assert bsession.closed_window_browser({**hint, "path": 7}) is None
-    assert bsession.closed_window_browser({"path": "/?session=browser-1"}) is None
-    assert bsession.closed_window_browser(["/?session=browser-1"]) is None
-    assert bsession.closed_window_browser(None) is None
+    assert bsession.closed_window_browser(WindowClosedHint.model_validate(hint)) == "browser-1"
+    assert bsession.closed_window_browser(WindowClosedHint.model_validate({**hint, "path": "/new?url=https%3A%2F%2Fx"})) is None
 
 
 def test_window_seen_rides_the_manifest_through_a_restart(monkeypatch: pytest.MonkeyPatch) -> None:

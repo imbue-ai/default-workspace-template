@@ -2,7 +2,7 @@
 
 The agent harness UI: live conversations with mngr-managed agents, one page per
 chat, rendered inside a window's iframe at the chat's own registered origin. It
-is an app of the workspace like the terminal or the file viewer (the desktop
+is an app of the workspace like the terminal or Files (the desktop
 interface, `docs/system/blueprint/desktop-interface/`): the shell knows it only
 through its manifest (`app.toml`), its registry row, and the browser-side
 contract; everything about chats lives in this app's own pages and routes.
@@ -30,8 +30,16 @@ observe`, its own supervised service) writes, and serves:
   composer, which stays in view (holding any draft) but disabled, and opens the
   provider chooser as that notice appears; this is the one place the chooser
   opens for a missing provider (the New chat button opens the awaiting chat, and
-  an intake's first message goes into its composer, with no dialog). Which
-  account a chat starts on is decided from a fresh read of the account list.
+  an intake's first message goes into its composer, with no dialog). Whether
+  anything is signed in is decided from a fresh read of the account list; the
+  New chat button then names no account, so the chat app picks it as the create
+  runs and an account signed out since the page read the list is never the one
+  a new chat starts on. A create the chat app refuses for any other reason shows
+  its reason in a notice rather than opening a chat. Every page is told when the
+  account list changes (`accounts_updated` on `/api/ws`, from a poll of the
+  account index) and reads it again, so a chat whose account was removed
+  elsewhere shows the signed-out notice at once; a send refused for it anyway
+  offers "Choose a provider" in place of Retry.
   The list's right edge drags to resize it (100px to 480px, 180px by default,
   kept per browser). On a phone-sized touchscreen (the shell's rule: a short side at
   most 500px and a long side at most 1000px, either way round), or a window at
@@ -56,7 +64,9 @@ observe`, its own supervised service) writes, and serves:
   (`frontend/src/embedApi.ts`), and through `frontend/src/root/relay.ts`, the
   one module the embed ratchet allows, hands them the shell's handshake and
   forwards their `minds:`, `shell:focused`, `shell:open`, `shell:draft-text`,
-  `shell:message`, and `shell:open-link` messages.
+  `shell:message`, and `shell:open-link` messages, and passes the desktop
+  app's answers to them (`minds:provider-sign-in-ack`,
+  `minds:permission-resolutions`) back down.
 - `GET /<chat-id>` (and `/<chat-id>.<agent-id>.<session-id>` for a subagent view): the
   chat document, the built `chat.html` with the chat's ids, the workspace
   hostname, and the origin label of the terminal's pty (the terminal app's while
@@ -76,8 +86,9 @@ observe`, its own supervised service) writes, and serves:
 - `/api/ws`: the chat pages' socket, carrying `chats_updated` (a `ChatSnapshot`
   per chat, the agent-level facts under `active_agent` and the epoch seconds of
   its last message as `last_messaged_at`, which the chat root's list orders on)
-  and the provisional-chat events (`provisional_chat_created`,
-  `provisional_chat_completed`).
+  the provisional-chat events (`provisional_chat_created`,
+  `provisional_chat_completed`), and `accounts_updated` whenever the account
+  index changes, whichever process wrote it.
 - `POST /api/focus-chat`: what the shell posts for the Imbue Studio app's `minds:focus-chat` (the user opened a
   chat's notification), since the manifest registers the type under `[[message_handlers]]`. It takes the
   message's `chatId` and the `client_id` the shell adds, and asks the shell's `show` op
@@ -91,6 +102,10 @@ observe`, its own supervised service) writes, and serves:
   after the restart. `agent_events` (`{"is_stream_healthy", "detail"}`) says
   whether lifecycle events are actually reaching this instance; `status` stays
   `ok` either way.
+- `GET /api/schema`: the OpenAPI document of these routes, built from the app's url map
+  (`system/libs/app_schema`), with the request and response models of the routes that
+  validate with pydantic published as schemas; the manifest's `api_schema_path`, which the
+  visiting-agent primer links.
 - Agent-authored files by their absolute on-disk path (`file_serving.py`), so a
   chat's markdown can show an image the agent wrote.
 
@@ -114,7 +129,7 @@ messages its manifest registers for (`minds:focus-chat`).
 The chat has no link code of its own: a click on a message's link follows the
 app contract's link rule, as a click in any app does. Rendering a message
 (`frontend/src/markdown.ts`) only says what each link names: an absolute path
-becomes the file's `file:` URL, which the shell opens in the File Viewer
+becomes the file's `file:` URL, which the shell opens in Files
 (`open:file`); a local address (`localhost`, `127.0.0.1`, `[::1]`,
 `*.localhost`) the shell opens as the window of the app on whose
 `<label>.localhost` host or registered port it is, or else in the workspace's
@@ -132,10 +147,63 @@ attribute a request to a client, and the app asks the shell for windows,
 through one client of the `workspace_layout` library that asks as the chat app
 (`shell_client.py`), which the send routes, the auto-open reactor, and the
 focus-chat route share. A chat's status (`ChatStatus` in
-`primitives.py`: working, idle, attention, stopped, or error) comes from its
-active agent's activity state, a pending permission request, and the lifecycle,
-and rides the `chats_updated` snapshots the chat root's list draws its status
-dots from.
+`primitives.py`: working, background, idle, attention, stopped, or error) comes
+from its active agent's activity state, a pending permission request, the
+lifecycle, and the chat's pending background tasks, and rides the
+`chats_updated` snapshots the chat root's list draws its status dots from. The
+first that holds wins: stopped, attention, working, background, idle; a chat
+switching agents is working, or error once the switch failed.
+
+A chat is busy when its agent will resume on its own: a turn is in flight, or a
+background task is pending whose completion starts one. The pending tasks are
+one marker file each under `data/.apps/chat/background_tasks/<chat-id>/`,
+written by `system/scripts/run_in_background.py` and by Claude's Stop hook, and
+read through the `system/libs/chat_background_tasks` library (`background_tasks.py`
+here wraps it, and creates the directory's root at startup so the shell's avatar
+can watch it). A poller of its own reads each chat's directory, keyed by the
+agent the chat runs on, re-reads it when its entries change, and rechecks the
+pids of every chat with markers on each pass, so a killed runner returns its
+chat to idle within a second. In a chat whose transcript this app is tailing
+(one a page has shown, or that the app has sent to, interrupted or switched),
+the Claude watcher removes a Claude task's marker once the transcript's
+`<task-notification>` reports the task completed, failed or killed: a turn the
+user interrupts, or one that fails, runs no Stop hook, and the finished task
+would otherwise read as pending until the next Stop or Claude's exit, as it
+still does in a chat the app is not tailing. With no turn in flight the removal
+waits for the turn the notice starts and goes out with it, so the chat goes from
+`background` to `working` without reading idle in between; a notice that starts
+no turn (a task stopped from Claude's `/tasks`) ends the wait three poller passes
+later. A busy chat with no turn in flight
+is `background`: the rail draws a dashed ring that turns slowly, and the strip
+above the composer adds a line, "Waiting on N background tasks", that opens
+into one row per task. Each snapshot's `active_agent` carries `is_busy` and
+`background_tasks`; `GET /api/agents` carries each agent's `chat_id`,
+`is_busy` and its chat's `background_tasks` (the active agent's only), which is
+what `background_tasks.py list` and `is-busy` ask first. `is_busy` counts a turn
+in flight, which only this app knows: the script's fallback to the marker files
+sees the tasks alone. The listing is a fresh discovery by default;
+`?tracked=true` answers from the agent list this app already follows, with no
+discovery, and 503 until it has read it once. The poller is not the only reader:
+the recompute that sees a turn end reads its chat's markers before it publishes
+the end (the Stop hook writes them before mngr clears the `active` marker), so a
+turn that ends to wait reads `background` at once, never `idle` first. A turn
+whose final message is in the transcript while `active` is still down reads as
+closing: busy and `working`, with no activity on the strip, until the marker
+goes; the poller rechecks a closing turn on every pass, since that removal is
+the only sign of its end. The tasks
+are the chat's, so a handoff moves nothing: the successor reads the same
+directory. A switch stops the agent, which ends its tasks: the harness's own end
+unreported, while the runner reports how its command ended to the chat. The
+handoff prompt tells the successor which was which, and Claude Code itself tells
+a Claude that resumes after a restart (a rebind, or any other) which of its own
+tasks the restart stopped. A runner stopped before it reported (Imbue Studio
+ending a chat's commands, a restart) leaves a marker whose runner is dead: after
+the next message the app delivers to that chat it sends a background-task report
+naming those commands, which no report will ever cover, and removes their
+markers. The memory prioritizer treats a chat waiting
+on one of the harness's own tasks as mid-turn; one waiting only on runner
+commands ages as an idle chat does, since its runner outlives a shed of the
+agent's process and its report revives the chat.
 
 A chat is a sequence of agent transcripts run by one agent at a time
 (`docs/system/blueprint/chat-agent-split/`); its id is its first agent's id, a

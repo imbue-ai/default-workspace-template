@@ -84,6 +84,12 @@ _DELIBERATE_SYNCS: tuple[tuple[str, str], ...] = (
     # The migration reference quotes the forms an existing workspace's files still use.
     (".agents/skills/update-self/references/python-packaging-migration.md", "runs `uv run <name>`"),
     (".agents/skills/update-self/references/python-packaging-migration.md", "a plain `uv run X` becomes"),
+    # Starts Imbue Studio from a source checkout of the mngr repo on the user's machine, which
+    # keeps no synced venv of its own; nothing about the workspace's venv applies there.
+    (
+        ".agents/skills/imbue-studio/SKILL.md",
+        "uv run minds run --no-browser",
+    ),
 )
 
 

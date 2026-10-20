@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
+import type { BackgroundTask, QueuedMessage } from "../models/Chats";
 import type { CompactionCause, TranscriptEvent } from "../models/Response";
-import type { QueuedMessage } from "../models/Chats";
 import { ActivityIndicator, labelForActivityState, wakeUpSpinnerDeadline } from "./ActivityIndicator";
+import { BackgroundTasksLine } from "./BackgroundTasksLine";
 import { notePermissionResolutions, resetShellPermissionResolutionsForTesting } from "./permission-card";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
 
@@ -14,11 +15,13 @@ const agentState: {
   compaction_cause: CompactionCause | null;
   harness: string;
   queued_messages: QueuedMessage[];
+  background_tasks: BackgroundTask[];
 } = {
   activity_state: null,
   compaction_cause: null,
   harness: "claude",
   queued_messages: [],
+  background_tasks: [],
 };
 const handoffState: { handoff: unknown } = { handoff: null };
 vi.mock("../models/Chats", () => ({
@@ -280,6 +283,7 @@ describe("ActivityIndicator — what the strip actually renders", () => {
   beforeEach(() => {
     resetShellPermissionResolutionsForTesting();
     agentState.activity_state = null;
+    agentState.background_tasks = [];
     agentState.compaction_cause = null;
     agentState.queued_messages = [];
     vi.spyOn(m, "redraw").mockImplementation(() => undefined);
@@ -338,6 +342,34 @@ describe("ActivityIndicator — what the strip actually renders", () => {
     expect(strip).not.toBeNull();
     expect((strip?.attrs as Record<string, unknown>)["data-state"]).toBe("WAKING");
     expect(labelTextOf(strip)).toBe("Confirming permission changes…");
+  });
+
+  it("puts the wait line over the activity line while tasks are pending, whatever the activity", () => {
+    agentState.background_tasks = [
+      {
+        id: "task-1",
+        source: "run_in_background",
+        harness: "",
+        kind: "",
+        description: "Rebuild the worker image",
+        started_at: "2027-01-15T08:00:00Z",
+      },
+    ];
+
+    agentState.activity_state = "THINKING";
+    const working = render();
+    const [waitLine, activityLine] = (working?.children ?? []) as (m.Vnode | null)[];
+    expect((activityLine?.attrs as Record<string, unknown>)["data-state"]).toBe("THINKING");
+    expect(waitLine?.tag).toBe(BackgroundTasksLine);
+    expect((waitLine?.attrs as { tasks: BackgroundTask[] }).tasks).toEqual(agentState.background_tasks);
+
+    // Between turns the activity line has nothing to say; the wait line stands alone.
+    agentState.activity_state = "IDLE";
+    const waiting = render();
+    expect(((waiting?.children ?? []) as (m.Vnode | null)[]).map((child) => child?.tag ?? null)).toEqual([
+      BackgroundTasksLine,
+      null,
+    ]);
   });
 
   it("shows a compaction on the strip, ahead of the wake-up caption", () => {

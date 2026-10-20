@@ -1,5 +1,5 @@
 import urllib.parse
-from typing import Any, Final, Self
+from typing import Any, Final, Literal, Self
 
 from app_manifest.primitives import AppName
 from imbue.imbue_common.pure import pure
@@ -15,6 +15,19 @@ APP_NAME: Final[AppName] = AppName("browser")
 
 # The viewer page selects its browser by this query parameter (assets/index.html).
 SESSION_QUERY_KEY: Final[str] = "session"
+
+# Who controls a browser: the person at its window, or the one agent holding its lease.
+ControlOwner = Literal["human", "agent"]
+
+# Explicit per-browser lifecycle. A browser is REGISTERED in the fleet the instant
+# create() is called (so the viewer/CLI can address it at once), but its Chromium is
+# launched asynchronously and serialized, so it starts in ``init`` and flips to
+# ``running`` only once Chromium is up and the active tab is foregrounded. ``crashed`` is
+# terminal (Chromium died -- OOM/segfault). Driving/ownership only applies once
+# ``running``; the viewer renders deterministically off this field.
+# ``stopped``: the user ended this browser's Chromium but kept the browser (its record, profile,
+# and last known tabs); a start relaunches it from those. Unlike ``crashed`` it is not terminal.
+Lifecycle = Literal["init", "running", "crashed", "stopped"]
 
 # A start page is an absolute http(s) URL with a host; the length bound keeps a query string
 # from smuggling in an unbounded value.

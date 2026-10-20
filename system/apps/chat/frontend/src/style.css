@@ -28,8 +28,28 @@
   animation: chat-rail-pulse 1.6s ease-in-out infinite;
 }
 
+/* A chat waiting on a background task wears a dashed accent ring that turns slowly: alive, but
+   not working. The strip's wait line (views/BackgroundTasksLine.ts) wears the same ring. Reduced
+   motion holds it still. */
+@keyframes chat-rail-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.chat-rail-dot--dashed {
+  width: 10px;
+  height: 10px;
+  margin: -1px;
+  border: 1.5px dashed var(--color-accent);
+  background: transparent;
+  box-sizing: border-box;
+  animation: chat-rail-spin 6s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .chat-rail-dot--pulse {
+  .chat-rail-dot--pulse,
+  .chat-rail-dot--dashed {
     animation: none;
   }
 }
@@ -384,12 +404,14 @@
 }
 
 /* The switch that turns the card over. Only the row around it is styled here -- the switch
-   itself is the shared one from `modelProviderMenuStyles`, at its own size. */
+   itself is the shared one from `modelProviderMenuStyles`, at its own size. Its 8px side padding
+   matches the model selector's, so at rest the switch sits as far in from the composer's right
+   edge as the model's name does from its left. */
 .terminal-view-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 2px 6px;
+  gap: 6px;
+  padding: 2px 8px;
   border: none;
   background: none;
   border-radius: var(--radius-md);
@@ -397,7 +419,8 @@
   /* Faint, like the model chip beside it: a view setting under the composer is not something to
      draw the eye down there. */
   color: var(--c-text-faint);
-  font-size: var(--font-size-row);
+  /* The model selector's size, so the two ends of the bar read as one line of text. */
+  font-size: var(--font-size-helper);
   transition: color var(--dur-base);
 }
 .terminal-view-toggle:hover {
