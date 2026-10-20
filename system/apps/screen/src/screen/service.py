@@ -173,8 +173,8 @@ class ScreenService(MutableModel):
     clipboard: XClipboard = Field(default_factory=XClipboard, frozen=True, description="xclip on the display")
     desktop_dir: Path = Field(
         frozen=True,
-        description="Where dropped files and downloads land: the Screen's folder under data/, shown in a file "
-        "manager window after a drop",
+        description="Where dropped files land: the Screen's desktop folder under data/ (Chromium downloads beside "
+        "it, into the stack's download folder), shown in a file manager window after a drop",
     )
     launcher: ProcessLauncherInterface = Field(frozen=True, description="How ``screen run`` starts a command")
     messenger: AgentMessengerInterface = Field(frozen=True, description="Wakes queued agents")
