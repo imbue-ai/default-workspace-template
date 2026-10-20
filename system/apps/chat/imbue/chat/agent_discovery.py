@@ -451,10 +451,10 @@ class MngrMessenger(FrozenModel):
     def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
         """Press ``key`` into the agent with ``agent_id`` at ``known_locations``, else discovery.
 
-        The key-chord sibling of ``send_to_agent`` and resolves the agent exactly the same
-        way (known location first, discovery on a miss), but delivers a keystroke rather than
-        text and never auto-starts a stopped agent. Returns True when the chord reached the
-        agent.
+        The key-chord sibling of ``send_to_agent``: it tries the known location first, but
+        falls back to discovery whenever the press there reached no agent, not only on a
+        location miss. It delivers a keystroke rather than text and never auto-starts a
+        stopped agent. Returns True when the chord reached the agent.
         """
         mngr_ctx, cg = _get_mngr_context()
         try:
