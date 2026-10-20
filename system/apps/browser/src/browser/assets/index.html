@@ -1204,9 +1204,7 @@ registerProcessor('pb', PB);`;
   boot();
 })();
 </script>
-<!-- A contract that cannot load (the shell's frontend not built) leaves nobody to say whether the
-     pane is shown: stream as a page opened on its own does. -->
-<script type="module" onerror="console.warn('[browser] could not load the shell contract: streaming as a page on its own'); document.dispatchEvent(new CustomEvent('browser:shell-visibility', { detail: { isShown: true } }))">
+<script type="module" id="shell-contract">
   // The workspace shell's app contract (docs/system/blueprint/desktop-interface/contracts.md
   // section 7), imported from this page's own origin, which the daemon serves it from. The
   // window's path says WHICH browser this page shows and its title is that browser's name; what
@@ -1243,6 +1241,16 @@ registerProcessor('pb', PB);`;
     window.addEventListener("focus", () => connection.focused());
     if (session) connection.location(`/?session=${encodeURIComponent(session)}`, document.title);
   }
+</script>
+<script>
+  // A contract that cannot load (the shell's frontend not built) leaves nobody to say whether the
+  // pane is shown: stream as a page opened on its own does. A listener, since the page's
+  // Content-Security-Policy runs no inline event-handler attribute; the module above runs once
+  // the document is parsed, so it is in place before the module's error.
+  document.getElementById("shell-contract").addEventListener("error", () => {
+    console.warn("[browser] could not load the shell contract: streaming as a page on its own");
+    document.dispatchEvent(new CustomEvent("browser:shell-visibility", { detail: { isShown: true } }));
+  });
 </script>
 </body>
 </html>
