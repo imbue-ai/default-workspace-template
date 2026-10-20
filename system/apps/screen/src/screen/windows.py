@@ -1,6 +1,8 @@
 """The X window list and the frontmost window, through ``wmctrl`` and ``xdotool`` on the Screen's display."""
 
 import subprocess
+from collections.abc import Sequence
+from pathlib import Path
 from typing import Final
 
 from pydantic import Field
@@ -10,6 +12,7 @@ from screen.data_types import XWindow
 from screen.errors import WindowToolError
 from screen.interfaces import WindowToolsInterface
 from screen.primitives import DISPLAY
+from screen.primitives import FILE_MANAGER_COMMAND
 from screen.primitives import XWindowId
 
 _TOOL_TIMEOUT_SECONDS: Final[float] = 10.0
@@ -58,6 +61,15 @@ def window_id_from_tool_output(output: str) -> XWindowId | None:
 
 
 @pure
+@pure
+def find_file_manager_window(windows: Sequence[XWindow], folder: Path) -> XWindow | None:
+    """The file manager's window showing ``folder``, by its class and the folder's name in its title, or None."""
+    for window in windows:
+        if FILE_MANAGER_COMMAND in window.window_class.lower() and folder.name.lower() in window.title.lower():
+            return window
+    return None
+
+
 def find_window(windows: list[XWindow], window_id: XWindowId) -> XWindow | None:
     """The listed window with this id; ids compare by value, since the tools pad them differently."""
     wanted = int(window_id, 16)

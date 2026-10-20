@@ -36,6 +36,7 @@ def _second_service_life(fake_supervisor: FakeSupervisor, fake_neko: FakeNeko, t
         neko=fake_neko,
         state_dir=tmp_path / "state",
         home=tmp_path / "home",
+        desktop_dir=tmp_path / "Desktop",
         runtime_dir=tmp_path / "runtime",
         display_socket_path=tmp_path / "x11" / "X99",
         input_socket_path=tmp_path / "runtime" / "xf86-input-neko.sock",
@@ -68,6 +69,12 @@ def test_start_renders_the_configuration_and_brings_the_members_up_in_order(
     # free Screen is unlocked) follows on the projection thread.
     assert wait_until(lambda: fake_neko.calls == ["login:Screen service", "lock:False"]), fake_neko.calls
     assert (tmp_path / "runtime").is_dir()
+    # The session's desktop and download folders are the Screen's, under data/, and the folder exists before XFCE
+    # and Chromium look for it.
+    user_dirs = (tmp_path / "home" / ".config" / "user-dirs.dirs").read_text()
+    assert f'XDG_DESKTOP_DIR="{tmp_path / "Desktop"}"' in user_dirs
+    assert f'XDG_DOWNLOAD_DIR="{tmp_path / "Desktop"}"' in user_dirs
+    assert (tmp_path / "Desktop").is_dir()
 
 
 def test_a_member_that_fails_to_start_stops_the_rest_and_records_why(
@@ -95,6 +102,7 @@ def test_xorg_that_never_binds_the_input_drivers_socket_is_a_failed_start(
         neko=fake_neko,
         state_dir=tmp_path / "state",
         home=tmp_path / "home",
+        desktop_dir=tmp_path / "Desktop",
         runtime_dir=tmp_path / "runtime",
         display_socket_path=tmp_path / "x11" / "X99",
         input_socket_path=unbound,
@@ -142,6 +150,7 @@ def test_installing_is_reported_until_the_unit_is_satisfied(
         neko=fake_neko,
         state_dir=tmp_path / "state",
         home=tmp_path / "home",
+        desktop_dir=tmp_path / "Desktop",
         runtime_dir=tmp_path / "runtime",
         display_socket_path=tmp_path / "x11" / "X99",
         input_socket_path=tmp_path / "runtime" / "xf86-input-neko.sock",
@@ -179,6 +188,7 @@ def test_a_starter_that_dies_unexpectedly_does_not_pin_the_lifecycle_at_starting
         neko=fake_neko,
         state_dir=tmp_path / "state",
         home=tmp_path / "home",
+        desktop_dir=tmp_path / "Desktop",
         runtime_dir=tmp_path / "runtime",
         display_socket_path=tmp_path / "x11" / "X99",
         input_socket_path=tmp_path / "runtime" / "xf86-input-neko.sock",
@@ -202,6 +212,7 @@ def test_shutdown_ends_a_stack_still_waiting_for_its_install(
     service = ScreenService(
         repo_root=tmp_path,
         state_dir=tmp_path / "state",
+        desktop_dir=tmp_path / "Desktop",
         neko=fake_neko,
         window_tools=FakeWindowTools(),
         display_modes=FakeDisplayModes(),
@@ -218,6 +229,7 @@ def test_shutdown_ends_a_stack_still_waiting_for_its_install(
         neko=fake_neko,
         state_dir=tmp_path / "state",
         home=tmp_path / "home",
+        desktop_dir=tmp_path / "Desktop",
         runtime_dir=tmp_path / "runtime",
         display_socket_path=tmp_path / "x11" / "X99",
         input_socket_path=tmp_path / "runtime" / "xf86-input-neko.sock",

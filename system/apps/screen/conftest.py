@@ -169,6 +169,7 @@ def service(
         neko=fake_neko,
         state_dir=tmp_path / "state",
         home=tmp_path / "home",
+        desktop_dir=tmp_path / "Desktop",
         runtime_dir=tmp_path / "runtime",
         display_socket_path=tmp_path / "x11" / "X99",
         input_socket_path=tmp_path / "runtime" / "xf86-input-neko.sock",

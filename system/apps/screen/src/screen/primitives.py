@@ -104,6 +104,9 @@ _LOCAL_HOSTNAME_SUFFIX: Final[str] = ".localhost"
 # An X window id as wmctrl and xdotool print it: a hex literal.
 _WINDOW_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^0x[0-9a-fA-F]{1,8}$")
 
+# The Screen's desktop folder, under the workspace's ``data/`` where the Files app shows it (spec section 4.3):
+# where a dropped file lands and where Chromium downloads, relative to the workspace root every program runs from.
+DESKTOP_FOLDER_RELATIVE_PATH: Final[Path] = Path("data/Desktop")
 # A dropped file keeps its name in the desktop folder (spec section 4.3), so the name must be one plain path
 # segment: the filesystem's length limit, no separators, and no leading dot (a hidden file, ``.`` or ``..``).
 MAX_DROPPED_FILE_NAME_BYTES: Final[int] = 255

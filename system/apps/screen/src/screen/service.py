@@ -42,7 +42,6 @@ from screen.data_types import RequestIdentity
 from screen.data_types import ScreenSize
 from screen.data_types import ScreenState
 from screen.data_types import XWindow
-from screen.desktop_files import desktop_directory
 from screen.desktop_files import save_dropped_file
 from screen.errors import DisplayModeError
 from screen.errors import NekoError
@@ -73,6 +72,7 @@ from screen.sizing import ModesLedger
 from screen.sizing import decide_mode_addition
 from screen.sizing import quantize_screen_size
 from screen.stack import ScreenStack
+from screen.windows import find_file_manager_window
 from screen.xclipboard import ClipboardContents
 from screen.xclipboard import ClipboardMonitor
 from screen.xclipboard import XClipboard
@@ -172,9 +172,9 @@ class ScreenService(MutableModel):
     display_modes: DisplayModesInterface = Field(frozen=True, description="xrandr on the display")
     clipboard: XClipboard = Field(default_factory=XClipboard, frozen=True, description="xclip on the display")
     desktop_dir: Path = Field(
-        default_factory=lambda: desktop_directory(Path.home()),
         frozen=True,
-        description="Where dropped files land: the XDG desktop folder, shown in a file manager window after a drop",
+        description="Where dropped files and downloads land: the Screen's folder under data/, shown in a file "
+        "manager window after a drop",
     )
     launcher: ProcessLauncherInterface = Field(frozen=True, description="How ``screen run`` starts a command")
     messenger: AgentMessengerInterface = Field(frozen=True, description="Wakes queued agents")
@@ -678,10 +678,18 @@ class ScreenService(MutableModel):
         saved = [save_dropped_file(self.desktop_dir, name, stream) for name, stream in files]
         # The window is a convenience on top of a drop that has landed: the paths are answered either way.
         try:
-            self.launcher.launch((FILE_MANAGER_COMMAND, str(self.desktop_dir)))
+            self._show_desktop_folder()
         except ScreenError as e:
             logger.warning("Could not open the desktop folder {} on the Screen after a drop: {}", self.desktop_dir, e)
         return saved
+
+    def _show_desktop_folder(self) -> None:
+        """Raise the file manager window already showing the folder, else open one."""
+        showing = find_file_manager_window(self.window_tools.list_windows(), self.desktop_dir)
+        if showing is not None:
+            self.window_tools.activate_window(showing.id)
+            return
+        self.launcher.launch((FILE_MANAGER_COMMAND, str(self.desktop_dir)))
 
     def set_screen_size(self, width: int, height: int) -> ScreenSize:
         """Resize the display (spec section 7.2): quantize and clamp, add the RANDR mode when the server lacks it,

@@ -157,14 +157,16 @@ def test_a_browser_asked_for_while_the_stack_is_down_launches_when_the_stack_com
     assert browser.lifecycle == BrowserLifecycle.INIT
     assert browser.is_launch_wanted is True
     assert harness.launcher.requests == []
-    # A second ask meanwhile holds its page for the launch.
+    # A second ask meanwhile queues its page for the launch; it is not a page held from the human, so the viewer
+    # offers nothing to take control for.
     harness.fleet.ensure_browser("https://later.example")
-    assert browser.pending_url == "https://later.example"
+    assert browser.launch_tabs == ["https://later.example"]
+    assert browser.pending_url is None
     harness.fleet.on_stack_running()
     assert wait_until(lambda: browser.is_running)
     assert harness.launcher.requests[0].start_url == "https://example.com"
     assert wait_until(lambda: harness.cdp().created == ["https://later.example"])
-    assert browser.pending_url is None
+    assert browser.launch_tabs == []
 
 
 def test_a_page_asked_for_while_an_agent_drives_is_held_and_opens_when_the_human_takes_control(tmp_path: Path) -> None:
@@ -476,7 +478,7 @@ def test_the_gate_lets_the_token_owner_drive_takes_a_free_screen_on_the_first_fr
     refused = harness.fleet.attach_for(browser.name, _AGENT, "Alice")
     assert refused["status"] == "busy_human" and refused["ok"] is False
     # The human hands back: the agent, first in the resume queue, drives again on the same token.
-    harness.control.return_to_agents(_HUMAN)
+    harness.control.return_to_agents(_HUMAN, is_owner=False)
     assert harness.control.view().agent_id == _AGENT
     assert harness.fleet.token_may_drive(browser, token) is True
 

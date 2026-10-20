@@ -102,7 +102,10 @@ class Browser(MutableModel):
     last_known_active_tab: int = Field(default=0, description="The index of the tab in front among those")
     pending_url: str | None = Field(
         default=None,
-        description="A page the human asked to open while an agent drove or Chromium launched; opened once it can be",
+        description="A page the human asked to open while an agent drove; opened once the agent lets go",
+    )
+    launch_tabs: list[str] = Field(
+        default_factory=list, description="Pages asked for while Chromium launched; opened in front once it is up"
     )
     is_stopped_by_user: bool = Field(
         default=False, description="Stopped on purpose (the stop verb), so a stack start leaves it stopped"
@@ -151,6 +154,21 @@ class Browser(MutableModel):
         with self._lock:
             self.last_known_tabs.append(url)
             self.last_known_active_tab = len(self.last_known_tabs) - 1
+
+    def queue_tab_for_launch(self, url: str) -> None:
+        """A page asked for while Chromium is still coming up: opened in front once the launch finishes."""
+        with self._lock:
+            self.launch_tabs.append(url)
+
+    def open_queued_tabs(self) -> None:
+        """Open what was asked for during the launch, the last in front; a tab Chromium refuses is logged."""
+        with self._lock:
+            urls, self.launch_tabs = list(self.launch_tabs), []
+        for url in urls:
+            try:
+                self.open_tab(url)
+            except BrowserNotDrivableError as e:
+                logger.debug("A page asked for while {} launched was not opened: {}", self.name, e)
 
     def mark_stopped_by_user(self) -> None:
         """The stop verb: stopped on purpose, so a stack start leaves it stopped; a held page is dropped."""
@@ -510,8 +528,8 @@ class BrowserFleet(MutableModel):
 
     def ensure_browser(self, start_url: str | None) -> Browser:
         """What a nameless create answers (an agent's ``new``): the one browser, created when there is none,
-        started again when it was stopped, with ``start_url`` opened as a new tab when given (held until the
-        launch finishes when Chromium is still coming up)."""
+        started again when it was stopped, with ``start_url`` opened as a new tab when given (queued for the launch
+        when Chromium is still coming up)."""
         browser = self.the_browser()
         if browser is None:
             return self.create(None, start_url)
@@ -522,7 +540,7 @@ class BrowserFleet(MutableModel):
             return browser
         if browser.lifecycle == BrowserLifecycle.INIT:
             if start_url is not None:
-                self.hold_pending_url(browser, start_url)
+                browser.queue_tab_for_launch(start_url)
             return browser
         if start_url is not None:
             browser.remember_tab_in_front(start_url)
@@ -679,6 +697,7 @@ class BrowserFleet(MutableModel):
         logger.info("Browser {} started (cdp={})", browser.name, chromium.http_endpoint)
         self.on_changed()
         self.on_browser_running(browser.name)
+        browser.open_queued_tabs()
         self.open_pending_url()
 
     # the gate

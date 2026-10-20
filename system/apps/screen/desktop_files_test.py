@@ -1,13 +1,10 @@
-"""Where a dropped file lands and under what name: the home's desktop folder, the name checks, and the suffix a
-clash takes."""
+"""Under what name a dropped file lands: the name checks and the suffix a clash takes."""
 
 import io
 from pathlib import Path
 
 import pytest
 
-from screen.desktop_files import desktop_directory
-from screen.desktop_files import parse_desktop_dir
 from screen.desktop_files import save_dropped_file
 from screen.desktop_files import suffixed_file_name
 from screen.errors import FileDropError
@@ -15,29 +12,6 @@ from screen.errors import InvalidDroppedFileNameError
 from screen.primitives import DroppedFileName
 from screen.primitives import MAX_DROPPED_FILE_NAME_BYTES
 from screen.primitives import describe_dropped_file_name_problem
-
-_USER_DIRS = """# This file is written by xdg-user-dirs-update
-XDG_DESKTOP_DIR="$HOME/Desktop"
-XDG_DOWNLOAD_DIR="$HOME/Downloads"
-"""
-
-
-def test_the_user_dirs_file_names_the_desktop_folder_relative_to_home_or_absolutely() -> None:
-    home = Path("/home/someone")
-    assert parse_desktop_dir(_USER_DIRS, home) == home / "Desktop"
-    assert parse_desktop_dir('XDG_DESKTOP_DIR="$HOME/Schreibtisch"\n', home) == home / "Schreibtisch"
-    assert parse_desktop_dir('XDG_DESKTOP_DIR="/srv/desk"\n', home) == Path("/srv/desk")
-    assert parse_desktop_dir('XDG_DOWNLOAD_DIR="$HOME/Downloads"\n', home) is None
-    assert parse_desktop_dir("", home) is None
-    assert parse_desktop_dir('XDG_DESKTOP_DIR="relative/desk"\n', home) is None
-
-
-def test_the_desktop_folder_falls_back_to_home_desktop_without_a_user_dirs_file(tmp_path: Path) -> None:
-    assert desktop_directory(tmp_path) == tmp_path / "Desktop"
-    user_dirs = tmp_path / ".config" / "user-dirs.dirs"
-    user_dirs.parent.mkdir(parents=True)
-    user_dirs.write_text('XDG_DESKTOP_DIR="$HOME/Bureau"\n')
-    assert desktop_directory(tmp_path) == tmp_path / "Bureau"
 
 
 @pytest.mark.parametrize(

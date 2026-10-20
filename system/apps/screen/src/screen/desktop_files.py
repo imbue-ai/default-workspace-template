@@ -1,16 +1,13 @@
-"""Files dropped on the viewer land in the Screen's desktop folder (docs/system/specs/screen/spec.md section 4.3):
-the XDG desktop directory (``XDG_DESKTOP_DIR`` in ``~/.config/user-dirs.dirs``, the file ``xdg-user-dirs-update``
-writes when the session starts) and ``~/Desktop`` without one, which the service then shows in a file manager window
-since the desktop's own icons are off. Each file keeps its name; a clash takes a numeric suffix, settled by an
-exclusive create so two drops never write the same file."""
+"""Files dropped on the viewer land in the Screen's desktop folder (docs/system/specs/screen/spec.md section 4.3),
+the folder under the workspace's ``data/`` the service names in the session's ``user-dirs.dirs`` (``user_dirs.py``),
+which the service then shows in a file manager window since the desktop's own icons are off. Each file keeps its
+name; a clash takes a numeric suffix, settled by an exclusive create so two drops never write the same file."""
 
 import os
 import shutil
 from pathlib import Path
 from typing import Final
 from typing import IO
-
-from loguru import logger
 
 from imbue.imbue_common.pure import pure
 from screen.errors import FileDropError
@@ -20,41 +17,8 @@ from screen.primitives import DroppedFileName
 # disk image, since the body is held in memory or on the small tmpfs while it is parsed.
 MAX_DROP_BYTES: Final[int] = 64 * 1024 * 1024
 
-USER_DIRS_RELATIVE_PATH: Final[Path] = Path(".config/user-dirs.dirs")
-DESKTOP_DIR_KEY: Final[str] = "XDG_DESKTOP_DIR"
-DEFAULT_DESKTOP_DIR_NAME: Final[str] = "Desktop"
 # How many suffixed names are tried for one dropped file before the drop is refused.
 _MAX_CLASH_ATTEMPTS: Final[int] = 1000
-
-
-@pure
-def parse_desktop_dir(user_dirs_text: str, home: Path) -> Path | None:
-    """The desktop folder ``user-dirs.dirs`` names, in the file's own format (``XDG_DESKTOP_DIR="$HOME/Desktop"``
-    or an absolute path in quotes), or None when the file does not name one."""
-    for raw_line in user_dirs_text.splitlines():
-        line = raw_line.strip()
-        if not line.startswith(f"{DESKTOP_DIR_KEY}="):
-            continue
-        quoted = line.partition("=")[2].strip()
-        value = quoted[1:-1] if len(quoted) >= 2 and quoted[0] == quoted[-1] == '"' else quoted
-        if value.startswith("$HOME/"):
-            return home / value.removeprefix("$HOME/")
-        if value.startswith("/"):
-            return Path(value)
-        return None
-    return None
-
-
-def desktop_directory(home: Path) -> Path:
-    """This home's desktop folder: the user-dirs file's desktop entry, else ``~/Desktop``."""
-    user_dirs_path = home / USER_DIRS_RELATIVE_PATH
-    try:
-        text = user_dirs_path.read_text() if user_dirs_path.is_file() else None
-    except OSError as e:
-        logger.debug("Could not read {}; the desktop folder is the default: {}", user_dirs_path, e)
-        text = None
-    parsed = parse_desktop_dir(text, home) if text is not None else None
-    return parsed if parsed is not None else home / DEFAULT_DESKTOP_DIR_NAME
 
 
 @pure

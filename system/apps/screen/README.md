@@ -165,8 +165,9 @@ addressed.
 The held-URL rule: a page the human asked to open (`open:url`, or the launch path's
 `url`) while an agent drives the Screen is held rather than opened over the agent's
 work; the viewer's agent overlay names it with "Take control and open it" and "Cancel",
-and it also opens once the agent releases or hands off, or when Chromium finishes
-launching. Agents queued for the Screen are woken through the chat messenger as the
+and it also opens once the agent releases or hands off. A page asked for while Chromium
+is still launching (an agent's own `new --url` among them) is not held: it is queued and
+opens in front once the launch finishes. Agents queued for the Screen are woken through the chat messenger as the
 browser fleet's were.
 
 ## Bands
@@ -244,12 +245,14 @@ session alone and with text only, so the directions are:
   `us` by default.
 
 A file dropped on the viewer by the controller goes to the service's `POST /api/drop`, which
-writes it into the Screen's desktop folder: the XDG desktop directory (`XDG_DESKTOP_DIR` in
-`~/.config/user-dirs.dirs`, the file `xdg-user-dirs-update` writes when the session starts, else
-`~/Desktop`; the service and the session share one home, so `desktop_files.py` resolves it the
-same way), created when missing. The service then opens that folder in a Thunar window on the
-Screen (`thunar <folder>`, started as `screen run` starts a command, so it is shed before the
-stack), and the strip says where the files landed. The desktop's own icons are off: `xfdesktop`
+writes it into the Screen's desktop folder, `data/Desktop` under the workspace, where the Files
+app shows it. The service names that folder as both the desktop and the download directory in
+the session's `~/.config/user-dirs.dirs` before each stack start (`user_dirs.py`, keeping the
+file's other entries, with `xdg-user-dirs-update` turned off in `user-dirs.conf` so the session
+never moves them back), so Chromium's downloads land there too. The service then shows the
+folder in a Thunar window on the Screen (raising the Thunar window already showing it, else
+`thunar <folder>`, started as `screen run` starts a command, so it is shed before the stack),
+and the strip says where the files landed. The desktop's own icons are off: `xfdesktop`
 wants a double click for one, which a phone cannot give, and anything an icon would do belongs
 in the panel, so the service sets the `xfce4-desktop` channel's `desktop-icons/style` to none in
 `~/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml` before each stack start

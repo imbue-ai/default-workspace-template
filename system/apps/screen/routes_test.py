@@ -17,10 +17,13 @@ from app_manifest.registry import CONTEXT_MENU_ROUTE
 from mock_chromium_test import FakeCdpConnector
 from mock_messenger_test import RecordingLauncher
 from mock_neko_test import FakeNeko
+from mock_window_tools_test import FakeWindowTools
 from screen.browser_routes import CANCEL_PENDING_URL_RULE
+from screen.data_types import XWindow
 from screen.desktop_files import MAX_DROP_BYTES
 from screen.primitives import FILE_MANAGER_COMMAND
 from screen.primitives import LAUNCH_BROWSER_PATH
+from screen.primitives import XWindowId
 from screen.proxy import NEKO_PROXY_PREFIX
 from screen.service import ScreenService
 from screen.watch import STOPPED_NOTIFICATION_PATH
@@ -203,6 +206,31 @@ def test_a_visitor_in_control_drops_files_into_the_desktop_folder(client: FlaskC
     assert service.launcher.commands == [(FILE_MANAGER_COMMAND, str(service.desktop_dir))]
 
 
+def test_a_drop_raises_the_file_manager_window_already_showing_the_folder(
+    client: FlaskClient, service: ScreenService
+) -> None:
+    start_service_stack(service)
+    assert isinstance(service.window_tools, FakeWindowTools)
+    service.window_tools.windows.append(
+        XWindow(
+            id=XWindowId("0x03a00007"),
+            desktop=0,
+            pid=4242,
+            x=0,
+            y=0,
+            width=800,
+            height=600,
+            window_class="thunar.Thunar",
+            title=f"{service.desktop_dir.name} - File Manager",
+        )
+    )
+    owner = _controlling_session(client, {})
+    assert _drop(client, {}, owner["session_id"], ("notes.txt", b"hello")).status_code == 200
+    assert service.window_tools.activated == ["0x03a00007"]
+    assert isinstance(service.launcher, RecordingLauncher)
+    assert service.launcher.commands == []
+
+
 def test_a_drop_lands_even_when_the_file_manager_cannot_be_opened(client: FlaskClient, service: ScreenService) -> None:
     start_service_stack(service)
     visitor = _controlling_session(client, _VISITOR)
@@ -233,7 +261,7 @@ def test_a_drop_needs_the_controlling_session_and_refuses_the_owners_session_to_
         "/api/drop", data={"files": [(io.BytesIO(b"x"), "a.txt")]}, content_type="multipart/form-data"
     )
     assert no_session.status_code == 400
-    assert not service.desktop_dir.exists()
+    assert list(service.desktop_dir.iterdir()) == []
 
 
 def test_a_drop_refuses_bad_names_empty_drops_and_oversize_bodies(client: FlaskClient, service: ScreenService) -> None:
@@ -266,7 +294,7 @@ def test_a_drop_refuses_bad_names_empty_drops_and_oversize_bodies(client: FlaskC
         environ_overrides={"HTTP_TRANSFER_ENCODING": "chunked", "wsgi.input_terminated": True},
     )
     assert chunked.status_code == 413
-    assert not service.desktop_dir.exists()
+    assert list(service.desktop_dir.iterdir()) == []
 
 
 def test_a_form_past_werkzeugs_own_limits_is_refused_in_the_routes_shape(client: FlaskClient) -> None:

@@ -44,7 +44,6 @@ from screen.cdp_proxy import ProxyServer
 from screen.chrome_launcher import SubprocessChromiumLauncher
 from screen.connect_info import ConnectInfoAggregator
 from screen.data_types import Lifecycle
-from screen.desktop_files import DEFAULT_DESKTOP_DIR_NAME
 from screen.events import EVENTS_RELATIVE_PATH
 from screen.interfaces import ProgramState
 from screen.launch import DetachedProcessLauncher
@@ -155,6 +154,7 @@ def _build_live_service(base: Path, supervisor: SubprocessSupervisor) -> _LiveSe
     service = ScreenService(
         repo_root=Path.cwd(),
         state_dir=state_dir,
+        desktop_dir=base / "Desktop",
         neko=neko,
         window_tools=DisplayWindowTools(),
         display_modes=XrandrDisplayModes(),
@@ -187,6 +187,7 @@ def _build_live_service(base: Path, supervisor: SubprocessSupervisor) -> _LiveSe
         neko=neko,
         state_dir=state_dir,
         home=base / "home",
+        desktop_dir=base / "Desktop",
         on_lifecycle_changed=service.on_lifecycle_changed,
         on_running=service.on_running,
         set_api_token=service.set_api_token,
@@ -292,8 +293,8 @@ def test_xeyes_appears_in_the_window_list_and_a_raised_window_titles_the_screen(
 
 
 def test_a_dropped_file_lands_in_the_desktop_folder(running: _LiveService) -> None:
-    """A file the controlling session drops is written into the desktop folder (spec section 4.3): the XDG desktop
-    directory, which in the workspace image is ``~/Desktop``."""
+    """A file the controlling session drops is written into the desktop folder (spec section 4.3), the one the
+    service named in the session's user-dirs file."""
     service, client = running.service, running.client
     session = client.post("/api/session", headers={"X-Imbue-Identity": '{"owner": true, "email": "josh@imbue.com"}'})
     assert session.status_code == 200, session.get_json()
@@ -310,7 +311,8 @@ def test_a_dropped_file_lands_in_the_desktop_folder(running: _LiveService) -> No
     try:
         assert answer.status_code == 200, answer.get_json()
         assert answer.get_json() == {"directory": str(service.desktop_dir), "saved": [name]}
-        assert service.desktop_dir == Path.home() / DEFAULT_DESKTOP_DIR_NAME
+        user_dirs = (service.stack.home / ".config" / "user-dirs.dirs").read_text()
+        assert f'XDG_DESKTOP_DIR="{service.desktop_dir}"' in user_dirs
         assert landed.read_bytes() == content
     finally:
         landed.unlink(missing_ok=True)
