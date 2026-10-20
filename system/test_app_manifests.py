@@ -337,9 +337,9 @@ def test_built_in_manifest_validates_and_matches_its_program(
     "manifest_path", _built_in_manifest_paths(), ids=lambda path: path.parent.name
 )
 def test_built_in_app_runs_its_entry_point_from_the_workspace_venv(manifest_path: Path) -> None:
-    # The venv is an app's only install. A bare entry point is resolved through PATH, and an
-    # agent's PATH and supervisord's have reached different installs of the same app before:
-    # the update's pre-flight boots ``.venv/bin/<script>``, so that is what the program runs.
+    # The venv is an app's only install, and the update's pre-flight boots
+    # ``.venv/bin/<script>``; a bare entry point is resolved through PATH, which can reach
+    # some other install.
     manifest = load_manifest(manifest_path)
     command = _command_by_program()[manifest.program]
     script = _entry_point_script(command)

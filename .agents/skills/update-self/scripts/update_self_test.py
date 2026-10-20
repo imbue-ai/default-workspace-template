@@ -2398,9 +2398,7 @@ def _supervisord_exec_target(program_conf: Path) -> list[str]:
 def test_the_preflight_boots_the_install_supervisord_runs(
     program_conf: str, preflight, extra_args: list[str]
 ) -> None:
-    # The pre-flight exists to boot what the restart will boot. It once ran the bare
-    # console script off the agent's PATH, which found a per-app uv tool the services
-    # never used, and a stale one rolled back a good update. Read off the real tree's
+    # The pre-flight exists to boot what the restart will boot. Read off the real tree's
     # program lines, so a program that moves to another install moves the pre-flight too.
     spawner = _FakeSpawner()
 
@@ -5675,11 +5673,10 @@ def _old_layout(apply_repo: Path, runtime_home: Path) -> tuple[list[Path], Path]
 def test_a_landed_apply_removes_the_app_tools_an_old_layout_workspace_carries(
     apply_repo: Path, tmp_path: Path
 ) -> None:
-    # Every app runs from the workspace venv; the per-app tools an older build made are
-    # a second install only a login shell and older pre-flights reached. A landed apply
-    # removes them from every home they were left in, scripts included, and leaves the
-    # mngr tool -- and it does so before env-converge re-captures its uv tool record,
-    # which would otherwise go on listing them for a rebuilt rootfs to reinstall.
+    # A landed apply removes the per-app tools an older build made from every home they
+    # were left in, scripts included, and leaves the mngr tool -- before env-converge
+    # re-captures its uv tool record, which would otherwise go on listing them for a
+    # rebuilt rootfs to reinstall.
     runtime_home = tmp_path / "home"
     app_paths, mngr_environment = _old_layout(apply_repo, runtime_home)
     runner = _apply_runner(_DOCS_DIFF, apply_repo)

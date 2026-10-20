@@ -1450,11 +1450,9 @@ def apply_update(
         return 3
 
     # CLEANUP: remove this block with tool_env.remove_app_tool_installs.
-    # Older builds installed every app a second time, as its own uv tool, beside the
-    # workspace venv every app runs from; only a login shell and older pre-flights ever
-    # reached that copy. It goes once the merged tree is live and healthy, and before
-    # env-converge re-captures its uv tool record, which would otherwise keep listing it.
-    # Never fatal: the update has landed.
+    # Only once the merged tree is live and healthy, and before env-converge re-captures
+    # its uv tool record, which would otherwise keep listing the removed tools. Never
+    # fatal: the update has landed.
     try:
         for removed in tool_env.remove_app_tool_installs(
             sweep_homes, repo_root / APPS_DIR

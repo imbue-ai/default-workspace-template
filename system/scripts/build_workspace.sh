@@ -64,10 +64,8 @@ git config --global --add safe.directory "$REPO_ROOT"
 # intentionally not registered (providers.modal.is_enabled=false).
 mngr_git_auth_run python3 "$REPO_ROOT/system/scripts/install_mngr.py" --repo-root "$REPO_ROOT"
 
-# Every Python app runs from the workspace venv the sync below writes, which is
-# the only install of it. Older builds also installed each app as its own uv
-# tool, a second copy nothing kept in step; drop any such copy an image baked
-# before this change still carries (see tool_env.py).
+# Every Python app runs from the workspace venv the sync below writes, its only
+# install. Drop any per-app uv tool an older image still carries (see tool_env.py).
 python3 "$REPO_ROOT/system/scripts/tool_env.py" drop-app-tools --repo-root "$REPO_ROOT"
 
 # Drop an mngr install left under a different $HOME by a create that ran before the pin
