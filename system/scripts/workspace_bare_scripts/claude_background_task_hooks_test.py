@@ -13,12 +13,13 @@ import pytest
 from chat_background_tasks import markers
 from chat_background_tasks.markers import BackgroundTask, TaskSource
 from chat_background_tasks.testing import runner_task
-from script_modules_testing import claude_background_task_hooks as hooks
+
+from workspace_bare_scripts import claude_background_task_hooks as hooks
 
 _CHAT_ID = "agent-0123456789abcdef0123456789abcdef"
 _OTHER_CHAT_ID = "agent-fedcba9876543210fedcba9876543210"
 _SCRIPT_NAME = "claude_background_task_hooks.py"
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _main_claude_env(work_dir: Path, **extra: str) -> dict[str, str]:
