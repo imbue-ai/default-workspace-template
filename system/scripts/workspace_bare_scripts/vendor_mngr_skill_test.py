@@ -8,8 +8,9 @@ import subprocess
 from pathlib import Path
 
 import pytest
-import vendor_mngr_skill
-from list_mngr_plugins import GitPin
+
+from workspace_bare_scripts import vendor_mngr_skill
+from workspace_bare_scripts.list_mngr_plugins import GitPin
 
 _PUBLIC_SHA = "a" * 40
 _INTERNAL_SHA = "b" * 40
