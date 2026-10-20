@@ -72,8 +72,11 @@ export const WINDOW_ID_ATTRIBUTE = "data-window-id";
 // need which.
 export const PAGE_FRAME_SANDBOX =
   "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals";
-// Lets embedded apps (the browser fleet viewer) reach the user's clipboard.
-export const PAGE_FRAME_ALLOW = "clipboard-read; clipboard-write";
+// Lets embedded apps reach the user's clipboard (the browser fleet viewer) and ask for an audio input (an app that
+// takes dictation or listens to a headset). A feature missing here is refused to the page before the browser or the
+// OS is ever asked; the user is still asked before any page hears anything. Studio's own workspace frame has to
+// delegate the microphone too, or this one has nothing to pass on.
+export const PAGE_FRAME_ALLOW = "clipboard-read; clipboard-write; microphone";
 // The shell's WindowTitle rule (contracts.md section 1, ``shell/primitives.py``): a longer title is
 // refused with a 400, which would leave the whole report, path included, unstored.
 export const MAX_WINDOW_TITLE_LENGTH = 256;
