@@ -3,8 +3,8 @@
 Inside a workspace ``python3`` is the system interpreter, which has none of the root venv's
 packages: a module that imports one runs fine under ``uv run`` and in these tests, and fails
 with ``ModuleNotFoundError`` the moment an agent, a hook or a supervisord program line runs its
-entry script as documented. Every module of ``workspace_bare_scripts`` is held to that; the
-stdlib-only libraries the hook entry scripts put on ``sys.path`` count as standard library.
+entry script as documented. Every module of ``workspace_bare_scripts`` is held to that, and so
+is each stdlib-only library its entry scripts put on ``sys.path``.
 """
 
 from __future__ import annotations
@@ -15,9 +15,10 @@ from pathlib import Path
 
 import pytest
 
+_SYSTEM_DIR = Path(__file__).resolve().parents[1]
 _BARE_PACKAGE_DIR = Path(__file__).parent / "workspace_bare_scripts"
-# The bare package itself, and the stdlib-only libraries hook entry scripts put on sys.path.
-_ALSO_ALLOWED = frozenset({"workspace_bare_scripts", "tk_command_parsing", "oom_priority"})
+# The bare package itself, and a stdlib-only library hook entry scripts put on sys.path.
+_ALSO_ALLOWED = frozenset({"workspace_bare_scripts", "tk_command_parsing"})
 
 _BARE_MODULES = sorted(
     path.name
@@ -28,16 +29,12 @@ _BARE_MODULES = sorted(
 # The stdlib-only workspace libraries a script may put on ``sys.path`` and import, by package,
 # each held to the same rule.
 _STDLIB_ONLY_LIBRARIES = {
-    "chat_background_tasks": _SCRIPTS_DIR.parent
+    "chat_background_tasks": _SYSTEM_DIR
     / "libs"
     / "chat_background_tasks"
     / "src"
     / "chat_background_tasks",
-    "oom_priority": _SCRIPTS_DIR.parent
-    / "services"
-    / "oom_priority"
-    / "src"
-    / "oom_priority",
+    "oom_priority": _SYSTEM_DIR / "services" / "oom_priority" / "src" / "oom_priority",
 }
 
 
