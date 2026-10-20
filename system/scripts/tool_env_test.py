@@ -300,12 +300,14 @@ def test_every_app_tool_goes_from_every_home_and_nothing_else_does(
 ) -> None:
     """Old builds installed each app as an editable uv tool beside the workspace venv. Those
     go, in both homes they were left in and with every console script into them (the
-    browser app ships two), while the mngr tool and a tool installed from anywhere else
-    stay: the receipt's editable source is the only thing that marks an app's tool."""
+    browser app ships two), and whatever the project's name spelling (uv names the
+    environment by its PEP 503 form), while the mngr tool and a tool installed from anywhere
+    else stay: the receipt's editable source is the only thing that marks an app's tool."""
     checkout = tmp_path / "mngr-vol" / "workspace"
     apps = checkout / "system" / "apps"
     (apps / "browser").mkdir(parents=True)
     (apps / "system_interface").mkdir()
+    (apps / "weather_dashboard").mkdir()
     # The build reached the checkout through a symlink, as /home/user reaches /mngr-vol.
     linked_checkout = tmp_path / "workspace"
     linked_checkout.symlink_to(checkout)
@@ -322,6 +324,12 @@ def test_every_app_tool_goes_from_every_home_and_nothing_else_does(
         "system-interface",
         f'{{ name = "system-interface", editable = "{apps}/system_interface" }}',
         ("system-interface",),
+    )
+    weather_env, weather_links = _install_receipted_tool(
+        pinned_home,
+        "weather-dashboard",
+        f'{{ name = "Weather.Dashboard", editable = "{apps}/weather_dashboard" }}',
+        ("weather-dashboard",),
     )
     mngr_env, mngr_links = _install_receipted_tool(
         pinned_home,
@@ -345,9 +353,14 @@ def test_every_app_tool_goes_from_every_home_and_nothing_else_does(
         *browser_links,
         stale_shell_env,
         *stale_shell_links,
+        weather_env,
+        *weather_links,
     }
-    assert not browser_env.exists() and not stale_shell_env.exists()
-    assert not any(link.is_symlink() for link in [*browser_links, *stale_shell_links])
+    assert not any(env.exists() for env in (browser_env, stale_shell_env, weather_env))
+    assert not any(
+        link.is_symlink()
+        for link in [*browser_links, *stale_shell_links, *weather_links]
+    )
     assert mngr_env.is_dir() and all(link.is_symlink() for link in mngr_links)
     assert other_env.is_dir() and all(link.is_symlink() for link in other_links)
 

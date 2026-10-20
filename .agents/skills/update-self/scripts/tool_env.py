@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import sys
 import tomllib
@@ -224,8 +225,8 @@ def _is_editable_install_under(environment: Path, directory: Path) -> bool:
 
 
 def _canonical_name(name: str) -> str:
-    """A distribution name normalized the way uv names its environment directory."""
-    return name.replace("_", "-").lower()
+    """A distribution name normalized the way uv names its environment directory (PEP 503)."""
+    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def _drop_app_tools(repo_root: Path) -> list[Path]:
