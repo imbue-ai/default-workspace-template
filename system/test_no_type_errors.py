@@ -37,6 +37,9 @@ _UPDATE_SELF_DIR = UPDATE_SELF_SCRIPTS.parent
 _UPDATE_SELF_PYTHON = _UPDATE_SELF_DIR / "python"
 _TK_COMMAND_PARSING_SRC = REPO_ROOT / "system" / "libs" / "tk_command_parsing" / "src"
 _OOM_PRIORITY_SRC = REPO_ROOT / "system" / "services" / "oom_priority" / "src"
+_CHAT_BACKGROUND_TASKS_SRC = (
+    REPO_ROOT / "system" / "libs" / "chat_background_tasks" / "src"
+)
 
 # Where the bare tier's imports resolve from at runtime: system/scripts (the stubs' own
 # directory), update-self's python/ and the stdlib-only library trees, which the stubs and
@@ -46,6 +49,7 @@ _BARE_SEARCH_PATHS = (
     _UPDATE_SELF_PYTHON,
     _TK_COMMAND_PARSING_SRC,
     _OOM_PRIORITY_SRC,
+    _CHAT_BACKGROUND_TASKS_SRC,
 )
 
 
@@ -54,7 +58,12 @@ _BARE_SEARCH_PATHS = (
 # tree); everything else runs beside system/scripts with the stdlib-only library trees.
 _UPDATE_SELF_IMPORTABLE = frozenset({"update_self_skill", "oom_priority"})
 _SYSTEM_IMPORTABLE = frozenset(
-    {"workspace_bare_scripts", "tk_command_parsing", "oom_priority"}
+    {
+        "workspace_bare_scripts",
+        "tk_command_parsing",
+        "oom_priority",
+        "chat_background_tasks",
+    }
 )
 
 
@@ -97,7 +106,12 @@ def _bare_files() -> list[Path]:
     stubs = [entry for entry in all_entry_points() if is_bare_entry(entry)]
     packages = _bare_packages(stubs)
     assert {package.name for package in packages} == BARE_PACKAGES
-    trees = [*packages, _TK_COMMAND_PARSING_SRC, _OOM_PRIORITY_SRC]
+    trees = [
+        *packages,
+        _TK_COMMAND_PARSING_SRC,
+        _OOM_PRIORITY_SRC,
+        _CHAT_BACKGROUND_TASKS_SRC,
+    ]
     modules = [
         path
         for tree in trees
