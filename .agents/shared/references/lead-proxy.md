@@ -29,7 +29,7 @@ and wait for one finish report use the same `await` (or the synchronous
 
 ```bash
 python3 system/scripts/run_in_background.py --description "Wait for the background agent" -- \
-    uv run .agents/skills/launch-task/scripts/create_worker.py await \
+    uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name <WORKER_NAME> \
     --task-file <TASK_FILE>
 ```
@@ -155,7 +155,7 @@ The worker is framed as addressing the user directly. When you answer, write
 your reply in the user's voice and forward it to the worker's chat:
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply \
     --task-file <TASK_FILE> -m "<reply, in the user's voice>"
 ```
 
@@ -200,7 +200,9 @@ git merge --no-ff <commit> -m "Provisional merge of <WORKER_NAME> at milestone <
 ```
 
 Then the **provisional go-live**, the minimum needed to use the thing: a skill
-is on disk at `.agents/skills/<name>/` and invocable; an app or service gets
+is on disk at `.agents/skills/<name>/` and invocable (one with a `python/`
+project only after `uv sync --all-packages --frozen`, which installs its package
+and any dependency the merge added into the workspace venv); an app or service gets
 its tab refreshed. You do that refresh -- never hand it to the user. The calling
 skill's end-of-pass work (post-crystallize migration, closing the ticket) still
 waits for `done`.
@@ -228,7 +230,7 @@ de facto "no with notes" (the merge commit's subject names the worker and
 milestone, so the target is easy to find).
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply \
     --task-file <TASK_FILE> -m "<why the milestone was reverted, in the user's voice>"
 ```
 
@@ -272,7 +274,7 @@ On `type: status`:
   On a clean merge, close any tracking ticket and destroy the worker before
   the calling skill's go-live:
   ```bash
-  uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name <WORKER_NAME>
+  uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py destroy --name <WORKER_NAME>
   ```
   Destroy takes the worker's sub-workers with it and keeps what you may
   still need: the branch `mngr/<WORKER_NAME>`, the transcript (under
@@ -291,7 +293,7 @@ On `type: status`:
   body (or its absence) to the user, point at the branch and worker agent, then
   stop the worker (and its sub-workers) so no process stays behind:
   ```bash
-  uv run .agents/skills/launch-task/scripts/create_worker.py stop --name <WORKER_NAME>
+  uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py stop --name <WORKER_NAME>
   ```
   Its branch, worktree, and transcript stay for inspection. A timeout is
   the same once the liveness diagnosis says the worker is dead or wedged.
@@ -314,7 +316,7 @@ finishing its task yourself. Re-take whatever preconditions the calling skill
 holds for a pass (a lease, a run record), then send it the decision:
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply \
     --task-file <TASK_FILE> -m "<the user's decision>"
 ```
 

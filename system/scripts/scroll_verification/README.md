@@ -14,8 +14,8 @@ they are the substance of a manual driver.
 Usage (from system/apps/system_interface, with the frontend built via
 `cd frontend && npm run build`):
 
-    uv run python ../../scripts/scroll_verification/serve_scroll_fixture.py 8642 <real-session.jsonl> /tmp/scroll-fixture &
-    uv run python ../../scripts/scroll_verification/verify_scroll.py /tmp/scroll-fixture/claude_config/projects/fixture-project/scrollfix-session-001.jsonl
+    uv run --no-sync python ../../scripts/scroll_verification/serve_scroll_fixture.py 8642 <real-session.jsonl> /tmp/scroll-fixture &
+    uv run --no-sync python ../../scripts/scroll_verification/verify_scroll.py /tmp/scroll-fixture/claude_config/projects/fixture-project/scrollfix-session-001.jsonl
 
 Pick any large real Claude session JSONL as the fixture (e.g. from
 ~/.claude/projects). The verifier prints PASS/FAIL for each scenario: fill

@@ -21,22 +21,18 @@ import importlib
 import importlib.util
 import re
 import subprocess
-import sys
 import tomllib
 from pathlib import Path
 from types import ModuleType
 
 import pytest
+from workspace_bare_scripts import list_mngr_plugins, set_mngr_pin
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _PUBLIC_MNGR_REPO = "https://github.com/imbue-ai/mngr"
 _INTERNAL_MNGR_REPO = "https://github.com/imbue-ai/mngr-internal"
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 
-sys.path.insert(0, str(_REPO_ROOT / "system" / "scripts"))
-
-import list_mngr_plugins  # noqa: E402
-import set_mngr_pin  # noqa: E402
 
 _MNGR_REPOS = (_PUBLIC_MNGR_REPO, _INTERNAL_MNGR_REPO)
 

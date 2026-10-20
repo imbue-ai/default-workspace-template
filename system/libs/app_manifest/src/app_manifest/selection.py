@@ -88,8 +88,8 @@ _WIRING_GUARDS: Final[tuple[str, ...]] = (
 # The cross-cutting checks run beside system/*.py for every change: the system/scripts guards,
 # and the checks that read every skill's prose, which a change to any one skill can break.
 ALWAYS_RUN_GUARDS: Final[tuple[str, ...]] = (
-    ".agents/shared/scripts/test_skill_mngr_references.py",
-    ".agents/skills/launch-task/scripts/dispatch_contract_test.py",
+    ".agents/shared/scripts/agents_shared/test_skill_mngr_references.py",
+    ".agents/skills/launch-task/python/launch_task_skill/dispatch_contract_test.py",
     "system/scripts/agent_hook_wiring_test.py",
     "system/scripts/agent_guard_tool_scope_test.py",
     "system/scripts/provision_guard_test.py",
@@ -134,7 +134,7 @@ _NO_COVERAGE_FLAG: Final[str] = "--no-cov"
 _UV_RUN: Final[tuple[str, ...]] = ("uv", "run", "--no-sync")
 
 # Where a markdown file is agent-run prose rather than documentation: mirrors the update-self
-# change classes (``.agents/skills/update-self/scripts/update_classification.py``).
+# change classes (``.agents/skills/update-self/python/update_self_skill/update_classification.py``).
 _RUNTIME_PREFIXES: Final[tuple[str, ...]] = (
     ".agents/",
     "system/scripts/",

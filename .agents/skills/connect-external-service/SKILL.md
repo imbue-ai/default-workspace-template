@@ -61,7 +61,7 @@ explanation, try the row, and move to the next one when it actually fails.
   ...`). The same rule as a latchkey permission request, enforced by the same
   guard. Do not ask the user to tell you when they have answered.
   ```bash
-  python3 .agents/skills/connect-external-service/scripts/request_secret.py \
+  uv run --no-sync .agents/skills/connect-external-service/scripts/request_secret.py \
     --file example --var EXAMPLE_API_KEY --rationale "I need your Example API key to look up the part numbers you asked about."
   ```
 - **A background agent does not request a secret.** A worker (`launch-task`)

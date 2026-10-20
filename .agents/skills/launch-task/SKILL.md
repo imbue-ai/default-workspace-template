@@ -96,7 +96,7 @@ Commit -- never stash (stashed work gets lost during multi-agent coordination)
 -- then launch.
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py launch \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
     --name $NAME \
     --template worker \
     --runtime-dir data/.tasks/launch-task/$NAME/ \
@@ -139,7 +139,7 @@ promptly and actionably (exit code 75) instead of waiting out the full timeout.
 
 ```bash
 python3 system/scripts/run_in_background.py --description "Wait for the background agent" -- \
-    uv run .agents/skills/launch-task/scripts/create_worker.py await \
+    uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name $NAME \
     --task-file data/.tasks/launch-task/$NAME/task.md
 ```

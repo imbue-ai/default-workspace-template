@@ -344,10 +344,15 @@
 
 ## Open questions
 
-- **`system/scripts` package names** for the bare and venv packages (e.g. `workspace_bare_scripts` / `workspace_scripts`). They must not collide with app or library packages.
-- **Two top-level packages in one hatchling project**: hatchling supports `packages = [...]`, but confirm the editable install exposes both. Otherwise use two projects under `system/scripts/`.
-- **Entry-point declaration table name**: `[tool.workspace.entry-points]` is a placeholder. Pick a name that won't collide with uv/hatch tables.
-- **Test-filename-collision rule** in `type-skill.md`: drop it only after confirming pytest's import mode gives package-qualified names for tests inside `<skill>_skill/`, while `scripts/` itself has no `__init__.py`.
+- Decided during PR 2 review (2026-10-09), superseding the bullets above that put a skill's uv project in `scripts/`:
+  - A skill's uv project lives in `.agents/skills/<name>/python/` (pyproject + `<name>_skill/`), globbed as `.agents/skills/*/python`; `scripts/` keeps the entry files and shell scripts. A `scripts/` glob let any third-party skill's plain `scripts/` break every uv command in the workspace. Venv-tier stubs import through the editable install; update-self's and publish-template's no-venv stubs put `../python` on `sys.path`.
+  - `refresh_workspace_view` and `check_changelog_entries` stay venv tier: update-self runs the refresh through `uv run --no-sync` (every caller has just synced the venv), and CI's changelog job syncs `workspace-scripts` first.
+- Decided 2026-10-13: the stub path-edit check is a `snapshot(N)` count like the other ratchets, not a declared list, and a second count covers loading a module from a file path (`spec_from_file_location`, `SourceFileLoader`, `runpy.run_path`). Both scan tests too. The test-side path loaders that could import instead were converted first: the chat tests (with `workspace-scripts` as a chat dev dependency), the supervisord readers, and the bug-report collector (now a `Collector` object). The one-time `migrate_claude_auth` script, the only reason `workspace-scripts` depended on chat, was deleted, so that dev dependency forms no cycle. The counts skip skills without a `python/` project, so a third-party skill never fails them.
+- Resolved in PR 2:
+  - `system/scripts` packages are `workspace_bare_scripts` and `workspace_scripts`, in one hatchling project (`packages = [...]`). The editable install's `.pth` adds the whole `scripts/` dir to `sys.path`, which exposes both packages (and, as a side effect, the entry stubs as top-level module names).
+  - The entry-point table is `[tool.workspace-template.entry-points."<entry>.py"]` with `heavy-imports = [...]`.
+  - The test-filename-collision rule is dropped: pytest imports a test inside `<skill>_skill/` as `<skill>_skill.<test>`, and two same-named tests in two skill packages collect together (two flat `scripts/` dirs still collide).
+  - With the project in `scripts/`, a stub run through the `.claude/skills` symlink was not recognised as a workspace member; with it in `python/`, uv walks up to the workspace root and the symlinked path works.
 - **Expensive-stdlib list for the bare tier**: start with `asyncio`, then measure on the scratch workspace before fixing the list.
 - **Does update-self's apply health probe cover every program?** If a bare wrapper broke after an apply, would the probes catch it? Relevant only to the safety margin. The 3.12 guard makes it moot for the version case.
 - **Follow-ups outside this stack**: MIND-485 (guard dispatcher and the rewrite hook's `Bash` matcher, on main after this merges); MIND-486 (migration-doc system that reshapes the migration reference).

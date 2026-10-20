@@ -237,7 +237,7 @@ missing auth scope, the user changed their mind about which fields matter), send
 short note to the worker:
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply \
     --task-file data/.tasks/harden/crystallize-$SLUG/task.md \
     -m "<short note about what changed>"
 ```

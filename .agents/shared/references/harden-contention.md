@@ -167,7 +167,7 @@ Whoever finds the staleness -- the pass owner at merge time, or the agent
 taking over an abandoned pass -- replaces it with **one** new pass:
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name <worker-name> --delete-branches
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py destroy --name <worker-name> --delete-branches
 tk close <old-ticket-id> "Superseded -- base moved under the pass; re-dispatched covering the union."
 ```
 

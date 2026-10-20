@@ -128,7 +128,7 @@ reason to do the fix inline: commit, then dispatch. Healing always runs in the
 background worker.
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py launch \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
     --name heal-$TARGET \
     --template worker \
     --runtime-dir data/.tasks/harden/heal-$TARGET/ \
@@ -161,7 +161,9 @@ last hardened merge.
 
 Then merge `mngr/heal-$TARGET`, destroy the worker per `lead-proxy.md`
 (`create_worker.py destroy --name heal-$TARGET`), and go live by type: a **skill** needs
-nothing beyond the merge; an **app** wants a window refresh (`uv run --no-sync
+nothing beyond the merge, except `uv sync --all-packages --frozen` when it has a
+`python/` project (the workspace venv then carries any dependency the merge
+added); an **app** wants a window refresh (`uv run --no-sync
 workspace-layout refresh --app <app-name>`); a background **service** has no
 window -- restart it (`supervisorctl restart <name>`) instead. Then close the
 ticket:

@@ -16,12 +16,10 @@ rather than as archives with no ``chats/`` member or with every line's speaker r
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from types import ModuleType
 
 import pytest
 from imbue.mngr.agents.common_transcript_records import (
@@ -33,24 +31,9 @@ from imbue.mngr.agents.common_transcript_records import (
 from imbue.mngr.hosts.common import get_agent_state_dir_path
 from imbue.mngr.interfaces.data_types import CertifiedHostData
 from imbue.mngr.primitives import AgentId, HostId
+from workspace_bare_scripts.collect_bug_report_diagnostics import Collector
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_COLLECTOR_PATH = Path(__file__).parent / "collect_bug_report_diagnostics.py"
-
-
-def _load_collector(mngr_binary: str) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(
-        "collect_bug_report_diagnostics_over_mngr", _COLLECTOR_PATH
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    namespace = module.__dict__
-    assert "MNGR_BINARY" in namespace, (
-        "the collector no longer defines MNGR_BINARY; update this test"
-    )
-    namespace["MNGR_BINARY"] = mngr_binary
-    return module
 
 
 def _atif_stream_records() -> list[dict[str, object]]:
@@ -148,7 +131,7 @@ def test_transcripts_are_fetched_through_the_installed_mngr(
     monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
     # A temp cwd, so mngr does not read this checkout's own .mngr/settings.toml as project settings.
     monkeypatch.chdir(tmp_path)
-    collector = _load_collector(mngr_binary)
+    collector = Collector(mngr_binary=mngr_binary)
 
     members = collector.collect_transcript_members(60.0)
 

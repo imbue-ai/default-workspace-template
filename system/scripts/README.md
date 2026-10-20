@@ -1,13 +1,18 @@
 # system/scripts/
 
-Provisioning and utility scripts:
+Provisioning and utility scripts. Their Python lives in one of two packages
+here (one uv project, `pyproject.toml`): `workspace_bare_scripts/`, which the
+system `python3` runs with no venv and which imports only the standard library,
+through entry stubs at the paths below, and `workspace_scripts/`, whose modules
+run by their own path from the root venv (`uv run --no-sync`). See
+`.agents/shared/references/running-python.md`.
 
 - Image build / provisioning: `setup_system.sh`, `install_dependencies.sh`,
   `build_workspace.sh`, `write_apt_sources.sh`, `seed_home_skeleton.sh`,
   `default_workspace_template_seed.sh`, `install_secret_scanners.sh`,
   `_provision_guard.sh`, `_tool_env.sh`, `install_mngr.py`, `tool_env.py`
-  (vendored byte-identically into `.agents/skills/update-self/scripts/`, which
-  the apply runs as a self-contained unit), and the boot-convergence units in
+  (vendored byte-identically into `.agents/skills/update-self/python/update_self_skill/`,
+  which the apply runs as a self-contained unit), and the boot-convergence units in
   `env.d/`.
 - Cross-harness agent policy hooks (`agent_*.sh` / `agent_*.py`), wired in
   `.claude/settings.json` for claude and `.codex/hooks.json` for codex; pi's
@@ -39,7 +44,7 @@ Provisioning and utility scripts:
   command detached and, when it exits, send its exit code and output to the
   caller's own chat as a message that starts the agent's next turn, on any
   harness; how a lead waits for a worker's report; vendored byte-identically into
-  `.agents/skills/update-self/scripts/`, whose staged copy update-self waits
+  `.agents/skills/update-self/python/update_self_skill/`, whose staged copy update-self waits
   through), `background_tasks.py` (the background tasks each chat is waiting
   on, one marker file per task under `data/.apps/chat/background_tasks/<chat-id>/`,
   written by `run_in_background.py` and by Claude's Stop hook; `list` and
@@ -57,9 +62,9 @@ Provisioning and utility scripts:
   conversation the Imbue Studio app had before the workspace existed; run through
   `mngr exec` by the Imbue Studio app), `require_create_account.py` (the
   create gate), `refresh_workspace_view.py` (rebuild the user's view after the
-  interface changes), `migrate_claude_auth.py` (one-time auth migration).
+  interface changes).
 - Boot recovery: `minds_start_services_agent.sh`, `minds_lima_autostart.sh`.
-- The changelog gate: `check_changelog_entries.py`.
+- The changelog gate: `workspace_scripts/check_changelog_entries.py`.
 
 Cohesive machinery lives in packages instead: the recurring-job/automation
 scripts in `system/libs/automations/`, the Caretaker check in
