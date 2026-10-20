@@ -6,7 +6,9 @@ belongs in a manual check against the actual binaries, not here -- a fake termin
 only assert that our fake behaves like our fake.
 """
 
+import itertools
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -22,6 +24,7 @@ from imbue.chat.harnesses.auth_flows import flow_shape
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import get_method
 from imbue.chat.harnesses.registry import build_account_binding
+from imbue.chat.harnesses.sign_in_relay import RelayCallbackError
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.testing import FakePexpectProcess
 
@@ -577,14 +580,8 @@ def _agy_account(tmp_path: Path, service: AuthFlowService) -> tuple[str, Path]:
     return account.id, token
 
 
-def test_a_re_auth_is_judged_on_the_new_sign_in_not_the_old_credential(tmp_path: Path) -> None:
-    """The one thing re-auth exists for, and it could not fail.
-
-    A re-auth keeps the folder, and three of the four promote probes are presence checks --
-    `claude auth status --json` reports loggedIn for a bogus key, and so do codex and pi. So a
-    user whose account died, who hit re-auth and then declined in the browser, was told
-    "signed in again" on the strength of the credential that was already there.
-    """
+def test_a_re_auth_leaves_the_live_credential_in_place(tmp_path: Path) -> None:
+    """The account keeps working while its owner signs in again; the CLI writes over it."""
     service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES)
     account_id, token = _agy_account(tmp_path, service)
 
@@ -592,12 +589,108 @@ def test_a_re_auth_is_judged_on_the_new_sign_in_not_the_old_credential(tmp_path:
     service._spawner = lambda *_a, **_k: process
     service.start("google", "oauth", account_id=account_id)
 
-    assert not token.exists(), "the old credential is still there for the probe to answer with"
+    assert token.read_text() == "live-token"
 
 
-def test_an_abandoned_re_auth_puts_the_old_credential_back(tmp_path: Path) -> None:
-    """Taking it away is only safe if every exit restores it: the credential the account had
-    is more use than none, and the user asked to REPLACE it, not to lose it."""
+def test_a_re_auth_is_not_decided_by_the_credential_it_replaces(tmp_path: Path) -> None:
+    """agy's probe only sees that a credential is there, so it says yes for the old one as well.
+    The re-auth stays pending until agy writes a new credential, and then the probe decides."""
+    service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES)
+    account_id, token = _agy_account(tmp_path, service)
+    process = FakePexpectProcess([(0, f"Visit {_AGY_URL}")], drain_chunks=[f"Visit {_AGY_URL}\r\n"])
+    service._spawner = lambda *_a, **_k: process
+    again = service.start("google", "oauth", account_id=account_id)
+
+    assert service.submit_code(again.flow_id, "4/0Aexample").state is FlowState.PENDING
+
+    token.write_text("new-token")
+    assert service.poll(again.flow_id).state is FlowState.OK
+
+
+def _finished_claude(output: str, exitstatus: int | None) -> FakePexpectProcess:
+    process = FakePexpectProcess(
+        [(0, f"Browser didn't open? Use the url below\r\n{_CLAUDE_MANUAL_URL}")],
+        drain_chunks=[output],
+        exitstatus=exitstatus,
+    )
+    process.exit()
+    return process
+
+
+@pytest.mark.parametrize(
+    ("output", "exitstatus", "probe_answer", "state", "is_probed"),
+    [
+        pytest.param("Login successful.\r\n", 0, SignedIn.NO, FlowState.OK, False, id="success-line-and-clean-exit"),
+        pytest.param("", 0, SignedIn.YES, FlowState.OK, True, id="clean-exit-reworded-probe-confirms"),
+        pytest.param("", 0, SignedIn.NO, FlowState.FAILED, True, id="clean-exit-reworded-probe-refuses"),
+        pytest.param("Login successful.\r\n", 1, SignedIn.YES, FlowState.FAILED, False, id="line-then-an-error-exit"),
+        pytest.param("Login successful.\r\n", None, SignedIn.YES, FlowState.FAILED, False, id="killed"),
+    ],
+)
+def test_claude_decides_its_own_sign_in(
+    tmp_path: Path, output: str, exitstatus: int | None, probe_answer: SignedIn, state: FlowState, is_probed: bool
+) -> None:
+    """The CLI's exit decides. The probe, which would also answer yes for the credential a re-auth
+    replaces, is asked only about a clean exit whose success line did not match its wording."""
+    probed: list[HarnessType] = []
+
+    def probe(harness: HarnessType, _path: Path) -> SignedIn:
+        probed.append(harness)
+        return probe_answer
+
+    process = _finished_claude(output, exitstatus)
+    service = AuthFlowService.create(
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        spawner=lambda *_a, **_k: process,
+        probe=probe,
+    )
+    started = service.start("anthropic", "subscription")
+
+    assert service.poll(started.flow_id).state is state
+    assert (probed != []) is is_probed
+
+
+def test_a_browser_re_auth_takes_away_the_env_credential_that_would_outrank_it(tmp_path: Path) -> None:
+    """claude ranks a key or token in the settings env above what `claude auth login` writes, so one
+    left behind would keep every chat on the old credential after "Signed in again"."""
+    service = AuthFlowService.create(
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        spawner=lambda *_a, **_k: _finished_claude("Login successful.\r\n", 0),
+        probe=lambda *_a: SignedIn.YES,
+    )
+    pasted = service.start("anthropic", "api_key")
+    service.submit_key(pasted.flow_id, "sk-ant-old", None)
+    (account,) = read_index(tmp_path).accounts
+    settings_path = tmp_path / ".minds" / "accounts" / account.id / "settings.json"
+    settings = json.loads(settings_path.read_text())
+    settings["env"]["DISABLE_TELEMETRY"] = "1"
+    settings_path.write_text(json.dumps(settings))
+
+    again = service.start("anthropic", "subscription", account_id=account.id)
+
+    assert service.poll(again.flow_id).state is FlowState.OK
+    assert json.loads(settings_path.read_text())["env"] == {"DISABLE_TELEMETRY": "1"}
+
+
+def test_a_claude_sign_in_still_running_waits(tmp_path: Path) -> None:
+    process = FakePexpectProcess(
+        [(0, f"Browser didn't open? Use the url below\r\n{_CLAUDE_MANUAL_URL}")],
+        drain_chunks=["Login successful.\r\n"],
+    )
+    service = AuthFlowService.create(
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        spawner=lambda *_a, **_k: process,
+        probe=lambda *_a: SignedIn.YES,
+    )
+    started = service.start("anthropic", "subscription")
+
+    assert service.poll(started.flow_id).state is FlowState.PENDING
+
+
+def test_an_abandoned_re_auth_leaves_the_credential_as_it_was(tmp_path: Path) -> None:
     service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES)
     account_id, token = _agy_account(tmp_path, service)
 
@@ -607,3 +700,218 @@ def test_an_abandoned_re_auth_puts_the_old_credential_back(tmp_path: Path) -> No
     service.abort(again.flow_id)
 
     assert token.read_text() == "live-token"
+
+
+# What `claude auth login` prints for a person to open by hand: its callback is Anthropic's own page.
+_CLAUDE_MANUAL_URL = (
+    "https://claude.ai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+    "&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback"
+    "&scope=user%3Ainference&code_challenge=abc&code_challenge_method=S256&state=manual-state"
+)
+# What it hands `$BROWSER`: the same sign-in, called back on its own loopback listener.
+_CLAUDE_RELAY_URL = (
+    "https://claude.ai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+    "&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A54871%2Fcallback"
+    "&scope=user%3Ainference&code_challenge=abc&code_challenge_method=S256&state=relay-state"
+)
+
+
+def _claude_flow_service(
+    tmp_path: Path,
+    process: FakePexpectProcess,
+    relay_url: str | None,
+    fetched: list[tuple[int, str]],
+    on_callback: Callable[[], None] = lambda: None,
+) -> AuthFlowService:
+    """A service whose fake `claude` runs `$BROWSER` with `relay_url`, as the real one does.
+
+    `on_callback` is what the CLI does when the relayed callback reaches its listener. The clock
+    moves ten seconds each time it is read, so a flow still pending after the callback is reported
+    as such within a few polls rather than after the real wait.
+    """
+
+    def spawner(*_args: object, env: dict[str, str], **_kwargs: object) -> FakePexpectProcess:
+        if relay_url is not None:
+            Path(env["MINDS_SIGNIN_URL_FILE"]).write_text(relay_url + "\n")
+        return process
+
+    def fetch(port: int, path_and_query: str) -> None:
+        fetched.append((port, path_and_query))
+        on_callback()
+
+    ticks = itertools.count(start=0.0, step=10.0)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    return AuthFlowService.create(
+        home=tmp_path,
+        work_dir=work_dir,
+        spawner=spawner,
+        probe=lambda *_a: SignedIn.YES,
+        fetch_callback=fetch,
+        clock=lambda: next(ticks),
+    )
+
+
+def _claude_process() -> FakePexpectProcess:
+    return FakePexpectProcess([(0, f"Browser didn't open? Use the url below\r\n{_CLAUDE_MANUAL_URL}")])
+
+
+def test_a_claude_sign_in_offers_the_page_its_cli_opened_for_relaying(tmp_path: Path) -> None:
+    service = _claude_flow_service(tmp_path, _claude_process(), _CLAUDE_RELAY_URL, [])
+
+    started = service.start("anthropic", "subscription")
+
+    assert started.url == _CLAUDE_MANUAL_URL
+    assert started.relay_url == _CLAUDE_RELAY_URL
+
+
+def test_a_claude_sign_in_whose_cli_opened_nothing_offers_no_relay(tmp_path: Path) -> None:
+    service = _claude_flow_service(tmp_path, _claude_process(), None, [])
+
+    started = service.start("anthropic", "subscription")
+
+    assert started.url == _CLAUDE_MANUAL_URL
+    assert started.relay_url is None
+
+
+def test_a_page_whose_callback_is_not_loopback_is_not_offered_for_relaying(tmp_path: Path) -> None:
+    service = _claude_flow_service(tmp_path, _claude_process(), _CLAUDE_MANUAL_URL, [])
+
+    assert service.start("anthropic", "subscription").relay_url is None
+
+
+def test_the_callback_is_replayed_against_the_port_the_sign_in_named_and_answered_with_the_verdict(
+    tmp_path: Path,
+) -> None:
+    fetched: list[tuple[int, str]] = []
+    process = _claude_process()
+
+    def sign_in() -> None:
+        process.print_output("Login successful.\r\n")
+        process.exit(0)
+
+    service = _claude_flow_service(tmp_path, process, _CLAUDE_RELAY_URL, fetched, on_callback=sign_in)
+    started = service.start("anthropic", "subscription")
+
+    status = service.relay_callback(started.flow_id, "/callback?code=the-code&state=relay-state")
+
+    assert fetched == [(54871, "/callback?code=the-code&state=relay-state")]
+    assert status.state is FlowState.OK
+    assert status.account_id is not None
+
+
+def test_a_callback_carrying_a_denial_is_answered_with_why_the_sign_in_failed(tmp_path: Path) -> None:
+    process = _claude_process()
+
+    def deny() -> None:
+        process.print_output("Login failed: No authorization code received\r\n")
+        process.exit(1)
+
+    service = _claude_flow_service(tmp_path, process, _CLAUDE_RELAY_URL, [], on_callback=deny)
+    started = service.start("anthropic", "subscription")
+
+    status = service.relay_callback(started.flow_id, "/callback?error=access_denied&state=relay-state")
+
+    assert status.state is FlowState.FAILED
+    assert status.detail == "Access wasn't approved on Claude's page."
+
+
+def test_a_callback_the_cli_does_not_take_is_answered_with_how_the_flow_stands(tmp_path: Path) -> None:
+    def unreachable() -> None:
+        raise RelayCallbackError("the sign-in did not answer (ConnectTimeout)")
+
+    service = _claude_flow_service(tmp_path, _claude_process(), _CLAUDE_RELAY_URL, [], on_callback=unreachable)
+    started = service.start("anthropic", "subscription")
+
+    status = service.relay_callback(started.flow_id, "/callback?code=the-code&state=relay-state")
+
+    assert status.state is FlowState.PENDING
+
+
+def test_a_relayed_callback_gives_the_flow_the_short_verdict_deadline(tmp_path: Path) -> None:
+    service = _claude_flow_service(tmp_path, _claude_process(), _CLAUDE_RELAY_URL, [])
+    started = service.start("anthropic", "subscription")
+
+    status = service.relay_callback(started.flow_id, "/callback?code=the-code&state=relay-state")
+
+    assert status.state is FlowState.PENDING
+    session = service._session
+    assert session is not None and session.timer is not None
+    assert session.timer.interval == 120.0
+    service.abort(started.flow_id)
+
+
+@pytest.mark.parametrize(
+    "path_and_query",
+    [
+        pytest.param("/callback?code=the-code&state=someone-elses", id="wrong-state"),
+        pytest.param("/callback?code=the-code", id="no-state"),
+        pytest.param("/elsewhere?code=the-code&state=relay-state", id="wrong-path"),
+        pytest.param("//evil.example/callback?state=relay-state", id="another-host"),
+        pytest.param("http://127.0.0.1:22/?state=relay-state", id="absolute-url"),
+    ],
+)
+def test_a_first_request_that_is_not_this_sign_ins_callback_is_refused(tmp_path: Path, path_and_query: str) -> None:
+    fetched: list[tuple[int, str]] = []
+    service = _claude_flow_service(tmp_path, _claude_process(), _CLAUDE_RELAY_URL, fetched)
+    started = service.start("anthropic", "subscription")
+
+    with pytest.raises(FlowError):
+        service.relay_callback(started.flow_id, path_and_query)
+
+    assert fetched == []
+
+
+def test_the_callback_is_taken_only_once(tmp_path: Path) -> None:
+    fetched: list[tuple[int, str]] = []
+    service = _claude_flow_service(tmp_path, _claude_process(), _CLAUDE_RELAY_URL, fetched)
+    started = service.start("anthropic", "subscription")
+
+    service.relay_callback(started.flow_id, "/callback?code=the-code&state=relay-state")
+    with pytest.raises(FlowError, match="already been handled"):
+        service.relay_callback(started.flow_id, "/callback?code=the-code&state=relay-state")
+
+    assert fetched == [(54871, "/callback?code=the-code&state=relay-state")]
+
+
+def test_a_sign_in_without_a_relay_takes_no_callback(tmp_path: Path) -> None:
+    service = _claude_flow_service(tmp_path, _claude_process(), None, [])
+    started = service.start("anthropic", "subscription")
+
+    with pytest.raises(FlowError):
+        service.relay_callback(started.flow_id, "/callback?code=the-code&state=relay-state")
+
+
+def test_the_sign_in_url_file_goes_with_the_flow(tmp_path: Path) -> None:
+    url_files: list[Path] = []
+
+    def spawner(*_args: object, env: dict[str, str], **_kwargs: object) -> FakePexpectProcess:
+        url_files.append(Path(env["MINDS_SIGNIN_URL_FILE"]))
+        url_files[0].write_text(_CLAUDE_RELAY_URL + "\n")
+        return _claude_process()
+
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    service = AuthFlowService.create(home=tmp_path, work_dir=work_dir, spawner=spawner, probe=lambda *_a: SignedIn.YES)
+    started = service.start("anthropic", "subscription")
+    assert url_files[0].exists()
+
+    service.abort(started.flow_id)
+
+    assert not url_files[0].parent.exists()
+
+
+def test_the_cli_is_given_the_browser_shim(tmp_path: Path) -> None:
+    browsers: list[str] = []
+
+    def spawner(*_args: object, env: dict[str, str], **_kwargs: object) -> FakePexpectProcess:
+        browsers.append(env["BROWSER"])
+        return _claude_process()
+
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    service = AuthFlowService.create(home=tmp_path, work_dir=work_dir, spawner=spawner, probe=lambda *_a: SignedIn.YES)
+
+    service.start("anthropic", "console")
+
+    assert browsers == [str(work_dir / "system" / "scripts" / "minds_browser_shim")]

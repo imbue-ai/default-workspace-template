@@ -37,8 +37,8 @@ build_inputs = [
     "system/scripts/install_secret_scanners.sh",
     "system/scripts/agy_install-1.1.22.sh",
     "system/scripts/install_owner_exec.sh",
-    "system/scripts/install_dufs.sh",
     "system/scripts/install_earlyoom.sh",
+    "system/scripts/install_agent_plugins.sh",
     "system/scripts/install_dependencies.sh",
     "system/scripts/_mngr_git_auth.sh",
     "system/scripts/build_workspace.sh",
@@ -59,6 +59,9 @@ build_inputs = [
 [framework]
 type = "pytest"
 command = "uv run pytest"
+# Skip assertion-rewriting during `pytest --collect-only` -- pure overhead
+# there (OFFLOAD-18).
+discovery_args = "--assert=plain"
 # Inside the image every workspace-only test can run, so a skip is a missing install (pytest-workspace-env).
 env = { DWT_REQUIRE_WORKSPACE_ENV = "1" }
 

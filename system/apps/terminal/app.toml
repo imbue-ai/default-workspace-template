@@ -1,11 +1,16 @@
 name = "terminal"
 display_name = "Terminal"
+description = "Web terminals inside the workspace, one per window."
+api_schema_path = "/api/schema"
 icon = "icon.svg"
 # The terminal program serves the wrapper pages on 7681; ttyd runs on the terminal-pty origin
 # (system/apps/terminal_pty/app.toml, port 7683).
 critical = true
 priority = "terminal"
 launcher_rank = 40
+# Part of the workspace itself rather than an app built on it, so the Share tab tucks it under its System group
+# rather than offering it up front.
+system = true
 # A terminal lives as long as a window shows it: the shell posts every closed window here and
 # the app collects what no window shows (docs/system/specs/window-bound-resources.md).
 window_closed_path = "/api/window-closed"

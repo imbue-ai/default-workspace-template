@@ -6,7 +6,7 @@ Top to bottom: a search field over its own content; "Start something", eight int
 a row (four at first, the rest behind "See more"), each with a seeded first message; "Start
 from a template", the published template catalog by shelf, with a detail page (the drawing,
 the write-up, what the template needs, its repository) whose two actions adopt the template
-into this machine or have a new machine made from it. Every tile and both actions start a
+into this workspace or have a new workspace made from it. Every tile and both actions start a
 chat through one contract message, `shell:start-with-text`, which the desktop runs as its
 launcher's primary text action; the page names no app, and the Getting Started window stays
 where it is while the chat comes up beside it.
@@ -19,6 +19,8 @@ from its own uv tool environment (`system/scripts/build_workspace.sh`), serving 
   placeholder until it is built), with its bundle under `/assets/`.
 - `GET /api/health`: `{"status", "is_frontend_built"}`, the app's liveness probe (the update
   apply's post-restart probes cover critical apps only, which this one is not).
+- `GET /api/schema`: the OpenAPI document of these routes, built from the app's url map
+  (`system/libs/app_schema`); the manifest's `api_schema_path`.
 - `GET /api/templates-catalog`: the template catalog (`catalog/README.md` at the repo root),
   fetched from `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL` (the shell's old variable name, kept
   so nothing outside the workspace changes), reused for six hours, and kept as a last good
@@ -32,8 +34,10 @@ first-visit opener (`first_window.py`): while `data/.state/getting-started/first
 does not say the window was delivered, it polls the shell's client list and, for the first
 connected client, posts an `open` of `/` on the first desktop and a `place` at the left
 complement of the pinned chat's frame through the loopback op route, then records the
-delivery. The shell seeds nothing for it; this is the same shape the chat app's auto-open
-takes for the welcome chat. A boot with `--no-register` does neither, since both would reach
+delivery. A window the `open` finds popped out into its own Imbue Studio window is on screen
+already: it is left there, with no `place`, and the delivery recorded. The shell seeds
+nothing for it; this is the same shape the chat app's auto-open takes for the welcome chat.
+A boot with `--no-register` does neither, since both would reach
 the live workspace: that is how its `[preview]` table boots it (`getting-started --no-register
 --state-dir {scratch}/state` on a free port, what `update-app`'s `preview_app.py` runs), with
 the catalog cache in the scratch state directory.

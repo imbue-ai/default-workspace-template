@@ -45,8 +45,8 @@ function ChatDocument(chatId: string, agentId: string, sessionId: string): m.Com
         sessionId === ""
           ? m(ChatPanel, { chatId, isVisible: isFrameRendered(), isCompact: isCompactLayout() })
           : m(SubagentView, { chatId, agentId, subagentSessionId: sessionId }),
-        // The provider chooser: the chat root offers it when nothing is signed in, and the model
-        // bar's "+ Add a provider" and a provider-fault notice open it from inside a chat.
+        // The provider chooser: a chat with no provider to start on opens it from its composer, and
+        // the model bar's "+ Add a provider" and a provider-fault notice open it too.
         isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
       ]);
     },
@@ -66,8 +66,8 @@ async function bootstrap(): Promise<void> {
   addActiveAgentChangedListener((chatId) => forgetPendingChoice(chatId));
   initShellPermissionResolutions();
   const isChatPage = sessionId === "";
-  // Only the chat's own page reports the chat's presence: a subagent view is a second page
-  // of the same chat in the same client, and its reports would overwrite the chat page's.
+  // Only the chat's own page reports the chat's presence: a subagent view on screen is not the
+  // chat being read.
   const connection = connectChatToShell(chatId, {
     isPresenceReported: isChatPage,
     path: isChatPage ? `/${chatId}` : `/${chatId}.${agentId}.${sessionId}`,

@@ -20,7 +20,9 @@ like every Python app with a manifest):
   `new` launch path, posted by the shell with an optional `workdir`) allocates the
   lowest free `terminal-N`, creates its tmux session, and answers `{"path"}`, the
   page the shell then opens a window at (`docs/system/blueprint/post-launch-paths/`);
-  `/api/sessions/<name>` is what the page refreshes from, `/api/health` the probe, and
+  `/api/sessions/<name>` is what the page refreshes from, `/api/health` the probe,
+  `GET /api/schema` the OpenAPI document of these routes (the manifest's
+  `api_schema_path`, built by `system/libs/app_schema`), and
   `POST /api/window-closed` (the manifest's `window_closed_path`) where the shell
   posts a closed window of the terminal so the window sweep below runs at once.
   It appends the `server_registered` discovery event to
@@ -107,7 +109,7 @@ session in its URL, and a reload reattaches to that session.
 
 `window_sweep.py` (`WindowSweeper`) reads the shell's desktops
 (`GET /api/desktops` on `MINDS_WORKSPACE_SERVER_URL`, through
-`app_manifest.shell_windows`) and hands the terminal's window paths to
+`workspace_layout.windows`) and hands the terminal's window paths to
 `TmuxSessionSource.sweep_windows`: a remembered terminal some window shows is
 marked window-seen in the store (`is_window_seen`), and one that was marked and
 no window shows any more is deleted. A terminal no window has ever shown (a

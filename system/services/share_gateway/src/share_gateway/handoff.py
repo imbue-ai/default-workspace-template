@@ -16,6 +16,7 @@ import time
 
 import httpx
 import jwt
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from jwt import algorithms as jwt_algorithms
 
 from share_gateway.identity import RequesterIdentity
@@ -32,24 +33,26 @@ class HandoffVerificationError(ValueError):
 class JwksCache:
     """Fetches and caches the broker's JWKS, refreshing once when a kid is unknown."""
 
-    def __init__(self, jwks_url: str, preloaded_keys_by_kid: dict[str, object] | None = None) -> None:
+    def __init__(self, jwks_url: str, preloaded_keys_by_kid: dict[str, RSAPublicKey] | None = None) -> None:
         # preloaded_keys_by_kid lets tests (and pre-warmed callers) inject keys
         # without a network fetch; unknown kids still trigger a refresh.
         self._jwks_url = jwks_url
-        self._keys_by_kid: dict[str, object] = dict(preloaded_keys_by_kid or {})
+        self._keys_by_kid: dict[str, RSAPublicKey] = dict(preloaded_keys_by_kid or {})
         self._lock = threading.Lock()
 
     def _refresh(self) -> None:
         response = httpx.get(self._jwks_url, timeout=_JWKS_FETCH_TIMEOUT_SECONDS)
         response.raise_for_status()
-        fresh_keys: dict[str, object] = {}
+        fresh_keys: dict[str, RSAPublicKey] = {}
         for key_entry in response.json().get("keys", []):
             kid = key_entry.get("kid")
             if kid and key_entry.get("kty") == "RSA":
-                fresh_keys[str(kid)] = jwt_algorithms.RSAAlgorithm.from_jwk(key_entry)
+                key = jwt_algorithms.RSAAlgorithm.from_jwk(key_entry)
+                if isinstance(key, RSAPublicKey):
+                    fresh_keys[str(kid)] = key
         self._keys_by_kid = fresh_keys
 
-    def key_for_kid(self, kid: str) -> object:
+    def key_for_kid(self, kid: str) -> RSAPublicKey:
         """The public key for ``kid``; raises HandoffVerificationError when unknown even after refresh."""
         with self._lock:
             cached = self._keys_by_kid.get(kid)

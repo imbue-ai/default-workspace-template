@@ -1,24 +1,40 @@
 """Tests for agent_discovery module."""
 
 from collections.abc import Sequence
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 
 import pytest
 
+from imbue.chat.agent_discovery import COMPACT_UNAVAILABLE_SEND_FAILURE_KIND
+from imbue.chat.agent_discovery import COMPACT_WHILE_BUSY_DETAIL
 from imbue.chat.agent_discovery import MngrMessenger
+from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_discovery import _first_failure
+from imbue.chat.agent_discovery import compact_stale_agents_if_enabled
 from imbue.chat.agent_discovery import discover_agents
 from imbue.chat.agent_discovery import read_claude_config_dir_from_env_file
+from imbue.chat.agent_discovery import request_idle_compaction
+from imbue.chat.mock_compaction_agent_test import RecordingCompactionAgent
+from imbue.chat.testing import use_mngr_settings
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.message import AgentSendFailure
 from imbue.mngr.api.message import MessageResult
 from imbue.mngr.config.data_types import MngrContext
+from imbue.mngr.errors import AgentNoLongerIdleError
+from imbue.mngr.errors import AgentNotFoundError
+from imbue.mngr.errors import MessageLockTimeoutError
+from imbue.mngr.errors import MngrError
 from imbue.mngr.errors import SendFailureKind
+from imbue.mngr.errors import SendMessageError
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentName
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostName
 from imbue.mngr.primitives import ProviderInstanceName
+from imbue.mngr_autocompact.manager import COMPACTION_MESSAGE_LOCK_TIMEOUT_SECONDS
+from imbue.mngr_autocompact.manager import compact_stale_agents_by_name
 
 
 def test_reads_claude_config_dir_from_env_file(tmp_path: Path) -> None:
@@ -312,3 +328,106 @@ def test_unknown_config_field_degrades_to_a_warning_not_a_failure(
     # the unknown field was reported rather than swallowed silently.
     assert agents == []
     assert any("field_from_a_newer_mngr" in record for record in loguru_records)
+
+
+def test_compacting_agents_that_no_longer_exist_compacts_nothing_and_raises_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The sweep lists its chats a moment before this call, so a name may already be gone."""
+    use_mngr_settings('[plugins.autocompact]\nmode = "proactive_timer"\n', tmp_path, monkeypatch)
+
+    assert compact_stale_agents_if_enabled(["chat-that-was-destroyed"], compact_stale_agents_by_name) == []
+
+
+@pytest.mark.parametrize(
+    ("settings", "expected_batches", "expected_compacted"),
+    [
+        ("", [], []),
+        ('[plugins.autocompact]\nmode = "on_next_prompt"\n', [], []),
+        ('[plugins.autocompact]\nmode = "proactive_timer"\n', [["chat-alpha", "chat-beta"]], ["chat-alpha"]),
+    ],
+)
+def test_the_plugin_is_called_only_when_the_workspace_mngr_config_has_proactive_compaction_on(
+    settings: str,
+    expected_batches: list[list[str]],
+    expected_compacted: list[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The mode is loaded through mngr's own loader, so the sweep acts exactly when the plugin would."""
+    use_mngr_settings(settings, tmp_path, monkeypatch)
+    recorded_batches: list[list[str]] = []
+
+    def compact_by_name(mngr_ctx: MngrContext, names: Sequence[AgentName]) -> Sequence[AgentName]:
+        recorded_batches.append([str(name) for name in names])
+        return names[:1]
+
+    compacted = compact_stale_agents_if_enabled(["chat-alpha", "chat-beta"], compact_by_name)
+
+    assert recorded_batches == expected_batches
+    assert compacted == expected_compacted
+
+
+_IDLE_SINCE = datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc)
+
+
+def test_an_idle_agent_is_compacted_with_its_idle_start_rechecked_under_a_bounded_lock() -> None:
+    agent = RecordingCompactionAgent(idle_since=_IDLE_SINCE)
+
+    request_idle_compaction(agent, "keep the test plan")
+
+    assert agent.requests == [("keep the test plan", COMPACTION_MESSAGE_LOCK_TIMEOUT_SECONDS, _IDLE_SINCE)]
+
+
+@pytest.mark.parametrize(
+    ("idle_since", "error"),
+    [
+        pytest.param(None, None, id="mid_turn"),
+        pytest.param(
+            _IDLE_SINCE, AgentNoLongerIdleError("agent", _IDLE_SINCE, None), id="started_a_turn_before_the_lock"
+        ),
+        pytest.param(_IDLE_SINCE, MessageLockTimeoutError("agent", 5.0), id="another_send_holds_the_lock"),
+    ],
+)
+def test_an_agent_that_is_not_idle_is_declined_rather_than_compacted(
+    idle_since: datetime | None, error: MngrError | None
+) -> None:
+    agent = RecordingCompactionAgent(idle_since=idle_since, error=error)
+
+    with pytest.raises(SendFailedError) as raised:
+        request_idle_compaction(agent, None)
+
+    assert (raised.value.detail, raised.value.kind) == (
+        COMPACT_WHILE_BUSY_DETAIL,
+        COMPACT_UNAVAILABLE_SEND_FAILURE_KIND,
+    )
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+def test_a_compaction_request_reaches_mngr_with_its_instructions() -> None:
+    calls: list[tuple[AgentId, str | None]] = []
+
+    def _compact(agent_id: AgentId, instructions: str | None, ctx: MngrContext) -> None:
+        calls.append((agent_id, instructions))
+
+    MngrMessenger(compact=_compact).request_compaction(_AGENT_ID, "keep the test plan")
+
+    assert calls == [(_AGENT_ID, "keep the test plan")]
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+def test_a_failed_compaction_request_is_a_send_failure_in_mngrs_words() -> None:
+    def _compact(agent_id: AgentId, instructions: str | None, ctx: MngrContext) -> None:
+        raise SendMessageError(str(agent_id), "failed to request context compaction: the daemon hung up")
+
+    with pytest.raises(SendFailedError) as raised:
+        MngrMessenger(compact=_compact).request_compaction(_AGENT_ID, None)
+
+    assert "the daemon hung up" in raised.value.detail
+    assert raised.value.kind == "unknown"
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+def test_a_compaction_request_for_an_agent_mngr_no_longer_lists_raises_not_found() -> None:
+    with pytest.raises(AgentNotFoundError):
+        MngrMessenger().request_compaction(AgentId("agent-0000000000000000000000000000dead"), None)

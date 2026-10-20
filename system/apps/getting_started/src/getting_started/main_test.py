@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from app_manifest.registry import ENV_APPS_FILE
+from app_manifest.registry_location import ENV_APPS_FILE
 from getting_started.config import Config
 from getting_started.first_window import LEDGER_FILENAME
 from getting_started.first_window import OPENER_THREAD_NAME

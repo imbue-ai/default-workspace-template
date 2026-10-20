@@ -33,8 +33,17 @@ def _events(events_path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in events_path.read_text().splitlines() if line]
 
 
-def _registered(name: str, url: str, label: str = "", display_name: str | None = None) -> str:
-    return registry_row_toml(name, url, label=label, display_name=display_name)
+def _registered(
+    name: str,
+    url: str,
+    label: str = "",
+    display_name: str | None = None,
+    is_internal: bool = False,
+    is_system: bool = False,
+) -> str:
+    return registry_row_toml(
+        name, url, label=label, display_name=display_name, is_internal=is_internal, is_system=is_system
+    )
 
 
 def test_the_first_announcement_registers_every_app(
@@ -113,30 +122,68 @@ def test_a_relabelled_app_is_re_announced(announcement_writer: AppAnnouncementWr
     assert events[1]["label"] == "chat-bbbb2222"
 
 
+def test_an_announcement_carries_whether_the_app_is_a_system_or_internal_app(
+    announcement_writer: AppAnnouncementWriter, tmp_path: Path
+) -> None:
+    """The minds Share tab never lists an internal app, tucks a system app under its System group, and offers the
+    rest up front; it reads which is which from these two fields alone."""
+    announcement_writer.announce(
+        _rows(
+            tmp_path,
+            _registered("files", "http://localhost:8300"),
+            _registered("terminal", "http://localhost:7681", is_system=True),
+            _registered("terminal-pty", "http://localhost:7683", is_internal=True),
+        )
+    )
+
+    assert {
+        event["service"]: (event["system"], event["internal"]) for event in _events(announcement_writer.events_path)
+    } == {
+        "files": (False, False),
+        "terminal": (True, False),
+        "terminal-pty": (False, True),
+    }
+
+
+def test_an_app_that_became_a_system_or_internal_app_is_re_announced(
+    announcement_writer: AppAnnouncementWriter, tmp_path: Path
+) -> None:
+    """An upgrade can change either declaration alone, and each moves the app on the Share tab."""
+    announcement_writer.announce(_rows(tmp_path, _registered("files", "http://localhost:8300")))
+
+    announcement_writer.announce(_rows(tmp_path, _registered("files", "http://localhost:8300", is_system=True)))
+    announcement_writer.announce(_rows(tmp_path, _registered("files", "http://localhost:8300", is_internal=True)))
+
+    events = _events(announcement_writer.events_path)
+    assert [(event["service"], event["system"], event["internal"]) for event in events] == [
+        ("files", False, False),
+        ("files", True, False),
+        ("files", False, True),
+    ]
+
+
 def test_an_announcement_carries_the_apps_display_name(
     announcement_writer: AppAnnouncementWriter, tmp_path: Path
 ) -> None:
     """The stream is the only way the name users read leaves the workspace, and the minds desktop's share panel
     has nothing but the registered name to show without it."""
-    announcement_writer.announce(
-        _rows(tmp_path, _registered("files", "http://localhost:8300", display_name="File Viewer"))
-    )
+    announcement_writer.announce(_rows(tmp_path, _registered("files", "http://localhost:8300", display_name="Files")))
 
-    assert _events(announcement_writer.events_path)[0]["display_name"] == "File Viewer"
+    assert _events(announcement_writer.events_path)[0]["display_name"] == "Files"
 
 
 def test_a_renamed_app_is_re_announced(announcement_writer: AppAnnouncementWriter, tmp_path: Path) -> None:
     """An upgrade can change a manifest's display name alone, and consumers show it, so it must reach them
     even though the app's name, URL, and label are untouched."""
-    announcement_writer.announce(_rows(tmp_path, _registered("files", "http://localhost:8300", display_name="Files")))
-
     announcement_writer.announce(
         _rows(tmp_path, _registered("files", "http://localhost:8300", display_name="File Viewer"))
     )
 
+    announcement_writer.announce(_rows(tmp_path, _registered("files", "http://localhost:8300", display_name="Files")))
+
     events = _events(announcement_writer.events_path)
     assert [(event["type"], event["service"]) for event in events[1:]] == [("service_registered", "files")]
-    assert events[1]["display_name"] == "File Viewer"
+    assert events[1]["display_name"] == "Files"
 
 
 def test_a_row_with_no_manifest_announces_an_empty_display_name() -> None:

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import httpx
 
+from share_gateway.json_values import is_json_object
 from share_gateway.log import log as _log
 
 _ASSIGNMENT_TIMEOUT_SECONDS = 30.0
@@ -43,14 +44,14 @@ def _split_endpoint(endpoint: str) -> tuple[str, int] | None:
 
 def parse_assignment(body: object) -> RelayAssignment | None:
     """Parse an assignment response body; None when it carries no usable relay endpoint."""
-    if not isinstance(body, dict):
+    if not is_json_object(body):
         return None
     raw_endpoints = body.get("relay_endpoints")
     if not isinstance(raw_endpoints, list):
         return None
     endpoint_by_relay_id: dict[str, tuple[str, int]] = {}
     for entry in raw_endpoints:
-        if not isinstance(entry, dict):
+        if not is_json_object(entry):
             continue
         relay_id = entry.get("relay_id")
         split = _split_endpoint(str(entry.get("endpoint", "")))

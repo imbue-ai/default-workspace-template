@@ -2,11 +2,13 @@
  * Activity strip that sits just above the message input -- the harness-common shell.
  *
  * The backend (the chat app) is the source of truth for *which* state the agent
- * is in -- IDLE / THINKING / TOOL_RUNNING -- delivered on ``activity_state`` via the
- * ``chats_updated`` WS payload. This component's job is to render a label:
+ * is in -- IDLE / THINKING / TOOL_RUNNING / COMPACTING -- delivered on ``activity_state`` via
+ * the ``chats_updated`` WS payload. This component's job is to render a label:
  *   - IDLE / null      -> hidden
  *   - THINKING         -> "Thinking…"
  *   - TOOL_RUNNING     -> the in-flight tool call, captioned by the agent's harness
+ *   - COMPACTING       -> "Compacting…", named for who started it ("Compacting while idle…"),
+ *                         and "…, then replying…" once a message is queued behind it
  *
  * The TOOL_RUNNING caption is read straight off the tool call: the harness's own
  * parser labelled it, so this view needs no notion of which harness is running.
@@ -21,12 +23,18 @@
  * genuinely IDLE and the strip would show nothing, so the user sees their
  * decision land and then apparent silence. Through that gap the strip says
  * `WAKE_LABEL`, bounded by `WAKE_SPINNER_MS`.
+ *
+ * Above the activity line, whatever it says, sits the wait line (`BackgroundTasksLine`) while
+ * the chat has background tasks pending: the agent may be between turns, but one of them will
+ * start the next.
  */
 
 import m from "mithril";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
-import type { ToolCall, TranscriptEvent } from "../models/Response";
-import { getChatById } from "../models/Chats";
+import type { CompactionCause, ToolCall, TranscriptEvent } from "../models/Response";
+import { COMPACTING_STATE } from "../models/activityState";
+import { getChatById, getQueuedMessagesForChat } from "../models/Chats";
+import { BackgroundTasksLine } from "./BackgroundTasksLine";
 import { handoffPhaseText } from "./handoff-phase";
 import { resolutionRequestIdOf } from "./message-classification";
 import { hasShellResolutionSince, shellResolutionArrivalFor } from "./permission-card";
@@ -56,31 +64,46 @@ function pendingToolCall(events: TranscriptEvent[]): ToolCall | null {
   return null;
 }
 
-// Activity states in which the agent has an interruptible turn in progress.
-const WORKING_ACTIVITY_STATES: ReadonlySet<string> = new Set(["THINKING", "TOOL_RUNNING"]);
-
-/**
- * Whether the given server-derived activity state means the agent is in the
- * middle of an interruptible turn. Drives the visibility of the stop button.
- */
-export function isWorkingActivityState(state: string | null | undefined): boolean {
-  return state !== null && state !== undefined && WORKING_ACTIVITY_STATES.has(state);
-}
-
 /** The in-flight tool caption, as labelled by the harness that produced the call. */
 function labelForToolCall(tc: ToolCall): string {
   return tc.caption_label || "Running tool…";
 }
 
+function compactingLead(cause: CompactionCause | null): string {
+  switch (cause) {
+    case "manual":
+      return "Compacting as requested";
+    case "idle":
+      return "Compacting while idle";
+    case "native":
+      return "Compacting to free up context";
+    default:
+      return "Compacting";
+  }
+}
+
+/** What a running compaction is called, on the strip and on the transcript's chip for its start. */
+export function compactingLabel(cause: CompactionCause | null, hasQueuedMessages: boolean): string {
+  const lead = compactingLead(cause);
+  return hasQueuedMessages ? `${lead}, then replying…` : `${lead}…`;
+}
+
 /**
  * Pick the user-facing label for a server-derived activity state. For TOOL_RUNNING
- * we consult the transcript for the in-flight tool and use its label; every other
- * state is fixed (or null = hide).
+ * we consult the transcript for the in-flight tool and use its label; COMPACTING
+ * says who started it and whether a queued message waits on it; every other state is fixed
+ * (or null = hide).
  */
-export function labelForActivityState(state: string | null | undefined, events: TranscriptEvent[]): string | null {
+export function labelForActivityState(
+  state: string | null | undefined,
+  events: TranscriptEvent[],
+  hasQueuedMessages = false,
+  compactionCause: CompactionCause | null = null,
+): string | null {
   if (state === null || state === undefined) return null;
   if (state === "IDLE") return null;
   if (state === "THINKING") return "Thinking…";
+  if (state === COMPACTING_STATE) return compactingLabel(compactionCause, hasQueuedMessages);
   if (state === "TOOL_RUNNING") {
     const pending = pendingToolCall(events);
     if (pending !== null) return labelForToolCall(pending);
@@ -99,7 +122,10 @@ const WAKE_LABEL = "Confirming permission changes…";
 // server's activity states -- the server has no signal for this beat.
 const WAKE_STATE = "WAKING";
 
-function renderStrip(label: string, state: string | null | undefined): m.Vnode {
+// The centred column the strip and the wait line share, above the centred input.
+const STRIP_COLUMN_CLASS = "mx-auto mb-2 w-full max-w-(--width-message-column)";
+
+function renderStrip(label: string, state: string | null | undefined, columnClass: string): m.Vnode {
   // `flex` (not inline-flex) so the auto side-margins can horizontally center
   // the strip within the footer above the centered input. The dot's pulse
   // keyframes (agent-activity-pulse) live in the library's base.css.
@@ -107,7 +133,7 @@ function renderStrip(label: string, state: string | null | undefined): m.Vnode {
     "div",
     {
       class:
-        "agent-activity-indicator mx-auto mb-2 flex w-full max-w-(--width-message-column) items-center gap-2 px-1 " +
+        `agent-activity-indicator ${columnClass} flex items-center gap-2 px-1 ` +
         "text-(length:--font-size-helper) text-secondary",
       "data-state": state,
       role: "status",
@@ -215,68 +241,87 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
     }
   };
 
+  /** The activity line: the switch's phase, the turn's caption, or the wake-up caption; null when there is none. */
+  const activityStrip = (attrs: ActivityIndicatorAttrs, columnClass: string): m.Vnode | null => {
+    const { chatId, events } = attrs;
+    const chat = getChatById(chatId);
+    // A chat switching harness reports the switch, not the retiring agent's turn: that
+    // agent is busy with the summary it was asked for, which is the switch's own business.
+    // The failed phase has its own notice over the composer and shows nothing here.
+    if (chat !== undefined && chat.handoff !== null && chat.handoff.phase !== "failed") {
+      cancelRelease();
+      cancelWake();
+      heldToolCaption = null;
+      return renderStrip(
+        handoffPhaseText(chat.handoff, chat.active_agent.harness),
+        `HANDOFF_${chat.handoff.phase}`,
+        columnClass,
+      );
+    }
+    const state = chat?.active_agent.activity_state ?? null;
+    const label = labelForActivityState(
+      state,
+      events,
+      getQueuedMessagesForChat(chatId).length > 0,
+      chat?.active_agent.compaction_cause ?? null,
+    );
+
+    const now = Date.now();
+    if (state === "TOOL_RUNNING" && label !== null) {
+      // Active tool -> (re)start the hold window; cancel any pending release.
+      cancelRelease();
+      heldToolCaption = label;
+      heldUntil = now + TOOL_CAPTION_MIN_MS;
+    } else if (state === "THINKING" && heldToolCaption !== null && now < heldUntil) {
+      // Still working, but the tool cleared fast -- keep the caption up briefly so
+      // it doesn't flash, then release. Schedule a redraw at the release point.
+      if (releaseTimer === null) {
+        releaseTimer = window.setTimeout(() => {
+          releaseTimer = null;
+          heldToolCaption = null;
+          m.redraw();
+        }, heldUntil - now);
+      }
+      cancelWake();
+      return renderStrip(heldToolCaption, "TOOL_RUNNING", columnClass);
+    } else {
+      // IDLE / null (turn ended), window expired, or nothing held -> release now.
+      cancelRelease();
+      heldToolCaption = null;
+    }
+
+    if (label === null) {
+      // Nothing else is going on, so this is the only moment the wake-up
+      // caption may take the strip -- a real turn always outranks it.
+      const wakeDeadline = wakeUpSpinnerDeadline(events, now);
+      if (wakeDeadline !== null) {
+        if (wakeTimer === null) {
+          wakeTimer = window.setTimeout(() => {
+            wakeTimer = null;
+            m.redraw();
+          }, wakeDeadline - now);
+        }
+        return renderStrip(WAKE_LABEL, WAKE_STATE, columnClass);
+      }
+      cancelWake();
+      return null;
+    }
+    cancelWake();
+    return renderStrip(label, state, columnClass);
+  };
+
   return {
     onremove() {
       cancelRelease();
       cancelWake();
     },
     view(vnode) {
-      const { chatId, events } = vnode.attrs;
-      const chat = getChatById(chatId);
-      // A chat switching harness reports the switch, not the retiring agent's turn: that
-      // agent is busy with the summary it was asked for, which is the switch's own business.
-      // The failed phase has its own notice over the composer and shows nothing here.
-      if (chat !== undefined && chat.handoff !== null && chat.handoff.phase !== "failed") {
-        cancelRelease();
-        cancelWake();
-        heldToolCaption = null;
-        return renderStrip(handoffPhaseText(chat.handoff, chat.active_agent.harness), `HANDOFF_${chat.handoff.phase}`);
-      }
-      const state = chat?.active_agent.activity_state ?? null;
-      const label = labelForActivityState(state, events);
-
-      const now = Date.now();
-      if (state === "TOOL_RUNNING" && label !== null) {
-        // Active tool -> (re)start the hold window; cancel any pending release.
-        cancelRelease();
-        heldToolCaption = label;
-        heldUntil = now + TOOL_CAPTION_MIN_MS;
-      } else if (state === "THINKING" && heldToolCaption !== null && now < heldUntil) {
-        // Still working, but the tool cleared fast -- keep the caption up briefly so
-        // it doesn't flash, then release. Schedule a redraw at the release point.
-        if (releaseTimer === null) {
-          releaseTimer = window.setTimeout(() => {
-            releaseTimer = null;
-            heldToolCaption = null;
-            m.redraw();
-          }, heldUntil - now);
-        }
-        cancelWake();
-        return renderStrip(heldToolCaption, "TOOL_RUNNING");
-      } else {
-        // IDLE / null (turn ended), window expired, or nothing held -> release now.
-        cancelRelease();
-        heldToolCaption = null;
-      }
-
-      if (label === null) {
-        // Nothing else is going on, so this is the only moment the wake-up
-        // caption may take the strip -- a real turn always outranks it.
-        const wakeDeadline = wakeUpSpinnerDeadline(events, now);
-        if (wakeDeadline !== null) {
-          if (wakeTimer === null) {
-            wakeTimer = window.setTimeout(() => {
-              wakeTimer = null;
-              m.redraw();
-            }, wakeDeadline - now);
-          }
-          return renderStrip(WAKE_LABEL, WAKE_STATE);
-        }
-        cancelWake();
-        return null;
-      }
-      cancelWake();
-      return renderStrip(label, state);
+      const tasks = getChatById(vnode.attrs.chatId)?.active_agent.background_tasks ?? [];
+      if (tasks.length === 0) return activityStrip(vnode.attrs, STRIP_COLUMN_CLASS);
+      return m("div", { class: `agent-activity-stack ${STRIP_COLUMN_CLASS} flex flex-col gap-1` }, [
+        m(BackgroundTasksLine, { tasks }),
+        activityStrip(vnode.attrs, ""),
+      ]);
     },
   };
 }

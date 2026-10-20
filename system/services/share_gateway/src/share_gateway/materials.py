@@ -14,6 +14,7 @@ always carries a new relay token) starts.
 
 import hashlib
 import json
+import os
 import re
 import secrets
 from pathlib import Path
@@ -39,6 +40,10 @@ CADDYFILE_PATH = STATE_DIR / "Caddyfile"
 # its region. The last-fetched relay assignment is cached so a container
 # restart brings the tunnels up without the connector.
 ASSIGNMENT_CACHE_PATH = STATE_DIR / "assignment.json"
+# The domain the workspace was last shared under. Unlike everything else here it outlives an unshare: an address the
+# workspace handed out under it (an agent's link to an app) still routes to the app after sharing is turned off, and
+# works again for visitors once it is turned back on, since a re-share keeps the domain. The shell reads it.
+SHARE_DOMAIN_FILE = Path("data/.state/share_domain")
 # Where the runner reports the stack's provisioning state (up / retrying /
 # halted, the last error, the next retry time) for the Imbue Studio desktop client;
 # removed at unshare along with the rest of the stack.
@@ -176,19 +181,60 @@ def discard_signing_secret(path: Path) -> bool:
 _VALID_AUTH_LABEL = re.compile(r"^auth-[a-z0-9]{" + str(_AUTH_LABEL_RANDOM_LENGTH) + r"}$")
 
 
+def _stored_auth_label(path: Path) -> str | None:
+    """The file's text, or None when there is no file (a malformed value is returned as is)."""
+    try:
+        return path.read_text().strip()
+    except FileNotFoundError:
+        return None
+
+
 def load_or_create_auth_label(path: Path) -> str:
     """The workspace's dedicated ``auth-<rand>`` origin label, generated once and persisted.
 
     Stable across unshare/re-share (like the cert) so the auth origin does not
     move. A stored value that does not match the expected shape is replaced.
+
+    Two processes can create it at once: the gateway starting the stack on a
+    first publish, and the ``agent-access`` CLI minting an invite right after
+    that publish. The create is therefore an atomic link of a complete file,
+    and the loser answers the winner's label rather than a second one that
+    the running gateway would not serve.
     """
-    if path.exists():
-        existing = path.read_text().strip()
-        if _VALID_AUTH_LABEL.match(existing):
-            return existing
+    stored = _stored_auth_label(path)
+    if stored is not None and _VALID_AUTH_LABEL.match(stored):
+        return stored
     suffix = "".join(secrets.choice(_AUTH_LABEL_ALPHABET) for _ in range(_AUTH_LABEL_RANDOM_LENGTH))
     label = f"auth-{suffix}"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(label)
-    path.chmod(0o600)
-    return label
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}")
+    temporary.write_text(label)
+    temporary.chmod(0o600)
+    try:
+        if stored is None:
+            try:
+                os.link(temporary, path)
+                return label
+            except FileExistsError:
+                winner = _stored_auth_label(path)
+                if winner is not None and _VALID_AUTH_LABEL.match(winner):
+                    return winner
+        os.replace(temporary, path)
+        return label
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def record_share_domain(path: Path, workspace_domain: str) -> None:
+    """Record the domain the workspace is shared under, rewriting the file only when it names another one (an
+    undecodable file names none)."""
+    text = f"{workspace_domain}\n"
+    try:
+        if path.read_text() == text:
+            return
+    except (FileNotFoundError, UnicodeDecodeError):
+        pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.name}.tmp")
+    temporary.write_text(text)
+    temporary.replace(path)

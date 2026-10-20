@@ -1,8 +1,10 @@
 /**
  * The chats' drawer in the chat root's phone layout: the list (``ChatRail``, rows unchanged)
- * on a panel that slides in from the left over the chat, with a scrim over the rest. A tap on
- * the scrim, Escape, or dragging the panel back to the left dismisses it; while a modal is open
- * over the drawer, Escape is the modal's.
+ * on a panel that slides in from the left over the chat, floating with a menu's soft shadow over
+ * a clear scrim that takes the tap beside it. On a touchscreen the panel takes most of the
+ * width; under a mouse it is as wide as the rail the list draws in a wider window. A tap on the
+ * scrim, Escape, or dragging the panel back to the left dismisses it; while a modal is open over
+ * the drawer, Escape is the modal's.
  */
 
 import m from "mithril";
@@ -25,7 +27,6 @@ export function ChatDrawer(): m.Component<ChatDrawerAttrs> {
   let onDismiss: () => void = () => undefined;
   let isCovered = false;
   let panel: HTMLElement | null = null;
-  let scrim: HTMLElement | null = null;
   // The press being followed, from its pointerdown to its release; null between presses.
   let press: { pointerId: number; startX: number; startY: number; offset: number; isDragging: boolean } | null = null;
   // Set when a press ended as a drag, so the click it releases into does not also pick a row.
@@ -35,7 +36,6 @@ export function ChatDrawer(): m.Component<ChatDrawerAttrs> {
     if (panel === null) return;
     panel.style.transition = isAnimated ? "transform var(--dur-slow) ease-out" : "none";
     panel.style.transform = offset === 0 ? "" : `translateX(${offset}px)`;
-    if (scrim !== null) scrim.style.opacity = String(1 + offset / panel.offsetWidth);
   }
 
   function onPointerMove(event: PointerEvent): void {
@@ -96,7 +96,6 @@ export function ChatDrawer(): m.Component<ChatDrawerAttrs> {
     oncreate({ dom }) {
       window.addEventListener("keydown", onKeydown);
       panel = dom.querySelector<HTMLElement>(".chat-drawer-panel");
-      scrim = dom.querySelector<HTMLElement>(".chat-drawer-scrim");
       // Native listeners: a drag moves the panel directly, frame by frame, with no redraw of the root behind it.
       panel?.addEventListener("pointerdown", onPointerDown);
       panel?.addEventListener("click", swallowClickAfterDrag, true);
@@ -107,7 +106,6 @@ export function ChatDrawer(): m.Component<ChatDrawerAttrs> {
       window.removeEventListener("pointerup", endPress);
       window.removeEventListener("pointercancel", endPress);
       panel = null;
-      scrim = null;
       press = null;
     },
     view({ attrs }) {
@@ -115,15 +113,17 @@ export function ChatDrawer(): m.Component<ChatDrawerAttrs> {
       isCovered = attrs.isCovered;
       return m("div", { class: "chat-drawer absolute inset-0 z-(--z-sticky)", "data-chat-drawer": "" }, [
         m("div", {
-          class: "chat-drawer-scrim absolute inset-0 bg-black/30 animate-[modal-overlay-in_160ms_ease-out]",
+          class: "chat-drawer-scrim absolute inset-0 bg-transparent",
           onclick: () => attrs.onDismiss(),
         }),
         m(
           "div",
           {
-            class:
-              "chat-drawer-panel absolute top-0 bottom-0 left-0 flex w-[86%] max-w-[340px] flex-col bg-surface " +
-              "shadow-[8px_0_32px_rgb(0_0_0/0.18)] animate-[chat-drawer-in_160ms_ease-out] touch-pan-y",
+            class: [
+              "chat-drawer-panel absolute top-0 bottom-0 left-0 flex flex-col bg-surface shadow-overlay",
+              "animate-[chat-drawer-in_160ms_ease-out] touch-pan-y",
+              attrs.rail.isTouch ? "w-[86%] max-w-[340px]" : "",
+            ].join(" "),
           },
           m(ChatRail, attrs.rail),
         ),

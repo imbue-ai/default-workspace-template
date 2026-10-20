@@ -191,7 +191,8 @@ def chat_agent_oom_score_adj(
 # terminal) come first, then the UI and the chat app, then the sharing stack,
 # then the runtime-state sync (github-sync, opt-in) and the host backup, then
 # the job scheduler, then the browser stack (its X display, then the
-# coordinator), and last the file viewer.
+# coordinator), then the Files app, and last the two single-page apps
+# (Getting Started, then Memory & disk).
 # ``user`` is the single band every *user-created* service shares;
 # it sits above every built-in service so a user's own service is shed before any
 # built-in one, while staying below USER_AGENT.
@@ -261,20 +262,23 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # (910-1000) is long gone and this display is holding nothing.
     "xvfb": 65,
     # The browser coordinator: the daemon that launches and drives Chromium, not
-    # Chromium itself. The most expendable built-in service, but a *service*
+    # Chromium itself. An expendable built-in service, but a *service*
     # nonetheless -- it holds little memory, the Chromium processes it manages
     # outlive its death, and supervisord restarts it straight back into the same
     # session, so shedding it frees almost nothing. It therefore must stay well
     # below SHARED_BROWSER, where those Chromium processes live: a coordinator
     # ranked above them would be picked first every time and free nothing.
     "browser": 70,
-    # The file viewer: dufs, the tiny static file server the program runs
-    # directly. It holds little memory and supervisord restarts it if shed.
+    # The Files app: a small Flask server over the workspace's files. It
+    # holds little memory and supervisord restarts it if shed.
     "files": 75,
     # The Getting Started page: one static page and a cached catalog. A shed costs
-    # one reload of a window that shows nothing of the user's, so this is the most
-    # expendable built-in service of all.
+    # one reload of a window that shows nothing of the user's.
     "getting-started": 80,
+    # The Memory & disk page: one polling page that writes nothing to disk, so a
+    # shed costs a reload and the memory graph's last 10 minutes. The most
+    # expendable built-in service of all.
+    "system-monitor": 85,
     "user": USER_SERVICE,
     # The shell of a workspace terminal window (and everything run in it), tagged by the
     # terminal app's session command. Not a supervisord program: the pane is a child of the
@@ -350,6 +354,9 @@ def shared_browser_oom_score_adj(self_assigned: int) -> int:
 _NON_SERVICE_PROGRAM_BANDS: Final[dict[str, int]] = {
     "earlyoom": PROTECTED,
     "oom-tag-backstop": PROTECTED,
+    # Feeds earlyoom the container's cgroup headroom under runc; without it
+    # earlyoom cannot see the workspace's cap at all.
+    "publish_cgroup_meminfo": PROTECTED,
     "env-converge": PROTECTED,
     # A one-shot (autorestart=false) that registers the VM-resident owner-exec
     # service origin and exits; shedding it mid-run would leave the registration

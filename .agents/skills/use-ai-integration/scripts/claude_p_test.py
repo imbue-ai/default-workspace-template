@@ -1,16 +1,17 @@
 """Unit tests for the copyable ``claude_p`` helper.
 
 These guard the parts that are easy to get wrong and that the module docstring
-promises: flag emission per scenario, the success-vs-error JSON arm handling, and
-the session-var scrub. The async wrappers' subprocess execution is not tested
-here -- it would need a real ``claude`` binary -- but they are thin shells over
-these covered helpers.
+promises: flag emission per scenario, the success-vs-error JSON arm handling, the
+session-var scrub, and how a call from a service launches ``claude`` (against a
+stub ``claude`` on ``PATH``, since the real binary needs a live sign-in).
 """
 
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -32,7 +33,7 @@ def test_completion_argv_disables_tools_and_sets_system() -> None:
         model="claude-haiku-4-5",
         system="You are a classifier.",
     )
-    assert argv[:3] == ["claude", "-p", "classify this"]
+    assert argv[:2] == ["claude", "-p"]
     assert (
         "--output-format" in argv and argv[argv.index("--output-format") + 1] == "json"
     )
@@ -65,6 +66,23 @@ def test_task_argv_keeps_tools_and_sets_permission_mode() -> None:
     assert "--system-prompt" not in argv
     # A task runs in the repo and its session is resumable like any other.
     assert "--no-session-persistence" not in argv
+
+
+def test_dash_leading_prompt_follows_the_option_terminator() -> None:
+    prompt = "---\nname: some-skill\n---\nSummarize this skill."
+    completion = claude_p._completion_argv(
+        prompt, model="claude-haiku-4-5", system="You summarize."
+    )
+    task = claude_p._task_argv(
+        prompt,
+        model="claude-haiku-4-5",
+        system=None,
+        append_system=None,
+        permission_mode="bypassPermissions",
+    )
+    for argv in (completion, task):
+        assert argv[-2:] == ["--", prompt]
+        assert argv.index("--") == len(argv) - 2
 
 
 def _success_payload(**overrides: object) -> dict[str, object]:
@@ -197,6 +215,164 @@ def test_child_env_strips_mngr_vars_when_requested(
     assert os.environ.get("MNGR_AGENT_NAME") == "lead"
 
 
+def _write_claude_accounts(
+    home: Path,
+    account_ids: tuple[str, ...],
+    *,
+    mru: str,
+    default_account: str | None = None,
+    codex_account_ids: tuple[str, ...] = (),
+) -> Path:
+    """Give ``home`` these claude accounts, in index order; return the accounts root.
+
+    Any ``codex_account_ids`` are written ahead of them, as the oldest accounts.
+    """
+    accounts = home / ".minds" / "accounts"
+    for account_id in (*codex_account_ids, *account_ids):
+        (accounts / account_id).mkdir(parents=True)
+    index: dict[str, object] = {
+        "accounts": [{"id": a, "lane": "openai"} for a in codex_account_ids]
+        + [{"id": a, "lane": "anthropic"} for a in account_ids],
+        "mru": mru,
+    }
+    if default_account is not None:
+        index["default_account"] = default_account
+    (accounts / "index.json").write_text(json.dumps(index))
+    return accounts
+
+
+def _make_default_account(home: Path) -> Path:
+    """Give ``home`` one claude account, recorded as the most recently used; return its folder."""
+    return (
+        _write_claude_accounts(home, ("acct-claude",), mru="acct-claude")
+        / "acct-claude"
+    )
+
+
+def test_child_env_keeps_the_agents_own_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Inside an agent, the child runs on the chat's account, not the workspace default."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _make_default_account(tmp_path)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/accounts/the-chats-own")
+
+    assert claude_p._child_env()["CLAUDE_CONFIG_DIR"] == "/accounts/the-chats-own"
+
+
+@pytest.mark.parametrize(
+    ("default_account", "mru", "expected"),
+    [
+        pytest.param(
+            "acct-oldest", "acct-recent", "acct-oldest", id="pinned-claude-account"
+        ),
+        pytest.param(
+            "acct-codex", "acct-recent", "acct-recent", id="pinned-codex-account"
+        ),
+        pytest.param(None, "acct-codex", "acct-oldest", id="codex-most-recently-used"),
+    ],
+)
+def test_child_env_runs_on_the_default_claude_account(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    default_account: str | None,
+    mru: str,
+    expected: str,
+) -> None:
+    """Outside an agent, the child runs on the Claude account a chat created now would get:
+    the pinned default when it is a Claude account, else the most recently used one when
+    it is, else the oldest."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    accounts = _write_claude_accounts(
+        tmp_path,
+        ("acct-oldest", "acct-recent"),
+        mru=mru,
+        default_account=default_account,
+        codex_account_ids=("acct-codex",),
+    )
+
+    assert claude_p._child_env()["CLAUDE_CONFIG_DIR"] == str(accounts / expected)
+
+
+def test_child_env_leaves_config_dir_unset_without_an_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no account to name, the child keeps claude's own default, ~/.claude."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+
+    assert "CLAUDE_CONFIG_DIR" not in claude_p._child_env()
+
+
+# Stands in for claude: reports the config dir it was given and whether its stdin is
+# at EOF (readable at once and empty), as the result text of a success payload.
+_STUB_CLAUDE = """#!/usr/bin/env python3
+import json, os, select
+stdin_at_eof = bool(select.select([0], [], [], 1.0)[0]) and os.read(0, 1) == b""
+observed = {"config_dir": os.environ.get("CLAUDE_CONFIG_DIR"), "stdin_at_eof": stdin_at_eof}
+print(json.dumps({"subtype": "success", "result": json.dumps(observed), "total_cost_usd": 0}))
+"""
+
+_SERVICE_CALL = """
+import sys
+sys.path.insert(0, sys.argv[1])
+from claude_p import claude_p_completion
+print(claude_p_completion("hello", system="Answer briefly.").text)
+"""
+
+
+def _complete_from_a_service(tmp_path: Path, home: Path) -> dict[str, object]:
+    """Run one completion the way a supervisord service does; return what claude saw.
+
+    The caller's environment has no ``CLAUDE_CONFIG_DIR``, and its stdin is a pipe
+    nothing ever closes.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "claude"
+    stub.write_text(_STUB_CLAUDE)
+    stub.chmod(0o755)
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CONFIG_DIR"}
+    env["HOME"] = str(home)
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    stdin_read, stdin_write = os.pipe()
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", _SERVICE_CALL, str(_SCRIPT.parent)],
+            stdin=stdin_read,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=8,
+        )
+    finally:
+        os.close(stdin_read)
+        os.close(stdin_write)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+def test_completion_from_a_service_runs_claude_on_the_default_account(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    account_dir = _make_default_account(home)
+
+    observed = _complete_from_a_service(tmp_path, home)
+
+    assert observed["config_dir"] == str(account_dir)
+
+
+def test_completion_from_a_service_gives_claude_a_closed_stdin(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    _make_default_account(home)
+
+    observed = _complete_from_a_service(tmp_path, home)
+
+    assert observed["stdin_at_eof"] is True
+
+
 def _isolate_credential_sources(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> Path:
@@ -208,9 +384,24 @@ def _isolate_credential_sources(
     """
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    _clear_credential_env_vars(monkeypatch)
+    return tmp_path / "settings.json"
+
+
+def _isolate_credential_sources_in_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Like ``_isolate_credential_sources``, but as a service sees it: no
+    CLAUDE_CONFIG_DIR, and HOME (so ~/.claude and ~/.minds) is the tmp dir."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _clear_credential_env_vars(monkeypatch)
+
+
+def _clear_credential_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"):
         monkeypatch.delenv(var, raising=False)
-    return tmp_path / "settings.json"
 
 
 def test_credentials_prefer_snapshot_over_settings(
@@ -245,17 +436,12 @@ def test_credentials_fall_back_to_settings_without_snapshot(
     assert creds.base_url is None
 
 
-def test_credentials_read_default_claude_dir_when_config_dir_env_unset(
+def test_credentials_read_default_claude_dir_without_config_dir_or_account(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With CLAUDE_CONFIG_DIR unset -- the workspace-wide default since the
-    ~/.claude cutover -- the resolver reads the shared ~/.claude/settings.json
-    instead of skipping settings entirely."""
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path))
-    for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"):
-        monkeypatch.delenv(var, raising=False)
+    """With CLAUDE_CONFIG_DIR unset and no provider account, the resolver reads
+    the shared ~/.claude/settings.json instead of skipping settings entirely."""
+    _isolate_credential_sources_in_home(tmp_path, monkeypatch)
     default_dir = tmp_path / ".claude"
     default_dir.mkdir()
     (default_dir / "settings.json").write_text(
@@ -265,6 +451,23 @@ def test_credentials_read_default_claude_dir_when_config_dir_env_unset(
     creds = claude_p.read_workspace_ai_credentials()
 
     assert creds.api_key == "sk-default-dir-key"
+
+
+def test_credentials_read_the_default_account_when_config_dir_env_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A service or cron job reads the workspace's default account, not ~/.claude."""
+    _isolate_credential_sources_in_home(tmp_path, monkeypatch)
+    account_dir = _make_default_account(tmp_path)
+    (account_dir / "settings.json").write_text(
+        '{"env": {"ANTHROPIC_API_KEY": "sk-account-key"}}'
+    )
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text(
+        '{"env": {"ANTHROPIC_API_KEY": "sk-shared-key"}}'
+    )
+
+    assert claude_p.read_workspace_ai_credentials().api_key == "sk-account-key"
 
 
 def test_credentials_never_take_oauth_token_from_snapshot(

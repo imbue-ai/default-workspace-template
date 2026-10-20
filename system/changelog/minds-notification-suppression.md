@@ -1,0 +1,1 @@
+- The desktop-interface contracts (section 7) now describe chat presence: reports keyed by a per-page instance id with the document's focus, the 30-second heartbeat, what counts as watching a chat, the loopback-only watchers route, and the read call the chat app makes when someone starts watching. The workspace-app-model phase 6 spec points there for the current shape.

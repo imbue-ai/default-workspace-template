@@ -29,8 +29,7 @@ belong in tested code rather than agent prose:
 
     A default target the workspace is **already on** is a refusal too: the command
     asks git whether the chosen ref is already an ancestor of ``HEAD``, rather
-    than spending a backup, a worker, and a validation run on a merge that changes
-    nothing. A workspace *behind* the ceiling still updates to it.
+    than spending a worker and a validation run on a merge that changes nothing. A workspace *behind* the ceiling still updates to it.
 
 ``classify-merge``
     Split the files upstream changed into the reconciled **merged** set (local
@@ -986,8 +985,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         metavar="APP=PATH",
         help="An app's already-built static/ bundle from the worker (the artifact "
-        "the worker validated): system_interface=<path>, chat=<path>, or "
-        "getting_started=<path>, once per app. Installed as-is only when every "
+        "the worker validated): system_interface=<path>, chat=<path>, "
+        "getting_started=<path>, or files=<path>, once per app. Installed as-is only when every "
         "app's is given and verified; a live build is the fallback.",
     )
     apply_parser.add_argument(

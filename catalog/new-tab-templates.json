@@ -314,22 +314,6 @@
       "choices": []
     },
     {
-      "slug": "datalib",
-      "title": "datalib -- your personal data, searchable",
-      "description": "Mirror your own data (Slack, email, GitHub, Notion, chat history) into a private local store, and let the mind search and answer questions from it.",
-      "what_it_is": "datalib gives a mind a private, always-local copy of the user's own data --\ntheir Slack messages, email, GitHub activity, Notion pages, and chat history --\nmirrored out of those services into a single store on the mind's disk. Once\nmirrored, the mind can search it and answer questions from it (\"what did I tell\nSam about the launch?\", \"find the invoice email from March\") without going back\nout to each service. Nothing leaves the mind: the data is fetched with the\nuser's own credentials (via latchkey) and stored locally. It is opt-in on\npurpose -- concentrating this much personal data is powerful and sensitive, so a\nmind only gets it when the user chooses this inspiration.",
-      "author": "qi-imbue",
-      "repository_url": "https://github.com/qi-imbue/datalib-inspiration",
-      "thumbnail": "thumbnails/qi-imbue--datalib.svg",
-      "version": "",
-      "updated_at": "2026-08-27T10:16:10Z",
-      "required_accounts": [],
-      "required_secrets": [],
-      "needs_ai": false,
-      "apt_packages": [],
-      "choices": []
-    },
-    {
       "slug": "red-scribble",
       "title": "Red Scribble",
       "description": "Scribble, type, or speak UI feedback directly on any app in your workspace; it routes to your chat agent as one batched, rendered card per send.",
@@ -887,8 +871,7 @@
         "plain-text-gtd",
         "lego-todo-planner",
         "bullet-journal",
-        "networked-notebook",
-        "datalib"
+        "networked-notebook"
       ]
     },
     {

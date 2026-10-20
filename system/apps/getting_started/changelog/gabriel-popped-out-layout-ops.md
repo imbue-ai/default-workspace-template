@@ -1,0 +1,1 @@
+The first-visit window counts as delivered when the user already has it popped out into its own Imbue Studio window: the app leaves it there instead of trying to place it on the desktop, which the shell now refuses, and retrying every few seconds, which raised the pop-out each time.

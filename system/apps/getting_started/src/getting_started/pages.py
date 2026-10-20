@@ -12,19 +12,32 @@ from typing import assert_never
 
 from flask import Blueprint
 from flask import Response
-from flask import jsonify
 from flask import send_file
 from flask import send_from_directory
 from flask.typing import ResponseReturnValue
+from pydantic import Field
 from werkzeug.exceptions import NotFound
 
+from app_manifest.content_security_policy import attach_document_policy
+from app_manifest.content_security_policy import url_origin
 from app_manifest.registry import APP_CONTRACT_ROUTE
+from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
+from app_schema.api_schema import RouteModels
+from app_schema.api_schema import RouteTable
+from app_schema.api_schema import SchemalessRoute
+from app_schema.api_schema import register_api_schema_route
+from app_schema.routes import error_response
+from app_schema.routes import model_response
+from getting_started.template_catalog import CatalogDocument
 from getting_started.template_catalog import TemplateCatalogAvailability
 from getting_started.template_catalog import TemplateCatalogStore
-from getting_started.template_catalog import catalog_wire_json
+from getting_started.template_catalog import catalog_wire
+from imbue.imbue_common.frozen_model import FrozenModel
 
 BLUEPRINT_NAME: Final[str] = "getting_started_pages"
 HEALTH_PATH: Final[str] = "/api/health"
+APP_DISPLAY_NAME: Final[str] = "Getting Started"
+APP_DESCRIPTION: Final[str] = "The ways into the workspace: things to start, and the published templates to adapt."
 TEMPLATES_CATALOG_PATH: Final[str] = "/api/templates-catalog"
 PAGE_DOCUMENT_FILENAME: Final[str] = "index.html"
 
@@ -41,11 +54,45 @@ _NOT_BUILT_PAGE: Final[str] = (
 )
 
 
+class HealthResponse(FrozenModel):
+    """What the health probe answers."""
+
+    status: str = Field(description="Always 'ok'")
+    is_frontend_built: bool = Field(description="Whether the page's bundle has been built, so the page can be served")
+
+
+class TemplatesCatalogResponse(FrozenModel):
+    """What the catalog route answers: the catalog as last fetched, and how current it is."""
+
+    catalog: CatalogDocument | None = Field(description="The catalog; null when no catalog URL is configured")
+    is_stale: bool = Field(description="Whether the catalog is the last good copy rather than a fresh fetch")
+
+
+# What every route exchanges, which the app's API document publishes and every parse and answer is checked against.
+ROUTE_TABLE: RouteTable = {
+    ("GET", "/"): SchemalessRoute(reason="the Getting Started page"),
+    ("GET", "/assets/{filename}"): SchemalessRoute(reason="one file of the page's built bundle"),
+    ("GET", HEALTH_PATH): RouteModels(response_model=HealthResponse),
+    ("GET", TEMPLATES_CATALOG_PATH): RouteModels(response_model=TemplatesCatalogResponse),
+    ("GET", APP_CONTRACT_ROUTE): SchemalessRoute(reason="the app contract module, a JavaScript file"),
+}
+
+
 def build_pages_blueprint(static_directory: Path, catalog: TemplateCatalogStore, contract_path: Path) -> Blueprint:
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
+    register_api_schema_route(
+        blueprint, DEFAULT_API_SCHEMA_PATH, title=APP_DISPLAY_NAME, description=APP_DESCRIPTION, route_table=ROUTE_TABLE
+    )
+    # The template drawings live beside the catalog (catalog/README.md), so the page admits images from the
+    # catalog's origin besides its own; with no catalog there is no templates section and nothing to admit.
+    image_sources = "'self' data: blob:"
+    if catalog.catalog_url != "":
+        image_sources = f"{image_sources} {url_origin(catalog.catalog_url)}"
+    attach_document_policy(blueprint, {"img-src": image_sources})
 
     @blueprint.get("/")
     def page() -> ResponseReturnValue:
+        """The Getting Started page: things to start, and the published templates to adapt."""
         document = static_directory / PAGE_DOCUMENT_FILENAME
         if not document.is_file():
             return Response(_NOT_BUILT_PAGE, mimetype="text/html", headers={"Cache-Control": "no-store"})
@@ -55,6 +102,7 @@ def build_pages_blueprint(static_directory: Path, catalog: TemplateCatalogStore,
 
     @blueprint.get("/assets/<path:filename>")
     def asset(filename: str) -> ResponseReturnValue:
+        """One file of the page's built bundle, by name."""
         # Existence and safety are both left to ``send_from_directory``: the filename arrives with any ``..``
         # segments intact, and a missing asset is a plain 404.
         try:
@@ -64,34 +112,36 @@ def build_pages_blueprint(static_directory: Path, catalog: TemplateCatalogStore,
 
     @blueprint.get(HEALTH_PATH)
     def health() -> ResponseReturnValue:
-        return jsonify({"status": "ok", "is_frontend_built": (static_directory / PAGE_DOCUMENT_FILENAME).is_file()})
+        """Whether the app is up, and whether its page has been built."""
+        return model_response(
+            HealthResponse(status="ok", is_frontend_built=(static_directory / PAGE_DOCUMENT_FILENAME).is_file())
+        )
 
     @blueprint.get(TEMPLATES_CATALOG_PATH)
     def templates_catalog() -> ResponseReturnValue:
+        """The published template catalog as last fetched (null when none is configured; 503 when none could be loaded)."""
         reading = catalog.read()
         match reading.availability:
             case TemplateCatalogAvailability.DISABLED:
-                return jsonify({"catalog": None, "is_stale": False})
+                return model_response(TemplatesCatalogResponse(catalog=None, is_stale=False))
             case TemplateCatalogAvailability.UNAVAILABLE:
-                return jsonify({"detail": _TEMPLATES_UNAVAILABLE_DETAIL}), HTTP_SERVICE_UNAVAILABLE
+                return error_response(_TEMPLATES_UNAVAILABLE_DETAIL, HTTP_SERVICE_UNAVAILABLE)
             case TemplateCatalogAvailability.FRESH | TemplateCatalogAvailability.STALE:
                 assert reading.catalog is not None, "a fresh or stale reading carries its catalog"
-                return jsonify(
-                    {
-                        "catalog": catalog_wire_json(reading.catalog, catalog.catalog_url),
-                        "is_stale": reading.availability is TemplateCatalogAvailability.STALE,
-                    }
+                return model_response(
+                    TemplatesCatalogResponse(
+                        catalog=catalog_wire(reading.catalog, catalog.catalog_url),
+                        is_stale=reading.availability is TemplateCatalogAvailability.STALE,
+                    )
                 )
             case _ as unreachable:
                 assert_never(unreachable)
 
     @blueprint.get(APP_CONTRACT_ROUTE)
     def app_contract() -> ResponseReturnValue:
+        """The app contract module: how the page talks to the shell framing it."""
         if not contract_path.is_file():
-            return (
-                jsonify({"detail": f"the workspace shell's frontend is not built: {contract_path} is missing"}),
-                HTTP_NOT_FOUND,
-            )
+            return error_response(f"the workspace shell's frontend is not built: {contract_path} is missing", HTTP_NOT_FOUND)
         # Flask resolves a relative path against the app's own directory, not the cwd the path names.
         return send_file(contract_path.absolute(), mimetype="text/javascript")
 

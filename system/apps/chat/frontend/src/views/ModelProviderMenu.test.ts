@@ -27,7 +27,8 @@ vi.mock("../models/Chats", () => ({
 }));
 
 const catalogState: { catalog: unknown } = { catalog: null };
-vi.mock("../models/HarnessCatalog", () => ({
+vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),
   ensureHarnessCatalogs: () => undefined,
   getHarnessCatalog: (harness?: string) => (harness === undefined ? null : catalogState.catalog),
 }));
@@ -35,15 +36,22 @@ vi.mock("../models/HarnessCatalog", () => ({
 const settingsState: { choice: unknown } = { choice: null };
 const picks: unknown[] = [];
 vi.mock("../models/ModelSettings", () => ({
+  addModelChoiceFailureListener: () => undefined,
   effectiveChoice: () => settingsState.choice,
   changedAxes: () => ["model"],
   setModelChoice: (...args: unknown[]) => picks.push(args),
 }));
 
 // The workspace's chat settings as the page has them (null before the load), and every write
-// the fast-limit row asked for.
+// the fast-limit row and the "New chats start with" segments asked for.
 const { DEFAULT_CHAT_SETTINGS, chatSettingsState, settingsWrites } = vi.hoisted(() => {
-  const defaults = { fast_mode_default: "auto", fast_mode_turn_limit: 2, is_fast_mode_notice_shown: false };
+  const defaults = {
+    fast_mode_default: "auto",
+    fast_mode_turn_limit: 2,
+    is_fast_mode_notice_shown: false,
+    autocompact_default: true,
+    is_autocompact_notice_shown: false,
+  };
   return {
     DEFAULT_CHAT_SETTINGS: defaults,
     chatSettingsState: { settings: defaults as typeof defaults | null, loads: 0 },
@@ -65,10 +73,11 @@ vi.mock("../models/ChatSettings", () => ({
 
 // The chat's fast mode as the page has it (null before the load), the loads asked for, and every
 // mode the chooser picked.
-const { fastModeState, fastModeLoads, fastModeChoices } = vi.hoisted(() => ({
+const { fastModeState, fastModeLoads, fastModeChoices, fastModeForgets } = vi.hoisted(() => ({
   fastModeState: { state: null as { mode: string; is_switched: boolean } | null },
   fastModeLoads: [] as string[],
   fastModeChoices: [] as [string, string][],
+  fastModeForgets: { count: 0 },
 }));
 // Only the backend-backed half is faked; the words the rows read are the real ones, so what
 // this asserts on is what the menu really says.
@@ -79,6 +88,9 @@ vi.mock("../models/FastMode", async (importOriginal) => ({
     fastModeLoads.push(chatId);
     return Promise.resolve(fastModeState.state);
   },
+  forgetAllFastModeStates: () => {
+    fastModeForgets.count += 1;
+  },
 }));
 vi.mock("./fast-mode-limit", () => ({
   chooseFastMode: (chatId: string, mode: string) => {
@@ -86,6 +98,30 @@ vi.mock("./fast-mode-limit", () => ({
   },
 }));
 vi.mock("../models/Response", () => ({ getEventsForChat: () => [] }));
+
+// The chat's auto-compact setting as the page has it (null before the load), the loads asked for,
+// and every write the submenu made.
+const { autocompactState, autocompactLoads, autocompactWrites, autocompactForgets } = vi.hoisted(() => ({
+  autocompactState: { state: null as { is_enabled: boolean } | null },
+  autocompactLoads: [] as string[],
+  autocompactWrites: [] as [string, { is_enabled: boolean }][],
+  autocompactForgets: { count: 0 },
+}));
+vi.mock("../models/Autocompact", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/Autocompact")>()),
+  getAutocompactState: () => autocompactState.state,
+  ensureAutocompactState: (chatId: string) => {
+    autocompactLoads.push(chatId);
+    return Promise.resolve(autocompactState.state);
+  },
+  setAutocompactState: (chatId: string, next: { is_enabled: boolean }) => {
+    autocompactWrites.push([chatId, next]);
+    return Promise.resolve(next);
+  },
+  forgetAllAutocompactStates: () => {
+    autocompactForgets.count += 1;
+  },
+}));
 
 const providerState: { accounts: unknown[]; defaultId: string | null; isLoaded: boolean } = {
   accounts: [],
@@ -161,6 +197,15 @@ function click(selector: string): void {
   render();
 }
 
+function clickSubmenuRow(label: string): void {
+  const row = [...document.querySelectorAll<HTMLElement>('[data-menu-part="submenu"] button')].find((button) =>
+    button.textContent?.includes(label),
+  );
+  if (row === undefined) throw new Error(`no ${label} row in the submenu`);
+  row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  render();
+}
+
 /** Take the pointer off the open submenu and wait out the menu's leave grace. Needs fake timers,
  *  and overshoots the shared menu's own grace constant rather than restating it. */
 function leaveSubmenu(): void {
@@ -178,7 +223,13 @@ const OPUS = {
   supports_fast: false,
   in_picker: true,
   harness_reported_model_id: null,
+  default_effort: null,
 };
+const LOW_MEDIUM_HIGH = [
+  { level: "low", in_picker: true },
+  { level: "medium", in_picker: true },
+  { level: "high", in_picker: true },
+];
 const ACCOUNT = {
   id: "acct-1",
   lane: "anthropic",
@@ -196,12 +247,14 @@ function catalogOf(overrides: Record<string, unknown> = {}): Record<string, unkn
     picker_mode: "list",
     options: [OPUS],
     native_atomic_shoulder_tap_possible: true,
+    supports_compaction: false,
+    can_interrupt_compaction: false,
     popups: [],
     ...overrides,
   };
 }
 
-/** Put the chat on a model that supports fast mode, so the menu offers its Fast Mode row. */
+/** Put the chat on a model that supports fast mode, so the menu offers its Fast mode row. */
 function withFastModel(): void {
   const model = { ...OPUS, supports_fast: true };
   catalogState.catalog = catalogOf({ options: [model] });
@@ -217,6 +270,11 @@ beforeEach(() => {
   fastModeState.state = { mode: "auto", is_switched: false };
   fastModeLoads.length = 0;
   fastModeChoices.length = 0;
+  fastModeForgets.count = 0;
+  autocompactState.state = { is_enabled: true };
+  autocompactLoads.length = 0;
+  autocompactWrites.length = 0;
+  autocompactForgets.count = 0;
   picks.length = 0;
   started.length = 0;
   begun.length = 0;
@@ -235,6 +293,10 @@ beforeEach(() => {
   providerState.accounts = [ACCOUNT];
   setPendingAccount("a1", null);
   setSwitchSending("a1", false);
+  // Opening the menu on a dynamic or searchable picker loads the chat's offerable models. Answered
+  // here, so the load settles in the test that opened the menu: unanswered, it goes out to jsdom's
+  // localhost and its failure is logged after the file's environment has been torn down.
+  vi.spyOn(m, "request").mockResolvedValue({ models: null, options: null });
 });
 
 describe("the combo card", () => {
@@ -412,12 +474,7 @@ describe("the combo card", () => {
   it("commits an effort on release, not on every notch of the drag", () => {
     // Each notch is a live switch typed into the agent's pane, and setModelChoice chains
     // rather than debounces -- a low-to-max drag would queue one per stop.
-    const efforts = [
-      { level: "low", in_picker: true },
-      { level: "medium", in_picker: true },
-      { level: "high", in_picker: true },
-    ];
-    const model = { ...OPUS, efforts };
+    const model = { ...OPUS, efforts: LOW_MEDIUM_HIGH };
     catalogState.catalog = catalogOf({ options: [model] });
     settingsState.choice = {
       identity: { model_id: "opus", effort: "low", fast: false },
@@ -443,12 +500,7 @@ describe("the combo card", () => {
     // Uncommitted is not the same as unshown: the row is what you are aiming with, so it reads
     // off the thumb from the first notch. The TRIGGER keeps saying the committed level, since
     // that is still what the agent is running on until release.
-    const efforts = [
-      { level: "low", in_picker: true },
-      { level: "medium", in_picker: true },
-      { level: "high", in_picker: true },
-    ];
-    const model = { ...OPUS, efforts };
+    const model = { ...OPUS, efforts: LOW_MEDIUM_HIGH };
     catalogState.catalog = catalogOf({ options: [model] });
     settingsState.choice = {
       identity: { model_id: "opus", effort: "low", fast: false },
@@ -521,6 +573,55 @@ describe("the combo card", () => {
     click(".model-selector-trigger");
     expect(document.querySelector('[data-menu-row="effort"]')?.textContent).toContain("Ultra");
     expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("0");
+  });
+
+  it("shows the model's default effort for a chat that never picked one", () => {
+    // codex records no effort until one is picked, while the thread runs at the model's default.
+    const model = { ...OPUS, id: "gpt-6-sol", label: "GPT-6-Sol", efforts: LOW_MEDIUM_HIGH, default_effort: "medium" };
+    catalogState.catalog = catalogOf({ picker_mode: "dynamic", switch_mode: "on_change", options: [] });
+    settingsState.choice = {
+      identity: { model_id: "gpt-6-sol", effort: null, fast: false },
+      matched: model,
+      pending: null,
+    };
+    render();
+    expect(document.querySelector(".model-selector-trigger")?.textContent).toContain("Medium");
+    click(".model-selector-trigger");
+    expect(document.querySelector('[data-menu-row="effort"]')?.textContent).toContain("Medium");
+    expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("1");
+  });
+
+  it("carries the default effort in effect onto a newly picked model", () => {
+    const current = { ...OPUS, efforts: LOW_MEDIUM_HIGH, default_effort: "medium" };
+    const other = { ...OPUS, id: "sonnet", label: "Sonnet", efforts: LOW_MEDIUM_HIGH, default_effort: "medium" };
+    catalogState.catalog = catalogOf({ options: [current, other] });
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: null, fast: false },
+      matched: current,
+      pending: null,
+    };
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="model"]');
+    clickSubmenuRow("Sonnet");
+    expect(picks).toHaveLength(1);
+    expect((picks[0] as unknown[])[1]).toEqual({ model_id: "sonnet", effort: "medium", fast: false });
+  });
+
+  it("lands a newly picked model on its default when it does not offer the current effort", () => {
+    const current = { ...OPUS, efforts: [...LOW_MEDIUM_HIGH, { level: "xhigh", in_picker: true }] };
+    const other = { ...OPUS, id: "sonnet", label: "Sonnet", efforts: LOW_MEDIUM_HIGH, default_effort: "medium" };
+    catalogState.catalog = catalogOf({ options: [current, other] });
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: "xhigh", fast: false },
+      matched: current,
+      pending: null,
+    };
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="model"]');
+    clickSubmenuRow("Sonnet");
+    expect((picks[0] as unknown[])[1]).toEqual({ model_id: "sonnet", effort: "medium", fast: false });
   });
 
   it("colours each tick for the part of the track it is drawn on", () => {
@@ -659,7 +760,7 @@ describe("the combo card", () => {
     expect(document.querySelector('[data-menu-row="model"]')?.textContent).toContain("Gemini · High");
     // The current agent's effort and fast rows are not the target's: they are not offered.
     expect(document.querySelector('[data-menu-row="effort"]')).toBeNull();
-    expect(document.querySelector('[data-menu-part="menu"]')?.textContent).not.toContain("Fast Mode");
+    expect(document.querySelector('[data-menu-part="menu"]')?.textContent).not.toContain("Fast mode");
     click('[data-menu-row="model"] button');
     expect(reopened).toEqual(["acct-2"]);
     expect(document.querySelector('[data-menu-part="menu"]')).toBeNull();
@@ -869,7 +970,7 @@ describe("the combo card", () => {
     // limit lives.
     withFastModel();
     chatSettingsState.settings = {
-      fast_mode_default: "auto",
+      ...DEFAULT_CHAT_SETTINGS,
       fast_mode_turn_limit: 3,
       is_fast_mode_notice_shown: true,
     };
@@ -878,7 +979,7 @@ describe("the combo card", () => {
     click(".model-selector-trigger");
     const row = document.querySelector<HTMLElement>('[data-menu-row="fast"]');
     if (row === null) throw new Error("no fast row");
-    expect(row.textContent).toContain("Fast Mode");
+    expect(row.textContent).toContain("Fast mode");
     expect(row.textContent).toContain("Auto (off now)");
     expect(document.querySelector(".fast-limit-input")).toBeNull();
 
@@ -915,9 +1016,7 @@ describe("the combo card", () => {
     // The field keeps what is being typed across the redraws every keystroke causes.
     expect(limit.value).toBe("3");
     limit.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(settingsWrites).toEqual([
-      { fast_mode_default: "auto", fast_mode_turn_limit: 3, is_fast_mode_notice_shown: false },
-    ]);
+    expect(settingsWrites).toEqual([{ ...DEFAULT_CHAT_SETTINGS, fast_mode_turn_limit: 3 }]);
 
     // An emptied field or a zero is not a limit.
     limit.value = "";
@@ -969,36 +1068,62 @@ describe("the combo card", () => {
     expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
   });
 
-  it("makes the chat's mode the one new chats start in, and says when it already is", () => {
+  it("names the mode new chats start in, and sets it to any mode whatever the chat's own", () => {
     withFastModel();
     fastModeState.state = { mode: "on", is_switched: false };
     render();
     click(".model-selector-trigger");
     click('[data-menu-row="fast"]');
     const row = document.querySelector<HTMLElement>(".fast-mode-default");
-    expect(row?.textContent).toContain("Use On for new chats");
-    const toggle = document.querySelector<HTMLButtonElement>("[data-fast-mode-default]");
-    if (toggle === null) throw new Error("no default toggle");
-    expect(toggle.getAttribute("aria-checked")).toBe("false");
-    expect(toggle.disabled).toBe(false);
-    click("[data-fast-mode-default]");
-    expect(settingsWrites).toEqual([
-      { fast_mode_default: "on", fast_mode_turn_limit: 2, is_fast_mode_notice_shown: false },
-    ]);
+    if (row === null) throw new Error("no new-chats row");
+    expect(row.textContent).toContain("New chats start with");
+    expect(row.querySelector('[role="radiogroup"]')?.getAttribute("aria-label")).toBe("Fast mode for new chats");
+    const options = [...row.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+    expect(options.map((option) => option.getAttribute("data-fast-mode-default"))).toEqual(["off", "auto", "on"]);
+    expect(options.map((option) => option.textContent)).toEqual(["Off", "Auto", "On"]);
+    // The workspace's setting is the one lit, not the chat's own mode.
+    expect(options.map((option) => option.getAttribute("aria-checked"))).toEqual(["false", "true", "false"]);
+    expect(options.every((option) => !option.disabled)).toBe(true);
 
-    // Auto is the settings' default, so its toggle is on and has nothing left to do -- but it is
-    // NOT natively disabled, which would fade the setting out at the moment it reads as set.
-    fastModeState.state = { mode: "auto", is_switched: false };
+    // Away from the chat's mode...
+    click('[data-fast-mode-default="off"]');
+    expect(settingsWrites).toEqual([{ ...DEFAULT_CHAT_SETTINGS, fast_mode_default: "off" }]);
+    chatSettingsState.settings = { ...DEFAULT_CHAT_SETTINGS, fast_mode_default: "off" };
     render();
-    expect(document.querySelector(".fast-mode-default")?.textContent).toContain("Use Auto for new chats");
-    const already = document.querySelector<HTMLButtonElement>("[data-fast-mode-default]");
-    if (already === null) throw new Error("no default toggle");
-    expect(already.getAttribute("aria-checked")).toBe("true");
-    expect(already.getAttribute("aria-disabled")).toBe("true");
-    expect(already.disabled).toBe(false);
-    expect(already.className).not.toContain("cursor-pointer");
-    click("[data-fast-mode-default]");
-    expect(settingsWrites).toHaveLength(1);
+    expect(
+      document.querySelector('[data-fast-mode-default][aria-checked="true"]')?.getAttribute("data-fast-mode-default"),
+    ).toBe("off");
+    // ...back again, and to the chat's mode.
+    click('[data-fast-mode-default="auto"]');
+    click('[data-fast-mode-default="on"]');
+    expect(settingsWrites.slice(1)).toEqual([
+      { ...DEFAULT_CHAT_SETTINGS, fast_mode_default: "auto" },
+      { ...DEFAULT_CHAT_SETTINGS, fast_mode_default: "on" },
+    ]);
+    // The mode already set is not a change.
+    click('[data-fast-mode-default="off"]');
+    expect(settingsWrites).toHaveLength(3);
+    // None of it touches the chat's own mode.
+    expect(fastModeChoices).toEqual([]);
+  });
+
+  it("leaves the new-chats modes unlit and unpressable until the settings load", () => {
+    withFastModel();
+    chatSettingsState.settings = null;
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="fast"]');
+    const options = [...document.querySelectorAll<HTMLButtonElement>("[data-fast-mode-default]")];
+    expect(options).toHaveLength(3);
+    expect(options.every((option) => option.disabled)).toBe(true);
+    expect(options.every((option) => option.getAttribute("aria-checked") === "false")).toBe(true);
+    click('[data-fast-mode-default="on"]');
+    expect(settingsWrites).toEqual([]);
+    expect(chatSettingsState.loads).toBeGreaterThan(0);
+
+    chatSettingsState.settings = DEFAULT_CHAT_SETTINGS;
+    render();
+    expect(document.querySelector<HTMLButtonElement>('[data-fast-mode-default="on"]')?.disabled).toBe(false);
   });
 
   it("asks for the chat's fast mode and shows the row unresolved until it is known", () => {
@@ -1010,6 +1135,140 @@ describe("the combo card", () => {
     if (row === null) throw new Error("no fast row");
     expect(row.textContent).toContain("...");
     expect(fastModeLoads).toContain("a1");
+  });
+
+  it("offers Auto-compact after the fast row for a harness that can be compacted, and not for one that cannot", () => {
+    withFastModel();
+    render();
+    click(".model-selector-trigger");
+    expect(document.querySelector('[data-menu-row="autocompact"]')).toBeNull();
+
+    catalogState.catalog = { ...(catalogState.catalog as Record<string, unknown>), supports_compaction: true };
+    render();
+    const row = document.querySelector<HTMLElement>('[data-menu-row="autocompact"]');
+    if (row === null) throw new Error("no auto-compact row");
+    expect(row.textContent).toContain("Auto-compact");
+    expect(row.textContent).toContain("On");
+    const rowKeys = [...document.querySelectorAll("[data-menu-row]")].map((each) =>
+      each.getAttribute("data-menu-row"),
+    );
+    expect(rowKeys.indexOf("autocompact")).toBe(rowKeys.indexOf("fast") + 1);
+
+    // It belongs to the harness, not the model: a model with no fast mode still has it.
+    catalogState.catalog = catalogOf({ supports_compaction: true });
+    settingsState.choice = { identity: { model_id: "opus", effort: null, fast: false }, matched: OPUS, pending: null };
+    render();
+    expect(document.querySelector('[data-menu-row="fast"]')).toBeNull();
+    expect(document.querySelector('[data-menu-row="autocompact"]')).not.toBeNull();
+  });
+
+  it("turns auto-compact off for the chat from its submenu, which stays up", () => {
+    catalogState.catalog = catalogOf({ supports_compaction: true });
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="autocompact"]');
+    const submenu = document.querySelector<HTMLElement>('[data-menu-part="submenu"]');
+    if (submenu === null) throw new Error("no auto-compact submenu");
+    expect(submenu.querySelector('[role="radiogroup"]')?.getAttribute("aria-label")).toBe("Auto-compact");
+    expect(submenu.querySelector('[data-autocompact="on"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(submenu.querySelector('[data-autocompact="off"]')?.getAttribute("aria-checked")).toBe("false");
+    expect(submenu.querySelector(".autocompact-help")?.textContent).toBe(
+      "Saves ~50% by compacting right before the cache expires.",
+    );
+
+    click('[data-autocompact="on"]');
+    expect(autocompactWrites).toEqual([]);
+    click('[data-autocompact="off"]');
+    expect(autocompactWrites).toEqual([["a1", { is_enabled: false }]]);
+    expect(document.querySelector('[data-menu-part="submenu"]')).not.toBeNull();
+    expect(document.querySelector('[data-menu-part="menu"]')).not.toBeNull();
+  });
+
+  it("names what new chats start with for auto-compact, and sets it either way whatever the chat's own", () => {
+    catalogState.catalog = catalogOf({ supports_compaction: true });
+    autocompactState.state = { is_enabled: true };
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="autocompact"]');
+    const row = document.querySelector<HTMLElement>(".autocompact-default");
+    if (row === null) throw new Error("no new-chats row");
+    expect(row.textContent).toContain("New chats start with");
+    expect(row.querySelector('[role="radiogroup"]')?.getAttribute("aria-label")).toBe("Auto-compact for new chats");
+    const options = [...row.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+    expect(options.map((option) => option.getAttribute("data-autocompact-default"))).toEqual(["on", "off"]);
+    expect(options.map((option) => option.textContent)).toEqual(["On", "Off"]);
+    expect(options.map((option) => option.getAttribute("aria-checked"))).toEqual(["true", "false"]);
+
+    // Off for new chats while this chat stays on...
+    click('[data-autocompact-default="off"]');
+    expect(settingsWrites).toEqual([{ ...DEFAULT_CHAT_SETTINGS, autocompact_default: false }]);
+    chatSettingsState.settings = { ...DEFAULT_CHAT_SETTINGS, autocompact_default: false };
+    render();
+    expect(document.querySelector('[data-autocompact-default="off"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(document.querySelector('[data-autocompact-default="on"]')?.getAttribute("aria-checked")).toBe("false");
+    expect(document.querySelector('[data-autocompact="on"]')?.getAttribute("aria-checked")).toBe("true");
+    // ...and back to on, with the chat turned off.
+    autocompactState.state = { is_enabled: false };
+    render();
+    click('[data-autocompact-default="on"]');
+    expect(settingsWrites[1]).toEqual({ ...DEFAULT_CHAT_SETTINGS, autocompact_default: true });
+    // The setting already in place is not a change, and none of it touches the chat's own.
+    click('[data-autocompact-default="off"]');
+    expect(settingsWrites).toHaveLength(2);
+    expect(autocompactWrites).toEqual([]);
+  });
+
+  it("reloads the chats' auto-compact settings once the new-chats default is saved", async () => {
+    catalogState.catalog = catalogOf({ supports_compaction: true });
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="autocompact"]');
+    click('[data-autocompact-default="off"]');
+    await Promise.resolve();
+
+    expect(autocompactForgets.count).toBe(1);
+    expect(fastModeForgets.count).toBe(0);
+  });
+
+  it("reloads the chats' fast modes once the new-chats default is saved", async () => {
+    withFastModel();
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="fast"]');
+    click('[data-fast-mode-default="off"]');
+    await Promise.resolve();
+
+    expect(fastModeForgets.count).toBe(1);
+    expect(autocompactForgets.count).toBe(0);
+  });
+
+  it("asks for the chat's auto-compact setting and shows the row unresolved until it is known", () => {
+    catalogState.catalog = catalogOf({ supports_compaction: true });
+    autocompactState.state = null;
+    render();
+    click(".model-selector-trigger");
+    const row = document.querySelector<HTMLElement>('[data-menu-row="autocompact"]');
+    if (row === null) throw new Error("no auto-compact row");
+    expect(row.textContent).toContain("...");
+    expect(autocompactLoads).toContain("a1");
+
+    // The submenu reads the workspace default until the chat's own setting arrives.
+    chatSettingsState.settings = { ...DEFAULT_CHAT_SETTINGS, autocompact_default: false };
+    click('[data-menu-row="autocompact"]');
+    expect(document.querySelector('[data-autocompact="off"]')?.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("states auto-compact on a read-only harness without a submenu to open", () => {
+    catalogState.catalog = catalogOf({ switch_mode: "read_only", supports_compaction: true });
+    autocompactState.state = { is_enabled: false };
+    render();
+    click(".model-selector-trigger");
+    const row = document.querySelector<HTMLElement>('[data-menu-row="autocompact"]');
+    if (row === null) throw new Error("no auto-compact row");
+    expect(row.textContent).toContain("Off");
+    expect(row.querySelector("svg")).toBeNull();
+    click('[data-menu-row="autocompact"]');
+    expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
   });
 
   it("gives a read-only harness no model list to open", () => {
@@ -1148,6 +1407,17 @@ describe("the phone layout's card", () => {
     } finally {
       delete (HTMLElement.prototype as { inert?: boolean }).inert;
     }
+  });
+
+  it("sets what new chats start with from a submenu slid in over the card", () => {
+    catalogState.catalog = { ...(catalogState.catalog as Record<string, unknown>), supports_compaction: true };
+    renderPhone();
+    tap("[data-composer-settings]");
+    tap('[data-menu-row="autocompact"]');
+    expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
+    expect(document.querySelector('[data-autocompact-default="on"]')?.getAttribute("aria-checked")).toBe("true");
+    tap('[data-autocompact-default="off"]');
+    expect(settingsWrites).toEqual([{ ...DEFAULT_CHAT_SETTINGS, autocompact_default: false }]);
   });
 
   it("carries the Source view switch as a row, whose press turns the card over and closes the menu", () => {

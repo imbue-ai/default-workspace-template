@@ -28,8 +28,9 @@ from app_manifest.primitives import (
 
 _SCRIPT = Path(__file__).parent / "forward_port.py"
 
-# ``<name>-<8 lowercase base36 chars>``.
-_LABEL_RE = re.compile(r"^[a-z0-9_-]+-[a-z0-9]{8}$")
+# ``<name>-<8 lowercase base36 chars>``, with the name's underscores hyphenated:
+# a label is a strict hostname label.
+_LABEL_RE = re.compile(r"^[a-z0-9-]+-[a-z0-9]{8}$")
 
 
 def _run(script_args: list[str], apps_file: Path) -> subprocess.CompletedProcess[str]:
@@ -79,9 +80,28 @@ def test_valid_names_register_and_are_persisted(tmp_path: Path, name: str) -> No
     assert len(rows) == 1
     assert rows[0]["name"] == name
     assert rows[0]["url"] == "http://localhost:7681"
-    # A registered service gets an unguessable ``<name>-<rand>`` origin label.
-    assert rows[0]["label"].startswith(f"{name}-")
+    # A registered service gets an unguessable ``<name>-<rand>`` origin label
+    # that is a valid hostname label: an underscore in the name is hyphenated.
+    assert rows[0]["label"].startswith(name.replace("_", "-") + "-")
     assert _LABEL_RE.match(rows[0]["label"])
+
+
+def test_legacy_underscore_label_survives_re_registration(tmp_path: Path) -> None:
+    """A label minted before underscores were hyphenated stays as it is.
+
+    Share links and bookmarks carry the label, so re-registering (every boot
+    does) must not move a service to a new origin.
+    """
+    apps_file = tmp_path / "apps.toml"
+    apps_file.write_text(
+        '[[apps]]\nname = "system_interface"\nurl = "http://localhost:8000"\nlabel = "system_interface-abcd1234"\n'
+    )
+    result = _run(["--name", "system_interface", "--url", "http://localhost:8001", "--no-icon"], apps_file)
+    assert result.returncode == 0, result.stderr
+    rows = _read_apps(apps_file)
+    assert len(rows) == 1
+    assert rows[0]["url"] == "http://localhost:8001"
+    assert rows[0]["label"] == "system_interface-abcd1234"
 
 
 @pytest.mark.parametrize(
@@ -597,26 +617,22 @@ def _load_module(module_name: str, path: Path) -> ModuleType:
 
 
 def test_every_carrier_of_the_reserved_name_set_holds_the_same_set() -> None:
-    """Drift guard: three places in this repo carry the reserved-name set, because
-    two of them cannot import the one that owns it -- ``forward_port.py`` is
-    stdlib-only by contract, and ``layout.py`` is an agent-facing script run from
-    any cwd. Comparing the sets is what makes the copies safe; sampling names
-    cannot, since any name absent from the sample is free to diverge. Every
-    carrier this repo owns belongs here: one left out is one free to drift,
-    which is the state this guard was written to end.
+    """Drift guard: two places in this repo carry the reserved-name set, because
+    ``forward_port.py`` is stdlib-only by contract and cannot import the
+    ``app_manifest`` library that owns it. Comparing the sets is what makes the
+    copy safe; sampling names cannot, since any name absent from the sample is
+    free to diverge. Every carrier this repo owns belongs here: one left out is
+    one free to drift, which is the state this guard was written to end.
 
-    A fourth carrier is the mngr repo's: ``SEED_APP_RESERVED_NAMES`` in
+    A third carrier is the mngr repo's: ``SEED_APP_RESERVED_NAMES`` in
     ``apps/minds_evals/imbue/minds_evals/data_types.py``, copied from
     ``validate_service_name`` here so a seeded app's name can be checked before the
     workspace sees it. It lives outside this tree, so only a fix in mngr reaches it.
     """
     forward_port = _load_module("_forward_port_set_drift_check", _SCRIPT)
-    layout = _load_module("_layout_set_drift_check", _SCRIPT.parent / "layout.py")
 
     assert forward_port.RESERVED_NAMES == RESERVED_APP_NAMES
-    assert forward_port.RESERVED_NAMES == layout._RESERVED_APP_NAMES
     assert forward_port.RESERVED_NAME_PREFIXES == RESERVED_APP_NAME_PREFIXES
-    assert forward_port.RESERVED_NAME_PREFIXES == layout._RESERVED_APP_NAME_PREFIXES
 
 
 def test_app_manifest_name_rule_is_identical_to_the_registration_rule() -> None:
@@ -737,10 +753,13 @@ def _write_manifest(tmp_path: Path, body: str, icon: str | None = _ICON) -> Path
 
 _FULL_MANIFEST = """
 name = "files"
-display_name = "File Viewer"
+display_name = "Files"
+description = "Browse and open the files in this workspace."
+api_schema_path = "/api/schema"
 icon = "icon.svg"
 critical = false
 stop_when_no_windows = true
+system = true
 priority = "files"
 launcher_rank = 20
 window_closed_path = "/api/window-closed"
@@ -751,7 +770,7 @@ mode = "focus"
 
 [[launch_paths]]
 id = "new"
-label = "New File Viewer"
+label = "Files"
 path = "/"
 params = [{name = "path", label = "Path", required = false}]
 text_param = "path"
@@ -779,6 +798,11 @@ default_mode = "floating"
 [[message_handlers]]
 type = "minds:focus-chat"
 path = "/api/focus-chat"
+
+[[message_handlers]]
+type = "open:file"
+show = "{path}?view"
+showing = ["{path}", "{path}/"]
 """
 
 
@@ -798,10 +822,11 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     assert row["url"] == "http://localhost:8300"
     assert _LABEL_RE.match(row["label"])
     assert row["icon"] == _ICON
-    assert row["display_name"] == "File Viewer"
+    assert row["display_name"] == "Files"
     assert "instances" not in row and "instances_url" not in row
     assert row["critical"] is False
     assert row["stop_when_no_windows"] is True
+    assert row["system"] is True
     assert row["priority"] == "files"
     assert row["program"] == "files"
     assert "internal" not in row
@@ -810,11 +835,13 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     assert list(row["default_shortcut"]) == ["launch", "mode"]
     assert row["launcher_rank"] == 20
     assert row["window_closed_path"] == "/api/window-closed"
+    assert row["description"] == "Browse and open the files in this workspace."
+    assert row["api_schema_path"] == "/api/schema"
     assert "actions" not in row
     # The row carries each launch path's param NAMES (the launcher reads them), its presets, and its method, text
     # and draft params, and none of those keys at all for a launch path that declares none of them.
     assert row["launch_paths"] == [
-        {"id": "new", "label": "New File Viewer", "path": "/", "params": ["path"], "text_param": "path"},
+        {"id": "new", "label": "Files", "path": "/", "params": ["path"], "text_param": "path"},
         {"id": "recent", "label": "Recent files", "path": "/recent"},
         {
             "id": "draft",
@@ -827,7 +854,10 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
         },
     ]
     assert row["pin"] == {"path": "/", "style": "avatar", "scope": "independent", "default_mode": "floating"}
-    assert row["message_handlers"] == [{"type": "minds:focus-chat", "path": "/api/focus-chat"}]
+    assert row["message_handlers"] == [
+        {"type": "minds:focus-chat", "path": "/api/focus-chat"},
+        {"type": "open:file", "show": "{path}?view", "showing": ["{path}", "{path}/"]},
+    ]
 
 
 def test_manifest_registration_copies_only_the_pin_keys_the_manifest_wrote(tmp_path: Path) -> None:
@@ -882,8 +912,23 @@ def test_manifest_registration_copies_only_the_pin_keys_the_manifest_wrote(tmp_p
         ),
         pytest.param(
             '[[message_handlers]]\ntype = "minds:focus-chat"\n',
-            "every message handler needs a string 'type' and 'path'",
-            id="message-handler-without-a-path",
+            "every message handler needs exactly one of a string 'path' or 'show'",
+            id="message-handler-without-a-path-or-show",
+        ),
+        pytest.param(
+            '[[message_handlers]]\ntype = "open:file"\npath = "/api/open"\nshow = "{path}"\n',
+            "every message handler needs exactly one of a string 'path' or 'show'",
+            id="message-handler-with-a-path-and-show",
+        ),
+        pytest.param(
+            '[[message_handlers]]\ntype = "open:file"\nshow = "{path}"\nshowing = "{path}/"\n',
+            "a message handler's showing must be an array of strings",
+            id="message-handler-showing-not-an-array",
+        ),
+        pytest.param(
+            '[[message_handlers]]\ntype = "open:file"\npath = "/api/open"\nshowing = ["{path}/"]\n',
+            "a message handler gives 'showing' only beside 'show'",
+            id="message-handler-showing-beside-a-path",
         ),
         pytest.param(
             '[pin]\nstyle = "avatar"\n',
@@ -940,9 +985,12 @@ def test_manifest_registration_is_authoritative_on_every_call(tmp_path: Path) ->
     assert row["program"] == "files-sidecar"
     assert row["critical"] is True
     for stale_key in (
+        "description",
+        "api_schema_path",
         "instances",
         "instances_url",
         "stop_when_no_windows",
+        "system",
         "default_shortcut",
         "actions",
         "launch_paths",
@@ -1153,7 +1201,7 @@ def test_registration_ignores_the_manifests_references_and_scope_tables(
     assert "scope" not in row
     assert "wiring" not in row
     # The keys the manifest does own still land, so this is not a vacuous pass.
-    assert row["display_name"] == "File Viewer"
+    assert row["display_name"] == "Files"
     assert row["priority"] == "files"
 
 

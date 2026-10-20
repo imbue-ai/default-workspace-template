@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en-US">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width" />
+  <title>Not found</title>
+  <style>
+    /* The workspace's own colours and type (system/libs/workspace_ui/src/base.css), written out: this page is
+       copied into the build as-is and carries no stylesheet. */
+    html {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      color: #202020;
+      background: #ffffff;
+    }
+
+    body {
+      margin: 0;
+      padding: 80px 24px;
+      text-align: center;
+    }
+
+    h1 {
+      font-size: 18px;
+      font-weight: 600;
+      margin: 0 0 8px;
+    }
+
+    p {
+      color: #666666;
+      margin: 0 0 4px;
+    }
+
+    .asked-path {
+      word-break: break-all;
+    }
+
+    a {
+      color: #2f6b4f;
+      text-decoration: none;
+      word-break: break-all;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Not found</h1>
+  <p>There is nothing at <code class="asked-path"></code>.</p>
+  <p class="nearest hidden">The nearest folder above it is <a class="nearest-folder"></a>.</p>
+  <script>
+    // Files' page for a path that does not exist. The Files server serves this file as it
+    // is, with status 404, for every such path, so everything here is read from the address.
+    (async () => {
+      const segments = location.pathname.split("/").filter((segment) => segment !== "");
+      const decode = (text) => {
+        try {
+          return decodeURIComponent(text);
+        } catch {
+          return text;
+        }
+      };
+      document.querySelector(".asked-path").textContent = decode(location.pathname);
+
+      // The same app contract the listing and file pages speak (shell.js), and the same beacon, so
+      // the window keeps this address and is titled after the name that was asked for.
+      const title = segments.length === 0 ? "Files" : decode(segments[segments.length - 1]);
+      import("/home/user/workspace/system/apps/system_interface/imbue/system_interface/static/_static/app_contract.js")
+        .then(({ connectToShell }) => connectToShell({}).location(location.pathname + location.search, title))
+        .catch((error) => console.warn("[files] the app contract did not load", error));
+
+      // Walk up to the first folder that exists.
+      for (let depth = segments.length - 1; depth >= 0; depth--) {
+        const folder = depth === 0 ? "/" : `/${segments.slice(0, depth).join("/")}/`;
+        let listing = null;
+        try {
+          const response = await fetch(`${folder}?json`);
+          listing = response.ok ? await response.json() : null;
+        } catch {
+          listing = null;
+        }
+        if (listing !== null && listing.kind === "folder") {
+          const $link = document.querySelector(".nearest-folder");
+          $link.href = folder;
+          $link.textContent = decode(folder);
+          document.querySelector(".nearest").classList.remove("hidden");
+          return;
+        }
+      }
+    })();
+  </script>
+</body>
+
+</html>

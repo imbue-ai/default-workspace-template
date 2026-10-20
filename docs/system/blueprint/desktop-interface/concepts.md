@@ -191,7 +191,7 @@ flowchart TB
 Per window: open, raise, minimize, restore, maximize, snap left, snap right, move, resize, navigate, refresh, share, close.
 Per desktop: create, rename, recolour, set the glyph, set the wallpaper, delete, switch to, add, move, and remove shortcuts.
 Per app: stop, start.
-The agent-facing `layout.py` speaks the same verbs, targets exactly one client for the per-client ones, and applies every op to the stored files so no browser needs to be connected.
+The agent-facing `workspace-layout` speaks the same verbs, targets exactly one client for the per-client ones, and applies every op to the stored files so no browser needs to be connected.
 
 ## 5. What goes away
 

@@ -84,6 +84,19 @@ class WindowNotFoundError(ShellError, LookupError):
         super().__init__(f"Window '{window}' not found")
 
 
+class WindowPoppedOutError(ShellError, ValueError):
+    """An op would change where a window the target client has popped out into its own window sits, and the op did
+    not carry ``force`` (answered 423): the pop-out is the user's arrangement."""
+
+    def __init__(self, op: str, window: str) -> None:
+        self.op = op
+        self.window = window
+        super().__init__(
+            f"Window {window} is popped out into its own window, so {op!r} would bring it back onto the desktop; "
+            "pass force to do so anyway"
+        )
+
+
 class PinnedWindowError(ShellError, ValueError):
     """A pinned window cannot be closed (answered 409); minimizing is how it leaves the screen."""
 

@@ -233,9 +233,10 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   // misclassify the initial fill's giant clamp as a user scroll.
   let lastNativeInputAtMs = Number.NEGATIVE_INFINITY;
   const pendingEchoTops: number[] = [];
-  // Last observed scrollHeight, to recognize the browser's own clamp of
-  // scrollTop after content shrank (no user intent; must not be reduced).
-  let lastScrollHeightPx = 0;
+  // Last observed maximum scrollTop, to recognize the browser's own clamp of
+  // scrollTop after the maximum dropped: content shrank, or the viewport grew
+  // (the composer under it got shorter). No user intent; must not be reduced.
+  let lastMaxScrollTopPx = 0;
 
   // fill
   let fillInFlight = false;
@@ -264,6 +265,11 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   let lastPositionedKey = "";
   // afterRender work deferred to a microtask (see afterRender); one per task.
   let isAfterRenderQueued = false;
+  // The scroll element as computeRenderPlan found it, before the DOM patch.
+  // The patch runs in one synchronous task, so any scrollTop change between
+  // this snapshot and runAfterRender is the browser adjusting to the patch
+  // (clamping after content shrank), never the user.
+  let prePatchSnapshot: { scrollTopPx: number; maxScrollTopPx: number } | null = null;
 
   // persistence / restore
   let persistChatKey: string | null = null;
@@ -803,16 +809,16 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     if (echoIndex !== -1) {
       pendingEchoTops.splice(0, echoIndex + 1);
       scrollTopPx = topPx;
-      lastScrollHeightPx = element.scrollHeight;
+      lastMaxScrollTopPx = element.scrollHeight - element.clientHeight;
       trace?.record("scroll-echo", { topPx });
       return;
     }
     // The browser clamping scrollTop after content shrank (a spacer eased down,
-    // rows collapsed) carries no user intent: sync bookkeeping, don't reduce.
-    const scrollHeightNow = element.scrollHeight;
-    const isShrinkClamp =
-      scrollHeightNow < lastScrollHeightPx && Math.abs(topPx - (scrollHeightNow - element.clientHeight)) <= 1;
-    lastScrollHeightPx = scrollHeightNow;
+    // rows collapsed) or the viewport grew carries no user intent: sync
+    // bookkeeping, don't reduce.
+    const maxScrollTopNowPx = element.scrollHeight - element.clientHeight;
+    const isShrinkClamp = maxScrollTopNowPx < lastMaxScrollTopPx && Math.abs(topPx - maxScrollTopNowPx) <= 1;
+    lastMaxScrollTopPx = maxScrollTopNowPx;
     if (isShrinkClamp) {
       pendingEchoTops.length = 0;
       scrollTopPx = topPx;
@@ -946,6 +952,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     }
     detachListeners();
     scrollEl = element;
+    prePatchSnapshot = null;
     if (debugHandles !== null) {
       Object.assign(element as unknown as Record<string, unknown>, debugHandles);
     }
@@ -964,7 +971,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     if (isVisible()) {
       viewportHeightPx = element.clientHeight;
     }
-    lastScrollHeightPx = element.scrollHeight;
+    lastMaxScrollTopPx = element.scrollHeight - element.clientHeight;
     listResizeObserver = new ResizeObserver(() => {
       m.redraw();
     });
@@ -1014,6 +1021,8 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   }
 
   function runAfterRender(element: HTMLElement): void {
+    const snapshot = prePatchSnapshot;
+    prePatchSnapshot = null;
     if (!isVisible()) {
       return;
     }
@@ -1035,25 +1044,35 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     // position no longer means what the user saw). Fold it in instead:
     // compensate AND preserve the user's delta in one write, consume the
     // stale event as an echo, and run the state machine on the result now.
-    const pendingUserDeltaPx = element.scrollTop - scrollTopPx;
-    // This frame's DOM update may have shrunk the content, making the browser
-    // clamp scrollTop before we ran: that gap is not user input. The clamp can
-    // land short of the FINAL maximum (a mid-patch forced layout clamps against
-    // intermediate geometry), so besides the at-max signature, any sizeable
-    // upward gap with no recent native input is an adjustment. Consume its
-    // event as an echo and reposition normally.
-    const maxScrollPx = Math.max(0, element.scrollHeight - element.clientHeight);
+    // Only movement from before this frame's patch can be the user's. The
+    // patch itself may shrink the content and make the browser clamp
+    // scrollTop, possibly against intermediate geometry (a mid-patch forced
+    // layout), so short of the final maximum. Read as input, that clamp would
+    // be added on top of the anchor hold and move the view by however much
+    // the rows above shrank.
+    const prePatchTopPx = snapshot?.scrollTopPx ?? element.scrollTop;
+    const prePatchMaxScrollPx = snapshot?.maxScrollTopPx ?? Math.max(0, element.scrollHeight - element.clientHeight);
+    const isPatchShift = Math.abs(element.scrollTop - prePatchTopPx) > 0.01;
+    const pendingUserDeltaPx = prePatchTopPx - scrollTopPx;
+    // Content can also shrink outside a redraw (an image, a late font swap),
+    // making the browser clamp scrollTop before the patch: that gap is not
+    // user input either. Besides the at-max signature, any upward gap with no
+    // recent native input is an adjustment. Consume its event as an echo and
+    // reposition normally.
     const isRecentNativeInput = performance.now() - lastNativeInputAtMs < 150;
     const isPendingClamp =
-      pendingUserDeltaPx < -0.01 && (Math.abs(element.scrollTop - maxScrollPx) <= 1 || !isRecentNativeInput);
+      pendingUserDeltaPx < -0.01 && (Math.abs(prePatchTopPx - prePatchMaxScrollPx) <= 1 || !isRecentNativeInput);
     // NO minimum size: a trackpad gesture starts as a stream of sub-pixel
     // deltas, and while streaming redraws run every frame, any threshold here
     // reverts each tiny delta before the next arrives -- pinning the user in
     // place. Bookkeeping is exact, so exact comparison is safe.
     const hasPendingUserScroll = Math.abs(pendingUserDeltaPx) > 0.01 && !isPendingClamp;
-    if (isPendingClamp) {
+    if (isPendingClamp || (isPatchShift && !hasPendingUserScroll)) {
       pendingEchoTops.push(element.scrollTop);
-      trace?.record("clamp-absorbed", { deltaPx: pendingUserDeltaPx });
+      trace?.record("clamp-absorbed", {
+        deltaPx: pendingUserDeltaPx,
+        patchShiftPx: element.scrollTop - prePatchTopPx,
+      });
     }
 
     // Positioning: the single writer of scrollTop, and only when the content
@@ -1215,6 +1234,14 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
 
   return {
     computeRenderPlan(): TranscriptRenderPlan {
+      // A second render in the same task keeps the first one's snapshot: the
+      // queued runAfterRender covers both patches.
+      if (scrollEl !== null && !isAfterRenderQueued && isVisible()) {
+        prePatchSnapshot = {
+          scrollTopPx: scrollEl.scrollTop,
+          maxScrollTopPx: Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight),
+        };
+      }
       refreshGeometry();
       tryFinishRestore();
 

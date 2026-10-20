@@ -1,5 +1,8 @@
+from collections.abc import Callable
+
 import pytest
 from browser import fleet
+from workspace_layout.testing import LoopbackShell
 
 
 def test_daemon_url_prefers_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -103,16 +106,14 @@ def test_parser_accepts_the_ownership_verbs() -> None:
         ({"ok": False, "status": "busy_human", "enqueued": False}, "state", fleet._EXIT_BUSY),
         ({"ok": False, "status": "busy_agent", "enqueued": True}, "click", fleet._EXIT_BUSY),
         ({"ok": False, "status": "busy_agent", "enqueued": False}, "state", fleet._EXIT_BUSY),
-        # the fleet is still restoring saved browsers -> try again (busy), not a hard error.
-        ({"ok": False, "status": "initializing"}, "click", fleet._EXIT_BUSY),
         # the browser itself is still launching (init) -> try again (busy), non-fatal.
         ({"ok": False, "status": "starting"}, "click", fleet._EXIT_BUSY),
         ({"ok": False, "status": "crashed"}, "state", fleet._EXIT_ERROR),
         ({"ok": False, "status": "lost_control", "enqueued": True}, "click", fleet._EXIT_PREEMPTED),
         ({"ok": False, "status": "lost_control", "enqueued": False}, "state", fleet._EXIT_BUSY),
-        ({"ok": False, "status": "stale_index", "error": "run state"}, "click", fleet._EXIT_ERROR),
+        ({"ok": False, "status": "stale_index", "detail": "run state"}, "click", fleet._EXIT_ERROR),
         ({"ok": False, "status": "timed_out"}, "state", fleet._EXIT_TIMEOUT),
-        ({"ok": False, "status": "error", "error": "boom"}, "click", fleet._EXIT_ERROR),
+        ({"ok": False, "status": "error", "detail": "boom"}, "click", fleet._EXIT_ERROR),
     ],
 )
 def test_render_action_exit_codes(payload: dict, kind: str, expected: int) -> None:
@@ -135,35 +136,43 @@ def test_parser_rejects_the_removed_drive_verbs() -> None:
     assert close.func is fleet.cmd_close and close.name == "morgan-lee"
 
 
-def test_open_viewer_window_opens_the_browsers_page_as_a_window(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_open_viewer_window_opens_the_browsers_page_as_a_window(
+    loopback_shell: LoopbackShell, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # A user-started agent surfaces each browser as its own window, at the viewer page selected
     # by the browser's NAME; the shell picks the client from the chat that asked.
-    calls: list[tuple] = []
-    monkeypatch.setattr(fleet, "_layout", lambda *a, **k: calls.append(a) or True)
+    monkeypatch.setenv("MINDS_CHAT_ID", "agent-7")
     fleet._open_viewer_window("alex-smith", is_minimized=True)
-    assert calls == [("open", "browser", "--path", "/?session=alex-smith", "--minimized")]
+    assert loopback_shell.posted_ops() == [
+        ("open", {"app": "browser", "path": "/?session=alex-smith", "if_present": "focus", "minimized": True})
+    ]
+    assert loopback_shell.posted[0][1]["requester"] == {"app": "chat", "marker": "agent-7"}
 
 
-def test_open_viewer_window_warns_cleanly_when_it_cant_show_a_window(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_open_viewer_window_warns_cleanly_when_it_cant_show_a_window(
+    loopback_shell: LoopbackShell, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # The open never lands (no shell, no client to place it on): we attempt it, then offer the
-    # launcher in one clean line -- never crash, never leak layout.py's raw error (the browser
+    # launcher in one clean line -- never crash, never leak the shell's raw error (the browser
     # is still running).
     printed: list[str] = []
-    monkeypatch.setattr(fleet, "_layout", lambda *a, **k: False)
+    loopback_shell.close()
     monkeypatch.setattr(fleet, "_out", lambda msg: printed.append(msg))
     fleet._open_viewer_window("riley-jones", is_minimized=True)
     assert printed == ["browser riley-jones is ready. To watch it live, open it from the launcher (Browser -> riley-jones)."]
 
 
-def test_cmd_new_opens_the_viewer_window_by_name_minimized(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cmd_new_opens_the_viewer_window_by_name_minimized(
+    loopback_shell: LoopbackShell, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # "Open a new browser" opens its viewer window (by the returned name) right away rather than
     # waiting for the first command, but minimized, so it does not land over the user's work.
-    calls: list[tuple] = []
     monkeypatch.setattr(fleet, "_request", lambda *a, **k: (200, {"name": "alex-smith"}))
-    monkeypatch.setattr(fleet, "_layout", lambda *a, **k: calls.append(a) or True)
     args = fleet._build_parser().parse_args(["new"])
     assert fleet.cmd_new(args) == fleet._EXIT_OK
-    assert calls == [("open", "browser", "--path", "/?session=alex-smith", "--minimized")]
+    assert [(op, arguments["path"], arguments["minimized"]) for op, arguments in loopback_shell.posted_ops()] == [
+        ("open", "/?session=alex-smith", True)
+    ]
 
 
 def test_cmd_new_sends_chosen_name_and_maps_errors(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -182,9 +191,9 @@ def test_cmd_new_sends_chosen_name_and_maps_errors(monkeypatch: pytest.MonkeyPat
     assert fleet.cmd_new(args) == fleet._EXIT_OK
     assert sent == [{"name": "my-browser"}]
 
-    monkeypatch.setattr(fleet, "_request", lambda *a, **k: (400, {"error": "bad name"}))
+    monkeypatch.setattr(fleet, "_request", lambda *a, **k: (400, {"detail": "bad name"}))
     assert fleet.cmd_new(fleet._build_parser().parse_args(["new", "Bad Name"])) == fleet._EXIT_USAGE
-    monkeypatch.setattr(fleet, "_request", lambda *a, **k: (409, {"error": "already in use"}))
+    monkeypatch.setattr(fleet, "_request", lambda *a, **k: (409, {"detail": "already in use"}))
     assert fleet.cmd_new(fleet._build_parser().parse_args(["new", "dup"])) == fleet._EXIT_BUSY
 
 
@@ -197,16 +206,18 @@ def test_parser_accepts_handoff_and_request_human_alias() -> None:
     assert b.func is fleet.cmd_handoff and b.name == "alex-smith" and b.reason == "human verification needed"
 
 
-def test_cmd_handoff_shows_the_viewer_window_and_returns_preempted(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cmd_handoff_shows_the_viewer_window_and_returns_preempted(
+    loopback_shell: LoopbackShell, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # A successful handoff opens the viewer window NOT minimized, which also restores and raises a
     # window the browser already has, so the human sees what to solve; it exits PREEMPTED so the
     # agent stops and waits to be woken to resume.
-    calls: list[tuple] = []
     monkeypatch.setattr(fleet, "_request", lambda *a, **k: (200, {"ok": True, "status": "handed_off"}))
-    monkeypatch.setattr(fleet, "_layout", lambda *a, **k: calls.append(a) or True)
     args = fleet._build_parser().parse_args(["handoff", "alex-smith", "solve the captcha"])
     assert fleet.cmd_handoff(args) == fleet._EXIT_PREEMPTED
-    assert calls == [("open", "browser", "--path", "/?session=alex-smith")]
+    assert [(op, arguments["path"], arguments["minimized"]) for op, arguments in loopback_shell.posted_ops()] == [
+        ("open", "/?session=alex-smith", False)
+    ]
 
 
 def test_cmd_handoff_not_owner_still_tells_agent_to_stop(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -216,6 +227,24 @@ def test_cmd_handoff_not_owner_still_tells_agent_to_stop(monkeypatch: pytest.Mon
     monkeypatch.setattr(fleet, "_open_viewer_window", lambda name, is_minimized: None)
     args = fleet._build_parser().parse_args(["handoff", "alex-smith"])
     assert fleet.cmd_handoff(args) == fleet._EXIT_PREEMPTED
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param(lambda: fleet.cmd_acquire(fleet._build_parser().parse_args(["acquire", "alex-smith"])), id="acquire"),
+        pytest.param(lambda: fleet.cmd_handoff(fleet._build_parser().parse_args(["handoff", "alex-smith"])), id="handoff"),
+    ],
+)
+def test_every_ownership_verb_reads_the_gates_refusal_as_try_again_and_an_unknown_browser_as_an_error(
+    monkeypatch: pytest.MonkeyPatch, command: Callable[[], int]
+) -> None:
+    monkeypatch.setattr(fleet, "_open_viewer_window", lambda name, is_minimized: None)
+    monkeypatch.setattr(fleet, "_print_attach", lambda name: None)
+    monkeypatch.setattr(fleet, "_request", lambda *a, **k: (503, {"detail": "Browser fleet is still restoring"}))
+    assert command() == fleet._EXIT_BUSY
+    monkeypatch.setattr(fleet, "_request", lambda *a, **k: (404, {"detail": "no browser alex-smith"}))
+    assert command() == fleet._EXIT_ERROR
 
 
 def test_attach_url_waits_only_while_the_browser_is_starting(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -238,7 +267,7 @@ def test_attach_url_waits_only_while_the_browser_is_starting(monkeypatch: pytest
 
 
 def test_attach_url_bails_immediately_on_anything_but_starting(monkeypatch: pytest.MonkeyPatch) -> None:
-    for status, payload in [(404, {"error": "no browser"}), (200, {"ok": False, "status": "crashed"})]:
+    for status, payload in [(404, {"detail": "no browser"}), (200, {"ok": False, "status": "crashed"})]:
         calls: list[int] = []
         monkeypatch.setattr(fleet.time, "sleep", lambda s: (_ for _ in ()).throw(AssertionError("must not sleep")))
         monkeypatch.setattr(fleet, "_request", lambda *a, s=status, p=payload, **k: (calls.append(1), (s, p))[1])

@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "app-manifest",
+    "app-schema",
+    "chat-background-tasks",
     "concurrency-group",
     "flask>=3.0",
     "flask-sock>=0.7",
@@ -27,11 +29,13 @@ dependencies = [
     "tomlkit>=0.12",
     "watchdog>=4.0",
     "werkzeug>=3.0",
+    "workspace-layout",
 ]
 license = {text = "FCL-1.0-MIT"}
 
 [dependency-groups]
 dev = [
+    "app-schema[testing]",
     "playwright>=1.40",
     "pytest-playwright>=0.4",
     "pytest>=9.0",
@@ -53,7 +57,7 @@ dev = [
     "ruff~=0.12.8",
     # Used by check_no_type_errors in test_ratchets.py. Pinned to the version the source was
     # last verified clean against (see the system interface's pyproject).
-    "ty==0.0.24",
+    "ty==0.0.85",
 ]
 
 [project.scripts]
@@ -117,12 +121,6 @@ format-command="uv run ruff format --force-exclude --config pyproject.toml --std
 # without one, a checkout nested in another project (e.g. a clone under mngr's
 # .external_worktrees/) would be checked as part of that project instead.
 [tool.ty]
-
-[tool.pyright]
-venvPath = "."
-venv = ".venv"
-pythonVersion = "3.12"
-strict = ["**/*.py"]
 
 # Ruff config mirrors mngr's pyproject.toml, as the system interface's does.
 [tool.ruff]

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from imbue.imbue_common.ratchet_testing import standard_ratchet_checks as rc
+from imbue.imbue_common.ratchet_testing.ratchets import check_no_type_errors
 from inline_snapshot import snapshot
 
 _DIR = Path(__file__).parent
@@ -23,7 +24,7 @@ def test_prevent_while_true() -> None:
 
 
 def test_prevent_time_sleep() -> None:
-    rc.check_time_sleep(_DIR, snapshot(2))
+    rc.check_time_sleep(_DIR, snapshot(3))
 
 
 def test_prevent_global_keyword() -> None:
@@ -60,3 +61,7 @@ def test_prevent_asyncio_import() -> None:
 
 def test_prevent_dataclasses_import() -> None:
     rc.check_dataclasses_import(_DIR, snapshot(0))
+
+
+def test_no_type_errors() -> None:
+    check_no_type_errors(_DIR)

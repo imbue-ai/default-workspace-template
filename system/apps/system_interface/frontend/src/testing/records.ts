@@ -70,6 +70,7 @@ export function appRecord(name: string, overrides: Partial<AppRecord> = {}): App
     pin: null,
     message_handlers: [],
     is_running: true,
+    share_url: null,
     ...overrides,
   };
 }
@@ -163,6 +164,7 @@ export function clientRecord(id: string, overrides: Partial<ClientRecord> = {}):
     is_connected: true,
     entries: {},
     shown_history: [],
+    desktop_revision: 0,
     ...overrides,
   };
 }

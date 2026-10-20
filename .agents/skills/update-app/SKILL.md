@@ -35,7 +35,8 @@ touches and the `app.toml` of the app that owns it (`system/apps/<package>/app.t
 If it says `critical = true` -- the shell (`system_interface`), the chat, the
 terminal, and any user app that declares it -- or if the change is under
 `system/libs/workspace_ui/` (the shared library both critical bundles are built
-from), **follow [`references/critical-app.md`](references/critical-app.md) and
+from) or `system/libs/workspace_layout/` (the layout wire contract the shell, the
+chat, and the terminal all run), **follow [`references/critical-app.md`](references/critical-app.md) and
 stop reading here.** A critical app is never edited in the served tree: that
 flow runs the same live loop against an isolated worktree, with a preview window
 as the user's view, and goes live through the atomic update apply once a
@@ -165,6 +166,21 @@ requests can go back to `true`. The field is read at registration, so the
 restart in step 2 is what applies it; `uv run app-manifest validate-manifest
 system/apps/<package>/app.toml` checks the file.
 
+An app with an `api_schema_path` in its manifest describes its own API there:
+an OpenAPI document built from its routes on every request, which is what a
+visiting agent reads instead of the code (`build-app`, "The app describes its
+own API"). A route the change adds is listed on its own; what the change owes
+the document is a docstring on each new or changed view (its first paragraph is
+the operation's summary, in the user's terms), an entry in the app's route table
+for each new route (`RouteModels` with the pydantic models it reads through
+`parse_request_body` and answers through `model_response`, or `SchemalessRoute`
+with the reason it exchanges no JSON), the table updated when a route's models
+or status change, and an updated `description` in `app.toml` when the change
+moves what the app is for. A parse or an answer the table does not name fails
+the request, and the app's own test (`runner_test.py` in a scaffolded app) fails
+when the document and the manifest disagree, a view has no docstring, or a
+route is missing from the table, so run it with the change.
+
 ### 2. Apply it so it actually takes effect
 
 The scaffolded web runner runs with `use_reloader=False`, and daemons
@@ -222,12 +238,12 @@ pre-change content. Refresh it so the user sees the update without being told
 to click Refresh:
 
 ```bash
-python3 system/scripts/layout.py refresh --app <name>
+uv run --no-sync workspace-layout refresh --app <name>
 ```
 
 `refresh --app` reloads every page of the service on every client. If no
 window is open yet and the change is ready to show, surface it instead with
-`python3 system/scripts/layout.py open <name>`: with no `--desktop` it lands
+`uv run --no-sync workspace-layout open <name>`: with no `--desktop` it lands
 on the desktop the user is looking at, and `--desktop <name>` targets one
 desktop (and switches the client to it).
 **That `open` puts the window on the user's screen the moment it returns** -- it
@@ -363,10 +379,17 @@ where the data dies. Encode these, cheapest first:
   ```bash
   uv run python3 .agents/skills/update-app/scripts/preview_app.py up \
       --app <name> --worktree <dir>          # prints <name>-preview
-  python3 system/scripts/layout.py open <name>-preview   # puts a window of it in front of the user
+  uv run --no-sync workspace-layout open <name>-preview   # puts a window of it in front of the user
   uv run python3 .agents/skills/update-app/scripts/preview_app.py refresh --app <name>   # after a rebuild, in place
   uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
   ```
+
+  The worktree needs its own environment before the first `up`. A fresh
+  `git worktree add` has no `.venv`, and without one the app's command
+  resolves to the live install, so the preview silently serves the live code.
+  Run `uv sync --all-packages` in the worktree first, and again before
+  `refresh` after changing a dependency or entry point. If the app has a
+  frontend, build it there too.
 
   `--with <sibling>` boots a sibling app's preview from the same worktree first
   and points the app's copied registry at it: a shell preview frames the

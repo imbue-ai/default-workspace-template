@@ -46,8 +46,8 @@ provision_drop_inherited_pins
 : "${TTYD_VERSION:=1.7.7}"
 : "${UV_VERSION:=0.11.7}"
 : "${NODE_VERSION:=22.23.2}"
-: "${CLAUDE_CODE_VERSION:=2.1.280}"
-: "${CODEX_VERSION:=0.157.0}"
+: "${CLAUDE_CODE_VERSION:=2.1.293}"
+: "${CODEX_VERSION:=0.161.0}"
 : "${PI_VERSION:=0.87.1}"
 : "${PLAYWRIGHT_CLI_VERSION:=0.1.18}"
 : "${OPENCODE_VERSION:=1.18.19}"
@@ -449,10 +449,9 @@ else
     bash "$setup_dir/default-workspace-template-install-secret-scanners"
 fi
 
-# owner-exec (the in-container exec daemon), dufs (the file-viewer server) and
-# earlyoom (the OOM-prevention daemon; see install_earlyoom.sh for why it is a
-# fork), each a pinned, sha256-verified static binary with its own idempotent
-# installer.
+# owner-exec (the in-container exec daemon) and earlyoom (the OOM-prevention
+# daemon; see install_earlyoom.sh for why it is a fork), each a pinned,
+# sha256-verified static binary with its own idempotent installer.
 # Invoked from here rather than as their own Dockerfile layers so that a live
 # re-provision (the update apply) and a non-Docker provider get them too: this
 # script is the only provisioning path every provider shares.
@@ -461,15 +460,17 @@ if [ -f "$setup_dir/install_owner_exec.sh" ]; then
 else
     bash "$setup_dir/default-workspace-template-install-owner-exec"
 fi
-if [ -f "$setup_dir/install_dufs.sh" ]; then
-    bash "$setup_dir/install_dufs.sh"
-else
-    bash "$setup_dir/default-workspace-template-install-dufs"
-fi
 if [ -f "$setup_dir/install_earlyoom.sh" ]; then
     bash "$setup_dir/install_earlyoom.sh"
 else
     bash "$setup_dir/default-workspace-template-install-earlyoom"
+fi
+# The agents' Claude and Codex plugins, pinned like the CLIs above (see
+# install_agent_plugins.sh).
+if [ -f "$setup_dir/install_agent_plugins.sh" ]; then
+    bash "$setup_dir/install_agent_plugins.sh"
+else
+    bash "$setup_dir/default-workspace-template-install-agent-plugins"
 fi
 # A host provisioned before the fork still has the apt earlyoom. Purging it
 # only touches /usr/bin/earlyoom: the fork lives at /usr/local/bin, which is

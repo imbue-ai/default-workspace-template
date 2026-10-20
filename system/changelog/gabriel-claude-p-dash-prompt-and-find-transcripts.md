@@ -1,0 +1,1 @@
+The ai-driven-services plan now shows the `claude -p` helper's invocation with the prompt last, after `--`, matching `claude_p.py`. It used to show the prompt right after `-p`, the form that fails with `unknown option` for a prompt starting with `-`.

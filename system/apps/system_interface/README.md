@@ -50,6 +50,8 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   `imbue/system_interface/static/`; `/assets/<path>` for its bundle.
 - `/api/health`: `{"status", "is_frontend_built"}`, the probe the update
   apply and the preview flow poll.
+- `GET /api/schema`: the OpenAPI document of the shell's routes, built from its
+  url map (`system/libs/app_schema`); the manifest's `api_schema_path`.
 - `/_static/app_contract.js` and `/_static/context_menu.js`: the browser-side
   contract module and the element context menu module (sources in
   `system/libs/workspace_ui/src/app_contract.ts` and `context_menu.ts`), built
@@ -91,7 +93,7 @@ has offered), `placements/<desktop>/<client>.json`,
 `window_paths/<client>.json` (a client's own paths for independent windows),
 `clients.json`, `users.json` (the desktop made for each visiting user),
 `avatar_selection.json`, and the client-activity
-event log (`events/client_activity/events.jsonl`, what `layout.py context`
+event log (`events/client_activity/events.jsonl`, what `workspace-layout context`
 reads). Wallpapers are listed from `static/wallpapers/` (bundled) and
 `data/.apps/system_interface/wallpapers/` (files the user adds); avatar designs
 an agent registers live in `data/.apps/system_interface/avatars/catalog.json`
@@ -116,8 +118,10 @@ and the profile cache.
   avatar) is on its client record.
 - **The avatar** (`avatar/`): the bundled and registered designs, the
   workspace's selection, the rendered image routes, and the status reader,
-  which folds mngr's agents event file into a mood (working when any agent
-  but the services agent is running) and pushes `avatar_status` on change.
+  which folds mngr's agents event file and the chats' background task markers
+  into a mood (working when any agent but the services agent is running, or
+  any chat is busy on a background task that will wake its agent) and pushes
+  `avatar_status` on change.
 - **State files**: a fresh workspace gets one desktop, `Home`, seeded from
   every registered app's default shortcut (its `default_shortcut`, else, for
   an app a program runs, its first launch path taking no text, or its first
@@ -143,7 +147,8 @@ and the profile cache.
   with 409 and the browser refetches. `GET /api/inventory` is
   `{desktops, apps, clients}`, each `app` carrying its `launch_paths`,
   `default_shortcut`, and `is_running`.
-- **The op route** (`shell/layout_ops.py`): an op is `{op, args, requester}`,
+- **The op route** (`shell/desktop_routes.py`, over the request models of
+  the `workspace_layout` library's `ops`): an op is `{op, args, requester}`,
   the requester `{app, marker}` or null; `self` names the requester's app's
   window whose path carries the marker. The document verbs (`open`, `focus`,
   `minimize`, `restore`, `maximize`, `place`, `close`, `navigate`, `load`,
@@ -151,13 +156,15 @@ and the profile cache.
   announced as `desktops_updated` and `placements_updated`; `context` answers every
   client's recent activity, folded from the client-activity log and the live
   socket registrations, and `desktops` and `list` answer the inventory
-  document (`GET /api/inventory`'s `{desktops, apps, clients}`); only
-  `refresh` and `reload_system_interface` reach the browser as `layout_op`
-  messages.
+  document (`GET /api/inventory`'s `{desktops, apps, clients}`);
+  `refresh` and `reload_system_interface` reach the browser only as
+  `layout_op` messages, and `focus`, `show`, and an `open` that is not
+  minimized also send one telling the target client which window they put in
+  front.
 
 The backend is the `imbue/system_interface/shell/` subpackage (inventory and
 liveness, desktops, placements, wallpapers, clients, users and the request
-identity, client activity, layout ops, the pure desktop document editor, the
+identity, client activity, the pure desktop document editor, the
 routes with their shared helpers, state); the package root holds the process
 (`main.py`, `server.py`), the not-built placeholder, and the update-staleness
 check. The frontend
@@ -167,21 +174,45 @@ modules it shares with the app pages live in `system/libs/workspace_ui`, and
 `src/relay.ts` is the shell's side of the embedder relay (it forwards the
 framed pages' `minds:` messages to the minds chrome unchanged).
 
-A message the Imbue Studio chrome sends the shell's page reaches an app another way
-too: an app whose manifest registers its type (`[[message_handlers]]`) has it
-posted, by the shell's page once (never by a solo page, whose client is the
-main window's) and then by the shell's backend
-(`POST /api/embedder-messages`, `shell/embedder_messages.py`), to the route it
-named, with the client whose page received it. The shell reads no payload. An
+A message the shell's page receives, from the Imbue Studio chrome or from an
+app's page (`shell:message`),
+reaches every app whose manifest registers its type (`[[message_handlers]]`):
+the shell's page hands it once to the shell's backend (`POST
+/api/embedder-messages`, `shell/embedder_messages.py`), with the client whose
+page received it. A solo page hands on its apps' messages but never the
+chrome's, which the main window's page already relays. A `path` handler has the
+message posted to the route it named; a `show` handler has the shell build the
+page its template names from the message's fields and show it through the op
+route's `show` below, in-process. A message some app did not take becomes a
+notice carrying that app's reason, and a page shown while the client has only
+pop-outs open becomes a notice to reopen the main window. The shell's page
+also opens links itself: it announces `opensLinks` to the chrome and opens a
+`minds:open-link` (a popup Imbue Studio turned back into the workspace) or a
+page's `shell:open-link` by the shared link classifier (`workspace_ui`'s
+`links.ts`): a `file:` URL as `open:file`, a local URL on an openable app's
+`<label>.localhost` (or `<name>.localhost`) host, or else at its registered
+backend port, as that app's window (`windowAtLocalAppHost` and
+`windowAtBackendUrl` in `frontend/src/model/pageUrl.ts`), any other local URL
+as `open:url`, one of this workspace's app addresses (its addresses on the
+domain the workspace was last shared under included, read off the apps'
+`share_url`) as that app's window, and an external web, `mailto:`, or `tel:`
+link as `open:web`, `open:mailto`, or `open:tel` to the app registered for it,
+or else outside the workspace: back to a chrome that says it opens external
+links (`minds:open-external`), else in a new browser tab. An app's window already
+there that the client has popped out is raised in its own window, and one a
+link opens while the client has only pop-outs open gets the same notice. An
 app that wants a window for what it was told asks the op route's `show`, which
 takes the app, a path, the other paths that count as already showing it, and
 the pages whose windows it may point at the path, and picks the window itself:
 one already showing it (switching desktops if it must), else the frontmost
 window on screen at one of those pages (pointed at the path), else the app's
 pinned window, else a new one. A pulled-out window it settles on stays out, and
-the client stays on its desktop: the shell asks that client's page to have the
-Imbue Studio app raise the window's own desktop window. The shell reads no meaning into
-a path's query string.
+the client stays on its desktop: the shell asks that client's pages to have the
+Imbue Studio app raise the window's own desktop window (the window's own solo
+page asks too, so the raise works with the main window closed). The shell reads
+no meaning into a path's query string. The other ops treat a pulled-out window
+the same way: `focus` raises it, and the ops that would move it back onto the
+desktop are refused unless forced (desktop contracts.md section 8).
 
 ### How the shell learns about apps
 
@@ -204,9 +235,11 @@ reported (under gVisor and on lima, a change made outside the sandbox raises no
 inotify event in it).
 
 Every registry read is also announced to the minds desktop (`app_announcements.py`):
-one `service_registered` event per app whose URL, label, icon, or display name
-differs from the last announced, and one `service_deregistered` per app that left, appended
-to `$MNGR_AGENT_STATE_DIR/events/services/events.jsonl` in the `imbue_common`
+one `service_registered` event per app whose URL, label, icon, display name, or
+`system` or `internal` declaration (which tell the minds Share tab to list the
+app under its System group, or not at all) differs from the last announced, and
+one `service_deregistered` per app that left, appended to
+`$MNGR_AGENT_STATE_DIR/events/services/events.jsonl` in the `imbue_common`
 event envelope; the first read after the shell starts announces every app. The
 stream is what `mngr forward` and the desktop resolve app origins from, and
 they replay it whole each time they attach, so a stream over 5 MiB at that
@@ -219,14 +252,15 @@ rewrite. A preview shell announces nothing, since its registry is a copy.
 The shell also owns each stoppable app's process (`shell/app_lifecycle.py`,
 the stop-when-no-windows spec): an app whose manifest declares
 `stop_when_no_windows` is stopped once no window on any desktop has shown it
-for a minute (only once someone has visited the workspace, and never while a
-per-app share grant names it, since such a visitor reaches the app without the
-shell: `shell/share_grants.py` reads `data/.secrets/share_grants.toml`), and while any
-stoppable app is stopped the shell holds its port (`shell/port_parking.py`), so
-the first request for the app starts it again and is answered with a loading
-page that reloads into the app. "Quit <app>" on the window menu
-(`frontend/src/views/WindowMenu.ts`) closes every window of the app and stops
-it at once; critical apps offer nothing there and are never stopped or parked.
+for a minute (only once someone has visited the workspace, and never, unless it
+is internal, while a per-app share grant names it, since such a visitor reaches
+the app without the shell: `shell/share_grants.py` reads
+`data/.secrets/share_grants.toml`), and while any stoppable app is stopped the
+shell holds its port (`shell/port_parking.py`), so the first request for the
+app starts it again and is answered with a loading page that reloads into the
+app. "Quit <app>" on the window menu (`frontend/src/views/WindowMenu.ts`)
+closes every window of the app and stops it at once; critical apps offer
+nothing there and are never stopped or parked.
 The stop and start routes remain for agents. A framed page reaches the shell only
 through the contract module (`shell:open`, `shell:focused`, `shell:location`,
 `shell:capabilities`, `shell:start-with-text`); a page that reports the path it is showing gets it
@@ -343,7 +377,8 @@ fresh install lands on its `Home` desktop with the Getting Started window
 open, placed there once by that app for the first client that connects.
 
 A refused operation (an open, a close, a shortcut move) says so in a toast at
-the foot of the screen (`views/Toast.ts`) rather than a browser alert.
+the foot of the screen (the shared toasts of `system/libs/workspace_ui`) rather
+than a browser alert.
 
 ### The phone layout
 
@@ -393,18 +428,18 @@ that, tokens or not.
 ## Driving the desktop from an agent
 
 An agent inside the workspace arranges the desktop through
-`system/scripts/layout.py` (`context / desktops / list / load / open / focus /
+`uv run --no-sync workspace-layout` (`context / desktops / list / load / open / show / focus /
 minimize / restore / maximize / place / close / navigate / refresh / shortcuts /
 shortcut set / shortcut move / shortcut remove / wallpaper`), which names apps
 and windows (desktop-interface contracts.md section 8):
 
 ```bash
-python3 system/scripts/layout.py desktops
-python3 system/scripts/layout.py context
-python3 system/scripts/layout.py open files --path /home/user/workspace/data/notes/ --desktop Research
-python3 system/scripts/layout.py open terminal
-python3 system/scripts/layout.py place self --zone left
-python3 system/scripts/layout.py navigate win-0123456789abcdef /other/
+uv run --no-sync workspace-layout desktops
+uv run --no-sync workspace-layout context
+uv run --no-sync workspace-layout open files --path /home/user/workspace/data/notes/ --desktop Research
+uv run --no-sync workspace-layout open terminal
+uv run --no-sync workspace-layout place self --state snapped-left
+uv run --no-sync workspace-layout navigate win-0123456789abcdef /other/
 ```
 
 The document ops are applied by the shell to the desktop and to the target

@@ -13,6 +13,7 @@ from app_manifest.selection import render_selection
 from app_manifest.selection import select_tests
 from app_manifest.testing import build_selection_workspace
 from app_manifest.testing import commit_everything
+from app_manifest.testing import remove_shell_modules
 from app_manifest.testing import selection_lock
 from app_manifest.testing import write_app_manifest
 from app_manifest.testing import write_repo_file
@@ -123,6 +124,39 @@ def test_a_consumer_change_does_not_run_what_it_consumes(workspace: Path) -> Non
     selection = _select(workspace, ["system/apps/notes/src/notes/core.py"])
 
     assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/apps/notes"]
+
+
+@pytest.mark.parametrize(
+    ("path", "expected_runs"),
+    [
+        ("system/apps/notes/src/notes/core.py", [_ALWAYS_RUN, "uv run pytest system/apps/notes"]),
+        # Reaches notes through midlib.
+        (
+            "system/libs/midlib/src/midlib/core.py",
+            [_ALWAYS_RUN, "uv run pytest system/apps/notes", "uv run pytest system/libs/midlib"],
+        ),
+        # Outside every package: the full root suite collects every root-collected app's tests.
+        ("system/scripts/forward_port.py", [_FULL_ROOT]),
+    ],
+)
+def test_without_the_shells_built_modules_an_apps_root_collected_run_builds_the_frontends_first(
+    workspace: Path, path: str, expected_runs: list[str]
+) -> None:
+    remove_shell_modules(workspace)
+
+    selection = _select(workspace, [path])
+
+    assert _command_lines(selection) == [*_FRONTEND_BUILD, *expected_runs]
+
+
+def test_without_the_shells_built_modules_a_run_that_reaches_no_app_builds_nothing(
+    workspace: Path,
+) -> None:
+    remove_shell_modules(workspace)
+
+    selection = _select(workspace, ["system/libs/corelib/src/corelib/core_test.py"])
+
+    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/libs/corelib"]
 
 
 def test_a_skill_change_runs_only_that_skills_suite(workspace: Path) -> None:

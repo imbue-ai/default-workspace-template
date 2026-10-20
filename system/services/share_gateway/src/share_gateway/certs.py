@@ -17,7 +17,6 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.x509.oid import ExtensionOID
 
 _WORKSPACE_KEY_BITS = 2048
 _CERT_REQUEST_TIMEOUT_SECONDS = 300.0
@@ -128,7 +127,7 @@ def cert_matches_share(cert_pem_text: str, workspace_domain: str) -> bool:
     """Whether an on-disk cert covers this share's names (a re-share after a region move must reissue)."""
     try:
         leaf = x509.load_pem_x509_certificate(cert_pem_text.encode("utf-8"))
-        san_extension = leaf.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
+        san_extension = leaf.extensions.get_extension_for_class(x509.SubjectAlternativeName)
     except (ValueError, x509.ExtensionNotFound):
         return False
     sans = set(san_extension.value.get_values_for_type(x509.DNSName))

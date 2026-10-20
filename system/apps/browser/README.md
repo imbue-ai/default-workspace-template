@@ -20,7 +20,9 @@ background agent, which is its own chat -- or the human).
   chats and Imbue Studio hosts use), while browsers created by older builds keep their
   random english names. Closing a browser retires its name and deletes its
   profile, which is what frees the number for a later create; the fleet starts
-  empty and there is no default browser.
+  empty and there is no default browser. The daemon describes its own HTTP API at
+  `GET /api/schema` (the manifest's `api_schema_path`), an OpenAPI document built
+  from its routes by `system/libs/app_schema`.
 - **Ownership** is one locked, compare-and-set state machine per browser. Agents
   never preempt each other -- a second agent waits in a FIFO queue
   (monitor-and-wait). The human can take control from the UI at any time, which
@@ -33,7 +35,7 @@ background agent, which is its own chat -- or the human).
   (`docs/system/specs/window-bound-resources.md`). The shell posts every closed
   window of the browser to `POST /api/window-closed` (the manifest's
   `window_closed_path`), and the daemon sweeps the shell's windows
-  (`GET /api/desktops`, through `app_manifest.shell_windows`) every
+  (`GET /api/desktops`, through `workspace_layout.windows`) every
   `BROWSER_WINDOW_SWEEP_SECONDS` (default 90) regardless: a browser some window
   showed (recorded as `window_seen` in the manifest) and none shows any more is
   stopped, never deleted, so its profile and tabs come back with its next window.
@@ -52,7 +54,7 @@ background agent, which is its own chat -- or the human).
   installed; a refusal carries its reason as `{"detail"}`, which the shell passes on
   to whoever ran the launch). `POST /browsers` with no name answers the same browser; with a name
   it is a create (409 for a duplicate or a full fleet). The shell opens a browser
-  window at the launch path (`layout.py open browser`); everything else about a
+  window at the launch path (`workspace-layout open browser`); everything else about a
   browser it learns from the page itself through the app contract. The `/browsers`
   routes serve the CLI and the viewer. Every browser
   can be stopped: `POST /browsers/<name>/stop` ends its Chromium (refreshing its tab
@@ -69,6 +71,21 @@ background agent, which is its own chat -- or the human).
   fresh home page rather than closed, since Chromium would close its window with it
   and the window-bound sweep would then stop the browser (409 while the browser is
   not running).
+- **Opening a link for the human** (`POST /api/open-url`, the manifest's `open:url` message handler; the
+  workspace link routing plan): the shell posts `{"type", "client_id", "url"}` when a link to a local address no
+  app is registered at is clicked in the workspace (a chat's `http://localhost:3000/` link, or a page's popup
+  Imbue Studio hands back).
+  The URL must be an absolute `http(s)` URL on this machine (`localhost`, `127.0.0.1`, `[::1]`, or a
+  `*.localhost` host); anything else is refused with a reason under `detail`, which the shell shows the user, as
+  is a Chromium still installing (503). The one browser then opens it the way the launch path opens a start page
+  -- created, relaunched, or given a new tab in front -- with two exceptions: while Chromium is still launching the
+  URL is held and opened in front once the launch finishes, and while an agent drives the browser the URL is held
+  rather than opened over the agent's work. Either way the route then shows the browser's page to the client that
+  clicked (the shell's `show` op, through `workspace_layout`), raising a browser window or opening one. A held URL
+  is named on the viewer's agent overlay with "Take control of this browser", which takes control as the plain
+  button does and opens the URL as a tab in front, and "Cancel" (`POST /browsers/<name>/pending-url/cancel`), which
+  drops it and leaves the agent's session as it was. It also opens once the agent lets go of the browser; a
+  second URL held before either replaces the first, and a browser that stops (a failed relaunch included) drops it.
 - **CLI** (`agentic-browser-fleet`): the thin client the agent uses to drive the
   fleet. The fleet starts empty, so the first step is always `new` (it prints the
   name of the browser it started); every other command takes that
@@ -119,7 +136,9 @@ background agent, which is its own chat -- or the human).
   themselves were lost). On daemon startup the
   fleet is restored **eager-sequentially** (one browser at a time, no cold-boot
   memory spike) behind an **init gate**: state-changing commands return a 503
-  "initializing" until restore finishes, while `ls`/`state` stay open. A fresh
+  whose `detail` says the fleet is still restoring until restore finishes, while
+  `ls`/`state` stay open. Every refusal of every route is `{"detail": "<reason>"}`,
+  and `GET /api/schema` publishes the request and response shape of every route. A fresh
   workspace starts with an empty fleet; the first `new` (or the first browser
   window) creates the browser. `close <name>` retires a browser and forgets its
   profile, which only the fleet CLI does; a crashed browser is never restored as

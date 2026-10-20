@@ -16,6 +16,7 @@ from pydantic import model_validator
 
 from app_manifest.errors import InvalidManifestValueError
 from app_manifest.errors import ManifestLoadError
+from app_manifest.primitives import AppDescription
 from app_manifest.primitives import AppName
 from app_manifest.primitives import DisplayName
 from app_manifest.primitives import EnvVarName
@@ -25,6 +26,7 @@ from app_manifest.primitives import LaunchParamName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
 from app_manifest.primitives import MessageType
+from app_manifest.primitives import PageTemplate
 from app_manifest.primitives import PreviewName
 from app_manifest.primitives import PriorityName
 from app_manifest.primitives import ProgramName
@@ -132,7 +134,7 @@ class LaunchPath(FrozenModel):
     """A way of starting something the desktop offers (desktop-interface contracts.md section 2): a page path the
     shell opens a window at (GET), or a route the shell posts to for the path of the page to open (POST)."""
 
-    id: LaunchPathId = Field(description="The id shortcuts and layout.py refer to")
+    id: LaunchPathId = Field(description="The id shortcuts and workspace-layout refer to")
     label: NonEmptyStr = Field(description="The launch path's user-facing label")
     path: LaunchPathValue = Field(description="The path under the app origin, without a query string")
     method: LaunchPathMethod = Field(
@@ -183,11 +185,32 @@ class LaunchPath(FrozenModel):
 
 
 class MessageHandler(FrozenModel):
-    """A message an app takes, and the route under its own origin the shell posts each one to
-    (desktop-interface contracts.md section 2)."""
+    """A message an app takes, and how the shell delivers it (desktop-interface contracts.md section 2): posted to a
+    route under the app's origin (``path``), or as a page of the app the shell puts on screen (``show``)."""
 
     type: MessageType = Field(description="The message type the app handles")
-    path: LaunchPathValue = Field(description="The route under the app origin the shell POSTs the message to")
+    path: LaunchPathValue | None = Field(
+        default=None, description="The route under the app origin the shell POSTs the message to"
+    )
+    show: PageTemplate | None = Field(
+        default=None, description="The page of the app the shell shows for the message, built from its fields"
+    )
+    showing: tuple[PageTemplate, ...] = Field(
+        default=(), description="The app's other pages, built the same way, that count as already showing it"
+    )
+
+    @model_validator(mode="after")
+    def _check_one_delivery(self) -> Self:
+        if (self.path is None) == (self.show is None):
+            raise InvalidManifestValueError(
+                f"message handler {str(self.type)!r} gives exactly one of 'path' (a route to post to) or 'show' "
+                "(a page to show)"
+            )
+        if self.showing and self.show is None:
+            raise InvalidManifestValueError(
+                f"message handler {str(self.type)!r} gives 'showing' only beside 'show'"
+            )
+        return self
 
 
 class AppReference(FrozenModel):
@@ -339,6 +362,15 @@ class AppManifest(FrozenModel):
 
     name: AppName = Field(description="The registered app name")
     display_name: DisplayName = Field(description="What users see")
+    description: AppDescription | None = Field(
+        default=None,
+        description="One line saying what the app is for, shown wherever the app is described to an agent",
+    )
+    api_schema_path: LaunchPathValue | None = Field(
+        default=None,
+        description="The path under the app's origin that answers an OpenAPI document describing its HTTP API; "
+        "absent when the app describes none",
+    )
     icon: IconPath | None = Field(default=None, description="The icon file, relative to the manifest; required unless internal")
     critical: bool = Field(
         default=False,
@@ -353,6 +385,11 @@ class AppManifest(FrozenModel):
     priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
     program: ProgramName = Field(description="The supervisord program that runs the app (defaults to the name)")
     internal: bool = Field(default=False, description="Hidden from every open surface")
+    system: bool = Field(
+        default=False,
+        description="Part of the workspace itself rather than an app built on it: the minds Share tab lists it under "
+        "its System group instead of offering it up front",
+    )
     default_shortcut: DefaultShortcut | None = Field(default=None, description="The shortcut a new desktop is seeded with")
     launch_paths: tuple[LaunchPath, ...] = Field(
         default=(), description="The paths the desktop interface opens windows at, with their labels and params"
@@ -385,7 +422,6 @@ class AppManifest(FrozenModel):
     secrets: tuple[SecretDeclaration, ...] = Field(
         default=(), description="The secret files the app runs under, for publish-template to aggregate"
     )
-    handles: dict[str, Any] = Field(default_factory=dict, description="Reserved; must be absent or empty")
     preview: PreviewSpec = Field(description="How a throwaway instance boots for a preview (the scaffold convention by default)")
 
     @model_validator(mode="before")
@@ -412,8 +448,10 @@ class AppManifest(FrozenModel):
             raise InvalidManifestValueError("icon is required unless internal = true")
         if self.critical and self.stop_when_no_windows:
             raise InvalidManifestValueError("a critical app cannot declare stop_when_no_windows = true")
-        if self.handles:
-            raise InvalidManifestValueError("handles must be absent or empty in this release")
+        if self.api_schema_path is not None and self.description is None:
+            raise InvalidManifestValueError(
+                "an app that declares api_schema_path also declares description: the API document carries it"
+            )
         reference_paths = [reference.path for reference in self.references]
         if len(set(reference_paths)) != len(reference_paths):
             raise InvalidManifestValueError(

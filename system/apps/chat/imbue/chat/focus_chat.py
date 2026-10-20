@@ -10,21 +10,28 @@ not, and a chat root window on screen on another chat is moved to this one.
 
 from typing import Final
 
+from app_schema.api_schema import RouteModels
+from app_schema.api_schema import RouteTable
+from app_schema.routes import error_response
+from app_schema.routes import model_response
+from app_schema.routes import parse_request_body
 from flask import Flask
 from flask import Response
 from loguru import logger
 from pydantic import ConfigDict
 from pydantic import Field
+from workspace_layout.errors import InvalidLayoutValueError
+from workspace_layout.errors import ShellOpError
+from workspace_layout.ops import ShowArgs
+from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import ShowOutcome
+from workspace_layout.primitives import WindowPath
 
 from imbue.chat.auto_open import CHAT_ROOT_PAGE
 from imbue.chat.auto_open import chat_root_path
-from imbue.chat.models import ErrorResponse
 from imbue.chat.primitives import AGENT_ID_PATTERN
 from imbue.chat.primitives import ChatId
-from imbue.chat.request_helpers import json_response
-from imbue.chat.request_helpers import parse_request_body
-from imbue.chat.shell_client import ShellOpError
-from imbue.chat.shell_client import ShowRequest
+from imbue.chat.shell_client import chat_show_args
 from imbue.chat.state import get_state
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.primitives import NonEmptyStr
@@ -48,45 +55,54 @@ class FocusChatRequest(FrozenModel):
     chat_id: str = Field(alias="chatId", description="The chat to show")
 
 
-def chat_page_path(chat_id: ChatId) -> str:
+class FocusChatResponse(FrozenModel):
+    """The shell's answer to the show: how it put the chat on screen, and in which window."""
+
+    shown: ShowOutcome = Field(description="How the shell showed the chat")
+    window_id: str = Field(description="The window the chat is shown in")
+
+
+def chat_page_path(chat_id: ChatId) -> WindowPath:
     """The chat's own page: one chat, no list beside it."""
-    return f"/{chat_id}"
+    return WindowPath(f"/{chat_id}")
 
 
 @pure
-def show_chat_request(chat_id: ChatId, client_id: str) -> ShowRequest:
+def show_chat_args(chat_id: ChatId, client_id: ClientId) -> ShowArgs:
     """The ``show`` that puts the chat on the client's screen: the chat root with the chat selected, the chat's own
     page counting as already showing it, and a chat root window on another chat moved to it."""
-    return ShowRequest(
-        path=chat_root_path(chat_id),
-        showing=(chat_page_path(chat_id),),
-        repoint=(CHAT_ROOT_PAGE,),
-        client_id=client_id,
+    return chat_show_args(
+        chat_root_path(chat_id), showing=(chat_page_path(chat_id),), repoint=(CHAT_ROOT_PAGE,), client_id=client_id
     )
-
-
-def _error(detail: str, status_code: int) -> Response:
-    return json_response(ErrorResponse(detail=detail).model_dump(), status_code=status_code)
 
 
 def focus_chat_endpoint() -> Response:
     """``POST /api/focus-chat``: ask the shell to show the chat to the client. Answers the shell's ``shown`` and
-    window; 400 for a chat id of the wrong shape, 403 in a secondary chat (it opens no windows), and 502 when the
-    shell could not be reached, refused, or answered something that is not a show's answer."""
+    window; 400 for a chat or client id of the wrong shape, 403 in a secondary chat (it opens no windows), and 502
+    when the shell could not be reached, refused, or answered something that is not a show's answer."""
     focus_request = parse_request_body(FocusChatRequest)
     if not AGENT_ID_PATTERN.fullmatch(focus_request.chat_id):
-        return _error(f"{focus_request.chat_id!r} is not a chat id", HTTP_BAD_REQUEST)
+        return error_response(f"{focus_request.chat_id!r} is not a chat id", HTTP_BAD_REQUEST)
     state = get_state()
     if state.is_secondary:
-        return _error("A secondary chat opens no windows", HTTP_FORBIDDEN)
+        return error_response("A secondary chat opens no windows", HTTP_FORBIDDEN)
+    try:
+        client_id = ClientId(focus_request.client_id)
+    except InvalidLayoutValueError as e:
+        return error_response(str(e), HTTP_BAD_REQUEST)
     chat_id = ChatId(focus_request.chat_id)
     try:
-        answer = state.shell.show(show_chat_request(chat_id, focus_request.client_id))
+        answer = state.shell.show(show_chat_args(chat_id, client_id))
     except ShellOpError as e:
         logger.warning("Could not show chat {} to client {}: {}", chat_id, focus_request.client_id, e)
-        return _error(str(e), HTTP_BAD_GATEWAY)
+        return error_response(str(e), HTTP_BAD_GATEWAY)
     logger.info("Showed chat {} to client {} ({})", chat_id, focus_request.client_id, answer.shown)
-    return json_response({"shown": answer.shown, "window_id": answer.window_id})
+    return model_response(FocusChatResponse(shown=answer.shown, window_id=str(answer.window_id)))
+
+
+ROUTE_TABLE: Final[RouteTable] = {
+    ("POST", FOCUS_CHAT_ROUTE): RouteModels(request_model=FocusChatRequest, response_model=FocusChatResponse),
+}
 
 
 def register_routes(application: Flask) -> None:

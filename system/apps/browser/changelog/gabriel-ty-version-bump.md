@@ -1,0 +1,3 @@
+The type-check ratchet runs `ty` 0.0.85 (was 0.0.24).
+
+The resource telemetry imports `psutil` directly: it is a declared dependency, so the fallback that disabled telemetry when it was missing is gone. `launch_with_sandbox_retry` takes `launch`'s keyword arguments explicitly instead of forwarding untyped `**kwargs`. The window guardian imports `ClientMessage` from `Xlib.protocol.event` rather than reaching it through `Xlib.protocol`, and two async context managers are annotated as returning `AsyncGenerator[...]`. The launch tests' Chromium stand-in is a `ChromeProcess` subclass, so no test needs a `type: ignore`.

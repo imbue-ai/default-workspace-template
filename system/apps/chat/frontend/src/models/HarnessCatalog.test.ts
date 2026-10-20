@@ -20,6 +20,8 @@ function catalogFixture(popups: HarnessCatalog["popups"]): HarnessCatalog {
     switch_mode: "on_change",
     picker_mode: "dynamic",
     native_atomic_shoulder_tap_possible: true,
+    supports_compaction: true,
+    can_interrupt_compaction: true,
     popups,
   };
 }

@@ -26,8 +26,9 @@ env-var check goes stale when the user changes auth.
 Inside an agent the variable is always set, so a skill script, a worker and the
 agent itself all use the account that chat is bound to. Outside one -- a
 supervisord service, a cron job -- nothing sets it and `claude_p.py` falls back
-to the workspace's most recently used account. Either way, use its resolver
-rather than reading a path yourself:
+to the workspace's default Claude account (the pinned default, else the most
+recently used one), for both its resolver and the `claude -p` it launches.
+Either way, use its resolver rather than reading a path yourself:
 
 ```bash
 uv run python -c "from claude_p import read_workspace_ai_credentials; print('keyed' if read_workspace_ai_credentials().api_key else 'keyless')"
@@ -101,7 +102,7 @@ from litellm import completion, completion_cost
 from claude_p import read_workspace_ai_credentials  # the file you copied in
 
 # Resolve credentials at call time: the data/.secrets/anthropic.env snapshot
-# first (see setup above), then the shared Claude settings, then the process
+# first (see setup above), then the Claude account's settings, then the process
 # env. litellm reads differently-named vars and is picky about a trailing
 # slash, so pass both explicitly.
 creds = read_workspace_ai_credentials()

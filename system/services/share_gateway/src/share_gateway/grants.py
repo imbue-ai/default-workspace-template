@@ -2,8 +2,9 @@
 
 The grants document is a TOML file the workspace owner edits through Imbue
 Studio. Workspace-level grants admit a user to every service; per-service grants
-admit it to exactly that service's origin. A malformed grants file fails
-closed: nobody is admitted until it parses again.
+admit it to exactly that service's origin, and only for an app the registry
+does not mark ``internal``. A malformed grants file fails closed: nobody is
+admitted until it parses again.
 
     [workspace]
     users = ["3f1c..."]
@@ -25,12 +26,16 @@ Imbue Studio desktop through ``mngr exec`` -- holds the same ``flock`` on the si
 """
 
 import fcntl
+import json
 import os
 import tomllib
-from collections.abc import Iterator
+from collections.abc import Generator
+from collections.abc import Set as AbstractSet
 from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
+
+from share_gateway.json_values import is_json_object
 
 
 class GrantsError(ValueError):
@@ -65,26 +70,34 @@ class Grants:
         self.workspace = workspace
         self.services = services
 
-    def allows(self, user_id: str, email: str, service_name: str | None) -> bool:
+    def allows(
+        self, user_id: str, email: str, service_name: str | None, grantable_service_names: AbstractSet[str]
+    ) -> bool:
         """Whether the requester may visit ``service_name`` (None = the workspace shell).
 
         A workspace-level grant implies every service. A per-service grant
         admits only that service's origin -- the shell and sibling services
-        stay forbidden. Within a scope the user id is matched before the
-        email, and the email before its domain.
+        stay forbidden -- and only when the service is in
+        ``grantable_service_names``: an internal app is reachable only through
+        a workspace-level grant. Within a scope the user id is matched before
+        the email, and the email before its domain.
         """
         if self.workspace.allows(user_id, email):
             return True
-        if service_name is None:
+        if service_name is None or service_name not in grantable_service_names:
             return False
         service_grants = self.services.get(service_name)
         return service_grants is not None and service_grants.allows(user_id, email)
 
-    def allows_any(self, user_id: str, email: str) -> bool:
-        """Whether the requester has any grant at all (used at login callback time)."""
+    def allows_any(self, user_id: str, email: str, grantable_service_names: AbstractSet[str]) -> bool:
+        """Whether the requester has any grant that admits them anywhere (used at login callback time)."""
         if self.workspace.allows(user_id, email):
             return True
-        return any(service_grants.allows(user_id, email) for service_grants in self.services.values())
+        return any(
+            service_grants.allows(user_id, email)
+            for service_name, service_grants in self.services.items()
+            if service_name in grantable_service_names
+        )
 
     def has_email_invite(self, email: str) -> bool:
         """Whether ``email`` appears as an exact ``emails`` entry in any scope (a domain match is not an invite)."""
@@ -95,13 +108,15 @@ class Grants:
 
 
 def _parse_string_list(raw: object, scope: str, key: str) -> list[str]:
-    if not isinstance(raw, list) or not all(isinstance(entry, str) for entry in raw):
-        raise GrantsError(f"grants scope {scope!r}: {key} must be a list of strings")
-    return list(raw)
+    if isinstance(raw, list):
+        strings = [entry for entry in raw if isinstance(entry, str)]
+        if len(strings) == len(raw):
+            return strings
+    raise GrantsError(f"grants scope {scope!r}: {key} must be a list of strings")
 
 
 def _parse_grant_list(raw: object, scope: str) -> GrantList:
-    if not isinstance(raw, dict):
+    if not is_json_object(raw):
         raise GrantsError(f"grants scope {scope!r} must be a table")
     return GrantList(
         users=_parse_string_list(raw.get("users", []), scope, "users"),
@@ -135,9 +150,18 @@ def load_grants(path: Path) -> Grants:
     return parse_grants(text)
 
 
+def toml_string(value: str) -> str:
+    """``value`` as a TOML basic string.
+
+    A JSON string literal is one, with two differences: non-ASCII text must be
+    kept verbatim (TOML refuses the surrogate pairs JSON would otherwise spell
+    an astral character with), and DEL, which JSON leaves raw, must be escaped.
+    """
+    return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
+
+
 def _toml_string_array(values: set[str]) -> str:
-    quoted = ", ".join('"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"' for value in sorted(values))
-    return f"[{quoted}]"
+    return "[" + ", ".join(toml_string(value) for value in sorted(values)) + "]"
 
 
 def _toml_key(name: str) -> str:
@@ -181,7 +205,7 @@ def grants_lock_path(grants_path: Path) -> Path:
 
 
 @contextmanager
-def locked_grants_file(grants_path: Path) -> Iterator[None]:
+def locked_grants_file(grants_path: Path) -> Generator[None, None, None]:
     """Hold the exclusive ``flock`` on the grants document's sibling lock file."""
     lock_path = grants_lock_path(grants_path)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -193,12 +217,18 @@ def locked_grants_file(grants_path: Path) -> Iterator[None]:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
+def write_text_atomic(path: Path, text: str, mode: int) -> None:
+    """Replace ``path`` through a same-directory temp file and a rename, creating its directory."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f".{path.name}.{uuid4().hex}")
+    temp_path.write_text(text)
+    os.chmod(temp_path, mode)
+    os.replace(temp_path, path)
+
+
 def write_grants_atomic(grants_path: Path, text: str) -> None:
     """Replace the grants document through a same-directory temp file and a rename."""
-    temp_path = grants_path.with_name(f".{grants_path.name}.{uuid4().hex}")
-    temp_path.write_text(text)
-    os.chmod(temp_path, 0o600)
-    os.replace(temp_path, grants_path)
+    write_text_atomic(grants_path, text, 0o600)
 
 
 def upgrade_invites_in_file(grants_path: Path, email: str, user_id: str) -> bool:

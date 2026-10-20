@@ -23,9 +23,9 @@ export const MAX_WINDOW_PATH_LENGTH = 2048;
 export const TEXT_TOO_LONG_REASON = "Too long to send from here";
 
 /** Why a text cannot be started anywhere: no app declares a launch path that takes typed text. */
-export const NO_TEXT_APP_REASON = "No app on this machine can start a chat";
+export const NO_TEXT_APP_REASON = "No app in this workspace can start a chat";
 /** Why a page's ``shell:draft-text`` went nowhere. */
-export const NO_DRAFT_APP_REASON = "No app on this machine can take a draft";
+export const NO_DRAFT_APP_REASON = "No app in this workspace can take a draft";
 
 /** Every launch path of every openable app, in registry and manifest order. */
 export function appLaunchesOf(apps: readonly AppRecord[]): AppLaunch[] {

@@ -7,10 +7,10 @@ from loguru import logger
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import ValidationError
+from workspace_layout.primitives import UserId
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
-from imbue.system_interface.shell.primitives import UserId
 
 IDENTITY_HEADER: Final[str] = "X-Imbue-Identity"
 

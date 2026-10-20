@@ -11,12 +11,10 @@ from app_manifest.primitives import AppName
 from app_manifest.primitives import AppUrl
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import register_app
-from app_manifest.shell_windows import shell_base_url
 from getting_started.config import Config
 from getting_started.config import load_config
 from getting_started.first_window import FirstWindowLedger
 from getting_started.first_window import FirstWindowOpener
-from getting_started.first_window import HttpShellOps
 from getting_started.first_window import LEDGER_FILENAME
 from getting_started.pages import build_pages_blueprint
 from getting_started.serving import app_url_port
@@ -26,12 +24,16 @@ from getting_started.state_files import DEFAULT_STATE_DIRECTORY
 from getting_started.template_catalog import build_template_catalog_store
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import log_span
+from workspace_layout.client import ShellLayoutClient
+from workspace_layout.shell_url import shell_base_url
 
 # The app's fixed wiring, relative to the repo root every supervised program runs from.
 MANIFEST_PATH: Final[Path] = Path("system/apps/getting_started/app.toml")
 APP_NAME: Final[AppName] = AppName("getting-started")
 # The frontend's build output, inside the package.
 DEFAULT_STATIC_DIRECTORY: Final[Path] = Path(__file__).parent / "static"
+# One loopback request the shell answers without work.
+SHELL_TIMEOUT_SECONDS: Final[float] = 2.0
 
 
 class GettingStartedArguments(FrozenModel):
@@ -67,7 +69,7 @@ def build_first_window_opener(arguments: GettingStartedArguments) -> FirstWindow
     return FirstWindowOpener(
         app=APP_NAME,
         ledger=FirstWindowLedger(path=arguments.state_dir / LEDGER_FILENAME),
-        shell=HttpShellOps(shell_url=shell_base_url()),
+        shell=ShellLayoutClient(shell_url=shell_base_url(), requester=None, timeout_seconds=SHELL_TIMEOUT_SECONDS),
     )
 
 

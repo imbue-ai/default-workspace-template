@@ -1,11 +1,12 @@
 import json
 from pathlib import Path
 
-from imbue.system_interface.shell.data_types import StoredWindowPath
-from imbue.system_interface.shell.primitives import ClientId
-from imbue.system_interface.shell.primitives import WindowId
-from imbue.system_interface.shell.primitives import WindowPath
-from imbue.system_interface.shell.primitives import WindowTitle
+from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import WindowId
+from workspace_layout.primitives import WindowPath
+from workspace_layout.primitives import WindowTitle
+from workspace_layout.records import StoredWindowPath
+
 from imbue.system_interface.shell.window_paths import WINDOW_PATHS_DIRNAME
 from imbue.system_interface.shell.window_paths import WindowPathStore
 

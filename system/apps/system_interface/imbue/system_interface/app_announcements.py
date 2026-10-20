@@ -4,14 +4,14 @@ The stream keeps mngr's wire vocabulary (``events/services/events.jsonl``, ``ser
 ``service_deregistered``, a ``service`` field); in the shell's own code an app is an app.
 
 Every read of the app registry is announced to ``$MNGR_AGENT_STATE_DIR/events/services/events.jsonl`` as one
-``service_registered`` event per app whose registered fields (URL, label, icon, display name) differ from the
-last announced,
-and one ``service_deregistered`` per app that left. Only changed rows are announced: ``forward_port.py`` rewrites
-the whole registry whenever any app registers, so a write says nothing about which apps moved, and an app
-restarting in a loop would otherwise re-announce every app in the file on every restart. The first read after
-the shell starts remembers nothing and announces every app, which is what a consumer reading the stream from its
-start needs. A stream over the archive threshold at that first read is moved aside before it and gzipped off-thread
-after, to a name mngr does not replay. The stream is plumbing the shell writes; it imports nothing from mngr.
+``service_registered`` event per app whose registered fields (URL, label, icon, display name, and whether it is
+a system or internal app) differ from the last announced, and one ``service_deregistered`` per app that left. Only
+changed rows are announced: ``forward_port.py`` rewrites the whole registry whenever any app registers, so a write
+says nothing about which apps moved, and an app restarting in a loop would otherwise re-announce every app in the
+file on every restart. The first read after the shell starts remembers nothing and announces every app, which is
+what a consumer reading the stream from its start needs. A stream over the archive threshold at that first read is
+moved aside before it and gzipped off-thread after, to a name mngr does not replay. The stream is plumbing the shell
+writes; it imports nothing from mngr.
 """
 
 import gzip
@@ -71,6 +71,15 @@ class AppRegisteredAnnouncement(EventEnvelope):
         default="",
         description="What users read for the app; empty for a row registered without a manifest",
     )
+    is_system: bool = Field(
+        serialization_alias="system",
+        description="Whether the app is part of the workspace itself, which the minds Share tab lists under its System "
+        "group rather than up front",
+    )
+    is_internal: bool = Field(
+        serialization_alias="internal",
+        description="Whether the app is internal plumbing, which the minds Share tab never lists",
+    )
 
 
 class AppDeregisteredAnnouncement(EventEnvelope):
@@ -86,6 +95,8 @@ class AnnouncedRow(FrozenModel):
     label: str = Field(description="The origin label")
     icon: str = Field(description="The icon markup, empty when none")
     display_name: str = Field(description="What users read for the app, empty when the row carries none")
+    is_system: bool = Field(description="Whether the row declares the app part of the workspace itself")
+    is_internal: bool = Field(description="Whether the row declares the app internal")
 
 
 class AnnouncementDiff(FrozenModel):
@@ -98,7 +109,12 @@ class AnnouncementDiff(FrozenModel):
 @pure
 def announced_row_of(row: RegistryRow) -> AnnouncedRow:
     return AnnouncedRow(
-        url=str(row.url), label=row.label, icon=row.icon or "", display_name=str(row.display_name or "")
+        url=str(row.url),
+        label=row.label,
+        icon=row.icon or "",
+        display_name=str(row.display_name or ""),
+        is_system=row.system,
+        is_internal=row.internal,
     )
 
 
@@ -210,6 +226,8 @@ class AppAnnouncementWriter(MutableModel):
                 label=current[name].label,
                 icon=current[name].icon,
                 display_name=current[name].display_name,
+                is_system=current[name].is_system,
+                is_internal=current[name].is_internal,
             ).model_dump_json(by_alias=True)
             for name in diff.changed
         ] + [

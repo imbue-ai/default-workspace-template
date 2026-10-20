@@ -185,9 +185,9 @@ def test_rewrite_legacy_references_rewrites_the_old_safety_net_symlinks() -> Non
 
 def test_rewrite_legacy_references_keeps_directory_prefixes_intact() -> None:
     rewritten, _ = migrate_workspace.rewrite_legacy_references(
-        "python3 scripts/layout.py open\nDATA_DIR = Path('runtime/memory')\n"
+        "python3 scripts/forward_port.py --list\nDATA_DIR = Path('runtime/memory')\n"
     )
-    assert "python3 system/scripts/layout.py open" in rewritten
+    assert "python3 system/scripts/forward_port.py --list" in rewritten
     # A multi-segment legacy dir is rewritten with or without a trailing slash,
     # since code most often names it without one.
     assert "Path('data/memories')" in rewritten
@@ -416,7 +416,7 @@ def test_parse_supervisord_ports_reads_the_forward_port_call() -> None:
 # the app's name is the program's. Alongside it, a --name call with its flags in
 # the other order, and a registration line in a comment that names no port.
 _MANIFEST_SUPERVISORD_SNIPPET = """
-# The file viewer registers its manifest via forward_port.py, then execs dufs.
+# The Files app registers its manifest via forward_port.py, then execs dufs.
 [program:files]
 command=python3 system/services/oom_priority/bin/oom_tag_service.py files bash -c "python3 system/scripts/forward_port.py --manifest system/apps/files/app.toml --url http://localhost:8300 && exec dufs --port 8300"
 
@@ -457,14 +457,13 @@ def test_parse_supervisord_ports_reads_the_real_template_config(
             conf.read_text(encoding="utf-8")
         )
     ]
-    # The chat and the terminal register from inside their own processes (the registry
-    # scan covers them); the others register from their program lines.
+    # The chat, the terminal, and Files register from inside their own processes (the
+    # registry scan covers them); the others register from their program lines.
     assert {(port.name, port.port) for port in ports} >= {
         ("system_interface", 8000),
         ("browser", 8081),
-        ("files", 8300),
     }
-    assert not {port.name for port in ports} & {"terminal", "chat"}
+    assert not {port.name for port in ports} & {"terminal", "chat", "files"}
     assert [port.name for port in ports].count("system_interface") == 1
 
 
@@ -642,6 +641,7 @@ def test_scan_audit_finds_each_kind_of_call_site() -> None:
             "cat /mngr/code/uploads/x\n"
         ),
         ".agents/skills/dash/SKILL.md": "See the build-web-service skill and heal-artifact.\n",
+        ".agents/skills/arrange/SKILL.md": "python3 system/scripts/layout.py place self --zone left\n",
     }
     findings = migrate_workspace.scan_audit(files)
     by_kind: dict[str, set[str]] = {}
@@ -652,6 +652,7 @@ def test_scan_audit_finds_each_kind_of_call_site() -> None:
     assert by_kind["legacy-path"] == {
         "system/apps/dash/runner.py",
         "system/scripts/fetch.sh",
+        ".agents/skills/arrange/SKILL.md",
     }
     assert by_kind["retired-skill"] == {".agents/skills/dash/SKILL.md"}
 
@@ -675,7 +676,10 @@ def test_scan_audit_respects_the_kind_filter() -> None:
 
 def test_scan_audit_legacy_path_pattern_ignores_current_layout_paths() -> None:
     findings = migrate_workspace.scan_audit(
-        {"a.py": "P = 'data/runtime/x'\nQ = 'data/uploads/y'\nR = 'myruntime/z'\n"},
+        {
+            "a.py": "P = 'data/runtime/x'\nQ = 'data/uploads/y'\nR = 'myruntime/z'\n",
+            "b.sh": "uv run pytest system/test_supervisord_layout.py\n",
+        },
         kinds=["legacy-path"],
     )
     assert findings == []

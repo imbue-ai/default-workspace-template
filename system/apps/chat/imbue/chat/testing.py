@@ -18,7 +18,9 @@ import fcntl
 import json
 import os
 import queue
+import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -28,7 +30,6 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from collections.abc import Generator
-from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
 from concurrent.futures import Executor
@@ -38,6 +39,8 @@ from contextlib import closing
 from contextlib import contextmanager
 from datetime import datetime
 from datetime import timezone
+from http.server import BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -47,17 +50,23 @@ import httpx
 import pexpect
 import pytest
 import simple_websocket
+from chat_background_tasks import markers
+from chat_background_tasks.markers import TaskSource
 from flask import Flask
 from flask import request
 from pydantic import Field
+from workspace_layout.client import DisconnectedShell
+from workspace_layout.interfaces import ShellLayoutInterface
 
 from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import MngrMessenger
+from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_records import ChatAgentEntry
 from imbue.chat.chat_records import ChatHandoffRecord
@@ -85,24 +94,19 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.server import create_application
-from imbue.chat.shell_client import DisconnectedShell
-from imbue.chat.shell_client import ShellLayoutClient
-from imbue.chat.shell_client import ShellLayoutInterface
-from imbue.chat.shell_client import ShellOpError
-from imbue.chat.shell_client import ShellRefusedOpError
-from imbue.chat.shell_client import ShowAnswer
-from imbue.chat.shell_client import ShowRequest
+from imbue.chat.shell_client import build_chat_shell_client
 from imbue.chat.state import ChatAppState
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
 from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.observe import acquire_observe_lock
 from imbue.mngr.api.observe import release_observe_lock
 from imbue.mngr.errors import AgentIdNotFoundError
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.utils.polling import wait_for
+from imbue.mngr_claude.claude_config import COMPACTING_MARKER_FILENAME
+from imbue.mngr_claude.claude_config import LAST_COMPACTION_FILENAME
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config as ShellConfig
 from imbue.system_interface.server import create_application as create_shell_application
@@ -141,7 +145,7 @@ def agent_message_lock(agent_state_dir: Path) -> Generator[None, None, None]:
 
 
 @contextmanager
-def observer_holding_the_lock(events_base_dir: Path) -> Iterator[None]:
+def observer_holding_the_lock(events_base_dir: Path) -> Generator[None, None, None]:
     """Hold the observe lock for the body, standing in for a live ``mngr observe``.
 
     The chat's follower reads the lock as the observer's liveness, so a test that wants
@@ -152,6 +156,143 @@ def observer_holding_the_lock(events_base_dir: Path) -> Iterator[None]:
         yield
     finally:
         release_observe_lock(fd)
+
+
+class StandInAnthropicApi:
+    """A loopback stand-in for the Anthropic API, to point Claude Code at with ``ANTHROPIC_BASE_URL``.
+
+    It records every request's path, auth headers and body. With ``reply_for`` set, ``POST /v1/messages`` gets a
+    valid answer carrying the text ``reply_for`` picks from the request body: the server-sent events of a streamed
+    message when the request asks for a stream, else the message as JSON. Every other request, and every request
+    when ``reply_for`` is None, is answered 401, which is enough to observe the credential a request carries.
+    """
+
+    def __init__(self, reply_for: Callable[[dict[str, Any]], str] | None = None) -> None:
+        self.captured: list[dict[str, Any]] = []
+        self.first_request_event = threading.Event()
+        captured = self.captured
+        first_request_event = self.first_request_event
+
+        class _Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                length = int(self.headers.get("content-length") or 0)
+                raw_body = self.rfile.read(length) if length else b""
+                try:
+                    body = json.loads(raw_body) if raw_body else {}
+                except ValueError:
+                    body = {}
+                captured.append(
+                    {
+                        "path": self.path,
+                        "x-api-key": self.headers.get("x-api-key"),
+                        "authorization": self.headers.get("authorization"),
+                        "body": body,
+                    }
+                )
+                first_request_event.set()
+                if reply_for is not None and self.command == "POST" and self.path.split("?")[0] == "/v1/messages":
+                    self._answer_message(body, reply_for(body))
+                    return
+                self._send(401, "application/json", _anthropic_error("authentication_error", "stand-in"))
+
+            do_GET = do_POST
+
+            def _answer_message(self, body: dict[str, Any], text: str) -> None:
+                model = str(body.get("model", "claude-haiku-4-5"))
+                if body.get("stream"):
+                    self._send(200, "text/event-stream", _streamed_message_events(model, text))
+                else:
+                    self._send(200, "application/json", json.dumps(_message(model, text)).encode())
+
+            def _send(self, status: int, content_type: str, payload: bytes) -> None:
+                self.send_response(status)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            # Signature mirrors BaseHTTPRequestHandler.log_message (including
+            # the builtin-shadowing `format` name) to satisfy override checks.
+            def log_message(self, format: str, *args: object) -> None:
+                pass
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+        self.port = self._server.server_address[1]
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+
+    def __enter__(self) -> "StandInAnthropicApi":
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+
+    @property
+    def base_url(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+
+def _anthropic_error(error_type: str, message: str) -> bytes:
+    return json.dumps({"type": "error", "error": {"type": error_type, "message": message}}).encode()
+
+
+def _message(model: str, text: str) -> dict[str, Any]:
+    return {
+        "id": "msg_stand_in",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [{"type": "text", "text": text}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+
+
+def _streamed_message_events(model: str, text: str) -> bytes:
+    started = {
+        **_message(model, ""),
+        "content": [],
+        "stop_reason": None,
+        "usage": {"input_tokens": 10, "output_tokens": 1},
+    }
+    events: list[tuple[str, dict[str, Any]]] = [
+        ("message_start", {"type": "message_start", "message": started}),
+        (
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        (
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+        ),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": 5},
+            },
+        ),
+        ("message_stop", {"type": "message_stop"}),
+    ]
+    return "".join(f"event: {name}\ndata: {json.dumps(data)}\n\n" for name, data in events).encode()
+
+
+def skip_unless_pinned_claude() -> None:
+    """Skip the calling test unless ``claude`` on PATH is the version ``.mngr/settings.toml`` pins.
+
+    For the ``real_claude`` tests, which assert behaviours of the exact binary workspaces ship.
+    """
+    if shutil.which("claude") is None:
+        pytest.skip("claude binary not on PATH")
+    installed = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=30).stdout.strip()
+    settings = tomllib.loads((Path(__file__).parents[5] / ".mngr" / "settings.toml").read_text())
+    pinned = settings["agent_types"]["claude"]["version"]
+    if not installed.startswith(pinned):
+        pytest.skip(f"claude on PATH is {installed!r}, not the pinned {pinned!r}; these tests assert the pin")
 
 
 def prepare_isolated_mngr_host_dir(host_dir: Path) -> None:
@@ -167,6 +308,11 @@ def prepare_isolated_mngr_host_dir(host_dir: Path) -> None:
         "is_allowed_in_pytest = true\n\n[providers.modal]\nis_enabled = false\n\n[providers.docker]\nis_enabled = false\n"
     )
     (profile_dir / "tmux_onboarding_shown").write_text("")
+
+
+def is_chat_frontend_built() -> bool:
+    """True when the chat page's bundle (``static/chat.html``) exists, which the browser tests serve."""
+    return (Path(__file__).parent / "static" / "chat.html").is_file()
 
 
 def is_e2e_browser_installed() -> bool:
@@ -263,6 +409,33 @@ def make_chat_agent_entry(
 CONTINUE_CHAT_TEMPLATE_PATH: Final[Path] = (
     Path(__file__).parents[5] / ".agents" / "shared" / "references" / "continue-chat.md"
 )
+
+
+def write_background_task_marker(
+    reader: BackgroundTaskReader,
+    chat_id: str,
+    task_id: str,
+    pid: int,
+    description: str = "Rebuild the worker image",
+    started_at: str = "2026-10-08T12:00:00+00:00",
+    harness: str = "",
+) -> None:
+    """Write a marker into the chat's directory with the library's own writer: ``run_in_background``'s, or the
+    named harness's."""
+    task = markers.BackgroundTask(
+        source=TaskSource.HARNESS if harness else TaskSource.RUN_IN_BACKGROUND,
+        id=task_id,
+        description=description,
+        started_at=started_at,
+        pid=pid,
+        harness=harness,
+    )
+    markers.write_marker(reader.root, chat_id, task)
+
+
+def remove_background_task_marker(reader: BackgroundTaskReader, chat_id: str, task_id: str) -> None:
+    """Remove a ``run_in_background`` marker, as the runner does once its report is delivered."""
+    markers.remove_marker(reader.root, chat_id, TaskSource.RUN_IN_BACKGROUND, task_id)
 
 
 def write_summary_for_request(text: str) -> None:
@@ -405,22 +578,26 @@ class InlineExecutor(Executor):
 
 
 class RecordingMngrMessenger(MngrMessenger):
-    """A `MngrMessenger` that records sends and key-chord presses and never contacts mngr.
+    """A `MngrMessenger` that records sends, key-chord presses and compaction requests and never contacts mngr.
 
-    Overrides `send_to_agent` (records each `(agent_id, message)`) and
-    `press_key_chord_to_agent` (records each `(agent_id, key)`), returning fixed
-    results, so a test exercises the manager's send / keypress paths without building a
-    real mngr context or hitting the network. Inject via
+    Overrides `send_to_agent` (records each `(agent_id, message)`), `press_key_chord_to_agent`
+    (records each `(agent_id, key)`) and `request_compaction` (records each
+    `(agent_id, instructions)`), returning fixed results, so a test exercises the manager's send /
+    keypress / compaction paths without building a real mngr context or hitting the network. Inject via
     `AgentManager.build(broadcaster, messenger=RecordingMngrMessenger())`.
     """
 
     sent: list[tuple[str, str]] = []
     pressed: list[tuple[str, str]] = []
+    # Each compaction requested, as ``(agent_id, instructions)``.
+    compactions: list[tuple[str, str | None]] = []
     succeeds: bool = True
     # What a non-succeeding send reports, in place of a harness's own words and mngr's kind.
     failure_reason: str = "The agent could not be reached."
     failure_kind: str = "unknown"
     press_succeeds: bool = True
+    # The refusal a compaction request raises, in place of mngr's; None for one that succeeds.
+    compaction_failure: SendFailure | None = None
 
     def send_to_agent(
         self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
@@ -431,6 +608,11 @@ class RecordingMngrMessenger(MngrMessenger):
     def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
         self.pressed.append((str(agent_id), key))
         return self.press_succeeds
+
+    def request_compaction(self, agent_id: AgentId, instructions: str | None) -> None:
+        self.compactions.append((str(agent_id), instructions))
+        if self.compaction_failure is not None:
+            raise SendFailedError(self.compaction_failure.reason, self.compaction_failure.kind)
 
 
 class SummaryWritingMngrMessenger(RecordingMngrMessenger):
@@ -462,30 +644,6 @@ class VanishedAgentMngrMessenger(RecordingMngrMessenger):
         raise AgentIdNotFoundError(f"No agent(s) found matching: {agent_id}")
 
 
-class RecordingShell(MutableModel):
-    """A shell whose connected clients a test sets, recording every show it is asked for and answering each with
-    ``answer``: refused for a client in ``refused_client_ids``, and failing with ``error`` for everyone while set."""
-
-    model_config = {"extra": "forbid", "frozen": False, "arbitrary_types_allowed": True}
-
-    client_ids: list[str] = []
-    refused_client_ids: list[str] = []
-    error: ShellOpError | None = None
-    answer: ShowAnswer = ShowAnswer(shown="opened", window_id="win-0123456789abcdef")
-    shows: list[ShowRequest] = []
-
-    def connected_client_ids(self) -> list[str]:
-        return list(self.client_ids)
-
-    def show(self, request: ShowRequest) -> ShowAnswer:
-        self.shows.append(request)
-        if self.error is not None:
-            raise self.error
-        if request.client_id in self.refused_client_ids:
-            raise ShellRefusedOpError(f"The shell refused the show (412): no client {request.client_id!r}")
-        return self.answer
-
-
 def read_create_defaults_type(path: Path) -> str | None:
     """The `commands.create.type` the workspace's local mngr settings name, or None when they name none."""
     if not path.exists():
@@ -496,35 +654,33 @@ def read_create_defaults_type(path: Path) -> str | None:
     return agent_type if isinstance(agent_type, str) and agent_type else None
 
 
-class RecordingClientActivityShell:
-    """A stand-in shell that records every body posted to ``/api/client-activity``."""
+class RecordedGatewayRequest(FrozenModel):
+    """One request a ``RecordingGateway`` received."""
 
-    def __init__(self) -> None:
-        self.received: list[dict[str, Any]] = []
-        self.application = Flask("recording-shell")
+    path: str = Field(description="The request's path")
+    headers: dict[str, str] = Field(description="The request's headers")
+    body: Any = Field(description="The request's JSON body")
+
+
+class RecordingGateway:
+    """A stand-in latchkey gateway that records every POST under ``/minds-api-proxy/`` and answers each with
+    one status."""
+
+    def __init__(self, status: int) -> None:
+        self.received: list[RecordedGatewayRequest] = []
+        self.status = status
+        self.application = Flask("recording-gateway")
         self.application.add_url_rule(
-            "/api/client-activity", view_func=self._accept, methods=["POST"], endpoint="client_activity"
+            "/minds-api-proxy/<path:rest>", view_func=self._accept, methods=["POST"], endpoint="minds_api_proxy"
         )
 
-    def _accept(self) -> tuple[str, int]:
-        self.received.append(request.get_json())
-        return "", 204
-
-
-class RecordingLayoutOpShell:
-    """A stand-in shell that records every op posted to ``/api/layout/broadcast`` and answers each with one
-    status and body."""
-
-    def __init__(self, status: int, body: str) -> None:
-        self.received: list[dict[str, Any]] = []
-        self.status = status
-        self.body = body
-        self.application = Flask("recording-op-shell")
-        self.application.add_url_rule("/api/layout/broadcast", view_func=self._accept, methods=["POST"], endpoint="op")
-
-    def _accept(self) -> tuple[str, int]:
-        self.received.append(request.get_json())
-        return self.body, self.status
+    def _accept(self, rest: str) -> tuple[str, int]:
+        self.received.append(
+            RecordedGatewayRequest(
+                path=request.path, headers=dict(request.headers), body=request.get_json(force=True, silent=True)
+            )
+        )
+        return json.dumps({"ok": True}), self.status
 
 
 def build_temporary_secret_request_store() -> SecretRequestStore:
@@ -584,9 +740,12 @@ def build_test_state(
         secret_requests=secret_requests if secret_requests is not None else build_temporary_secret_request_store(),
         chat_namer=chat_namer,
     )
-    # Match production: eviction drops a destroyed/stopped agent's watcher.
+    # Match production: eviction drops a destroyed agent's transcripts, the release a stopped chat's
+    # that nobody is streaming, and removing a chat's active agent ends the chat's streams.
     manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)
     manager.set_unviewed_transcript_release(state.release_unviewed_stopped_transcripts)
+    manager.set_session_watcher_check(state.has_watcher)
+    manager.set_chat_stream_ender(state.event_queues.end_streams)
     return state
 
 
@@ -627,11 +786,13 @@ class FakePexpectProcess:
         expect_script: Sequence[tuple[int, str]],
         drain_chunks: Sequence[str] = (),
         is_alive: bool = True,
+        exitstatus: int | None = 0,
     ) -> None:
         assert expect_script, "expect_script must have at least one entry"
+        # What pexpect reports once the process has exited: its exit code, or None if a signal ended it.
+        self.exitstatus = exitstatus
         self._script = list(expect_script)
-        # Scriptable so the "the CLI has exited" arms are reachable from tests: process exit
-        # is the only success signal codex's device flow has.
+        # Scriptable so the "the CLI has exited" arms are reachable from tests.
         self._is_alive = is_alive
         self._call_idx = 0
         self._drain_chunks = list(drain_chunks)
@@ -669,10 +830,16 @@ class FakePexpectProcess:
     def isalive(self) -> bool:
         return self._is_alive
 
-    def exit(self) -> None:
+    def print_output(self, chunk: str) -> None:
+        """Have the scripted CLI print ``chunk``, for the next drain to read."""
+        self._drain_chunks.append(chunk)
+
+    def exit(self, exitstatus: int | None = None) -> None:
         """Let the scripted CLI finish. `terminate` does not: the production teardown calls
         it on paths where the process was already gone, so it cannot mean "now exited"."""
         self._is_alive = False
+        if exitstatus is not None:
+            self.exitstatus = exitstatus
 
     def terminate(self, force: bool = False) -> None:
         self.terminate_calls += 1
@@ -715,7 +882,7 @@ class ServedApp:
 
 
 @contextmanager
-def serve_app(app: Flask) -> Iterator[ServedApp]:
+def serve_app(app: Flask) -> Generator[ServedApp, None, None]:
     """Serve ``app`` on an ephemeral loopback port via a real threaded Werkzeug server.
 
     Used by the WebSocket/SSE tests, which the Flask test client cannot drive
@@ -757,8 +924,6 @@ def close_ws(ws: simple_websocket.Client) -> None:
         pass
 
 
-# the two-process fixture: the shell framing this chat app
-
 # The fixture chat's agent id and name. A real mngr id shape (32 hex), so the send path can type
 # it as an AgentId.
 FIXTURE_AGENT_ID: Final[str] = "agent-0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e"
@@ -795,6 +960,48 @@ def make_session_file(projects_dir: Path, session_id: str, events: Sequence[Mapp
         for event in events:
             handle.write(json.dumps(event) + "\n")
     return session_file
+
+
+def use_mngr_settings(settings: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point mngr's config loader at a project settings file holding ``settings``, with a host dir under tmp_path."""
+    config_dir = tmp_path / ".mngr"
+    config_dir.mkdir()
+    (config_dir / "settings.toml").write_text("is_allowed_in_pytest = true\n" + settings)
+    monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
+
+
+def utc_iso_seconds_ago(seconds: float = 0.0) -> str:
+    """A UTC ISO timestamp this many seconds before now, as the hook files and transcript records carry."""
+    return datetime.fromtimestamp(time.time() - seconds, tz=timezone.utc).isoformat()
+
+
+def write_compacting_marker(state_dir: Path, trigger: str | None = "manual", started_seconds_ago: float = 0.0) -> Path:
+    """Write the ``compacting`` marker mngr's Claude ``PreCompact`` hook writes; a None trigger leaves the field out."""
+    payload: dict[str, str] = {"started_at": utc_iso_seconds_ago(started_seconds_ago)}
+    if trigger is not None:
+        payload["trigger"] = trigger
+    marker = state_dir / COMPACTING_MARKER_FILENAME
+    marker.write_text(json.dumps(payload))
+    return marker
+
+
+def write_last_compaction_record(state_dir: Path, trigger: str = "manual", ended_seconds_ago: float = 0.0) -> Path:
+    """Write the ``last_compaction.json`` mngr's Claude ``PostCompact`` hook writes when a compaction finishes."""
+    record = state_dir / LAST_COMPACTION_FILENAME
+    record.write_text(json.dumps({"trigger": trigger, "ended_at": utc_iso_seconds_ago(ended_seconds_ago)}))
+    return record
+
+
+def compact_summary_record(uuid: str, timestamp: str) -> dict[str, Any]:
+    """The transcript record Claude Code writes when a compaction finishes, shown as the compaction's chips."""
+    return {
+        "type": "user",
+        "uuid": uuid,
+        "timestamp": timestamp,
+        "isCompactSummary": True,
+        "message": {"role": "user", "content": [{"type": "text", "text": "The conversation so far, summarized."}]},
+    }
 
 
 def make_agent_fixture(
@@ -862,10 +1069,13 @@ def make_chat_snapshot(chat_id: str, last_messaged_at: float | None = None, name
             account_id=None,
             state="RUNNING",
             activity_state=ActivityState.IDLE,
+            compaction_cause=None,
             model_choice=None,
             queued_messages=(),
             shoulder_tap_available=False,
             is_connecting=False,
+            is_busy=False,
+            background_tasks=(),
         ),
         last_messaged_at=last_messaged_at,
     )
@@ -895,6 +1105,12 @@ def seed_failed_chat(
     with agent_manager._lock:
         agent_manager._provisional_chats[chat_id] = proto
     return proto
+
+
+def get_json(url: str) -> Any:
+    """GET ``url`` and decode its JSON body, for assertions against a served app's API."""
+    with urllib.request.urlopen(url, timeout=5) as response:
+        return json.loads(response.read())
 
 
 def _is_serving_api(base_url: str) -> bool:
@@ -941,7 +1157,10 @@ def running_workspace(
     is_account_signed_in: bool = True,
     additional_accounts: Sequence[tuple[str, str]] = (),
     messenger: MngrMessenger | None = None,
-) -> Iterator[RunningWorkspace]:
+    background_tasks_root: Path | None = None,
+    # Further registry rows beside the chat's, for apps a test serves itself.
+    extra_rows: Sequence[str] = (),
+) -> Generator[RunningWorkspace, None, None]:
     """Serve the shell and this chat app together, the way a workspace runs them, over fakes.
 
     The chat app lists the fixture agent (plus any ``additional_agents``, bare state dirs with
@@ -952,7 +1171,9 @@ def running_workspace(
     root offers the provider chooser instead. ``additional_accounts`` sign further
     accounts in (a chat switches harness to one of them); ``messenger`` replaces the recording
     messenger the manager sends through. The chat's layout client is the served shell, so a route that asks the
-    shell for a window lands it there.
+    shell for a window lands it there. ``background_tasks_root`` is where the chat reads its chats'
+    background-task markers, and the agents' runner and hooks write them (``CHAT_BACKGROUND_TASKS_DIR``);
+    without it the chat reads none.
     """
     shell_url = f"http://127.0.0.1:{shell_port}"
     chat_url = f"http://127.0.0.1:{chat_port}"
@@ -1002,6 +1223,7 @@ def running_workspace(
                 "draft": {"target": "current_chat", "is_draft": "true"},
             },
         ),
+        *extra_rows,
     )
 
     with (
@@ -1019,6 +1241,7 @@ def running_workspace(
                 "MNGR_PROJECT_CONFIG_DIR": str(tmp_path / "project-config"),
                 "MINDS_APPS_FILE": str(registry_path),
                 "MINDS_WORKSPACE_SERVER_URL": shell_url,
+                **({} if background_tasks_root is None else {"CHAT_BACKGROUND_TASKS_DIR": str(background_tasks_root)}),
             },
         ),
         patch("imbue.chat.server.discover_agents", return_value=agents),
@@ -1042,6 +1265,9 @@ def running_workspace(
             # The successor's prompt template is cwd-relative in production (the repo root); the
             # suite runs from the chat package, so it is named outright.
             prompt_template_path=CONTINUE_CHAT_TEMPLATE_PATH,
+            background_tasks=None
+            if background_tasks_root is None
+            else BackgroundTaskReader(root=background_tasks_root),
         )
         # The agents carry the signed-in account's label, as a chat the app created would, so the
         # page's provider row names it.
@@ -1057,7 +1283,7 @@ def running_workspace(
         chat_state = build_test_state(
             config=Config(chat_host="127.0.0.1", chat_port=chat_port),
             agent_manager=manager,
-            shell=ShellLayoutClient(shell_url=shell_url),
+            shell=build_chat_shell_client(shell_url),
         )
         chat_app = create_application(chat_state)
         chat_server = make_threaded_server("127.0.0.1", chat_port, chat_app)

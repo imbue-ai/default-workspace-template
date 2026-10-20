@@ -8,7 +8,6 @@ from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
-from typing import Any
 from typing import Final
 from typing import assert_never
 
@@ -22,6 +21,21 @@ from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import field_validator
+from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import IfPresent
+from workspace_layout.primitives import UserId
+from workspace_layout.primitives import WindowId
+from workspace_layout.primitives import WindowPath
+from workspace_layout.primitives import WindowTitle
+from workspace_layout.records import ClientRecord
+from workspace_layout.records import Desktop
+from workspace_layout.records import DesktopLayout
+from workspace_layout.records import DesktopView
+from workspace_layout.records import EntryPresentation
+from workspace_layout.records import StoredWindowPath
+from workspace_layout.records import Window
+from workspace_layout.records import WindowView
 
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
@@ -30,6 +44,7 @@ from imbue.system_interface.avatar.catalog import DEFAULT_AVATAR_CATALOG_DIRECTO
 from imbue.system_interface.avatar.selection import AvatarSelectionStore
 from imbue.system_interface.avatar.status import AvatarStatusReader
 from imbue.system_interface.avatar.status import agent_events_path_from_environment
+from imbue.system_interface.avatar.status import background_tasks_root_from_environment
 from imbue.system_interface.profiles import DEFAULT_SHARE_ENV_PATH
 from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.profiles import UserProfile
@@ -41,32 +56,26 @@ from imbue.system_interface.shell.client_activity import ClientActivityLog
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.clients import ClientStore
 from imbue.system_interface.shell.clients import entries_wire_json
-from imbue.system_interface.shell.close_hints import WindowClosedHint
+from imbue.system_interface.shell.close_hints import WindowClosedHintPost
 from imbue.system_interface.shell.close_hints import post_window_closed_hint
 from imbue.system_interface.shell.close_hints import window_closed_hint
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import ClientArrivalOutcome
-from imbue.system_interface.shell.data_types import ClientRecord
 from imbue.system_interface.shell.data_types import ClientReportOutcome
 from imbue.system_interface.shell.data_types import ClientStateReport
-from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import DesktopDeleteOutcome
-from imbue.system_interface.shell.data_types import DesktopLayout
-from imbue.system_interface.shell.data_types import EntryPresentation
 from imbue.system_interface.shell.data_types import LaunchOutcome
 from imbue.system_interface.shell.data_types import LaunchRequest
 from imbue.system_interface.shell.data_types import PlacementsEditOutcome
 from imbue.system_interface.shell.data_types import PlacementsSaveRequest
-from imbue.system_interface.shell.data_types import StoredWindowPath
 from imbue.system_interface.shell.data_types import UserRecord
-from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.data_types import WindowOpenOutcome
 from imbue.system_interface.shell.data_types import WindowOpenRequest
-from imbue.system_interface.shell.data_types import desktop_wire_json
+from imbue.system_interface.shell.data_types import desktop_view
 from imbue.system_interface.shell.data_types import effective_launch_paths
 from imbue.system_interface.shell.data_types import effective_window
 from imbue.system_interface.shell.data_types import stoppable_program_of
-from imbue.system_interface.shell.data_types import window_wire_json
+from imbue.system_interface.shell.data_types import window_view
 from imbue.system_interface.shell.desktop_document import apps_with_their_default_shortcut_on
 from imbue.system_interface.shell.desktop_document import desktop_seeded_from
 from imbue.system_interface.shell.desktop_document import find_window
@@ -95,19 +104,13 @@ from imbue.system_interface.shell.errors import WindowNotFoundError
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.identity import visiting_user_id
 from imbue.system_interface.shell.inventory import AppInventory
+from imbue.system_interface.shell.inventory import DEFAULT_SHARE_DOMAIN_PATH
 from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.launches import post_launch
 from imbue.system_interface.shell.launches import resolve_launch_destination
 from imbue.system_interface.shell.placements import PlacementStore
 from imbue.system_interface.shell.placements import StoredDesktopLayout
-from imbue.system_interface.shell.primitives import ClientId
-from imbue.system_interface.shell.primitives import DesktopId
-from imbue.system_interface.shell.primitives import IfPresent
 from imbue.system_interface.shell.primitives import LaunchTargetKind
-from imbue.system_interface.shell.primitives import UserId
-from imbue.system_interface.shell.primitives import WindowId
-from imbue.system_interface.shell.primitives import WindowPath
-from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.primitives import mint_save_id
 from imbue.system_interface.shell.primitives import mint_window_id
 from imbue.system_interface.shell.share_grants import DEFAULT_SHARE_GRANTS_PATH
@@ -166,7 +169,7 @@ class ShellState(MutableModel):
     client_prune_interval_seconds: float = Field(
         default=CLIENT_PRUNE_INTERVAL_SECONDS, frozen=True, description="How often stale clients are pruned"
     )
-    close_hint_poster: Callable[[WindowClosedHint], None] = Field(
+    close_hint_poster: Callable[[WindowClosedHintPost], None] = Field(
         default=post_window_closed_hint,
         frozen=True,
         description="How an app is told a window of its closed; a test records the hints instead",
@@ -266,7 +269,7 @@ class ShellState(MutableModel):
         shortcuts_outcome = self.desktops.ensure_default_shortcuts_offered(rows)
         pinned_outcome = self.desktops.ensure_pinned_windows(pinned_apps(rows), datetime.now(timezone.utc))
         if shortcuts_outcome.is_written or pinned_outcome.is_written:
-            self.broadcaster.broadcast_desktops_updated(self.desktops_wire_json(pinned_outcome.desktops))
+            self.broadcaster.broadcast_desktops_updated(self.desktop_views(pinned_outcome.desktops))
         return pinned_outcome.desktops
 
     def create_desktop(self, name: str, color: str, glyph: int) -> Desktop:
@@ -374,9 +377,9 @@ class ShellState(MutableModel):
         raise DesktopNotFoundError(desktop_id)
 
     def broadcast_desktops_updated(self) -> None:
-        self.broadcaster.broadcast_desktops_updated(self.desktops_wire_json(self.list_desktops()))
+        self.broadcaster.broadcast_desktops_updated(self.desktop_views(self.list_desktops()))
 
-    def desktops_wire_json(self, desktops: Sequence[Desktop]) -> list[dict[str, Any]]:
+    def desktop_views(self, desktops: Sequence[Desktop]) -> list[DesktopView]:
         """The ``desktops`` of a listing or a ``desktops_updated``: every client's stored path for each independent
         window rides on the window, read once for the whole list."""
         by_client = self.window_paths.read_all_paths(self._independent_window_ids())
@@ -384,16 +387,16 @@ class ShellState(MutableModel):
         for client_id, paths in by_client.items():
             for window_id, stored in paths.items():
                 by_window.setdefault(window_id, {})[client_id] = stored.path
-        return [desktop_wire_json(desktop, by_window) for desktop in desktops]
+        return [desktop_view(desktop, by_window) for desktop in desktops]
 
-    def desktop_wire_json(self, desktop: Desktop) -> dict[str, Any]:
-        (wire,) = self.desktops_wire_json((desktop,))
-        return wire
+    def desktop_view(self, desktop: Desktop) -> DesktopView:
+        (view,) = self.desktop_views((desktop,))
+        return view
 
-    def window_wire_json(self, window: Window) -> dict[str, Any]:
+    def window_view(self, window: Window) -> WindowView:
         """One window as a listing shows it, with each client's own path when it is independent."""
         by_client = self.window_paths.read_all_paths({window.id})
-        return window_wire_json(
+        return window_view(
             window, {client_id: paths[window.id].path for client_id, paths in by_client.items() if window.id in paths}
         )
 
@@ -616,7 +619,9 @@ class ShellState(MutableModel):
         """Move a client onto a desktop and tell its windows; answers whether the stored desktop actually moved."""
         outcome = self.clients.set_active_desktop(client_id, desktop_id, datetime.now(timezone.utc))
         if outcome.is_active_desktop_changed:
-            self.broadcaster.broadcast_active_desktop_changed(str(client_id), str(desktop_id))
+            self.broadcaster.broadcast_active_desktop_changed(
+                str(client_id), str(desktop_id), outcome.record.desktop_revision, None
+            )
         return outcome.is_active_desktop_changed
 
     def arrive_client(self, client_id: ClientId, identity: RequestIdentity) -> ClientArrivalOutcome | None:
@@ -650,7 +655,9 @@ class ShellState(MutableModel):
             self.broadcast_desktops_updated()
         # A client that already had a record may have other windows open on the desktop it was moved off.
         if record is not None and recorded.is_active_desktop_changed:
-            self.broadcaster.broadcast_active_desktop_changed(str(client_id), str(outcome.desktop_id))
+            self.broadcaster.broadcast_active_desktop_changed(
+                str(client_id), str(outcome.desktop_id), recorded.record.desktop_revision, None
+            )
         return outcome
 
     def _land_visiting_user(
@@ -748,21 +755,29 @@ class ShellState(MutableModel):
         """The desktop a client is on by the rule of desktop contracts.md section 4.3; None with no desktops."""
         return resolve_active_desktop(self.clients.get_client(client_id), self.list_desktops())
 
+    def record_client_seen(self, client_id: ClientId) -> ClientRecord:
+        """Stamp a recorded client as seen without moving it (a following ``client_state`` report); raises
+        ClientNotFoundError."""
+        return self.clients.record_seen(client_id, datetime.now(timezone.utc))
+
     def record_client_report(self, report: ClientStateReport) -> ClientReportOutcome:
         """Record a ``client_state`` report and announce what moved; a report naming a desktop that no longer exists
-        lands the client on the first desktop instead (desktop plan section 3.5)."""
+        lands the client on the first desktop instead (desktop plan section 3.5), and a superseded report (made before
+        a move its page had not heard of) is neither recorded nor announced."""
         desktops = self.list_desktops()
         resolved = report
         if desktops and report.active_desktop not in {desktop.id for desktop in desktops}:
             resolved = report.model_copy_update(to_update(report.field_ref().active_desktop, desktops[0].id))
-        outcome = self.clients.record_report(resolved, datetime.now(timezone.utc))
-        # Only a report that moved the stored desktop, or that was redirected off a desktop that no longer exists,
-        # is broadcast: a window following a push reports what it was pushed to, which matches the record, so the
-        # chain ends after one hop.
         is_redirected = resolved is not report
-        if outcome.is_active_desktop_changed or is_redirected:
+        outcome = self.clients.record_report(resolved, datetime.now(timezone.utc), is_redirected=is_redirected)
+        # Only a report that moved the stored desktop, or that was redirected off a desktop that no longer exists,
+        # is broadcast; a superseded one is not, even when redirected.
+        if outcome.is_active_desktop_changed or (is_redirected and not outcome.is_superseded):
             self.broadcaster.broadcast_active_desktop_changed(
-                str(report.client_id), str(outcome.record.active_desktop)
+                str(report.client_id),
+                str(outcome.record.active_desktop),
+                outcome.record.desktop_revision,
+                report.report_id,
             )
         return outcome
 
@@ -792,6 +807,7 @@ def build_shell_state(
     wallpaper_files_directory: Path = DEFAULT_WALLPAPER_FILES_DIRECTORY,
     avatar_catalog_directory: Path = DEFAULT_AVATAR_CATALOG_DIRECTORY,
     agent_events_path: Path | None = None,
+    background_tasks_root: Path | None = None,
     repo_root: Path = WORKSPACE_ROOT_DIRECTORY,
     profiles: ProfileResolver | None = None,
     launch_poster: LaunchPoster | None = None,
@@ -803,7 +819,8 @@ def build_shell_state(
     """Wire the shell's collaborators over ``state_directory``; ``inventory`` is injectable for tests (and
     ``on_registry_read``, what the built inventory tells every registry read, is the production shell's services
     event writer), and either way the shell's desktop reconcile listens to its registry changes;
-    ``agent_events_path`` (the mngr observer's file the avatar's mood is read from) defaults to the one the
+    ``agent_events_path`` (the mngr observer's file the avatar's mood is read from) and ``background_tasks_root``
+    (the chats' background task markers, which keep the mood working while a chat is busy) default to the ones the
     environment names; ``repo_root`` (the workspace the update notice's record and script, and the
     share materials the lifecycle manager reads the per-app grants from, live under) is the served tree by
     default; ``profiles`` (the resolver the composition root shares with presence) defaults to one that can reach
@@ -815,7 +832,12 @@ def build_shell_state(
     resolved_inventory = (
         inventory
         if inventory is not None
-        else AppInventory(registry_path=registry_path, broadcaster=broadcaster, on_registry_read=on_registry_read)
+        else AppInventory(
+            registry_path=registry_path,
+            broadcaster=broadcaster,
+            on_registry_read=on_registry_read,
+            share_domain_path=_under_repo_root(DEFAULT_SHARE_DOMAIN_PATH, repo_root),
+        )
     )
     desktops = DesktopStore(state_directory=state_directory)
     share_grants = ShareGrantsReader(
@@ -850,6 +872,9 @@ def build_shell_state(
         avatar_selection=AvatarSelectionStore(state_directory=state_directory),
         avatar_status=AvatarStatusReader(
             events_path=agent_events_path if agent_events_path is not None else agent_events_path_from_environment(),
+            background_tasks_root=background_tasks_root
+            if background_tasks_root is not None
+            else background_tasks_root_from_environment(),
             broadcaster=broadcaster,
         ),
         update_notice=UpdateNoticeWatch(repo_root=repo_root, broadcaster=broadcaster),

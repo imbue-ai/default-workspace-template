@@ -1089,12 +1089,12 @@ def up(
     # What the caller needs on stdout: the preview's service name when
     # previewing (its browser origin is derived from the workspace host, which
     # is not knowable server-side -- open the window by service name, e.g. via
-    # layout.py open), else the instance's own loopback URL.
+    # workspace-layout open), else the instance's own loopback URL.
     if preview_requested:
         sys.stdout.write(f"{preview_service_name}\n")
         sys.stderr.write(
             f"preview up: open the '{preview_service_name}' service window, e.g. "
-            f"`python3 system/scripts/layout.py open "
+            f"`uv run --no-sync workspace-layout open "
             f"{preview_service_name}` (serving {cwd} "
             f"on port {inner_port}, wrapped on port {wrapper_port}). Opening it "
             "puts it on the user's screen. Run "

@@ -11,7 +11,7 @@ _RELAY_A = "relay-" + "a" * 16
 _RELAY_B = "relay-" + "b" * 16
 
 
-def _body(entries: list[dict], poll_seconds: object = 60) -> dict:
+def _body(entries: list[object], poll_seconds: object = 60) -> dict:
     return {"workspace_domain": "host-x.user.us1.example", "relay_endpoints": entries, "poll_seconds": poll_seconds}
 
 

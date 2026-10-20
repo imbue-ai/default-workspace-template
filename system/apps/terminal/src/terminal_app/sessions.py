@@ -3,12 +3,12 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from app_manifest.primitives import canonical_name_from_title, is_name_conflict
-from app_manifest.shell_windows import window_query_value
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import Field, PrivateAttr
+from workspace_layout.windows import window_query_value
 
 from terminal_app.data_types import TerminalListing, TerminalSessionRecord, TmuxSession
 from terminal_app.errors import (

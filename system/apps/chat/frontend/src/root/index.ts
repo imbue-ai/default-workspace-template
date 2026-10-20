@@ -6,12 +6,11 @@
  * The root owns the shell connection: it reports ``/?chat=<id>`` and the selected chat's
  * title as its location, handles ``shell:navigate`` by changing the selection, applies the
  * pending intake an ``intake=<token>`` in its URL names (a draft into a composer, a choice of
- * chat through the picker, or a first message that launches a chat through the provider
- * chooser) exactly once and then reports the selection alone, and drives its inner pages
- * directly (they share an origin) with the shell's handshake and its shown and hidden states,
- * so each page's presence reports key on the chat it shows. The inner pages' own ``minds:``,
- * ``shell:focused``, and sub-agent ``shell:open`` messages go up through ``relay.ts``; a page
- * asking for a sibling chat is answered here, by selecting it.
+ * chat through the picker, or a first message that launches a chat) exactly once and then reports the selection alone, and drives its inner pages
+ * directly (they share an origin) with its shown and hidden states, so each page's presence
+ * reports key on the chat it shows. The shell's handshake goes down to the inner pages, and their
+ * messages for the shell and the minds chrome go up, through ``relay.ts``, which says which
+ * kinds; a page asking for a sibling chat is answered here, by selecting it.
  */
 
 import m from "mithril";
@@ -19,6 +18,7 @@ import "../style.css";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
+import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
 import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
 import { scopeOfHandshake } from "@imbue/workspace-ui/src/element_reference";
@@ -30,7 +30,6 @@ import {
   addChatsUpdatedListener,
   applyPendingIntake,
   awaitingChatForEmptyList,
-  createChat,
   discardPendingIntake,
   fetchPendingIntake,
   getChatById,
@@ -42,16 +41,8 @@ import {
   removeChatsUpdatedListener,
 } from "../models/Chats";
 import type { AppliedIntake, PendingIntake } from "../models/Chats";
-import {
-  accountForFirstSend,
-  closeProviderChooser,
-  getSelectedAccount,
-  isProviderChooserOpen,
-  loadAccountsWithRetry,
-  openProviderChooser,
-  whenAccountsReadyToChoose,
-} from "../models/Providers";
-import { ProviderChooserModal } from "../views/ProviderChooserModal";
+import { accountForFirstSend, loadAccountsWithRetry, whenAccountsReadyToChoose } from "../models/Providers";
+import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { COMPACT_MEDIA_QUERY } from "../compactLayout";
 import { ChatDrawer } from "./ChatDrawer";
 import { ChatHeader } from "./ChatHeader";
@@ -59,6 +50,8 @@ import { ChatRail } from "./ChatRail";
 import type { ChatRailAttrs } from "./ChatRail";
 import { SendPicker } from "./SendPicker";
 import { initChatUnread, markRead, noteStatuses } from "./chatUnread";
+import { initRailWidth } from "./railWidth";
+import { startNewChat } from "./newChat";
 import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
 import { groupedRows, rowsFromSnapshots } from "./rows";
@@ -87,6 +80,8 @@ const startedHere = new Set<string>();
 const awaitingListing = new Set<string>();
 // The phone layout (compactLayout.ts): a header over the chat, and the list in a drawer over it.
 const compactQuery = window.matchMedia(COMPACT_MEDIA_QUERY);
+// A touchscreen: the drawer takes the finger's form of the list rather than the rail's.
+const touchQuery = window.matchMedia(TOUCH_MEDIA_QUERY);
 // Whether the phone layout's drawer is open. It opens whenever nothing is selected, and closes when a chat is picked.
 let isDrawerOpen = false;
 
@@ -174,26 +169,22 @@ function openChatForEmptyList(): void {
     });
 }
 
-async function createAndSelect(accountId: string): Promise<void> {
-  try {
-    const created = await createChat("", accountId);
-    startedHere.add(created.chatId);
-    awaitingListing.add(created.chatId);
-    select(created.chatId);
-  } catch (error) {
-    alert(`Failed to create chat: ${(error as Error).message}`);
-  }
-}
+// Why the last click on New chat started nothing, shown as a notice until dismissed; null otherwise.
+let newChatRefusal: string | null = null;
+const newChatRefusalNotice = makeNoticeDialog();
 
-/** The New chat button: a chat on the selected account, or after a sign-in when nothing is signed in. */
-async function startNewChat(): Promise<void> {
-  await whenAccountsReadyToChoose();
-  const account = getSelectedAccount();
-  if (account !== null) {
-    await createAndSelect(account.id);
+/** The New chat button: a chat on the account the chat app picks, or with nothing signed in the chat awaiting its
+ *  first send, whose page asks for a provider. A create the chat app refuses says why rather than opening a chat. */
+async function openNewChat(): Promise<void> {
+  const outcome = await startNewChat();
+  if (outcome.kind === "refused") {
+    newChatRefusal = outcome.detail;
+    m.redraw();
     return;
   }
-  openProviderChooser({ onSignedIn: (signedInAccountId) => void createAndSelect(signedInAccountId) });
+  if (outcome.kind === "created") startedHere.add(outcome.chatId);
+  awaitingListing.add(outcome.chatId);
+  select(outcome.chatId);
 }
 
 /** Show ``chatId`` once the pending intake is applied or given up, reporting the selection even when it is the one
@@ -214,14 +205,13 @@ function draftInto(chatId: string, text: string): void {
 }
 
 /** Launch a chat awaiting its first send with ``text`` (an intake that could not launch it at once): on the account
- *  the chat was minted for when it names one, else the signed-in account when one has appeared meanwhile, else
- *  through the provider chooser, as the composer's first send does; a dismissed chooser leaves the text in the
- *  composer, where the next send offers the chooser again. A chooser already open (for the New chat button) takes
- *  no second intent, so the text goes to the composer at once. */
+ *  the chat was minted for when it names one, else the signed-in account when one has appeared meanwhile. With
+ *  nothing signed in the text goes into the chat's composer, whose page asks for a provider. */
 async function launchWithFirstMessage(chatId: string, text: string): Promise<void> {
+  // A launch the chat app refuses leaves the text in the chat's composer, where the chat shows what it needs.
   const launchOrDraft = (accountId: string): void => {
     launchChat(chatId, accountId, text).catch((error: unknown) => {
-      alert(`Failed to start the chat: ${(error as Error).message}`);
+      console.warn("[chat-root] could not launch the chat with its first message; drafting it", error);
       draftInto(chatId, text);
     });
   };
@@ -232,11 +222,7 @@ async function launchWithFirstMessage(chatId: string, text: string): Promise<voi
     launchOrDraft(account.id);
     return;
   }
-  if (isProviderChooserOpen()) {
-    draftInto(chatId, text);
-    return;
-  }
-  openProviderChooser({ onSignedIn: launchOrDraft, onDismissed: () => draftInto(chatId, text) });
+  draftInto(chatId, text);
 }
 
 /** A reference drafted from the root's own chrome (the rail, the empty slot): into the selected chat's composer,
@@ -251,7 +237,7 @@ function draftReference(text: string): void {
 
 /** Whether a reference drafted from the root has somewhere to go: a selected chat, or a shell to ask. */
 function isReferenceDraftAvailable(): boolean {
-  return selectedChatId !== null || (connection?.isFramed ?? false);
+  return selectedChatId !== null || (connection?.hasShell() ?? false);
 }
 
 /** What an applied intake asks of the root (post-launch-paths plan section 3.6.1): the chat is selected, a draft
@@ -356,6 +342,7 @@ const ChatRoot: m.Component = {
               onOpenList: () => {
                 isDrawerOpen = true;
               },
+              isTouch: rail.isTouch,
             })
           : m(ChatRail, rail),
         m("div", { class: "chat-root-slot relative min-h-0 min-w-0 flex-1" }, [
@@ -388,13 +375,22 @@ const ChatRoot: m.Component = {
         isCompact && isDrawerOpen
           ? m(ChatDrawer, {
               rail,
-              isCovered: isProviderChooserOpen() || pendingPick !== null,
+              isCovered: pendingPick !== null,
               onDismiss: () => {
                 isDrawerOpen = false;
               },
             })
           : null,
-        isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
+        newChatRefusal === null
+          ? null
+          : m(newChatRefusalNotice, {
+              title: "Couldn't start a new chat",
+              body: [newChatRefusal],
+              dismissLabel: "OK",
+              onDismiss: () => {
+                newChatRefusal = null;
+              },
+            }),
         pendingPick === null
           ? null
           : m(SendPicker, {
@@ -413,9 +409,10 @@ function railAttrs(rows: readonly ChatRow[], isCompact: boolean): ChatRailAttrs 
   return {
     rows,
     selectedChatId,
-    isCompact,
+    isInDrawer: isCompact,
+    isTouch: isCompact && touchQuery.matches,
     onPick: (chatId: string) => select(chatId),
-    onNew: () => void startNewChat(),
+    onNew: () => void openNewChat(),
     referenceScope: scopeOfHandshake(handshake),
     onDraftReference: draftReference,
     isReferenceDraftAvailable: isReferenceDraftAvailable(),
@@ -479,6 +476,7 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
 
 function bootstrap(): void {
   initChatUnread();
+  initRailWidth();
   initChats();
   const accountsLoaded = loadAccountsWithRetry();
   addChatsUpdatedListener(onChatsUpdated);
@@ -487,9 +485,11 @@ function bootstrap(): void {
     fillSlot();
     m.redraw();
   });
+  touchQuery.addEventListener("change", () => m.redraw());
   const shell = connectRootToShell(accountsLoaded);
   startInnerFrameRelay(
     (source) => pool?.isInnerWindow(source) ?? false,
+    () => pool?.innerWindows() ?? [],
     (chatId) => select(chatId),
   );
   const rootElement = document.getElementById("app");

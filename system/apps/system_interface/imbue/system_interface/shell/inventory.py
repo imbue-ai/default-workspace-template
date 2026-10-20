@@ -1,20 +1,22 @@
 """The app inventory: the registry and each app's liveness.
 
-The registry (``data/.state/apps.toml``) is watched for changes, and its mtime is compared on every sweep
-as the backstop for a write no watch event reported (under gVisor and on lima, a change made outside the
-sandbox raises no inotify event in it); liveness is re-derived on the sweep and after a stop or start. Every
-change of the inventory is broadcast as one ``apps_updated`` message, diffed against the last one sent
-(desktop contracts.md section 6), every read of the registry is handed to ``on_registry_read`` (the
-production shell's services event writer), and every read that changed the rows is announced to each registry change
-listener (the shell's desktop reconcile).
+The registry (``data/.state/apps.toml``) is watched for changes, and its mtime is compared on every sweep as
+the backstop for a write no watch event reported (under gVisor and on lima, a change made outside the sandbox
+raises no inotify event in it); liveness is re-derived on the sweep and after a stop or start. Each app's
+address on the domain the workspace was last shared under (``data/.state/share_domain``, which the share
+gateway keeps past an unshare) is read with every view, so a first share reaches the clients on the next
+sweep. Every change of the inventory is broadcast as one ``apps_updated`` message, diffed against the last one
+sent (desktop contracts.md section 6), every read of the registry is handed to ``on_registry_read`` (the
+production shell's services event writer), and every read that changed the rows is announced to each registry
+change listener (the shell's desktop reconcile).
 """
 
 import json
+import re
 import threading
 from collections.abc import Callable
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
 from typing import Final
 
 from app_manifest.errors import RegistryReadError
@@ -24,6 +26,7 @@ from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
 from watchdog.observers.api import BaseObserver
+from workspace_layout.answers import InventoryApp
 
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
@@ -31,17 +34,38 @@ from imbue.imbue_common.pure import pure
 from imbue.system_interface.file_watch import start_file_watch
 from imbue.system_interface.file_watch import stop_file_watch
 from imbue.system_interface.shell.data_types import AppInventoryEntry
-from imbue.system_interface.shell.data_types import app_wire_json
+from imbue.system_interface.shell.data_types import app_view
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # How often liveness is re-derived.
 LIVENESS_SWEEP_INTERVAL_SECONDS: Final[float] = 10.0
 
+# Where the share gateway keeps the domain the workspace was last shared under.
+DEFAULT_SHARE_DOMAIN_PATH: Final[Path] = Path("data/.state/share_domain")
+
+_DNS_NAME: Final[re.Pattern[str]] = re.compile(
+    r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+)
+
+
+def read_share_domain(path: Path | None) -> str | None:
+    """The domain ``path`` names, lowercased; None for no file, an unreadable one, or one that names no domain."""
+    if path is None:
+        return None
+    try:
+        text = path.read_text().strip().lower()
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError) as e:
+        logger.warning("Could not read the share domain at {}: {}", path, e)
+        return None
+    return text if _DNS_NAME.fullmatch(text) is not None else None
+
 
 @pure
-def serialize_apps(entries: Sequence[AppInventoryEntry]) -> list[dict[str, Any]]:
-    return [app_wire_json(entry) for entry in entries]
+def app_views(entries: Sequence[AppInventoryEntry], share_domain: str | None) -> list[InventoryApp]:
+    return [app_view(entry, share_domain) for entry in entries]
 
 
 class AppInventory(MutableModel):
@@ -56,6 +80,11 @@ class AppInventory(MutableModel):
     )
     sweep_interval_seconds: float = Field(
         default=LIVENESS_SWEEP_INTERVAL_SECONDS, frozen=True, description="How often the sweep runs"
+    )
+    share_domain_path: Path | None = Field(
+        default=None,
+        frozen=True,
+        description="The file naming the domain the workspace was last shared under; None for a shell with no share",
     )
     on_registry_read: Callable[[Sequence[RegistryRow]], None] | None = Field(
         default=None,
@@ -113,8 +142,8 @@ class AppInventory(MutableModel):
         with self._lock:
             return self._entry_by_name.get(app_name)
 
-    def serialized(self) -> list[dict[str, Any]]:
-        return serialize_apps(self.entries())
+    def views(self) -> list[InventoryApp]:
+        return app_views(self.entries(), read_share_domain(self.share_domain_path))
 
     @property
     def is_registry_read(self) -> bool:
@@ -247,9 +276,9 @@ class AppInventory(MutableModel):
 
     def _broadcast_if_changed(self) -> None:
         with self._broadcast_lock:
-            serialized = self.serialized()
-            encoded = json.dumps(serialized, sort_keys=True)
+            views = self.views()
+            encoded = json.dumps([view.model_dump(mode="json") for view in views], sort_keys=True)
             if encoded == self._last_broadcast_json:
                 return
             self._last_broadcast_json = encoded
-            self.broadcaster.broadcast_apps_updated(serialized)
+            self.broadcaster.broadcast_apps_updated(views)

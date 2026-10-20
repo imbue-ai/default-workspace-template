@@ -9,19 +9,20 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv sync --all-packages"
-          },
-          {
-            "type": "command",
-            "command": "./system/scripts/claude_update_plugin.sh"
-          },
-          {
-            "type": "command",
             "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/ensure_tk_on_path.sh"
           },
           {
             "type": "command",
-            "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/claude_shed_notice_hook.py 2>/dev/null || true"
+            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/claude_shed_notice_hook.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/claude_background_task_hooks.py session-start || true"
           }
         ]
       }
@@ -80,6 +81,10 @@
           {
             "type": "command",
             "command": "[ -n \"$MNGR_CLAUDE_SUBAGENT_PROXY_CHILD\" ] && exit 0; ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_open_tickets_stop_nudge.sh"
+          },
+          {
+            "type": "command",
+            "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/claude_background_task_hooks.py stop || true"
           }
         ]
       }
@@ -92,19 +97,19 @@
   },
   "enabledPlugins": {
     "imbue-code-guardian@imbue-code-guardian": true,
-    "frontend-design@claude-code-plugins": true
+    "frontend-design@claude-code-plugins-pinned": true
   },
   "extraKnownMarketplaces": {
     "imbue-code-guardian": {
       "source": {
-        "source": "github",
-        "repo": "imbue-ai/code-guardian"
+        "source": "directory",
+        "path": "/opt/agent-plugins/imbue-code-guardian"
       }
     },
-    "claude-code-plugins": {
+    "claude-code-plugins-pinned": {
       "source": {
-        "source": "github",
-        "repo": "anthropics/claude-code"
+        "source": "directory",
+        "path": "/opt/agent-plugins/claude-code-plugins-pinned"
       }
     }
   },

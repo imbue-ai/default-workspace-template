@@ -7,6 +7,7 @@ import pytest
 
 from env_converge import template_manifest
 from env_converge.template_manifest import (
+    AdaptationRequirement,
     CURRENT_MANIFEST_FORMAT,
     MANIFEST_MARKDOWN_NAME,
     MANIFEST_THUMBNAIL_NAME,
@@ -555,7 +556,7 @@ def test_an_template_needing_no_activation_says_so() -> None:
     # straight to the adaptation conversation instead of opening approval flows.
     assert not Requirements().has_activation_requirements()
     assert not Requirements(
-        adaptation=({"summary": "swap the data source"},)
+        adaptation=(AdaptationRequirement(summary="swap the data source"),)
     ).has_activation_requirements()
 
 

@@ -1,13 +1,16 @@
 # app_manifest
 
-The models behind a workspace app's two descriptions:
+The models behind a workspace app's two descriptions (a third, the OpenAPI document of its HTTP API, is `system/libs/app_schema`):
 
 - **The manifest**, `system/apps/<package>/app.toml`: an app's static
-  declarations (name, display name, icon, its memory-shedding priority, whether
-  it is critical, whether it stops once no window shows it, its supervisord
-  program, the launch paths the desktop opens windows at, the shortcut a new
-  desktop is seeded with, the messages from the Imbue Studio chrome it takes,
-  and what it owns outside its own directory). The schema is `contracts.md`
+  declarations (name, display name, a one-line description, the path of its
+  API document, icon, its memory-shedding priority, whether
+  it is critical, whether it stops once no window shows it, whether it is part
+  of the workspace itself (which the minds Share tab lists under its System
+  group), its supervisord program, the launch paths the desktop opens windows
+  at, the shortcut a new desktop is seeded with, the messages from the Imbue
+  Studio chrome it takes, and what it owns outside its own directory). The
+  schema is `contracts.md`
   section 2 of the desktop interface (`docs/system/blueprint/desktop-interface/`),
   which carries
   section 2 of the workspace app model
@@ -31,9 +34,13 @@ The models behind a workspace app's two descriptions:
   shell's launch envelope and can name neither a param nor a preset; `open` is
   reserved for the root launch path the shell synthesizes for an app that
   declares none), `LaunchPathMethod`,
-  `MessageHandler` (`type`, a `MessageType`: `minds:` and a lowercase kebab-case
-  name, unique within the manifest; `path`, the route under the app's origin the
-  shell posts each message of that type to, shaped like a launch path),
+  `MessageHandler` (`type`, a `MessageType`: a lowercase prefix, `:`, and a
+  lowercase kebab-case name, never `shell:`, unique within the manifest; and
+  exactly one of `path`, the route under the app's origin the shell posts each
+  message of that type to, shaped like a launch path, or `show`, the
+  `PageTemplate` of the app's page the shell shows for it, with `showing`, the
+  templates of the app's other pages that count as already showing it, only
+  beside `show`),
   `DefaultShortcut`
   (`launch`, `mode`), `ShortcutMode`, `AppReference` (`path`, optional `note`),
   `ScopeRules` (`exclude`), `PreviewSpec` (the optional `[preview]` table: how
@@ -53,7 +60,7 @@ The models behind a workspace app's two descriptions:
   validation is logged and skipped; an unreadable file raises
   `RegistryReadError`), and `registry_path()` (honours `MINDS_APPS_FILE`,
   default `data/.state/apps.toml` relative to the cwd, exactly like
-  `forward_port.py` and `layout.py`). `register_app(manifest_path, app_url)` is
+  `forward_port.py` and `workspace-layout`). `register_app(manifest_path, app_url)` is
   the startup registration every app's entry point calls: it runs
   `system/scripts/forward_port.py --manifest <path> --url <url>` under the
   current interpreter from the repo root, which upserts the app's row from its
@@ -67,6 +74,21 @@ The models behind a workspace app's two descriptions:
   its own origin (a cross-origin module import carries no cookie, and the
   forwarder refuses it); `SHELL_CONTEXT_MENU_PATH` and `CONTEXT_MENU_ROUTE` are
   the same for the element context menu module built beside it.
+- `app_manifest.content_security_policy`: `attach_document_policy(app_or_blueprint,
+  overrides=None)` stamps a `Content-Security-Policy` on every HTML response that
+  does not set one itself: scripts from the page's own origin plus the page's own
+  inline `<script>` blocks (admitted by hash, computed from each response), inline
+  styles, images from the page's own origin (plus `data:` and `blob:`), frames of any
+  http(s) page, same-origin fetches
+  and sockets, no plugins, no `<base>` retargeting, no cross-origin form posts.
+  `overrides` replace whole directives for an app that needs more (the browser
+  app's `blob:` worklet, the chat's images and media from anywhere, Getting
+  Started's thumbnails from the catalog's origin, which `url_origin(url)` gives). `frame-ancestors` is left to the proxy in front of the
+  workspace, which appends its own policy. `build_document_policy(html,
+  overrides)`, `inline_script_hashes(html)` and `inline_source(text)` (the
+  `'sha256-...'` source for one inline script or stylesheet, which the shell's
+  parked-port page uses for its stylesheet) are the pieces; a built document
+  served with `send_file` is not read and must carry no inline script.
 - `app_manifest.scope`: the footprint computation. `compute_app_scope`,
   `compute_skill_scope`, `with_diff_against_base`, and `render_scope_file` build
   the scope file described below; `find_wiring_sections` reads the app's own
@@ -93,6 +115,8 @@ The models behind a workspace app's two descriptions:
 - `app_manifest.primitives`: the validated string types (`AppName`,
   `DisplayName`, `LaunchPathId`, `LaunchParamName`, `LaunchPathValue` (rooted with one
   slash, no query string or fragment, nothing a URL would escape), `MessageType`,
+  `PageTemplate` (a path with `{field}` placeholders, starting with one `/` or a
+  placeholder, optionally ending in a fixed query string, no fragment),
   `PriorityName`, `ProgramName`,
   `RepoRelativePath`, `ReferencePath`, `ExcludeGlob` (no leading `!`: a
   gitignore negation would re-include a built-in exclude), `ReferenceNote`) and
@@ -100,7 +124,12 @@ The models behind a workspace app's two descriptions:
   `system/scripts/forward_port_test.py` keeps them identical), with
   `canonical_name_from_title(title)` (the name a user-facing title registers
   as) and `is_name_conflict(candidate_title, taken_names)` (whether a title
-  would collide with a name already taken) for apps that mint names from titles.
+  would collide with a name already taken) for apps that mint names from titles,
+  and `render_page_template(template, fields)`, the page a `show` handler's
+  template names for a message: each placeholder replaced by its string field,
+  percent-encoded one path segment at a time, a trailing `/` of the value joining
+  the template's following `/` as one slash; it raises `PageTemplateFieldError`
+  when a field is missing or not a string or the page is not a rooted path.
 - The `app-manifest validate-manifest <path> [--repo-root DIR]` command, for the
   build-app scaffold and tests. Without `--repo-root` the reference location
   checks run against the root the `system/apps/<package>/app.toml` layout
@@ -248,6 +277,17 @@ the full root suite too. So does a path in a package the root project's
 than a test file or a frontend path), and a `uv.lock` upgrade the root project
 depends on directly or through one of those packages: the root project's own
 tests, in `system/scripts`, `.agents` and the skills, are its consumers.
+
+A run that can drive a browser comes after `npm ci && npm run build`: an
+own-root suite's run that includes its `browser` tests, or its files named on
+their own (those tests skip when the bundles are missing). An app's pages
+import the shell's built modules (`_static/app_contract.js` and
+`_static/context_menu.js`, in the shell's gitignored `static/`), so when the
+tree lacks them, as a fresh worktree does, the full root suite and every
+root-collected run of an app come after the build too. A tree that has them,
+like the live workspace, gets no build for those runs: the modules change only
+when a frontend does, which selects the build itself, and a build in the live
+workspace rewrites the bundles the running shell serves.
 
 Every change that is not entirely documentation (README and changelog files
 anywhere, and other markdown outside `.agents/` and

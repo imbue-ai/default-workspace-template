@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 from flask.testing import FlaskClient
+from workspace_layout.testing import FakeShell
 
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.documents import CHAT_AGENT_ID_META_NAME
@@ -14,15 +15,13 @@ from imbue.chat.documents import FRONTEND_BUILT_HEADER
 from imbue.chat.documents import TERMINAL_LABEL_META_NAME
 from imbue.chat.models import SendMessageRequest
 from imbue.chat.primitives import ChatId
-from imbue.chat.server import _record_client_message_activity
 from imbue.chat.server import client_activity_report
 from imbue.chat.server import create_application
 from imbue.chat.server import is_client_activity_reportable
+from imbue.chat.server import record_client_message_activity
 from imbue.chat.state import ChatAppState
-from imbue.chat.testing import RecordingClientActivityShell
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import seed_agent_state
-from imbue.chat.testing import serve_app
 from imbue.chat.testing import wait_until_true
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 
@@ -133,7 +132,7 @@ def test_a_send_is_reported_to_the_shell_only_with_a_client_and_a_desktop() -> N
     assert is_client_activity_reportable(framed)
     assert not is_client_activity_reportable(SendMessageRequest(message="hello", client_id="c1"))
     assert not is_client_activity_reportable(SendMessageRequest(message="hello", desktop_id="home"))
-    assert client_activity_report(chat_id, framed) == {
+    assert client_activity_report(chat_id, framed).model_dump(mode="json") == {
         "client_id": "c1",
         "desktop_id": "home",
         "kind": "message",
@@ -143,19 +142,20 @@ def test_a_send_is_reported_to_the_shell_only_with_a_client_and_a_desktop() -> N
     }
 
 
-def test_a_framed_send_is_posted_to_the_shells_client_activity_route(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_framed_send_is_reported_to_the_shell() -> None:
     chat_id = ChatId("agent-1")
     framed = SendMessageRequest(message="hello", client_id="c1", desktop_id="home")
-    shell = RecordingClientActivityShell()
-    with serve_app(shell.application) as served:
-        monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", served.http_url)
-        _record_client_message_activity(chat_id, SendMessageRequest(message="unframed"))
-        # A secondary chat's send is as framed as any, and still reaches no shell.
-        _record_client_message_activity(chat_id, framed, is_secondary=True)
-        _record_client_message_activity(chat_id, framed)
-        wait_until_true(
-            lambda: shell.received == [client_activity_report(chat_id, framed)], 5.0, "the client-activity report"
-        )
+    shell = FakeShell()
+    record_client_message_activity(shell, chat_id, SendMessageRequest(message="unframed"), is_secondary=False)
+    # A secondary chat's send is as framed as any, and still reaches no shell.
+    record_client_message_activity(shell, chat_id, framed, is_secondary=True)
+    # A client or desktop the shell would refuse is not reported at all.
+    unusable = SendMessageRequest(message="hello", client_id="../c1", desktop_id="home")
+    record_client_message_activity(shell, chat_id, unusable, is_secondary=False)
+    record_client_message_activity(shell, chat_id, framed, is_secondary=False)
+    wait_until_true(
+        lambda: shell.activities == [client_activity_report(chat_id, framed)], 5.0, "the client-activity report"
+    )
 
 
 def test_the_terminal_label_prefers_the_pty_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -25,3 +25,6 @@ class PiActivityTracker(ClaudeActivityTracker):
     """pi: no turn markers, so activity is claude's lifecycle-plus-tail inference."""
 
     marker_filename: ClassVar[str] = "pi_process_started"
+    # mngr_pi_coding has no compaction hooks: a pi compaction shows only through the chat's own request.
+    compacting_marker_filename: ClassVar[str | None] = None
+    last_compaction_filename: ClassVar[str | None] = None

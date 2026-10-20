@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 
 import pytest
+from app_schema.testing import assert_api_schema_describes_app
+from app_manifest.testing import assert_document_policy_admits_page
 from flask.testing import FlaskClient
 
 from terminal_app.pages import (
@@ -9,7 +11,7 @@ from terminal_app.pages import (
     SessionPage,
     render_page,
 )
-from terminal_app.primitives import TmuxSessionName
+from terminal_app.primitives import TerminalTitle, TmuxSessionName
 from terminal_app.sessions import TmuxSessionSource
 from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.testing import (
@@ -52,6 +54,15 @@ def test_the_wrapper_page_frames_the_session_with_the_ptys_origin_label(
     }
 
 
+def test_the_wrapper_page_is_served_under_a_policy_admitting_its_inline_script_and_the_pty_frame(
+    pages_client: FlaskClient,
+) -> None:
+    page = pages_client.get("/")
+    assert page.status_code == 200
+    assert_document_policy_admits_page(page)
+    assert "frame-src http: https:" in page.headers["Content-Security-Policy"]
+
+
 def test_the_bare_root_carries_no_session(pages_client: FlaskClient) -> None:
     response = pages_client.get("/")
 
@@ -87,7 +98,7 @@ def test_a_name_that_cannot_be_a_session_is_not_found(pages_client: FlaskClient)
     response = pages_client.get("/?session=not%20a%20name")
 
     assert response.status_code == 404
-    assert "no terminal has the name" in response.json["detail"]
+    assert "no terminal has the name" in response.get_json()["detail"]
 
 
 def test_new_allocates_a_terminal_in_the_posted_workdir_and_answers_its_page_path(
@@ -121,7 +132,7 @@ def test_new_refuses_a_bad_workdir_with_a_detail_body(pages_client: FlaskClient)
     response = pages_client.post("/new", json={"workdir": "x" * 2000})
 
     assert response.status_code == 400
-    assert "workdir" in response.json["detail"]
+    assert "workdir" in response.get_json()["detail"]
 
 
 @pytest.mark.parametrize("body", [[], "text", None], ids=["array", "string", "nothing"])
@@ -129,7 +140,7 @@ def test_new_refuses_a_body_that_is_not_a_json_object(pages_client: FlaskClient,
     response = pages_client.post("/new", json=body) if body is not None else pages_client.post("/new", data="")
 
     assert response.status_code == 400
-    assert "JSON object" in response.json["detail"]
+    assert "JSON object" in response.get_json()["detail"]
 
 
 def test_new_is_a_post_and_a_get_of_it_is_refused(pages_client: FlaskClient, fake_tmux: FakeTmux) -> None:
@@ -145,7 +156,7 @@ def test_new_answers_a_detail_body_when_tmux_refuses(pages_client: FlaskClient, 
     response = pages_client.post("/new", json={})
 
     assert response.status_code == 500
-    assert "could not create session" in response.json["detail"]
+    assert "could not create session" in response.get_json()["detail"]
 
 
 def test_the_session_api_answers_what_the_page_refreshes_from(
@@ -172,7 +183,7 @@ def test_a_window_closed_post_names_the_terminal_the_window_showed_and_answers_n
     pages_client: FlaskClient, window_closed_posts: list[TmuxSessionName | None]
 ) -> None:
     response = pages_client.post(
-        "/api/window-closed", json={"path": "/?session=terminal-1", "window_id": "win-1", "desktop_id": "home"}
+        "/api/window-closed", json={"path": "/?session=terminal-1", "window_id": "win-0000000000000001", "desktop_id": "home"}
     )
 
     assert response.status_code == 204
@@ -182,19 +193,31 @@ def test_a_window_closed_post_names_the_terminal_the_window_showed_and_answers_n
 def test_a_window_closed_post_that_names_no_terminal_still_asks_for_a_sweep(
     pages_client: FlaskClient, window_closed_posts: list[TmuxSessionName | None]
 ) -> None:
-    # A path naming no session, a path naming something no session can be called, a body of another shape, and
-    # no JSON at all: each brings a sweep and marks nothing.
+    # A path naming no session and a path naming something no session can be called: each brings a sweep and
+    # marks nothing.
     nameless = pages_client.post(
-        "/api/window-closed", json={"path": "/new?workdir=%2Fsrv", "window_id": "win-1", "desktop_id": "home"}
+        "/api/window-closed", json={"path": "/new?workdir=%2Fsrv", "window_id": "win-0000000000000001", "desktop_id": "home"}
     )
     odd_name = pages_client.post(
-        "/api/window-closed", json={"path": "/?session=not%20a%20name", "window_id": "win-2", "desktop_id": "home"}
+        "/api/window-closed", json={"path": "/?session=not%20a%20name", "window_id": "win-0000000000000002", "desktop_id": "home"}
     )
+
+    assert [r.status_code for r in (nameless, odd_name)] == [204, 204]
+    assert window_closed_posts == [None, None]
+
+
+def test_a_window_closed_post_of_another_shape_is_refused_and_brings_no_sweep(
+    pages_client: FlaskClient, window_closed_posts: list[TmuxSessionName | None]
+) -> None:
+    # A body of another shape than the shell's hint, a hint missing its window, and no JSON at all: each is a 400.
     odd_shape = pages_client.post("/api/window-closed", json=["/?session=terminal-1"])
+    partial = pages_client.post("/api/window-closed", json={"path": "/?session=terminal-1"})
     not_json = pages_client.post("/api/window-closed", data="terminal-1", content_type="text/plain")
 
-    assert [r.status_code for r in (nameless, odd_name, odd_shape, not_json)] == [204, 204, 204, 204]
-    assert window_closed_posts == [None, None, None, None]
+    assert [r.status_code for r in (odd_shape, partial, not_json)] == [400, 400, 400]
+    assert "JSON object" in odd_shape.get_json()["detail"]
+    assert "window_id" in partial.get_json()["detail"]
+    assert window_closed_posts == []
 
 
 def test_the_app_contract_module_is_served_from_the_terminals_own_origin(pages_client: FlaskClient) -> None:
@@ -214,14 +237,17 @@ def test_a_missing_app_contract_module_says_the_shell_is_not_built(
     response = client.get("/_static/app_contract.js")
 
     assert response.status_code == 404
-    assert "not built" in response.json["detail"]
+    assert "not built" in response.get_json()["detail"]
 
 
 def test_render_page_keeps_a_script_closer_out_of_the_config_and_escapes_the_title() -> None:
     page = SessionPage(
-        name="terminal-1", title="R&D <tests>", pty_path="/?arg=_&arg=session&arg=terminal-1", pty_label="</script>"
+        name=TmuxSessionName("terminal-1"),
+        title=TerminalTitle("R&D <tests>"),
+        pty_path="/?arg=_&arg=session&arg=terminal-1",
+        pty_label="</script>",
     )
-    page_html = render_page(PageConfig(session="terminal-1", page=page))
+    page_html = render_page(PageConfig(session=TmuxSessionName("terminal-1"), page=page))
 
     assert "<title>R&amp;D &lt;tests&gt;</title>" in page_html
     start = page_html.index('id="terminal-config">') + len('id="terminal-config">')
@@ -232,11 +258,21 @@ def test_render_page_keeps_a_script_closer_out_of_the_config_and_escapes_the_tit
 
 def test_render_page_leaves_a_placeholders_text_in_the_title_alone() -> None:
     title = "__CONTRACT_PATH__ and __CONFIG__"
-    page = SessionPage(name="terminal-1", title=title, pty_path="/?arg=session", pty_label="pty")
+    page = SessionPage(
+        name=TmuxSessionName("terminal-1"), title=TerminalTitle(title), pty_path="/?arg=session", pty_label="pty"
+    )
 
-    page_html = render_page(PageConfig(session="terminal-1", page=page))
+    page_html = render_page(PageConfig(session=TmuxSessionName("terminal-1"), page=page))
 
     assert f"<title>{title}</title>" in page_html
     start = page_html.index('id="terminal-config">') + len('id="terminal-config">')
     assert json.loads(page_html[start : page_html.index("</script>", start)])["page"]["title"] == title
     assert 'import("/_static/app_contract.js")' in page_html
+
+
+def test_the_app_describes_its_api_the_way_its_manifest_says(
+    pages_client: FlaskClient,
+) -> None:
+    assert_api_schema_describes_app(
+        pages_client, Path(__file__).resolve().parents[2] / "app.toml"
+    )

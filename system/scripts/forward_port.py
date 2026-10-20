@@ -20,12 +20,12 @@ Manifests
 ---------
 An app with a directory ships ``system/apps/<package>/app.toml`` (see
 ``system/libs/app_manifest`` for the schema). ``--manifest <path>`` reads it
-and copies its static fields onto the row: ``display_name``, ``critical``,
-``stop_when_no_windows``, ``priority``, ``program`` (default: the name), ``internal``, ``launcher_rank``,
+and copies its static fields onto the row: ``display_name``, ``description``, ``api_schema_path``, ``critical``,
+``stop_when_no_windows``, ``priority``, ``program`` (default: the name), ``internal``, ``system``, ``launcher_rank``,
 ``default_shortcut`` (launch and mode), ``launch_paths`` (id, label, path,
 the names of the params, and ``method``, ``presets``, ``text_param``, and
 ``draft_param`` when given), ``pin`` (path, and style, scope, and
-default_mode when given), ``window_closed_path``, and ``message_handlers`` (type and path);
+default_mode when given), ``window_closed_path``, and ``message_handlers`` (type, and path or show and showing);
 the icon is read from the file the manifest names, relative to the manifest. Every manifest
 field is authoritative on every call, so a re-registration with a changed manifest updates the row.
 Only what is copied from files is checked here (the name rule, the icon markup,
@@ -89,6 +89,14 @@ ENV_APPS_FILE = "MINDS_APPS_FILE"
 # which no longer routes. The random suffix is the one hostname component CT
 # never sees. Minted once per service and persisted (stable across re-share so
 # bookmarks/layouts keep working); see blueprint/random-service-labels/.
+#
+# A label is a strict RFC 1123 hostname label: a name's underscores become
+# hyphens. Browsers tolerate an underscore in a hostname, but ``java.net.URI``
+# (so every JDK-based HTTP client) refuses to parse it as a host, and Python's
+# ``ssl`` will not match a wildcard certificate against it. Labels minted
+# before this rule keep their underscore (a label never changes once
+# persisted), so readers map a label back to its name through the registry,
+# never by transforming the label.
 _LABEL_RANDOM_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
 _LABEL_RANDOM_LENGTH = 8
 
@@ -105,15 +113,16 @@ MAX_DISPLAY_NAME_LENGTH = 64
 
 # Service-name rule: lowercase alphanumeric/underscore runs separated by
 # single hyphens (no uppercase, no leading/trailing/consecutive hyphens).
-# The registered name becomes the leading label of the service's origin
-# hostname (http://<name>.host-<hex>.localhost:8421/ locally; share
-# hostnames follow the same prefix rule on a longer base), so it must work
-# as a hostname label. Underscores are tolerated for legacy names --
-# ``system_interface`` predates this scheme and underscore labels resolve
-# fine in browsers -- but new apps should stick to kebab-case (the build-app
-# scaffold enforces the stricter rule; a drift test in forward_port_test.py
-# keeps that rule a subset of this one, and keeps the app_manifest library's
-# copy of this rule identical).
+# The registered name seeds the leading label of the service's origin
+# hostname: ``mint_service_label`` derives ``<name>-<rand>`` from it, served
+# at http://<name>-<rand>.host-<hex>.localhost:8421/ locally (share hostnames
+# follow the same prefix rule on a longer base), so the name must work as a
+# hostname label. Underscores are tolerated for legacy names --
+# ``system_interface`` predates this scheme; ``mint_service_label`` turns
+# them into hyphens in the origin label -- but new apps should stick to
+# kebab-case (the build-app scaffold enforces the stricter rule; a drift test
+# in forward_port_test.py keeps that rule a subset of this one, and keeps the
+# app_manifest library's copy of this rule identical).
 NAME_PATTERN = re.compile(r"^[a-z0-9_]+(?:-[a-z0-9_]+)*$")
 
 # Workspace hostnames carry their coordinate as a ``host-<hex>`` label (and
@@ -160,8 +169,15 @@ _ALLOWED_CONTROL_CHARACTERS = frozenset({"\t", "\n", "\r"})
 # structured keys (``default_shortcut``, ``launch_paths``, ``pin``,
 # ``message_handlers``) are handled on their own. ``program`` defaults to the
 # name when the manifest omits it.
-_MANIFEST_STRING_KEYS = ("display_name", "priority", "program", "window_closed_path")
-_MANIFEST_BOOL_KEYS = ("critical", "internal", "stop_when_no_windows")
+_MANIFEST_STRING_KEYS = (
+    "display_name",
+    "description",
+    "api_schema_path",
+    "priority",
+    "program",
+    "window_closed_path",
+)
+_MANIFEST_BOOL_KEYS = ("critical", "internal", "system", "stop_when_no_windows")
 _MANIFEST_INT_KEYS = ("launcher_rank",)
 # A per-entry copier for one manifest array of tables: ``(copied, None)`` or ``(None, error)``.
 _TableCopier = Callable[[Any, Path], tuple[dict[str, object] | None, str | None]]
@@ -175,6 +191,8 @@ _TableCopier = Callable[[Any, Path], tuple[dict[str, object] | None, str | None]
 # workspace has re-registered its apps under this release.
 _MANIFEST_OWNED_KEYS = (
     "display_name",
+    "description",
+    "api_schema_path",
     "instances",
     "instances_url",
     "critical",
@@ -182,6 +200,7 @@ _MANIFEST_OWNED_KEYS = (
     "priority",
     "program",
     "internal",
+    "system",
     "launcher_rank",
     "default_shortcut",
     "actions",
@@ -322,11 +341,15 @@ def read_icon_file(path: Path) -> tuple[str | None, str | None]:
 
 
 def mint_service_label(name: str) -> str:
-    """Mint an unguessable ``<name>-<rand>`` origin label for a freshly-registered service."""
+    """Mint an unguessable ``<name>-<rand>`` origin label for a freshly-registered service.
+
+    The name's underscores become hyphens so the label is a valid hostname
+    label everywhere (``system_interface`` -> ``system-interface-<rand>``).
+    """
     suffix = "".join(
         secrets.choice(_LABEL_RANDOM_ALPHABET) for _ in range(_LABEL_RANDOM_LENGTH)
     )
-    return f"{name}-{suffix}"
+    return f"{name.replace('_', '-')}-{suffix}"
 
 
 def validate_display_name(value: str) -> str | None:
@@ -376,7 +399,7 @@ def _apps_file() -> Path:
     Defaults to ``data/.state/apps.toml`` relative to cwd. Override
     via ``MINDS_APPS_FILE`` -- used by tests and by callers that
     need to point at a non-default registry (e.g. when running outside
-    the agent's repo root). Mirrors ``system/scripts/layout.py``.
+    the agent's repo root). Mirrors ``app_manifest.registry.registry_path``.
     """
     return Path(os.environ.get(ENV_APPS_FILE, DEFAULT_APPS_FILE))
 
@@ -720,18 +743,29 @@ def _copied_param_names(
 def _copied_message_handler(
     handler: Any, path: Path
 ) -> tuple[dict[str, object] | None, str | None]:
-    """One manifest message handler as the registry row carries it: ``type`` and ``path``. Returns
+    """One manifest message handler as the registry row carries it: ``type`` and either ``path`` (the route the
+    shell posts the message to) or ``show`` (the page it shows) with ``showing`` when the manifest gives it. Returns
     ``(copied, None)``, or ``(None, error)`` when the entry is not shaped as the manifest requires."""
-    if not (
-        isinstance(handler, dict)
-        and isinstance(handler.get("type"), str)
-        and isinstance(handler.get("path"), str)
-    ):
+    if not (isinstance(handler, dict) and isinstance(handler.get("type"), str)):
+        return None, f"manifest {str(path)!r}: every message handler needs a string 'type'"
+    is_path_given = isinstance(handler.get("path"), str)
+    is_show_given = isinstance(handler.get("show"), str)
+    if is_path_given == is_show_given:
         return (
             None,
-            f"manifest {str(path)!r}: every message handler needs a string 'type' and 'path'",
+            f"manifest {str(path)!r}: every message handler needs exactly one of a string 'path' or 'show'",
         )
-    return {"type": handler["type"], "path": handler["path"]}, None
+    showing = handler.get("showing")
+    if is_path_given:
+        if showing is not None:
+            return None, f"manifest {str(path)!r}: a message handler gives 'showing' only beside 'show'"
+        return {"type": handler["type"], "path": handler["path"]}, None
+    copied: dict[str, object] = {"type": handler["type"], "show": handler["show"]}
+    if showing is not None:
+        if not (isinstance(showing, list) and all(isinstance(page, str) for page in showing)):
+            return None, f"manifest {str(path)!r}: a message handler's showing must be an array of strings"
+        copied["showing"] = list(showing)
+    return copied, None
 
 
 # The manifest arrays of tables copied onto the row, each with the copier for its entries.
@@ -867,7 +901,7 @@ def main() -> None:
         "--manifest",
         help=(
             "Path to the app's app.toml. Its name, icon, and static fields (display_name, "
-            "critical, priority, program, internal, launcher_rank, default_shortcut, "
+            "critical, priority, program, internal, system, launcher_rank, default_shortcut, "
             "launch_paths with their text_param, pin, window_closed_path, message_handlers) are copied onto the row on "
             "every call."
         ),

@@ -98,7 +98,8 @@ export enum UserMessageKind {
    */
   SecretResolution = "secret-resolution",
   /**
-   * A subtle inline status message (e.g. "Context was compacted").
+   * A compaction of the agent's context ("Context was compacted"), shown as chips
+   * in the agent's chip rows.
    */
   StatusMessage = "status-message",
   /**
@@ -187,12 +188,20 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
       "Handled by secretResolutionOf + turn-grouping, never by classifyUserMessage.",
   },
   [UserMessageKind.StatusMessage]: {
-    rail: Rail.User,
+    rail: Rail.Assistant,
     boundary: false,
     isTurn: false,
     netVisual:
-      "A subtle centered status pill (e.g. 'Context was compacted') rendered as " +
-      "its own row between turns or inline during a turn.",
+      "No row on the user rail. A compaction ('Context was compacted') becomes two " +
+      "chips in the agent's chip rows, beside its tool calls: a start chip named as " +
+      "the activity strip names the compaction ('Compacting while idle…', package-open " +
+      "glyph) and a finish chip reading 'Compacted' (package glyph). They join the " +
+      "chip run at the event's transcript position (or a row of their own when " +
+      "nothing chips beside them, as under a `/compact` bubble), and " +
+      "follow the reply when the event landed after it. Either chip opens the tool " +
+      "chips' detail panel: why it ran and where to change that, then the summary in " +
+      "an output pane. While the agent is COMPACTING, the start chip alone stands " +
+      "where the pair will land (see compaction-chips.ts).",
   },
   [UserMessageKind.Notice]: {
     rail: Rail.Assistant,

@@ -3,26 +3,57 @@
  * that touches the message primitives (``test_embed_ratchets.py``).
  *
  * A chat page inside the root posts to ``window.parent`` exactly as it would to the shell.
- * Three kinds of those messages are the shell's business and go up unchanged, as the shell's
- * own relay forwards the frames it created (desktop-interface contracts.md section 7): the
- * ``minds:`` messages for the minds chrome, ``shell:focused`` (which the root re-posts as its
- * own, since the shell raises the root's window for it), ``shell:open`` of a sub-agent view, and
- * ``shell:draft-text`` from a sub-agent view (which has no composer of its own to draft into).
+ * Some of those messages are the shell's business and go up unchanged, as the shell's own relay
+ * forwards the frames it created (desktop-interface contracts.md section 7): the ``minds:``
+ * messages for the minds chrome, ``shell:focused`` (which the root re-posts as its own, since the
+ * shell raises the root's window for it), ``shell:open`` of a sub-agent view, ``shell:draft-text``
+ * from a sub-agent view (which has no composer of its own to draft into), ``shell:message`` (for
+ * whichever app registered its type), and ``shell:open-link`` (a clicked link or script popup the
+ * app contract hands on -- a local URL, another app's address, a ``file:`` URL, an external web,
+ * ``mailto:`` or ``tel:`` link -- which the shell opens where it belongs).
  * One ``shell:open`` is the root's own business: a page asking for a sibling chat names the
  * root's path for it (``/?chat=<id>``), and the root that already frames a chat list selects
  * that chat in place, exactly as its own New chat button does, rather than asking the shell for
  * a second root window. Everything else a page posts -- its capabilities, its location -- is the
- * root's to know and stops here; the root reports its own.
+ * root's to know and stops here; the root reports its own. A root opened on its own has no shell
+ * to forward to, and drops them.
  *
- * Trust: only a message whose source is one of the root's own inner frames is acted on, and a
- * forwarded one is forwarded only to ``window.parent``.
+ * Two kinds go the other way. The shell's handshake to the root is handed to each inner page
+ * (``handHandshakeDown``), so a page's app contract knows a shell stands above it; a page under a
+ * root opened on its own gets none, and leaves its links to the browser. And the minds chrome
+ * answers some of an inner page's asks, and its answer reaches the root, which the shell frames,
+ * not the page that asked: those answers (``minds:provider-sign-in-ack``, and
+ * ``minds:permission-resolutions``, the verdict on a permission request a page asked the chrome
+ * to open, which the page's card flips on and whose activity strip covers the wait for the agent
+ * to be told) are passed down to the root's inner frames. Everything else the chrome sends is
+ * the root's own to handle.
+ *
+ * Trust: a message going up counts only when its source is one of the root's own inner frames,
+ * and is forwarded only to ``window.parent``; a message going down counts only when its source is
+ * ``window.parent``, and is forwarded only to the root's inner frames.
  */
 
-import { SHELL_DRAFT_TEXT, SHELL_FOCUSED, SHELL_OPEN } from "@imbue/workspace-ui/src/app_contract";
+import {
+  SHELL_DRAFT_TEXT,
+  SHELL_FOCUSED,
+  SHELL_HANDSHAKE,
+  SHELL_MESSAGE,
+  SHELL_OPEN,
+  SHELL_OPEN_LINK,
+} from "@imbue/workspace-ui/src/app_contract";
+import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
+import { PERMISSION_RESOLUTIONS, PROVIDER_SIGN_IN_ACK } from "@imbue/workspace-ui/src/embed";
 import { selectionFromSearch } from "./selection";
 
 const MINDS_PREFIX = "minds:";
-const FORWARDED_SHELL_TYPES: ReadonlySet<string> = new Set([SHELL_FOCUSED, SHELL_OPEN, SHELL_DRAFT_TEXT]);
+const FORWARDED_SHELL_TYPES: ReadonlySet<string> = new Set([
+  SHELL_FOCUSED,
+  SHELL_OPEN,
+  SHELL_DRAFT_TEXT,
+  SHELL_MESSAGE,
+  SHELL_OPEN_LINK,
+]);
+const FORWARDED_TO_INNER_TYPES: ReadonlySet<string> = new Set([PROVIDER_SIGN_IN_ACK, PERMISSION_RESOLUTIONS]);
 
 /** Whether a posted message is one the root passes up to the shell. */
 export function isForwardedToShell(data: unknown): boolean {
@@ -30,6 +61,13 @@ export function isForwardedToShell(data: unknown): boolean {
   const type = (data as { type?: unknown }).type;
   if (typeof type !== "string") return false;
   return type.startsWith(MINDS_PREFIX) || FORWARDED_SHELL_TYPES.has(type);
+}
+
+/** Whether a message from the parent is one of the chrome's answers to an inner page, which the root passes down. */
+export function isForwardedToInnerFrames(data: unknown): boolean {
+  if (data === null || typeof data !== "object") return false;
+  const type = (data as { type?: unknown }).type;
+  return typeof type === "string" && FORWARDED_TO_INNER_TYPES.has(type);
 }
 
 /** What a ``shell:open`` from an inner page comes to at the root. */
@@ -55,22 +93,32 @@ export function rootOpenDecision(data: unknown): RootOpenDecision {
 
 /**
  * Start forwarding. ``isInnerWindow`` says whether a message's source is one of the root's
- * inner frames; the root's frame pool answers it. ``selectChat`` is the root's own selection,
- * for a sibling chat an inner page asks for.
+ * inner frames, and ``innerWindows`` lists them; the root's frame pool answers both.
+ * ``selectChat`` is the root's own selection, for a sibling chat an inner page asks for.
  */
 export function startInnerFrameRelay(
   isInnerWindow: (source: MessageEventSource | null) => boolean,
+  innerWindows: () => readonly Window[],
   selectChat: (chatId: string | null) => void,
 ): void {
   window.addEventListener("message", (event: MessageEvent) => {
+    if (window.parent !== window && event.source === window.parent) {
+      if (!isForwardedToInnerFrames(event.data)) return;
+      for (const inner of innerWindows()) inner.postMessage(event.data, "*");
+      return;
+    }
     if (!isInnerWindow(event.source)) return;
     const decision = rootOpenDecision(event.data);
     if (decision.kind === "select") {
       selectChat(decision.chatId);
       return;
     }
-    if (window.parent === window) return;
-    if (!isForwardedToShell(event.data)) return;
+    if (window.parent === window || !isForwardedToShell(event.data)) return;
     window.parent.postMessage(event.data, "*");
   });
+}
+
+/** Hand the shell's handshake to the root to ``inner``, one of its inner pages, as the shell hands it to the root. */
+export function handHandshakeDown(inner: Window, handshake: ShellHandshake): void {
+  inner.postMessage({ type: SHELL_HANDSHAKE, ...handshake }, "*");
 }

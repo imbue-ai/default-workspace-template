@@ -1,5 +1,5 @@
 import urllib.parse
-from typing import Any, Final, Self
+from typing import Any, Final, Literal, Self
 
 from app_manifest.primitives import AppName
 from imbue.imbue_common.pure import pure
@@ -15,6 +15,19 @@ APP_NAME: Final[AppName] = AppName("browser")
 
 # The viewer page selects its browser by this query parameter (assets/index.html).
 SESSION_QUERY_KEY: Final[str] = "session"
+
+# Who controls a browser: the person at its window, or the one agent holding its lease.
+ControlOwner = Literal["human", "agent"]
+
+# Explicit per-browser lifecycle. A browser is REGISTERED in the fleet the instant
+# create() is called (so the viewer/CLI can address it at once), but its Chromium is
+# launched asynchronously and serialized, so it starts in ``init`` and flips to
+# ``running`` only once Chromium is up and the active tab is foregrounded. ``crashed`` is
+# terminal (Chromium died -- OOM/segfault). Driving/ownership only applies once
+# ``running``; the viewer renders deterministically off this field.
+# ``stopped``: the user ended this browser's Chromium but kept the browser (its record, profile,
+# and last known tabs); a start relaunches it from those. Unlike ``crashed`` it is not terminal.
+Lifecycle = Literal["init", "running", "crashed", "stopped"]
 
 # A start page is an absolute http(s) URL with a host; the length bound keeps a query string
 # from smuggling in an unbounded value.
@@ -76,6 +89,45 @@ class AbsoluteHttpUrl(str):
 
     def __new__(cls, value: str) -> Self:
         problem = describe_start_url_problem(value)
+        if problem is not None:
+            raise InvalidStartUrlError(problem)
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(
+            cls, core_schema.str_schema()
+        )
+
+
+# The hosts of this machine, as a link opened in the workspace names them (``open:url``, the workspace link routing
+# plan): the loopback names and any ``*.localhost`` host. ``urlsplit`` gives an IPv6 host without its brackets.
+_LOCAL_HOSTNAMES: Final[frozenset[str]] = frozenset({"localhost", "127.0.0.1", "::1"})
+_LOCAL_HOSTNAME_SUFFIX: Final[str] = ".localhost"
+
+
+@pure
+def describe_local_url_problem(value: str) -> str | None:
+    """Return why ``value`` cannot be a link the workspace's browser opens for the human, or None when it can."""
+    problem = describe_start_url_problem(value)
+    if problem is not None:
+        return problem
+    hostname = urllib.parse.urlsplit(value).hostname or ""
+    if hostname not in _LOCAL_HOSTNAMES and not hostname.endswith(
+        _LOCAL_HOSTNAME_SUFFIX
+    ):
+        return f"invalid url {_preview(value)}: only an address on this machine (localhost) opens here"
+    return None
+
+
+class LocalHttpUrl(str):
+    """A link the workspace's browser opens for the human: an absolute http(s) URL on a local host (``localhost``,
+    ``127.0.0.1``, ``[::1]``, or a ``*.localhost`` host), held to a start page's rules."""
+
+    def __new__(cls, value: str) -> Self:
+        problem = describe_local_url_problem(value)
         if problem is not None:
             raise InvalidStartUrlError(problem)
         return super().__new__(cls, value)

@@ -39,7 +39,7 @@ Facts this design builds on, as of `main` at `02eb68c02` (2026-09-28).
    The workspace guarantees that every registered loopback URL accepts a connection: while an app is stopped, the shell holds its port.
 2. The manifest field is `stop_when_no_windows`, a boolean, default `false`, and `critical = true` forces it `false`.
    It governs only the automatic stop of Part D; Quit (Part E) is offered for every stoppable app whatever the field says, and a stopped app always wakes through Part B whatever the field says.
-3. Built-in defaults: `files` and `getting-started` declare `true`; `browser` declares `false`, since agents drive its browsers with no window at all (the agentic-browser-fleet skill, through the coordinator's CDP proxy) and stopping the coordinator closes every Chromium it runs, while Chromium itself already stops on the close hint; `chat`, `terminal`, `terminal-pty`, and `system_interface` are critical.
+3. Built-in defaults: `files`, `getting-started`, and `system-monitor` declare `true`; `browser` declares `false`, since agents drive its browsers with no window at all (the agentic-browser-fleet skill, through the coordinator's CDP proxy) and stopping the coordinator closes every Chromium it runs, while Chromium itself already stops on the close hint; `chat`, `terminal`, `terminal-pty`, and `system_interface` are critical.
    The build-app scaffold writes `stop_when_no_windows = true` into every new manifest, so a user app's manifest states the rule outright.
 4. The grace period before an automatic stop is 60 seconds, cancelled by any window of the app opening; Quit has none.
 5. An app is stopped for having no windows only once a client has arrived at the shell since the shell started.
@@ -55,6 +55,7 @@ Facts this design builds on, as of `main` at `02eb68c02` (2026-09-28).
 12. An app with a per-app share grant (a `[services.<name>]` table of `data/.secrets/share_grants.toml` that names anyone, while the workspace is shared) is exempt from the automatic stop.
     A visitor holding only such a grant reaches the app's origin through the share gateway and never loads the shell, so no window of theirs exists to count; without the exemption the app would stop a minute after each of their requests and, past the wake budget, answer them the failure page.
     A workspace-level grant needs no exemption: its visitors load the shell and get a desktop of their own, whose windows count.
+    Nor does a grant on an `internal` app: the gateway admits nobody through it.
 
 ## 3. Part A: no resident `uv run`
 
@@ -95,6 +96,7 @@ The program lines that end in `&& <entry>` without `exec` (`system_interface`, a
 | `files` | false | true |
 | `browser` | false | false |
 | `getting-started` | false | true |
+| `system-monitor` | false | true |
 
 `system/test_app_manifests.py` pins the table.
 The browser's manifest keeps its `window_closed_path`, so Chromium still stops on the close hint, and declares `false`: the coordinator serves browsers that agents drive with no window (decision 3), so Part D must not stop it.
@@ -196,13 +198,13 @@ The visitor's next request wakes the app through the parker exactly as the owner
 On every pass of the lifecycle sweep, for each app that is stoppable, whose row carries `stop_when_no_windows = true`, and whose program is `RUNNING` or `STARTING`:
 
 - count the windows of the app across every desktop (the owner's and every visitor's; minimized, detached, pinned, linked, and independent alike);
-- with at least one window, or with a per-app share grant (decision 12), clear the app's idle mark;
+- with at least one window, or not `internal` and with a per-app share grant (decision 12), clear the app's idle mark;
 - with none, and once a client has arrived at the shell since it started (decision 5), set the idle mark to now when it is unset, and stop the program when the mark is at least 60 seconds old.
 
 A stop is `stopProcess(program, wait=False)`, logged at info, followed by a liveness refresh; the next pass parks the port.
 The idle mark lives in the manager's memory: a shell restart starts the 60 seconds over, which is the safe direction.
 
-The per-app grants are read by the shell itself (`shell/share_grants.py`), once per pass and only when a pass finds a running app that declares the field and has no window: an app is granted when `data/.secrets/share.env` exists (the workspace is shared) and its `[services.<name>]` table in `data/.secrets/share_grants.toml` has a non-empty `users`, `emails`, or `email_domains`.
+The per-app grants are read by the shell itself (`shell/share_grants.py`), once per pass and only when a pass finds a running app that declares the field, is not `internal`, and has no window: an app is granted when `data/.secrets/share.env` exists (the workspace is shared) and its `[services.<name>]` table in `data/.secrets/share_grants.toml` has a non-empty `users`, `emails`, or `email_domains`.
 A missing document grants no app (the desktop writes it before the materials), and so does one the gateway would refuse (which then admits nobody), warned about once per version of the file.
 A granted app that is already parked when the grant is added is woken by the visitor's first request, as any parked app is.
 
@@ -235,7 +237,7 @@ The stopped placeholder loses its Start button: a stoppable app's window never s
 
 ## 8. Part F: the app watcher moves into the shell
 
-`imbue/system_interface/app_announcements.py` holds `AppAnnouncementWriter`: given the rows of a registry read, it writes one `service_registered` event per row whose registered fields (URL, label, icon, display name) differ from the last announced, and one `service_deregistered` per row that left, to `$MNGR_AGENT_STATE_DIR/events/services/events.jsonl`, in the event envelope the watcher wrote (`EventEnvelope` from `imbue_common`, source `services`, nanosecond ISO timestamps, `evt-<uuid>` ids).
+`imbue/system_interface/app_announcements.py` holds `AppAnnouncementWriter`: given the rows of a registry read, it writes one `service_registered` event per row whose registered fields (URL, label, icon, display name, and its `system` and `internal` declarations) differ from the last announced, and one `service_deregistered` per row that left, to `$MNGR_AGENT_STATE_DIR/events/services/events.jsonl`, in the event envelope the watcher wrote (`EventEnvelope` from `imbue_common`, source `services`, nanosecond ISO timestamps, `evt-<uuid>` ids).
 The first read after the shell starts remembers nothing and announces every row, which is what a consumer reading the stream from its start needs.
 With `MNGR_AGENT_STATE_DIR` unset it logs one warning at start and writes nothing.
 
@@ -262,7 +264,7 @@ The shell still imports nothing from mngr and runs no `mngr` binary: the writer 
 
 - `app_manifest`: `manifest_test.py` for the field, its default, and the critical refusal; `registry_test.py` for the key; `forward_port_test.py` for the copied key and its clearing.
 - The shell, `port_parking_test.py`: a parked port accepts a connection, answers 503 with the loading body and `Connection: close`, releases the port, and reports the wake; a bind on a port something listens on parks nothing.
-- The shell, `app_lifecycle_test.py`, over the fake supervisor: a stopped parkable app is parked on a pass and released when its state turns `RUNNING`; a wake starts the program; a `FATAL` after a wake re-parks with the failure page; the wake budget refuses a fourth attempt, and a wake after which the app runs spends none of it; the no-window rule stops a `stop_when_no_windows` app only after the grace period, only once a client has arrived, and not while any desktop holds a window of it or a per-app share grant names it (and the clock starts once the grant goes); an app without the field is never stopped; a critical app is never parked or stopped.
+- The shell, `app_lifecycle_test.py`, over the fake supervisor: a stopped parkable app is parked on a pass and released when its state turns `RUNNING`; a wake starts the program; a `FATAL` after a wake re-parks with the failure page; the wake budget refuses a fourth attempt, and a wake after which the app runs spends none of it; the no-window rule stops a `stop_when_no_windows` app only after the grace period, only once a client has arrived, and not while any desktop holds a window of it or a per-app share grant names it (and the clock starts once the grant goes; a grant on an `internal` app keeps nothing running, while one on a `system` app does); an app without the field is never stopped; a critical app is never parked or stopped.
   `share_grants_test.py`: the per-app tables that name anyone, and nothing for a workspace-level grant alone, an empty table, an unshared workspace, a missing document, or one the gateway would refuse; `state_test.py`: the manager reads the grants under the workspace root.
 - The shell, `routes_test.py`: the quit route closes every window across desktops and stops the program, refuses a critical app and a preview, and answers `is_running` false.
 - The shell, `state_test.py`: the close hint is not posted to a stopped app.

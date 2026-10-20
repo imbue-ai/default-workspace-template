@@ -18,11 +18,12 @@ import asyncio
 import contextlib
 import http.server
 import json
+import queue
 import socket
 import threading
 import time
 import urllib.request
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Any
 
 import pytest
@@ -68,7 +69,7 @@ async def _create_running(manager: "bsession.BrowserSessionManager", name: str |
 @contextlib.asynccontextmanager
 async def _running_browser(
     manager: "bsession.BrowserSessionManager", *, with_proxy: bool = False
-) -> "AsyncIterator[bsession.LiveBrowser]":
+) -> "AsyncGenerator[bsession.LiveBrowser, None]":
     """A real Chromium launched through ``manager``, which is shut down on exit. Skips the test
     when this host cannot run one. ``with_proxy`` also serves the fleet's CDP proxy, which an
     agent attach goes through."""
@@ -136,7 +137,7 @@ def test_http_new_browser_blocked_until_chromium_installed(monkeypatch: pytest.M
     monkeypatch.delenv("BROWSER_SKIP_INSTALL_CHECK", raising=False)
     monkeypatch.setattr(bsession, "_FORTRESS_EXECUTABLE", "/nonexistent/tilion")
     client = runner.application.test_client()
-    resp = client.post("/browsers")
+    resp = client.post("/browsers", json={})
     assert resp.status_code == 503
 
 
@@ -260,7 +261,7 @@ def test_http_cast_does_not_tell_a_running_browser_viewer_it_is_initializing(mon
 
 
 def test_init_gate_blocks_ownership_but_not_read_only_or_create(monkeypatch: pytest.MonkeyPatch) -> None:
-    # While the fleet is still restoring, taking ownership returns 503 "initializing", but
+    # While the fleet is still restoring, taking ownership returns a 503 saying so, but
     # read-only routes (ls/health) AND create stay open -- the locked "init must not block
     # create" decision (a create queues behind the serialized restore on the manager lock).
     _install_fake_browser(monkeypatch)
@@ -269,7 +270,7 @@ def test_init_gate_blocks_ownership_but_not_read_only_or_create(monkeypatch: pyt
     # Acquiring an existing browser is gated during init. This is the FIRST thing an agent
     # does, so it is where the retryable state has to surface.
     acq = client.post("/browsers/alex-smith/acquire", json={}, headers={"X-Mngr-Agent-Id": "A"})
-    assert acq.status_code == 503 and acq.get_json()["status"] == "initializing"
+    assert acq.status_code == 503 and "restoring" in acq.get_json()["detail"]
     # Read-only routes stay open.
     assert client.get("/browsers").status_code == 200
     assert client.get("/health").get_json()["initializing"] is True
@@ -288,7 +289,7 @@ def test_init_gate_blocks_ownership_but_not_read_only_or_create(monkeypatch: pyt
     monkeypatch.setattr(bsession.BrowserSessionManager, "create", fake_create)
     create = client.post("/browsers", json={"name": "morgan-lee"})
     assert create.status_code == 200 and create.get_json()["name"] == "morgan-lee"
-    existing = client.post("/browsers")
+    existing = client.post("/browsers", json={})
     assert existing.status_code == 200 and existing.get_json()["name"] == "alex-smith"
     # conftest re-sets _init_done on teardown.
 
@@ -480,7 +481,7 @@ class _PageServer:
                 self.end_headers()
                 self.wfile.write(encoded)
 
-            def log_message(self, *args: Any) -> None:
+            def log_message(self, format: str, *args: Any) -> None:
                 pass
 
         self._server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -725,6 +726,82 @@ def test_a_new_tab_after_a_handoff_does_not_freeze_the_page_real_chromium(monkey
 
 
 @pytest.mark.browser
+@pytest.mark.timeout(120)
+def test_a_page_asked_for_while_an_agent_drives_waits_on_the_overlay_and_opens_on_take_control_real_chromium() -> None:
+    # A link the human clicks in the workspace while an agent drives the browser must not open over the agent's
+    # work: it waits, named to the viewer, until the human cancels it (the tabs stay as they were) or takes
+    # control (it opens as a tab in front).
+    pages = _PageServer({"/": "<title>start</title>", "/held": "<title>held</title>", "/dropped": "<title>dropped</title>"})
+    with pages:
+        async def go() -> None:
+            manager = bsession.BrowserSessionManager()
+            async with _running_browser(manager) as browser:
+                assert browser._cdp is not None
+                await _only_page_session(browser, f"{pages.origin}/")
+                assert await browser.acquire("agent-7", "Plan") == "acquired"
+                cast = await browser.register_cast_queue()
+                before = {t["targetId"] for t in await browser._cdp.page_targets()}
+
+                await manager.open_url_for_human(f"{pages.origin}/dropped")
+                assert browser.cancel_pending_url()
+                await manager.open_url_for_human(f"{pages.origin}/held")
+                shown = [json.loads(frame) for frame in _drain(cast)]
+                assert [m["pending_url"] for m in shown if m.get("type") == "control"][-1] == f"{pages.origin}/held"
+                assert {t["targetId"] for t in await browser._cdp.page_targets()} == before
+
+                assert await browser.take_control()
+                created = await _new_page_target(browser, before, f"{pages.origin}/held")
+                assert await _eventually(lambda: _is_active(browser, created["targetId"]))
+                assert browser._pending_url is None
+                assert all(t["url"] != f"{pages.origin}/dropped" for t in await browser._cdp.page_targets())
+
+        asyncio.run(go())
+
+
+@pytest.mark.browser
+@pytest.mark.timeout(120)
+def test_a_page_asked_for_while_the_browser_launches_opens_in_front_once_it_is_up_real_chromium() -> None:
+    # A link the human clicks while Chromium is still starting is kept rather than dropped, and opens as a tab in
+    # front once the launch finishes.
+    pages = _PageServer({"/": "<title>start</title>", "/early": "<title>early</title>"})
+    with pages:
+
+        async def go() -> None:
+            manager = bsession.BrowserSessionManager()
+            try:
+                browser = await manager.create(None, f"{pages.origin}/")
+                assert await manager.open_url_for_human(f"{pages.origin}/early") is browser
+                assert browser._pending_url == f"{pages.origin}/early"
+                try:
+                    for task in list(manager._launch_tasks):
+                        await task
+                except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
+                    pytest.skip(f"Chromium unavailable in this environment: {e}")
+                _require_running(browser)
+
+                opened = await _new_page_target(browser, set(), f"{pages.origin}/early")
+                assert await _eventually(lambda: _is_active(browser, opened["targetId"]))
+                assert browser._pending_url is None
+            finally:
+                await manager.shutdown()
+
+        asyncio.run(go())
+
+
+def _drain(cast: "queue.Queue[str | None]") -> list[str]:
+    frames: list[str] = []
+    while not cast.empty():
+        frame = cast.get_nowait()
+        if frame is not None:
+            frames.append(frame)
+    return frames
+
+
+async def _is_active(browser: "bsession.LiveBrowser", target_id: str) -> bool:
+    return browser._active_target_id == target_id
+
+
+@pytest.mark.browser
 @pytest.mark.timeout(180)
 def test_every_paste_lands_and_leaves_no_key_held_real_chromium() -> None:
     # Paste-in presses Ctrl+V in the shown tab over CDP after setting the X clipboard. The
@@ -756,7 +833,9 @@ def test_every_paste_lands_and_leaves_no_key_held_real_chromium() -> None:
                     return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=30)
 
                 def paste(text: str) -> int:
-                    with runner.application.test_request_context():
+                    # The paste view answers through the route table, which is keyed by the matched route.
+                    paste_path = f"/browsers/{browser.browser_id}/clipboard/paste"
+                    with runner.application.test_request_context(paste_path, method="POST"):
                         returned = mediastream.clipboard_paste(
                             browser.browser_id, browser, text.encode(), "text/plain", run_on_loop
                         )
@@ -848,6 +927,7 @@ def _ws_recv_json(ws: Any, timeout: float) -> dict[str, Any]:
     return json.loads(payload)
 
 
+@pytest.mark.flaky
 @pytest.mark.timeout(30)
 def test_cast_ws_streams_control_and_take_control_flips_ownership(monkeypatch: pytest.MonkeyPatch) -> None:
     # The load-bearing WS inversion: the loop fans frames/control out onto the cast

@@ -7,6 +7,7 @@ from collections.abc import Callable
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
+from typing import Final
 
 from loguru import logger as _loguru_logger
 from pydantic import Field
@@ -26,15 +27,24 @@ from imbue.mngr.api.list import list_agents
 from imbue.mngr.api.message import MessageResult
 from imbue.mngr.api.message import send_key_chord_to_agents
 from imbue.mngr.api.message import send_message_to_agents
+from imbue.mngr.api.providers import close_provider_instances_for_context
 from imbue.mngr.config.data_types import MngrContext
-from imbue.mngr.config.data_types import PluginConfigT
 from imbue.mngr.config.loader import load_config
+from imbue.mngr.errors import AgentNoLongerIdleError
+from imbue.mngr.errors import AgentNotFoundError
+from imbue.mngr.errors import MessageLockTimeoutError
+from imbue.mngr.errors import MngrError
 from imbue.mngr.errors import SendFailureKind
+from imbue.mngr.interfaces.agent import HasCompactionMixin
+from imbue.mngr.interfaces.agent import require_compaction_agent
 from imbue.mngr.main import get_or_create_plugin_manager
 from imbue.mngr.primitives import AgentAddress
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentName
 from imbue.mngr.utils.env_utils import parse_env_file
+from imbue.mngr_autocompact.config import AutoCompactPluginConfig
+from imbue.mngr_autocompact.config import ContextCompactionMode
+from imbue.mngr_autocompact.manager import COMPACTION_MESSAGE_LOCK_TIMEOUT_SECONDS
 
 logger = _loguru_logger
 
@@ -85,13 +95,27 @@ def _get_mngr_context() -> tuple[MngrContext, ConcurrencyGroup]:
     return mngr_ctx, cg
 
 
-def read_plugin_config(name: str, config_type: type[PluginConfigT]) -> PluginConfigT:
-    """A plugin's config as this workspace's mngr resolves it: its defaults when no config file sets it."""
+CompactByNameFn = Callable[[MngrContext, Sequence[AgentName]], Sequence[AgentName]]
+
+
+def compact_stale_agents_if_enabled(names: Sequence[str], compact_by_name: CompactByNameFn) -> list[str]:
+    """Compact whichever of the named agents are stale, when the workspace's mngr config has proactive compaction on.
+
+    Returns the names compacted. mngr caches provider instances per context, and this builds a
+    fresh context on every call, so the context's instances are closed before it is dropped.
+    """
     mngr_ctx, cg = _get_mngr_context()
     try:
-        return mngr_ctx.get_plugin_config(name, config_type)
+        config = mngr_ctx.get_plugin_config("autocompact", AutoCompactPluginConfig)
+        if config.mode != ContextCompactionMode.PROACTIVE_TIMER:
+            return []
+        compacted = compact_by_name(mngr_ctx, [AgentName(name) for name in names])
     finally:
-        cg.__exit__(None, None, None)
+        try:
+            close_provider_instances_for_context(mngr_ctx)
+        finally:
+            cg.__exit__(None, None, None)
+    return [str(name) for name in compacted]
 
 
 def _read_claude_config_dir_from_env(env_file: Path) -> Path | None:
@@ -206,6 +230,8 @@ SendFn = Callable[[Sequence[AgentMatch], str, MngrContext], MessageResult]
 # Press a tmux key token (e.g. "M-q") into a resolved set of agents' panes. Same shape as
 # SendFn -- the str is the key token rather than message text.
 PressFn = Callable[[Sequence[AgentMatch], str, MngrContext], MessageResult]
+# Ask mngr to compact the agent with this id now, with these compaction instructions (if any).
+CompactFn = Callable[[AgentId, str | None, MngrContext], None]
 
 
 def _discover_locations(agent_id: AgentId, mngr_ctx: MngrContext) -> Sequence[AgentMatch]:
@@ -325,6 +351,41 @@ def _press_to(matches: Sequence[AgentMatch], key: str, mngr_ctx: MngrContext) ->
     )
 
 
+# The kind a /compact the chat cannot ask mngr for right now is declined with: the agent is mid-turn,
+# which a compaction would abort, or it is not running.
+COMPACT_UNAVAILABLE_SEND_FAILURE_KIND: Final[str] = "compact_unavailable"
+COMPACT_WHILE_BUSY_DETAIL: Final[str] = "The agent is busy. Send /compact again once it has finished."
+
+
+def request_idle_compaction(agent: HasCompactionMixin, instructions: str | None) -> None:
+    """Request a compaction of ``agent`` as the idle sweep does, only while mngr sees it idle.
+
+    mngr re-checks the idle period once it holds the agent's message lock, so a turn that started
+    meanwhile is not aborted by the compaction. Raises ``SendFailedError`` with
+    ``COMPACT_UNAVAILABLE_SEND_FAILURE_KIND`` when the agent is not idle.
+    """
+    idle_since = agent.get_idle_since()
+    if idle_since is None:
+        raise SendFailedError(COMPACT_WHILE_BUSY_DETAIL, COMPACT_UNAVAILABLE_SEND_FAILURE_KIND)
+    try:
+        agent.request_compaction(
+            instructions=instructions,
+            message_lock_timeout_seconds=COMPACTION_MESSAGE_LOCK_TIMEOUT_SECONDS,
+            expected_idle_since=idle_since,
+        )
+    except (MessageLockTimeoutError, AgentNoLongerIdleError) as e:
+        raise SendFailedError(COMPACT_WHILE_BUSY_DETAIL, COMPACT_UNAVAILABLE_SEND_FAILURE_KIND) from e
+
+
+def _compact(agent_id: AgentId, instructions: str | None, mngr_ctx: MngrContext) -> None:
+    """Have mngr compact the running agent with ``agent_id`` now, if it sees it idle (``request_idle_compaction``)."""
+    host_ref, agent_ref = find_one_agent(AgentAddress(agent=agent_id), mngr_ctx)
+    agent, _host = resolve_to_started_host_and_running_agent(
+        host_ref=host_ref, agent_ref=agent_ref, allow_auto_start=False, mngr_ctx=mngr_ctx
+    )
+    request_idle_compaction(require_compaction_agent(agent), instructions)
+
+
 class MngrMessenger(FrozenModel):
     """Sends a message to (or presses a key chord into) an agent, preferring a known location.
 
@@ -336,6 +397,7 @@ class MngrMessenger(FrozenModel):
     discover: DiscoverFn = _discover_locations
     send: SendFn = _send_to
     press: PressFn = _press_to
+    compact: CompactFn = _compact
 
     def send_to_agent(
         self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
@@ -384,6 +446,26 @@ class MngrMessenger(FrozenModel):
             return bool(self.press(matches, key, mngr_ctx).successful_agents)
         finally:
             cg.__exit__(None, None, None)
+
+    def request_compaction(self, agent_id: AgentId, instructions: str | None) -> None:
+        """Have mngr compact the agent with ``agent_id`` now, through the same request the idle sweep makes.
+
+        Raises ``SendFailedError``: with ``COMPACT_UNAVAILABLE_SEND_FAILURE_KIND`` when the agent is
+        not idle, else with mngr's own words when the request fails. Raises mngr's
+        ``AgentNotFoundError`` when mngr no longer lists the agent.
+        """
+        mngr_ctx, cg = _get_mngr_context()
+        try:
+            self.compact(agent_id, instructions, mngr_ctx)
+        except AgentNotFoundError:
+            raise
+        except (MngrError, OSError) as e:
+            raise SendFailedError(str(e)) from e
+        finally:
+            try:
+                close_provider_instances_for_context(mngr_ctx)
+            finally:
+                cg.__exit__(None, None, None)
 
 
 def start_agent(agent_name: str) -> None:

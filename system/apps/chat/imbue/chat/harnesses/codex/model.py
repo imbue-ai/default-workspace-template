@@ -88,6 +88,8 @@ def codex_model_to_option(model: CodexModel) -> ModelOption:
       file reports -- so no ``harness_reported_model_id`` is needed);
     * ``label`` = ``display_name``;
     * ``efforts`` = ``supported_reasoning_efforts`` verbatim, per-model (no static uniform set);
+    * ``default_effort`` = ``default_reasoning_effort``, the effort a thread runs at until one is
+      picked (its live state records no effort until then);
     * ``supports_fast`` = whether the model offers the ``priority`` service tier;
     * ``in_picker`` = ``not hidden`` (a hidden model is still matchable if the live state reports it,
       but never offered -- mirroring claude's ``ultra``).
@@ -96,6 +98,7 @@ def codex_model_to_option(model: CodexModel) -> ModelOption:
         id=model.model,
         label=model.display_name,
         efforts=tuple(EffortChoice(level=effort.reasoning_effort) for effort in model.supported_reasoning_efforts),
+        default_effort=model.default_reasoning_effort,
         supports_fast=any(tier.id == FAST_SERVICE_TIER for tier in model.service_tiers),
         in_picker=not model.hidden,
     )

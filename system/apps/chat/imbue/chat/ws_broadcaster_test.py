@@ -73,6 +73,8 @@ def test_broadcast_chats_updated() -> None:
         shoulder_tap_available=False,
         is_connecting=False,
         last_messaged_at=None,
+        background_tasks=(),
+        compaction_cause=None,
     )
     broadcaster.broadcast_chats_updated([snapshot])
 

@@ -6,13 +6,13 @@ from pathlib import Path
 
 import httpx
 import pytest
+from workspace_layout.primitives import UserId
 
 from imbue.system_interface.profiles import PROFILE_CACHE_TTL
 from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.profiles import UserProfile
 from imbue.system_interface.profiles import parse_share_broker_url
 from imbue.system_interface.profiles import read_share_broker_url
-from imbue.system_interface.shell.primitives import UserId
 
 _T0 = datetime(2026, 9, 19, 10, 0, 0, tzinfo=timezone.utc)
 _BOB = UserId("user-bob-4471")

@@ -28,6 +28,7 @@ function option(id: string, isInPicker: boolean): CatalogModelOption {
     supports_fast: false,
     in_picker: isInPicker,
     harness_reported_model_id: null,
+    default_effort: null,
   } as CatalogModelOption;
 }
 

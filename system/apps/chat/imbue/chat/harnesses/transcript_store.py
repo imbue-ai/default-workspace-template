@@ -9,8 +9,9 @@ source byte ranges this store tracks (see :meth:`TranscriptStore.source_of`). Th
 therefore carries identity, prose, labels, and small derived stamps -- never raw payloads
 -- and the resident cost per event is correspondingly small.
 
-Residency is bounded by the payload-free event shape, and lifetime by watcher eviction on
-agent stop/destroy (``ChatAppState.stop_and_remove_watcher``).
+Residency is bounded by the payload-free event shape, and lifetime by watcher eviction when
+the agent is destroyed (``ChatAppState.stop_and_remove_watcher``) or its chat is stopped with
+no stream open (``ChatAppState.release_unviewed_stopped_transcripts``).
 
 Locking: the store takes no lock of its own. The owning watcher guards every call with
 its single lock (held across file reads and parsing -- cheap and incremental -- but never
@@ -557,6 +558,10 @@ class StoreBackedWatcher(StoreBackedTranscriptLoader, AgentSessionWatcher, ABC):
         """Push side-channel state that must precede the event broadcast (queue snapshots:
         the A3b depart-before-arrive ordering). Called outside the lock. No-op default."""
 
+    def _after_broadcast(self) -> None:
+        """Push side-channel state that must follow the event broadcast. Called outside the lock.
+        No-op default."""
+
     # -- lifecycle ------------------------------------------------------------------------
 
     def start(self) -> None:
@@ -599,6 +604,7 @@ class StoreBackedWatcher(StoreBackedTranscriptLoader, AgentSessionWatcher, ABC):
         self._before_broadcast()
         if to_send:
             self._on_events(self._agent_id, to_send)
+        self._after_broadcast()
 
     def is_main_session_event(self, event: dict[str, Any]) -> bool:
         return True

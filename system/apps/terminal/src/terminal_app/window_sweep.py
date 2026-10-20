@@ -10,11 +10,10 @@ import threading
 from typing import Final
 
 from app_manifest.primitives import AppName
-from app_manifest.shell_windows import read_app_window_paths
+from imbue.imbue_common.mutable_model import MutableModel
 from loguru import logger
 from pydantic import Field, PrivateAttr
-
-from imbue.imbue_common.mutable_model import MutableModel
+from workspace_layout.windows import read_app_window_paths
 
 from terminal_app.errors import TerminalAppError
 from terminal_app.primitives import TmuxSessionName

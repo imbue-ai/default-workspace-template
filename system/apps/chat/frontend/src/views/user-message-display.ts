@@ -16,7 +16,6 @@ import { MarkdownContent } from "../markdown";
 import { parseMessageAttachments } from "../models/attachments";
 import type { UserMessageEvent } from "../models/Response";
 import { classifyUserMessage, isHiddenUserMessage } from "./message-classification";
-import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
 import { UserMessageKind } from "./message-kinds";
 import { renderToolBlock } from "./ToolCallBlock";
 
@@ -41,54 +40,6 @@ export const USER_BUBBLE_CLASS =
  *  bubbles on its rail (the assistant flow's blocks run full-width instead). */
 function renderSystemChip(label: string, body: string, expansionKey: string): m.Vnode {
   return renderToolBlock({ headerText: label, inputText: body, extra: "max-w-[80%]", expansionKey });
-}
-
-/**
- * Render a status message (e.g. "Context was compacted").
- * When body text is present, renders an expandable toggle on the status pill
- * to show/hide the summary contents.
- */
-function renderStatusMessage(label: string, body: string, expansionKey: string): m.Vnode {
-  if (!body) {
-    return m("div", { class: "message-system-status" }, label);
-  }
-  const expanded = isBlockExpanded(expansionKey);
-  return m(
-    "div",
-    {
-      class: `message-system-status-container${expanded ? " message-system-status-container--expanded" : ""}`,
-    },
-    [
-      m(
-        "div",
-        {
-          class: "message-system-status message-system-status--toggleable",
-          role: "button",
-          tabindex: 0,
-          onclick(e: Event) {
-            const container = (e.currentTarget as HTMLElement).parentElement;
-            if (container) {
-              setBlockExpanded(expansionKey, container.classList.toggle("message-system-status-container--expanded"));
-            }
-          },
-          onkeydown(e: KeyboardEvent) {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              const container = (e.currentTarget as HTMLElement).parentElement;
-              if (container) {
-                setBlockExpanded(
-                  expansionKey,
-                  container.classList.toggle("message-system-status-container--expanded"),
-                );
-              }
-            }
-          },
-        },
-        [m("span", { class: "tool-call-chevron" }, "▸"), m("span", label)],
-      ),
-      m("div", { class: "message-system-status-details" }, [m("div", { class: "message-system-status-body" }, body)]),
-    ],
-  );
 }
 
 /** A notice's lead when the backend's decision names none. */
@@ -125,7 +76,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       //
       // The trailing "See attachment here: <markdown>" block is delivered to the
       // agent and kept visible in the bubble, where it renders as markdown so its
-      // images show inline and other files as download links. The backend classifier
+      // images show inline and other files as links that open in Files. The backend classifier
       // strips the block before its detectors run (harnesses/message_display.py),
       // so an appended attachment never changes the kind here either, and puts it back on the
       // body it hands a prompt, so splitting it off here still finds it.
@@ -136,11 +87,6 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       }
       if (cls.kind === UserMessageKind.Notice) {
         return renderNotice(cls.label ?? NOTICE_FALLBACK_LABEL, cls.body);
-      }
-      if (cls.kind === UserMessageKind.StatusMessage) {
-        const label = cls.label ?? (cls.body || "Context was compacted");
-        const body = cls.body && cls.body !== label ? cls.body : "";
-        return renderStatusMessage(label, body, `status:${event.event_id}`);
       }
 
       const bubbleChildren: m.Children[] = [];
@@ -157,24 +103,23 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
 
 /**
  * Render a `user_message` as a top-level row, or `null` when it produces no row of its own
- * (hidden `/welcome`, or a skill expansion folded into its Skill tool block). A `SystemChip`
- * row gets the collapsed-system class; a genuine prompt gets the user-bubble class; a status
- * message gets the status-row class; a notice sits on the agent's rail instead.
+ * (hidden `/welcome`, a skill expansion folded into its Skill tool block, or a compaction,
+ * whose chips the transcript walk places in the agent's chip rows). A `SystemChip` row gets
+ * the collapsed-system class; a genuine prompt gets the user-bubble class; a notice sits on
+ * the agent's rail instead.
  */
 export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
   const kind = classifyUserMessage(event).kind;
-  if (isHiddenUserMessage(event)) {
+  if (isHiddenUserMessage(event) || kind === UserMessageKind.StatusMessage) {
     return null;
   }
   const messageClass =
     kind === UserMessageKind.SystemChip
       ? "message message-system-collapsed mb-1 flex flex-col items-end"
-      : kind === UserMessageKind.StatusMessage
-        ? "message message-system-status-row"
-        : kind === UserMessageKind.Notice
-          ? `message message-notice-row ${NOTICE_ROW_SPACING_CLASS}`
-          : `${USER_MESSAGE_ROW_CLASS} mb-5`;
+      : kind === UserMessageKind.Notice
+        ? `message message-notice-row ${NOTICE_ROW_SPACING_CLASS}`
+        : `${USER_MESSAGE_ROW_CLASS} mb-5`;
   // id mirrors the assistant rows so the virtualized list can measure every
   // rendered row's height by querying ``.message-list > [id]``.
-  return m("div", { id: event.event_id, class: messageClass, key: event.event_id }, [m(StableUserMessage, { event })]);
+  return m("div", { id: event.event_id, class: messageClass, key: event.event_id }, m(StableUserMessage, { event }));
 }

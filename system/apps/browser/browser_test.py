@@ -22,6 +22,7 @@ from mock_cdp_client_test import (
     RecordingCdpClient,
     TabClosingCdpClient,
 )
+from workspace_layout.windows import WindowClosedHint
 
 
 async def _noop_wake(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
@@ -393,7 +394,7 @@ def test_devtools_active_port_is_cleared_with_the_other_singletons(tmp_path: Pat
     assert "DevToolsActivePort" in chrome_launcher.SINGLETON_NAMES
 
 
-def test_sandbox_retry_falls_back_once_then_gives_up(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sandbox_retry_falls_back_once_then_gives_up(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # A non-root runtime keeps the sandbox, but if that launch fails we retry once with it
     # off (the only thing the retry changes). As root the sandbox is off from the start, so
     # the doomed sandboxed attempt never happens.
@@ -405,12 +406,17 @@ def test_sandbox_retry_falls_back_once_then_gives_up(monkeypatch: pytest.MonkeyP
             raise chrome_launcher.ChromeStartupError("Running as root without --no-sandbox is not supported.")
         return "chrome"
 
+    def launch_with_retry(*, no_sandbox: bool) -> chrome_launcher.ChromeProcess:
+        return chrome_launcher.launch_with_sandbox_retry(
+            no_sandbox=no_sandbox, executable="x", profile_dir=tmp_path, start_url="about:blank", window_size=(800, 600)
+        )
+
     monkeypatch.setattr(chrome_launcher, "launch", fake_launch)
-    assert chrome_launcher.launch_with_sandbox_retry(no_sandbox=False, executable="x") == "chrome"
+    assert launch_with_retry(no_sandbox=False) == "chrome"
     assert attempts == [False, True]  # sandbox on (fails) -> retried off (succeeds)
 
     attempts.clear()
-    assert chrome_launcher.launch_with_sandbox_retry(no_sandbox=True, executable="x") == "chrome"
+    assert launch_with_retry(no_sandbox=True) == "chrome"
     assert attempts == [True]  # already off: one attempt, no doomed try
 
 
@@ -798,17 +804,19 @@ def test_failed_launch_memory_is_bounded(monkeypatch: pytest.MonkeyPatch) -> Non
     assert mgr.recently_failed_launch("c") is True
 
 
-class _KillableChrome:
+class _KillableChrome(chrome_launcher.ChromeProcess):
     """Stand-in for a launched Chromium that records whether it was killed, so a test can
     assert no process handle is leaked when a launch is aborted."""
 
     def __init__(self) -> None:
         self.killed = False
-        self.alive = True
+
+    @property
+    def alive(self) -> bool:
+        return not self.killed
 
     def kill(self) -> None:
         self.killed = True
-        self.alive = False
 
 
 def test_close_during_launch_does_not_resurrect_or_leak(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -829,8 +837,9 @@ def test_close_during_launch_does_not_resurrect_or_leak(monkeypatch: pytest.Monk
         # Bring up a killable Chromium (as real start() does early), then suspend at an
         # await -- modelling start() parked mid-launch while close() runs. On resume, run
         # the SAME guard production uses before the flip.
-        self._chrome = _KillableChrome()  # type: ignore[assignment]
-        launched.append(self._chrome)  # type: ignore[arg-type]
+        chrome = _KillableChrome()
+        self._chrome = chrome
+        launched.append(chrome)
         started_bu.set()
         await resume.wait()
         if await self._abort_start_if_torn_down():
@@ -2003,11 +2012,9 @@ def test_a_close_hint_marks_the_browser_it_names_so_the_sweep_it_brings_stops_it
 
 
 def test_closed_window_browser_reads_the_hints_path_and_nothing_else() -> None:
-    assert bsession.closed_window_browser({"path": "/?session=browser-1", "window_id": "win-1"}) == "browser-1"
-    assert bsession.closed_window_browser({"path": "/new?url=https%3A%2F%2Fx"}) is None
-    assert bsession.closed_window_browser({"path": 7}) is None
-    assert bsession.closed_window_browser(["/?session=browser-1"]) is None
-    assert bsession.closed_window_browser(None) is None
+    hint = {"path": "/?session=browser-1", "window_id": "win-0000000000000001", "desktop_id": "home"}
+    assert bsession.closed_window_browser(WindowClosedHint.model_validate(hint)) == "browser-1"
+    assert bsession.closed_window_browser(WindowClosedHint.model_validate({**hint, "path": "/new?url=https%3A%2F%2Fx"})) is None
 
 
 def test_window_seen_rides_the_manifest_through_a_restart(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2195,3 +2202,120 @@ def test_close_active_tab_refuses_a_browser_that_is_not_running() -> None:
 
     with pytest.raises(BrowserNotDrivableError):
         asyncio.run(browser.close_active_tab())
+
+
+# a page the human asks for (open:url): opened, or held while an agent drives
+
+
+def _fleet_of(browser: bsession.LiveBrowser) -> bsession.BrowserSessionManager:
+    mgr = _manager()
+    mgr._browsers = {browser.browser_id: browser}
+    return mgr
+
+
+async def _settle_background(browser: bsession.LiveBrowser) -> None:
+    """Wait for the fire-and-forget work a control change spawned (opening a held page)."""
+    while browser._bg_tasks:
+        await asyncio.gather(*list(browser._bg_tasks))
+
+
+def test_a_page_for_a_free_running_browser_opens_as_a_tab_in_front() -> None:
+    browser, cdp = _running_browser_with_tabs(["https://a.example/"], shown_target_id="t1", active_target_id="t1")
+
+    async def go() -> None:
+        assert await _fleet_of(browser).open_url_for_human("http://localhost:3000/app") is browser
+
+    asyncio.run(go())
+    assert cdp.created == ["http://localhost:3000/app"]
+    assert cdp.activated == ["new-1"]
+    assert browser._pending_url is None
+
+
+def test_a_page_asked_for_while_an_agent_drives_waits_and_opens_when_the_human_takes_control(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bsession.LiveBrowser, "_wake_agent", _noop_wake)
+    browser, cdp = _running_browser_with_tabs(["https://a.example/"], shown_target_id="t1", active_target_id="t1")
+
+    async def go() -> list[dict[str, Any]]:
+        fleet = _fleet_of(browser)
+        assert await browser.acquire("agent-7", "Plan") == "acquired"
+        cast = await browser.register_cast_queue()
+        while not cast.empty():
+            cast.get_nowait()
+        await fleet.open_url_for_human("http://localhost:3000/first")
+        await fleet.open_url_for_human("http://localhost:3000/second")
+        seen = [_pop_json(cast) for _ in range(cast.qsize())]
+        assert cdp.created == []
+        assert await browser.take_control() is True
+        await _settle_background(browser)
+        return seen
+
+    seen = asyncio.run(go())
+    assert [message["pending_url"] for message in seen] == ["http://localhost:3000/first", "http://localhost:3000/second"]
+    assert cdp.created == ["http://localhost:3000/second"]
+    assert browser._pending_url is None
+    assert browser._state_tuple() == ("human", None, True)
+
+
+def test_a_cancelled_page_never_opens_and_leaves_the_agent_driving() -> None:
+    browser, cdp = _running_browser_with_tabs(["https://a.example/"], shown_target_id="t1", active_target_id="t1")
+
+    async def go() -> None:
+        fleet = _fleet_of(browser)
+        assert await browser.acquire("agent-7", "Plan") == "acquired"
+        await fleet.open_url_for_human("http://localhost:3000/")
+        assert browser.cancel_pending_url() is True
+        assert browser.cancel_pending_url() is False
+        assert browser._state_tuple() == ("agent", "agent-7", False)
+        assert await browser.release("agent-7") is True
+        await _settle_background(browser)
+
+    asyncio.run(go())
+    assert cdp.created == []
+
+
+def test_a_waiting_page_opens_once_the_agent_lets_the_browser_go() -> None:
+    browser, cdp = _running_browser_with_tabs(["https://a.example/"], shown_target_id="t1", active_target_id="t1")
+
+    async def go() -> None:
+        fleet = _fleet_of(browser)
+        assert await browser.acquire("agent-7", "Plan") == "acquired"
+        await fleet.open_url_for_human("http://localhost:3000/")
+        assert await browser.release("agent-7") is True
+        await _settle_background(browser)
+
+    asyncio.run(go())
+    assert cdp.created == ["http://localhost:3000/"]
+    assert browser._pending_url is None
+
+
+def test_a_waiting_page_is_dropped_when_the_browser_stops() -> None:
+    browser, cdp = _running_browser_with_tabs(["https://a.example/"], shown_target_id="t1", active_target_id="t1")
+
+    async def go() -> list[dict[str, Any]]:
+        fleet = _fleet_of(browser)
+        assert await browser.acquire("agent-7", "Plan") == "acquired"
+        await fleet.open_url_for_human("http://localhost:3000/")
+        cast = await browser.register_cast_queue()
+        while not cast.empty():
+            cast.get_nowait()
+        await browser.stop()
+        await _settle_background(browser)
+        return [_pop_json(cast) for _ in range(cast.qsize())]
+
+    seen = asyncio.run(go())
+    assert browser._pending_url is None
+    assert [message["pending_url"] for message in seen if message.get("type") == "control"][-1] is None
+    assert cdp.created == []
+
+
+def test_a_page_asked_for_while_the_browser_launches_is_kept_for_the_launch() -> None:
+    browser = bsession.LiveBrowser(browser_id="browser-1")
+
+    async def go() -> None:
+        assert await _fleet_of(browser).open_url_for_human("http://localhost:3000/") is browser
+
+    asyncio.run(go())
+    assert browser._lifecycle == "init"
+    assert browser._pending_url == "http://localhost:3000/"

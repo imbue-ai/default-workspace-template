@@ -114,7 +114,7 @@ actions:
   machine and walks the user through its requirements.
 - **Create a new machine from this**: starts a new chat whose first message asks
   the mind to create a fresh Mind machine from the template's repository (the
-  `minds-api` skill does that) and to walk the user through anything it needs.
+  `imbue-studio` skill does that) and to walk the user through anything it needs.
 
 Both close the dialog; the new chat replaces the launcher in the pane, as any tile
 does. Both stand down exactly as the prompt tiles do: disabled, with the same tooltip,

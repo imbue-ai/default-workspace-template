@@ -9,7 +9,7 @@ import os
 import subprocess
 import sys
 import threading
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -37,7 +37,7 @@ _AGENT_ID = "agent-00000000000000000000000000000031"
 
 
 @contextmanager
-def _running_chat_app(tmp_path: Path, messenger: RecordingMngrMessenger) -> Iterator[str]:
+def _running_chat_app(tmp_path: Path, messenger: RecordingMngrMessenger) -> Generator[str, None, None]:
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
     seed_agent_state(manager, _AGENT_ID, name="chat-1")
     manager.note_agent_list_known()

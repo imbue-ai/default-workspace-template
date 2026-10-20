@@ -8,17 +8,19 @@ the worker a live chat just spawned.
 
 Signals, and where each comes from:
 
-- **open** / **visible** -- the chat page's presence in each client, reported by
+- **open** / **visible** -- the chat page's presence in each page instance, reported by
   the page itself through the chat app's presence route and aggregated by the
-  ``PresenceTracker`` (open while any client's report is unexpired, visible
-  while any client's last report says so),
+  ``PresenceTracker`` (open while any instance has an unexpired visible or hidden
+  report, visible while any instance's last report says so),
 - **messaged** -- a message sent through the chat app's send route; drives a
   recency ranking across all chats, newest-first,
 - **running** -- the chat's mngr lifecycle state, pushed in from the observe
   stream via ``record_running_chats``. Entering a running state counts as
   engagement (it is the only evidence of a message sent outside the UI -- by
   ``mngr message`` or by another agent), and staying in one marks the chat
-  mid-turn, which suspends its staleness climb until the turn ends.
+  mid-turn, which suspends its staleness climb until the turn ends. The chat app
+  also reports a chat waiting on one of its harness's own background tasks as
+  mid-turn, but not one waiting only on ``run_in_background`` commands.
 
 Idle time is measured against the most recent of those events, wall-clock, with
 the agent's own process-start time as a floor so a freshly revived chat counts as
@@ -56,8 +58,9 @@ from typing import Final
 
 from oom_priority import bands
 
-from imbue.chat.presence import PresenceState
+from imbue.chat.presence import PresenceReport
 from imbue.chat.presence import PresenceTracker
+from imbue.chat.presence import PresenceTransition
 from imbue.chat.primitives import ChatId
 
 # How often the sweep re-evaluates staleness. The ramp is measured in hours, so
@@ -80,7 +83,7 @@ class ChatOomPrioritizer:
     engagement clock so a revived chat is never treated as stale. ``clock``
     supplies wall-clock epoch seconds -- absolute, not monotonic, because idle
     time is compared against filesystem mtimes and seeded log timestamps.
-    ``presence`` holds the per-client presence reports the open and visible
+    ``presence`` holds the per-instance presence reports the open and visible
     signals are read from; one on the same clock is built when none is given.
     """
 
@@ -149,25 +152,25 @@ class ChatOomPrioritizer:
             for chat_id, messaged_at in last_message_at_by_chat_id.items():
                 self._stamp_message_locked(chat_id, messaged_at)
 
-    def record_presence(self, chat_id: ChatId, client_id: str, state: PresenceState) -> None:
-        """Apply one client's presence report about one chat, then re-tag every chat.
+    def record_presence(self, chat_id: ChatId, report: PresenceReport) -> PresenceTransition:
+        """Apply one page instance's presence report about one chat, re-tag every chat, and say what it changed.
 
-        The report replaces that client's standing one (idempotent and self-healing:
-        the page's heartbeat corrects any missed one). Non-chat ids are accepted and
-        ignored by ``reapply``, which only iterates the managed chats.
+        The report replaces that instance's standing one unless it is numbered at or
+        below it (self-healing: the page's heartbeat corrects any missed one). Non-chat
+        ids are accepted and ignored by ``reapply``, which only iterates the managed chats.
 
         Engagement is stamped on the *transition* into visibility, not for
         everything currently visible: a window left visible and untouched is not
         continuing engagement, and re-stamping it every heartbeat would make it
         permanently fresh.
         """
-        was_visible = self._presence.is_visible(chat_id)
-        self._presence.record(chat_id, client_id, state)
-        if not was_visible and self._presence.is_visible(chat_id):
+        transition = self._presence.record(chat_id, report)
+        if transition.is_newly_visible:
             now = self._clock()
             with self._lock:
                 self._stamp_engagement_locked(chat_id, now)
         self.reapply()
+        return transition
 
     def record_message(self, chat_id: ChatId) -> None:
         """Stamp a chat as just-messaged so it ranks newest, then re-tag every chat."""
@@ -183,13 +186,16 @@ class ChatOomPrioritizer:
     def record_running_chats(self, running_ids: Iterable[ChatId]) -> None:
         """Record which chats are currently mid-turn, then re-tag if it changed.
 
-        Called from the observe stream on every lifecycle change. Both edges of a
-        turn stamp engagement: entering a running state means something addressed
-        the chat (for one driven from outside the UI this is the only evidence it
-        is still in use), and leaving one means it was active up to that moment --
-        without the second stamp a chat that ran for three days would read as
-        three days idle the instant its turn ended, and jump straight to the stale
-        ceiling. Between the two edges the chat is exempt from the climb entirely.
+        A chat waiting on one of its harness's own background tasks counts as mid-turn:
+        a shed would end the task unreported. One waiting only on ``run_in_background``
+        commands does not, since the runner outlives a shed and its report revives the
+        chat. Called on every lifecycle change and whenever a chat's pending background
+        tasks change. Both edges of a turn stamp engagement: entering a running state
+        means something addressed the chat (for one driven from outside the UI this is
+        the only evidence it is still in use), and leaving one means it was active up
+        to that moment -- without the second stamp a chat that ran for three days would
+        read as three days idle the instant its turn ended, and jump straight to the
+        stale ceiling. Between the two edges the chat is exempt from the climb entirely.
 
         The ids may include workers and the primary agent (own chats under the own-chat
         rule); they are ignored by ``reapply``, which only iterates the managed chats.

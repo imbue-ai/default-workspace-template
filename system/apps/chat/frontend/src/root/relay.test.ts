@@ -6,7 +6,7 @@
  * from one of the root's own inner frames counts.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isForwardedToShell, rootOpenDecision, startInnerFrameRelay } from "./relay";
+import { isForwardedToInnerFrames, isForwardedToShell, rootOpenDecision, startInnerFrameRelay } from "./relay";
 
 /** Frame this window under a spy parent for the duration of the test. */
 function framed(): { postMessage: ReturnType<typeof vi.fn> } {
@@ -21,14 +21,21 @@ function deliver(data: unknown, source: unknown): void {
 
 afterEach(() => {
   Object.defineProperty(window, "parent", { value: window, configurable: true });
+  vi.restoreAllMocks();
 });
 
 describe("isForwardedToShell", () => {
-  it("passes the Imbue Studio messages and the two shell messages the root re-posts as its own", () => {
+  it("passes the Imbue Studio messages and the shell messages the root re-posts as its own", () => {
     expect(isForwardedToShell({ type: "minds:ready" })).toBe(true);
     expect(isForwardedToShell({ type: "shell:focused" })).toBe(true);
     expect(isForwardedToShell({ type: "shell:open", path: "/agent-1.agent-2.sess-3", ifPresent: "focus" })).toBe(true);
     expect(isForwardedToShell({ type: "shell:draft-text", text: "Explain this element:" })).toBe(true);
+    expect(
+      isForwardedToShell({ type: "shell:message", message: { type: "open:file", path: "/home/user/a.md" } }),
+    ).toBe(true);
+    expect(isForwardedToShell({ type: "shell:open-link", url: "http://files-ab12cd34.host-0123.localhost/" })).toBe(
+      true,
+    );
   });
 
   it("keeps everything else the page posts, and anything that is not a typed message, at the root", () => {
@@ -75,6 +82,7 @@ describe("startInnerFrameRelay", () => {
     const selected: (string | null)[] = [];
     startInnerFrameRelay(
       (source) => source === (inner as unknown as MessageEventSource),
+      () => [],
       (chatId) => void selected.push(chatId),
     );
 
@@ -97,6 +105,7 @@ describe("startInnerFrameRelay", () => {
     const selected: (string | null)[] = [];
     startInnerFrameRelay(
       (source) => source === (inner as unknown as MessageEventSource),
+      () => [],
       (chatId) => void selected.push(chatId),
     );
 
@@ -106,6 +115,63 @@ describe("startInnerFrameRelay", () => {
     deliver({ type: "shell:open", path: "/?chat=agent-4", ifPresent: "focus" }, inner);
 
     expect(selected).toEqual(["agent-2", "agent-4"]);
+    expect(parent.postMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("passing the chrome's answers down", () => {
+  it("passes only the chrome's answers to an inner page's asks, and only from the parent", () => {
+    expect(isForwardedToInnerFrames({ type: "minds:provider-sign-in-ack", relay: true })).toBe(true);
+    expect(
+      isForwardedToInnerFrames({
+        type: "minds:permission-resolutions",
+        resolutions: [{ requestId: "req-1", resolution: "granted" }],
+      }),
+    ).toBe(true);
+    expect(isForwardedToInnerFrames({ type: "minds:focus-chat", chatId: "agent-1" })).toBe(false);
+    expect(isForwardedToInnerFrames(null)).toBe(false);
+  });
+
+  it("hands a permission verdict from the shell to every inner page, so a card flips and the strip covers the wait", () => {
+    const parent = framed();
+    const pageA = { postMessage: vi.fn() };
+    const pageB = { postMessage: vi.fn() };
+    startInnerFrameRelay(
+      () => false,
+      () => [pageA, pageB] as unknown as Window[],
+      () => undefined,
+    );
+    const verdict = {
+      type: "minds:permission-resolutions",
+      resolutions: [{ requestId: "req-1", resolution: "granted" }],
+    };
+
+    deliver(verdict, parent);
+    deliver(verdict, { name: "stranger" });
+
+    expect(pageA.postMessage.mock.calls).toEqual([[verdict, "*"]]);
+    expect(pageB.postMessage.mock.calls).toEqual([[verdict, "*"]]);
+    expect(parent.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("hands the sign-in answer from the shell to every inner page, and ignores it from anyone else", () => {
+    const parent = framed();
+    const pageA = { postMessage: vi.fn() };
+    const pageB = { postMessage: vi.fn() };
+    const inner = { name: "inner" };
+    startInnerFrameRelay(
+      (source) => source === (inner as unknown as MessageEventSource),
+      () => [pageA, pageB] as unknown as Window[],
+      () => undefined,
+    );
+    const ack = { type: "minds:provider-sign-in-ack", relay: true };
+
+    deliver(ack, parent);
+    deliver({ type: "minds:focus-chat", chatId: "agent-1" }, parent);
+    deliver(ack, { name: "stranger" });
+
+    expect(pageA.postMessage.mock.calls).toEqual([[ack, "*"]]);
+    expect(pageB.postMessage.mock.calls).toEqual([[ack, "*"]]);
     expect(parent.postMessage).not.toHaveBeenCalled();
   });
 });

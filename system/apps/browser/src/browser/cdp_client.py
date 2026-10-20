@@ -20,7 +20,7 @@ import contextlib
 import json
 import urllib.error
 import urllib.request
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import websockets
@@ -259,7 +259,7 @@ class CdpClient:
         return result.get("result", {}).get("value") is True
 
     @contextlib.asynccontextmanager
-    async def _attached(self, target_id: str) -> AsyncIterator[str]:
+    async def _attached(self, target_id: str) -> AsyncGenerator[str, None]:
         """A flattened session on one target for the page-domain calls of the block.
 
         Page-domain calls (``Page.*``, ``Input.*``, ``Runtime.*``) need a session on the

@@ -1,0 +1,1 @@
+The shared UI library (workspace-ui) carries the media queries that tell a phone from a desktop, `device_queries`: the phone-sized viewport (a short side at most 500px and a long side at most 1000px, either way round) and the touchscreen query. Apps that draw a phone layout import them, so they all switch together.

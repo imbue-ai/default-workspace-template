@@ -10,7 +10,14 @@ than the in-flight one).
 It then waits for the triggered tick to reach any terminal event and prints it,
 exiting 0 on success, 3 when backups are not configured, 1 on any other tick
 outcome, and 2 when no outcome was observed at all (no terminal event before the
-timeout, or no events log to read in the first place).
+timeout, or no events log to read in the first place). When the in-flight tick is
+still running at the timeout, it exits 2 without triggering a tick.
+
+With `--check` it triggers nothing and waits for nothing: it reads the newest tick
+outcomes back from the log, prints them, and exits 0 when a `restic_backup_succeeded`
+is recent (within two backup intervals), 3 when the newest tick ended for missing
+secrets, 1 otherwise (the service is down, or its ticks fail), and 2 when the events
+log cannot be located.
 """
 
 import json
@@ -19,28 +26,29 @@ import sys
 import time
 from collections.abc import Sequence
 from contextlib import closing
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO, Final
 
 import click
 from loguru import logger
 
-from host_backup.config import BACKUP_TOML_PATH, resolve_service_events_dir
+from host_backup.config import (
+    BACKUP_TOML_PATH,
+    load_backup_config,
+    resolve_service_events_dir,
+)
 from host_backup.events import (
     BACKUP_EVENT_SOURCE,
     EVENTS_FILENAME,
-    EVENTS_LOG_ROTATION_BYTES,
     TICK_TERMINAL_EVENT_TYPES,
     BackupEventType,
+    find_inflight_tick_id,
+    scan_recent_ticks_across_rotation,
 )
 
 DEFAULT_TIMEOUT_SECONDS = 1800.0  # 30 minutes
 _POLL_INTERVAL_SECONDS = 0.5
-
-# How much of the end of the events log the in-flight scan may read. Comfortably
-# more than the events of one tick, and small enough that this command cannot be
-# the reason the workspace runs out of memory.
-_TAIL_READ_MAX_BYTES = EVENTS_LOG_ROTATION_BYTES
 
 # Exit codes. "Backups are not configured" is a distinct outcome from "the
 # backup attempt failed": callers that take a backup as a precondition (e.g. the
@@ -58,9 +66,14 @@ EXIT_BACKUPS_NOT_CONFIGURED: Final[int] = 3
     "timeout_seconds",
     default=DEFAULT_TIMEOUT_SECONDS,
     show_default=True,
-    help="How long (seconds) to wait for the triggered backup to finish",
+    help="How long (seconds) to wait in all: for a tick already in flight, then for the triggered one",
 )
-def backup_now_main(timeout_seconds: float) -> None:
+@click.option(
+    "--check",
+    is_flag=True,
+    help="Only report whether a recent backup succeeded; trigger and wait for nothing",
+)
+def backup_now_main(timeout_seconds: float, check: bool) -> None:
     """Trigger an immediate host_backup tick and wait for it to complete."""
     events_dir = resolve_service_events_dir()
     if events_dir is None:
@@ -70,10 +83,22 @@ def backup_now_main(timeout_seconds: float) -> None:
         )
         sys.exit(EXIT_NO_COMPLETION_OBSERVED)
     events_path = events_dir / EVENTS_FILENAME
+    if check:
+        sys.exit(_check_recent_backup(events_path))
 
     deadline = time.monotonic() + timeout_seconds
+    # Opened before the scan, so a tick that ends between the scan and the first poll
+    # is still seen ending.
     with closing(_EventsLogFollower(events_path)) as follower:
-        _wait_for_no_inflight_backup(events_path, follower, deadline)
+        inflight_tick_id = find_inflight_tick_id(events_path)
+        is_idle = inflight_tick_id is None or _wait_for_tick_to_end(
+            follower, inflight_tick_id, deadline
+        )
+    if not is_idle:
+        logger.error(
+            "Timed out waiting for the in-flight backup tick to finish; triggered nothing"
+        )
+        sys.exit(EXIT_NO_COMPLETION_OBSERVED)
     # Opened before the bump, so every event of the triggered tick lands after it.
     with closing(_EventsLogFollower(events_path)) as follower:
         _bump_config_mtime()
@@ -83,6 +108,58 @@ def backup_now_main(timeout_seconds: float) -> None:
         sys.exit(EXIT_NO_COMPLETION_OBSERVED)
     click.echo(json.dumps(completion, default=str))
     sys.exit(_exit_code_for_completion(completion))
+
+
+def _check_recent_backup(events_path: Path) -> int:
+    """Print the newest tick outcomes and map them to an exit code: 0 when the newest
+    `restic_backup_succeeded` is within two backup intervals, 3 when the newest tick
+    ended for missing secrets, 1 otherwise.
+
+    Two intervals: a healthy service starts the next tick one interval after the
+    previous one ended, so its newest success is at most one interval plus one run
+    old, and a run longer than the interval is the slow-backup notice's business.
+    """
+    recent = scan_recent_ticks_across_rotation(events_path)
+    max_age_seconds = 2 * load_backup_config().backup_interval_seconds
+    success_at = _event_time(recent.newest_success_event)
+    age_seconds = (
+        None
+        if success_at is None
+        else (datetime.now(timezone.utc) - success_at).total_seconds()
+    )
+    newest_outcome = (
+        None
+        if recent.newest_terminal_event is None
+        else recent.newest_terminal_event.get("type")
+    )
+    click.echo(
+        json.dumps(
+            {
+                "newest_outcome": newest_outcome,
+                "newest_success_at": None
+                if success_at is None
+                else success_at.isoformat(),
+                "age_seconds": age_seconds,
+                "max_age_seconds": max_age_seconds,
+                "inflight_tick_id": recent.inflight_tick_id,
+            }
+        )
+    )
+    if newest_outcome == BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS.value:
+        return EXIT_BACKUPS_NOT_CONFIGURED
+    if age_seconds is not None and age_seconds <= max_age_seconds:
+        return EXIT_BACKUP_SUCCEEDED
+    return EXIT_BACKUP_FAILED
+
+
+def _event_time(event: dict[str, object] | None) -> datetime | None:
+    if event is None or not isinstance(timestamp := event.get("timestamp"), str):
+        return None
+    try:
+        return datetime.fromisoformat(timestamp)
+    except ValueError as e:
+        logger.warning("Ignoring a backup event with an unparseable timestamp: {}", e)
+        return None
 
 
 def _exit_code_for_completion(completion: dict[str, object]) -> int:
@@ -170,34 +247,35 @@ def _is_path_rotated_away_from(events_path: Path, held: BinaryIO) -> bool:
     return (on_path.st_dev, on_path.st_ino) != (held_stat.st_dev, held_stat.st_ino)
 
 
-def _wait_for_no_inflight_backup(
-    events_path: Path,
+def _wait_for_tick_to_end(
     follower: _EventsLogFollower,
+    inflight_tick_id: str,
     deadline: float,
-) -> None:
-    """Block until every tick in flight when this began emits a terminal event, or
-    the deadline passes.
+) -> bool:
+    """Block until the tick in flight emits a terminal event, or the deadline passes.
+    Returns False when the deadline passed first.
 
-    `follower` has to be opened before this scans the log, so a tick that ends
-    between the scan and the first poll is still seen ending.
+    A tick that starts meanwhile becomes the one waited for: the runner runs one tick
+    at a time, so `inflight_tick_id` died (its runner was shed or restarted) and will
+    never end.
     """
-    pending_tick_ids = _scan_for_inflight_tick_ids(events_path, max_lines=200)
-    if not pending_tick_ids:
-        return
-    logger.info(
-        "Waiting for {} in-flight backup tick(s) to complete...", len(pending_tick_ids)
-    )
-    while pending_tick_ids:
-        if time.monotonic() >= deadline:
-            return
+    logger.info("Waiting for the in-flight backup tick to complete...")
+    while time.monotonic() < deadline:
         for event in follower.read_new_events():
+            if event.get("source") != BACKUP_EVENT_SOURCE:
+                continue
             tick_id = event.get("tick_id")
-            if (
-                isinstance(tick_id, str)
-                and event.get("type") in TICK_TERMINAL_EVENT_TYPES
+            if not isinstance(tick_id, str):
+                continue
+            event_type = event.get("type")
+            if event_type == BackupEventType.BACKUP_STARTED.value:
+                inflight_tick_id = tick_id
+            elif (
+                tick_id == inflight_tick_id and event_type in TICK_TERMINAL_EVENT_TYPES
             ):
-                pending_tick_ids.discard(tick_id)
+                return True
         time.sleep(_POLL_INTERVAL_SECONDS)
+    return False
 
 
 def _wait_for_next_completion(
@@ -208,68 +286,14 @@ def _wait_for_next_completion(
     deadline passes."""
     while time.monotonic() < deadline:
         for event in follower.read_new_events():
+            # An abandoned tick is one the service restarted out of; the backup it was
+            # running starts over as the restarted service's first tick.
+            if event.get("type") == BackupEventType.TICK_ABANDONED.value:
+                continue
             if event.get("type") in TICK_TERMINAL_EVENT_TYPES:
                 return event
         time.sleep(_POLL_INTERVAL_SECONDS)
     return None
-
-
-def _read_tail_lines(events_path: Path, *, max_lines: int, max_bytes: int) -> list[str]:
-    """The last `max_lines` lines of `events_path`, reading at most `max_bytes` from its end.
-
-    Reads `max_bytes` at most, however large the file is. A log written before the
-    runner rotated it and capped each event's fields runs to gigabytes on an old
-    workspace, one line to hundreds of kilobytes -- reading it whole is what got this
-    command killed by the OOM watchdog before it did anything at all.
-
-    The byte ceiling binds first on such a workspace, yielding fewer than `max_lines`
-    events. That is the right trade for the one question asked of this: only a tick
-    whose BACKUP_STARTED has no completion after it matters, and the events a tick
-    emits before it completes are the small ones (the large ones all report a finished
-    restic command), so an in-flight tick is always inside the window.
-    """
-    try:
-        with events_path.open("rb") as fh:
-            size = fh.seek(0, os.SEEK_END)
-            fh.seek(max(0, size - max_bytes))
-            blob = fh.read()
-    except OSError:
-        return []
-    lines = blob.decode(errors="replace").splitlines()
-    # A window that started mid-file almost certainly cut its first line in half.
-    if size > max_bytes and lines:
-        lines = lines[1:]
-    return lines[-max_lines:]
-
-
-def _scan_for_inflight_tick_ids(
-    events_path: Path, *, max_lines: int, max_bytes: int = _TAIL_READ_MAX_BYTES
-) -> set[str]:
-    """Return the tick_ids that started but did not finish among the last `max_lines`
-    events that fit in the final `max_bytes` of the log."""
-    if not events_path.exists():
-        return set()
-    lines = _read_tail_lines(events_path, max_lines=max_lines, max_bytes=max_bytes)
-    started: set[str] = set()
-    finished: set[str] = set()
-    for raw in lines:
-        try:
-            event = json.loads(raw)
-        except ValueError:
-            continue
-        if not isinstance(event, dict):
-            continue
-        if event.get("source") != BACKUP_EVENT_SOURCE:
-            continue
-        tick_id = event.get("tick_id")
-        if not isinstance(tick_id, str):
-            continue
-        event_type = event.get("type")
-        if event_type == BackupEventType.BACKUP_STARTED.value:
-            started.add(tick_id)
-        elif event_type in TICK_TERMINAL_EVENT_TYPES:
-            finished.add(tick_id)
-    return started - finished
 
 
 def _parse_event_lines(raw_lines: Sequence[bytes]) -> list[dict[str, object]]:

@@ -42,7 +42,7 @@ def test_static_file_basename_to_path_maps() -> None:
 
 
 def test_split_comma_separated_string() -> None:
-    config = Config(chat_javascript_plugins="a.js, b.js")  # type: ignore[arg-type]
+    config = Config(chat_javascript_plugins="a.js, b.js")
     assert config.chat_javascript_plugins == ["a.js", "b.js"]
 
 

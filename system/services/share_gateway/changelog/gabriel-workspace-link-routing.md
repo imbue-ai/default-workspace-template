@@ -1,0 +1,1 @@
+The share gateway records the domain the workspace is shared under in `data/.state/share_domain` whenever it reads a share, and keeps it after an unshare, so an app's share address stays known to the workspace (and a link an agent wrote under it keeps opening the app's window) when sharing is turned off.

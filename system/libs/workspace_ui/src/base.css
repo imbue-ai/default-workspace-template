@@ -96,6 +96,8 @@
   /* Row text: the dense-chrome step between body and helper. */
   --font-size-row: 13px;
   --font-size-helper: 12px;
+  /* A word badge set beside other text ("Read-only"): the smallest step. */
+  --font-size-tag: 10px;
   /* (No --weight-medium: 500 in markup is Tailwind's font-medium, and no type
      role uses it -- see the type-roles note below.) */
   --weight-regular: 400;
@@ -117,7 +119,7 @@
   --z-overlay: 10000;
   --z-popover: 10001;
   --z-tooltip: 10002;
-  --width-message-column: 740px;
+  --width-message-column: 672px;
   /* The agent's side of the column keeps this much clear on the right. The user's
      bubbles already stop short (they cap at 80% and hug the right edge); without
      it the agent's prose and task rows were the only thing running the column's
@@ -252,6 +254,11 @@ body {
   font-weight: var(--weight-regular);
   line-height: 1.4;
 }
+@utility type-tag {
+  font-size: var(--font-size-tag);
+  font-weight: var(--weight-regular);
+  line-height: 1;
+}
 @utility type-section {
   font-size: var(--font-size-helper);
   font-weight: var(--weight-semibold);
@@ -281,9 +288,9 @@ body {
  * track/arc default to --c-border / --c-accent, overridable via
  * --spinner-track / --spinner-arc.
  * .spinner--current makes it monochrome (currentColor ring with a transparent
- * gap) for use on coloured contexts. (The login screen's fancier SVG arc is
- * its own svg drawing -- see loginSpinnerIcon in components/icons.ts -- but shares
- * this @keyframes.) */
+ * gap) for use on coloured contexts. (The fancier SVG arc that sign-in and an
+ * attachment's upload show is its own svg drawing -- see spinnerIcon in
+ * components/icons.ts -- but shares this @keyframes.) */
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -328,6 +335,14 @@ body {
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+/* A toast rises into place (components/toasts.ts). */
+@keyframes toast-rise {
+  from {
+    transform: translateY(24px);
+    opacity: 0.6;
   }
 }
 

@@ -14,8 +14,6 @@ from __future__ import annotations
 import contextlib
 import json
 import re
-import shutil
-import subprocess
 import threading
 import urllib.error
 import urllib.parse
@@ -38,18 +36,23 @@ from playwright.sync_api import FloatRect
 from playwright.sync_api import Frame
 from playwright.sync_api import Locator
 from playwright.sync_api import Page
+from playwright.sync_api import WebSocket
+from playwright.sync_api import WebSocketRoute
 from playwright.sync_api import expect
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.config import Config
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.identity import RequestIdentity
+from imbue.system_interface.shell.testing import files_registry_row
 from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.shell.testing import message_handling_app
 from imbue.system_interface.shell.testing import registry_row_toml
+from imbue.system_interface.shell.testing import running_files
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.shell.testing import write_rollback_point
 from imbue.system_interface.shell.testing import write_stub_update_self_script
@@ -459,7 +462,7 @@ def _wait_for_window_count(base_url: str, count: int, desktop_id: str = _HOME_DE
 
 
 def _broadcast_op(base_url: str, op: str, args: dict[str, Any]) -> dict[str, Any]:
-    """POST an op to ``/api/layout/broadcast`` the way ``system/scripts/layout.py`` does, retrying while the shell
+    """POST an op to ``/api/layout/broadcast`` the way ``workspace-layout`` does, retrying while the shell
     has not yet registered the client the op names (a 404 or 412)."""
     answer: dict[str, Any] = {}
 
@@ -1497,6 +1500,224 @@ def test_desktop_create_settings_switch_and_delete_through_the_tray(e2e_server: 
     expect(_window(page, home_window)).to_be_visible(timeout=15000)
 
 
+# Rapid desktop switches (desktop contracts.md section 6)
+
+# How long a window that has settled after rapid switches is watched: the shell reads a socket's reports once a
+# second at most, so a client whose windows and shell were still answering each other's desktop news would send
+# reports and redraw its windows several times in this.
+_SETTLED_WATCH_MS = 3000
+# How many tenths of a second ``_pump_until`` gives its condition to come true.
+_PUMP_POLLS = 150
+
+# Records, in the page, every change of whether a window is drawn and how its taskbar entry reads.
+_WINDOW_STATE_RECORDER = """(id) => {
+  window.__windowStates = [];
+  const record = () => {
+    const drawn = document.querySelector(`[data-window-id="${id}"]`) !== null;
+    const entry = document.querySelector(`[data-taskbar-entry="${id}"]`);
+    const state = `${drawn ? "drawn" : "gone"}/${entry === null ? "no-entry" : entry.getAttribute("data-minimized")}`;
+    const last = window.__windowStates[window.__windowStates.length - 1];
+    if (last !== state) window.__windowStates.push(state);
+  };
+  new MutationObserver(record).observe(document.body, { subtree: true, childList: true, attributes: true });
+  record();
+}"""
+
+
+class _DesktopTraffic(MutableModel):
+    """What one page said and heard about its client's desktop over the socket, appended as it happens."""
+
+    reports: list[dict[str, Any]] = Field(description="Every ``client_state`` the page sent")
+    moves: list[dict[str, Any]] = Field(description="Every ``active_desktop_changed`` the page received")
+
+
+def _take_sent(traffic: _DesktopTraffic, payload: str | bytes) -> None:
+    message = json.loads(payload)
+    if message.get("type") == "client_state":
+        traffic.reports.append(message)
+
+
+def _take_received(traffic: _DesktopTraffic, payload: str | bytes) -> None:
+    message = json.loads(payload)
+    if message.get("type") == "active_desktop_changed":
+        traffic.moves.append(message)
+
+
+def _record_desktop_traffic(page: Page) -> _DesktopTraffic:
+    """Record the page's desktop traffic from here on; call before the page loads."""
+    traffic = _DesktopTraffic(reports=[], moves=[])
+
+    def _watch(websocket: WebSocket) -> None:
+        websocket.on("framesent", lambda payload: _take_sent(traffic, payload))
+        websocket.on("framereceived", lambda payload: _take_received(traffic, payload))
+
+    page.on("websocket", _watch)
+    return traffic
+
+
+def _create_desktop_shown_on(server: E2EServer, pages: list[Page]) -> str:
+    """Create a second desktop and wait until every page offers a switch to it; answers its id."""
+    desktop_id = _post_json(f"{server.base_url}/api/desktops", {"name": "Other", "color": "#4477aa", "glyph": 0})["id"]
+    for page in pages:
+        expect(page.locator(f'[data-desktop-switch="{desktop_id}"]')).to_be_visible(timeout=15000)
+    return desktop_id
+
+
+def _pump_until(page: Page, condition: Callable[[], bool], what: str) -> None:
+    """Wait through the sync API, which hands the pages' socket events over only while it is called."""
+    for _ in range(_PUMP_POLLS):
+        if condition():
+            return
+        page.wait_for_timeout(100)
+    raise AssertionError(f"never saw {what}")
+
+
+def _switch_rapidly(page: Page, desktop_ids: list[str], traffics: list[_DesktopTraffic]) -> None:
+    """Click the desktops in turn as fast as the pointer goes, waiting on nothing between clicks, then wait until
+    every page has heard the move of each click."""
+    heard_before = [len(traffic.moves) for traffic in traffics]
+    for desktop_id in desktop_ids:
+        page.locator(f'[data-desktop-switch="{desktop_id}"]').click()
+    _pump_until(
+        page,
+        lambda: all(
+            len(traffic.moves) >= before + len(desktop_ids)
+            for traffic, before in zip(traffics, heard_before, strict=True)
+        ),
+        "every page hear every switch",
+    )
+
+
+def _expect_settled_on(page: Page, desktop_id: str, window_id: str) -> None:
+    expect(page.locator(f'[data-desktop-switch="{desktop_id}"]')).to_have_attribute("data-active", "true")
+    expect(_window(page, window_id)).to_be_visible(timeout=15000)
+    expect(_taskbar_entry(page, window_id)).to_have_attribute("data-minimized", "false")
+
+
+def _watch_settled(pages: list[Page], window_id: str, traffics: list[_DesktopTraffic]) -> None:
+    """Watch settled pages for ``_SETTLED_WATCH_MS``: none of them sends a report or hears another move, and the
+    window stays drawn and shown on each the whole time."""
+    for page in pages:
+        page.evaluate(_WINDOW_STATE_RECORDER, window_id)
+    before = [(len(traffic.reports), len(traffic.moves)) for traffic in traffics]
+    pages[0].wait_for_timeout(_SETTLED_WATCH_MS)
+    assert [(len(traffic.reports), len(traffic.moves)) for traffic in traffics] == before, (
+        "the client's windows and the shell kept answering each other's desktop moves"
+    )
+    for page in pages:
+        assert page.evaluate("() => window.__windowStates") == ["drawn/false"]
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_rapid_desktop_switches_settle_on_the_last_one_chosen(e2e_server: E2EServer, page: Page) -> None:
+    """Switching back and forth faster than the shell answers puts several moves in flight at once, whose echoes
+    reach the window after it has moved on. The window ends on the desktop chosen last and stays there: it neither
+    follows those echoes back nor sends anything more, and its windows are never taken down."""
+    traffic = _record_desktop_traffic(page)
+    _land(page, e2e_server)
+    window_id = _open_via_shortcut(page, e2e_server)
+    other = _create_desktop_shown_on(e2e_server, [page])
+
+    _switch_rapidly(page, [other, _HOME_DESKTOP_ID, other, _HOME_DESKTOP_ID], [traffic])
+    _expect_settled_on(page, _HOME_DESKTOP_ID, window_id)
+    _watch_settled([page], window_id, [traffic])
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_two_windows_of_one_client_settle_together_after_rapid_switches(e2e_server: E2EServer, page: Page) -> None:
+    """Two windows of one browser are one client: the other window follows every move of the one switching. A
+    window that only follows moves nothing, so the two never answer each other's news back and forth, and both
+    end on the desktop chosen last."""
+    second = page.context.new_page()
+    traffics = [_record_desktop_traffic(page), _record_desktop_traffic(second)]
+    _land(page, e2e_server)
+    window_id = _open_via_shortcut(page, e2e_server)
+    _land(second, e2e_server)
+    other = _create_desktop_shown_on(e2e_server, [page, second])
+
+    _switch_rapidly(page, [other, _HOME_DESKTOP_ID, other, _HOME_DESKTOP_ID], traffics)
+    for shown in (page, second):
+        _expect_settled_on(shown, _HOME_DESKTOP_ID, window_id)
+    _watch_settled([page, second], window_id, traffics)
+    clients = _get_json(f"{e2e_server.base_url}/api/clients")["clients"]
+    assert [client["active_desktop"] for client in clients] == [_HOME_DESKTOP_ID]
+
+
+class _HeldSocket(_DesktopTraffic):
+    """A page's shell socket with what the page sends held back from the shell until released."""
+
+    is_holding: bool = Field(description="Whether what the page sends is held rather than passed on")
+    held: list[str | bytes] = Field(description="What the page sent while held, oldest first")
+
+
+def _hold_page_socket(page: Page) -> tuple[_HeldSocket, Callable[[], None]]:
+    """Route the page's shell socket through the test, holding what the page sends; call before the page loads.
+    Answers the socket's record and the release, which passes the held messages on in order and stops holding."""
+    socket = _HeldSocket(is_holding=True, held=[], reports=[], moves=[])
+    shell_sides: list[WebSocketRoute] = []
+
+    def _route(page_side: WebSocketRoute) -> None:
+        shell_side = page_side.connect_to_server()
+        shell_sides.append(shell_side)
+
+        def _from_page(payload: str | bytes) -> None:
+            _take_sent(socket, payload)
+            if socket.is_holding:
+                socket.held.append(payload)
+            else:
+                shell_side.send(payload)
+
+        def _from_shell(payload: str | bytes) -> None:
+            _take_received(socket, payload)
+            page_side.send(payload)
+
+        page_side.on_message(_from_page)
+        shell_side.on_message(_from_shell)
+
+    def _release() -> None:
+        socket.is_holding = False
+        for payload in socket.held:
+            shell_sides[-1].send(payload)
+        socket.held.clear()
+
+    page.route_web_socket("**/api/ws", _route)
+    return socket, _release
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_an_op_move_wins_over_a_report_the_page_made_before_hearing_it(e2e_server: E2EServer, page: Page) -> None:
+    """An agent's op moves the client while the page's own report of where it landed is still on its way to the
+    shell (held here; a socket read late or a slow network in real use). The report was made before the page heard
+    of the op's move, so the shell does not record it but tells the page the op's move again: the client and the page
+    end on the op's desktop, and the page hears of no move but the op's."""
+    socket, release = _hold_page_socket(page)
+    _land(page, e2e_server)
+    _pump_until(page, lambda: any(not report["is_following"] for report in socket.reports), "the landing's report")
+    client_id = _client_id(page)
+    other = _create_desktop_shown_on(e2e_server, [page])
+
+    _broadcast_op(e2e_server.base_url, "load", {"desktop": other, "client": client_id})
+    other_switch = page.locator(f'[data-desktop-switch="{other}"]')
+    expect(other_switch).to_have_attribute("data-active", "true", timeout=15000)
+    _pump_until(page, lambda: any(report["is_following"] for report in socket.reports), "the page follow the op")
+    op_move = (other, socket.moves[0]["revision"])
+    assert [(move["desktop_id"], move["revision"]) for move in socket.moves] == [op_move]
+
+    release()
+
+    def _is_registered() -> bool:
+        clients = _get_json(f"{e2e_server.base_url}/api/clients")["clients"]
+        return any(client["id"] == client_id and client["is_connected"] for client in clients)
+
+    _pump_until(page, _is_registered, "the shell register the page's reports")
+    page.wait_for_timeout(_SETTLED_WATCH_MS)
+    heard = [(move["desktop_id"], move["revision"]) for move in socket.moves]
+    assert len(heard) > 1 and set(heard) == {op_move}
+    expect(other_switch).to_have_attribute("data-active", "true")
+    clients = _get_json(f"{e2e_server.base_url}/api/clients")["clients"]
+    assert [client["active_desktop"] for client in clients if client["id"] == client_id] == [other]
+
+
 # Pinned windows (pinned-taskbar-entries plan sections 3.2, 4.1, 4.3, 4.4)
 
 
@@ -2238,19 +2459,21 @@ def test_a_kept_rollback_point_raises_one_banner_naming_its_apps_and_everything_
     banner.locator(".update-notice-confirm").click()
 
     expect(page.locator(".update-notice-banner")).to_have_count(0, timeout=15000)
-    assert _get_json(f"{e2e_server.base_url}/api/updates/pending") is None
+    assert _get_json(f"{e2e_server.base_url}/api/updates/pending") == {"notice": None}
 
 
 # Past the grace a freshly torn-out pop-out gives the desktop's detach save before writing the detach itself
 # (``SOLO_HEAL_GRACE_MS`` in DesktopStore.ts): long enough for a pop-out that was going to write it to have.
 _PAST_SOLO_HEAL_GRACE_MS = 2000
 
-# Records, in the page it is added to, every ``minds:detached-windows`` report the page's shell sends its
-# embedder: a top-level page is its own parent, so it hears its own reports.
+# Records, in the page it is added to, every ``minds:detached-windows`` report and ``minds:pop-out-window`` ask the
+# page's shell sends its embedder: a top-level page is its own parent, so it hears its own messages.
 _RECORD_DETACHED_REPORTS_SCRIPT = """
 window.__detachedReports = [];
+window.__popOutAsks = [];
 window.addEventListener("message", (event) => {
   if (event.data?.type === "minds:detached-windows") window.__detachedReports.push(event.data.windows);
+  if (event.data?.type === "minds:pop-out-window") window.__popOutAsks.push(event.data.windowId);
 });
 """
 
@@ -2294,7 +2517,7 @@ def test_a_pop_out_is_reached_by_a_refresh_of_its_window_and_stays_a_pop_out_ove
         )
 
     with pop_out.expect_navigation(timeout=15000):
-        _broadcast_op(e2e_server.base_url, "reload_system_interface", {"client": client_id})
+        _broadcast_op(e2e_server.base_url, "reload_system_interface", {})
     assert urllib.parse.parse_qs(urllib.parse.urlparse(pop_out.url).query)["solo"] == [window_id]
     _page_frame(pop_out, window_id)
     expect(pop_out.locator("[data-taskbar]")).to_have_count(0)
@@ -2322,6 +2545,47 @@ def test_a_pop_out_reopened_at_launch_over_a_window_brought_back_closes_rather_t
     assert pop_out.evaluate("() => window.__detachedReports") == [[]]
     assert _stored_placements(e2e_server.state_dir, client_id)[window_id]["is_detached"] is False
     expect(_window(page, window_id)).to_be_visible()
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_agent_ops_raise_a_pop_out_in_its_own_window_refuse_to_move_it_and_bring_it_back_when_forced(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """``focus``, and an ``open`` that finds the window, ask the pop-out's own page to raise its window and leave it
+    popped out; ``restore`` is refused without ``force``; with it the window is back on the desktop, and the
+    pop-out's page reports it back, which is what closes its window."""
+    _land(page, e2e_server)
+    client_id = _client_id(page)
+    window_id = _broadcast_op(e2e_server.base_url, "open", {"app": _STUB_APP_NAME, "path": "/", "client": client_id})[
+        "window_id"
+    ]
+    pop_out = _pop_out(page, e2e_server, window_id)
+    _wait_for_stored_placement(e2e_server, client_id, window_id, lambda placement: placement["is_detached"], "detach")
+
+    focused = _broadcast_op(e2e_server.base_url, "focus", {"window": window_id, "client": client_id})
+    assert focused["is_raised_in_own_window"] is True
+    pop_out.wait_for_function(f"() => window.__popOutAsks.includes({json.dumps(window_id)})", timeout=15000)
+    found = _broadcast_op(e2e_server.base_url, "open", {"app": _STUB_APP_NAME, "path": "/", "client": client_id})
+    assert (found["window_id"], found["is_raised_in_own_window"]) == (window_id, True)
+    pop_out.wait_for_function("() => window.__popOutAsks.length >= 2", timeout=15000)
+    assert _stored_placements(e2e_server.state_dir, client_id)[window_id]["is_detached"] is True
+    expect(_window(page, window_id)).to_have_count(0)
+
+    with pytest.raises(urllib.error.HTTPError) as refused:
+        _post_json(
+            f"{e2e_server.base_url}/api/layout/broadcast",
+            {"op": "restore", "args": {"window": window_id, "client": client_id}, "requester": None},
+        )
+    assert refused.value.code == 423
+    assert _stored_placements(e2e_server.state_dir, client_id)[window_id]["is_detached"] is True
+
+    restored = _broadcast_op(e2e_server.base_url, "restore", {"window": window_id, "client": client_id, "force": True})
+    assert restored["is_brought_back"] is True
+    expect(_window(page, window_id)).to_be_visible(timeout=15000)
+    pop_out.wait_for_function(
+        "() => { const last = window.__detachedReports.at(-1); return last !== undefined && last.length === 0; }",
+        timeout=15000,
+    )
 
 
 # The Imbue Studio chrome, played by a page on its own origin: it frames the shell, waits for the shell's
@@ -2392,56 +2656,135 @@ def test_a_message_from_the_minds_chrome_reaches_the_app_that_registered_its_typ
     assert received == [{"type": _FOCUS_CHAT_TYPE, "client_id": client_id, "chatId": _FOCUSED_CHAT_ID}]
 
 
-# The File Viewer (``system/apps/files``): dufs over a folder of the test's own, with the workspace's vendored and
-# patched frontend, registered as the ``files`` app. The workspace image installs dufs; elsewhere these tests skip.
-_FILES_APP_NAME = "files"
-_FILES_ASSETS_DIRECTORY = Path(__file__).resolve().parents[3] / "files" / "assets"
-_DUFS_BINARY = shutil.which("dufs")
-# dufs answers a client it takes for a script (curl and the like) with a bare "Not Found" instead of the assets'
-# ``404.html``, so a direct request says it is a browser.
-_BROWSER_USER_AGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36"
+_OPEN_URL_HANDLER_PATH = "/api/open-url"
+_OPEN_FILE_HANDLER_PATH = "/api/open-file"
+# Links an app's page holds, none of which the page does anything about itself: a service running in the workspace,
+# a file of the workspace, and a page of its own app.
+_APP_PAGE_LINKS = (
+    '<a id="local" href="http://localhost:3999/preview?x=1">preview</a>'
+    '<a id="file" href="file:///home/user/plan%201.md">plan</a>'
+    '<a id="own" href="/elsewhere">elsewhere</a>'
 )
 
 
-@contextlib.contextmanager
-def _running_file_viewer(root: Path) -> Generator[str, None, None]:
-    """Run dufs over ``root`` as the File Viewer's program line runs it over ``/``; yields its URL."""
-    assert _DUFS_BINARY is not None
-    port = find_free_port()
-    url = f"http://127.0.0.1:{port}"
-    command = [_DUFS_BINARY, "--allow-all", "--bind", "127.0.0.1", "--port", str(port)]
-    command += ["--assets", str(_FILES_ASSETS_DIRECTORY), str(root)]
-    process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    try:
-        wait_for(
-            lambda: is_server_answering(url),
-            timeout=10.0,
-            poll_interval=0.1,
-            error_message=f"dufs did not come up at {url}",
+@pytest.mark.timeout(90, func_only=False)
+def test_an_apps_links_open_by_the_app_contract_with_no_link_code_of_its_own(tmp_path: Path, page: Page) -> None:
+    """A page that only connects to the shell has its link clicks followed by the app contract: a local URL reaches
+    the app registered for ``open:url`` and a ``file:`` URL the one registered for ``open:file``, each with the client,
+    while the page stays where it is; a plain click on a page of its own app moves its window there. No click opens a
+    window or a browser window of its own."""
+    opened_urls: list[dict[str, Any]] = []
+    opened_files: list[dict[str, Any]] = []
+    with (
+        serve_app(message_handling_app(opened_urls, _OPEN_URL_HANDLER_PATH, 200)) as url_opener,
+        serve_app(message_handling_app(opened_files, _OPEN_FILE_HANDLER_PATH, 200)) as file_opener,
+    ):
+        rows = (
+            registry_row_toml(
+                "browser",
+                url_opener.http_url,
+                display_name="Browser",
+                message_handlers=[("open:url", _OPEN_URL_HANDLER_PATH)],
+            ),
+            registry_row_toml(
+                "viewer",
+                file_opener.http_url,
+                display_name="Viewer",
+                message_handlers=[("open:file", _OPEN_FILE_HANDLER_PATH)],
+            ),
         )
-        yield url
-    finally:
-        process.terminate()
-        process.wait(timeout=5.0)
+        with _running_e2e_server(tmp_path, extra_rows=rows) as server:
+            _land(page, server)
+            client_id = _client_id(page)
+            window_id = _broadcast_op(
+                server.base_url, "open", {"app": _STUB_APP_NAME, "path": "/", "client": client_id}
+            )["window_id"]
+            frame = _page_frame(page, window_id)
+            frame.evaluate(f"() => document.body.insertAdjacentHTML('beforeend', {json.dumps(_APP_PAGE_LINKS)})")
+
+            frame.locator("#local").click()
+            wait_for(
+                lambda: len(opened_urls) == 1,
+                timeout=15.0,
+                poll_interval=0.1,
+                error_message="the app registered for open:url was never posted the local link",
+            )
+            frame.locator("#file").click()
+            wait_for(
+                lambda: len(opened_files) == 1,
+                timeout=15.0,
+                poll_interval=0.1,
+                error_message="the app registered for open:file was never posted the file link",
+            )
+            assert frame.evaluate("() => location.pathname") == "/"
+
+            frame.locator("#own").click()
+            _wait_for_window_at(server.base_url, window_id, "/elsewhere")
+            assert [window["id"] for window in _windows(server.base_url)] == [window_id]
+    assert opened_urls == [{"type": "open:url", "client_id": client_id, "url": "http://localhost:3999/preview?x=1"}]
+    assert opened_files == [{"type": "open:file", "client_id": client_id, "path": "/home/user/plan 1.md"}]
+    assert page.context.pages == [page]
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_an_apps_script_popups_open_where_its_links_would(tmp_path: Path, page: Page) -> None:
+    """A page that only connects to the shell has its ``window.open`` calls routed by the app contract, in a plain
+    browser as in Imbue Studio: a local URL reaches the app registered for ``open:url`` with the client, a page of its
+    own app opens as a second window of the app, and the calls answer null. No browser tab opens."""
+    opened_urls: list[dict[str, Any]] = []
+    with serve_app(message_handling_app(opened_urls, _OPEN_URL_HANDLER_PATH, 200)) as url_opener:
+        rows = (
+            registry_row_toml(
+                "browser",
+                url_opener.http_url,
+                display_name="Browser",
+                message_handlers=[("open:url", _OPEN_URL_HANDLER_PATH)],
+            ),
+        )
+        with _running_e2e_server(tmp_path, extra_rows=rows) as server:
+            _land(page, server)
+            client_id = _client_id(page)
+            window_id = _broadcast_op(
+                server.base_url, "open", {"app": _STUB_APP_NAME, "path": "/", "client": client_id}
+            )["window_id"]
+            frame = _page_frame(page, window_id)
+
+            answer = frame.evaluate("() => window.open('http://localhost:3999/scripted?x=1', '_blank')")
+            wait_for(
+                lambda: len(opened_urls) == 1,
+                timeout=15.0,
+                poll_interval=0.1,
+                error_message="the app registered for open:url was never posted the scripted popup",
+            )
+            frame.evaluate("() => window.open('/scripted-own')")
+            wait_for(
+                lambda: len(_windows(server.base_url)) == 2,
+                timeout=15.0,
+                poll_interval=0.1,
+                error_message="the scripted popup to the app's own page never opened a window of the app",
+            )
+            other = next(window for window in _windows(server.base_url) if window["id"] != window_id)
+    assert answer is None
+    assert opened_urls == [{"type": "open:url", "client_id": client_id, "url": "http://localhost:3999/scripted?x=1"}]
+    assert (other["app"], other["path"]) == (_STUB_APP_NAME, "/scripted-own")
+    assert page.context.pages == [page]
+
+
+# Files (``system/apps/files``): its server over a folder of the test's own, with the Files frontend's build,
+# registered as the ``files`` app.
+_FILES_APP_NAME = "files"
 
 
 @contextlib.contextmanager
-def _running_e2e_server_with_file_viewer(tmp_path: Path, root: Path) -> Generator[tuple[E2EServer, str], None, None]:
-    """The shell over the stub app and a File Viewer serving ``root``; yields the shell and the viewer's URL."""
-    with _running_file_viewer(root) as viewer_url:
-        row = registry_row_toml(
-            _FILES_APP_NAME,
-            viewer_url,
-            display_name="File Viewer",
-            launch_paths=(("new", "File Viewer", "/"),),
-        )
-        with _running_e2e_server(tmp_path, extra_rows=(row,)) as server:
-            yield server, viewer_url
+def _running_e2e_server_with_files(tmp_path: Path, root: Path) -> Generator[tuple[E2EServer, str], None, None]:
+    """The shell over the stub app and Files serving ``root``; yields the shell and Files' URL."""
+    with running_files(root) as files_url:
+        with _running_e2e_server(tmp_path, extra_rows=(files_registry_row(files_url),)) as server:
+            yield server, files_url
 
 
-def _file_viewer_frame(page: Page, window_id: str) -> Frame:
-    """The frame of a File Viewer window; it speaks only its location beacon, so there is no handshake to await."""
+def _files_frame(page: Page, window_id: str) -> Frame:
+    """The frame of a Files window."""
     handle = page.locator(f'iframe[data-live-page="{window_id}"]').element_handle(timeout=15000)
     frame = handle.content_frame()
     assert frame is not None
@@ -2468,33 +2811,31 @@ def _wait_for_window_at(base_url: str, window_id: str, path: str) -> dict[str, A
     return _window_record(base_url, window_id)
 
 
-@pytest.mark.skipif(_DUFS_BINARY is None, reason="dufs is not installed (the workspace image installs it)")
 @pytest.mark.timeout(120, func_only=False)
-def test_the_file_viewer_opens_files_in_workspace_windows_and_raises_one_already_on_the_page(
-    tmp_path: Path, page: Page
-) -> None:
-    """In a File Viewer window, a folder opens in place; a file's name opens its view page in a new window of the
-    File Viewer, titled after the file, and a second click raises that window; the view page's Edit takes the same
-    window to the edit page; the listing's Edit then raises that window, and a modified click on the name opens a
-    view page again, as no window is on it any more. No click opens a browser window of its own."""
+def test_files_opens_files_in_workspace_windows_and_raises_one_already_on_the_page(tmp_path: Path, page: Page) -> None:
+    """In a Files window, a folder opens in place; a double-clicked file opens its view page in a new Files window,
+    titled after the file, and a second double-click raises that window; the view page's Edit takes the same window to
+    the edit page; the entry menu's Edit then raises that window, and its Open opens a view page again, as no window
+    is on it any more. Nothing opens a browser window of its own."""
     root = tmp_path / "viewer-root"
     (root / "notes").mkdir(parents=True)
     (root / "notes" / "plan 1.txt").write_text("the plan\n")
     view_path = "/notes/plan%201.txt?view"
     edit_path = "/notes/plan%201.txt?edit"
-    with _running_e2e_server_with_file_viewer(tmp_path, root) as (server, _):
+    with _running_e2e_server_with_files(tmp_path, root) as (server, _):
         _land(page, server)
         client_id = _client_id(page)
         listing_id = _broadcast_op(
             server.base_url, "open", {"app": _FILES_APP_NAME, "path": "/", "client": client_id}
         )["window_id"]
-        listing = _file_viewer_frame(page, listing_id)
+        listing = _files_frame(page, listing_id)
+        plan = listing.locator('[data-entry-path="/notes/plan 1.txt"]')
 
-        listing.get_by_role("link", name="notes", exact=True).click()
+        listing.locator('[data-entry-path="/notes/"]').dblclick()
         _wait_for_window_at(server.base_url, listing_id, "/notes/")
         assert [window["id"] for window in _windows(server.base_url)] == [listing_id]
 
-        listing.get_by_role("link", name="plan 1.txt", exact=True).click()
+        plan.dblclick()
         (viewer,) = [window for window in _wait_for_window_count(server.base_url, 2) if window["id"] != listing_id]
         assert viewer["app"] == _FILES_APP_NAME and viewer["path"] == view_path
         wait_for(
@@ -2506,43 +2847,45 @@ def test_the_file_viewer_opens_files_in_workspace_windows_and_raises_one_already
         expect(_window(page, viewer["id"])).to_have_attribute("data-focused", "true", timeout=15000)
 
         _raise_window(page, server, client_id, listing_id)
-        listing.get_by_role("link", name="plan 1.txt", exact=True).click()
+        plan.dblclick()
         expect(_window(page, viewer["id"])).to_have_attribute("data-focused", "true", timeout=15000)
         _assert_no_further_window(page, server, [listing_id, viewer["id"]])
 
-        viewer_frame = _file_viewer_frame(page, viewer["id"])
+        viewer_frame = _files_frame(page, viewer["id"])
         viewer_frame.locator(".edit-file").click()
         _wait_for_window_at(server.base_url, viewer["id"], edit_path)
         assert [window["id"] for window in _windows(server.base_url)] == [listing_id, viewer["id"]]
 
         _raise_window(page, server, client_id, listing_id)
-        listing.locator('a[title="Edit file"]').click()
+        plan.click(button="right")
+        listing.locator('[data-menu-row="edit"]').click()
         expect(_window(page, viewer["id"])).to_have_attribute("data-focused", "true", timeout=15000)
         _assert_no_further_window(page, server, [listing_id, viewer["id"]])
 
         _raise_window(page, server, client_id, listing_id)
-        listing.get_by_role("link", name="plan 1.txt", exact=True).click(modifiers=["ControlOrMeta"])
+        plan.click(button="right")
+        listing.locator('[data-menu-row="open"]').click()
         (second_viewer,) = [
             window
             for window in _wait_for_window_count(server.base_url, 3)
             if window["id"] not in (listing_id, viewer["id"])
         ]
         assert second_viewer["path"] == view_path
-        assert page.context.pages == [page], "a File Viewer click opened a browser window of its own"
+        assert page.context.pages == [page], "a Files window opened a browser window of its own"
 
 
-@pytest.mark.skipif(_DUFS_BINARY is None, reason="dufs is not installed (the workspace image installs it)")
 @pytest.mark.timeout(90, func_only=False)
-def test_the_file_viewer_answers_a_missing_path_with_its_own_page_naming_it_and_the_nearest_folder(
+def test_files_answers_a_missing_path_with_its_own_page_naming_it_and_the_nearest_folder(
     tmp_path: Path, page: Page
 ) -> None:
-    """A path that does not exist answers 404 with the File Viewer's own page, which, in a window, names the path
+    """A path that does not exist answers 404 with Files' own page, which, in a window, names the path
     asked for, links the nearest folder above it that exists, and titles the window after the missing name."""
     root = tmp_path / "viewer-root"
     (root / "notes").mkdir(parents=True)
     missing = "/notes/gone/missing.txt"
-    with _running_e2e_server_with_file_viewer(tmp_path, root) as (server, viewer_url):
-        request = urllib.request.Request(f"{viewer_url}{missing}?view", headers={"User-Agent": _BROWSER_USER_AGENT})
+    with _running_e2e_server_with_files(tmp_path, root) as (server, files_url):
+        # Files answers its own page to a request that asks for a page, as a browser's does.
+        request = urllib.request.Request(f"{files_url}{missing}?view", headers={"Accept": "text/html"})
         with pytest.raises(urllib.error.HTTPError) as answered:
             urllib.request.urlopen(request, timeout=5)
         assert answered.value.code == 404
@@ -2553,7 +2896,7 @@ def test_the_file_viewer_answers_a_missing_path_with_its_own_page_naming_it_and_
         window_id = _broadcast_op(
             server.base_url, "open", {"app": _FILES_APP_NAME, "path": f"{missing}?view", "client": client_id}
         )["window_id"]
-        frame = _file_viewer_frame(page, window_id)
+        frame = _files_frame(page, window_id)
         expect(frame.locator(".asked-path")).to_have_text(missing, timeout=15000)
         nearest = frame.locator(".nearest-folder")
         expect(nearest).to_have_text("/notes/", timeout=15000)

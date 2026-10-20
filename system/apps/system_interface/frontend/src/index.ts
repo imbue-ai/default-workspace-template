@@ -4,6 +4,8 @@ import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import {
   DETACHED_WINDOWS,
   EMBEDDER_CAPABILITIES,
+  OPEN_EXTERNAL,
+  OPEN_LINK,
   POP_OUT_WINDOW,
   REATTACH_WINDOW,
   TEAR_OUT,
@@ -20,9 +22,10 @@ import * as api from "./model/api";
 import { isDeepLinkEmpty, parseDeepLink, stripDeepLinkParams } from "./model/deepLinks";
 import type { DeepLink } from "./model/deepLinks";
 import { parseSoloMode } from "./model/soloMode";
+import { isPreviewShell } from "./model/PreviewShell";
 import type { Frame } from "./model/records";
 import { frameFromViewportFractions } from "./geometry/frames";
-import type { PopOutBridge } from "./store/DesktopStore";
+import type { OutsideLinkOpener, PopOutBridge } from "./store/DesktopStore";
 import { PointerGestureSource } from "./gestures/pointerGestures";
 import { startPresenceHeartbeat } from "./model/Presence";
 import { initEmbedderRelay } from "./relay";
@@ -75,6 +78,12 @@ const popOutBridge: PopOutBridge = {
   reportDetachedWindows: (windows) => sendToEmbedder(DETACHED_WINDOWS, { windows: [...windows] }),
 };
 
+/** Where an external link no app takes opens: through the chrome, or in a new tab of the browser this shell is in. */
+const outsideLinks: OutsideLinkOpener = {
+  openInEmbedder: (url) => sendToEmbedder(OPEN_EXTERNAL, { url }),
+  openInBrowser: (url) => void window.open(url, "_blank", "noopener,noreferrer"),
+};
+
 function bootstrap(): void {
   const clientId = getClientId();
   // Read and left in the URL, unlike the deep link: a reload of a pulled-out window's page must come back as it.
@@ -97,6 +106,7 @@ function bootstrap(): void {
           redraw: () => m.redraw(),
           reloadInterface,
           popOut: popOutBridge,
+          outsideLinks,
           soloWindowId: solo?.windowId ?? null,
           isSoloReopened: solo?.isReopened ?? false,
         });
@@ -121,16 +131,26 @@ function bootstrap(): void {
   document.addEventListener("visibilitychange", () =>
     desktopStore.onVisibilityChange(document.visibilityState === "visible"),
   );
-  // Every message the chrome sends also goes, its payload unread, to the apps registered for its type.
-  setEmbedderMessageObserver((message) => void desktopStore.relayEmbedderMessage(message));
+  // Every message the chrome sends also goes to the apps registered for its type.
+  setEmbedderMessageObserver((message) => void desktopStore.relayEmbedderMessage(message, null));
   // The pull-out conversation's two asks from the chrome: what it can do, and a window to bring back.
   setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) => {
     desktopStore.setCanPopOut(message.canPopOut === true);
+    desktopStore.setCanOpenLinksOutside(message.opensExternalLinks === true);
   });
   setEmbedderMessageHandler(REATTACH_WINDOW, (message) => {
     const windowId = message.windowId;
     if (typeof windowId !== "string" || windowId === "") return;
     void desktopStore.reattachWindow(windowId, frameFromMessage(message.frame));
+  });
+  // A popup (or an external page replacing a frame) a page of this workspace asked for, which Imbue Studio turned
+  // away: the store opens it where it belongs.
+  // A preview shell sees it only as the live shell's rebroadcast, and the live shell opens it.
+  setEmbedderMessageHandler(OPEN_LINK, (message) => {
+    if (isPreviewShell()) return;
+    const url = message.url;
+    if (typeof url !== "string" || url === "") return;
+    void desktopStore.openLink(url, window.location.host, null);
   });
   setEmbedderMessageHandler(TEAR_OUT, (message) => {
     const windowId = message.windowId;
@@ -155,7 +175,7 @@ function bootstrap(): void {
   // Announced once the page can act on what the embedder held, not merely once a handler is
   // registered: relaying a message needs the apps (which of them take it), and the embedder sends
   // what it held the moment this lands.
-  void Promise.all([started, desktopStore.whenAppsLoaded()]).then(() => announceReadyToEmbedder());
+  void Promise.all([started, desktopStore.whenAppsLoaded()]).then(() => announceReadyToEmbedder({ opensLinks: true }));
 }
 
 window.addEventListener("load", bootstrap);

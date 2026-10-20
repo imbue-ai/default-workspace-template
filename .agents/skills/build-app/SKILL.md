@@ -144,8 +144,8 @@ under `system/apps/<your-package>/` so they get an isolated window and origin.
   `system/supervisord.conf.d/*.conf`, and `data/.state/apps.toml`, so running
   manual port checks (`ss -tln`) is unnecessary. If you are picking a port
   manually for the wrap-existing escape hatch, check `ss -tln` and avoid `8000`
-  (system_interface), `8010` (the chat app), `8030` (the Getting Started app) and
-  `8081` (the browser service).
+  (system_interface), `8010` (the chat app), `8030` (the Getting Started app),
+  `8040` (the Memory & disk app) and `8081` (the browser service).
   Two things do not show up there: the `agent-observer` program binds no port at
   all, and a preview of any app (`update-app`'s `preview_app.py`) takes free
   ports at boot, so nothing to avoid is written down for it.
@@ -174,7 +174,12 @@ Required:
 - `--name`: kebab-case (lowercase letters/digits with single hyphens;
   must not start with `host-` or `agent-`) -- it becomes the service's
   hostname label.
-- `--description`: becomes the lib `pyproject.toml` description.
+- `--description`: the manifest's `description` -- one line of at most 200
+  characters saying what the app is for, in the person's terms. It is
+  what an agent reads to decide whether the app does what it needs (the
+  visiting-agent primer shows it, and the app's API document carries it),
+  so write it for them; it also becomes the lib `pyproject.toml`
+  description.
 - `--icon-file`: the icon you drew in pre-flight (`.svg` only); copied
   to `system/apps/<package>/icon.svg`, named by the manifest, and
   registered on every start.
@@ -193,13 +198,16 @@ Optional:
   `uv sync --all-packages` (for fast iteration / dry runs).
 
 The scaffolder fails non-zero with a clear stderr message if the lib
-already exists, the name is reserved or invalid, the requested port
+already exists, the name is reserved or invalid, the description is
+empty, spans lines or is over 200 characters, the requested port
 is taken, or the manifest check, the tool install or `uv sync` fails.
 
 What gets generated:
 
 - `system/apps/<package>/app.toml` -- the app's manifest: its registered
-  `name`, `display_name`, `icon`,
+  `name`, `display_name`, `description` (the one-liner, which is what an
+  agent reads to know what the app is for), `api_schema_path` (`/api/schema`,
+  where the app describes its own API; see below), `icon`,
   `priority = "user"` (shed before any built-in under memory pressure),
   `program` (its supervisord program), and `stop_when_no_windows = true` (the
   shell stops the app a minute after its last window closes and starts it
@@ -221,8 +229,13 @@ What gets generated:
   under `[[references]]` with a `note` naming the surface it uses.
 - `system/apps/<package>/pyproject.toml` -- declares
   `[project.scripts] <name> = "<package>.runner:main"`, the entry point
-  the app's own tool environment exposes.
+  the app's own tool environment exposes, and makes the directory its own
+  `ty` project (an empty `[tool.ty]` table and a pinned `ty` dev dependency)
+  for the ratchets' type check.
 - `system/apps/<package>/src/<package>/__init__.py` -- empty.
+- `system/apps/<package>/src/<package>/runner_test.py` -- the one test every
+  app starts with: its API document at `/api/schema` says what its manifest
+  says and covers every route (see "The app describes its own API" below).
 - `system/apps/<package>/src/<package>/runner.py` -- sync Flask starter.
   Builds a `Flask` app and serves it with
   `werkzeug.serving.run_simple(..., threaded=True)`. It serves at `/`,
@@ -243,9 +256,13 @@ What gets generated:
   "Explain...", "Modify...") hand the clicked element to a chat as a
   `REF-<id>.json` attachment an agent can resolve
   (`.agents/shared/references/element-references.md`,
-  `docs/system/blueprint/element-reference-menu/`). Keep the script on
-  every page the app serves. An app that drops it always reopens at its
-  origin and gets the browser's own menu. The runner serves the two modules
+  `docs/system/blueprint/element-reference-menu/`). The connection also
+  opens the page's links where the workspace opens them, so write plain
+  `<a href>` links and no link handling of your own; a `window.open` to any
+  of the workspace's own addresses is routed the same way and returns `null`.
+  Keep the script on every page the app serves. An app that drops it always
+  reopens at its origin, gets the browser's own menu, and has its links
+  navigate its own window. The runner serves the two modules
   the script imports from its own origin at `/_static/app_contract.js` and
   `/_static/context_menu.js` (a module import is a fetch without cookies,
   which the forwarder refuses across origins); keep that route too.
@@ -255,7 +272,7 @@ What gets generated:
   interactive control a stable `id` or a first class that names it, and a
   reference resolves to one thing.
 - `system/apps/<package>/test_<package>_ratchets.py` -- standard ratchets at
-  zero.
+  zero, plus `test_no_type_errors`, which fails on any `ty` error in the app.
 - `system/apps/<package>/README.md` -- one-line description.
 
 What gets updated and installed -- no shared file is authored, which is what
@@ -370,7 +387,7 @@ This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
   render *that real data* in the mock so the user judges the UI against real
   content. Otherwise use representative placeholder data that covers the shapes
   the real view will show (including an empty state and a busy/overflow state).
-- `layout.py open` to surface it (see Step 4 for the command and its `--desktop` flag), then loop:
+- `workspace-layout open` to surface it (see Step 4 for the command and its `--desktop` flag), then loop:
   present -> take feedback -> update the mock so the change is *visible* ->
   re-present. Do not accept feedback and move on having only asserted you'll apply
   it.
@@ -393,6 +410,46 @@ investing in configuration or integration around it.
 
 ## Step 2: Build the real routes to a usable site (after confirmation)
 
+### The app describes its own API
+
+Every app with an HTTP API serves an OpenAPI document of its routes at
+`/api/schema` (the manifest's `api_schema_path`), built by
+`app_schema.api_schema.register_api_schema_route(app, DEFAULT_API_SCHEMA_PATH, title=..., description=..., route_table=ROUTE_TABLE)`,
+which the scaffold already calls in `runner.py` with the manifest's
+`display_name` and `description` and a starting table. The document is built
+from the live url map on each request, so every route you add is listed
+automatically; what each route owes it is:
+
+- A docstring on the view: its first paragraph, as one line, is the
+  operation's summary, the whole of it the operation's description. Write
+  them in the user's terms.
+- An entry in `ROUTE_TABLE`, keyed by `(method, path)` with path parameters
+  in `{name}` form. A route that reads or answers JSON gets
+  `RouteModels(request_model=..., response_model=..., success_status=...)`
+  (plus `alternate_responses` for a second success under another status, or a
+  failure whose answer is a model richer than the error shape),
+  and the view reads its body only through
+  `app_schema.routes.parse_request_body(Model)` and answers only through
+  `app_schema.routes.model_response(model, status)`; a refusal or a failure is
+  `app_schema.routes.error_response(detail, status)`. A page, a file, a
+  stream, a socket or a redirect gets `SchemalessRoute(reason=...)`. Define the
+  models as `FrozenModel`s with a `Field(description=...)` per attribute; the
+  descriptions are what the document shows.
+
+Never read the body with `request.get_json` or answer JSON with `jsonify` of a
+dict: the helpers check every parse and answer against the table at request
+time, and the app checks every answer, so a route that disagrees with the
+document, answers JSON by hand, or succeeds without reading its body through
+the helper fails its first request instead of shipping a document that lies.
+A failure richer than `{"detail"}` (a model extending `ErrorResponse`) is
+listed among the route's answers like any other. The scaffolded test
+`assert_api_schema_describes_app` keeps the rest honest: it fails when the
+manifest's `description` and the document disagree, when a route is missing,
+when a view has no docstring, when a route is not in the table (or the table
+names a route the app lacks), or when a modelled view reads its body around
+the helper. This document is how a visiting agent (`.agents/shared/references/visiting-agents.md`)
+and any other agent learns what the app can do without reading its code.
+
 Everything from here runs **only after** the user has confirmed the mock. The
 goal of the foreground work is a *usable* site the user can actually try -- not a
 fully hardened one. Implement the real routes (replacing the mock), wire in the
@@ -403,6 +460,22 @@ the thorough testing and review gates happen in the background (Step 5), not her
 The starter `runner.py` has just `GET /` (a placeholder HTML page)
 and `GET /health` (returns `{"status": "ok"}`). Replace the
 placeholder with your real routes.
+
+Every page is served under the starter's `Content-Security-Policy`
+(`CONTENT_SECURITY_POLICY` and the `after_request` that sets it; keep it, the app
+is reachable from the internet once the workspace is shared), and it admits only
+the app's own origin. **Anything a page pulls from elsewhere -- a CDN script,
+Google Fonts, an image hosted elsewhere, a third-party API called from the
+browser -- is blocked by the browser until its origin is added to the matching
+directive** (`script-src`, `style-src` and `font-src`, `img-src`,
+`connect-src`); an inline `<script>` needs its
+`inline_script_source` in `script-src`; never `'unsafe-inline'` or `*` for
+scripts. The browser reports every block to the starter's `/_csp-report` route,
+which logs it to stderr as `ERROR Content-Security-Policy blocked <url> on <page>
+(<directive>)` (a blocked inline script adds its line and first characters), so
+when something on a page does not show up, read the app's
+stderr log (`/var/log/supervisor/<name>-stderr.log`; `check-app-errors` finds
+these lines too) rather than guessing.
 
 Use **sync handlers** (`def`, not `async def`). Flask handlers are
 sync `def`, and the starter runs on the threaded Werkzeug server
@@ -494,7 +567,7 @@ launcher -- skip the surfacing step only for services with no UI
 (pure JSON APIs, webhook receivers, etc.).
 
 ```bash
-python3 system/scripts/layout.py open <name> --beside
+uv run --no-sync workspace-layout open <name> --beside
 ```
 
 `--beside` lays it beside the chat that asked for it instead of on top of the
@@ -503,13 +576,15 @@ nudged sideways only if there is no room beside it, and then by the least that
 makes room; it is resized only if it is over half the backdrop wide. Most of the
 time nothing about it changes. Drop the flag
 only for an app the user wanted running rather than shown; with no chat on that
-desktop it is already a no-op.
+desktop it is already a no-op. When the user has popped the chat out into its own
+window, the app opens unpaired where a plain `open` puts it and the summary says
+so; that is fine, and there is no need to `--force` the chat back.
 
 With no `--desktop`, the op edits the desktop the target client is looking
 at, which is where the user expects the new window. (Pass `--desktop <name>`
 to surface it on a different desktop instead; the op edits that desktop and
 switches the client to it.)
-`layout.py` POSTs to a loopback-only shell endpoint that opens the window
+`workspace-layout` POSTs to a loopback-only shell endpoint that opens the window
 on the desktop and writes that client's placement of it (no browser needs
 to be connected) and broadcasts the change, so the client's screen shows the
 new window on top, or brings the window for `<name>` to the front when one is
@@ -522,23 +597,26 @@ To force a reload of an already-open window (e.g. after redeploying the
 service) without prompting the user to click Refresh:
 
 ```bash
-python3 system/scripts/layout.py refresh --app <name>
+uv run --no-sync workspace-layout refresh --app <name>
 ```
 
 You should always `refresh` services after making changes, to make sure the user can see the updates.
 
 For anything beyond `open` / `refresh` -- placing, focusing, minimizing,
 maximizing, navigating a window to another path, reading the desktops -- see
-the `manage-desktop` skill. `layout.py list` is also useful when the user is
+the `manage-desktop` skill. `workspace-layout list` is also useful when the user is
 asking about what is open (it prints every app with its launch paths and
 its windows, and every desktop).
 
 ## Step 5: Finalize in the background (after the user confirms the working site)
 
 The foreground work stops at a usable, surfaced site. The thorough pass --
-extending Playwright coverage, the full test suite and ratchets, review gates
- -- runs in a **background harden worker**, never in the
-main agent. This is skeleton phase 7: the harden pass
+extending Playwright coverage, the full test suite and ratchets over the
+extended tests, review gates -- runs in a **background harden worker**, never
+in the main agent. The test gate AGENTS.md has you run through
+`system/scripts/run_in_background.py` checks the app against the tests it
+already has, so it is not this pass: run it anyway, since the worker may never
+be dispatched. This is skeleton phase 7: the harden pass
 (`.agents/shared/worker/references/harden-creation.md`), here the **crystallize**
 operation with the **app** type -- the scaffolded app is already on
 disk and the user confirmed it live, so nothing needs reconstructing and there
@@ -555,8 +633,8 @@ invalidate.)
 Reading the confirmation signal:
 
 - If the user keeps asking for changes, each one is a **cheap foreground
-  iteration that resets the clock** -- you have run no gates or thorough tests
-  yet, so pivots stay cheap. Do not hand off until their response is a
+  iteration that resets the clock** -- you have run no review gates or thorough
+  tests yet, so pivots stay cheap. Do not hand off until their response is a
   confirmation rather than a change request.
 - If the user starts asking for surface-level (cosmetic) tweaks, or pivots to a
   slightly unrelated task or follow-up, treat that as a sign the core is settled:
@@ -658,6 +736,16 @@ For the full program schema and logging knobs, see the shared
 
 Verification and gotchas references apply identically to this path.
 
+A wrapped tool's pages do not carry the shell page script, so a plain click
+on one of their links to a local service or another app navigates the tool's
+own window. If the tool can serve one more static file from its own origin
+and add a script to its pages (Jupyter's custom JS, a dev server's plugin
+hook), give it the contract: serve
+`system/apps/system_interface/imbue/system_interface/static/_static/app_contract.js`
+at `/_static/app_contract.js` and add
+`<script type="module">import { connectToShell } from "/_static/app_contract.js"; connectToShell({});</script>`
+to its pages. If it can do neither, leave it as it is.
+
 ## `forward_port.py` CLI reference
 
 Used by both paths (the scaffolder generates the call; the escape
@@ -755,10 +843,10 @@ Flags:
 
 ## The shared (public) URL
 
-If the workspace is shared, every registered service is also reachable at
-its own public origin -- the same prefix rule on the share hostname
-(`https://<name>.<workspace-share-host>/`) -- with caveats about where that
-hostname lives and why it isn't in `data/.state/apps.toml`. See
+Once the workspace has been shared, every registered service is also
+reachable at its own public origin -- the same prefix rule on the share
+domain (`https://<label>.<share-domain>/`) -- and
+`uv run --no-sync workspace-layout list` prints it as the app's `link`. See
 [references/public-url.md](references/public-url.md).
 
 ## Cleanup

@@ -48,6 +48,7 @@ import shutil
 import subprocess
 import threading
 import time
+from types import ModuleType
 from typing import Any
 
 from loguru import logger
@@ -234,6 +235,13 @@ def target_capture_fps(
     return min(_RATE_MAX_FPS, current_fps + _RATE_INCREASE_FPS)
 
 
+def _loaded_pixelflux() -> ModuleType:
+    module = _pixelflux["module"]
+    if not isinstance(module, ModuleType):
+        raise VideoPipeError(f"pixelflux failed to import: {_pixelflux['error']}")
+    return module
+
+
 def is_available() -> bool:
     """Pixelflux's native module loaded (the capture display arrives per-pipe)."""
     return _pixelflux["module"] is not None
@@ -257,12 +265,10 @@ class PixelfluxCaptureBackend:
         return display_geometry(display)
 
     def new_settings(self) -> Any:
-        module: Any = _pixelflux["module"]
-        return module.CaptureSettings()
+        return _loaded_pixelflux().CaptureSettings()
 
     def new_capture(self) -> Any:
-        module: Any = _pixelflux["module"]
-        return module.ScreenCapture()
+        return _loaded_pixelflux().ScreenCapture()
 
 
 def display_geometry(display: str) -> tuple[int, int]:
