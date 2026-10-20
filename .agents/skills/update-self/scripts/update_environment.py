@@ -1,7 +1,6 @@
 """The served environment the apply rebuilds and protects: the mngr tool
-environment, one tool environment per Python app, the root venv,
-``node_modules``, the provisioner run, and the pre-apply snapshots a rollback
-restores from.
+environment, the root venv every Python app runs from, ``node_modules``, the
+provisioner run, and the pre-apply snapshots a rollback restores from.
 """
 
 from __future__ import annotations
@@ -19,7 +18,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import tool_env
 from update_apply_contract import SnapshotRecord, snapshots_root
 from update_banding import ExpendWrapper
-from update_classification import ApplyPlan, AppTool
+from update_classification import ApplyPlan
 from update_layout import (
     FRONTEND_BUNDLES,
     MNGR_ASSETS_SCRIPT,
@@ -104,14 +103,11 @@ def snapshot_targets(
 
     Every entry is a directory restored by a plain copy: the built bundles
     (the shell's and the chat's) and the npm workspace's ``node_modules`` (the
-    build and ``npm ci`` both delete before they produce), the root venv
-    (``uv sync`` rewrites it), the mngr tool environment, and the tool
-    environment of every *critical* app the plan
-    reinstalls (``uv tool install --reinstall`` rebuilds them from scratch). A
-    non-critical app's tool is not copied aside: a rollback reinstalls it from
-    the restored tree instead.
+    build and ``npm ci`` both delete before they produce), the root venv every
+    app runs from (``uv sync`` rewrites it), and the mngr tool environment
+    (``uv tool install --reinstall`` rebuilds it from scratch).
 
-    A tool environment is named by ``destinations``
+    The mngr tool environment is named by ``destinations``
     (:func:`resolve_tool_destinations`), the same value the reinstall is given,
     so what is copied aside is what the reinstall overwrites.
     """
@@ -121,16 +117,12 @@ def snapshot_targets(
             targets.append((bundle.snapshot_name, repo_root / bundle.static_dir))
     if plan.frontend_manifest:
         targets.append(("node_modules", repo_root / NPM_ROOT_DIR / "node_modules"))
-    tool_names: list[str] = []
     if plan.backend_manifest:
         targets.append(("venv", repo_root / ".venv"))
-        tool_names.append(MNGR_TOOL_NAME)
-    tool_names.extend(app.tool_name for app in plan.app_tools if app.is_critical)
-    for tool_name in tool_names:
         targets.append(
             (
-                tool_snapshot_name(tool_name),
-                destinations[tool_name].tool_dir / tool_name,
+                tool_snapshot_name(MNGR_TOOL_NAME),
+                destinations[MNGR_TOOL_NAME].tool_dir / MNGR_TOOL_NAME,
             )
         )
     return targets
@@ -145,8 +137,7 @@ def tool_snapshot_name(tool_name: str) -> str:
 # re-resolve both from the restored tree: a restored venv over a tool
 # environment still built from the rolled-back-away tree is the
 # ModuleNotFoundError-on-``mngr`` state that reads as recovered while nothing
-# works. An app's tool environment stands on its own (it resolves from the
-# app's pyproject, not the venv), so each is judged by its own snapshot name.
+# works.
 BACKEND_SNAPSHOT_NAMES = frozenset({"venv", tool_snapshot_name(MNGR_TOOL_NAME)})
 
 
@@ -359,8 +350,8 @@ def default_sweep_homes() -> list[Path]:
     this list feeds a deletion, and ``TOOL_ENV_HOME`` is a test override that
     must not be able to redirect it. Which installation survives the sweep is
     a separate question, answered from ``PATH`` by
-    :func:`remove_shadowing_mngr_installs` and
-    :func:`remove_shadowing_app_tool_installs`.
+    :func:`remove_shadowing_mngr_installs`. The same homes are where an older
+    build left the per-app tool installs the apply removes once it has landed.
     """
     homes = [Path(tool_env.DEFAULT_TOOL_HOME)]
     if os.environ.get("HOME"):
@@ -392,34 +383,6 @@ def remove_shadowing_mngr_installs(runner: Runner, homes: Sequence[Path]) -> lis
     return tool_env.remove_shadowing_installs(canonical[0], homes, MNGR_TOOL_NAME)
 
 
-# CLEANUP: remove this function, its call in update_apply.py, and its test once no
-# supported workspace can still have been created before the tool directories were
-# pinned (those creates installed a second copy of every app tool under $HOME/.local).
-def remove_shadowing_app_tool_installs(
-    runner: Runner, homes: Sequence[Path], app_tools: Sequence[AppTool]
-) -> list[Path]:
-    """Delete stale copies of each app's tool under ``homes`` that shadow the pinned one.
-
-    The same pre-pin installs that left a second mngr under ``$HOME/.local`` left one
-    of every app tool beside it, and a login shell reaches those first too -- a month
-    behind the copy each apply refreshes. Stricter than the mngr sweep, because an app's
-    program line resolves its entry point through the pinned bin directory: a tool is
-    swept only when this apply's PATH already reaches its pinned installation, so
-    neither the copy PATH runs nor the pinned one is ever the one removed. A tool whose
-    only copy is under ``$HOME`` is left where it is.
-    """
-    pinned = _pinned_tool_location()[0].resolve()
-    removed: list[Path] = []
-    for app in app_tools:
-        canonical = _installed_tool_location(app.executable, app.tool_name, runner)
-        if canonical is None or canonical[0].resolve() != pinned:
-            continue
-        removed.extend(
-            tool_env.remove_shadowing_installs(canonical[0], homes, app.tool_name)
-        )
-    return removed
-
-
 def _pinned_tool_location() -> tuple[Path, Path]:
     """``(tool_dir, bin_dir)`` of the installation the build pins, resolved from
     nothing on this machine.
@@ -445,22 +408,12 @@ class ToolDestination(NamedTuple):
     note: str | None
 
 
-def _refresh_destination(
-    executable: str, tool_name: str, runner: Runner
-) -> ToolDestination:
-    """Where a refresh of ``tool_name`` installs: ``executable``'s own
-    installation when we can confirm which that is, else the mngr tool's, else
-    the one the build pins.
+def _mngr_refresh_destination(runner: Runner) -> ToolDestination:
+    """Where a refresh of the mngr tool installs: the installation behind
+    ``mngr`` on PATH when we can confirm which that is, else the one the build
+    pins.
 
-    A tool the merge adds (an app this workspace has never run) is on no PATH
-    yet, and uv's own default tool directory follows ``$HOME`` -- which at
-    runtime is not the one build_workspace.sh installed under, and whose bin
-    directory is on nobody's PATH. Left to that default the new tool installs
-    fine and is never found. So a tool with no installation of its own goes
-    beside the mngr tool, whose bin directory every program line resolves its
-    entry point through.
-
-    When neither resolves there is still a right answer, and it is never uv's
+    When nothing resolves there is still a right answer, and it is never uv's
     default: the build installs under a pinned home regardless of the ``$HOME``
     it runs beneath, so that is where a reachable copy goes. Falling through to
     uv instead put the tool under ``/home/user/.local`` and exited 0, which the
@@ -468,44 +421,31 @@ def _refresh_destination(
     old lease that never had a uv-tool ``mngr`` to resolve, updated itself into
     having no ``mngr`` on any PATH at all.
     """
-    own = _installed_tool_location(executable, tool_name, runner)
+    own = _installed_tool_location(MNGR_EXECUTABLE, MNGR_TOOL_NAME, runner)
     if own is not None:
         return ToolDestination(own[0], own[1], None)
-    beside_mngr = _installed_tool_location(MNGR_EXECUTABLE, MNGR_TOOL_NAME, runner)
-    if beside_mngr is not None:
-        return ToolDestination(
-            beside_mngr[0],
-            beside_mngr[1],
-            f"refresh: '{executable}' is not an installed uv tool on PATH; "
-            f"installing '{tool_name}' beside the mngr tool ({beside_mngr[1]}).\n",
-        )
     pinned = _pinned_tool_location()
     return ToolDestination(
         pinned[0],
         pinned[1],
-        f"refresh: could not identify the uv tool behind '{executable}' "
-        f"(not an installed uv tool on PATH) nor the one behind "
-        f"'{MNGR_EXECUTABLE}'; installing '{tool_name}' into the build's "
-        f"pinned tool home ({pinned[1]}).\n",
+        f"refresh: could not identify the uv tool behind '{MNGR_EXECUTABLE}' "
+        f"(not an installed uv tool on PATH); installing '{MNGR_TOOL_NAME}' into "
+        f"the build's pinned tool home ({pinned[1]}).\n",
     )
 
 
 def resolve_tool_destinations(
     plan: ApplyPlan, runner: Runner
 ) -> dict[str, ToolDestination]:
-    """Where each tool ``plan`` reinstalls will land, keyed by tool name.
+    """Where each tool ``plan`` reinstalls will land, keyed by tool name: the
+    mngr tool, when a backend manifest changed.
 
     Resolved once and handed to both the snapshot and the reinstall, so the
     environment copied aside is the one the reinstall rebuilds.
     """
-    tools: list[tuple[str, str]] = []
-    if plan.backend_manifest:
-        tools.append((MNGR_TOOL_NAME, MNGR_EXECUTABLE))
-    tools.extend((app.tool_name, app.executable) for app in plan.app_tools)
-    return {
-        tool_name: _refresh_destination(executable, tool_name, runner)
-        for tool_name, executable in tools
-    }
+    if not plan.backend_manifest:
+        return {}
+    return {MNGR_TOOL_NAME: _mngr_refresh_destination(runner)}
 
 
 _GIT_REF_QUERY_KEYS = frozenset({"rev", "tag", "branch"})
@@ -653,7 +593,7 @@ def _manifest_extras(plugin_key: str, repo_root: Path) -> list[str]:
     """The ``--with``/``--with-editable`` args ``PLUGIN_MANIFEST_PATH`` assigns to ``plugin_key``, from the merged tree's mngr source.
 
     ``plugin_key`` is how the plugin table names the tool: ``mngr`` for the mngr
-    tool and an app's manifest name for the app's tool. Empty for a tree that
+    tool. Empty for a tree that
     predates the manifest (a rollback re-refreshes the restored tree, and the
     receipt alone was that tree's whole answer).
 
@@ -777,10 +717,10 @@ def _reinstall_tool(
     destination: ToolDestination,
     timeout: float | None = None,
 ) -> None:
-    """Re-resolve ``tool_name`` into ``destination`` from ``base`` -- ``["-e", <dir>]``
-    for an in-tree app, or a single git requirement for the pinned mngr -- keeping the
-    extras it was installed with and adding the merged tree's own
-    plugin manifest (the plugins it assigns to ``plugin_key``).
+    """Re-resolve ``tool_name`` into ``destination`` from ``base`` -- a single git
+    requirement for the pinned mngr -- keeping the extras it was installed with and
+    adding the merged tree's own plugin manifest (the plugins it assigns to
+    ``plugin_key``).
 
     ``expend`` gates the expendable tag: a forward install may be shed (the
     rollback restores the tool-environment snapshot), a recovery install must
@@ -893,26 +833,3 @@ def refresh_backend_dependencies(
     )
     _fetch_mngr_assets(repo_root, runner, expend, timeout)
 
-
-def refresh_app_tools(
-    app_tools: Sequence[AppTool],
-    repo_root: Path,
-    runner: Runner,
-    expend: ExpendWrapper,
-    destinations: Mapping[str, ToolDestination],
-    timeout: float | None = None,
-) -> None:
-    """Reinstall each app's own tool environment from its directory in the
-    current tree, with the mngr plugins the plugin table assigns to it, as
-    ``build_workspace.sh`` installs them. ``timeout`` bounds each install."""
-    for app in app_tools:
-        _reinstall_tool(
-            app.tool_name,
-            ["-e", app.directory],
-            app.plugin_key,
-            repo_root,
-            runner,
-            expend,
-            destinations[app.tool_name],
-            timeout,
-        )
