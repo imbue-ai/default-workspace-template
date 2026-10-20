@@ -1286,6 +1286,44 @@ def test_a_send_refused_for_a_removed_account_offers_a_provider_instead_of_retry
 
 
 @pytest.mark.timeout(120, func_only=False)
+def test_a_send_mngr_could_not_confirm_asks_the_user_to_check_before_sending_again(tmp_path: Path, page: Page) -> None:
+    """A send mngr typed into the agent but could not confirm may already be with the agent, so the notice says so
+    in its own words rather than mngr's diagnostics, offers neither Retry nor Force, and sends the message again
+    only when Send again is pressed; the message stays in the composer throughout."""
+    text = "did you get this?"
+    messenger = RecordingMngrMessenger(
+        succeeds=False,
+        failure_reason=f"Timeout waiting for message submission evidence: no evidence probe confirmed the submission "
+        f"within 30s\npane content:\n❯ {text}",
+        failure_kind="submission_unconfirmed",
+    )
+    with running_workspace(tmp_path, find_free_port(), find_free_port(), messenger=messenger) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        expect(chat.locator(".message-input-textbox")).to_be_editable(timeout=15000)
+
+        chat.locator(".message-input-textbox").fill(text)
+        chat.locator(".message-input-textbox").press("Enter")
+
+        notice = chat.locator(".modal-card")
+        expect(notice).to_contain_text("Couldn't confirm your message arrived", timeout=15000)
+        expect(notice).to_contain_text(
+            "The agent may already have it, so check its terminal before you send it again."
+        )
+        expect(notice).not_to_contain_text("Timeout waiting")
+        expect(notice.get_by_role("button", name="Retry")).to_have_count(0)
+        expect(notice.get_by_role("button", name="Force")).to_have_count(0)
+        expect(chat.locator(".message-input-textbox")).to_have_value(text)
+        assert [message for _agent_id, message in messenger.sent] == [text]
+
+        notice.get_by_role("button", name="Send again").click()
+        wait_for(lambda: len(messenger.sent) == 2, timeout=15.0, error_message="Send again never sent the message")
+        expect(notice.get_by_role("button", name="Send again")).to_be_enabled(timeout=15000)
+        assert [message for _agent_id, message in messenger.sent] == [text, text]
+        expect(chat.locator(".message-input-textbox")).to_have_value(text)
+
+
+@pytest.mark.timeout(120, func_only=False)
 def test_a_chat_awaiting_its_first_send_with_nothing_signed_in_offers_a_provider_in_place_of_the_composer(
     tmp_path: Path, page: Page
 ) -> None:
