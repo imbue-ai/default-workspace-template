@@ -3,8 +3,9 @@
 
 Invoked by the Imbue Studio desktop app via a small ``mngr exec`` as
 ``python3 system/scripts/collect_bug_report_diagnostics.py [--logs]
-[--transcript] [--scan-timeout=<seconds>]``. Stdlib only (no venv, no
-third-party imports), targeting the container's system python3 (3.11+).
+[--transcript] [--scan-timeout=<seconds>] [--budget-seconds=<seconds>]``.
+Stdlib only (no venv, no third-party imports), targeting the container's
+system python3 (3.11+).
 
 Prints exactly one line -- the base64 of a zip -- and nothing at all when no
 content type was requested. Under --logs the zip holds ``metadata.json`` plus
@@ -27,6 +28,12 @@ plain-words line in the archive's own ``collection-notes.txt`` member, so the
 archive explains itself; a content type that was not requested appears in
 neither the members nor the notes.
 
+The collection keeps to a deadline (``--budget-seconds``) inside the host's own
+exec budget, because the host kills an exec that overruns it and then nothing
+ships at all. Once too little time is left for the secret scan and packing, no
+further mngr call starts and what was gathered so far ships; whatever that left
+out is a line in ``collection-notes.txt`` too.
+
 Nothing leaves the container unscanned: every chat, the logs text, and each
 future zip member's own filename are staged as PLAINTEXT and run through the
 template's own secret-scan gate before anything is packed. A scanner pointed
@@ -47,7 +54,7 @@ import sys
 import tempfile
 import time
 import zipfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from functools import lru_cache
 from typing import NamedTuple
@@ -120,6 +127,17 @@ MAX_LOG_CLASS_BYTES = 4 * 1024 * 1024
 # it via --scan-timeout to keep it the same fraction of whatever budget it runs
 # under.
 DEFAULT_SCAN_TIMEOUT_SECONDS = 12
+# How long the whole collection may run when the host does not say: what a host
+# that predates --budget-seconds needs, since it runs collection under a 300s
+# exec budget and the rest of that is its own exec around this script.
+DEFAULT_BUDGET_SECONDS = 240
+# What the collection holds back for the work after its last mngr call: the
+# secret scan, then packing and encoding the archive. No mngr call starts with
+# less than this left, and each one is cut off where it would eat into it.
+FINISH_RESERVE_SECONDS = 60
+# The part of that reserve the packing and encoding after the scan need: the
+# scan's own timeout is capped so it ends this long before the deadline.
+PACK_RESERVE_SECONDS = 15
 SUPERVISORCTL_TIMEOUT_SECONDS = 2
 DF_TIMEOUT_SECONDS = 2
 GIT_TIMEOUT_SECONDS = 2
@@ -244,6 +262,22 @@ NOTE_NO_AGENT_LOGS = "no agent wrote a harness log to collect"
 # trimmed class reads exactly like a complete one, and "the harness that broke
 # wrote nothing" is the wrong conclusion to leave a reader holding.
 NOTE_TRIMMED_TO_BUDGET = "{} file(s) were left out to fit the collection's size budget"
+# What the deadline cost the report. Counts rather than names: these notes are
+# not scanned, so they carry nothing from the workspace, and an agent's name is.
+NOTE_AGENT_LIST_OUT_OF_TIME = (
+    "the agent list: left out because the collection ran out of time, so no agent"
+    " logs, panes or chats were gathered"
+)
+NOTE_PANES_OUT_OF_TIME = (
+    "{} of {} agent pane(s) were left out because the collection ran out of time"
+)
+NOTE_TRANSCRIPTS_OUT_OF_TIME = (
+    "{} of {} agent conversation(s) were left out because the collection"
+    " ran out of time"
+)
+# The key the agent list's note is filed under: it is no class of its own, and
+# it explains the absence of several.
+AGENT_LIST_KEY = "agent_list"
 
 FINDING_MARKER = "SECRET SCAN FINDING"
 # Every marker scan_secrets.sh prints for "one of my two mandatory scanners did
@@ -260,6 +294,32 @@ SCANNER_MALFUNCTION_MARKERS = (
 # A scanner exited with its findings code but its report could not be parsed, so
 # there are leaks that name no file: every target has to wear them.
 UNPARSEABLE_REPORT_MARKER = "SECRET SCAN FAILED"
+
+
+class CollectionDeadline:
+    """When the collection must be done by, and what it left out to get there.
+
+    One is made per run and handed to every step that asks mngr anything.
+    """
+
+    def __init__(self, budget_seconds: float) -> None:
+        self.ends_at = time.monotonic() + budget_seconds
+        # Plain-words notes for what was left out to meet the deadline, keyed by
+        # the class they belong to (or AGENT_LIST_KEY), so main can say each
+        # one only for a class that actually ships.
+        self.note_by_key: dict[str, str] = {}
+
+    def remaining(self) -> float:
+        return self.ends_at - time.monotonic()
+
+    def mngr_call_timeout(self) -> float | None:
+        """How long the next mngr call may run, or None when it must not start."""
+        available = self.remaining() - FINISH_RESERVE_SECONDS
+        return available if available > 0 else None
+
+    def scan_timeout(self, requested_seconds: float) -> float:
+        """The host's scan timeout, cut short where it would leave no time to pack."""
+        return max(0.0, min(requested_seconds, self.remaining() - PACK_RESERVE_SECONDS))
 
 
 def read_bounded(path: str, from_end: bool) -> str:
@@ -546,24 +606,52 @@ def select_agent_log_files(agent_id: str) -> list[str]:
     return recent
 
 
-def capture_pane(target: str, timeout: float) -> str | None:
-    """One agent's tmux scrollback, or None when it could not be captured.
-
-    ``target`` is the pinned ``id@host-id.provider`` form from ``list_agents``.
-
-    ``--no-start`` for the same reason the host's ``mngr exec`` passes it: a bug
-    report asks a workspace what happened, it does not boot anything to find
-    out. An agent that is stopped therefore contributes no pane, which is
-    correct -- its pane no longer exists.
-    """
-    captured = run_mngr(["capture", target, "--full", "--no-start"], timeout)
+def trim_pane(captured: str | None) -> str | None:
+    """A pane's last MAX_PANE_LINES lines, or None when it holds nothing."""
     if captured is None or not captured.strip():
         return None
     return "\n".join(captured.splitlines()[-MAX_PANE_LINES:])
 
 
+def capture_panes(
+    targets: Sequence[str], deadline: CollectionDeadline
+) -> dict[str, str]:
+    """Each agent's tmux scrollback, by target; an agent with none is absent.
+
+    ``targets`` are the pinned ``id@host-id.provider`` forms from
+    ``list_agents``, captured in one ``mngr capture`` so the report pays for one
+    mngr start rather than one per agent.
+
+    ``--no-start`` for the same reason the host's ``mngr exec`` passes it: a bug
+    report asks a workspace what happened, it does not boot anything to find
+    out. An agent that is stopped therefore contributes no pane, which is
+    correct -- its pane no longer exists.
+
+    Panes the deadline cost are counted into a note on ``deadline``.
+    """
+    answers = run_mngr_for_each_target(
+        "capture", targets, ["--full", "--no-start"], render_pane_envelope, deadline
+    )
+    if answers.out_of_time_count:
+        deadline.note_by_key[AGENT_LOGS_KEY] = NOTE_PANES_OUT_OF_TIME.format(
+            answers.out_of_time_count, len(targets)
+        )
+    panes: dict[str, str] = {}
+    for target, captured in answers.payload_by_target.items():
+        pane = trim_pane(captured)
+        if pane is not None:
+            panes[target] = pane
+    return panes
+
+
+def render_pane_envelope(envelope: dict[str, object]) -> str | None:
+    """The pane text one ``mngr capture`` record carries."""
+    content = envelope.get("content")
+    return content if isinstance(content, str) else None
+
+
 def collect_agent_log_db_members(
-    timeout: float,
+    deadline: CollectionDeadline,
 ) -> tuple[list[tuple[str, str, float]], int]:
     """Every agent's rendered harness log db, as ``(member name, content, mtime)``, and the drop count.
 
@@ -576,7 +664,7 @@ def collect_agent_log_db_members(
     """
     members: list[tuple[str, str, float]] = []
     used_names: set[str] = set()
-    for agent in list_agents(timeout):
+    for agent in list_agents(deadline):
         agent_dir_member = safe_member_component(agent.name)
         for path in select_agent_log_dbs(agent.agent_id):
             # Rendered to text under a ``.log`` member name: the db is packed for
@@ -595,7 +683,7 @@ def collect_agent_log_db_members(
 
 
 def collect_agent_log_members(
-    timeout: float, is_pane_included: bool
+    deadline: CollectionDeadline, is_pane_included: bool
 ) -> tuple[list[tuple[str, str, float]], int]:
     """The harness diagnostics for every agent, as ``(member name, content, mtime)``, and the drop count.
 
@@ -619,7 +707,13 @@ def collect_agent_log_members(
     log_members: list[tuple[str, str, float]] = []
     pane_members: list[tuple[str, str, float]] = []
     used_names: set[str] = set()
-    for agent in list_agents(timeout):
+    agents = list_agents(deadline)
+    pane_by_target = (
+        capture_panes([agent.target for agent in agents], deadline)
+        if is_pane_included
+        else {}
+    )
+    for agent in agents:
         agent_dir_member = safe_member_component(agent.name)
         for path in select_agent_log_files(agent.agent_id):
             member = unique_member_name(
@@ -633,9 +727,7 @@ def collect_agent_log_members(
             log_members.append(
                 (member, read_tail(path, MAX_LINES_PER_LOG), safe_mtime(path))
             )
-        if not is_pane_included:
-            continue
-        pane = capture_pane(agent.target, timeout)
+        pane = pane_by_target.get(agent.target)
         if pane is not None:
             member = unique_member_name(
                 "{}/{}/{}".format(
@@ -702,18 +794,101 @@ def run_mngr(args: Sequence[str], timeout: float) -> str | None:
     The workspace's own mngr is the source of truth for what agents exist and
     what was said in them, so the collector asks it rather than re-deriving
     either from the files under ~/.mngr. Any failure returns None and the
-    caller reports no transcript: a collector that guessed at mngr's state
-    would be the duplicate this exists to avoid.
+    caller reports nothing: a collector that guessed at mngr's state would be
+    the duplicate this exists to avoid. A timeout is raised rather than
+    returned, so a caller can tell the deadline cutting it short from mngr
+    failing.
     """
     try:
         proc = subprocess.run(
             [MNGR_BINARY, *args], capture_output=True, text=True, timeout=timeout
         )
+    except subprocess.TimeoutExpired:
+        raise
     except Exception:
         return None
     if proc.returncode != 0:
         return None
     return proc.stdout
+
+
+class TargetAnswers(NamedTuple):
+    """What one multi-target mngr call said about each target it was asked about."""
+
+    # Each target mngr answered for, with its rendered payload, or None when
+    # mngr reported that target as failed.
+    payload_by_target: dict[str, str | None]
+    # Targets left without an answer because the deadline skipped or cut the call.
+    out_of_time_count: int
+
+
+def run_mngr_for_each_target(
+    command: str,
+    targets: Sequence[str],
+    flags: Sequence[str],
+    render_envelope: Callable[[dict[str, object]], str | None],
+    deadline: CollectionDeadline,
+) -> TargetAnswers:
+    """Ask one mngr command about every target in a single call, within the deadline.
+
+    One call rather than one per target because each mngr call costs a Python
+    start and a discovery pass, seconds apiece under gVisor.
+
+    With several targets mngr writes one JSONL record per target, each as soon
+    as that target is done, so a call the deadline cuts short still yields
+    every target it finished; ``render_envelope`` turns a record into the text
+    a single-target call would have printed. A single target gets mngr's plain
+    output instead.
+    """
+    if not targets:
+        return TargetAnswers({}, 0)
+    timeout = deadline.mngr_call_timeout()
+    if timeout is None:
+        return TargetAnswers({}, len(targets))
+    argv = [MNGR_BINARY, command, *targets, *flags, "--format", "jsonl"]
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        # A killed call's output arrives as bytes whatever mode it ran in.
+        partial = e.stdout.decode("utf-8", errors="replace") if e.stdout else ""
+        return answers_from_records(partial, targets, render_envelope, is_cut=True)
+    except Exception:
+        return TargetAnswers({}, 0)
+    if len(targets) == 1:
+        return TargetAnswers(
+            {targets[0]: proc.stdout if proc.returncode == 0 else None}, 0
+        )
+    return answers_from_records(proc.stdout, targets, render_envelope, is_cut=False)
+
+
+def answers_from_records(
+    output: str,
+    targets: Sequence[str],
+    render_envelope: Callable[[dict[str, object]], str | None],
+    is_cut: bool,
+) -> TargetAnswers:
+    """The per-target records in a multi-target call's JSONL output.
+
+    Only whole lines count: a call cut short can end mid-record, and half a
+    record is no answer. A single target's plain output carries no records, so
+    a single-target call that was cut short answered nothing.
+    """
+    payload_by_target: dict[str, str | None] = {}
+    for line in output.splitlines(keepends=True):
+        if not line.endswith("\n"):
+            continue
+        try:
+            envelope = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(envelope, dict) or envelope.get("target") not in targets:
+            continue
+        is_failed = envelope.get("error") is not None
+        payload_by_target[envelope["target"]] = (
+            None if is_failed else render_envelope(envelope)
+        )
+    unanswered = sum(1 for target in targets if target not in payload_by_target)
+    return TargetAnswers(payload_by_target, unanswered if is_cut else 0)
 
 
 class ListedAgent(NamedTuple):
@@ -735,13 +910,12 @@ class ListedAgent(NamedTuple):
 
 
 @lru_cache(maxsize=1)
-def _query_agents(timeout: float) -> tuple[ListedAgent, ...]:
+def _query_agents(deadline: CollectionDeadline) -> tuple[ListedAgent, ...]:
     """Ask mngr which agents exist, at most once per run.
 
     Cached because it is the collector's most expensive call (see the fan-out
-    note below) and each half of a report needs the same answer. ``timeout``
-    here is most of the whole collection's budget, so asking three times is how
-    a slow mngr turns a trimmed report into no report at all.
+    note below) and each half of a report needs the same answer: asking three
+    times is how a slow mngr turns a trimmed report into no report at all.
 
     A failed listing is cached too: retrying a wedged mngr is exactly what the
     budget cannot afford. Returned as a tuple, so what is cached cannot be
@@ -770,16 +944,24 @@ def _query_agents(timeout: float) -> tuple[ListedAgent, ...]:
     failing the listing, so the chat columns cost nothing in a workspace whose
     agents have none.
     """
-    listed = run_mngr(
-        [
-            "list",
-            "--provider",
-            "local",
-            "--format",
-            "{name}|{id}|{id}@{host.id}.{host.provider_name}|{labels.chat_id}|{labels.chat_seq}",
-        ],
-        timeout,
-    )
+    timeout = deadline.mngr_call_timeout()
+    if timeout is None:
+        deadline.note_by_key[AGENT_LIST_KEY] = NOTE_AGENT_LIST_OUT_OF_TIME
+        return ()
+    try:
+        listed = run_mngr(
+            [
+                "list",
+                "--provider",
+                "local",
+                "--format",
+                "{name}|{id}|{id}@{host.id}.{host.provider_name}|{labels.chat_id}|{labels.chat_seq}",
+            ],
+            timeout,
+        )
+    except subprocess.TimeoutExpired:
+        deadline.note_by_key[AGENT_LIST_KEY] = NOTE_AGENT_LIST_OUT_OF_TIME
+        return ()
     if listed is None:
         return ()
     agents: list[ListedAgent] = []
@@ -808,7 +990,7 @@ def parse_chat_seq(raw: str) -> int:
         return 1
 
 
-def list_agents(timeout: float) -> list[ListedAgent]:
+def list_agents(deadline: CollectionDeadline) -> list[ListedAgent]:
     """Every agent mngr reports -- chat segment, worker, or the services agent.
 
     The id is what names an agent's state directory, so it is asked for here
@@ -817,7 +999,7 @@ def list_agents(timeout: float) -> list[ListedAgent]:
     One listing serves the whole report, so the harness logs, the log databases
     and the chats all describe the same set of agents.
     """
-    return list(_query_agents(timeout))
+    return list(_query_agents(deadline))
 
 
 def group_into_chats(agents: Sequence[ListedAgent]) -> list[list[ListedAgent]]:
@@ -837,11 +1019,14 @@ def group_into_chats(agents: Sequence[ListedAgent]) -> list[list[ListedAgent]]:
     ]
 
 
-def fetch_transcript(target: str, timeout: float) -> str | None:
-    """One agent's conversation as raw JSONL, or None when it has none.
+def fetch_transcripts(
+    targets: Sequence[str], deadline: CollectionDeadline
+) -> dict[str, str]:
+    """Each agent's conversation as raw JSONL, by target; an agent with none is absent.
 
-    ``target`` is the pinned ``id@host-id.provider`` form from ``list_agents``,
-    so resolving it never fans out to the unreachable cloud providers.
+    ``targets`` are the pinned ``id@host-id.provider`` forms from
+    ``list_agents``, so resolving them never fans out to the unreachable cloud
+    providers, and all of them are read in one ``mngr transcript`` call.
 
     ``mngr transcript`` rather than ``mngr event``: it writes the stream's ATIF
     records verbatim, where the event reader overwrites each record's ``source``
@@ -850,15 +1035,33 @@ def fetch_transcript(target: str, timeout: float) -> str | None:
     itself, so the harness stays mngr's business rather than a list kept here
     (an agent of type ``chat`` writes its events under ``claude/``), and the
     converter's own stdout under ``logs/`` is already not what it reads.
+
+    Conversations the deadline cost are counted into a note on ``deadline``.
     """
-    events = run_mngr(["transcript", target, "--format", "jsonl"], timeout)
-    if events is None or not events.strip():
+    answers = run_mngr_for_each_target(
+        "transcript", targets, [], render_transcript_envelope, deadline
+    )
+    if answers.out_of_time_count:
+        deadline.note_by_key[TRANSCRIPT_KEY] = NOTE_TRANSCRIPTS_OUT_OF_TIME.format(
+            answers.out_of_time_count, len(targets)
+        )
+    return {
+        target: events
+        for target, events in answers.payload_by_target.items()
+        if events is not None and events.strip()
+    }
+
+
+def render_transcript_envelope(envelope: dict[str, object]) -> str | None:
+    """One ``mngr transcript`` record's events, as the JSONL a single-target call prints."""
+    events = envelope.get("events")
+    if not isinstance(events, list):
         return None
-    return events
+    return "".join(json.dumps(event, separators=(",", ":")) + "\n" for event in events)
 
 
 def read_chat(
-    segments: Sequence[ListedAgent], timeout: float
+    segments: Sequence[ListedAgent], events_by_target: dict[str, str]
 ) -> tuple[str, str] | None:
     """One chat's whole conversation and the harness it is running on, or None when it has none.
 
@@ -870,7 +1073,7 @@ def read_chat(
     conversation = []
     harness = ""
     for segment in segments:
-        events = fetch_transcript(segment.target, timeout)
+        events = events_by_target.get(segment.target)
         if events is None:
             continue
         if not events.endswith("\n"):
@@ -928,7 +1131,9 @@ def newest_event_time(events: str) -> float:
     return newest
 
 
-def collect_transcript_members(timeout: float) -> list[tuple[str, str, float]]:
+def collect_transcript_members(
+    deadline: CollectionDeadline,
+) -> list[tuple[str, str, float]]:
     """The conversations to attach, as ``(member name, content, last-written epoch)``.
 
     One member per CHAT, not per agent: handing a chat to another harness
@@ -947,8 +1152,10 @@ def collect_transcript_members(timeout: float) -> list[tuple[str, str, float]]:
     """
     fetched = []
     used_names: set[str] = set()
-    for segments in group_into_chats(list_agents(timeout)):
-        chat = read_chat(segments, timeout)
+    agents = list_agents(deadline)
+    events_by_target = fetch_transcripts([agent.target for agent in agents], deadline)
+    for segments in group_into_chats(agents):
+        chat = read_chat(segments, events_by_target)
         if chat is None:
             continue
         events, harness = chat
@@ -1068,15 +1275,16 @@ def stage_for_scan(staging_dir: str, key: str, content: str) -> str | None:
     return path
 
 
-def parse_scan_timeout(flags: Sequence[str]) -> float:
-    """The host's --scan-timeout=<seconds> override, or the default when absent or unusable."""
+def parse_seconds_flag(flags: Sequence[str], name: str, default: float) -> float:
+    """The host's --<name>=<seconds>, or ``default`` when absent or unusable."""
+    prefix = "--{}=".format(name)
     for flag in flags:
-        if flag.startswith("--scan-timeout="):
+        if flag.startswith(prefix):
             try:
-                return float(flag.split("=", 1)[1])
+                return float(flag[len(prefix) :])
             except ValueError:
-                return DEFAULT_SCAN_TIMEOUT_SECONDS
-    return DEFAULT_SCAN_TIMEOUT_SECONDS
+                return default
+    return default
 
 
 def stage_members(
@@ -1102,7 +1310,12 @@ def stage_members(
 
 def main(argv: Sequence[str]) -> None:
     flags = set(argv)
-    scan_timeout_seconds = parse_scan_timeout(list(flags))
+    deadline = CollectionDeadline(
+        parse_seconds_flag(argv, "budget-seconds", DEFAULT_BUDGET_SECONDS)
+    )
+    scan_timeout_seconds = parse_seconds_flag(
+        argv, "scan-timeout", DEFAULT_SCAN_TIMEOUT_SECONDS
+    )
     # Plain-words lines for the notes member: whenever something requested is
     # not in the archive, one line here says so. The archive is the only
     # channel back to the report.
@@ -1139,9 +1352,11 @@ def main(argv: Sequence[str]) -> None:
         # harness renders the conversation, so its scrollback is chat content and
         # not only diagnostics.
         agent_log_members, dropped_agent_logs = collect_agent_log_members(
-            scan_timeout_seconds, is_pane_included="--transcript" in flags
+            deadline, is_pane_included="--transcript" in flags
         )
-        if not agent_log_members:
+        # An agent list the deadline cut says nothing about what the agents
+        # wrote, so it does not get to claim they wrote nothing.
+        if not agent_log_members and AGENT_LIST_KEY not in deadline.note_by_key:
             notes.append("agent logs: " + NOTE_NO_AGENT_LOGS)
         dropped_by_key[AGENT_LOGS_KEY] = dropped_agent_logs
         collected.append((AGENT_LOGS_KEY, "agent logs", agent_log_members))
@@ -1150,17 +1365,22 @@ def main(argv: Sequence[str]) -> None:
         # the harness's whole TRACE stream and has been observed carrying
         # credentials the harness logged about itself, so a row the target
         # allowlist did not anticipate must cost the report this class alone.
-        log_db_members, dropped_log_dbs = collect_agent_log_db_members(
-            scan_timeout_seconds
-        )
+        log_db_members, dropped_log_dbs = collect_agent_log_db_members(deadline)
         dropped_by_key[AGENT_LOG_DB_KEY] = dropped_log_dbs
         collected.append((AGENT_LOG_DB_KEY, "agent log databases", log_db_members))
 
     if "--transcript" in flags:
-        chat_members = collect_transcript_members(scan_timeout_seconds)
-        if not chat_members:
+        chat_members = collect_transcript_members(deadline)
+        is_chats_cut_short = (
+            AGENT_LIST_KEY in deadline.note_by_key
+            or TRANSCRIPT_KEY in deadline.note_by_key
+        )
+        if not chat_members and not is_chats_cut_short:
             notes.append("recent chats: " + NOTE_NO_CHAT_TRANSCRIPT)
         collected.append((TRANSCRIPT_KEY, "recent chats", chat_members))
+
+    if AGENT_LIST_KEY in deadline.note_by_key:
+        notes.append(deadline.note_by_key[AGENT_LIST_KEY])
 
     # Nothing leaves the container unscanned, so a payload that cannot even be
     # staged for the scanner is dropped exactly as one the scanner could not
@@ -1182,7 +1402,9 @@ def main(argv: Sequence[str]) -> None:
 
         if staged_by_key:
             targets = [path for paths in staged_by_key.values() for path in paths]
-            verdicts = scan_targets(targets, scan_timeout_seconds)
+            verdicts = scan_targets(
+                targets, deadline.scan_timeout(scan_timeout_seconds)
+            )
             for key, paths in staged_by_key.items():
                 # A class made of several files is released only when every one
                 # of them is clean: one chat carrying a secret withholds the
@@ -1205,6 +1427,8 @@ def main(argv: Sequence[str]) -> None:
         dropped = dropped_by_key.get(key, 0)
         if dropped:
             notes.append("{}: {}".format(label, NOTE_TRIMMED_TO_BUDGET.format(dropped)))
+        if key in deadline.note_by_key:
+            notes.append("{}: {}".format(label, deadline.note_by_key[key]))
         members.extend(class_members)
 
     # The notes ride inside the archive itself, so a reader learns what was

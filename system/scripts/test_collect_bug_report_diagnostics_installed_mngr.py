@@ -7,7 +7,7 @@ so ``mngr list`` names the host after that record (``workspace-1``) rather than
 ``localhost``, and a target composed from the listing is only as good as the installed
 mngr's willingness to resolve it.
 
-So this drives the collector's ``list_agents`` -> ``fetch_transcript`` path against the
+So this drives the collector's ``list_agents`` -> ``fetch_transcripts`` path against the
 installed binary over a host dir shaped like a workspace's: a record naming the host
 something other than ``localhost``, and one agent with a real ATIF stream. A change to
 mngr's addressing, or to what it makes of the records a harness writes, shows up here
@@ -132,15 +132,10 @@ def _workspace_shaped_host_dir(tmp_path: Path) -> Path:
     return host_dir
 
 
-@pytest.mark.timeout(120)
-def test_transcripts_are_fetched_through_the_installed_mngr(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    host_dir = _workspace_shaped_host_dir(tmp_path)
-    events_dir = _agent_with_events_dir(host_dir, "chatty", "claude/common_transcript")
-    (events_dir / "events.jsonl").write_text(
-        "\n".join(json.dumps(record) for record in _atif_stream_records()) + "\n"
-    )
+def _installed_mngr_over(
+    host_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> str:
+    """The checkout's pinned mngr, pointed at ``host_dir`` and away from this checkout's settings."""
     mngr_binary = shutil.which("mngr")
     assert mngr_binary is not None and Path(mngr_binary).resolve().is_relative_to(
         _REPO_ROOT
@@ -148,9 +143,27 @@ def test_transcripts_are_fetched_through_the_installed_mngr(
     monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
     # A temp cwd, so mngr does not read this checkout's own .mngr/settings.toml as project settings.
     monkeypatch.chdir(tmp_path)
-    collector = _load_collector(mngr_binary)
+    return mngr_binary
 
-    members = collector.collect_transcript_members(60.0)
+
+def _write_stream(events_dir: Path, records: list[dict[str, object]]) -> None:
+    (events_dir / "events.jsonl").write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n"
+    )
+
+
+@pytest.mark.timeout(120)
+def test_transcripts_are_fetched_through_the_installed_mngr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host_dir = _workspace_shaped_host_dir(tmp_path)
+    events_dir = _agent_with_events_dir(host_dir, "chatty", "claude/common_transcript")
+    _write_stream(events_dir, _atif_stream_records())
+    collector = _load_collector(_installed_mngr_over(host_dir, tmp_path, monkeypatch))
+
+    members = collector.collect_transcript_members(
+        collector.CollectionDeadline(collector.FINISH_RESERVE_SECONDS + 60.0)
+    )
 
     assert [name for name, _content, _written_at in members] == [
         "chats/chatty-claude.jsonl"
@@ -170,3 +183,48 @@ def test_transcripts_are_fetched_through_the_installed_mngr(
         "user",
         "agent",
     ]
+
+
+@pytest.mark.timeout(180)
+def test_one_transcript_call_for_every_agent_reads_what_one_call_per_agent_does(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The collector reads every agent's conversation in one ``mngr transcript`` call.
+
+    The installed mngr prints a lone target's stream bare but several targets as
+    one record each, so this is what shows the collector reassembles the records
+    into exactly the stream a per-agent read gets -- and that an agent mngr cannot
+    read costs only itself, not the others in the same call.
+    """
+    host_dir = _workspace_shaped_host_dir(tmp_path)
+    _write_stream(
+        _agent_with_events_dir(host_dir, "chatty", "claude/common_transcript"),
+        _atif_stream_records(),
+    )
+    quiet_records = [
+        {**record, "message": "a different conversation"}
+        if record["type"] == "step"
+        else record
+        for record in _atif_stream_records()
+    ]
+    _write_stream(
+        _agent_with_events_dir(host_dir, "quiet", "claude/common_transcript"),
+        quiet_records,
+    )
+    collector = _load_collector(_installed_mngr_over(host_dir, tmp_path, monkeypatch))
+    deadline = collector.CollectionDeadline(collector.FINISH_RESERVE_SECONDS + 120.0)
+    targets = [agent.target for agent in collector.list_agents(deadline)]
+    assert len(targets) == 2
+    missing_target = "agent-{}@{}".format("0" * 32, targets[0].split("@", 1)[1])
+
+    batched = collector.fetch_transcripts([*targets, missing_target], deadline)
+    one_at_a_time = {
+        target: collector.fetch_transcripts([target], deadline)[target]
+        for target in targets
+    }
+
+    assert batched == one_at_a_time
+    assert sorted(
+        json.loads(events.splitlines()[1])["message"] for events in batched.values()
+    ) == ["a different conversation", "what did the update change"]
+    assert deadline.note_by_key == {}

@@ -211,6 +211,78 @@ def _target_for(name: str) -> str:
     return f"{_agent_id_for(name)}@stub-host-id.local"
 
 
+def _ample_deadline(module: ModuleType) -> Any:
+    """A deadline that leaves every mngr call a minute to run."""
+    return module.CollectionDeadline(module.FINISH_RESERVE_SECONDS + 60.0)
+
+
+# The stub mngr. Its canned answers come in through the json config file named
+# on its first line.
+_MNGR_STUB_SCRIPT = """\
+import json
+import os
+import sys
+import time
+
+config = json.load(open(CONFIG_PATH, encoding="utf-8"))
+with open(config["argv_log"], "a", encoding="utf-8") as log:
+    log.write(" ".join(sys.argv[1:]) + "\\n")
+if config["exit_code"]:
+    sys.exit(config["exit_code"])
+command, rest = sys.argv[1], sys.argv[2:]
+stall_after = config["stall_after_records"].get(command)
+if command == "list":
+    if stall_after is not None:
+        time.sleep(600)
+    sys.stdout.write(config["listing"])
+    sys.exit(0)
+if command not in ("capture", "transcript"):
+    sys.exit(1)
+targets = []
+for arg in rest:
+    if arg.startswith("--"):
+        break
+    targets.append(arg)
+
+
+def answer(target):
+    agent_id = target.split("@", 1)[0]
+    if command == "capture":
+        pane = config["panes"].get(agent_id)
+        if pane is None:
+            return None, "Agent is stopped and automatic starting is disabled."
+        return pane, None
+    events = config["events"].get(agent_id)
+    if events is None:
+        return None, "No common transcript found."
+    return [json.loads(line) for line in events.splitlines() if line.strip()], None
+
+
+if len(targets) == 1:
+    payload, error = answer(targets[0])
+    if error is not None:
+        sys.exit(1)
+    if command == "capture":
+        sys.stdout.write(payload if payload.endswith("\\n") else payload + "\\n")
+    else:
+        for event in payload:
+            sys.stdout.write(json.dumps(event, separators=(",", ":")) + "\\n")
+    sys.exit(0)
+is_any_failed = False
+payload_field = "content" if command == "capture" else "events"
+for index, target in enumerate(targets):
+    if stall_after is not None and index == stall_after:
+        time.sleep(600)
+    payload, error = answer(target)
+    is_any_failed = is_any_failed or error is not None
+    agent_id = target.split("@", 1)[0]
+    record = {"target": target, "agent_id": agent_id, "name": agent_id, "error": error, payload_field: payload}
+    sys.stdout.write(json.dumps(record, separators=(",", ":")) + "\\n")
+    sys.stdout.flush()
+sys.exit(1 if is_any_failed else 0)
+"""
+
+
 def _write_mngr_stub(
     tmp_path: Path,
     *,
@@ -219,31 +291,31 @@ def _write_mngr_stub(
     panes_by_agent: Mapping[str, str] | None = None,
     chat_of_agent: Mapping[str, tuple[str, int]] | None = None,
     exit_code: int = 0,
+    stall_after_records: Mapping[str, int] | None = None,
 ) -> Path:
     """Write a stub standing in for the workspace's mngr.
 
     The collector asks mngr three things -- which agents exist, what was said in
-    one, and what is on one's pane -- so the stub answers exactly those three
+    them, and what is on their panes -- so the stub answers exactly those three
     shapes: the pipe template
     ``{name}|{id}|{id}@{host.id}.{host.provider_name}|{labels.chat_id}|{labels.chat_seq}``
-    for ``list``, raw JSONL for ``transcript``, and pane text for ``capture``. Both
-    per-agent targets arrive as the pinned ``id@host-id.provider`` form the
-    listing handed out, so the stub keys its canned answers by the id in front
-    of the ``@``. An agent with no canned pane exits nonzero, as the real
-    ``mngr capture`` does for an agent that is not running.
+    for ``list``, and for ``transcript`` and ``capture`` what the real CLI
+    prints: a lone target's plain output (compact JSONL, or the pane text), or
+    one JSONL record per target when there are several. Targets arrive as the
+    pinned ``id@host-id.provider`` form the listing handed out, so the stub keys
+    its canned answers by the id in front of the ``@``. An agent with no canned
+    pane fails, as the real ``mngr capture`` does for an agent that is not
+    running, and one with no canned events fails as an agent with no transcript
+    does.
 
     ``chat_of_agent`` maps an agent name to the ``(chat id, sequence)`` it is a
     segment of; an agent absent from it lists with both label columns empty,
     which is what mngr prints for an agent carrying neither.
+
+    ``stall_after_records`` makes a command hang, the way a loaded mngr does,
+    after writing that many per-target records (for ``list``, before writing
+    anything), so a test can watch the collection's deadline cut it short.
     """
-    events_dir = tmp_path / "stub-events"
-    events_dir.mkdir(parents=True, exist_ok=True)
-    for agent_name, events in (events_by_agent or {}).items():
-        (events_dir / _agent_id_for(agent_name)).write_text(events, encoding="utf-8")
-    panes_dir = tmp_path / "stub-panes"
-    panes_dir.mkdir(parents=True, exist_ok=True)
-    for agent_name, pane in (panes_by_agent or {}).items():
-        (panes_dir / _agent_id_for(agent_name)).write_text(pane, encoding="utf-8")
     chat_labels = chat_of_agent or {}
     listing = "".join(
         "{}|{}|{}|{}|{}\n".format(
@@ -254,31 +326,31 @@ def _write_mngr_stub(
         )
         for name in agents
     )
-    listing_path = tmp_path / "stub-listing.txt"
-    listing_path.write_text(listing, encoding="utf-8")
-    argv_log = tmp_path / "stub-argv.log"
+    config_path = tmp_path / "stub-config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "argv_log": str(tmp_path / "stub-argv.log"),
+                "exit_code": exit_code,
+                "listing": listing,
+                "events": {
+                    _agent_id_for(name): events
+                    for name, events in (events_by_agent or {}).items()
+                },
+                "panes": {
+                    _agent_id_for(name): pane
+                    for name, pane in (panes_by_agent or {}).items()
+                },
+                "stall_after_records": dict(stall_after_records or {}),
+            }
+        ),
+        encoding="utf-8",
+    )
     script = tmp_path / "mngr-stub"
     script.write_text(
-        "#!/bin/sh\n"
-        f'printf "%s\\n" "$*" >> "{argv_log}"\n'
-        f"if [ {exit_code} -ne 0 ]; then exit {exit_code}; fi\n"
-        'if [ "$1" = "list" ]; then\n'
-        f'  cat "{listing_path}"\n'
-        "  exit 0\n"
-        "fi\n"
-        'if [ "$1" = "transcript" ]; then\n'
-        '  agent_id="${2%%@*}"\n'
-        f'  f="{events_dir}/$agent_id"\n'
-        '  if [ -f "$f" ]; then cat "$f"; fi\n'
-        "  exit 0\n"
-        "fi\n"
-        'if [ "$1" = "capture" ]; then\n'
-        '  agent_id="${2%%@*}"\n'
-        f'  f="{panes_dir}/$agent_id"\n'
-        '  if [ -f "$f" ]; then cat "$f"; exit 0; fi\n'
-        "  exit 1\n"
-        "fi\n"
-        "exit 1\n",
+        "#!/usr/bin/env python3\n"
+        + "CONFIG_PATH = {!r}\n".format(str(config_path))
+        + _MNGR_STUB_SCRIPT,
         encoding="utf-8",
     )
     script.chmod(0o755)
@@ -377,7 +449,7 @@ def _notes_lines(archive: zipfile.ZipFile) -> list[str]:
     return archive.read("collection-notes.txt").decode("utf-8").splitlines()
 
 
-# --- Caps and contract constants ---
+# Caps and contract constants
 
 
 def test_the_scan_gate_path_points_at_a_gate_that_exists_in_this_repo() -> None:
@@ -445,7 +517,7 @@ def test_select_log_files_drops_logs_not_written_to_in_the_last_day(
     ]
 
 
-# --- No ownership or stream filtering ---
+# No ownership or stream filtering
 
 
 def test_select_log_files_keeps_every_programs_logs_both_streams(
@@ -474,7 +546,7 @@ def test_select_log_files_keeps_every_programs_logs_both_streams(
     ]
 
 
-# --- Chat selection ---
+# Chat selection
 
 
 def test_every_agent_is_a_transcript_candidate(
@@ -490,7 +562,7 @@ def test_every_agent_is_a_transcript_candidate(
     )
     collector = _load_collector(mngr_binary=stub)
 
-    assert collector.list_agents(5.0) == [
+    assert collector.list_agents(_ample_deadline(collector)) == [
         ("chatty", "agent-chatty", "agent-chatty@stub-host-id.local", "", 1),
         (
             "system-services",
@@ -519,7 +591,7 @@ def test_a_transcript_is_named_for_the_harness_that_wrote_it_not_the_agent_type(
     )
     collector = _load_collector(mngr_binary=stub)
 
-    members = collector.collect_transcript_members(5.0)
+    members = collector.collect_transcript_members(_ample_deadline(collector))
 
     assert [name for name, _, _ in members] == ["chats/chatty-claude.jsonl"]
 
@@ -540,7 +612,7 @@ def test_the_collector_reads_conversations_with_the_transcript_command(
     stub = _mngr_stub_for_chats(tmp_path, chats)
     module = _load_collector(mngr_binary=stub)
 
-    module.collect_transcript_members(5.0)
+    module.collect_transcript_members(_ample_deadline(module))
 
     invocations = (tmp_path / "stub-argv.log").read_text(encoding="utf-8")
     transcript_calls = [
@@ -577,7 +649,7 @@ def test_a_chat_handed_to_another_harness_attaches_as_one_conversation(
     )
     collector = _load_collector(mngr_binary=stub)
 
-    members = collector.collect_transcript_members(5.0)
+    members = collector.collect_transcript_members(_ample_deadline(collector))
 
     # Named for the segment the chat is live on, and for the harness it is on now.
     assert [name for name, _, _ in members] == ["chats/Chat-1-codex.jsonl"]
@@ -597,7 +669,7 @@ def test_an_unlabelled_agent_is_a_chat_of_its_own(tmp_path: Path) -> None:
     )
     collector = _load_collector(mngr_binary=stub)
 
-    members = collector.collect_transcript_members(5.0)
+    members = collector.collect_transcript_members(_ample_deadline(collector))
 
     assert sorted(name for name, _, _ in members) == [
         "chats/chatty-claude.jsonl",
@@ -635,7 +707,7 @@ def test_an_older_segment_rides_along_with_the_chat_it_belongs_to(
     )
     collector = _load_collector(mngr_binary=stub)
 
-    members = collector.collect_transcript_members(5.0)
+    members = collector.collect_transcript_members(_ample_deadline(collector))
 
     handed_off = [
         content for name, content, _ in members if name.startswith("chats/Chat-1-")
@@ -649,7 +721,7 @@ def test_an_agent_with_no_conversation_contributes_no_member(tmp_path: Path) -> 
     stub = _write_mngr_stub(tmp_path, agents=("chatty",))
     collector = _load_collector(mngr_binary=stub)
 
-    assert collector.collect_transcript_members(5.0) == []
+    assert collector.collect_transcript_members(_ample_deadline(collector)) == []
 
 
 def test_every_chat_written_to_inside_the_window_rides_along_newest_first(
@@ -674,7 +746,7 @@ def test_every_chat_written_to_inside_the_window_rides_along_newest_first(
     )
     collector = _load_collector(mngr_binary=stub)
 
-    members = collector.collect_transcript_members(5.0)
+    members = collector.collect_transcript_members(_ample_deadline(collector))
 
     assert [name for name, _, _ in members] == [
         f"chats/busy-{index}-claude.jsonl" for index in range(6)
@@ -705,7 +777,7 @@ def test_a_quiet_window_still_sends_the_five_newest_chats(
     )
     collector = _load_collector(mngr_binary=stub)
 
-    members = collector.collect_transcript_members(5.0)
+    members = collector.collect_transcript_members(_ample_deadline(collector))
 
     assert [name for name, _, _ in members] == [
         "chats/fresh-claude.jsonl",
@@ -732,7 +804,7 @@ def test_an_idle_workspace_still_carries_its_most_recent_chats(
     )
     collector = _load_collector(mngr_binary=stub)
 
-    members = collector.collect_transcript_members(5.0)
+    members = collector.collect_transcript_members(_ample_deadline(collector))
 
     assert [name for name, _, _ in members] == [
         "chats/stale-claude.jsonl",
@@ -748,8 +820,8 @@ def test_a_workspace_whose_mngr_cannot_be_asked_reports_no_chats(
     stub = _write_mngr_stub(tmp_path, agents=("chatty",), exit_code=3)
     collector = _load_collector(mngr_binary=stub)
 
-    assert collector.list_agents(5.0) == []
-    assert collector.collect_transcript_members(5.0) == []
+    assert collector.list_agents(_ample_deadline(collector)) == []
+    assert collector.collect_transcript_members(_ample_deadline(collector)) == []
 
 
 def test_transcript_member_names_live_under_chats_and_cannot_escape_an_extraction_directory() -> (
@@ -782,7 +854,7 @@ def test_transcript_member_names_stay_unique_within_one_archive() -> None:
     assert second.endswith(".jsonl")
 
 
-# --- Zip timestamp clamps ---
+# Zip timestamp clamps
 
 
 def test_zip_records_an_epoch_fallback_mtime_at_the_formats_floor() -> None:
@@ -822,7 +894,7 @@ def test_zip_records_a_far_future_chat_at_the_formats_ceiling() -> None:
         assert archive.infolist()[0].date_time == (2107, 12, 31, 23, 59, 58)
 
 
-# --- Scan verdicts (fail closed) ---
+# Scan verdicts (fail closed)
 
 
 def test_scan_targets_releases_every_file_on_a_clean_scan(tmp_path: Path) -> None:
@@ -958,7 +1030,7 @@ def test_scan_targets_fails_closed_when_the_scan_times_out(tmp_path: Path) -> No
     }
 
 
-# --- End-to-end output shape ---
+# End-to-end output shape
 
 
 def test_main_prints_only_the_base64_zip_line_with_all_content_on_a_clean_scan(
@@ -1034,10 +1106,10 @@ def test_main_prints_only_the_base64_zip_line_with_all_content_on_a_clean_scan(
         ).decode("utf-8")
         metadata = json.loads(archive.read("metadata.json").decode("utf-8"))
         assert set(metadata) == {"workspace", "host_health", "services"}
-        assert '"seq": "agent-newer"' in archive.read(
+        assert '"seq":"agent-newer"' in archive.read(
             "chats/agent-newer-codex.jsonl"
         ).decode("utf-8")
-        assert '"seq": "agent-older"' in archive.read(
+        assert '"seq":"agent-older"' in archive.read(
             "chats/agent-older-claude.jsonl"
         ).decode("utf-8")
         # Each chat's own last-modified time rides on its member.
@@ -1268,7 +1340,7 @@ def test_main_reports_everything_scanner_unavailable_when_the_gate_is_missing(
         ]
 
 
-# --- The size cap ---
+# The size cap
 
 
 def test_main_packs_every_collected_chat_with_no_size_cap(
@@ -1305,7 +1377,7 @@ def test_main_packs_every_collected_chat_with_no_size_cap(
         ]
 
 
-# --- Agent (harness) logs ---
+# Agent (harness) logs
 
 
 def test_agent_logs_are_collected_from_every_shape_a_harness_writes(
@@ -1693,14 +1765,16 @@ def test_capturing_a_pane_never_starts_a_stopped_agent(tmp_path: Path) -> None:
     )
     module = _load_collector(mngr_binary=stub)
 
-    assert module.capture_pane("agent-chatty@stub-host-id.local", 5.0) == "on screen"
+    assert module.capture_panes(
+        ["agent-chatty@stub-host-id.local"], _ample_deadline(module)
+    ) == {"agent-chatty@stub-host-id.local": "on screen"}
 
     invocations = (tmp_path / "stub-argv.log").read_text(encoding="utf-8")
     capture_calls = [
         line for line in invocations.splitlines() if line.startswith("capture ")
     ]
     assert capture_calls == [
-        "capture agent-chatty@stub-host-id.local --full --no-start"
+        "capture agent-chatty@stub-host-id.local --full --no-start --format jsonl"
     ]
 
 
@@ -1710,7 +1784,12 @@ def test_an_agent_that_is_not_running_contributes_no_pane(tmp_path: Path) -> Non
     stub = _write_mngr_stub(tmp_path, agents=("chatty",))
     module = _load_collector(mngr_binary=stub)
 
-    assert module.capture_pane("agent-chatty@stub-host-id.local", 5.0) is None
+    assert (
+        module.capture_panes(
+            ["agent-chatty@stub-host-id.local"], _ample_deadline(module)
+        )
+        == {}
+    )
 
 
 def test_a_chatty_agent_log_cannot_crowd_the_rest_out_of_the_archive(
@@ -1739,7 +1818,9 @@ def test_a_chatty_agent_log_cannot_crowd_the_rest_out_of_the_archive(
     module = _load_collector(mngr_binary=stub, agents_dir=agents_dir)
     _rebind(module.__dict__, "MAX_LOG_CLASS_BYTES", 900)
 
-    members, dropped = module.collect_agent_log_members(5.0, is_pane_included=True)
+    members, dropped = module.collect_agent_log_members(
+        _ample_deadline(module), is_pane_included=True
+    )
 
     assert [name for name, _, _ in members] == [
         "agent-logs/newest/app_server.log",
@@ -1763,7 +1844,9 @@ def test_one_outsized_agent_log_still_rides_rather_than_emptying_the_class(
     module = _load_collector(mngr_binary=stub, agents_dir=agents_dir)
     _rebind(module.__dict__, "MAX_LOG_CLASS_BYTES", 100)
 
-    members, _dropped = module.collect_agent_log_members(5.0, is_pane_included=True)
+    members, _dropped = module.collect_agent_log_members(
+        _ample_deadline(module), is_pane_included=True
+    )
 
     assert [name for name, _, _ in members] == ["agent-logs/chatty/app_server.log"]
 
@@ -1783,7 +1866,9 @@ def test_agent_log_members_stay_unique_when_two_agent_names_sanitize_alike(
     stub = _write_mngr_stub(tmp_path, agents=("chat 1", "chat+1"))
     module = _load_collector(mngr_binary=stub, agents_dir=agents_dir)
 
-    members, _dropped = module.collect_agent_log_members(5.0, is_pane_included=True)
+    members, _dropped = module.collect_agent_log_members(
+        _ample_deadline(module), is_pane_included=True
+    )
 
     assert sorted(name for name, _, _ in members) == [
         "agent-logs/chat_1/app_server-2.log",
@@ -1838,7 +1923,9 @@ def test_a_pane_is_not_captured_when_the_user_declined_to_send_their_chats(
     )
     module = _load_collector(mngr_binary=stub, agents_dir=agents_dir)
 
-    members, _dropped = module.collect_agent_log_members(5.0, is_pane_included=False)
+    members, _dropped = module.collect_agent_log_members(
+        _ample_deadline(module), is_pane_included=False
+    )
 
     assert [name for name, _, _ in members] == ["agent-logs/chatty/app_server.log"]
     # Not merely absent from the archive -- never captured, so nothing to leak.
@@ -1873,7 +1960,9 @@ def test_panes_do_not_displace_the_harness_logs_of_the_agent_that_broke(
     _rebind(module.__dict__, "MAX_LOG_CLASS_BYTES", 700)
     _rebind(module.__dict__, "MAX_PANE_CLASS_BYTES", 700)
 
-    members, _dropped = module.collect_agent_log_members(5.0, is_pane_included=True)
+    members, _dropped = module.collect_agent_log_members(
+        _ample_deadline(module), is_pane_included=True
+    )
     names = [name for name, _, _ in members]
 
     assert sum(1 for name in names if name.endswith("app_server.log")) == 2
@@ -2109,3 +2198,197 @@ def test_a_whole_collection_asks_mngr_for_the_agent_listing_once(
         "list --provider local --format "
         "{name}|{id}|{id}@{host.id}.{host.provider_name}|{labels.chat_id}|{labels.chat_seq}"
     ], invocations
+
+
+# The collection's deadline
+
+
+def _load_collector_with_short_reserves(
+    tmp_path: Path, mngr_stub: Path, agents_dir: Path | None = None
+) -> ModuleType:
+    """A collector whose finishing reserves are a few seconds, so a test can spend a budget quickly.
+
+    The scan still gets most of the finish reserve, so a loaded machine does not
+    time it out and withhold what the deadline let through. The scan gate is a
+    clean stub, so whatever the deadline let through ships.
+    """
+    gate = tmp_path / "gate"
+    _write_stub_scan_gate(gate, exit_code=0)
+    module = _load_collector(
+        mngr_binary=mngr_stub,
+        scan_gate_dir=gate,
+        agents_dir=agents_dir,
+        supervisor_log_dir=tmp_path / "supervisor",
+        workspace_dir=tmp_path / "workspace",
+    )
+    _rebind(module.__dict__, "FINISH_RESERVE_SECONDS", 5.5)
+    _rebind(module.__dict__, "PACK_RESERVE_SECONDS", 0.5)
+    return module
+
+
+def _budget_seconds(module: ModuleType, mngr_seconds: float) -> float:
+    """A budget leaving ``mngr_seconds`` for mngr calls before the finish reserve (none if negative)."""
+    return module.FINISH_RESERVE_SECONDS + mngr_seconds
+
+
+def test_a_deadline_that_runs_out_mid_collection_still_ships_what_it_gathered(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A host kills an exec that overruns its budget, and then nothing ships at all.
+
+    So a mngr call that hangs is cut off where the collection still has time to
+    scan and pack, the conversations it finished before hanging still ride, and
+    the archive says how many it had to leave behind.
+    """
+    chats = {
+        "first": _chat_events("first-chat"),
+        "second": _chat_events("second-chat"),
+        "third": _chat_events("third-chat"),
+    }
+    stub = _write_mngr_stub(
+        tmp_path,
+        agents=tuple(chats),
+        events_by_agent=chats,
+        stall_after_records={"transcript": 1},
+    )
+    module = _load_collector_with_short_reserves(tmp_path, stub)
+
+    budget = _budget_seconds(module, mngr_seconds=2.5)
+    started_at = time.monotonic()
+    module.main(["--transcript", "--budget-seconds={}".format(budget)])
+
+    assert time.monotonic() - started_at < budget
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert archive.namelist() == [
+            "chats/first-claude.jsonl",
+            "collection-notes.txt",
+        ]
+        assert "first-chat" in archive.read("chats/first-claude.jsonl").decode("utf-8")
+        assert _notes_lines(archive) == [
+            "recent chats: 2 of 3 agent conversation(s) were left out because the"
+            " collection ran out of time"
+        ]
+
+
+def test_a_spent_deadline_asks_mngr_nothing_and_says_why_the_agents_are_missing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With no time left for a mngr call, none starts, and the archive says so.
+
+    It must not claim the workspace has no harness logs or no chats: the agents
+    were never asked, which is a different thing for a reader to be told.
+    """
+    chats = {"chatty": _chat_events("never-read")}
+    stub = _write_mngr_stub(
+        tmp_path,
+        agents=tuple(chats),
+        events_by_agent=chats,
+        panes_by_agent={"chatty": "on screen\n"},
+    )
+    module = _load_collector_with_short_reserves(tmp_path, stub)
+
+    module.main(
+        [
+            "--logs",
+            "--transcript",
+            "--budget-seconds={}".format(_budget_seconds(module, mngr_seconds=-0.5)),
+        ]
+    )
+
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert not [name for name in archive.namelist() if name.startswith("chats/")]
+        assert not [
+            name for name in archive.namelist() if name.startswith("agent-logs/")
+        ]
+        notes = _notes_lines(archive)
+    assert notes == [
+        "the agent list: left out because the collection ran out of time, so no agent"
+        " logs, panes or chats were gathered"
+    ]
+    assert not (tmp_path / "stub-argv.log").exists()
+
+
+def test_a_listing_the_deadline_cuts_short_is_noted_rather_than_read_as_no_agents(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stub = _write_mngr_stub(
+        tmp_path,
+        agents=("chatty",),
+        events_by_agent={"chatty": _chat_events("never-read")},
+        stall_after_records={"list": 0},
+    )
+    module = _load_collector_with_short_reserves(tmp_path, stub)
+
+    module.main(
+        [
+            "--transcript",
+            "--budget-seconds={}".format(_budget_seconds(module, mngr_seconds=1.5)),
+        ]
+    )
+
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert _notes_lines(archive) == [
+            "the agent list: left out because the collection ran out of time, so no agent"
+            " logs, panes or chats were gathered"
+        ]
+
+
+def test_one_call_for_every_agent_collects_the_same_members_as_one_call_per_agent(
+    tmp_path: Path,
+) -> None:
+    """Batching is a cost change and nothing else.
+
+    Each agent collected on its own goes through mngr's single-target output (a
+    bare pane, compact JSONL); all of them together go through its per-target
+    records. Both must pack into exactly the same members, byte for byte, and
+    the batched run must ask mngr once per kind of thing rather than once per
+    agent.
+    """
+    names = ("alpha", "beta", "gamma")
+    chats = {name: _chat_events("said by {}".format(name)) for name in names}
+    panes = {name: "{} pane\nlast line\n".format(name) for name in names}
+    agents_dir = tmp_path / "agents"
+    for name in names:
+        _write_agent_log(
+            agents_dir, name, "app_server.log", mtime=time.time(), content=name + "\n"
+        )
+
+    def collect(stub_dir: Path, agent_names: Sequence[str]) -> list[tuple[str, str]]:
+        stub_dir.mkdir()
+        stub = _write_mngr_stub(
+            stub_dir,
+            agents=agent_names,
+            events_by_agent={name: chats[name] for name in agent_names},
+            panes_by_agent={name: panes[name] for name in agent_names},
+        )
+        module = _load_collector(mngr_binary=stub, agents_dir=agents_dir)
+        deadline = _ample_deadline(module)
+        log_members, _ = module.collect_agent_log_members(
+            deadline, is_pane_included=True
+        )
+        chat_members = module.collect_transcript_members(deadline)
+        return [(name, content) for name, content, _ in log_members + chat_members]
+
+    batched = collect(tmp_path / "batched", names)
+    one_at_a_time = [
+        member
+        for name in names
+        for member in collect(tmp_path / "single-{}".format(name), (name,))
+    ]
+
+    assert sorted(batched) == sorted(one_at_a_time)
+    assert {name for name, _ in batched} == {
+        "agent-logs/{}/{}".format(name, member)
+        for name in names
+        for member in ("app_server.log", "pane.txt")
+    } | {"chats/{}-claude.jsonl".format(name) for name in names}
+    batched_calls = (
+        (tmp_path / "batched" / "stub-argv.log")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    assert [call.split(" ", 1)[0] for call in batched_calls] == [
+        "list",
+        "capture",
+        "transcript",
+    ]
