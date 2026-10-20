@@ -490,7 +490,10 @@ class ScreenService(MutableModel):
         return self.control.take_control(session_id, str(session.name))
 
     def return_control(self, session_id: NekoSessionId) -> bool:
-        return self.control.return_to_agents(session_id)
+        session = self.known_session(session_id)
+        if session is None:
+            return False
+        return self.control.return_to_agents(session_id, is_owner=session.is_owner)
 
     def acquire(self, agent_id: AgentId, agent_name: str | None, is_reclaim: bool) -> dict[str, Any]:
         """An agent's ``acquire``: starts the stack when it is down, and answers ``starting`` until it runs."""

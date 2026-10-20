@@ -181,8 +181,11 @@ def test_agent_release_and_handoff(client: FlaskClient, service: ScreenService) 
     handed = client.post("/api/control/handoff", json={"reason": "solve the CAPTCHA"}, headers=_AGENT_A).get_json()
     assert handed["ok"] is True
     assert handed["status"] == "handed_off"
-    assert handed["controller"] == "nobody"
+    assert handed["controller"] == "human"
+    assert handed["human_pinned"] is True
+    assert handed["human_session_id"] is None
     assert handed["waiting"] == ["Alice"]
+    assert client.post("/api/control/acquire", json={}, headers=_AGENT_B).get_json()["status"] == "busy_human"
     assert client.post("/api/control/handoff", json={}, headers=_AGENT_B).get_json()["status"] == "not_owner"
 
 

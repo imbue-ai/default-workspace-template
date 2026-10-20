@@ -93,7 +93,7 @@ The viewer shows the live Screen.
 A strip at the top names who has control: "You", "<name>", "Agent <name>", or "Nobody".
 When someone else has control, the strip offers "Take control"; input from a non-controlling viewer is not sent.
 When an agent has control, the Screen is dimmed slightly, the agent's name is shown, and "Take control" is there, as in the browser app's agent overlay; a URL the human asked to open while an agent drives is held and offered as it is today.
-"Give control back" appears for the human who took it from an agent, so the agent can resume (the browser's `return_to_agents`).
+"Give control back" appears for the human who took it from an agent, so the agent can resume (the browser's `return_to_agents`), and for the owner while a handoff waits unclaimed.
 
 Several humans may watch at once, each from their own client; the controller's cursor is the remote one, and other viewers' cursors are shown as neko's inactive cursors.
 
@@ -159,7 +159,7 @@ A client that cannot establish any pair (no candidate reachable, no relay) shows
 
 The service owns a `ScreenControl` state machine with the browser app's shape: `controller` (`human`, `agent`, `nobody`), `owner_agent_id`, `human_pinned`, a FIFO wait queue and a resume queue for agents, a sticky agent lease with a 60-second idle TTL, and a 12-second claim window for a granted lease.
 The verbs are the browser's: `acquire(agent, reclaim, wait)`, `release(agent)`, `take_control(session)`, `handoff(agent, reason)`, `return_to_agents(session)`.
-Rules (D4): any human session may `take_control`, which preempts an agent (queued to resume first) or another human; `reclaim` by an agent is allowed only as the skill allows it today (an explicit user instruction); an agent's `acquire` while a human is pinned answers `busy_human`.
+Rules (D4): any human session may `take_control`, which preempts an agent (queued to resume first) or another human; `reclaim` by an agent is allowed only as the skill allows it today (an explicit user instruction); an agent's `acquire` while a human is pinned answers `busy_human`; `handoff` gives the Screen to the human pinned with no session yet (the first human input claims it, pin kept) and puts the agent first in the resume queue.
 
 ### 6.2 Projection onto neko
 

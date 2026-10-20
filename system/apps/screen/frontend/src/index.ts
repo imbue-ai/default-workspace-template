@@ -48,7 +48,7 @@ import {
   type VerbOutcome,
 } from "./service_client";
 import type { NekoSessionAnswer, ScreenStateDocument, ServiceEvent } from "./state";
-import { EMPTY_CONNECT_INFO, isOwnSessionController } from "./state";
+import { EMPTY_CONNECT_INFO, isOpenToFirstInput, isOwnSessionController } from "./state";
 import { DetailsPanel, describePath, entriesOf, summarizeStats } from "./stream_details";
 import { Strip } from "./strip";
 import { fittedVideoRect } from "./view_transform";
@@ -301,13 +301,18 @@ class Viewer {
     if (!this.state) return;
     const ownSessionId = this.session?.session_id ?? null;
     const isController = isOwnSessionController(this.state.control, ownSessionId);
-    // Input flows while this session controls, and while nobody does: the first input is then neko's
-    // control/request, which it grants with no host, and the service records this human (spec section 6.2).
-    // A hidden viewer keeps its lease but sends nothing (spec section 8.2).
-    const mayControl =
-      (isController || this.state.control.controller === "nobody") && this.state.lifecycle === "running";
+    // Input flows while this session controls, and while nobody does (or a handoff waits to be claimed): the
+    // first input is then neko's control/request, which it grants with no host, and the service records this
+    // human (spec section 6.2). A hidden viewer keeps its lease but sends nothing (spec section 8.2).
+    const mayControl = (isController || isOpenToFirstInput(this.state.control)) && this.state.lifecycle === "running";
     const canSend = mayControl && this.visibility.isVisible;
-    this.strip.update(this.state.control, ownSessionId, this.streamStatus, this.notice);
+    this.strip.update(
+      this.state.control,
+      ownSessionId,
+      this.session?.is_owner ?? false,
+      this.streamStatus,
+      this.notice,
+    );
     this.pointerLock.setAvailable(isController);
     this.overlays.update(this.state, this.streamStatus, this.session, this.signInError);
     this.input?.setEnabled(canSend);

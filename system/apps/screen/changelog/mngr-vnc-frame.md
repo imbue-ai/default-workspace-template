@@ -162,3 +162,5 @@ Files and the desktop's icons (spec section 4.3):
 - A start that fails records its reason in `data/.state/screen/stop_reason` as a stop does, so a service restart after a failed start shows why the stack did not start rather than the reason of an earlier stop.
 
 - `stack_test.py` builds the second service life's stack through one helper (`_second_service_life`) in the adoption and stop-reason tests, in place of the same construction repeated in each.
+
+- An agent's `handoff` gives the Screen to the human pinned, as the browser app's lease did, rather than freeing it with the agent queued: no other agent's `acquire` is granted until the human gives it back (`busy_human`), the human's first input or Take control claims the handoff with the pin kept, and the owner may give an unclaimed handoff back from the strip (`POST /api/control/return` accepts the owner's session for it). The strip reads "Control: Handed to you" meanwhile and input flows so the first click claims it.

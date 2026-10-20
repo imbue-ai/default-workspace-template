@@ -88,7 +88,7 @@ def test_enqueue_on_busy_queues_for_resume_and_wakes_on_handback() -> None:
     control.take_control(NekoSessionId("s1"), "Josh")
     assert _acquire(control, "A", "Alice", is_enqueue_on_busy=True) == AcquireStatus.BUSY_HUMAN
     assert control.view().waiting == ("Alice",)
-    assert control.return_to_agents(NekoSessionId("s1")) is True
+    assert control.return_to_agents(NekoSessionId("s1"), is_owner=False) is True
     assert _state(control) == (Controller.AGENT, "A", False, None)
     assert control.view().waiting == ()
     assert [agent for agent, _ in messenger.messages] == ["A"]
@@ -127,33 +127,59 @@ def test_human_pin_is_sticky_with_no_idle_yield() -> None:
     assert control.sweep() is False
     assert _state(control) == (Controller.HUMAN, None, True, "s1")
     assert _acquire(control, "A", "Alice") == AcquireStatus.BUSY_HUMAN
-    assert control.return_to_agents(NekoSessionId("s1")) is True
+    assert control.return_to_agents(NekoSessionId("s1"), is_owner=False) is True
     assert _state(control) == (Controller.AGENT, "A", False, None)
 
 
 def test_return_to_agents_is_only_the_controlling_humans() -> None:
     control, _, _ = _control()
     _acquire(control, "A")
-    assert control.return_to_agents(NekoSessionId("s1")) is False
+    assert control.return_to_agents(NekoSessionId("s1"), is_owner=True) is False
     control.release(AgentId("A"))
-    assert control.return_to_agents(NekoSessionId("s1")) is False
+    assert control.return_to_agents(NekoSessionId("s1"), is_owner=True) is False
     control.take_control(NekoSessionId("s1"), "Josh")
-    assert control.return_to_agents(NekoSessionId("other")) is False
-    assert control.return_to_agents(NekoSessionId("s1")) is True
+    assert control.return_to_agents(NekoSessionId("other"), is_owner=True) is False
+    assert control.return_to_agents(NekoSessionId("s1"), is_owner=False) is True
     assert _state(control) == (Controller.NOBODY, None, False, None)
 
 
-def test_handoff_to_human_fronts_resume_queue_and_announces() -> None:
+def test_handoff_pins_the_human_fronts_resume_queue_and_announces() -> None:
     control, _, handoffs = _control()
     _acquire(control, "A", "Alice")
     assert _acquire(control, "B", "Bob", is_enqueue_on_busy=True) == AcquireStatus.BUSY_AGENT
     assert control.handoff(AgentId("A"), "Alice", "solve the CAPTCHA") is True
-    assert _state(control) == (Controller.NOBODY, None, False, None)
+    assert _state(control) == (Controller.HUMAN, None, True, None)
     assert control.view().waiting == ("Alice", "Bob")
     assert handoffs == [("Alice", "solve the CAPTCHA")]
+    # No agent takes a handed-off Screen, and the idle clock never frees it.
+    assert _acquire(control, "C", "Carol", is_enqueue_on_busy=True) == AcquireStatus.BUSY_HUMAN
+    assert control.sweep() is False
     # The human takes it and hands back: the requester resumes first.
     control.take_control(NekoSessionId("s1"), "Josh")
-    assert control.return_to_agents(NekoSessionId("s1")) is True
+    assert _state(control) == (Controller.HUMAN, None, True, "s1")
+    assert control.return_to_agents(NekoSessionId("s1"), is_owner=False) is True
+    assert _state(control) == (Controller.AGENT, "A", False, None)
+
+
+def test_the_first_input_after_a_handoff_claims_it_with_the_pin_kept() -> None:
+    control, _, _ = _control()
+    _acquire(control, "A", "Alice")
+    assert control.handoff(AgentId("A"), "Alice", "sign in") is True
+    assert control.human_became_host(NekoSessionId("s1"), "Josh") is True
+    assert _state(control) == (Controller.HUMAN, None, True, "s1")
+    assert _acquire(control, "B", "Bob", is_enqueue_on_busy=True) == AcquireStatus.BUSY_HUMAN
+    # The claiming human's session leaving frees the Screen to the handoff's agent.
+    assert control.human_session_gone(NekoSessionId("s1")) is True
+    assert _state(control) == (Controller.AGENT, "A", False, None)
+
+
+def test_the_owner_gives_an_unclaimed_handoff_back_and_a_visitor_cannot() -> None:
+    control, _, _ = _control()
+    _acquire(control, "A", "Alice")
+    assert control.handoff(AgentId("A"), "Alice", "sign in") is True
+    assert control.return_to_agents(NekoSessionId("visitor"), is_owner=False) is False
+    assert _state(control) == (Controller.HUMAN, None, True, None)
+    assert control.return_to_agents(NekoSessionId("owner"), is_owner=True) is True
     assert _state(control) == (Controller.AGENT, "A", False, None)
 
 
@@ -174,7 +200,7 @@ def test_unclaimed_grant_passes_on() -> None:
     _acquire(control, "A", "Alice")
     control.take_control(NekoSessionId("s1"), "Josh")
     _acquire(control, "A", "Alice", is_enqueue_on_busy=True)
-    control.return_to_agents(NekoSessionId("s1"))
+    control.return_to_agents(NekoSessionId("s1"), is_owner=False)
     assert _state(control) == (Controller.AGENT, "A", False, None)
     assert control.is_grant_pending() is True
     clock.now += CLAIM_WINDOW_SECONDS + 1
@@ -187,7 +213,7 @@ def test_touch_claims_a_grant_and_restarts_the_idle_clock() -> None:
     control, _, _ = _control(clock=clock)
     control.take_control(NekoSessionId("s1"), "Josh")
     _acquire(control, "A", "Alice", is_enqueue_on_busy=True)
-    control.return_to_agents(NekoSessionId("s1"))
+    control.return_to_agents(NekoSessionId("s1"), is_owner=False)
     clock.now += CLAIM_WINDOW_SECONDS - 1
     control.touch(AgentId("A"))
     clock.now += CLAIM_WINDOW_SECONDS
@@ -255,7 +281,7 @@ def test_take_control_evicts_waiters_and_queues_the_displaced_owner_first() -> N
     assert results == [AcquireStatus.BUSY_HUMAN]
     assert control.waiting_agent_ids() == []
     assert [queued.agent_id for queued in control.resume_queue()] == ["A"]
-    control.return_to_agents(NekoSessionId("s1"))
+    control.return_to_agents(NekoSessionId("s1"), is_owner=False)
     assert _state(control) == (Controller.AGENT, "A", False, None)
     assert [agent for agent, _ in messenger.messages] == ["A"]
 
@@ -294,8 +320,8 @@ def test_human_takes_control_from_another_human() -> None:
     assert _state(control) == (Controller.HUMAN, None, True, "s2")
     assert control.view().human_name == "Mia"
     # The displaced human cannot give back what is no longer theirs.
-    assert control.return_to_agents(NekoSessionId("s1")) is False
-    assert control.return_to_agents(NekoSessionId("s2")) is True
+    assert control.return_to_agents(NekoSessionId("s1"), is_owner=True) is False
+    assert control.return_to_agents(NekoSessionId("s2"), is_owner=False) is True
     assert [view.human_session_id for view in views] == ["s1", "s2", None]
 
 

@@ -80,6 +80,7 @@ export const EMPTY_CONNECT_INFO: ConnectInfo = { ice_servers: [], candidates: []
 export function describeController(control: ControlDocument, ownSessionId: string | null): string {
   switch (control.controller) {
     case "human":
+      if (isUnclaimedHandoff(control)) return "Handed to you";
       return control.human_session_id !== null && control.human_session_id === ownSessionId
         ? "You"
         : (control.human_name ?? "Someone");
@@ -92,4 +93,16 @@ export function describeController(control: ControlDocument, ownSessionId: strin
 
 export function isOwnSessionController(control: ControlDocument, ownSessionId: string | null): boolean {
   return control.controller === "human" && ownSessionId !== null && control.human_session_id === ownSessionId;
+}
+
+/** An agent handed the Screen to the human and nobody has claimed it yet: the lease is the human's, pinned, with
+ *  no session, so any human's first input (or Take control) claims it and no agent takes it meanwhile. */
+export function isUnclaimedHandoff(control: ControlDocument): boolean {
+  return control.controller === "human" && control.human_session_id === null;
+}
+
+/** Whether a viewer's input may flow without its session holding control: nobody controls (the first input is
+ *  neko's control/request, granted with no host), or a handoff waits to be claimed the same way. */
+export function isOpenToFirstInput(control: ControlDocument): boolean {
+  return control.controller === "nobody" || isUnclaimedHandoff(control);
 }

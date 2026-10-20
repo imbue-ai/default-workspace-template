@@ -348,11 +348,16 @@ class ScreenControl(MutableModel):
         self._finish(True, [])
         return True
 
-    def return_to_agents(self, session_id: NekoSessionId) -> bool:
-        """The human in control gives it up; the Screen goes to the first queued agent, else to nobody."""
+    def return_to_agents(self, session_id: NekoSessionId, is_owner: bool) -> bool:
+        """The human in control gives it up; the Screen goes to the first queued agent, else to nobody. A handoff
+        nobody has claimed yet (the human's, with no session) is the owner's to give back."""
         to_wake: list[QueuedAgent] = []
         with self._lock:
-            if not (self.controller == Controller.HUMAN and self.human_session_id == session_id):
+            if self.controller != Controller.HUMAN:
+                return False
+            is_claimed_by_session = self.human_session_id == session_id
+            is_unclaimed_handoff = self.human_session_id is None and is_owner
+            if not (is_claimed_by_session or is_unclaimed_handoff):
                 return False
             self._write_locked(Controller.NOBODY, None, None, False, None, None)
             to_wake = self._settle_queue_locked()
@@ -360,16 +365,15 @@ class ScreenControl(MutableModel):
         return True
 
     def handoff(self, agent_id: AgentId, agent_name: str | None, reason: str) -> bool:
-        """The holding agent hands the Screen to the human and goes to the front of the resume queue."""
+        """The holding agent hands the Screen to the human, pinned, and goes to the front of the resume queue: no
+        agent takes it until the human gives it back. The human has no session yet; their first input, or Take
+        control, fills it in with the pin kept."""
         with self._lock:
             if not (self.controller == Controller.AGENT and self.owner_agent_id == agent_id):
                 return False
             self._enqueue_resume_front_locked(agent_id, agent_name)
-            self._write_locked(Controller.NOBODY, None, None, False, None, None)
-            waiters, self._wait_queue = self._wait_queue, []
-            for waiter in waiters:
-                waiter.is_granted = False
-                waiter.event.set()
+            self._write_locked(Controller.HUMAN, None, None, True, None, None)
+            self._settle_queue_locked()
         self._finish(True, [])
         self.on_handoff_request(agent_name or str(agent_id), reason)
         return True
@@ -378,13 +382,17 @@ class ScreenControl(MutableModel):
 
     def human_became_host(self, session_id: NekoSessionId, name: str) -> bool:
         """neko made a human session the host without the service asking (an uncontrolled Screen's first input):
-        record that human as the controller, unpinned."""
+        record that human as the controller, unpinned, except that the first input after a handoff claims the
+        handoff and keeps its pin."""
         with self._lock:
             if self.controller == Controller.AGENT:
                 return False
             if self.controller == Controller.HUMAN and self.human_session_id == session_id:
                 return False
-            self._write_locked(Controller.HUMAN, None, None, False, session_id, name)
+            is_claiming_handoff = (
+                self.controller == Controller.HUMAN and self.human_session_id is None and self.human_pinned
+            )
+            self._write_locked(Controller.HUMAN, None, None, is_claiming_handoff, session_id, name)
             self._settle_queue_locked()
         self._finish(True, [])
         return True

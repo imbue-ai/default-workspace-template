@@ -52,10 +52,11 @@ lease):
   user is your cue to `acquire --reclaim`.
 - **The lease goes idle after 60 seconds** without a `screen` command (a screenshot counts). Hold it
   by working, not by waiting; `release` it the moment you are done so the human has the Screen back.
-- **`handoff "<reason>"`** frees the Screen for the human with you first in line to resume, and shows
-  them the Screen's window: their first click or key makes them its controller, and their "Give
-  control back" (or leaving the Screen) hands it to you and messages you. Use it for anything only
-  they can do (a password, a CAPTCHA, a judgement call), then end your turn.
+- **`handoff "<reason>"`** gives the Screen to the human pinned (no other agent can take it until
+  they give it back), shows them the Screen's window, and puts you first in line to resume: their
+  first click or key claims it, and their "Give control back" (or leaving the Screen) hands it to
+  you and messages you. Use it for anything only they can do (a password, a CAPTCHA, a judgement
+  call), then end your turn.
 
 Your X input lands whether or not you hold the lease (X knows nothing about leases); the lease is
 what keeps a human's input from landing under yours and what tells you to stop. An agent that lost

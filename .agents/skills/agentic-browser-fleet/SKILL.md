@@ -211,9 +211,10 @@ credentials: **do not try to solve it yourself** -- you will fail and may get th
 uv run agentic-browser-fleet handoff browser-1 "solve the CAPTCHA on the sign-in page"
 ```
 
-`handoff` puts you at the **front** of the resume queue, frees the Screen for the human (their
-first input takes it; their "Give control back" or leaving hands it to you), and brings the Screen's
-window up in front of them with Chromium raised on it. In the **same turn**: tell the user exactly what to do and on which page,
+`handoff` puts you at the **front** of the resume queue, hands the Screen to the human pinned (no
+other agent can take it until they give it back; their first input claims it, and their "Give
+control back" or leaving hands it to you), and brings the Screen's window up in front of them with
+Chromium raised on it. In the **same turn**: tell the user exactly what to do and on which page,
 then **end your turn**. You are woken first when they hand it back -- re-`snapshot` to confirm the
 challenge cleared, then carry on.
 

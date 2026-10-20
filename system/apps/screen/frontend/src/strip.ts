@@ -4,7 +4,7 @@
  *  it applies (spec section 12). */
 
 import type { ControlDocument } from "./state";
-import { describeController, isOwnSessionController } from "./state";
+import { describeController, isOwnSessionController, isUnclaimedHandoff } from "./state";
 import type { StreamStatus } from "./webrtc";
 
 /** What the strip says about the media path (spec sections 4.2 and 5.4). */
@@ -118,6 +118,7 @@ export class Strip {
   update(
     control: ControlDocument,
     ownSessionId: string | null,
+    isOwner: boolean,
     streamStatus: StreamStatus,
     notice: string | null,
   ): void {
@@ -135,7 +136,9 @@ export class Strip {
     this.status.classList.toggle("screen-strip__status--notice", notice !== null);
     this.status.dataset.screenStreamStatus = streamStatus;
     this.takeButton.hidden = isOwn || ownSessionId === null;
-    // Giving control back is offered when this human holds it and an agent waits to resume.
-    this.returnButton.hidden = !(isOwn && control.waiting.length > 0);
+    // Giving control back is offered when this human holds it and an agent waits to resume, and to the owner
+    // for a handoff nobody has claimed, so the agent can be resumed without first taking the Screen.
+    const mayGiveBack = isOwn || (isUnclaimedHandoff(control) && isOwner && ownSessionId !== null);
+    this.returnButton.hidden = !(mayGiveBack && control.waiting.length > 0);
   }
 }

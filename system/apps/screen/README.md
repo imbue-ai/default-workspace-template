@@ -364,8 +364,11 @@ round trip; the viewer also logs one "media path" line to the console per connec
 queue and a resume queue for agents, a 60-second idle TTL on an agent's lease and a
 12-second claim window for a granted one. Any human may take control, which preempts an
 agent (queued to resume first) or another human; agents never preempt a human and queue;
-`reclaim` is the one exception, for an agent the user told to continue. The lease is
-projected onto neko: `locked_controls` on while an agent holds it, off otherwise, and
+`reclaim` is the one exception, for an agent the user told to continue. An agent's `handoff`
+gives the Screen to the human pinned with no session yet (the human's first input, or Take
+control, claims it with the pin kept; the owner may give it back unclaimed) and puts the agent
+first in the resume queue, so no other agent takes the Screen while the human does what only
+they can. The lease is projected onto neko: `locked_controls` on while an agent holds it, off otherwise, and
 the human controller made host with `control/give`. The service's own admin WebSocket
 session watches `control/host` and `session/*` so a human taking an uncontrolled Screen
 is recorded. The lease is checkpointed to `data/.state/screen/control.json`.
