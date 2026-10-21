@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skills</title>
+<style>
+  /* The workspace's design tokens, copied by name and value from
+     system/libs/workspace_ui/src/base.css (this page is plain HTML with no build step, so it
+     cannot import that file). Keep the two in step; everything below references only these. */
+  :root {
+    --c-bg: #fafaf8;
+    --c-surface: #ffffff;
+    --c-surface-secondary: #f3f2ef;
+    --c-text-primary: #202020;
+    --c-text-secondary: #666666;
+    --c-text-faint: #8c8c8c;
+    --c-border: #e4e3df;
+    --c-border-faint: #efeeeb;
+    --c-accent: #2f6b4f;
+    --c-danger-hover: #b62d22;
+    --c-warning: #b45309;
+    --c-fill-hover: rgb(0 0 0 / 0.07);
+    --font-size-heading: 18px;
+    --font-size-body: 14px;
+    --font-size-row: 13px;
+    --font-size-helper: 12px;
+    --weight-regular: 400;
+    --weight-semibold: 600;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --font-mono: "SF Mono", "Cascadia Code", ui-monospace, monospace;
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --dur-base: 120ms;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: var(--font-sans); color: var(--c-text-primary); background: var(--c-bg); font-size: var(--font-size-body); line-height: 1.5; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 24px 40px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+  h1 { font-size: var(--font-size-heading); font-weight: var(--weight-semibold); line-height: 1.3; margin: 0; overflow-wrap: anywhere; }
+  h2 { font-size: var(--font-size-helper); font-weight: var(--weight-semibold); text-transform: uppercase; letter-spacing: 0.05em; color: var(--c-text-secondary); margin: 0 0 8px; }
+  a { color: inherit; text-decoration: none; }
+  .count { color: var(--c-text-secondary); font-size: var(--font-size-helper); }
+  .error { color: var(--c-danger-hover); }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  input[type="search"] { flex: 1 1 220px; padding: 6px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); font: inherit; }
+  .filters { display: flex; flex-wrap: wrap; gap: 6px; }
+  .filters button { border: 1px solid var(--c-border); border-radius: 999px; background: var(--c-surface); color: var(--c-text-secondary); font: inherit; font-size: var(--font-size-helper); padding: 2px 10px; cursor: pointer; transition: background-color var(--dur-base); }
+  .filters button:hover { background: var(--c-fill-hover); }
+  .filters button[aria-pressed="true"] { border-color: var(--c-accent); color: var(--c-accent); font-weight: var(--weight-semibold); }
+  ul.skills { list-style: none; margin: 0; padding: 0; }
+  ul.skills li a { display: block; padding: 10px 8px; margin: 0 -8px; border-bottom: 1px solid var(--c-border-faint); border-radius: var(--radius-sm); transition: background-color var(--dur-base); }
+  ul.skills li a:hover { background: var(--c-fill-hover); }
+  .row-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .name { font-weight: var(--weight-semibold); font-family: var(--font-mono); font-size: var(--font-size-row); }
+  .description { color: var(--c-text-secondary); font-size: var(--font-size-row); margin-top: 2px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .pill { display: inline-block; padding: 0 8px; border-radius: 999px; background: var(--c-surface-secondary); color: var(--c-text-secondary); font-size: var(--font-size-helper); white-space: nowrap; }
+  .pill.made, .pill.installed { background: color-mix(in srgb, var(--c-accent) 12%, var(--c-surface)); color: var(--c-accent); }
+  .pill.changed, .pill.unsaved, .pill.warn { background: color-mix(in srgb, var(--c-warning) 12%, var(--c-surface)); color: var(--c-warning); }
+  .empty { color: var(--c-text-secondary); padding: 12px 0; }
+  .back { color: var(--c-text-secondary); font-size: var(--font-size-row); }
+  .back:hover { color: var(--c-text-primary); }
+  section { padding: 14px 0; border-top: 1px solid var(--c-border); }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; font-size: var(--font-size-row); }
+  dt { color: var(--c-text-secondary); }
+  dd { margin: 0; overflow-wrap: anywhere; }
+  ul.plain { margin: 0; padding-left: 18px; font-size: var(--font-size-row); }
+  table.files { width: 100%; border-collapse: collapse; font-size: var(--font-size-row); }
+  table.files td { padding: 3px 0; border-bottom: 1px solid var(--c-border-faint); }
+  table.files td.path { font-family: var(--font-mono); font-size: var(--font-size-helper); overflow-wrap: anywhere; }
+  table.files td.size { text-align: right; color: var(--c-text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  pre.source { margin: 0; padding: 12px; border-radius: var(--radius-md); background: var(--c-surface-secondary); font-family: var(--font-mono); font-size: var(--font-size-helper); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .hint { color: var(--c-text-faint); font-size: var(--font-size-helper); margin: 0 0 8px; }
+</style>
+</head>
+<body>
+<main id="app"><p class="empty">Loading...</p></main>
+<script type="module">
+  // Everything a skill's files say is shown as text (textContent), never as markup: a skill
+  // installed from elsewhere is content this page does not trust.
+  const ORIGINS = {
+    BUILT_IN: { label: "Built in", className: "" },
+    CHANGED_HERE: { label: "Built in, changed here", className: "changed" },
+    INSTALLED: { label: "Installed", className: "installed" },
+    MADE_HERE: { label: "Made here", className: "made" },
+    NOT_SAVED: { label: "Not saved yet", className: "unsaved" },
+  };
+  const FILTERS = [["ALL", "All"], ...Object.entries(ORIGINS).map(([key, origin]) => [key, origin.label])];
+  const root = document.getElementById("app");
+
+  function element(tag, attributes = {}, children = []) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(attributes)) {
+      if (key === "text") node.textContent = value;
+      else node.setAttribute(key, value);
+    }
+    for (const child of children) node.append(child);
+    return node;
+  }
+
+  function originPill(origin) {
+    const known = ORIGINS[origin] ?? { label: origin, className: "" };
+    return element("span", { class: `pill ${known.className}`, text: known.label });
+  }
+
+  function formatDate(iso) {
+    return iso ? new Date(iso).toLocaleString() : "Never saved";
+  }
+
+  function formatSize(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  async function fetchJson(path) {
+    const response = await fetch(path, { cache: "no-store" });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.detail ?? body.error ?? `The workspace answered ${response.status}.`);
+    return body;
+  }
+
+  function showError(message) {
+    root.replaceChildren(element("p", { class: "error", text: message }));
+  }
+
+  function renderListing(listing) {
+    let filter = "ALL";
+    let query = "";
+    const count = element("span", { class: "count" });
+    const list = element("ul", { class: "skills" });
+    const search = element("input", { type: "search", placeholder: "Search skills", "aria-label": "Search skills" });
+    const filterButtons = FILTERS.map(([key, label]) => {
+      const button = element("button", { type: "button", "data-filter": key, "aria-pressed": String(key === filter), text: label });
+      button.addEventListener("click", () => {
+        filter = key;
+        for (const other of filterButtons) other.setAttribute("aria-pressed", String(other === button));
+        update();
+      });
+      return button;
+    });
+    search.addEventListener("input", () => {
+      query = search.value.trim().toLowerCase();
+      update();
+    });
+
+    function matches(skill) {
+      const isOriginShown = filter === "ALL" || skill.origin === filter;
+      const haystack = `${skill.name} ${skill.title} ${skill.description}`.toLowerCase();
+      return isOriginShown && (!query || haystack.includes(query));
+    }
+
+    function update() {
+      const shown = listing.skills.filter(matches);
+      count.textContent = `${shown.length} of ${listing.skills.length}`;
+      list.replaceChildren(
+        ...shown.map((skill) => {
+          const head = element("div", { class: "row-head" }, [element("span", { class: "name", text: skill.name }), originPill(skill.origin)]);
+          if (skill.has_unsaved_changes && skill.origin !== "NOT_SAVED") head.append(element("span", { class: "pill unsaved", text: "Unsaved changes" }));
+          if (skill.problems.length) head.append(element("span", { class: "pill warn", text: "Layout problems" }));
+          const link = element("a", { href: `/${encodeURIComponent(skill.name)}`, "data-skill": skill.name }, [
+            head,
+            element("div", { class: "description", text: skill.description || "No description." }),
+          ]);
+          return element("li", { id: `skill-${skill.name}` }, [link]);
+        }),
+      );
+      if (!shown.length) list.append(element("li", { class: "empty", text: "No skills match." }));
+    }
+
+    update();
+    root.replaceChildren(
+      element("header", {}, [element("h1", { text: "Skills" }), count]),
+      element("p", { class: "hint", text: "What this workspace's agents can do, read from .agents/skills." }),
+      element("div", { class: "toolbar" }, [search, element("div", { class: "filters" }, filterButtons)]),
+      list,
+    );
+  }
+
+  function renderDetail(detail) {
+    const summary = detail.summary;
+    document.title = `${summary.name} - Skills`;
+    const facts = element("dl", {}, [
+      element("dt", { text: "Where it came from" }),
+      element("dd", {}, [originPill(summary.origin)]),
+      element("dt", { text: "Last saved" }),
+      element("dd", { text: formatDate(summary.last_changed_at) }),
+      element("dt", { text: "File" }),
+      element("dd", { text: detail.skill_file_path }),
+    ]);
+    if (summary.install_source) {
+      facts.append(
+        element("dt", { text: "Installed from" }),
+        element("dd", { text: `${summary.install_source.source} (${summary.install_source.skill_path}, recorded in ${summary.install_source.lock_file})` }),
+      );
+    }
+    if (summary.has_unsaved_changes) {
+      facts.append(element("dt", { text: "Unsaved changes" }), element("dd", { text: "Its folder has changes that have not been saved yet." }));
+    }
+    const sections = [
+      element("header", {}, [element("h1", { text: summary.title }), element("a", { class: "back", href: "/", text: "All skills" })]),
+      element("p", { class: "description", text: summary.description || "No description." }),
+      element("section", {}, [facts]),
+    ];
+    if (summary.problems.length) {
+      sections.push(
+        element("section", { id: "problems" }, [
+          element("h2", { text: "Layout problems" }),
+          element("ul", { class: "plain" }, summary.problems.map((problem) => element("li", { text: problem }))),
+        ]),
+      );
+    }
+    const fileRows = detail.files.map((file) => element("tr", {}, [element("td", { class: "path", text: file.path }), element("td", { class: "size", text: formatSize(file.size_bytes) })]));
+    const filesSection = element("section", { id: "files" }, [element("h2", { text: `Files (${detail.files.length})` }), element("table", { class: "files" }, fileRows)]);
+    if (detail.is_file_list_truncated) filesSection.append(element("p", { class: "hint", text: "Only the first files are listed." }));
+    sections.push(filesSection);
+    sections.push(element("section", { id: "source" }, [element("h2", { text: "SKILL.md" }), element("pre", { class: "source", text: detail.content })]));
+    root.replaceChildren(...sections);
+  }
+
+  async function load() {
+    const name = decodeURIComponent(location.pathname.replace(/^\/+|\/+$/g, ""));
+    try {
+      if (name) renderDetail(await fetchJson(`/api/skills/${encodeURIComponent(name)}`));
+      else renderListing(await fetchJson("/api/skills"));
+    } catch (error) {
+      showError(error.message);
+    }
+  }
+
+  load();
+</script>
+</body>
+</html>

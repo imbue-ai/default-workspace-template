@@ -33,6 +33,7 @@ _BUILT_IN_APP_PACKAGES = (
     "files",
     "getting_started",
     "routines",
+    "skills",
     "system_interface",
     "system_monitor",
     "terminal",
@@ -393,6 +394,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "browser": False,
         "getting-started": True,
         "routines": True,
+        "skills": True,
         "system-monitor": True,
     }
     # Where the minds Share tab lists each built-in: never for an internal one, under its System group for the
@@ -409,6 +411,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "browser": "system",
         "getting-started": "system",
         "routines": "app",
+        "skills": "system",
         "system-monitor": "system",
     }
     # Getting Started (launcher-and-getting-started plan section 3.6): one window is what it is for, so its shortcut
@@ -446,10 +449,18 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         ("minds:show-routine", "/{routine_id}")
     ]
     assert by_name["routines"].preview.env["ROUTINES_APP_PREVIEW"] == "1"
+    # Skills: one read-only window over .agents/skills, focused like Routines, in its own band.
+    assert by_name["skills"].critical is False
+    assert by_name["skills"].program == "skills"
+    assert by_name["skills"].priority == "skills"
+    assert by_name["skills"].launch_paths == ()
+    assert by_name["skills"].default_shortcut is not None
+    assert by_name["skills"].default_shortcut.launch == "open"
+    assert by_name["skills"].default_shortcut.mode == "focus"
     # One order for the built-ins: the desktop seeds its shortcuts in it and the launcher lists its apps in it.
     assert sorted(
         (manifest.launcher_rank, manifest.name) for manifest in by_name.values() if manifest.launcher_rank is not None
-    ) == [(10, "chat"), (15, "getting-started"), (20, "files"), (30, "browser"), (40, "terminal"), (45, "routines"), (50, "system-monitor")]
+    ) == [(10, "chat"), (15, "getting-started"), (20, "files"), (30, "browser"), (40, "terminal"), (45, "routines"), (48, "skills"), (50, "system-monitor")]
     # Every seeded shortcut opens a new window of its app; the one browser is focused instead
     # (docs/system/specs/window-bound-resources.md section 3.1).
     for name, mode in (("chat", "new"), ("terminal", "new"), ("files", "new"), ("browser", "focus")):

@@ -1,0 +1,28 @@
+# The Skills app: every skill this workspace's agents have (system/libs/skills_catalog, read
+# fresh from .agents/skills), with where each came from and its SKILL.md as written. Its pages
+# are the list at ``/`` and a skill at ``/<name>``; it stores nothing and changes nothing. It
+# declares no launch path, so the desktop offers the synthesized ``open`` at its root; its
+# shortcut focuses the one window it is for.
+name = "skills"
+display_name = "Skills"
+description = "Every skill this workspace's agents have, where each came from, and its instructions as written."
+api_schema_path = "/api/schema"
+icon = "icon.svg"
+critical = false
+# Only answers requests: the shell stops it once no window shows it and starts it again on the next request.
+stop_when_no_windows = true
+priority = "skills"
+# After Routines (45) and before Memory & disk (50).
+launcher_rank = 48
+# It reports on the workspace itself, so the Share tab lists it under its System group.
+system = true
+
+[default_shortcut]
+launch = "open"
+mode = "focus"
+
+# A preview serves the pages on a free port over the live checkout: the app only reads, so there
+# is nothing to copy.
+[preview]
+env = {SKILLS_APP_PORT = "{port:main}", SKILLS_APP_HOST = "{host}"}
+health_path = "/api/health"

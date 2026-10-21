@@ -59,6 +59,7 @@ _BUILTIN_SERVICE_ORDER = (
     "files",
     "routines",
     "getting-started",
+    "skills",
     "system-monitor",
 )
 

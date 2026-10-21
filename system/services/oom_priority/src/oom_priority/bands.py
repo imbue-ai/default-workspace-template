@@ -277,6 +277,9 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # The Getting Started page: one static page and a cached catalog. A shed costs
     # one reload of a window that shows nothing of the user's.
     "getting-started": 80,
+    # The Skills page: a read-only view of .agents/skills that stores nothing, so a shed costs
+    # one reload.
+    "skills": 82,
     # The Memory & disk page: one polling page that writes nothing to disk, so a
     # shed costs a reload and the memory graph's last 10 minutes. The most
     # expendable built-in service of all.
