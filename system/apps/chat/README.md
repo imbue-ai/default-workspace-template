@@ -226,7 +226,12 @@ handoff where it stopped. While a chat converges it stays listed as
 `working` from the retiring agent; stop, start, rename, interrupt, the queue
 actions, and the model change answer 409; a send is held (202, `{"status":
 "held"}`) and delivered to the successor in order once it runs; destroy
-proceeds. `POST .../handoff/cancel` calls it off before switching begins and
+proceeds. Once a handoff has landed (the successor is the chat's last member and
+only the prompt and the held sends are left to deliver), the snapshot's `handoff`
+says so (`has_landed`), the chat is listed with the successor's own status, the
+page shows that agent's activity and its Stop, and an interrupt waits (up to
+`LANDED_SWITCH_WAIT_TIMEOUT_SECONDS`) for the deliveries to finish rather than
+answering 409, so its restart cannot race one. `POST .../handoff/cancel` calls it off before switching begins and
 returns the confirming message for the composer; a step that fails past the
 point of no return -- the create, the model pick, a delivery, or one mngr
 refuses -- leaves the chat in the `failed` phase with the reason and the step

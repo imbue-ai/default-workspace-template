@@ -330,6 +330,20 @@ describe("ActivityIndicator — what the strip actually renders", () => {
     handoffState.handoff = null;
   });
 
+  it("reports the successor's own activity once a handoff has landed, though the chat still delivers to it", () => {
+    agentState.activity_state = "THINKING";
+    handoffState.handoff = null;
+    const ordinary = render();
+    handoffState.handoff = handoffStateFixture({ phase: "switching", has_landed: true });
+    const landed = render();
+    expect(labelTextOf(landed)).toBe(labelTextOf(ordinary));
+    expect((landed?.attrs as Record<string, unknown>)["data-state"]).toBe(
+      (ordinary?.attrs as Record<string, unknown>)["data-state"],
+    );
+    expect(String((landed?.attrs as Record<string, unknown>)["data-state"])).not.toMatch(/^HANDOFF_/);
+    handoffState.handoff = null;
+  });
+
   it("renders nothing for an idle agent with no verdict in flight", () => {
     agentState.activity_state = "IDLE";
     expect(render()).toBeNull();

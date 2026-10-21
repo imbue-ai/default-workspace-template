@@ -484,6 +484,14 @@ class HandoffState(FrozenModel):
     failed_step: HandoffFailedStep | None = Field(
         default=None, description="Which step failed, in the failed phase: the agent's start, or the model pick"
     )
+    has_landed: bool = Field(
+        default=False,
+        description=(
+            "Whether a handoff's successor is already the chat's agent, with only the prompt and the held sends "
+            "left to deliver: the page then shows the successor as it shows any agent, and an interrupt waits for "
+            "the delivery rather than being refused"
+        ),
+    )
 
 
 class SwitchChatRequest(SendMessageRequest):

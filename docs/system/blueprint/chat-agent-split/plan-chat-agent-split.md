@@ -481,6 +481,7 @@ The sequence:
    The queue was already returned in draining (5.3) and the open tk steps carry over (5.9), so nothing else is captured or closed here.
    Entering this phase is the point of no return.
 4. **active**: the record's `handoff` is cleared, the new agent is the last member, the switch chip is emitted, held sends are delivered, and the chat snapshot is pushed.
+   Between the new agent becoming the last member and the deliveries finishing, the switch has *landed*: the snapshot's `handoff` carries `has_landed`, the chat reads as the new agent (its status, its activity, a Stop for its turn), and an interrupt waits for the deliveries to finish instead of being refused, since its restart would otherwise race one.
 
 Step 3 fails into **failed** (5.10) when the create fails, and, since phase 8, when any other step of it is refused (a stop, the archival rename, the record write): past the point of no return no verb but destroy answers the chat and only the failed phase has a retry, so a refusal left in `switching` would wedge the chat until the next chat-app restart. A refusal in `draining` or `summarizing` keeps its phase, where cancel is still possible. The one exception is a successor the observe stream has not listed yet at delivery time, which is no refusal: the record keeps `switching` for the next resume.
 

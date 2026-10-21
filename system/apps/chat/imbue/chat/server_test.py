@@ -111,12 +111,13 @@ from imbue.chat.testing import open_ws
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import seed_failed_chat
 from imbue.chat.testing import serve_app
-from imbue.chat.testing import write_background_task_marker
 from imbue.chat.testing import utc_iso_seconds_ago
+from imbue.chat.testing import write_background_task_marker
 from imbue.chat.testing import write_compacting_marker
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
+from imbue.concurrency_group.thread_utils import ObservableThread
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.errors import AgentIdNotFoundError
 from imbue.mngr.errors import AgentStartError
@@ -3952,6 +3953,51 @@ def test_a_converging_chat_carries_the_model_it_was_switched_to(tmp_path: Path) 
     other, _ = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING)
     listed = client.get("/api/chats").get_json()["chats"]
     assert [chat["handoff"]["model_pick"] for chat in listed if chat["chat_id"] == other] == [None]
+
+
+def test_an_interrupt_waits_out_a_landed_handoffs_deliveries_and_then_stops_the_successor(tmp_path: Path) -> None:
+    """Once the successor is the chat's agent the page offers Stop; the route holds it until the switch has
+    delivered everything it owes the successor, so the restart cannot race a delivery, then interrupts."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first, successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SWITCHING)
+    _track_claude_agent(app, successor, "Chat-1", tmp_path / "claude_config")
+    manager: AgentManager = state_of(app).agent_manager
+    record = manager._chat_record_store.read(ChatId(first))
+    assert record is not None and record.handoff is not None
+    landed = record.model_copy_update(
+        to_update(
+            record.field_ref().agents,
+            (
+                make_chat_agent_entry(1, first, is_archived=True),
+                make_chat_agent_entry(2, successor, is_archived=False),
+            ),
+        )
+    )
+    manager._chat_record_store.write(landed)
+    manager.refresh_chat_records()
+    listed = client.get("/api/chats").get_json()["chats"]
+    assert [(chat["handoff"]["has_landed"], chat["active_agent"]["agent_id"]) for chat in listed] == [
+        (True, successor)
+    ]
+
+    restarted = FinishedProcess(
+        returncode=0, stdout="Restarted", stderr="", command=("mngr",), is_output_already_logged=False
+    )
+    answers: list[int] = []
+    with patch("imbue.chat.server.run_local_command_modern_version", return_value=restarted) as run:
+        interrupter = ObservableThread(
+            target=lambda: answers.append(client.post(f"/api/chats/{first}/interrupt").status_code),
+            name="interrupter",
+        )
+        interrupter.start()
+        interrupter.join(timeout=0.3)
+        assert interrupter.is_alive() and answers == [] and run.call_count == 0
+        manager._chat_record_store.write(landed.model_copy_update(to_update(landed.field_ref().handoff, None)))
+        manager.refresh_chat_records()
+        interrupter.join(timeout=10.0)
+    assert answers == [200]
+    assert run.call_args.kwargs["command"][:3] == ["mngr", "start", "Chat-1"]
 
 
 def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cancelled(tmp_path: Path) -> None:
