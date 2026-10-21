@@ -15,13 +15,20 @@ as a skills lock file records) and **Comes with Studio** (its author is
 for who made it ("Made by <author>", "Installed from <repo>" or "Comes with
 Studio") and one for when it was last updated (in Files' wording: "today at
 2:03 PM"), its description, and its instructions rendered from its
-`SKILL.md` in a panel of their own, labelled with the file's name (a first
-heading that only repeats the skill's name or "Instructions" is left out). Choosing a skill
-changes the address in place, so the shell reopens the window on it, and the
-arrow keys walk the list. Below 640px the page shows the list or one skill, with
-a way back. "Show in Files" opens the skills folder, or the skill's own folder,
-in Files (a `file:` link the shell routes; the buttons stay hidden on a page no
-shell frames, where such a link goes nowhere).
+`SKILL.md` under the same kind of heading as the description ("Instructions,
+from SKILL.md"; a first heading that only repeats the skill's name or
+"Instructions" is left out), collapsed to what fits the window behind a "Show
+all" control. Choosing a skill changes the address in place, so the shell
+reopens the window on it, and the arrow keys walk the list. Below 640px the
+page shows the list or one skill, with a way back.
+
+Square icon buttons ask the shell for the rest, so they stay hidden on a page
+no shell frames: a folder opens the skills folder (in the sidebar) or the
+skill's own folder in Files (a `file:` link the shell routes); a pencil sends
+`edit:file` with the skill's `SKILL.md`, which Files answers with its edit
+page; and the sidebar's + starts a chat asking the agent to help make a new
+skill (`shell:start-with-text`). The page rereads the skill when its window is
+shown again, so an edit made in Files appears.
 
 The app is read-only and stores nothing. A skill installed from elsewhere is
 untrusted content, so everything the page shows from a skill is set as text,
