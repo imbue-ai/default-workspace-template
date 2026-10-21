@@ -114,7 +114,8 @@ COPY . /home/user/workspace/
 
 # Build the workspace from full source. Shared verbatim with the Lima provider.
 # With a private pin, set_mngr_pin.py gives this RUN the same secret mount as
-# the dependency install above: the tool installs fetch mngr from the pin.
+# the dependency install above: the mngr tool install and the venv sync fetch
+# mngr from the pin.
 RUN bash /home/user/workspace/system/scripts/build_workspace.sh
 
 # Move the baked workspace off the volume mount path so the shipped
