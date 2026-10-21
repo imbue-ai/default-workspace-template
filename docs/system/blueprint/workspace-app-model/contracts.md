@@ -65,7 +65,7 @@ Built-in manifests:
 | `files` | false | `files` | `{launch = "new", mode = "new"}` | `new` ("New File Viewer" at `/home/user/workspace/`, param `path` optional) | the convention |
 | `browser` | false | `browser` | `{launch = "new", mode = "focus"}`; also `window_closed_path = "/api/window-closed"` | `new` ("New Browser" at `/new`, param `url` optional) | the convention |
 | `system-monitor` | false | `system-monitor` | `{launch = "open", mode = "focus"}`; also `launcher_rank = 50` | none; the shell synthesizes `open` at `/` | `SYSTEM_MONITOR_PORT = "{port:main}"` and `SYSTEM_MONITOR_HOST = "{host}"`, no copies (it stores nothing) |
-| `routines` | false | `routines` | `{launch = "open", mode = "focus"}`; also `launcher_rank = 45` and a `[[message_handlers]]` `type = "minds:show-routine", show = "/{routine_id}"` | none; the shell synthesizes `open` at `/` | `ROUTINES_APP_PORT = "{port:main}"`, `ROUTINES_APP_HOST = "{host}"` and `ROUTINES_APP_PREVIEW = "1"` (read-only over the live state: it refuses every change with `403`), no copies (it stores nothing) |
+| `routines` | false | `routines` | `{launch = "open", mode = "focus"}`; also `launcher_rank = 45` and a `[[message_handlers]]` `type = "minds:show-routine", show = "/{routine_id}"` | none; the shell synthesizes `open` at `/` | `routines-app` (the program's name, the default, is the routines library's command line) over `ROUTINES_APP_PORT = "{port:main}"`, `ROUTINES_APP_HOST = "{host}"` and `ROUTINES_APP_PREVIEW = "1"` (read-only over the live state: it refuses every change with `403`), no copies (it stores nothing) |
 
 The chat, terminal, browser, Getting Started, and System Monitor declare `system = true`; Routines does not.
 
