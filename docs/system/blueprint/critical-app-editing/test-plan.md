@@ -437,8 +437,9 @@ shell's, chat's, and terminal's supervisord pids and `git rev-parse HEAD`.
   (`data/.state/update-apply/snapshots/venv`: delete its `bin/chat-app`) so the restore
   yields an unbootable chat, then Roll back. Sabotaging only the kept bundle does not
   do it: the chat still boots, without its page, and the rollback exits 0. Pass: the
-  outcome says "did not come back healthy", `emergency.json` exists, reloading the shell shows the staleness banner, exit 3 in the
-  log. Recover by hand (`git revert` of the revert, rebuild) and confirm the banner clears.
+  outcome says "did not come back healthy", `emergency.json` exists, reloading the shell
+  shows the staleness banner, exit 3 in the log. Recover by hand (`git revert` of the
+  revert, rebuild) and confirm the banner clears.
 - **E16 update-self keeps no notice.** Run the update-self apply (no flag, `--ff-only`)
   on a trivial fast-forward: no `last-good.json`, no band, `run.json` updated as before.
 - **E17 Settled verdict.** In E2's apply output, the phase timings show the post-restart
