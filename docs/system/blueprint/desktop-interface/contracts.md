@@ -58,6 +58,7 @@ Built-in manifests:
 | `terminal-pty` | true | false | `terminal` | | none | none; `internal = true`, `program = "terminal-pty"` |
 | `files` | false | true | `files` | 20 | `{launch = "new", mode = "new"}` | `new` ("File Viewer", `/home/user/workspace/`, params `path` optional) |
 | `browser` | false | false | `browser` | 30 | `{launch = "new", mode = "focus"}` | `new` ("Browser", POST `/new`, params `url` optional) |
+| `skills` | false | true | `skills` | 48 | `{launch = "open", mode = "focus"}` | none; the shell synthesizes `open` ("Open Skills", `/`) |
 | `system-monitor` | false | true | `system-monitor` | 50 | `{launch = "open", mode = "focus"}` | none; the shell synthesizes `open` ("Open Memory & disk", `/`) |
 
 The chat, terminal, browser, Getting Started, and Memory & disk manifests declare `system = true`.

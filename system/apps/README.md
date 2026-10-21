@@ -43,6 +43,10 @@ Built-in apps:
   library, `system/libs/routines/`), each with its health, next run and history,
   and run-now, on/off, reschedule and fix controls. Served on port 8050 by the
   `routines-app` package; it stores nothing of its own.
+- `skills/` - Skills: every skill the workspace's agents have (the skills
+  catalog, `system/libs/skills_catalog/`, read fresh from `.agents/skills/`),
+  with where each came from and its `SKILL.md` as written. Read-only; served
+  on port 8060 by the `skills-app` package; it stores nothing.
 - `system_monitor/` - Memory & disk: one page showing how much memory and disk
   the workspace is using, which chats, code checkers, and apps hold the memory,
   and which programs the memory guard stopped in the last 24 hours. Served on

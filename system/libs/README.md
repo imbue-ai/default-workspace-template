@@ -22,6 +22,9 @@ README for details.
   under `system/routines/`, the scheduler, the runner for command runs and
   skill runs (automations), the run ledger, the cron env wrapper, and the
   `routines` command (see the manage-routines skill and the Routines app).
+- `skills_catalog/` - Every skill under `.agents/skills/`, read fresh on each
+  call, with where each came from (the template, this workspace, or an
+  install a skills lock file records); what the Skills app shows.
 - `bootstrap/` - First-boot setup; then launches supervisord, which supervises
   the apps and services.
 - `chat_background_tasks/` - The marker files recording the background tasks
