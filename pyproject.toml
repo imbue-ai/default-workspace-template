@@ -120,6 +120,7 @@ app-manifest = { workspace = true }
 app-schema = { workspace = true }
 workspace-layout = { workspace = true }
 routines = { workspace = true }
+skills-catalog = { workspace = true }
 # Apps that other members depend on (their test suites boot each other).
 system-interface = { workspace = true }
 chat = { workspace = true }
