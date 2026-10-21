@@ -12,6 +12,8 @@ SKILL_FILENAME: Final[str] = "SKILL.md"
 # Where the `skills` CLI (`npx skills add`) records what it installed: the template keeps its lock beside the
 # skills, and the CLI writes a new one at the checkout's root.
 LOCK_FILE_PATHS: Final[tuple[Path, ...]] = (Path(".agents/skills-lock.json"), Path("skills-lock.json"))
+# The frontmatter author every skill that ships with the template carries (``metadata.author``).
+STUDIO_AUTHOR: Final[str] = "imbue"
 
 
 class SkillName(NonEmptyStr):
@@ -37,3 +39,14 @@ class SkillOrigin(UpperCaseStrEnum):
     MADE_HERE = auto()
     # In the folder, but no commit has saved it yet.
     NOT_SAVED = auto()
+
+
+class SkillSource(UpperCaseStrEnum):
+    """Who a skill comes from, judged from its frontmatter author and the skills lock files."""
+
+    # Its author is Imbue: it ships with the template, whether or not a lock file also lists it.
+    STUDIO = auto()
+    # A skills lock file records the repository it was installed from.
+    INSTALLED = auto()
+    # Anything else: made by someone in this workspace, whatever its author says.
+    WORKSPACE = auto()

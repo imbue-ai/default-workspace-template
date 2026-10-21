@@ -1,3 +1,6 @@
+import os
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -12,6 +15,7 @@ from skills_catalog.errors import SkillNotFoundError
 from skills_catalog.primitives import SKILLS_DIR
 from skills_catalog.primitives import SkillName
 from skills_catalog.primitives import SkillOrigin
+from skills_catalog.primitives import SkillSource
 from skills_catalog.testing import commit_all
 from skills_catalog.testing import init_workspace_repo
 from skills_catalog.testing import write_skill
@@ -41,6 +45,45 @@ def test_the_listing_classifies_every_kind_of_skill(workspace_root: Path, catalo
         "notify-user": SkillOrigin.BUILT_IN,
         "web-design": SkillOrigin.INSTALLED,
     }
+
+
+def test_who_a_skill_comes_from_follows_its_author_then_the_lock_files(
+    workspace_root: Path, catalog: SkillsCatalog
+) -> None:
+    write_skill(workspace_root, "blueprint", "Plan a change.", author="imbue")
+    write_skill(workspace_root, "datalib", "Search your data.", author="Imbue")
+    write_skill(workspace_root, "web-design", "Design guidelines.", author="vercel")
+    write_skill(workspace_root, "trivia-quiz", "Quiz the user.", author="user")
+    write_skill(workspace_root, "news-digest", "Summarize the news.")
+    (workspace_root / "skills-lock.json").write_text(
+        _INSTALL_LOCK.replace('"web-design"', '"blueprint": {}, "web-design"', 1)
+    )
+    commit_all(workspace_root, "Workspace changes")
+
+    by_name: dict[str, SkillSummary] = {summary.name: summary for summary in catalog.list_skills().skills}
+
+    assert {name: (summary.author, summary.source) for name, summary in by_name.items()} == {
+        "assist": ("", SkillSource.WORKSPACE),
+        "blueprint": ("imbue", SkillSource.STUDIO),
+        "datalib": ("Imbue", SkillSource.STUDIO),
+        "news-digest": ("", SkillSource.WORKSPACE),
+        "notify-user": ("", SkillSource.WORKSPACE),
+        "trivia-quiz": ("user", SkillSource.WORKSPACE),
+        "web-design": ("vercel", SkillSource.INSTALLED),
+    }
+
+
+def test_a_saved_skill_was_last_updated_by_its_newest_commit_and_an_edited_one_by_its_files(
+    workspace_root: Path, catalog: SkillsCatalog
+) -> None:
+    edited_file = write_skill(workspace_root, "assist", "Edited, not saved.")
+    os.utime(edited_file, (1_800_000_000, 1_800_000_000))
+
+    by_name: dict[str, SkillSummary] = {summary.name: summary for summary in catalog.list_skills().skills}
+
+    assert by_name["notify-user"].last_updated_at == by_name["notify-user"].last_changed_at
+    assert by_name["assist"].has_unsaved_changes is True
+    assert by_name["assist"].last_updated_at == datetime.fromtimestamp(1_800_000_000, tz=UTC)
 
 
 def test_an_installed_skill_carries_its_lock_file_source(workspace_root: Path, catalog: SkillsCatalog) -> None:

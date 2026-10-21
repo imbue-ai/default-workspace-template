@@ -13,6 +13,12 @@ the skill's own folder, the file exactly as written and the files beside it. A `
 (`imbue.mngr.utils.agent_skills`), which is as lenient as the agents' loaders,
 and checked against the agentskills.io layout with its `skill_shape_problems`.
 
+Each skill's `source` says who it comes from, and is what the Skills app groups
+by: `STUDIO` when its frontmatter's `metadata.author` is `imbue` (every skill the
+template ships carries it), else `INSTALLED` when a skills lock file lists it,
+else `WORKSPACE`. Its `last_updated_at` is its newest commit's time, or, while
+its folder has unsaved changes, its newest file's.
+
 Each skill's `origin` comes from the workspace's git history and the skills
 lock files:
 

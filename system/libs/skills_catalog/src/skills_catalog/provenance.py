@@ -13,7 +13,9 @@ from skills_catalog.data_types import InstallSource
 from skills_catalog.data_types import SkillCommitFacts
 from skills_catalog.data_types import SkillsHistory
 from skills_catalog.primitives import SKILLS_DIR
+from skills_catalog.primitives import STUDIO_AUTHOR
 from skills_catalog.primitives import SkillOrigin
+from skills_catalog.primitives import SkillSource
 
 # Separators for the one `git log` read of the skills directory: a record per commit, then the hash and date.
 LOG_RECORD_SEPARATOR: Final[str] = "\x1e"
@@ -125,3 +127,10 @@ def classify_skill_origin(facts: SkillCommitFacts | None, is_recorded_in_lock_fi
     if facts.is_added_by_template:
         return SkillOrigin.BUILT_IN if facts.is_last_changed_by_template else SkillOrigin.CHANGED_HERE
     return SkillOrigin.INSTALLED if is_recorded_in_lock_file else SkillOrigin.MADE_HERE
+
+
+@pure
+def classify_skill_source(author: str, is_recorded_in_lock_file: bool) -> SkillSource:
+    if author.strip().lower() == STUDIO_AUTHOR:
+        return SkillSource.STUDIO
+    return SkillSource.INSTALLED if is_recorded_in_lock_file else SkillSource.WORKSPACE

@@ -6,6 +6,7 @@ from pydantic import Field
 from imbue.imbue_common.frozen_model import FrozenModel
 from skills_catalog.primitives import SkillName
 from skills_catalog.primitives import SkillOrigin
+from skills_catalog.primitives import SkillSource
 
 
 class SkillCommitFacts(FrozenModel):
@@ -39,9 +40,14 @@ class SkillSummary(FrozenModel):
     name: SkillName = Field(description="Its directory name under .agents/skills, which agents invoke it by")
     title: str = Field(description="The frontmatter's name, or the directory name when it gives none")
     description: str = Field(description="The frontmatter's description; empty when it gives none")
+    author: str = Field(description="The frontmatter's metadata author; empty when it names none")
+    source: SkillSource = Field(description="Who it comes from")
     origin: SkillOrigin = Field(description="Where it came from")
     install_source: InstallSource | None = Field(description="What a skills lock file records for it, if anything")
     last_changed_at: datetime | None = Field(description="When a commit last changed it; null until one has")
+    last_updated_at: datetime = Field(
+        description="When it last changed: its newest file's time while it has unsaved changes, else its newest commit's"
+    )
     has_unsaved_changes: bool = Field(description="Whether its directory has changes no commit has saved")
     problems: tuple[str, ...] = Field(description="How its SKILL.md departs from the agentskills.io layout")
 

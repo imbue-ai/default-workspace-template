@@ -12,11 +12,14 @@ def run_git(repo_root: Path, *arguments: str) -> str:
     return subprocess.run(["git", *arguments], cwd=repo_root, check=True, capture_output=True, text=True).stdout
 
 
-def write_skill(repo_root: Path, name: str, description: str) -> Path:
-    """Write a conforming SKILL.md for the named skill and answer its path."""
+def write_skill(repo_root: Path, name: str, description: str, author: str | None = None) -> Path:
+    """Write a conforming SKILL.md for the named skill, with a ``metadata.author`` when one is given, and answer its path."""
     skill_file = repo_root / SKILLS_DIR / name / SKILL_FILENAME
     skill_file.parent.mkdir(parents=True, exist_ok=True)
-    skill_file.write_text(f"---\nname: {name}\ndescription: {description}\n---\n\n# {name}\n\nDo the thing.\n")
+    metadata = "" if author is None else f"metadata:\n  author: {author}\n"
+    skill_file.write_text(
+        f"---\nname: {name}\ndescription: {description}\n{metadata}---\n\n# {name}\n\nDo the thing.\n"
+    )
     return skill_file
 
 

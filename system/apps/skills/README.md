@@ -8,10 +8,13 @@ so a skill an agent made, changed or installed a moment ago is listed on the
 next load.
 
 One page, at `/` and at `/<name>`: a sidebar listing every skill (its name and
-the first line of its description) under two headings, **Yours** (made or
-installed in this workspace) and **Built in** (arrived with the template, changed
-here or not), with a search field; and, beside it, the skill being read: where
-it came from, its description, and its instructions rendered from its
+the first line of its description) under three headings by the catalog's
+`source` -- **Made in this workspace**, **Installed** (from another repository,
+as a skills lock file records) and **Comes with Studio** (its author is
+`imbue`) -- with a search field; and, beside it, the skill being read: a chip
+for who made it ("Made by <author>", "Installed from <repo>" or "Comes with
+Studio") and one for when it was last updated (in Files' wording: "today at
+2:03 PM"), its description, and its instructions rendered from its
 `SKILL.md` in a panel of their own, labelled with the file's name (a first
 heading that only repeats the skill's name or "Instructions" is left out). Choosing a skill
 changes the address in place, so the shell reopens the window on it, and the

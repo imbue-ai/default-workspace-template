@@ -67,7 +67,10 @@
   .back { display: none; color: var(--c-text-secondary); font-size: var(--font-size-row); margin-bottom: 12px; }
   .back:hover { color: var(--c-text-primary); }
   .skill-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-  .origin { color: var(--c-text-secondary); font-size: var(--font-size-helper); margin: 2px 0 0; }
+  /* The workspace's badge (workspace_ui components/Badge.ts): outline chips, accent for what people here made. */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip { display: inline-flex; align-items: center; padding: 2px 8px; border: 1px solid var(--c-border); border-radius: 8px; background: var(--c-surface); color: var(--c-text-secondary); font-size: var(--font-size-helper); line-height: 1.4; white-space: nowrap; }
+  .chip.accent { border-color: var(--c-accent); color: var(--c-accent); }
   .section-heading { font-size: var(--font-size-helper); font-weight: var(--weight-semibold); color: var(--c-text-secondary); line-height: 1.3; margin: 0; }
   .description { margin-top: 20px; }
   .description p { font-size: 15px; margin: 4px 0 0; max-width: 68ch; }
@@ -125,10 +128,10 @@
 
   // A skill's own text is shown through textContent, and its instructions arrive as HTML the server rendered with
   // raw HTML escaped: a skill installed from elsewhere is content this page does not trust.
-  const YOURS = new Set(["INSTALLED", "MADE_HERE", "NOT_SAVED"]);
   const GROUPS = [
-    ["Yours", (skill) => YOURS.has(skill.origin)],
-    ["Built in", (skill) => !YOURS.has(skill.origin)],
+    ["Made in this workspace", "WORKSPACE"],
+    ["Installed", "INSTALLED"],
+    ["Comes with Studio", "STUDIO"],
   ];
   const WIDE = window.matchMedia("(min-width: 641px)");
   const root = document.documentElement;
@@ -160,17 +163,29 @@
     return `file://${path.split("/").map(encodeURIComponent).join("/")}`;
   }
 
-  function originText(summary) {
-    switch (summary.origin) {
-      case "BUILT_IN":
-        return "Built in";
-      case "CHANGED_HERE":
-        return "Built in, changed in this workspace";
+  function authorChip(summary) {
+    switch (summary.source) {
+      case "STUDIO":
+        return element("span", { class: "chip", text: "Comes with Studio" });
       case "INSTALLED":
-        return summary.install_source ? `Installed from ${summary.install_source.source}` : "Installed";
+        return element("span", { class: "chip", text: summary.install_source ? `Installed from ${summary.install_source.source}` : "Installed" });
       default:
-        return "Made in this workspace";
+        return element("span", { class: "chip accent", text: summary.author ? `Made by ${summary.author}` : "Made in this workspace" });
     }
+  }
+
+  function startOfDay(time) {
+    return new Date(time.getFullYear(), time.getMonth(), time.getDate()).getTime();
+  }
+
+  // Files' wording for when something changed (apps/files/frontend/src/models/format.ts).
+  function formatWhen(iso) {
+    const when = new Date(iso);
+    const clock = when.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    const dayDelta = Math.round((startOfDay(new Date()) - startOfDay(when)) / 86_400_000);
+    if (dayDelta === 0) return `today at ${clock}`;
+    if (dayDelta === 1) return `yesterday at ${clock}`;
+    return `${when.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })} at ${clock}`;
   }
 
   async function fetchJson(path) {
@@ -201,7 +216,7 @@
   function renderList() {
     const query = search.value.trim().toLowerCase();
     const shown = skills.filter((skill) => !query || `${skill.name} ${skill.title} ${skill.description}`.toLowerCase().includes(query));
-    const sections = GROUPS.map(([heading, belongs]) => [heading, shown.filter(belongs)])
+    const sections = GROUPS.map(([heading, source]) => [heading, shown.filter((skill) => skill.source === source)])
       .filter(([, members]) => members.length)
       .map(([heading, members]) =>
         element("section", {}, [
@@ -262,7 +277,10 @@
       element("article", {}, [
         element("a", { class: "back", href: "/", text: "All skills" }),
         element("header", { class: "skill-head" }, [
-          element("div", {}, [element("h1", { text: summary.title }), element("p", { class: "origin", text: originText(summary) })]),
+          element("div", {}, [
+            element("h1", { text: summary.title }),
+            element("div", { class: "chips" }, [authorChip(summary), element("span", { class: "chip", text: `Last updated ${formatWhen(summary.last_updated_at)}` })]),
+          ]),
           element("a", { class: "files-link", href: fileUrl(detail.directory), title: "Open this skill's folder in Files", text: "Show in Files" }),
         ]),
         element("section", { class: "description", "aria-labelledby": "description-heading" }, [

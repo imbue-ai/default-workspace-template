@@ -1,6 +1,8 @@
 import os
 from collections.abc import Mapping
 from collections.abc import Set
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
 from typing import Final
 
@@ -25,6 +27,7 @@ from skills_catalog.primitives import SKILLS_DIR
 from skills_catalog.primitives import SKILL_FILENAME
 from skills_catalog.primitives import SkillName
 from skills_catalog.provenance import classify_skill_origin
+from skills_catalog.provenance import classify_skill_source
 from skills_catalog.provenance import install_sources_from_lock_text
 from skills_catalog.provenance import merge_install_sources
 
@@ -88,18 +91,25 @@ class SkillsCatalog(SkillsCatalogInterface):
         skill_file = directory / SKILL_FILENAME
         document = split_skill_frontmatter(skill_file.read_text(encoding="utf-8", errors="replace"))
         install_source = install_sources.get(directory.name)
+        # The line-by-line frontmatter reader flattens the metadata map, so its author is a field of its own.
+        author = document.fields.get("author", "")
+        facts = history.facts_by_skill_name.get(directory.name)
+        has_unsaved_changes = directory.name in unsaved_names
         return SkillSummary(
             name=SkillName(directory.name),
             title=document.fields.get("name") or directory.name,
             description=document.fields.get("description", ""),
-            origin=classify_skill_origin(history.facts_by_skill_name.get(directory.name), install_source is not None),
+            author=author,
+            source=classify_skill_source(author, install_source is not None),
+            origin=classify_skill_origin(facts, install_source is not None),
             install_source=install_source,
-            last_changed_at=(
-                history.facts_by_skill_name[directory.name].last_changed_at
-                if directory.name in history.facts_by_skill_name
-                else None
+            last_changed_at=facts.last_changed_at if facts is not None else None,
+            last_updated_at=(
+                facts.last_changed_at
+                if facts is not None and not has_unsaved_changes
+                else _newest_file_time(directory)
             ),
-            has_unsaved_changes=directory.name in unsaved_names,
+            has_unsaved_changes=has_unsaved_changes,
             problems=skill_shape_problems(skill_file),
         )
 
@@ -124,6 +134,16 @@ def _list_skill_files(directory: Path) -> list[SkillFile]:
             path = Path(current_root) / file_name
             files.append(SkillFile(path=path.relative_to(directory), size_bytes=path.lstat().st_size))
     return files
+
+
+def _newest_file_time(directory: Path) -> datetime:
+    """When the most recently modified file under the directory was modified, caches and dependencies skipped."""
+    newest = directory.lstat().st_mtime
+    for current_root, directory_names, file_names in os.walk(directory):
+        directory_names[:] = [name for name in directory_names if name not in _SKIPPED_DIRECTORY_NAMES]
+        for file_name in file_names:
+            newest = max(newest, (Path(current_root) / file_name).lstat().st_mtime)
+    return datetime.fromtimestamp(newest, tz=UTC)
 
 
 def parse_skill_name(raw_name: str) -> SkillName | None:
