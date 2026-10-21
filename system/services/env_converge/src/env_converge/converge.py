@@ -440,11 +440,20 @@ def install_missing_from_record(
     if recorded.uv_tool_state is not None:
         recorded_uv_versions = recorded.uv_tool_state.version_by_tool
         current_uv = capture_uv_tool_state()
+        installed_uv_tools = set(current_uv.version_by_tool)
         missing_uv = uv_tools_to_replay(
             recorded_uv_versions,
-            set(current_uv.version_by_tool),
+            installed_uv_tools,
             workspace_app_package_names(workspace_dir),
         )
+        held_back_uv = sorted(
+            set(recorded_uv_versions) - installed_uv_tools - set(missing_uv)
+        )
+        if held_back_uv:
+            logger.info(
+                "Not replaying recorded uv tools named like workspace apps (old per-app installs): {}",
+                ", ".join(held_back_uv),
+            )
         for tool in missing_uv:
             spec = f"{tool}=={recorded_uv_versions[tool]}"
             installed, not_installed = _install_missing(
