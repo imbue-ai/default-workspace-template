@@ -2187,7 +2187,7 @@ def _plan(paths: list[str]) -> update_classification.ApplyPlan:
         ("system/apps/browser/src/browser/pyproject.toml", False),
     ],
 )
-def test_plan_apply_resyncs_the_venv_when_any_apps_manifest_changes(
+def test_plan_apply_resyncs_the_venv_when_any_apps_pyproject_changes(
     path: str, is_backend_manifest: bool
 ) -> None:
     # The workspace venv is every app's only install, and an app's console scripts
@@ -2587,7 +2587,7 @@ class _SyncObservingSpawner(_FakeSpawner):
         return super().spawn(argv, cwd, env, output_path)
 
 
-def test_apply_an_apps_manifest_change_resyncs_the_venv_before_the_preflight(
+def test_apply_an_apps_pyproject_change_resyncs_the_venv_before_the_preflight(
     apply_repo: Path,
 ) -> None:
     # An app's pyproject can add a console script without moving uv.lock, and the
