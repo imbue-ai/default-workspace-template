@@ -114,7 +114,7 @@ PY
 
 # Active automation-agent ids for this skill (one per line; empty if none).
 automation_agent_ids() {
-  uv run mngr list --active --include "$AUTOMATION_FILTER" --ids --on-error continue 2>/dev/null || true
+  uv run --no-sync mngr list --active --include "$AUTOMATION_FILTER" --ids --on-error continue 2>/dev/null || true
 }
 
 # Create the persistent automation agent whose first message is `/<skill>`. A brand-new
@@ -135,7 +135,7 @@ create_automation_agent() {
   # this runs from the repo root, where mngr reads that file); a create with no
   # account signed in is refused there with a message that says to sign in.
   log "creating the persistent automation agent (template: ${TEMPLATE}, first message: ${RUN_MESSAGE})"
-  uv run mngr create "$AGENT_NAME" \
+  uv run --no-sync mngr create "$AGENT_NAME" \
     --template "$TEMPLATE" \
     --no-connect \
     --format json \

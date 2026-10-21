@@ -27,6 +27,12 @@ interpreted the way a shell would.
   `tk create --step "<title>"` invocations in a command, in order.
 - `flag_values(args, flag) -> list[str]` -- the values passed to a flag within a
   token list, handling both the `--flag value` and `--flag=value` forms.
+- `uv_run.unwrap_uv_run(words) -> tuple[str, ...] | None` -- the program words a
+  `uv run` command starts, past the uv options that leave it unchanged
+  (`UV_RUN_PASSTHROUGH_FLAGS`: `--no-sync`, `--frozen`, `--quiet`). The
+  secrets guard (`system/scripts/agent_secrets_guard_check.py`) and the chat's
+  tk-lifecycle detection (`imbue.chat.harnesses.tool_output`) both use it, so
+  they agree on which `uv run` forms they see through.
 
 ## Consumers
 

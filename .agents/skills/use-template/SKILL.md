@@ -264,7 +264,7 @@ conversation:**
    work -- tell the user which package and why:
 
    - **it does not exist at this workspace's pinned timestamp** (the publisher
-     was on a different snapshot) -- offer `uv run env-converge upgrade`, which
+     was on a different snapshot) -- offer `uv run --no-sync env-converge upgrade`, which
      advances this workspace to its committed timestamp;
    - **cargo entries with rust absent** -- an upgrade will not help; rust has to
      be installed first.

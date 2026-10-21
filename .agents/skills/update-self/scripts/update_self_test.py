@@ -2214,7 +2214,7 @@ def test_read_app_tools_lists_every_python_app_in_the_tree() -> None:
 def test_read_app_tools_leaves_a_pre_manifest_app_to_the_root_venv(
     tmp_path: Path, capsys
 ) -> None:
-    # An app with a pyproject but no app.toml runs `uv run <name>` from the
+    # An app with a pyproject but no app.toml runs `.venv/bin/<name>` from the
     # root venv, so the apply must neither install nor reinstall a tool for
     # it, and its absence is expected rather than a note.
     repo_root = _make_apply_repo(tmp_path)
@@ -2723,7 +2723,7 @@ def test_re_applying_a_rolled_back_merge_refuses_instead_of_claiming_success(
 
     assert "rolled back" in str(raised.value)
     assert not (apply_repo / "docs/VERSION_HISTORY.md").exists()
-    assert not runner.ran("uv", "run", "env-converge")
+    assert not runner.ran("uv", "run", "--no-sync", "env-converge")
     assert not _marker_exists(apply_repo)
 
 
@@ -4959,7 +4959,7 @@ def test_marker_is_gone_before_the_post_success_bookkeeping(apply_repo: Path) ->
     seen: dict[str, bool] = {}
 
     def capture(argv: list[str]) -> None:
-        if argv[:3] == ["uv", "run", "env-converge"]:
+        if argv[:4] == ["uv", "run", "--no-sync", "env-converge"]:
             seen["marker_at_converge"] = _marker_exists(apply_repo)
         if argv[:2] == ["git", "add"]:
             seen["marker_at_ledger"] = _marker_exists(apply_repo)
@@ -7012,10 +7012,12 @@ def test_apply_writes_the_ledger_and_runs_env_converge_post_success(
     assert ledger.exists()
     assert "updated to minds-v0.4.2" in ledger.read_text()
     assert runner.ran("git", "add", "docs/VERSION_HISTORY.md")
-    assert runner.ran("uv", "run", "env-converge", "upgrade")
+    assert runner.ran("uv", "run", "--no-sync", "env-converge", "upgrade")
     # The converge comes after the ledger commit: it is post-success bookkeeping.
     add_index = runner.calls.index(["git", "add", "docs/VERSION_HISTORY.md"])
-    converge_index = runner.calls.index(["uv", "run", "env-converge", "upgrade"])
+    converge_index = runner.calls.index(
+        ["uv", "run", "--no-sync", "env-converge", "upgrade"]
+    )
     assert add_index < converge_index
 
 
@@ -7035,7 +7037,7 @@ def test_a_failed_apply_never_writes_the_ledger_or_moves_apt_state(
 
     assert code == 2
     assert not (apply_repo / "docs/VERSION_HISTORY.md").exists()
-    assert not runner.ran("uv", "run", "env-converge")
+    assert not runner.ran("uv", "run", "--no-sync", "env-converge")
 
 
 def test_env_converge_failure_is_a_warning_not_a_rollback(
@@ -7043,7 +7045,8 @@ def test_env_converge_failure_is_a_warning_not_a_rollback(
 ) -> None:
     runner = _apply_runner(_DOCS_DIFF, apply_repo)
     runner.respond(
-        ("uv", "run", "env-converge"), _Result(returncode=1, stderr="no network")
+        ("uv", "run", "--no-sync", "env-converge"),
+        _Result(returncode=1, stderr="no network"),
     )
 
     code = _apply(
@@ -7066,7 +7069,9 @@ def test_an_env_converge_that_cannot_be_spawned_is_a_warning_not_a_traceback(
     # Post-success bookkeeping: an update that landed healthy must not turn
     # into a non-zero exit because `uv` could not be resolved afterwards.
     runner = _apply_runner(_DOCS_DIFF, apply_repo)
-    runner.respond(("uv", "run", "env-converge"), FileNotFoundError("uv: not found"))
+    runner.respond(
+        ("uv", "run", "--no-sync", "env-converge"), FileNotFoundError("uv: not found")
+    )
 
     code = _apply(
         runner,

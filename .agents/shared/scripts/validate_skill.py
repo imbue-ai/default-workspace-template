@@ -99,7 +99,7 @@ def _validate_run_py(skill_dir: Path) -> str | None:
 
 
 def _run_help_via_uv(run_py: Path) -> subprocess.CompletedProcess[str]:
-    """Invoke ``uv run <run_py> --help`` so uv resolves the script's deps."""
+    """Run ``run_py --help`` through ``uv run`` so uv resolves the script's deps."""
     return subprocess.run(
         ["uv", "run", str(run_py), "--help"],
         capture_output=True,
@@ -135,7 +135,7 @@ def check_runnable(
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip()
         return (
-            f"{run_py} failed `uv run ... --help` (exit {result.returncode}); "
+            f"{run_py} failed its `--help` run under `uv run` (exit {result.returncode}); "
             f"its imports or PEP 723 dependencies may be broken:\n{detail}"
         )
     return None

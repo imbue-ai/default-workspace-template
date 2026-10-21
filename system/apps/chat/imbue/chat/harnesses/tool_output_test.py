@@ -41,6 +41,9 @@ def test_a_pure_invocation_satisfies_both_rules() -> None:
 def test_uv_run_lifecycle_commands_are_recognized_but_quoted_mentions_are_not() -> None:
     assert is_tk_lifecycle_anywhere('uv run tk create --step "Inspect the messages"')
     assert is_tk_lifecycle_anywhere("cat README.md && uv run tk start wor-step-abc")
+    assert is_tk_lifecycle_anywhere("uv run --no-sync tk start wor-step-abc")
+    assert is_tk_lifecycle_anywhere("uv run --frozen --quiet tk close wor-step-abc")
+    assert not is_tk_lifecycle_anywhere("uv run --with tk-shim tk start wor-step-abc")
     assert not is_tk_lifecycle_anywhere("uv run python -c \"print('tk start wor-step-abc')\"")
     assert not is_tk_lifecycle_anywhere('echo "uv run tk start wor-step-abc"')
 
@@ -93,6 +96,7 @@ _PERMISSION_ECHO = '{"request_id": "req-1", "payload": {"scope": "slack-api"}, "
 def test_a_secret_request_call_is_recognised_from_its_input_and_renders_as_the_card() -> None:
     assert is_secret_request_call(_SECRET_REQUEST_CALL)
     assert is_secret_request_call("uv run " + _SECRET_REQUEST_CALL.removeprefix("python3 "))
+    assert is_secret_request_call("uv run --no-sync " + _SECRET_REQUEST_CALL.removeprefix("python3 "))
     assert classify_tool_call_display(is_pure_tk=False, raw_input=_SECRET_REQUEST_CALL) is DisplayKind.SECRET_REQUEST
     # A mention that is not the script (another file with a longer name) is not a request.
     assert not is_secret_request_call("cat request_secret.pyc")

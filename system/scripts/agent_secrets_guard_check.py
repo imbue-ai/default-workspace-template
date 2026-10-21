@@ -46,6 +46,7 @@ sys.path.insert(
 )
 
 from tk_command_parsing.parser import parse_command
+from tk_command_parsing.uv_run import unwrap_uv_run
 
 SECRETS_DIRECTORY = "data/.secrets"
 # The one file under the directory that holds no secret.
@@ -140,11 +141,11 @@ def _allowed_script(words: Sequence[str]) -> str | None:
     """The wrapper or request script ``words`` invoke as their program, or None.
 
     Accepts the script run directly, through ``python3`` (with python's own
-    passthrough flags, never ``-c`` or ``-m``), or through ``uv run [python3]``.
+    passthrough flags, never ``-c`` or ``-m``), or through ``uv run`` with only the
+    options ``unwrap_uv_run`` sees through, optionally followed by ``python3``.
     """
-    remaining = list(words)
-    if remaining[:2] == ["uv", "run"]:
-        remaining = remaining[2:]
+    unwrapped = unwrap_uv_run(words)
+    remaining = list(words if unwrapped is None else unwrapped)
     if remaining and _basename(remaining[0]) in _PYTHON_PROGRAMS:
         remaining = remaining[1:]
         while remaining and remaining[0] in _PYTHON_PASSTHROUGH_FLAGS:

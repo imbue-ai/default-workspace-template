@@ -163,7 +163,7 @@ closes the window, or an API another agent drives with no window open --
 set it to `false` in `app.toml`, or that work is lost or interrupted at the
 stop. The reverse holds: an app that no longer does anything between
 requests can go back to `true`. The field is read at registration, so the
-restart in step 2 is what applies it; `uv run app-manifest validate-manifest
+restart in step 2 is what applies it; `uv run --no-sync app-manifest validate-manifest
 system/apps/<package>/app.toml` checks the file.
 
 An app with an `api_schema_path` in its manifest describes its own API there:
@@ -339,7 +339,7 @@ where the data dies. Encode these, cheapest first:
       --copy data=data/.apps/<name> \
       --env '<PACKAGE_UPPER>_DATA_DIR={copy:data}' \
       --health-path /health \
-      -- uv run <name>)
+      -- .venv/bin/<name>)
   # ...exercise the change at "$URL" (curl / Playwright); it can write freely...
   python3 .agents/shared/scripts/serve_isolated_instance.py down --name <name>-test
   ```
@@ -384,12 +384,14 @@ where the data dies. Encode these, cheapest first:
   uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
   ```
 
-  The worktree needs its own environment before the first `up`. A fresh
-  `git worktree add` has no `.venv`, and without one the app's command
-  resolves to the live install, so the preview silently serves the live code.
-  Run `uv sync --all-packages` in the worktree first, and again before
-  `refresh` after changing a dependency or entry point. If the app has a
-  frontend, build it there too.
+  Every `up` and `refresh` runs `uv sync --all-packages --frozen` in the
+  worktree and then starts the app from the worktree's own `.venv`, so the
+  preview serves the worktree's code. That boot sync counts against the
+  preview's health wait, so on a fresh `git worktree add` run
+  `uv sync --all-packages --frozen` there once before the first `up`. The
+  sync never relocks: after changing a dependency in the worktree, run
+  `uv lock` there before `refresh`, or the preview boots without the change.
+  If the app has a frontend, build it in the worktree too.
 
   `--with <sibling>` boots a sibling app's preview from the same worktree first
   and points the app's copied registry at it: a shell preview frames the

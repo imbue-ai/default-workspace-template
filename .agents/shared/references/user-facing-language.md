@@ -60,7 +60,7 @@ Good: (nothing; just do it)
 Bad: "Refactored `AuthProvider`, swapped the JWT library for `jose`, updated 14 call sites."
 Good: "Login's rebuilt. It's faster and more secure now."
 
-Bad: "Ran `uv run pytest`: 47 passed, 0 failed."
+Bad: "Ran `uv run --no-sync pytest`: 47 passed, 0 failed."
 Good: "Checked it all works."
 
 Bad: "The error was `KeyError: 'email'` in `sync.py:142`."

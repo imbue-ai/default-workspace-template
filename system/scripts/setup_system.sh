@@ -88,7 +88,7 @@ install_downloaded_binary() {
 # init system; the rest are agent/runtime deps). earlyoom, the OOM-prevention
 # daemon, is not among them: it is the imbue-ai fork, installed below by
 # install_earlyoom.sh. supervisor provides the system supervisord + supervisorctl
-# that `uv run bootstrap` execs into the foreground.
+# that `bootstrap` execs into the foreground.
 # xvfb + xclip (the browser fleet's virtual display and its clipboard bridge)
 # are baked here, NOT deferred to the env.d browser unit: [program:xvfb] execs
 # Xvfb directly at boot, and a binary that static service config promises at
@@ -109,7 +109,7 @@ rm -rf /var/lib/apt/lists/*
 # The Debian `supervisor` package enables a systemd unit that immediately starts
 # a supervisord against the default /etc/supervisor/supervisord.conf. On
 # systemd-based providers (lima/VPS) that daemon grabs /var/run/supervisor.sock
-# and makes `uv run bootstrap`'s `supervisord -c /home/user/workspace/system/supervisord.conf`
+# and makes `bootstrap`'s `supervisord -c /home/user/workspace/system/supervisord.conf`
 # fail with "Another program is already listening". We always launch our own
 # supervisord from bootstrap, so disable + mask the packaged unit. Guarded so
 # it is a no-op on docker (no systemd / no systemctl on the slim image).
@@ -367,7 +367,7 @@ cat > /usr/local/bin/env-converge-capture-hook << 'HOOK'
 [ -d /home/user/workspace/system/services/env_converge ] || exit 0
 [ -e /var/lib/minds/env-converge/rootfs-id ] || exit 0
 cd /home/user/workspace || exit 0
-MNGR_HOST_DIR="${MNGR_HOST_DIR:-/home/user/.mngr}" timeout 120 uv run env-converge capture >/dev/null 2>&1 || true
+MNGR_HOST_DIR="${MNGR_HOST_DIR:-/home/user/.mngr}" timeout 120 uv run --no-sync env-converge capture >/dev/null 2>&1 || true
 HOOK
 chmod +x /usr/local/bin/env-converge-capture-hook
 printf 'DPkg::Post-Invoke { "/usr/local/bin/env-converge-capture-hook || true"; };\n' \

@@ -194,7 +194,7 @@ above.
 Derive `slug` and `repo_name` from the title. Resolve the concrete set of
 include paths yourself.
 
-For an app, the paths are declared rather than deduced: `uv run app-manifest
+For an app, the paths are declared rather than deduced: `uv run --no-sync app-manifest
 footprint system/apps/<package>/app.toml` prints the app's footprint -- its own
 directory (`primary`), the supervisord program blocks that run it
 (`wiring`), and the skills, scripts and docs its manifest claims

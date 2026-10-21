@@ -379,7 +379,7 @@ def test_select_tests_over_explicit_paths_matches_the_same_set_read_from_a_diff(
     assert from_paths.exit_code == 0, from_paths.output
     assert from_paths.output == from_diff.output
     # The upgraded lock entry reached corelib's dependents through the lockfile, not a guess.
-    assert "uv run pytest system/libs/corelib" in from_diff.output.splitlines()
+    assert "uv run --no-sync pytest system/libs/corelib" in from_diff.output.splitlines()
 
 
 def test_select_tests_over_a_diff_runs_what_depended_on_a_moved_files_old_place(
@@ -398,9 +398,9 @@ def test_select_tests_over_a_diff_runs_what_depended_on_a_moved_files_old_place(
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
     # corelib lost the module its consumers import, so it and they run, not only midlib's side.
-    assert "uv run pytest system/libs/corelib" in lines
+    assert "uv run --no-sync pytest system/libs/corelib" in lines
     assert (
-        "(cd system/apps/chat && uv run pytest --deselect imbue/chat/test_ratchets.py::test_no_type_errors)"
+        "(cd system/apps/chat && uv run --no-sync pytest --deselect imbue/chat/test_ratchets.py::test_no_type_errors)"
         in lines
     )
 
@@ -424,7 +424,7 @@ def test_select_tests_in_a_fresh_worktree_builds_the_frontends_before_an_apps_te
     # git leaves the ignored built modules out of the worktree, so the notes run there builds them.
     worktree_commands = [line for line in in_worktree.output.splitlines() if not line.startswith("#")]
     assert worktree_commands[:2] == build
-    assert "uv run pytest system/apps/notes" in worktree_commands
+    assert "uv run --no-sync pytest system/apps/notes" in worktree_commands
     assert not set(build) & set(in_built_tree.output.splitlines())
 
 
@@ -447,7 +447,7 @@ def test_select_tests_over_a_diff_refuses_a_working_tree_with_uncommitted_change
     assert "system/libs/midlib/src/midlib/extra.py" in dirty.output
     assert "run.log" not in dirty.output
     assert committed.exit_code == 0, committed.output
-    assert "uv run pytest system/libs/midlib" in committed.output.splitlines()
+    assert "uv run --no-sync pytest system/libs/midlib" in committed.output.splitlines()
 
 
 def test_select_tests_over_a_diff_to_an_earlier_commit_ignores_the_working_tree(
@@ -474,8 +474,8 @@ def test_select_tests_over_a_diff_to_an_earlier_commit_ignores_the_working_tree(
 
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
-    assert lines[-1] == "uv run pytest"
-    assert "uv run pytest system/libs/midlib" not in lines
+    assert lines[-1] == "uv run --no-sync pytest"
+    assert "uv run --no-sync pytest system/libs/midlib" not in lines
 
 
 def test_select_tests_prints_json_with_every_path_classified(tmp_path: Path) -> None:
@@ -498,7 +498,7 @@ def test_select_tests_prints_json_with_every_path_classified(tmp_path: Path) -> 
     assert result.exit_code == 0, result.output
     selection = json.loads(result.output)
     assert selection["is_full_root"] is True
-    assert [command["argv"] for command in selection["commands"]] == [["uv", "run", "pytest"]]
+    assert [command["argv"] for command in selection["commands"]] == [["uv", "run", "--no-sync", "pytest"]]
     assert {entry["path"]: entry["classes"] for entry in selection["paths"]} == {
         "system/scripts/forward_port.py": ["unowned"],
         "unknown.bin": ["unowned"],

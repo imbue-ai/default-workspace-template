@@ -12,7 +12,7 @@ service.
 
 ## What it does
 
-`uv run bootstrap` runs, in order:
+`bootstrap` runs, in order:
 
 1. **Global git config** - rewrites `git@`/`ssh://` GitHub remotes to `https://`.
    (`core.hooksPath` is deliberately NOT set here: the post-commit auto-push
@@ -25,6 +25,9 @@ service.
 3. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
    via `exec` keeps the bootstrap tmux window alive as supervisord and lets the
    supervised services inherit this shell's already-sourced agent environment.
+   That environment gets the workspace venv activated (`.venv/bin` first on
+   `PATH`, `VIRTUAL_ENV` set), so a program line that names its entry point bare
+   resolves the venv's console script.
 
 ### Progress events
 

@@ -43,7 +43,7 @@ and `recover` both fail. Confirm there is a recent one; this reads the
 service's log and waits for nothing:
 
 ```bash
-uv run host-backup-now --check
+uv run --no-sync host-backup-now --check
 ```
 
 Exit 0 means a recent `restic_backup_succeeded`; 3 (not configured), 1 (no
@@ -523,7 +523,7 @@ table, so a program the update adds starts on its own), probes the shell's healt
 route and the health route of every critical app the user can open (the chat, the
 terminal; each at the URL its fresh registry row names), probes the
 live UI, refreshes every open view, writes the
-`docs/VERSION_HISTORY.md` entry, and runs `uv run env-converge upgrade` --
+`docs/VERSION_HISTORY.md` entry, and runs `uv run --no-sync env-converge upgrade` --
 reverting the entire merge and restoring the snapshots on any other failure.
 Exit codes:
 

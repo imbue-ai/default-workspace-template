@@ -85,15 +85,15 @@ rootfs back to that record at the pinned apt snapshot timestamp.
 
 ## CLI
 
-- `uv run env-converge run [--phase fast|slow|all]` -- converge (exit 3 when
+- `uv run --no-sync env-converge run [--phase fast|slow|all]` -- converge (exit 3 when
   some recorded packages were unavailable).
-- `uv run env-converge capture` -- re-capture actual state into the record
+- `uv run --no-sync env-converge capture` -- re-capture actual state into the record
   (skipped on a rootfs without the identity stamp, where the record is
   authoritative and pending replay; `--force` overrides).
-- `uv run env-converge upgrade` -- advance to the repo's committed snapshot
+- `uv run --no-sync env-converge upgrade` -- advance to the repo's committed snapshot
   timestamp: re-render sources, `apt-get full-upgrade`, re-run units,
   re-capture, and print the version deltas. Bundled into the update-self flow.
-- `uv run env-converge status` -- record vs reality summary as JSON
+- `uv run --no-sync env-converge status` -- record vs reality summary as JSON
   (including whether an upgrade is pending).
 
 The Imbue Studio in-place backup restore restarts this program

@@ -1,6 +1,6 @@
 """A preview's whole lifecycle through the real shared script and the real registration script.
 
-Run via: ``uv run pytest .agents/skills/update-app/scripts/test_preview_app_lifecycle.py``
+Run via: ``uv run --no-sync pytest .agents/skills/update-app/scripts/test_preview_app_lifecycle.py``
 
 ``preview_app_test.py`` pins the exact commands this script hands the shared
 ``serve_isolated_instance.py``; here nothing stands in for it. A fixture app is
@@ -15,6 +15,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import shutil
+import subprocess
 import sys
 import tempfile
 import tomllib
@@ -53,6 +54,17 @@ command = ["python3", "system/apps/fixture/serve.py"]
 env = {FIXTURE_PORT = "{port:main}", FIXTURE_DATA_DIR = "{copy:data}"}
 copies = {data = "data/.apps/fixture"}
 health_path = "/health"
+"""
+
+_WORKTREE_PYPROJECT = """
+[project]
+name = "fixture-worktree"
+version = "0"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.uv]
+package = false
 """
 
 # Reads its build once at boot, so only a re-boot shows a rebuild; and writes into its
@@ -130,6 +142,10 @@ def test_a_preview_boots_from_its_manifest_refreshes_a_rebuild_in_place_and_tear
     (app_dir / "icon.svg").write_text(_ICON)
     (app_dir / "serve.py").write_text(_SERVER)
     (app_dir / "build.txt").write_text("first build")
+    # A real worktree is a checkout of the repo's locked project, which the preview syncs
+    # --frozen before running the app from its venv.
+    (worktree / "pyproject.toml").write_text(_WORKTREE_PYPROJECT)
+    subprocess.run(["uv", "lock", "--offline"], cwd=worktree, check=True)
 
     repo_args = ["--repo-root", str(repo_root)]
     assert (

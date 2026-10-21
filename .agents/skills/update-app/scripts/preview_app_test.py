@@ -1,6 +1,6 @@
 """Tests for ``preview_app.py``.
 
-Run via: ``uv run pytest .agents/skills/update-app/scripts/preview_app_test.py``
+Run via: ``uv run --no-sync pytest .agents/skills/update-app/scripts/preview_app_test.py``
 
 A recording runner stands in for the shared ``serve_isolated_instance.py``: it records
 each invocation and files the instance state the real script would, so the resolution
@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 import tomllib
 from collections.abc import Sequence
@@ -196,7 +198,41 @@ def test_up_hands_the_manifests_table_to_the_shared_script_with_its_own_placehol
         "CHAT_HOST={host}",
         "CHAT_DATA_DIR={copy:data}",
     ]
-    assert _launch(argv) == ["uv", "run", "chat-app", "--secondary"]
+    assert _launch(argv) == [*mod.LAUNCHER, "chat-app", "--secondary"]
+
+
+def test_the_launcher_syncs_the_worktree_frozen_then_becomes_the_app(
+    tmp_path: Path,
+) -> None:
+    """The app replaces the launcher's shell, so no uv process stays its parent, and it
+    runs from the worktree's own venv after a sync that never relocks."""
+    worktree = tmp_path / "worktree"
+    (worktree / ".venv" / "bin").mkdir(parents=True)
+    app = worktree / ".venv" / "bin" / "app"
+    app.write_text('#!/bin/sh\necho "$$ $VIRTUAL_ENV $*"\n')
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    uv = fake_bin / "uv"
+    uv.write_text(f'#!/bin/sh\necho "$*" > {tmp_path / "uv-args"}\n')
+    for script in (app, uv):
+        script.chmod(0o755)
+
+    process = subprocess.Popen(
+        [*mod.LAUNCHER, "app", "--port", "1"],
+        cwd=worktree,
+        env={**os.environ, "PATH": f"{fake_bin}:/usr/bin:/bin"},
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    stdout, _ = process.communicate(timeout=30)
+
+    assert process.returncode == 0
+    assert (tmp_path / "uv-args").read_text().split() == [
+        "sync",
+        "--all-packages",
+        "--frozen",
+    ]
+    assert stdout.split() == [str(process.pid), str(worktree / ".venv"), "--port", "1"]
 
 
 def test_a_preview_that_opens_on_an_instance_needs_its_key(tmp_path: Path) -> None:
@@ -231,7 +267,7 @@ def test_an_app_with_no_table_previews_by_the_scaffold_convention(
     assert _flag_values(argv, "--copy") == ["data=data/.apps/notes"]
     assert _flag_values(argv, "--health-path") == ["/health"]
     assert _flag_values(argv, "--inner-path") == ["/"]
-    assert _launch(argv) == ["uv", "run", "notes"]
+    assert _launch(argv) == [*mod.LAUNCHER, "notes"]
 
 
 def test_an_app_that_runs_under_secret_files_previews_under_the_same_wrapper(
@@ -254,8 +290,7 @@ def test_an_app_that_runs_under_secret_files_previews_under_the_same_wrapper(
 
     wrapper = str(tmp_path / "system" / "scripts" / "with_secrets.py")
     assert _launch(runner.up_argv("notes-preview")) == [
-        "uv",
-        "run",
+        *mod.LAUNCHER,
         "python3",
         wrapper,
         str(tmp_path / "data" / ".secrets" / "notes-api.env"),

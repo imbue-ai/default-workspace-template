@@ -1,7 +1,7 @@
 """Contract tests between the skill prose that dispatches workers and the code
 that carries the dispatch.
 
-Run via: ``uv run pytest .agents/skills/launch-task/scripts/dispatch_contract_test.py``
+Run via: ``uv run --no-sync pytest .agents/skills/launch-task/scripts/dispatch_contract_test.py``
 
 A worker dispatch crosses three hands: a lead skill's prose writes a task file
 and invokes ``create_worker.py``; ``create_worker.py`` provisions the worker and

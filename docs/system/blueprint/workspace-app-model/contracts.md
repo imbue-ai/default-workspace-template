@@ -363,13 +363,13 @@ The minds chrome does not forward a deep link's query to the shell frame; that l
 ## 14. Tool environments
 
 - The manifest is the discriminator: every directory under `system/apps/` with both a `pyproject.toml` and an `app.toml` is a Python app that runs from its own uv tool: `uv tool install -e system/apps/<package> [--with-editable <plugin path>]...`, with the plugin list from `system/config/mngr_plugins.toml` where the app's manifest `name` appears in a plugin's `tools`.
-- A directory with a `pyproject.toml` and no manifest is a pre-manifest app; it runs `uv run <name>` from the root venv, untouched by the build and the apply. There are exactly these two forms, both supported indefinitely, so no code path ever handles a third.
+- A directory with a `pyproject.toml` and no manifest is a pre-manifest app; it runs `.venv/bin/<name>` from the root venv, untouched by the build and the apply. There are exactly these two forms, both supported indefinitely, so no code path ever handles a third.
 - The tool's entry point is named after the program and is what the supervisord line runs.
 - `system/scripts/build_workspace.sh` loops over the manifest directories.
 - The update apply reinstalls the tool of every manifest app whose directory changed in the merge (excluding paths under `frontend/` and `static/`), and of every manifest app when a shared backend manifest changed, and snapshots the tool directory of every `critical` app before it does.
 - `system/apps/*` is in the root workspace's member glob, so one lockfile covers the tree, a pre-manifest app's `{ workspace = true }` source in the root pyproject resolves, and a user-built app needs no root-pyproject edit; `uv sync --all-packages` therefore also installs the manifest apps into the root venv, unused, which uv's shared cache makes nearly free. Membership and the tool environments answer different questions: the lock keeps every environment on the same versions, and a tool environment keeps its app running while the root venv is rewritten or broken.
 - The `app_manifest` and `app_schema` libraries are workspace members that apps depend on by path, so a tool install pulls them in editable.
-- Services run from the root venv under `uv run <name>`.
+- Services run from the root venv: a `--frozen` sync, then `exec .venv/bin/<name>`.
 
 ## 15. Memory priority
 

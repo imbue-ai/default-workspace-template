@@ -58,7 +58,7 @@ build_inputs = [
 
 [framework]
 type = "pytest"
-command = "uv run pytest"
+command = "uv run --no-sync pytest"
 # Skip assertion-rewriting during `pytest --collect-only` -- pure overhead
 # there (OFFLOAD-18).
 discovery_args = "--assert=plain"

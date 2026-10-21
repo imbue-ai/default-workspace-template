@@ -129,6 +129,9 @@ _FRONTEND_MARKERS_EXPRESSION: Final[str] = "browser or frontend"
 # A run of only some of a coverage-measured suite's tests would fail its coverage floor, which
 # only the whole suite can reach.
 _NO_COVERAGE_FLAG: Final[str] = "--no-cov"
+# Every printed command runs its tool from the venv as it is, so running the gate never
+# relocks or syncs the workspace.
+_UV_RUN: Final[tuple[str, ...]] = ("uv", "run", "--no-sync")
 
 # Where a markdown file is agent-run prose rather than documentation: mirrors the update-self
 # change classes (``.agents/skills/update-self/scripts/update_classification.py``).
@@ -796,7 +799,7 @@ def _pytest_commands(
             )
             if targets:
                 root_commands.append(
-                    _command(SuiteKind.PYTEST, root, ("uv", "run", "pytest", *targets), reasons)
+                    _command(SuiteKind.PYTEST, root, (*_UV_RUN, "pytest", *targets), reasons)
                 )
             continue
         own_root_commands.extend(
@@ -823,7 +826,7 @@ def _own_root_commands(
     tests when just a frontend it builds changed, and any files named on their own, all markers
     included; then its split-out type check when a run includes the test it replaces."""
     commands: list[SuiteCommand] = []
-    partial_run = ("uv", "run", "pytest", *((_NO_COVERAGE_FLAG,) if is_coverage_measured else ()))
+    partial_run = (*_UV_RUN, "pytest", *((_NO_COVERAGE_FLAG,) if is_coverage_measured else ()))
     scopes = {request.marker_scope for request in whole}
     split_type_check = _SPLIT_TYPE_CHECKS.get(root)
     relative_files = [_relative_to_root(root, file) for file in files]
@@ -841,11 +844,11 @@ def _own_root_commands(
         else ()
     )
     if MarkerScope.EVERYTHING in scopes:
-        argv = ("uv", "run", "pytest", "-m", _ALL_MARKERS_EXPRESSION, *deselect)
+        argv = (*_UV_RUN, "pytest", "-m", _ALL_MARKERS_EXPRESSION, *deselect)
         commands.append(_command(SuiteKind.PYTEST, root, argv, reasons))
         return [*commands, *_split_type_check_commands(root, deselect, reasons)]
     if MarkerScope.DEFAULT in scopes:
-        commands.append(_command(SuiteKind.PYTEST, root, ("uv", "run", "pytest", *deselect), reasons))
+        commands.append(_command(SuiteKind.PYTEST, root, (*_UV_RUN, "pytest", *deselect), reasons))
         if MarkerScope.FRONTEND in scopes:
             # The default run already holds the frontend-marked tests, not the browser ones.
             argv = (*partial_run, "-m", _BROWSER_MARKER, *ignored_files)
@@ -865,7 +868,7 @@ def _split_type_check_commands(
 ) -> list[SuiteCommand]:
     if not deselect:
         return []
-    return [_command(SuiteKind.TYPE_CHECK, root, ("uv", "run", "ty", "check"), reasons)]
+    return [_command(SuiteKind.TYPE_CHECK, root, (*_UV_RUN, "ty", "check"), reasons)]
 
 
 def _frontend_commands(
@@ -1009,7 +1012,7 @@ def select_tests(
     if is_full_root:
         commands.append(
             _command(
-                SuiteKind.FULL_ROOT, ROOT_DIRECTORY, ("uv", "run", "pytest"), tuple(full_root_reasons)
+                SuiteKind.FULL_ROOT, ROOT_DIRECTORY, (*_UV_RUN, "pytest"), tuple(full_root_reasons)
             )
         )
     else:
@@ -1022,7 +1025,7 @@ def select_tests(
         )
         commands.append(
             _command(
-                SuiteKind.ALWAYS_RUN, ROOT_DIRECTORY, ("uv", "run", "pytest", *always_run), root_reasons
+                SuiteKind.ALWAYS_RUN, ROOT_DIRECTORY, (*_UV_RUN, "pytest", *always_run), root_reasons
             )
         )
     commands.extend(_pytest_commands(layout, pytest_requests, set(always_run), is_full_root))

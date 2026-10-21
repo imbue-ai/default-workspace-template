@@ -47,7 +47,7 @@ App specifics:
   chat's suites are their own pytest roots, run from their own directories):
 
   ```bash
-  uv run pytest system/apps/<package>    # primary, plus test_<package>_ratchets.py
+  uv run --no-sync pytest system/apps/<package>    # primary, plus test_<package>_ratchets.py
   ```
 
   Its pages import the shell's built modules, which a fresh worktree lacks

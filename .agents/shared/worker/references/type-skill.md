@@ -57,7 +57,7 @@ lookup and add it to the app's `app.toml` as part of this change when it is
 missing:
 
 ```bash
-uv run app-manifest references --for-path .agents/skills/<name>
+uv run --no-sync app-manifest references --for-path .agents/skills/<name>
 ```
 
 One JSON line per app that claims the skill; no output means none does.
@@ -72,11 +72,11 @@ belongs to the app itself is that app's own pass.
 ## Testing a skill
 
 - While you iterate, run the skill's own tests by path. The root pytest config
-  recurses into `.agents/`, so a bare root `uv run pytest` would collect the
+  recurses into `.agents/`, so a bare root `uv run --no-sync pytest` would collect the
   entire monorepo to reach them:
 
   ```bash
-  uv run pytest .agents/skills/<name>
+  uv run --no-sync pytest .agents/skills/<name>
   ```
 
   The gate is `harden-creation.md`'s "The test gate": when the reverse lookup
