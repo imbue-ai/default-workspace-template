@@ -58,7 +58,7 @@ It is not renameable (stable app ids and renaming are deferred, section 11); `di
 Every Python app, built-in or user-built, runs from the workspace venv, which is its only install (contracts section 14): every app is a member of the root uv workspace's `system/apps/*` glob, so one repo, one lockfile, and one set of build and test commands cover them all.
 An app's supervisord program line execs its entry point from `.venv/bin` rather than through `uv run`, as the services' lines do.
 The terminal and files apps are small Python launchers around ttyd and dufs, so they run the same way.
-Apps once also got per-app uv tool environments, meant to keep each running while the root venv was rewritten; the program lines never ran them, the update's pre-flight did, and the two installs drifted apart, so they were removed.
+No app has a uv tool environment of its own: a second install that the program lines never run drifts from the venv, and anything that boots it instead (the update's pre-flight) tests an install the restart does not run.
 Converting a pre-manifest app to the manifest form is something the update-app skill may offer the next time the user edits that app, with the user present (section 11).
 
 ### 3.2 Instances

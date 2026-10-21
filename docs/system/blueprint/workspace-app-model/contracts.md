@@ -366,7 +366,7 @@ The minds chrome does not forward a deep link's query to the shell frame; that l
 - An app's supervisord program line execs its entry point from `.venv/bin` (`exec .venv/bin/<name>`, or `oom_tag_service.py <band> .venv/bin/<name>`), never under `uv run` and never by a bare name that a PATH could resolve to some other install. The entry point is named after the program. Services run the same way.
 - The update apply re-syncs the venv when a backend manifest changed (`uv.lock`, the root `pyproject.toml`, `system/config/mngr_plugins.toml`, or any app's `pyproject.toml`), copying it aside first, and pre-flights the shell and the chat from the same `.venv/bin` entry points before the restart.
 - The `app_manifest` and `app_schema` libraries are workspace members that apps depend on by path, so the venv carries them editable.
-- Apps once also had per-app uv tools (`uv tool install -e system/apps/<package>`). The program lines never ran them -- `uv run bootstrap` put `.venv/bin` first on supervisord's PATH -- while the update's pre-flight did, so a stale tool rolled back a good update. The build and a landed update remove any that remain (`tool_env.remove_app_tool_installs`).
+- No app has a uv tool of its own. A workspace built before this layout may still carry per-app tools (`uv tool install -e system/apps/<package>`), which nothing runs; the build and a landed update remove them (`tool_env.remove_app_tool_installs`).
 
 ## 15. Memory priority
 
