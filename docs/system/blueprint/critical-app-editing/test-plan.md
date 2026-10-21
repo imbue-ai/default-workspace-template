@@ -88,10 +88,12 @@ things in), but one suffices if the emergency scenarios (E15) are run last.
   `ObserveEventFollower` with `require_writer`, or the chat's follower and the observer's
   writer disagree on the file. Check with
   `python3 -c "from imbue.mngr.api.observe import ObserveEventFollower; import inspect; print('require_writer' in inspect.signature(ObserveEventFollower).parameters)"`
-  under both the workspace venv the chat runs from (`.venv/bin/python`) and the mngr tool
-  environment the observer runs in (the interpreter on the shebang line of the `mngr` its
-  cmdline names; a workspace can hold two mngr tools, the one under `/root` and one under
-  `/home/user`, and they can differ).
+  under both the workspace venv the chat runs from (`.venv/bin/python`) and the environment
+  the observer runs in (the interpreter on the shebang line of the `mngr` its cmdline
+  names). The observer runs `mngr` by bare name, so under supervisord, whose PATH
+  `uv run bootstrap` leads with `.venv/bin`, that is normally the venv's own; it is a mngr
+  tool only when PATH reached one, and a workspace can hold two, the one under `/root`
+  and one under `/home/user`, which can differ.
 - **S0.2 Baseline health.** `supervisorctl status` shows `agent-observer`, `chat`,
   `system_interface`, `terminal` RUNNING. `curl -s localhost:8010/api/health` answers
   `agent_events.is_stream_healthy: true`. `curl -s localhost:8010/_instances` answers 200
