@@ -3,10 +3,11 @@
 The workspace frontends' shared JavaScript library: what the shell
 (`system/apps/system_interface/frontend`), the chat page
 (`system/apps/chat/frontend`), the Getting Started page
-(`system/apps/getting_started/frontend`), and Files
-(`system/apps/files/frontend`) have in common. Source only: there is
+(`system/apps/getting_started/frontend`), Files
+(`system/apps/files/frontend`), and Routines
+(`system/apps/routines/frontend`) have in common. Source only: there is
 no build here, each app's vite build compiles the modules it imports
-(`@imbue/workspace-ui/src/<module>`), and the five packages are one npm
+(`@imbue/workspace-ui/src/<module>`), and the six packages are one npm
 workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
 
 - `src/base.css`: the design system's token layer (colour and type tokens, the

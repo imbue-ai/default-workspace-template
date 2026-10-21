@@ -84,7 +84,7 @@ From top to bottom, inside the same `max-w-4xl` column the page uses today:
    a white card.
 
    The prompts are plain-language requests written so the mind's own skills
-   (`build-app`, `latchkey`, `manage-scheduled-tasks`, `launch-task`,
+   (`build-app`, `latchkey`, `manage-routines`, `launch-task`,
    `fetch-process-show`, `do-something-new`) match on them; they name no skill.
    With no app on the machine whose action takes a `message`, the tiles are
    disabled and say so in a tooltip.

@@ -145,7 +145,7 @@ under `system/apps/<your-package>/` so they get an isolated window and origin.
   manual port checks (`ss -tln`) is unnecessary. If you are picking a port
   manually for the wrap-existing escape hatch, check `ss -tln` and avoid `8000`
   (system_interface), `8010` (the chat app), `8030` (the Getting Started app),
-  `8040` (the Memory & disk app) and `8081` (the browser service).
+  `8040` (the System Monitor app) and `8081` (the browser service).
   Two things do not show up there: the `agent-observer` program binds no port at
   all, and a preview of any app (`update-app`'s `preview_app.py`) takes free
   ports at boot, so nothing to avoid is written down for it.
@@ -216,10 +216,13 @@ What gets generated:
   frees the whole process while nobody looks at it, its data on disk is
   untouched, and the next request wakes it. Set it to `false` when the app
   does work between requests that a stop would lose or interrupt: a
-  background thread or scheduler that refreshes data, a poller or file
+  background thread that keeps something live, a poller or file
   watcher, a websocket or subscription to an outside service, a job that
   must finish after the user closes the window, or an API another agent
-  drives with no window open. A stopped app runs nothing until its next
+  drives with no window open. Work on a cadence (a refresh every N minutes,
+  a nightly sync) is never a scheduler inside the service: it is a routine
+  with `--app <name>` (the `manage-routines` skill), which the Routines app
+  shows and the user can run, pause and retime. A stopped app runs nothing until its next
   request, and the wake serves that request, not the work that was in
   flight. `forward_port.py --manifest`
   reads it on every start; the scaffold checks it with `uv run app-manifest

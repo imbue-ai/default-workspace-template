@@ -300,6 +300,7 @@ marimo/_lsp/
 system/apps/system_interface/imbue/system_interface/static/
 system/apps/chat/imbue/chat/static/
 system/apps/getting_started/src/getting_started/static/
+system/apps/routines/src/routines_app/static/
 system/apps/files/static/
 system/apps/system_interface/frontend/media/*.ico
 system/apps/chat/frontend/media/*.ico

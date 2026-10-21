@@ -2284,6 +2284,8 @@ def test_plan_apply_does_not_mistake_nested_paths_for_manifests(path: str) -> No
         "system/apps/getting_started/frontend/index.html",
         "system/apps/files/frontend/src/index.ts",
         "system/apps/files/frontend/vite.config.ts",
+        "system/apps/routines/frontend/src/views/App.ts",
+        "system/apps/routines/frontend/index.html",
         "system/libs/workspace_ui/src/base.css",
         "system/tsconfig.base.json",
     ],
@@ -2301,6 +2303,7 @@ def test_plan_apply_counts_every_frontend_file_not_just_src(path: str) -> None:
         "system/apps/chat/frontend/package.json",
         "system/apps/getting_started/frontend/package.json",
         "system/apps/files/frontend/package.json",
+        "system/apps/routines/frontend/package.json",
         "system/libs/workspace_ui/package.json",
     ],
 )

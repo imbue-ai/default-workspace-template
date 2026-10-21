@@ -231,16 +231,21 @@ provisioning paragraph at its end, record the footprint evidence
 go to 4b. Every impacted consumer is then built-in, restarted by the apply and
 tested upstream. Enumerating consumers, grepping for retired names, and
 reasoning about coupling all exist to find user code, and with none to find
-they only spend the user's time. The footprint is read from git, so the one
-user consumer it cannot see is a scheduled task: cron drop-ins live under the
-gitignored `data/.state/cron.d`, and your worktree holds none of them (the
-launcher syncs only this run's `data/.tasks/update-self/` into it), so read
-the lead's copy. On this branch, list `$LEAD_WORK_DIR/data/.state/cron.d` --
-the main worktree of this same repo when `LEAD_WORK_DIR` is unset, as in Step
-6, since a directory you cannot read answers exactly like a workspace with no
-scheduled task -- and grep its lines for any path the update deleted or
-renamed (`git diff --name-status --diff-filter=DR "$BASE" "$TARGET_REF"`); a
-hit is a user-created consumer, and 4a runs in full. If you believe the
+they only spend the user's time. The footprint is read from git, and a
+scheduled task is a routine, a tracked `system/routines/<id>.toml` whose
+`command` or `skill` names what runs: grep the `command` fields of every
+definition for any path the update deleted or renamed
+(`git diff --name-status --diff-filter=DR "$BASE" "$TARGET_REF"`), and match
+each `skill` against the `.agents/skills/<name>/` directories that diff deleted
+or renamed; a hit is a user-created consumer, and 4a runs in full. One consumer the footprint still
+cannot see is a cron drop-in from before routines existed that
+`routines migrate-cron` left in place: those live under the gitignored
+`data/.state/cron.d`, and your worktree holds none of them (the launcher syncs
+only this run's `data/.tasks/update-self/` into it), so read the lead's copy.
+On this branch, list `$LEAD_WORK_DIR/data/.state/cron.d` -- the main worktree
+of this same repo when `LEAD_WORK_DIR` is unset, as in Step 6, since a
+directory you cannot read answers exactly like a workspace with no such entry
+-- and grep its lines the same way. If you believe the
 analysis should run anyway in a situation this rule does not cover, that is a
 `question` gate (Step 6), never a silent widening. When `has_local_footprint`
 is true, run all of it.
@@ -379,10 +384,11 @@ in your report.
   when the merge needed nontrivial merge work there. For the system interface,
   build the frontends in your worktree (`uv sync --all-packages`, then `cd
   system && npm ci && npm run build`: one npm workspace emits the shell's bundle,
-  the chat app's, the Getting Started app's, and the Files app's) and drive it per
-  `.agents/shared/worker/references/web-frontend-testing.md`. Those four bundles
+  the chat app's, the Getting Started app's, the Files app's, and the Routines
+  app's) and drive it per
+  `.agents/shared/worker/references/web-frontend-testing.md`. Those five bundles
   are what the lead's apply installs live (`--worker-bundle`, one per app,
-  installed only as a set) -- name all four locations in your report.
+  installed only as a set) -- name all five locations in your report.
 - **Customization survival** -- for every user creation the update touches
   (workspace-added apps, widgets and skills; user-modified built-in surfaces;
   apps hooking into the system interface's API or state), verify the *merged
@@ -478,10 +484,11 @@ Valid `name:` values:
     evidence for the manifest apps: which carried local content and which
     the update reached.
   - **Built frontend bundles** -- when you built them, the absolute paths of
-    all four (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`,
+    all five (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`,
     `<your work_dir>/system/apps/chat/imbue/chat/static`,
-    `<your work_dir>/system/apps/getting_started/src/getting_started/static`, and
-    `<your work_dir>/system/apps/files/static`); omit
+    `<your work_dir>/system/apps/getting_started/src/getting_started/static`,
+    `<your work_dir>/system/apps/files/static`, and
+    `<your work_dir>/system/apps/routines/src/routines_app/static`); omit
     when you did not build.
   - **Impact analysis** -- what you checked and how, and any user-created app
     or skill depending on a changed file; or, when the 4a rule skipped it,

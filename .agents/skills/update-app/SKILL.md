@@ -156,12 +156,15 @@ with the app through hardening, testing, and publishing.
 Check the app's `stop_when_no_windows` against what the change makes it do.
 The scaffold writes `true`: the shell stops the program a minute after the
 app's last window closes and starts it again only on the next request. If
-the change gives the app work between requests -- a background thread or
-scheduler that refreshes data, a poller or file watcher, a websocket or
-subscription to an outside service, a job that must finish after the user
-closes the window, or an API another agent drives with no window open --
-set it to `false` in `app.toml`, or that work is lost or interrupted at the
-stop. The reverse holds: an app that no longer does anything between
+the change gives the app work between requests -- a poller or file watcher,
+a websocket or subscription to an outside service, a job that must finish
+after the user closes the window, or an API another agent drives with no
+window open -- set it to `false` in `app.toml`, or that work is lost or
+interrupted at the stop. Work that runs on a schedule and then exits (a
+refresh of the app's data every hour, a nightly sync) is not a reason to
+keep the service up: it is a routine with `--app <name>`, made with the
+`manage-routines` skill, never a thread or scheduler inside the service.
+The reverse holds: an app that no longer does anything between
 requests can go back to `true`. The field is read at registration, so the
 restart in step 2 is what applies it; `uv run app-manifest validate-manifest
 system/apps/<package>/app.toml` checks the file.

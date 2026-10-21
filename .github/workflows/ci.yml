@@ -204,7 +204,7 @@ jobs:
       # The runner's offload and the one built into the image (OFFLOAD_VERSION in
       # system/scripts/offload_sandbox_init.sh) talk to each other, so they stay
       # in lockstep; system/test_offload_configs.py checks that.
-      OFFLOAD_VERSION: "0.9.14"
+      OFFLOAD_VERSION: "0.10.0"
     steps:
       - name: Fetch the Modal token from Vault
         uses: imbue-ai/use-vault-secrets@main

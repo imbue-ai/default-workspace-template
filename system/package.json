@@ -8,7 +8,8 @@
     "apps/system_interface/frontend",
     "apps/chat/frontend",
     "apps/getting_started/frontend",
-    "apps/files/frontend"
+    "apps/files/frontend",
+    "apps/routines/frontend"
   ],
   "scripts": {
     "prebuild": "bash scripts/fetch_mngr_assets.sh",
