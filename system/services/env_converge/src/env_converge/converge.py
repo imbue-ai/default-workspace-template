@@ -353,7 +353,12 @@ def workspace_app_package_names(workspace_dir: Path) -> frozenset[str]:
     ):
         try:
             name = tomllib.loads(pyproject.read_text()).get("project", {}).get("name")
-        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+            logger.warning(
+                "Could not read the app project name in {} ({}); a recorded uv tool of that name is not held back",
+                pyproject,
+                e,
+            )
             continue
         if isinstance(name, str) and name:
             names.add(_normalized_package_name(name))
