@@ -11,7 +11,8 @@ Two phases with different contracts:
   are idempotent with fast satisfied-checks -- there are NO marker files;
   version stability comes from the units' pins and the snapshot-pinned apt
   sources, so re-running is deterministic), then installs anything present in
-  the record but missing from this rootfs.
+  the record but missing from this rootfs, except a uv tool named like a
+  workspace app.
 
 Ordering rule (removal stickiness): on a rootfs that carries the identity
 stamp, capture runs FIRST so deliberate removals stick; on a fresh rootfs
@@ -393,7 +394,9 @@ def install_missing_from_record(
     Returns (installed_apt, installed_npm, installed_uv, installed_cargo,
     unavailable). The apt install-set is the recorded manual set (dependencies
     follow via apt at the pinned snapshot timestamp, so versions are
-    deterministic without pinning each name).
+    deterministic without pinning each name). A recorded uv tool named like an
+    app under ``workspace_dir``'s ``system/apps/`` is held back and logged, never
+    installed (:func:`uv_tools_to_replay`).
     """
     unavailable: list[str] = []
 
