@@ -362,26 +362,20 @@ def test_built_in_manifest_priority_is_a_band(manifest_path: Path) -> None:
     assert manifest.priority != "user"
 
 
-def _console_scripts(package: str) -> set[str]:
-    return set(
-        tomllib.loads((_APPS_DIR / package / "pyproject.toml").read_text())
-        .get("project", {})
-        .get("scripts", {})
-    )
+@pytest.mark.parametrize(
+    "manifest_path",
+    [path for path in _built_in_manifest_paths() if "preview" in tomllib.loads(path.read_text())],
+    ids=lambda path: path.parent.name,
+)
+def test_every_built_in_preview_boots_an_app_entry_point(manifest_path: Path) -> None:
+    # preview_app.py runs ``uv run`` on the preview command, or on the program's name when
+    # the table names none; whatever the venv holds under that name is what boots, and a
+    # name no app package declares is another package's script or nothing at all.
+    manifest = load_manifest(manifest_path)
+    launched = manifest.preview.command[0] if manifest.preview.command else str(manifest.program)
 
-
-@pytest.mark.parametrize("package", ("system_interface", "chat", "terminal"))
-def test_every_critical_built_in_previews_from_its_own_entry_point(
-    package: str,
-) -> None:
-    # A critical app's preview table names the app's real console script, so a preview
-    # boots the tool the program itself runs rather than a stale spelling of it.
-    manifest = load_manifest(_APPS_DIR / package / MANIFEST_FILENAME)
-
-    assert manifest.critical is True
-    assert manifest.preview.command, f"{package} declares no preview command"
-    assert manifest.preview.command[0] in _console_scripts(package), (
-        f"{package}'s preview runs {manifest.preview.command[0]!r}, which its pyproject does not export"
+    assert _script_entry_points(launched), (
+        f"{manifest.name}'s preview runs {launched!r}, which no app package declares as a console script"
     )
 
 
