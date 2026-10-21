@@ -1675,12 +1675,12 @@ _APP_FIXTURES = (
 
 
 def _write_app(
-    repo_root: Path, package: str, tool_name: str, executable: str, is_critical: bool
+    repo_root: Path, package: str, project_name: str, executable: str, is_critical: bool
 ) -> None:
     app_dir = repo_root / update_layout.APPS_DIR / package
     app_dir.mkdir(parents=True, exist_ok=True)
     (app_dir / "pyproject.toml").write_text(
-        f'[project]\nname = "{tool_name}"\nversion = "0.1.0"\n\n[project.scripts]\n{executable} = "{package}.main:main"\n'
+        f'[project]\nname = "{project_name}"\nversion = "0.1.0"\n\n[project.scripts]\n{executable} = "{package}.main:main"\n'
     )
     (app_dir / update_layout.MANIFEST_FILENAME).write_text(
         f'name = "{package}"\ndisplay_name = "{package}"\ninternal = true\ncritical = {str(is_critical).lower()}\n'
@@ -1708,8 +1708,8 @@ def _make_apply_repo(tmp_path: Path) -> Path:
         "[tool.uv.sources]\n"
         f'imbue-mngr = {{ git = "{_MNGR_GIT}", rev = "{_MNGR_REV}", subdirectory = "libs/mngr" }}\n'
     )
-    for package, tool_name, executable, is_critical in _APP_FIXTURES:
-        _write_app(repo_root, package, tool_name, executable, is_critical)
+    for package, project_name, executable, is_critical in _APP_FIXTURES:
+        _write_app(repo_root, package, project_name, executable, is_critical)
     return repo_root
 
 
