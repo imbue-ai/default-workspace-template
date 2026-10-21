@@ -83,13 +83,15 @@
 
   .reader { overflow-y: auto; min-height: 0; }
   .reader:focus { outline: none; }
-  article, .intro { max-width: 720px; margin: 0 auto; padding: 24px 32px; }
+  /* The reading column's first two rows sit level with the sidebar's: its title and buttons with the sidebar's
+     header (16px down, a 28px row), its chips with the search field (10px below, as tall as the field). */
+  article, .intro { max-width: 720px; margin: 0 auto; padding: 16px 32px 24px; }
   .intro { color: var(--c-text-secondary); }
   .back { display: none; color: var(--c-text-secondary); font-size: var(--font-size-row); margin-bottom: 12px; }
   .back:hover { color: var(--c-text-primary); }
-  .skill-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+  .skill-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 28px; }
   /* The workspace's badge (workspace_ui components/Badge.ts): outline chips, one tone per source of a skill. */
-  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; min-height: 39px; }
   .chip { display: inline-flex; align-items: center; padding: 2px 8px; border: 1px solid var(--c-border); border-radius: 8px; background: var(--c-surface); color: var(--c-text-secondary); font-size: var(--font-size-helper); line-height: 1.4; white-space: nowrap; }
   .chip.workspace { border-color: var(--c-accent); color: var(--c-accent); }
   .chip.installed { border-color: var(--c-warning); color: var(--c-warning); }
@@ -132,6 +134,7 @@
     .resize-handle { display: none; }
     :root[data-view="skill"] .sidebar, :root[data-view="list"] .reader { display: none; }
     .back { display: inline-block; }
+    .chips { min-height: 0; }
     article { padding: 16px; }
   }
 </style>
@@ -386,15 +389,13 @@
       element("article", {}, [
         element("a", { class: "back", href: "/", text: "All skills" }),
         element("header", { class: "skill-head" }, [
-          element("div", {}, [
-            element("h1", { text: summary.title }),
-            element("div", { class: "chips" }, [authorChip(summary), element("span", { class: "chip", text: `Last updated ${formatWhen(summary.last_updated_at)}` })]),
-          ]),
+          element("h1", { text: summary.title }),
           element("div", { class: "actions" }, [
             withIcon(element("a", { class: "icon-button", href: fileUrl(detail.directory), title: "Open this skill's folder in Files", "aria-label": "Open this skill's folder in Files" }), "folder"),
             editButton,
           ]),
         ]),
+        element("div", { class: "chips" }, [authorChip(summary), element("span", { class: "chip", text: `Last updated ${formatWhen(summary.last_updated_at)}` })]),
         element("section", { class: "skill-section", "aria-labelledby": "description-heading" }, [
           element("h2", { class: "section-heading", id: "description-heading", text: "Description" }),
           element("p", { text: summary.description || "No description." }),
