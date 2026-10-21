@@ -2231,10 +2231,10 @@ def test_plan_apply_keys_the_provisioner_run_on_what_it_reads() -> None:
         "system/apps/system_interface/pyproject.toml",
         "pyproject.toml",
         "uv.lock",
-        # Not a Python manifest, but it is what the refresh unions into each
-        # tool's reinstall, so it decides which packages the tool environments
-        # carry. A release that only re-assigns an existing plugin to another
-        # tool changes nothing else, and without this would never be registered.
+        # Not a Python manifest, but it is what the refresh unions into the mngr
+        # tool's reinstall, so it decides which plugins that tool carries. A release
+        # that only assigns an existing plugin to the tool changes nothing else, and
+        # without this would never be registered.
         update_layout.PLUGIN_MANIFEST_PATH,
     ],
 )
@@ -5302,10 +5302,9 @@ def test_only_apply_and_recover_band_themselves(
         assert target == (Path.cwd() if expected == "cwd" else Path(expected))
 
 
-# apply: the uv tool environments
+# apply: the mngr tool environment
 #
-# The refresh rebuilds the uv tool environments the workspace runs from (the
-# mngr tool and one per Python app).
+# The refresh rebuilds the mngr tool's uv tool environment.
 # ``uv tool install --reinstall`` rebuilds a tool from its base package alone,
 # so both halves of this are load-bearing: WHICH installation is rebuilt
 # (``resolve_tool_destinations``, from the console script's own shebang) and WHAT it is

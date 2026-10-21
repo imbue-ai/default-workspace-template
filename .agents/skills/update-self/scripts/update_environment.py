@@ -651,8 +651,8 @@ def _warn_manifest_unread(manifest_path: Path, why: str) -> None:
     alone" would send an operator looking for a breakage that has not happened.
     """
     sys.stderr.write(
-        f"refresh: skipping the plugin manifest at {manifest_path} ({why}); the tools "
-        "keep the plugins their receipts already name, but any plugin this release "
+        f"refresh: skipping the plugin manifest at {manifest_path} ({why}); the mngr "
+        "tool keeps the plugins its receipt already names, but any plugin this release "
         "adds will not be registered.\n"
     )
 
