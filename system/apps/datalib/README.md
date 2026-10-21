@@ -42,8 +42,10 @@ is used, so a workspace that never uses datalib downloads nothing. The launcher 
    it in the `user` band (200), the band the manifest's `priority` names; the
    OOM backstop only ever raises a process to its band, so it leaves 900 alone.
 4. Replaces itself with `~/.local/bin/datalib-http --no-open
-   data/.skills/datalib`, with `DATALIB_BIND=127.0.0.1:8731` and the token in
-   `DATALIB_TOKEN`. From then on supervisord supervises datalib-http directly.
+   data/.skills/datalib`, with `DATALIB_BIND=127.0.0.1:8731`, the token in
+   `DATALIB_TOKEN`, and, once the workspace has been shared, the share's app
+   hosts in `DATALIB_ALLOWED_HOSTS` (see below). From then on supervisord
+   supervises datalib-http directly.
 
 If it is started before that script has installed the binary, the launcher
 exits without registering anything and supervisord retries it with its
@@ -70,6 +72,22 @@ the same across restarts (a browser already holding the cookie stays signed
 in) and the skill can read the same file for its bearer token. When the file
 is missing or unusable the launcher mints one, and `datalib-http` writes it
 there.
+
+## Over a share
+
+`datalib-http` refuses a request whose `Host` is not loopback, `localhost`
+or a name under it, or a name in `DATALIB_ALLOWED_HOSTS`. That is its defence
+against DNS rebinding. A window on the desktop opens the app at
+`<label>.host-<hex>.localhost`, which it admits by itself. The share gateway's
+Caddy passes the browser's `Host` through, so a window over a share sends
+`<label>.<share domain>`. The launcher reads the share domain from
+`data/.state/share_domain`, which the share gateway writes and keeps after an
+unshare, and passes `DATALIB_ALLOWED_HOSTS=*.<share domain>`.
+
+The launcher reads that file once, at start. A workspace shared for the first
+time while datalib runs reaches it over the share only after
+`supervisorctl restart datalib`. A re-share keeps the domain, so this happens
+at most once per workspace.
 
 ## Staying up with no window
 

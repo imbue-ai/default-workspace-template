@@ -55,6 +55,20 @@ STATE_DIRECTORY: Final[Path] = Path("data/.state/datalib-app")
 ENV_BIND: Final[str] = "DATALIB_BIND"
 ENV_TOKEN: Final[str] = "DATALIB_TOKEN"
 
+# datalib-http refuses a request whose Host is not loopback, a name under localhost, or a name in this
+# list (auth.rs, ALLOWED_HOSTS_ENV). The share gateway's Caddy passes the browser's Host through, so a
+# window over a share sends `<label>.<share domain>` and the share domain has to be listed.
+ENV_ALLOWED_HOSTS: Final[str] = "DATALIB_ALLOWED_HOSTS"
+
+# Where the share gateway records the domain the workspace is shared under; kept after an unshare, and a
+# re-share keeps the domain (system/services/share_gateway/README.md).
+SHARE_DOMAIN_PATH: Final[Path] = Path("data/.state/share_domain")
+
+# A domain datalib-http accepts in its host list: letters, digits, hyphens and dots.
+SHARE_DOMAIN_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*$"
+)
+
 # datalib-http's query key for the token on a launch URL (auth.rs, TOKEN_QUERY_KEY).
 TOKEN_QUERY_KEY: Final[str] = "token"
 
@@ -173,9 +187,30 @@ def build_datalib_http_argv(datalib_http_path: Path, data_root: Path) -> list[st
     return [str(datalib_http_path), "--no-open", str(data_root)]
 
 
-def child_environment(port: int, token: str) -> dict[str, str]:
-    """What datalib-http reads from its environment: the loopback bind and the token to require."""
-    return {ENV_BIND: f"{BIND_HOST}:{port}", ENV_TOKEN: token}
+def read_share_domain(path: Path) -> str | None:
+    """The domain the workspace was last shared under, or None when it never was or the file is unusable."""
+    try:
+        domain = path.read_text(encoding="utf-8").strip()
+    except (FileNotFoundError, UnicodeDecodeError):
+        return None
+    if not SHARE_DOMAIN_PATTERN.fullmatch(domain):
+        logger.warning(
+            "The share domain file %s does not hold a domain; datalib will refuse windows over a share",
+            path,
+        )
+        return None
+    return domain
+
+
+def child_environment(
+    port: int, token: str, share_domain: str | None
+) -> dict[str, str]:
+    """What datalib-http reads from its environment: the loopback bind, the token to require, and the
+    share's app hosts when the workspace has been shared."""
+    environment = {ENV_BIND: f"{BIND_HOST}:{port}", ENV_TOKEN: token}
+    if share_domain is not None:
+        environment[ENV_ALLOWED_HOSTS] = f"*.{share_domain}"
+    return environment
 
 
 def register_app(
@@ -221,7 +256,13 @@ def launch(arguments: argparse.Namespace) -> None:
             OOM_SCORE_ADJ,
         )
     # The token goes through the environment, never the command line, which any process listing shows.
-    environment = {**os.environ, **child_environment(arguments.port, token)}
+    # Read once at start: a workspace shared for the first time while datalib runs reaches it over the
+    # share only after the program restarts.
+    share_domain = read_share_domain(arguments.share_domain_file)
+    environment = {
+        **os.environ,
+        **child_environment(arguments.port, token, share_domain),
+    }
     argv = build_datalib_http_argv(arguments.datalib_http, arguments.data_root)
     os.execve(argv[0], argv, environment)
 
@@ -256,6 +297,12 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
         type=Path,
         default=STATE_DIRECTORY,
         help="Where the manifest copy that carries the token is written",
+    )
+    parser.add_argument(
+        "--share-domain-file",
+        type=Path,
+        default=SHARE_DOMAIN_PATH,
+        help="Where the share gateway records the domain the workspace is shared under",
     )
     parser.add_argument(
         "--forward-port",

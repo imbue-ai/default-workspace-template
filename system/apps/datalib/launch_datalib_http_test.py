@@ -90,7 +90,37 @@ def test_datalib_http_is_told_the_data_root_and_not_to_open_a_browser() -> None:
 
 
 def test_datalib_http_binds_loopback_and_requires_the_token() -> None:
-    assert launcher.child_environment(8731, _TOKEN) == {
+    assert launcher.child_environment(8731, _TOKEN, None) == {
         "DATALIB_BIND": "127.0.0.1:8731",
         "DATALIB_TOKEN": _TOKEN,
     }
+
+
+def test_a_shared_workspace_lets_datalib_http_answer_to_every_app_host_under_the_share_domain() -> (
+    None
+):
+    """Caddy passes the browser's Host through; without this datalib-http refuses every window over a share."""
+    environment = launcher.child_environment(8731, _TOKEN, "abc.def.us1.example.com")
+    assert environment["DATALIB_ALLOWED_HOSTS"] == "*.abc.def.us1.example.com"
+
+
+def test_the_share_domain_is_read_from_the_gateways_record(tmp_path: Path) -> None:
+    path = tmp_path / "share_domain"
+    path.write_text("abc.def.us1.example.com\n")
+    assert launcher.read_share_domain(path) == "abc.def.us1.example.com"
+
+
+def test_a_workspace_never_shared_has_no_share_domain(tmp_path: Path) -> None:
+    assert launcher.read_share_domain(tmp_path / "share_domain") is None
+
+
+@pytest.mark.parametrize(
+    "text", ["", "*.example.com", "https://example.com", "a b", "example.com:443"]
+)
+def test_a_share_domain_datalib_http_would_refuse_is_not_passed_on(
+    tmp_path: Path, text: str
+) -> None:
+    """datalib-http exits on a host list it cannot parse, so a bad record must not reach it."""
+    path = tmp_path / "share_domain"
+    path.write_text(text)
+    assert launcher.read_share_domain(path) is None
