@@ -3656,6 +3656,26 @@ def test_ignores_requested_at_cache_busting_query(client: FlaskClient, tmp_path:
     assert tagged.headers["Cache-Control"] == "public, max-age=31536000, immutable"
 
 
+def test_serves_image_as_an_attachment_for_the_lightbox_download(client: FlaskClient, tmp_path: Path) -> None:
+    """The lightbox's Download asks for the image with ``download``, beside its message's cache key: the image comes
+    as an attachment under its own name, and a missing one is a not-found in plain words the lightbox can show."""
+    image_path = tmp_path / "chart.png"
+    image_path.write_bytes(b"fake-png-bytes")
+
+    downloaded = client.get(f"{image_path}?requested_at=2026-07-24T00%3A00%3A00Z&download=")
+
+    assert downloaded.status_code == 200
+    assert downloaded.content_type == "image/png"
+    assert downloaded.data == b"fake-png-bytes"
+    assert downloaded.headers["Content-Disposition"] == "attachment; filename=chart.png"
+
+    missing = client.get(f"{tmp_path / 'gone.png'}?download=")
+    assert missing.status_code == 404
+    assert missing.content_type.startswith("text/plain")
+    assert missing.get_data(as_text=True) == f"There's nothing at {tmp_path / 'gone.png'}."
+    assert "Content-Disposition" not in missing.headers
+
+
 def test_serves_image_in_nested_subdirectory(client: FlaskClient, tmp_path: Path) -> None:
     """Nested paths under the write directory are served (agents may organize per run)."""
     nested_dir = tmp_path / "images" / "run-3"

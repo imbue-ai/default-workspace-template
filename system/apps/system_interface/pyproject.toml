@@ -79,6 +79,7 @@ artifacts = [
 packages = ["imbue"]
 
 [tool.pytest.ini_options]
+required_plugins = ["pytest-workspace-env"]
 timeout_func_only = true
 # Same tmp_path retention as the root config, which says why.
 tmp_path_retention_policy = "failed"

@@ -52,6 +52,11 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   link handed to it with it, and the chat every link of a message it renders;
   its test holds its external rule (the app contract's `isExternalUrl`) to the
   desktop app's (the vendored `link-externality-vectors.json`).
+- `src/download.ts`: `startDownload`, how the workspace's own pages download a
+  file of their own origin: by loading it in a hidden frame rather than through
+  a `download` link, whose request the browser sends without the workspace's
+  session cookie when Imbue Studio frames the page, and reporting what the
+  server said instead when it answers with something other than a file.
 - `src/search.ts`: `matchesQuery`, the one text match of the workspace's
   typeaheads (every whitespace token of the query occurring in one of the given
   texts, case-insensitively), which the desktop's launcher, the Getting Started

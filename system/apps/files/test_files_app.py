@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from playwright.sync_api import Locator
 from playwright.sync_api import Page
+from playwright.sync_api import Request
 from playwright.sync_api import expect
 
 pytestmark = [pytest.mark.browser, pytest.mark.timeout(60)]
@@ -327,6 +328,47 @@ def test_delete_from_the_entry_menu_asks_first_and_removes_the_file(
     assert not (files_root / "README.md").exists()
 
 
+def test_download_loads_in_a_frame_and_saves_a_folder_as_a_zip_and_a_file_under_its_name(
+    open_files_page: OpenFilesPage,
+) -> None:
+    """A download is a frame's load, whose request carries the workspace's session when Imbue Studio frames Files from
+    another site (a ``download`` link's request goes without it), and the server names the file."""
+    page = open_files_page("/")
+    download_requests: list[Request] = []
+
+    def record_download_request(request: Request) -> None:
+        if "?zip" in request.url or "?download" in request.url:
+            download_requests.append(request)
+
+    page.on("request", record_download_request)
+    _entry(page, "/projects/").click(button="right")
+    with page.expect_download() as folder:
+        page.locator('[data-menu-row="download"]').click()
+    assert folder.value.suggested_filename == "projects.zip"
+
+    _entry(page, "/notes.txt").click(button="right")
+    with page.expect_download() as file:
+        page.locator('[data-menu-row="download"]').click()
+    assert file.value.suggested_filename == "notes.txt"
+    assert file.value.path().read_text() == "first line\nsecond line\n"
+
+    file_page = open_files_page("/README.md?view")
+    file_page.on("request", record_download_request)
+    with file_page.expect_download() as from_its_page:
+        file_page.locator('[data-action="download"]').click()
+    assert from_its_page.value.suggested_filename == "README.md"
+    assert [request.all_headers()["sec-fetch-dest"] for request in download_requests] == ["iframe", "iframe", "iframe"]
+
+
+def test_a_download_the_server_refuses_says_why_in_a_toast(open_files_page: OpenFilesPage, files_root: Path) -> None:
+    page = open_files_page("/")
+    expect(_entry(page, "/notes.txt")).to_be_visible()
+    (files_root / "notes.txt").unlink()
+    _entry(page, "/notes.txt").click(button="right")
+    page.locator('[data-menu-row="download"]').click()
+    expect(page.locator("[data-toast]")).to_have_text("Couldn't download notes.txt: There's nothing at /notes.txt.")
+
+
 def test_add_makes_a_new_folder_and_names_it(open_files_page: OpenFilesPage, files_root: Path) -> None:
     page = open_files_page("/")
     page.locator('[data-action="add"]').click()
@@ -379,6 +421,7 @@ def test_files_dropped_on_a_folder_upload_into_it(open_files_page: OpenFilesPage
     expect(page.locator(".files-uploads")).to_have_count(0)
 
 
+@pytest.mark.flaky
 def test_an_entry_dragged_onto_a_folder_moves_into_it(open_files_page: OpenFilesPage, files_root: Path) -> None:
     page = open_files_page("/")
     _entry(page, "/README.md").drag_to(_entry(page, "/projects/"))

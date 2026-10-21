@@ -28,6 +28,18 @@ path = "/new"
 method = "POST"
 params = [{name = "url", label = "Start page", required = false}]
 
+# A preview runs beside the live browser: ports of its own, a copy of the saved fleet, a profile root of its
+# own, since a restore relaunches the profiles under its root and deletes the ones its fleet does not name, and
+# audio sinks of its own, since its browsers carry the live ones' names on the one shared pulse daemon.
+# It is headful like the live service, each browser on an Xvfb display of its own.
+# It still talks to the live shell: its window sweep stops a preview browser that no live browser window shows,
+# and its open-url route shows the page in a live browser window, not a preview one.
+[preview]
+command = ["browser-service"]
+ports = ["main", "cdp"]
+env = {BROWSER_PORT = "{port:main}", BROWSER_CDP_PROXY_PORT = "{port:cdp}", BROWSER_MANIFEST_PATH = "{copy:data}/instances.json", BROWSER_PROFILE_ROOT = "{scratch}/profiles", BROWSER_PULSE_SINK_PREFIX = "browserpreview{port:main}", BROWSER_HEADLESS = "0"}
+copies = {data = "data/.apps/browser"}
+
 # Xvfb exists only to give Chromium a display; it is the browser's wiring.
 [wiring]
 programs = ["xvfb"]

@@ -164,6 +164,9 @@ norecursedirs = [
     "venv",
     "{arch}",
 ]
+# Without it a test sees the environment of the agent running the suite; the chat and system interface pyprojects,
+# the other pytest roots, require it too.
+required_plugins = ["pytest-workspace-env"]
 timeout_func_only = true
 # Delete a passing test's tmp_path as soon as it finishes and keep only the latest
 # session's leftovers. /tmp is a tmpfs, and under gVisor every file or directory there

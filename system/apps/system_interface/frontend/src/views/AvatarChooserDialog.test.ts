@@ -6,7 +6,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AvatarChooserDialog, NO_DRAFT_TARGET_REASON } from "./AvatarChooserDialog";
 import type { AvatarChooserDialogAttrs } from "./AvatarChooserDialog";
 
-afterEach(unmountViews);
+afterEach(() => {
+  unmountViews();
+  document.querySelectorAll("iframe").forEach((frame) => frame.remove());
+});
 
 function render(overrides: Partial<AvatarChooserDialogAttrs> = {}): HTMLElement {
   const attrs: AvatarChooserDialogAttrs = {
@@ -19,6 +22,7 @@ function render(overrides: Partial<AvatarChooserDialogAttrs> = {}): HTMLElement 
     onSelect: vi.fn(),
     onDesignOwn: vi.fn(),
     onClose: vi.fn(),
+    onDownloadFailed: vi.fn(),
     ...overrides,
   };
   const root = mountView(() => m(AvatarChooserDialog, attrs));
@@ -40,8 +44,9 @@ describe("AvatarChooserDialog", () => {
     expect(onSelect).toHaveBeenCalledWith("gummy-seal");
     const source = dialog.querySelector("[data-avatar-source]") as HTMLAnchorElement;
     expect(source.getAttribute("href")).toBe("/api/avatars/mine/source.svg");
-    expect(source.getAttribute("download")).toBe("");
     expect(source.getAttribute("data-hover-tooltip")).toBe("/tmp/mine.svg");
+    source.click();
+    expect(document.querySelector("iframe[hidden]")?.getAttribute("src")).toBe("/api/avatars/mine/source.svg");
   });
 
   it("starts the design chat, or says why it cannot", () => {
