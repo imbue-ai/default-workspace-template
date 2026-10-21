@@ -172,7 +172,8 @@ that survives SIGKILL, a rollback that dies from an exception mid-run, an unread
   `pgrep -af "mngr observe"` shows one. Stop the observer, run `mngr notify` again: it
   starts its own and says so. Stop that one and restart the program.
 - **A8 Pre-flight boot unchanged.** `CHAT_PORT=18010 .venv/bin/chat-app --preflight` from
-  the repo root (the install the apply's pre-flight boots): `/api/health` answers 200 within the apply's budget, starts no follower
+  the repo root (the install the apply's pre-flight boots): `/api/health` answers 200
+  within the apply's budget, starts no follower
   (`agent_events.is_stream_healthy` is `false` with the "not been started" detail), and
   `pgrep -af "mngr observe"` still shows one process. Kill it.
 - **A9 Bands.** `cat /proc/<pid>/oom_score_adj` for the observer, the chat, the shell, and
@@ -435,8 +436,8 @@ shell's, chat's, and terminal's supervisord pids and `git rev-parse HEAD`.
   apply copies the venv aside), sabotage the kept venv copy
   (`data/.state/update-apply/snapshots/venv`: delete its `bin/chat-app`) so the restore
   yields an unbootable chat, then Roll back. Sabotaging only the kept bundle does not
-  do it: the chat still boots, without its page, and the rollback exits 0. Pass: the outcome says "did not come back healthy",
-  `emergency.json` exists, reloading the shell shows the staleness banner, exit 3 in the
+  do it: the chat still boots, without its page, and the rollback exits 0. Pass: the
+  outcome says "did not come back healthy", `emergency.json` exists, reloading the shell shows the staleness banner, exit 3 in the
   log. Recover by hand (`git revert` of the revert, rebuild) and confirm the banner clears.
 - **E16 update-self keeps no notice.** Run the update-self apply (no flag, `--ff-only`)
   on a trivial fast-forward: no `last-good.json`, no band, `run.json` updated as before.
