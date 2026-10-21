@@ -57,6 +57,7 @@ class SkillDetail(FrozenModel):
     """One skill as its page shows it."""
 
     summary: SkillSummary = Field(description="What the list shows")
+    directory: Path = Field(description="Its folder, as an absolute path")
     skill_file_path: Path = Field(description="Its SKILL.md, relative to the checkout")
     content: str = Field(description="Its SKILL.md exactly as written, frontmatter included")
     files: tuple[SkillFile, ...] = Field(description="Every file in its directory, by path")
@@ -66,4 +67,5 @@ class SkillDetail(FrozenModel):
 class SkillListing(FrozenModel):
     """Every skill under .agents/skills, by name."""
 
+    skills_directory: Path = Field(description="The .agents/skills folder, as an absolute path")
     skills: tuple[SkillSummary, ...] = Field(description="One per skill directory holding a SKILL.md")

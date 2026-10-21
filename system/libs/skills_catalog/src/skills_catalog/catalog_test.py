@@ -90,6 +90,10 @@ def test_the_listing_skips_directories_without_a_skill_file_and_hidden_ones(
     assert set(_origin_by_name(catalog)) == {"assist", "notify-user"}
 
 
+def test_the_listing_names_the_skills_folder_absolutely(workspace_root: Path, catalog: SkillsCatalog) -> None:
+    assert catalog.list_skills().skills_directory == (workspace_root / SKILLS_DIR).absolute()
+
+
 def test_a_workspace_without_a_skills_folder_lists_nothing(tmp_path: Path) -> None:
     catalog = build_catalog(init_workspace_repo(tmp_path / "empty", ()))
 
@@ -108,6 +112,7 @@ def test_a_skill_page_carries_its_file_exactly_and_its_files_without_caches(
     detail = catalog.describe_skill(SkillName("assist"))
 
     assert detail.content == (skill_directory / "SKILL.md").read_text()
+    assert detail.directory == skill_directory.absolute()
     assert detail.skill_file_path == Path(".agents/skills/assist/SKILL.md")
     assert [(file.path, file.size_bytes) for file in detail.files] == [
         (Path("SKILL.md"), len(detail.content.encode())),

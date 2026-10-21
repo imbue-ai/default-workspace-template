@@ -9,7 +9,10 @@ dependencies = [
     "app-schema",
     "flask>=3.0",
     "imbue-common",
+    # Splits a SKILL.md's frontmatter from its body the way the agents' own loaders do.
+    "imbue-mngr",
     "loguru>=0.7",
+    "markdown-it-py>=4.0",
     "pydantic>=2.0",
     "skills-catalog",
     "werkzeug>=3.0",

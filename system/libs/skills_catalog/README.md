@@ -8,8 +8,8 @@ changed by `update-creation`, brought in by `use-template` or `update-self`, or
 installed with `npx skills add` shows up the moment it is on disk.
 
 `SkillsCatalog.list_skills()` answers one `SkillSummary` per directory holding a
-`SKILL.md`; `describe_skill(name)` adds the file exactly as written and the
-files beside it. A `SKILL.md` is parsed with mngr's own reader
+`SKILL.md`, and the skills folder's absolute path; `describe_skill(name)` adds
+the skill's own folder, the file exactly as written and the files beside it. A `SKILL.md` is parsed with mngr's own reader
 (`imbue.mngr.utils.agent_skills`), which is as lenient as the agents' loaders,
 and checked against the agentskills.io layout with its `skill_shape_problems`.
 

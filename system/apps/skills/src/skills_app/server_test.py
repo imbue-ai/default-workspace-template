@@ -16,13 +16,13 @@ def test_the_api_document_describes_every_route(client: FlaskClient) -> None:
     assert_api_schema_describes_app(client, MANIFEST_PATH)
 
 
-def test_every_page_path_serves_the_one_document_with_the_shell_script(client: FlaskClient) -> None:
+def test_every_page_path_serves_the_one_document_that_connects_to_the_shell(client: FlaskClient) -> None:
     for path in ("/", "/assist", "/no-such-skill"):
         response = client.get(path)
         page = response.get_data(as_text=True)
         assert response.status_code == 200, path
         assert "<title>Skills</title>" in page
-        assert page.index('import { connectToShell } from "/_static/app_contract.js"') < page.index("</body>")
+        assert 'import("/_static/app_contract.js")' in page
         assert response.headers["Cache-Control"] == "no-store"
         # The page's inline scripts are admitted by hash, so a script injected later cannot run.
         assert "script-src 'self' 'sha256-" in response.headers["Content-Security-Policy"]
@@ -35,6 +35,7 @@ def test_the_listing_answers_every_skill_with_its_origin(workspace_root: Path, c
     response = client.get("/api/skills")
 
     assert response.headers["Cache-Control"] == "no-store"
+    assert response.get_json()["skills_directory"] == str((workspace_root / ".agents/skills").absolute())
     assert [(skill["name"], skill["origin"]) for skill in response.get_json()["skills"]] == [
         ("assist", "BUILT_IN"),
         ("news-digest", "MADE_HERE"),
@@ -60,18 +61,29 @@ def test_a_skill_page_answers_its_file_as_written(workspace_root: Path, client: 
     detail = response.get_json()
     assert response.status_code == 200
     assert detail["summary"]["description"] == "The template's assist."
+    assert detail["directory"] == str((workspace_root / ".agents/skills/assist").absolute())
     assert detail["skill_file_path"] == ".agents/skills/assist/SKILL.md"
     assert detail["content"] == (workspace_root / ".agents/skills/assist/SKILL.md").read_text()
     assert [file["path"] for file in detail["files"]] == ["SKILL.md"]
 
 
-def test_a_missing_or_unnameable_skill_is_not_found(client: FlaskClient) -> None:
-    missing = client.get("/api/skills/no-such-skill")
-    hidden = client.get("/api/skills/.hidden")
+def test_a_skill_s_instructions_are_its_body_rendered_without_the_frontmatter(
+    workspace_root: Path, client: FlaskClient
+) -> None:
+    response = client.get("/api/skills/assist/instructions")
 
-    assert missing.status_code == 404
-    assert "no-such-skill" in missing.get_json()["detail"]
-    assert hidden.status_code == 404
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.get_json()["html"] == "<h1>assist</h1>\n<p>Do the thing.</p>\n"
+
+
+def test_a_missing_or_unnameable_skill_is_not_found(client: FlaskClient) -> None:
+    for path in ("/api/skills/no-such-skill", "/api/skills/no-such-skill/instructions"):
+        missing = client.get(path)
+        assert missing.status_code == 404, path
+        assert "no-such-skill" in missing.get_json()["detail"]
+    assert client.get("/api/skills/.hidden").status_code == 404
+    assert client.get("/api/skills/.hidden/instructions").status_code == 404
 
 
 def test_a_checkout_whose_history_cannot_be_read_answers_the_reason(tmp_path: Path) -> None:

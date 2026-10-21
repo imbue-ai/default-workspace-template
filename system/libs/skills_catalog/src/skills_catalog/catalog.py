@@ -55,7 +55,7 @@ class SkillsCatalog(SkillsCatalogInterface):
             for directory in skill_directories
             if (directory / SKILL_FILENAME).is_file() and not directory.name.startswith(".")
         )
-        return SkillListing(skills=summaries)
+        return SkillListing(skills_directory=skills_root.absolute(), skills=summaries)
 
     def describe_skill(self, name: SkillName) -> SkillDetail:
         directory = self.repo_root / SKILLS_DIR / name
@@ -71,6 +71,7 @@ class SkillsCatalog(SkillsCatalogInterface):
         files = _list_skill_files(directory)
         return SkillDetail(
             summary=summary,
+            directory=directory.absolute(),
             skill_file_path=SKILLS_DIR / name / SKILL_FILENAME,
             content=skill_file.read_text(encoding="utf-8", errors="replace"),
             files=files[:MAX_LISTED_FILES],
