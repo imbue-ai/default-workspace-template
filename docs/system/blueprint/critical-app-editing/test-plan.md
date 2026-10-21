@@ -426,10 +426,12 @@ shell's, chat's, and terminal's supervisord pids and `git rev-parse HEAD`.
   serves `/_instances` 200: exit 2 after the settled-verdict budget with the failure
   naming the chat's instances API.
 - **E15 Rollback that does not restore health (exit 3).** Only in a workspace you can
-  afford to break: after an apply of a chat change with the flag, sabotage the kept
-  copy of the chat's bundle (or of the venv, when the apply also changed a backend
-  manifest) so the restore yields an
-  unbootable chat, then Roll back. Pass: the outcome says "did not come back healthy",
+  afford to break: after an apply with the flag of a chat change that also edits a
+  backend manifest (a `description` change in `system/apps/chat/pyproject.toml`, so the
+  apply copies the venv aside), sabotage the kept venv copy
+  (`data/.state/update-apply/snapshots/venv`: delete its `bin/chat-app`) so the restore
+  yields an unbootable chat, then Roll back. Sabotaging only the kept bundle does not
+  do it: the chat still boots, without its page, and the rollback exits 0. Pass: the outcome says "did not come back healthy",
   `emergency.json` exists, reloading the shell shows the staleness banner, exit 3 in the
   log. Recover by hand (`git revert` of the revert, rebuild) and confirm the banner clears.
 - **E16 update-self keeps no notice.** Run the update-self apply (no flag, `--ff-only`)
@@ -538,7 +540,7 @@ E5, E8, E9, E15, F5, X4), then these. Numbering continues each group's.
   or accept `timed_out: true` beside the right `branch`.
 - **An app's environment copy is the venv's.** Every critical app runs from the workspace
   venv, which the apply copies aside only when a backend manifest changed, so a chat-only
-  or frontend apply holds bundles only (F3, E15). E20 and E24's environment variants need
+  or frontend apply holds bundles only (F3). E15, and E20 and E24's environment variants, need
   an apply that changes a backend manifest (an app's `pyproject.toml` will do).
 
 ### B. The shared script
