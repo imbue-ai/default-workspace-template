@@ -715,9 +715,27 @@ function arrivedUserEventIds(events: readonly TranscriptEvent[]): string[] {
     .map((event) => event.event_id);
 }
 
+// Per chat, the agent's latest work (a reply, a tool call or its result) the live stream brought this
+// page, and when: when the user saw it land, on this page's clock.
+const liveAgentWorkByChat = new Map<string, { eventId: string; at: number }>();
+
+/** When the live stream brought this page the agent's work `eventId`, or null when that is not the
+ *  latest such event it brought (or it brought none). */
+export function liveArrivalOfAgentWork(chatId: string, eventId: string): number | null {
+  const latest = liveAgentWorkByChat.get(chatId);
+  return latest !== undefined && latest.eventId === eventId ? latest.at : null;
+}
+
 export function appendEvents(chatId: string, newEvents: TranscriptEvent[]): void {
   if (storeFor(chatId).append(newEvents)) {
     m.redraw();
+  }
+  for (let i = newEvents.length - 1; i >= 0; i--) {
+    const event = newEvents[i];
+    if (event.type === "assistant_message" || event.type === "tool_result") {
+      liveAgentWorkByChat.set(chatId, { eventId: event.event_id, at: Date.now() });
+      break;
+    }
   }
   // Route live user-message arrivals through the optimistic-send layer so a
   // "Sending…" bubble drops the instant its real message lands in the transcript
@@ -1054,9 +1072,9 @@ export function announceMessageSent(chatId: string): void {
 }
 
 /** How the message route took a send: delivered ("ok"), held while the chat switches agents ("held"),
- *  or run as a compaction instead of being sent ("compaction_requested", a `/compact` no transcript
- *  turn will echo). */
-export type SendStatus = "ok" | "held" | "compaction_requested";
+ *  run as a compaction instead of being sent ("compaction_requested", a `/compact` no transcript
+ *  turn will echo), or taken back by Stop while the agent came up ("withdrawn", nothing delivered). */
+export type SendStatus = "ok" | "held" | "compaction_requested" | "withdrawn";
 
 /** Send a message to a chat; resolves with how the route took it, or null when there was nothing to send. */
 export async function sendMessage(chatId: string, message: string, messageId?: string): Promise<SendStatus | null> {

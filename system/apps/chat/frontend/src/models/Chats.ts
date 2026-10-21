@@ -5,6 +5,7 @@
  */
 
 import m from "mithril";
+import { postJson } from "@imbue/workspace-ui/src/models/http";
 import { apiUrl, wsUrl } from "@imbue/workspace-ui/src/base-path";
 import { getTerminalOriginLabel } from "../document-meta";
 import { deriveAppOrigin } from "@imbue/workspace-ui/src/origin";
@@ -42,7 +43,7 @@ export interface ActiveAgent {
   // flight.
   shoulder_tap_available: boolean;
   // A send is in flight and waiting for the agent to come up: the Connecting sub-state of
-  // Sending, shown beside the model bar.
+  // Sending, shown on the status row at the end of the transcript.
   is_connecting: boolean;
   // The agent will resume on its own: a turn is in flight, or a background task is pending.
   is_busy: boolean;
@@ -76,8 +77,9 @@ export type HandoffPhase = "draining" | "summarizing" | "switching" | "restartin
 /** What a converging chat is doing: moving to another harness on a new agent, or changing account in place. */
 export type TransitionKind = "handoff" | "rebind";
 
-/** One message the chat app holds while the chat switches (the backend's ``HeldSendSnapshot``).
- *  Rendered from the snapshot until it lands in the transcript. */
+/** One message the chat app holds while the chat switches or is still being created (the backend's
+ *  ``HeldSendSnapshot``, or a provisional chat's ``HeldSend``). Rendered from the backend's record until it
+ *  lands in the transcript. */
 export interface HeldSend {
   // The send-time message_id (contract A4); the page's own bubble for the same send carries it too.
   message_id: string;
@@ -175,6 +177,11 @@ export interface ProvisionalChat {
   // Imbue Studio app had before the workspace existed. Its page keeps the transcript and the composer up
   // through the create rather than the provisional screens.
   is_seeded: boolean;
+  // The messages sent while it is created, in order, which the chat app delivers once the agent lands
+  // (and a failed create's retry delivers then).
+  held_sends: HeldSend[];
+  // The model chosen for it; null for its harness's default.
+  model_pick: ModelIdentity | null;
 }
 
 type WsEvent =
@@ -388,6 +395,18 @@ function settleRegistration(chatId: string, error: Error | null): void {
  * send itself reports the backend's refusal. A held send is released the same way when a
  * reconnect's replay turns out not to carry the chat's record any more.
  */
+/**
+ * Refuse a send to a chat whose create has failed, with the reason its page shows: it takes no sends until
+ * its Try again starts it again. Any other chat's send goes to the send route, which holds one for a chat
+ * still being created until the agent lands, so the message is the chat app's to keep from then on.
+ */
+export function refuseSendToFailedChat(chatId: string): void {
+  const provisional = getProvisionalChat(chatId);
+  if (getChatById(chatId) === undefined && provisional?.phase === "failed") {
+    throw new Error(provisional.error ?? "The chat could not be started");
+  }
+}
+
 export function whenChatRegistered(chatId: string): Promise<void> {
   const provisional = getProvisionalChat(chatId);
   if (getChatById(chatId) !== undefined || provisional === undefined) return Promise.resolve();
@@ -537,6 +556,15 @@ export async function awaitingChatForEmptyList(): Promise<string> {
  * Launch a chat minted earlier (a seeded one awaiting its first send, or one whose create
  * failed) on ``accountId``: it keeps its id and name, so the window showing it becomes the chat.
  */
+/** Choose the account and model a chat with no agent yet runs on: it launches on them, or takes them as its
+ *  create lands. The provisional record the chat app pushes back carries the choice. */
+export async function setLaunchChoice(chatId: string, accountId: string, pick: ModelIdentity | null): Promise<void> {
+  await postJson<unknown>(apiUrl(`/api/chats/${encodeURIComponent(chatId)}/launch-choice`), {
+    account_id: accountId,
+    model: pick,
+  });
+}
+
 export function launchChat(chatId: string, accountId: string, message = ""): Promise<CreatedChat> {
   // A seeded chat's launch brings the user's first message; a failed create's retry has none
   // to bring, so the field is left out then.

@@ -76,6 +76,29 @@ describe("the chat header", () => {
     expect(root.querySelector("[data-chat-header-menu]")).toBeNull();
   });
 
+  it("offers a chat that is still starting its rename and delete, and nothing to stop", () => {
+    const starting: ChatRow = {
+      ...ONLY_CHAT,
+      chatId: "agent-3",
+      agentIds: [],
+      status: "working",
+      isProvisional: true,
+    };
+    root = document.createElement("div");
+    document.body.appendChild(root);
+    const context = chatRailAttrsFixture({ rows: [starting], selectedChatId: starting.chatId });
+    m.mount(root, {
+      view: () =>
+        m(ChatHeader, { row: starting, context, isListOpen: false, onOpenList: () => undefined, isTouch: true }),
+    });
+
+    root.querySelector<HTMLElement>("[data-chat-header-menu]")?.click();
+    m.redraw.sync();
+
+    const menuRows = [...document.querySelectorAll<HTMLElement>(".chat-header-menu [data-menu-row]")];
+    expect(menuRows.map((menuRow) => menuRow.getAttribute("data-menu-row")).slice(0, 2)).toEqual(["rename", "delete"]);
+  });
+
   it("leaves a rename begun in the open drawer to the drawer's row", () => {
     root = document.createElement("div");
     document.body.appendChild(root);

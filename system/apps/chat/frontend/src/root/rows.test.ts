@@ -6,7 +6,16 @@ import { groupedRows, parentOf, rowsFromSnapshots } from "./rows";
 const NONE: ReadonlySet<string> = new Set();
 
 function provisional(chatId: string, phase: ProvisionalChat["phase"], name = ""): ProvisionalChat {
-  return { chat_id: chatId, name, account_id: "", phase, error: null, is_seeded: false };
+  return {
+    chat_id: chatId,
+    name,
+    account_id: "",
+    phase,
+    error: null,
+    is_seeded: false,
+    held_sends: [],
+    model_pick: null,
+  };
 }
 
 describe("rowsFromSnapshots", () => {

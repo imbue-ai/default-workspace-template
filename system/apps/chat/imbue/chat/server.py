@@ -167,6 +167,7 @@ from imbue.chat.models import PoweredByResponse
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import RenameChatRequest
+from imbue.chat.models import SetLaunchChoiceRequest
 from imbue.chat.models import RenameChatResponse
 from imbue.chat.models import ScreenCaptureResponse
 from imbue.chat.models import SeedChatRequest
@@ -525,8 +526,9 @@ def _revive_and_retry_send(
     supplies the same behavior at the endpoint: start the agent through the exact path the
     start endpoint and terminal-open use (a no-op when it is already running), then retry
     while the daemon comes up. Returns the final outcome -- a daemon still unreachable at
-    the deadline keeps the honest NOT_READY -> 503, and a ``SendFailedError`` from a retry
-    propagates to the caller's handler like a first-attempt one.
+    the deadline keeps the honest NOT_READY -> 503, a send Stop took back meanwhile is
+    WITHDRAWN, and a ``SendFailedError`` from a retry propagates to the caller's handler like
+    a first-attempt one.
     """
     try:
         start_agent(agent_info.name)
@@ -540,8 +542,45 @@ def _revive_and_retry_send(
     outcome = SendOutcome.NOT_READY
     while outcome is SendOutcome.NOT_READY and time.monotonic() < deadline:
         sleep(_REVIVE_RETRY_INTERVAL_SECONDS)
+        if not agent_manager.claim_send_for_delivery(agent_info.id, message_id):
+            return SendOutcome.WITHDRAWN
         outcome = session.send(send_message_request.message, message_id)
     return outcome
+
+
+# How long a send waits for a starting agent before handing the message to mngr anyway, whose own
+# send waits for the harness too (just without a way for Stop to take the message back).
+_CONNECT_WAIT_BUDGET_SECONDS: Final[float] = 15.0
+
+
+def _wait_until_agent_accepts_input(
+    agent_info: AgentInfo,
+    agent_manager: AgentManager,
+    session: AgentHarnessSession,
+    message_id: str,
+    sleep: Callable[[float], None] = time.sleep,
+    budget_seconds: float = _CONNECT_WAIT_BUDGET_SECONDS,
+) -> None:
+    """Bring a stopped or starting agent up before its message is handed over, or until Stop takes it back.
+
+    Waiting here rather than inside mngr's send is what lets Stop withdraw the message: until the
+    harness accepts input nothing has reached the agent. Only a harness with a ready marker is
+    waited for; one without (codex) reports NOT_READY from its send at once, and its revive retries
+    are where Stop reaches it. A start that fails is left to the send, which reports the failure
+    the way it always has.
+    """
+    if is_lifecycle_dead(agent_info.state):
+        try:
+            start_agent(agent_info.name)
+        except MngrError as e:
+            logger.warning("Could not start agent {} ahead of a send: {}", agent_info.name, e)
+            return
+        agent_manager.note_agent_alive(agent_info.id)
+    if get_harness_spec(agent_info.harness).startup_ready_marker is None:
+        return
+    deadline = time.monotonic() + budget_seconds
+    while session.is_starting_up() and not agent_manager.is_send_withdrawn(message_id) and time.monotonic() < deadline:
+        sleep(_REVIVE_RETRY_INTERVAL_SECONDS)
 
 
 # What a composer ``/compact`` is refused with before the agent has an exchange to compact.
@@ -551,6 +590,8 @@ COMPACT_WHILE_STOPPED_DETAIL: Final[str] = "The agent isn't running. Send it a m
 # The message route's status for a /compact the chat asked mngr to run instead of sending it, which
 # no transcript turn will echo.
 COMPACTION_REQUESTED_SEND_STATUS: Final[str] = "compaction_requested"
+# The message route's status for a send Stop took back while its agent came up: nothing reached the agent.
+WITHDRAWN_SEND_STATUS: Final[str] = "withdrawn"
 # The refusals that are the chat's own decision not to send, answered 409 rather than as a failure.
 _DECLINED_SEND_FAILURE_KINDS: Final[frozenset[str]] = frozenset(
     {NOTHING_TO_COMPACT_SEND_FAILURE_KIND, COMPACT_UNAVAILABLE_SEND_FAILURE_KIND}
@@ -647,9 +688,12 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
     requested_at = time.monotonic()
     # A send that has to wait for the agent to come up -- a stopped agent the send starts, or a
     # harness still starting -- reads as Connecting on the chat until it resolves.
-    with agent_manager.track_connecting_send(agent_info.id, message_id) as mark_connecting:
+    with agent_manager.track_connecting_send(agent_info.id, message_id, text) as mark_connecting:
         if is_lifecycle_dead(agent_info.state) or session.is_starting_up():
             mark_connecting()
+            _wait_until_agent_accepts_input(agent_info, agent_manager, session, message_id)
+        if not agent_manager.claim_send_for_delivery(agent_info.id, message_id):
+            return SendOutcome.WITHDRAWN
         outcome = session.send(text, message_id)
         if outcome is SendOutcome.NOT_READY:
             mark_connecting()
@@ -719,6 +763,9 @@ class _SendAccepted(FrozenModel):
     held_phase: HandoffPhase | None = Field(description="The phase the send was held in; None when it was delivered")
     is_compaction_requested: bool = Field(
         default=False, description="Whether the send was a /compact the chat asked mngr to run in its place"
+    )
+    is_withdrawn: bool = Field(
+        default=False, description="Whether Stop took the send back while its agent came up, so nothing was delivered"
     )
 
 
@@ -802,6 +849,8 @@ def _send_to_chat(
             return _SendRefused(
                 answer=SendFailureResponse(detail=send_failure.detail, kind=send_failure.kind), status=status_code
             )
+        if outcome is SendOutcome.WITHDRAWN:
+            return _SendAccepted(held_phase=None, is_withdrawn=True)
         if outcome is SendOutcome.NOT_READY:
             return _SendRefused(
                 answer=ErrorResponse(
@@ -866,6 +915,24 @@ def _deliver_unreported_runner_ends_notice(
         )
 
 
+def _hold_send_for_chat_being_created(
+    state: ChatAppState, chat_id: str, send_message_request: SendMessageRequest, message_id: str
+) -> Response | None:
+    """Hold a send to a chat whose create is still running, answering the route's 202; None when the chat is
+    not being created. The chat app keeps it until the agent lands, so a page closed meanwhile loses nothing."""
+    parsed = parse_chat_ref(chat_id)
+    if parsed is None:
+        return None
+    is_held = state.agent_manager.hold_send_for_chat_being_created(
+        parsed, message_id, send_message_request.message, _held_send_origin(send_message_request)
+    )
+    if not is_held:
+        return None
+    _consider_naming_chat(state, parsed, send_message_request.message)
+    record_client_message_activity(state.shell, parsed, send_message_request, state.is_secondary)
+    return model_response(HeldSendResponse(status="held", phase=None), 202)
+
+
 def _send_message_endpoint(chat_id: str) -> Response:
     """Send a message to a chat: its active agent receives it, or the chat app holds it while the chat converges."""
     state = get_state()
@@ -876,11 +943,16 @@ def _send_message_endpoint(chat_id: str) -> Response:
     # a chat-app boot would route messages around the app instead of waiting for it.
     if not agent_manager.is_agent_list_known():
         return _agent_list_not_known_response()
-    if _find_active_agent(chat_id) is None:
-        return _chat_not_found_response(chat_id)
-
     send_message_request = parse_request_body(SendMessageRequest)
     message_id = send_message_request.message_id or uuid4().hex
+    if _find_active_agent(chat_id) is None:
+        held = _hold_send_for_chat_being_created(state, chat_id, send_message_request, message_id)
+        if held is not None:
+            return held
+        # The create may have landed between the lookup and the hold, which then refuses.
+        if _find_active_agent(chat_id) is None:
+            return _chat_not_found_response(chat_id)
+
     # Alongside the delivery rather than after it, which can take seconds: the name should land
     # while the agent is still answering.
     _consider_naming_chat(state, ChatId(chat_id), send_message_request.message)
@@ -893,7 +965,12 @@ def _send_message_endpoint(chat_id: str) -> Response:
     # backing off.
     if accepted.held_phase is not None:
         return model_response(HeldSendResponse(status="held", phase=accepted.held_phase), 202)
-    status = COMPACTION_REQUESTED_SEND_STATUS if accepted.is_compaction_requested else "ok"
+    if accepted.is_withdrawn:
+        status = WITHDRAWN_SEND_STATUS
+    elif accepted.is_compaction_requested:
+        status = COMPACTION_REQUESTED_SEND_STATUS
+    else:
+        status = "ok"
     return model_response(SendMessageResponse(status=status))
 
 
@@ -1380,6 +1457,9 @@ def _shoulder_tap_atomic_endpoint(chat_id: str) -> Response:
 def _drain_to_composer_endpoint(chat_id: str) -> Response:
     """Interrupt to composer: interrupt the running turn and hand the queued block back, unsent.
 
+    While the chat is connecting there is no turn to interrupt: the messages waiting for its agent
+    to come up (or held for a chat still being created) are taken back and returned instead.
+
     Dispatches through the harness's registered interrupt-to-composer implementation (the base
     restart-drain by default; native overrides for pi, codex, and claude's empty-queue chord),
     which returns the concatenated block the frontend drops into the composer for the user to
@@ -1393,15 +1473,25 @@ def _drain_to_composer_endpoint(chat_id: str) -> Response:
     agent, 400 for the primary services agent, 500 if the interrupt fails, 200 with ``{block}``
     otherwise.
     """
+    agent_manager: AgentManager = get_state().agent_manager
     agent_info = _find_active_agent(chat_id)
     if agent_info is None:
-        return _chat_not_found_response(chat_id)
+        parsed = parse_chat_ref(chat_id)
+        held = None if parsed is None else agent_manager.withdraw_sends_held_for_chat_being_created(parsed)
+        if held is None:
+            return _chat_not_found_response(chat_id)
+        return model_response(DrainToComposerResponse(block="\n".join(held)))
     converging = _refuse_while_converging(chat_id)
     if converging is not None:
         return converging
     refusal = _refuse_queue_action_on_primary(agent_info, "interrupt the queue of")
     if refusal is not None:
         return refusal
+    # Messages still waiting for the agent to come up never reached it, and no turn of theirs is
+    # running: taking them back is the whole stop.
+    connecting = agent_manager.withdraw_connecting_sends(agent_info.id)
+    if connecting:
+        return model_response(DrainToComposerResponse(block="\n".join(connecting)))
 
     try:
         block = get_state().drain_to_composer(agent_info, lambda: _restart_agent_process(agent_info.name))
@@ -2021,10 +2111,13 @@ def _refuse_primary_agent(agent_state_name: str, labels: dict[str, str], verb: s
 
 
 def _destroy_chat(chat_id: str) -> Response:
-    """Destroy a chat by running ``mngr destroy --force`` on every agent of it."""
+    """Destroy a chat by running ``mngr destroy --force`` on every agent of it; a chat with no agent yet is
+    dropped (one still being created loses its agent as the create lands)."""
     agent_manager: AgentManager = get_state().agent_manager
     agent_info = _find_active_agent(chat_id)
     if agent_info is None:
+        if agent_manager.discard_provisional_chat(chat_id):
+            return model_response(DestroyAgentResponse(status="ok"))
         return _chat_not_found_response(chat_id)
     refusal = _refuse_primary_agent(agent_info.name, agent_info.labels, "destroy")
     if refusal is not None:
@@ -2036,19 +2129,38 @@ def _destroy_chat(chat_id: str) -> Response:
     return model_response(DestroyAgentResponse(status="ok"))
 
 
+def _set_launch_choice(chat_id: str) -> Response:
+    """Choose the account and model a chat with no agent yet runs on: it launches on them, or, while it is being
+    created, takes them as it lands. 404 for a chat that has an agent or is unknown, 400 for an account that
+    cannot be bound."""
+    agent_manager: AgentManager = get_state().agent_manager
+    provisional = agent_manager.get_provisional_chat(chat_id)
+    if provisional is None:
+        return _chat_not_found_response(chat_id)
+    choice = parse_request_body(SetLaunchChoiceRequest)
+    try:
+        agent_manager.set_launch_choice(provisional.chat_id, choice.account_id, choice.model)
+    except AgentCreationError as e:
+        return error_response(str(e), 400)
+    return model_response(OkResponse())
+
+
 def _rename_chat(chat_id: str) -> Response:
     """Rename a chat: the ``display_name`` label and the matching canonical name.
 
     409 while the chat converges or when the name collides with another agent's, 400 for a
-    name mngr cannot take.
+    name mngr cannot take. A chat with no agent yet takes the name at once, and its agent is
+    renamed as it lands.
     """
     agent_manager: AgentManager = get_state().agent_manager
     agent_info = _find_active_agent(chat_id)
     if agent_info is None:
-        return _chat_not_found_response(chat_id)
-    refusal = _refuse_primary_agent(agent_info.name, agent_info.labels, "rename")
-    if refusal is not None:
-        return refusal
+        if agent_manager.get_provisional_chat(chat_id) is None:
+            return _chat_not_found_response(chat_id)
+    else:
+        refusal = _refuse_primary_agent(agent_info.name, agent_info.labels, "rename")
+        if refusal is not None:
+            return refusal
     rename_request = parse_request_body(RenameChatRequest)
     try:
         agent_manager.rename_chat(chat_id, rename_request.title)
@@ -2311,6 +2423,7 @@ def _run_ws_broadcast_loop(websocket: Any, agent_manager: AgentManager) -> None:
 _PER_CHAT_ROUTES: Final[tuple[tuple[str, Callable[..., Response], tuple[str, ...]], ...]] = (
     ("destroy", _destroy_chat, ("POST",)),
     ("rename", _rename_chat, ("POST",)),
+    ("launch-choice", _set_launch_choice, ("POST",)),
     ("start", _start_chat, ("POST",)),
     ("stop", _stop_chat, ("POST",)),
     ("events", _get_events, ("GET",)),
@@ -2398,6 +2511,9 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ("POST", "/api/chats/{chat_id}/destroy"): RouteModels(response_model=DestroyAgentResponse),
     ("POST", "/api/chats/{chat_id}/rename"): RouteModels(
         request_model=RenameChatRequest, response_model=RenameChatResponse
+    ),
+    ("POST", "/api/chats/{chat_id}/launch-choice"): RouteModels(
+        request_model=SetLaunchChoiceRequest, response_model=OkResponse
     ),
     ("POST", "/api/chats/{chat_id}/start"): RouteModels(
         response_model=StartAgentResponse, alternate_responses=(_CONVERGING,)

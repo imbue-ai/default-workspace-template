@@ -59,6 +59,32 @@ describe("the agent terminal's liveness gate", () => {
     );
   });
 
+  it("mounts the terminal at once for an agent the chat list shows running, without waiting on the start", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => {})),
+    );
+    agentState.agent = chatSnapshotFixture("agent-1", { active_agent: { state: "WAITING" } });
+
+    const root = mountPanel();
+
+    expect(root.querySelector(".iframe-panel-stub")).not.toBeNull();
+    expect(root.textContent).not.toContain("Starting agent");
+  });
+
+  it("says it is starting a stopped agent, and only opening the terminal of one it knows nothing about", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => {})),
+    );
+    agentState.agent = chatSnapshotFixture("agent-1", { active_agent: { state: "STOPPED" } });
+    expect(mountPanel().textContent).toContain("Starting agent…");
+
+    document.body.innerHTML = "";
+    agentState.agent = chatSnapshotFixture("agent-1", { active_agent: { state: "UNKNOWN" } });
+    expect(mountPanel().textContent).toContain("Opening the agent's terminal…");
+  });
+
   it("unmounts the iframe for a positively-dead agent and offers a Start button", async () => {
     agentState.agent = chatSnapshotFixture("agent-1", {
       name: "sunny-hollow",

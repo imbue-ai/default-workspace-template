@@ -49,7 +49,7 @@ export function ChatHeader(): m.Component<ChatHeaderAttrs> {
       const { row } = attrs;
       // A chat being deleted offers nothing more, as its row in the list does not.
       const isRowDeleting = row !== null && isDeleting(row.chatId);
-      const hasVerbs = row !== null && !row.isProvisional && !isRowDeleting;
+      const hasVerbs = row !== null && !isRowDeleting;
       const triggerAttrs = menu.triggerAttrs();
       const buttonClass = attrs.isTouch ? BAR_ICON_BUTTON_CLASS : DENSE_BAR_ICON_BUTTON_CLASS;
       return m(

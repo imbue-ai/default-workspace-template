@@ -150,7 +150,12 @@ class SendMessageRequest(FrozenModel):
 class SendMessageResponse(FrozenModel):
     """Response from the message endpoint."""
 
-    status: str = Field(description="Status of the send operation: 'ok', or 'compaction_requested'")
+    status: str = Field(
+        description=(
+            "Status of the send operation: 'ok', 'compaction_requested', or 'withdrawn' (Stop took it back while "
+            "the agent was coming up, and nothing was delivered)"
+        )
+    )
 
 
 class SetModelChoiceRequest(FrozenModel):
@@ -554,10 +559,11 @@ class SwitchChatResponse(FrozenModel):
 
 
 class HeldSendResponse(FrozenModel):
-    """Response from the message route while the chat is converging: the send is held for the successor."""
+    """Response from the message route while the chat is converging or still being created: the send is held
+    for the agent the chat is waiting on."""
 
     status: str = Field(description="'held'")
-    phase: HandoffPhase = Field(description="The phase the chat is in")
+    phase: HandoffPhase | None = Field(description="The phase the chat is in; None for a chat still being created")
 
 
 class SendFailureResponse(ErrorResponse):
@@ -786,6 +792,20 @@ class ProvisionalChat(FrozenModel):
         default=False,
         description="Whether the chat has a seed segment to show while it is created (``chat_seed.py``)",
     )
+    held_sends: tuple[HeldSend, ...] = Field(
+        default=(),
+        description="Messages sent while the create ran, delivered in order once the chat runs",
+    )
+    model_pick: ModelPick | None = Field(
+        default=None, description="The model chosen for it; None for its harness's default"
+    )
+
+
+class SetLaunchChoiceRequest(FrozenModel):
+    """Request body for POST /api/chats/{id}/launch-choice: the account and model a chat with no agent yet runs on."""
+
+    account_id: str = Field(description="The account it runs on")
+    model: ModelPick | None = Field(default=None, description="The model it runs on; None for the harness's default")
 
 
 class SeedChatRequest(FrozenModel):

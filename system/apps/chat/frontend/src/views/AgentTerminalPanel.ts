@@ -3,9 +3,10 @@
  *
  * Opening an agent terminal attaches to that agent's tmux session, which does
  * not exist while the agent is STOPPED -- the ttyd dispatch's `tmux attach`
- * fails immediately. So before mounting the terminal iframe this panel POSTs
- * to the agent's start endpoint and waits for it to resolve. The backend
- * no-ops for already-running agents, so this is cheap in the common case.
+ * fails immediately. So this panel POSTs to the agent's start endpoint as it
+ * opens. An agent the chat list already shows running gets its terminal at once
+ * (the start is a no-op for it, but still takes mngr a moment); any other waits
+ * for the start, saying what it waits on.
  */
 
 import m from "mithril";
@@ -19,6 +20,12 @@ interface AgentTerminalPanelAttrs {
   chatId: string;
   url: string;
   title: string;
+}
+
+/** Whether the chat list says ``chatId``'s agent is up, so its tmux session is there to attach to. */
+function isAgentKnownRunning(chatId: string): boolean {
+  const state = getChatById(chatId)?.active_agent.state;
+  return state !== undefined && state !== "UNKNOWN" && !isAgentProcessDead(state);
 }
 
 export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
@@ -53,15 +60,19 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
 
   return {
     oninit(vnode) {
-      ensureAgentStarted(vnode.attrs.chatId);
+      const chatId = vnode.attrs.chatId;
+      void ensureAgentStarted(chatId);
+      if (chatId !== "" && isAgentKnownRunning(chatId)) starting = false;
     },
 
     view(vnode) {
       if (starting) {
+        const chat = vnode.attrs.chatId === "" ? undefined : getChatById(vnode.attrs.chatId);
+        const isStarting = chat !== undefined && isAgentProcessDead(chat.active_agent.state);
         return m(
           "div",
           { class: "agent-terminal-starting flex items-center justify-center h-full" },
-          m("p", { class: "text-secondary" }, "Starting agent..."),
+          m("p", { class: "text-secondary" }, isStarting ? "Starting agent…" : "Opening the agent's terminal…"),
         );
       }
 

@@ -27,6 +27,7 @@ import { describeElement, type ReferenceClick, type ReferenceScope } from "@imbu
 import { anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
 import { kebabGlyph, plusGlyph } from "../glyphs";
 import { isUnread } from "./chatUnread";
+import { acceptPendingRename, dropPendingRename, showPendingRename } from "./pendingRenames";
 import { destroyChat, renameChat, startChat, stopChat } from "./verbs";
 import { isAgentStarted } from "./rows";
 import {
@@ -117,22 +118,30 @@ export function isRenaming(chatId: string): boolean {
   return rename !== null && rename.chatId === chatId;
 }
 
-/** Keep the typed name: the field closes at once, and a refusal brings it back with the reason. */
+/** Keep the typed name: the field closes at once on the new name, and a refusal brings back the old name and
+ *  the field with the reason. */
 function commitRename(row: ChatRow): void {
   if (rename === null || rename.chatId !== row.chatId) return;
   const title = rename.draft.trim();
   rename = null;
+  if (title !== "" && title !== row.title) showPendingRename(row.chatId, title);
   m.redraw();
   if (title === "" || title === row.title) return;
-  renameChat(row.chatId, title).catch((error: unknown) => {
-    if (rename !== null) {
-      // Another row's rename has the field: the refusal cannot be shown there, so it is logged.
-      console.warn(`Could not rename chat ${row.chatId}`, error);
-      return;
-    }
+  renameChat(row.chatId, title).then(
+    () => acceptPendingRename(row.chatId, title),
+    (error: unknown) => refuseRename(row, title, error),
+  );
+}
+
+function refuseRename(row: ChatRow, title: string, error: unknown): void {
+  dropPendingRename(row.chatId, title);
+  if (rename !== null) {
+    // Another row's rename has the field: the refusal cannot be shown there, so it is logged.
+    console.warn(`Could not rename chat ${row.chatId}`, error);
+  } else {
     rename = { chatId: row.chatId, draft: title, error: error instanceof Error ? error.message : String(error) };
-    m.redraw();
-  });
+  }
+  m.redraw();
 }
 
 function pruneDeleting(rows: readonly ChatRow[]): void {
@@ -191,12 +200,17 @@ export function rowMenuRows(attrs: RowMenuContext, row: ChatRow, referenceRows: 
   const isStopped = row.status === "stopped";
   return [
     { kind: "action", key: "rename", label: "Rename", onSelect: () => beginRename(row) },
-    {
-      kind: "action",
-      key: isStopped ? "start" : "stop",
-      label: isStopped ? "Restart chat" : "Stop chat",
-      onSelect: () => setRunningFromMenu(row, isStopped),
-    },
+    // A chat with no agent yet has nothing to stop or restart; its rename and delete apply as it lands.
+    ...(row.isProvisional
+      ? []
+      : [
+          {
+            kind: "action",
+            key: isStopped ? "start" : "stop",
+            label: isStopped ? "Restart chat" : "Stop chat",
+            onSelect: () => setRunningFromMenu(row, isStopped),
+          } as MenuRow,
+        ]),
     { kind: "divider" },
     {
       kind: "action",
@@ -443,10 +457,10 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
       onclick: () => {
         if (!isSelected || attrs.isInDrawer) attrs.onPick(row.chatId);
       },
-      ondblclick: row.isProvisional ? undefined : () => beginRename(row),
+      ondblclick: () => beginRename(row),
       oncontextmenu: (event: MouseEvent) => {
         event.preventDefault();
-        if (isDeleting || row.isProvisional) return;
+        if (isDeleting) return;
         menuChatId = row.chatId;
         menuReferenceRows = referenceRowsForEvent(attrs, event);
         railMenu.open(anchorForPoint(event.clientX, event.clientY));
@@ -455,7 +469,7 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
     [
       statusDot(row, "flex-none"),
       m("span", { class: "chat-rail-title min-w-0 flex-1 truncate text-(length:--font-size-row)" }, row.title),
-      row.isProvisional || (attrs.isTouch && isDeleting) ? null : attrs.isTouch ? rowKebab(row) : renamePencil(row),
+      attrs.isTouch && isDeleting ? null : attrs.isTouch ? rowKebab(row) : renamePencil(row),
     ],
   );
 }
