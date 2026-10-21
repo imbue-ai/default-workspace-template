@@ -61,6 +61,7 @@ _BUILTIN_SERVICE_ORDER = (
     "getting-started",
     "skills",
     "system-monitor",
+    "resource_sampler",
 )
 
 

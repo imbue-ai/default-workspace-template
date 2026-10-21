@@ -48,6 +48,9 @@ packages = ["src/getting_started"]
 
 [tool.pytest.ini_options]
 timeout_func_only = true
+# Same tmp_path retention as the root config, which says why.
+tmp_path_retention_policy = "failed"
+tmp_path_retention_count = 1
 markers = [
     "acceptance: marks tests as requiring network access, Modal credentials, etc. These are required to pass in CI",
     "browser: marks tests that drive a browser",

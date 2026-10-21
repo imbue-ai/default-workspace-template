@@ -101,6 +101,8 @@ Assert on things that are true if and only if the feature worked correctly -- th
 
 # Communication
 
+The user may be reaching this workspace from the Imbue Studio desktop app, or through a sharing URL in a browser on a computer, phone, or tablet: once sharing is on, the whole workspace and each of its apps has one. The `use-from-phone` skill walks the user through setting that up.
+
 If the user talks to you about files or directories on disk, assume (unless context indicates otherwise) they mean their local disk, not the one in your sandbox -- use the `file-sharing` skill to bridge the two.
 
 When a chat reply points the user at a workspace file or folder, link it by its absolute path (`[Q4 report](/home/user/workspace/data/reports/q4.md)`); it opens in Files (the `show-files-in-chat` skill). Link an app by the `link` `uv run --no-sync workspace-layout list` prints for it, plus the page's path. Link anything else served in the workspace by its localhost URL (`[the preview](http://localhost:3000/)`). A path you only mention goes in code formatting (`data/reports/q4.md`).
@@ -170,6 +172,8 @@ Fixing it locally is *not* an alternative: a fix to a file that is byte-identica
 - **A bare slash-command message invokes the skill of that name.** A user message that is exactly `/name` (possibly with arguments), such as `/assist`, means: read `.agents/skills/<name>/SKILL.md` and follow it as the user's instruction. Do it silently -- read the file without commentary and reply with what the skill says to reply, nothing else. Never narrate the mechanism ("I'm using the assist flow...", "let me look up that skill"): the user typed a command, not a question about how commands work. (Some harnesses expand these commands into the skill's instructions before you see them; if you are reading the raw `/name` text, the expansion is yours to do.)
 
 - **Prefer an applicable skill over reinventing.** Skill descriptions are auto-injected into your context, so match by purpose, not by name.
+
+- **Follow a skill without naming it.** Describe the work, not the skill, even when your harness tells you to announce which skills you use. Repeat a skill's name only after the user has used it (`.agents/shared/references/user-facing-language.md`, "Skills in particular").
 
 - **Run the creation, don't redo its job.** When a creation already does what's being asked -- an app that ingests this kind of data, a skill that runs this process -- run it, or extend it and run it. Producing the same result by hand beside it leaves the creation untested against the real case and the user with two sources of truth.
 

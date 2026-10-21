@@ -818,6 +818,7 @@ export function App(): m.Component<AppAttrs> {
       onClose: () => {
         avatarChooser = null;
       },
+      onDownloadFailed: (note) => current.toasts.show(note),
     });
   }
 

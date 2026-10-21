@@ -23,20 +23,6 @@ from script_modules_testing import message_chat
 
 
 @pytest.fixture(autouse=True)
-def _isolate_agent_identity(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Hide the ambient agent identity from every test for these scripts.
-
-    A script that names the caller's own chat reads ``MINDS_CHAT_ID``, falling back to
-    ``MNGR_AGENT_ID``, so a test asserting on an address it derives is reading its own inputs
-    only if BOTH halves are cleared -- clearing the chat id alone leaves the fallback steered by
-    whatever agent is running the suite. Cleared here rather than per test, so a test that needs
-    an identity has to say so explicitly.
-    """
-    monkeypatch.delenv("MINDS_CHAT_ID", raising=False)
-    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
-
-
-@pytest.fixture(autouse=True)
 def background_task_markers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """The background-task marker root every script (and every subprocess a test starts) writes
     and reads, in place of the checkout's ``data/.apps/chat/background_tasks``."""

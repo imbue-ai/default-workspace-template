@@ -47,10 +47,13 @@ Built-in apps:
   catalog, `system/libs/skills_catalog/`, read fresh from `.agents/skills/`),
   with where each came from and its `SKILL.md` as written. Read-only; served
   on port 8060 by the `skills-app` package; it stores nothing.
-- `system_monitor/` - Memory & disk: one page showing how much memory and disk
-  the workspace is using, which chats, code checkers, and apps hold the memory,
-  and which programs the memory guard stopped in the last 24 hours. Served on
-  port 8040 by the `system-monitor` package; it keeps nothing on disk.
+- `system_monitor/` - System Monitor: how much CPU, memory and disk the
+  workspace is using, on an overview and a view per resource: which chats,
+  code checkers, and apps use them, the busy stretches, which programs the
+  memory guard stopped in the last 24 hours, and the state of the backups.
+  Served on port 8040 by the `system-monitor` package; it keeps nothing on
+  disk (its graphs come from the `resource_sampler` program beside the memory
+  guard, `system/services/oom_priority/`).
 - `datalib/` - The Datalib app: datalib's web UI (`datalib-http`) over the store
   the `datalib` skill writes. Not announced to users yet: its program is not in
   `system/supervisord.conf.d/` until that skill's install script copies it there,

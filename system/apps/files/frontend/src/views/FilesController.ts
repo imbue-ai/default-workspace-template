@@ -8,6 +8,7 @@ import m from "mithril";
 import type { ShellConnection } from "@imbue/workspace-ui/src/app_contract";
 import type { ActionRow, MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import type { IconName } from "@imbue/workspace-ui/src/components/icons";
+import { startDownload } from "@imbue/workspace-ui/src/download";
 
 import { downloadUrlOf, pageUrlOf, urlOf, type Entry, type Listing } from "../models/server";
 import { FilesModel, type HistoryMode } from "../models/FilesModel";
@@ -16,7 +17,6 @@ import { decodePathname, titleOf } from "../models/paths";
 import { sourcesFromFileList } from "../models/uploads";
 import { isLiveShared } from "../models/connections";
 import { Dialogs } from "./dialogs";
-import { startDownload } from "./download";
 
 /** Below this width the window lays itself out for a phone: one tap opens, and there is no column view. */
 export const NARROW_QUERY = "(max-width: 700px)";
@@ -131,8 +131,9 @@ export class FilesController {
 
   download(entries: readonly Entry[]): void {
     for (const entry of entries) {
-      const filename = entry.isFolder ? `${entry.name}.zip` : entry.name;
-      startDownload(this.win.document, downloadUrlOf(entry.path, entry.isFolder), filename);
+      startDownload(this.win.document, downloadUrlOf(entry.path, entry.isFolder), entry.name, (note) =>
+        this.model.toasts.show(note),
+      );
     }
   }
 

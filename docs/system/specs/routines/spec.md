@@ -32,7 +32,7 @@ Facts this design builds on, as of `main` at `2cf9763de` (2026-10-20).
   The feed resolves the entry's destination from the agent's chat: a click lands in that chat.
   There is no way to send the user to an app page.
 - A built-in app is a Flask program with an `app.toml` manifest, installed as its own uv tool, registered through `forward_port.py`, serving an OpenAPI document through `system/libs/app_schema`; the ones with a real interface (the shell, the chat, Getting Started, Files) are Mithril and Tailwind builds in the npm workspace at `system/package.json` over `system/libs/workspace_ui`.
-  Memory & disk (`system/apps/system_monitor`) is the one-page reference for an app that reads machine state and stores nothing.
+  System Monitor (`system/apps/system_monitor`) is the reference for an app that reads machine state and stores nothing.
 - A published template that users adopted, `nicholasgjokaj-star/routines`, showed the value of one window over everything scheduled, with plain-language rows, automatic-versus-manual runs, next-run times, problems sorted first, a run-in-flight indicator, and a Fix button that hands an agent the evidence.
   It recovered all of it by parsing cron command lines, kept history only for jobs an agent remembered to wrap, modelled only cron commands, could not notify, and matched none of the workspace's conventions.
   This spec keeps its ideas and none of its mechanisms.
@@ -40,7 +40,7 @@ Facts this design builds on, as of `main` at `2cf9763de` (2026-10-20).
 ## 2. Decisions
 
 1. **One concept.** A routine is something that runs on a schedule and then exits.
-   Services that run continuously are not routines; they stay under supervisord and Memory & disk.
+   Services that run continuously are not routines; they stay under supervisord and System Monitor.
    An app that needs periodic work makes it a routine instead of a loop inside its service.
 2. **The definition is the source of truth.** Each routine is one TOML file, tracked in git like an app or a skill.
    Cron holds one line for the whole workspace and no routine is ever written to it.
@@ -330,7 +330,7 @@ The Caretaker's check (section 11) is the other layer: it reads the listing for 
 ### 10.1 Manifest and program
 
 `system/apps/routines`, name `routines`, display name "Routines", `priority = "routines"` (a new band in `oom_priority`'s table between `files` at 75 and `getting-started` at 80: it stores nothing of its own, and a shed costs a reload), `critical = false`, `stop_when_no_windows = true`, `launcher_rank = 45`, `system = false`, `api_schema_path = "/api/schema"`, a default shortcut on `open` in `focus` mode, and a `[preview]` table over the live state, read-only (the library's state is nothing of the app's to copy).
-The program registers on port 8050 (no built-in uses it) and runs the `routines-app` entry point, like Memory & disk.
+The program registers on port 8050 (no built-in uses it) and runs the `routines-app` entry point, like System Monitor.
 The app depends on the library and imports nothing from mngr.
 
 ### 10.2 Pages

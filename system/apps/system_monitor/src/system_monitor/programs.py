@@ -1,26 +1,18 @@
 """The running programs and who they belong to: each process's memory, the chats, the apps the
 user built, and the programs supervisord runs."""
 
-import http.client
 import json
 import re
-import socket
 import tomllib
-import xmlrpc.client
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, NamedTuple
 
+from oom_priority.meminfo import KIB, PROC, parse_kib_fields
 from oom_priority.registry import is_process_alive, live_pids_by_agent_id
-
-from system_monitor.memory import KIB, PROC, parse_kib_fields
 
 MNGR_AGENTS_DIR = Path("/home/user/.mngr/agents")
 APPS_REGISTRY = Path("data/.state/apps.toml")
-# supervisord's control socket (system/supervisord.conf's [unix_http_server]), asked directly
-# over XML-RPC as supervisorctl itself does. Starting a supervisorctl process each refresh cost
-# about 80 ms of CPU, most of a refresh's cost.
-SUPERVISOR_SOCKET = Path("/var/run/supervisor.sock")
 # Command-line fragments of the language servers chats start to check code.
 CODE_CHECKER_MARKERS = (
     "langserver",
@@ -34,6 +26,35 @@ CODE_CHECKER_MARKERS = (
 _AGENT_DIR = re.compile(r"/\.mngr/agents/(agent-[^/\s]+)")
 
 
+# Friendly names for the supervised programs that are not apps (an app's name comes from the
+# registry). A program named nowhere shows under its program name.
+PROGRAM_NAMES = {
+    "system_interface": "Desktop",
+    "agent-observer": "Agent manager",
+    "earlyoom": "Memory guard",
+    "oom-tag-backstop": "Memory guard",
+    "publish_cgroup_meminfo": "Memory guard",
+    "resource_sampler": "System Monitor",
+    "host-backup": "Backups",
+    "share-gateway": "Sharing",
+    "cron": "Scheduled tasks",
+    "xvfb": "Virtual display",
+    "terminal-pty": "Terminal",
+    "owner-exec": "Web access",
+    "vm-exec-register": "Web access",
+    "env-converge": "Environment setup",
+}
+
+
+class Rollup(NamedTuple):
+    """What smaps_rollup reports for one process, in bytes."""
+
+    private: int
+    pss: int
+    anonymous: int | None
+    shmem: int | None
+
+
 class Process:
     def __init__(
         self,
@@ -43,20 +64,26 @@ class Process:
         argv: list[str],
         private: int | None = None,
         pss: int | None = None,
+        anonymous: int | None = None,
+        shmem: int | None = None,
     ) -> None:
         self.pid = pid
         self.ppid = ppid
         self.rss = rss  # bytes, shared pages counted in full
         self.argv = argv
         # From smaps_rollup, in bytes, None where the kernel has none or the process is not
-        # ours to read: the memory only this process maps, and its proportional share (each
-        # shared page divided evenly among the processes that map it).
+        # ours to read: the memory only this process maps, its proportional share (each shared
+        # page divided evenly among the processes that map it), the anonymous memory it made for
+        # itself (what stopping it frees: its file pages are cache the kernel can drop), and its
+        # proportional share of shared memory segments.
         self.private = private
         self.pss = pss
+        self.anonymous = anonymous
+        self.shmem = shmem
 
 
-def read_rollup(entry: Path) -> tuple[int, int] | None:
-    """(private, pss) in bytes from a process's smaps_rollup, or None when it cannot be read."""
+def read_rollup(entry: Path) -> Rollup | None:
+    """The figures from a process's smaps_rollup, or None when it cannot be read."""
     try:
         values = parse_kib_fields((entry / "smaps_rollup").read_text())
     except OSError:
@@ -64,7 +91,9 @@ def read_rollup(entry: Path) -> tuple[int, int] | None:
     if "Pss" not in values:
         return None
     private = values.get("Private_Clean", 0) + values.get("Private_Dirty", 0)
-    return private, values["Pss"]
+    return Rollup(
+        private, values["Pss"], values.get("Anonymous"), values.get("Pss_Shmem")
+    )
 
 
 def read_processes(proc: Path = PROC) -> dict[int, Process]:
@@ -89,8 +118,10 @@ def read_processes(proc: Path = PROC) -> dict[int, Process]:
             ppid,
             rss,
             [a.decode(errors="replace") for a in argv],
-            private=rollup[0] if rollup else None,
-            pss=rollup[1] if rollup else None,
+            private=rollup.private if rollup else None,
+            pss=rollup.pss if rollup else None,
+            anonymous=rollup.anonymous if rollup else None,
+            shmem=rollup.shmem if rollup else None,
         )
     return out
 
@@ -110,25 +141,83 @@ def chat_agent_id(command: str) -> str | None:
     return found.group(1) if found else None
 
 
-def chat_names(agents_dir: Path = MNGR_AGENTS_DIR) -> dict[str, str]:
-    """Agent id -> the name the user knows the chat by."""
-    names: dict[str, str] = {}
+def _agent_records(agents_dir: Path) -> dict[str, dict[str, Any]]:
+    """Agent id -> its record, for every record under the agents directory that can be read."""
+    records: dict[str, dict[str, Any]] = {}
     if not agents_dir.is_dir():
-        return names
+        return records
     for data_file in agents_dir.glob("agent-*/data.json"):
         try:
             data = json.loads(data_file.read_text())
         except (OSError, ValueError):
             continue
         # A record of an unexpected shape is skipped, so one bad record cannot fail the page.
-        if not isinstance(data, dict):
-            continue
-        labels = data.get("labels") if isinstance(data.get("labels"), dict) else {}
-        name = labels.get("display_name") or data.get("name") or data_file.parent.name
-        names[data_file.parent.name] = (
-            str(name).removesuffix(" Agent").removesuffix("-Agent")
+        if isinstance(data, dict):
+            records[data_file.parent.name] = data
+    return records
+
+
+def _labels(record: dict[str, Any]) -> dict[str, Any]:
+    labels = record.get("labels")
+    return labels if isinstance(labels, dict) else {}
+
+
+class Chat(NamedTuple):
+    """What the page needs to know about a chat from its agent record."""
+
+    name: str  # the name the user knows the chat by
+    chat_id: str  # the id the chat app knows it by: its chat_id label, else the agent id itself
+
+
+def chats(agents_dir: Path = MNGR_AGENTS_DIR) -> dict[str, Chat]:
+    """Agent id -> its chat, from one read of the agent records."""
+    found: dict[str, Chat] = {}
+    for agent_id, record in _agent_records(agents_dir).items():
+        labels = _labels(record)
+        name = labels.get("display_name") or record.get("name") or agent_id
+        found[agent_id] = Chat(
+            str(name).removesuffix(" Agent").removesuffix("-Agent"),
+            str(labels.get("chat_id") or agent_id),
         )
-    return names
+    return found
+
+
+def registry_rows(registry: Path = APPS_REGISTRY) -> list[dict[str, Any]]:
+    """The app registry's rows; none when it cannot be read or is not shaped as one.
+
+    A row of an unexpected shape is skipped, so one bad row cannot fail the page.
+    """
+    try:
+        rows = tomllib.loads(registry.read_text()).get("apps", [])
+    except (OSError, ValueError):
+        return []
+    return (
+        [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    )
+
+
+def _display_name(row: dict[str, Any]) -> str:
+    return str(row.get("display_name") or row.get("name") or row["program"])
+
+
+def program_names(
+    supervised: Mapping[str, int], registry: Path = APPS_REGISTRY
+) -> dict[str, str]:
+    """supervisord program -> the name the page shows it under, for every running program.
+
+    ``PROGRAM_NAMES`` names a program first (the shell's own registry row calls it Workspace,
+    which is the row these items sit under), then its registry row (an app, whatever its
+    priority), and the rest show under their program name.
+    """
+    registered = {
+        str(row["program"]): _display_name(row)
+        for row in registry_rows(registry)
+        if row.get("program")
+    }
+    return {
+        program: PROGRAM_NAMES.get(program) or registered.get(program) or program
+        for program in supervised
+    }
 
 
 def agents_by_pid(
@@ -150,57 +239,8 @@ def agents_by_pid(
 
 def user_apps(registry: Path = APPS_REGISTRY) -> dict[str, str]:
     """supervisord program -> display name, for the apps the user built."""
-    try:
-        rows = tomllib.loads(registry.read_text()).get("apps", [])
-    except (OSError, ValueError):
-        return {}
-    # A row of an unexpected shape is skipped, so one bad row cannot fail the page.
     return {
-        str(r["program"]): str(r.get("display_name") or r.get("name") or r["program"])
-        for r in (rows if isinstance(rows, list) else [])
-        if isinstance(r, dict) and r.get("priority") == "user" and r.get("program")
+        str(row["program"]): _display_name(row)
+        for row in registry_rows(registry)
+        if row.get("priority") == "user" and row.get("program")
     }
-
-
-class _UnixHTTPConnection(http.client.HTTPConnection):
-    def __init__(self, path: Path) -> None:
-        super().__init__("localhost", timeout=2)
-        self._path = path
-
-    def connect(self) -> None:
-        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.settimeout(self.timeout)
-        self.sock.connect(str(self._path))
-
-
-class _UnixTransport(xmlrpc.client.Transport):
-    def __init__(self, path: Path) -> None:
-        super().__init__()
-        self._path = path
-
-    def make_connection(self, host: Any) -> http.client.HTTPConnection:
-        return _UnixHTTPConnection(self._path)
-
-
-def supervised_pids(sock: Path = SUPERVISOR_SOCKET) -> dict[str, int]:
-    """supervisord program -> pid, for the programs running now."""
-    proxy = xmlrpc.client.ServerProxy(
-        "http://localhost", transport=_UnixTransport(sock)
-    )
-    try:
-        infos = proxy.supervisor.getAllProcessInfo()
-    except (OSError, xmlrpc.client.Error, http.client.HTTPException):
-        return {}  # no supervisord here, or not ours to ask
-    pids: dict[str, int] = {}
-    for info in infos if isinstance(infos, list) else []:
-        # One dict per program: name, statename, pid, and more (supervisor's getProcessInfo).
-        entry = cast(dict[str, Any], info) if isinstance(info, dict) else {}
-        name, pid = entry.get("name"), entry.get("pid")
-        if (
-            entry.get("statename") == "RUNNING"
-            and isinstance(name, str)
-            and isinstance(pid, int)
-            and pid
-        ):
-            pids[name] = pid
-    return pids

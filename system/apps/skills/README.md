@@ -31,6 +31,6 @@ history cannot be read. The API is typed through `app_schema` and published at
 `/api/schema`; every model is the catalog's.
 
 The page is one hand-written document (`src/skills_app/static/index.html`, no
-build step) that reads its path, like the Memory & disk app's. It serves on port
+build step) that reads its path, like the System Monitor app's. It serves on port
 8060 by the `skills` program; `SKILLS_APP_PORT` and `SKILLS_APP_HOST` are how a
 preview boots.

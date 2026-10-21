@@ -13,7 +13,7 @@ critical = false
 # Only answers requests: the shell stops it once no window shows it and starts it again on the next request.
 stop_when_no_windows = true
 priority = "routines"
-# After the terminal (40) and before Memory & disk (50).
+# After the terminal (40) and before System Monitor (50).
 launcher_rank = 45
 
 [default_shortcut]
