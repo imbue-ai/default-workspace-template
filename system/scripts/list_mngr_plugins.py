@@ -7,7 +7,7 @@ arguments that install ``imbue-mngr`` itself; ``--tool`` prints those for every 
 prints where mngr comes from.
 
 Where mngr comes from is decided by ``pyproject.toml``'s ``[tool.uv.sources]`` entry
-for ``imbue-mngr`` -- the one place that lives -- so the tool environments and the
+for ``imbue-mngr`` -- the one place that lives -- so the mngr tool and the
 workspace venv can never disagree:
 
     imbue-mngr = { git = "https://github.com/imbue-ai/mngr", rev = "<commit>", subdirectory = "libs/mngr" }
