@@ -33,6 +33,10 @@ rootfs back to that record at the pinned apt snapshot timestamp.
   only; path/git installs are not recorded) and installs the recorded rustup
   default toolchain first; when rust itself is absent, entries are reported
   `package_unavailable` rather than bootstrapping rustup.
+- **A uv tool named like a workspace app is never replayed.** Apps run from the
+  workspace venv, so a recorded tool whose name is the `[project]` name of a
+  package under `system/apps/` is an old per-app install, and the package
+  index's project of that name is someone else's.
 - **Versions are a function of the snapshot timestamp.** All apt sources are
   pinned to the committed `.mngr/apt-snapshot-timestamp` (see
   `system/scripts/write_apt_sources.sh`), so replaying the recorded *names* yields
