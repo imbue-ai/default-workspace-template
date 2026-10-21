@@ -167,8 +167,8 @@ that survives SIGKILL, a rollback that dies from an exception mid-run, an unread
   `mngr notify` invocation (the notifications plugin) does not start a second observer:
   `pgrep -af "mngr observe"` shows one. Stop the observer, run `mngr notify` again: it
   starts its own and says so. Stop that one and restart the program.
-- **A8 Pre-flight boot unchanged.** `CHAT_PORT=18010 chat-app --preflight` from the repo
-  root: `/api/health` answers 200 within the apply's budget, starts no follower
+- **A8 Pre-flight boot unchanged.** `CHAT_PORT=18010 .venv/bin/chat-app --preflight` from
+  the repo root (the install the apply's pre-flight boots): `/api/health` answers 200 within the apply's budget, starts no follower
   (`agent_events.is_stream_healthy` is `false` with the "not been started" detail), and
   `pgrep -af "mngr observe"` still shows one process. Kill it.
 - **A9 Bands.** `cat /proc/<pid>/oom_score_adj` for the observer, the chat, the shell, and

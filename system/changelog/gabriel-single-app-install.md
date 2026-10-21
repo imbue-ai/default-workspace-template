@@ -6,4 +6,4 @@ Every app now has one install: the workspace venv.
 
 - `system/config/mngr_plugins.toml` now assigns plugins only to the mngr tool. The chat app gets the harness plugins as dependencies in its own pyproject.
 
-- `contracts.md` section 14, the workspace-app-model plan, `workspace-internals.md`, the stop-when-no-windows spec and the app READMEs now describe the single venv install, and the critical-app-editing test plan's E20 expects the venv re-sync and copy rather than per-app tool reinstalls (E15 has its chat change also edit the chat's `pyproject.toml` and sabotages the kept venv copy rather than a chat tool).
+- `contracts.md` section 14, the workspace-app-model plan, `workspace-internals.md`, the stop-when-no-windows spec and the app READMEs now describe the single venv install, and the critical-app-editing test plan's E20 expects the venv re-sync and copy rather than per-app tool reinstalls (E15 has its chat change also edit the chat's `pyproject.toml` and sabotages the kept venv copy rather than a chat tool, and A8 boots `.venv/bin/chat-app --preflight` rather than a bare `chat-app`).
