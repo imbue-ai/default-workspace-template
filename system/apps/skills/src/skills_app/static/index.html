@@ -18,6 +18,7 @@
     --c-border: #e4e3df;
     --c-border-faint: #efeeeb;
     --c-accent: #2f6b4f;
+    --c-accent-light: #e9f2ee;
     --c-danger-hover: #b62d22;
     --c-warning: #b45309;
     --c-stop-button: #64748b;
@@ -38,31 +39,45 @@
   html, body { height: 100%; }
   /* Thin scrollbars on a clear track: the browser's default draws a grey gutter with its own border. */
   .skill-list, .reader, .instructions pre, .instructions table { scrollbar-width: thin; scrollbar-color: var(--c-border) transparent; }
-  body { margin: 0; font-family: var(--font-sans); color: var(--c-text-primary); background: var(--c-bg); font-size: var(--font-size-body); line-height: 1.5; }
+  body { margin: 0; font-family: var(--font-sans); color: var(--c-text-primary); background: var(--c-surface); font-size: var(--font-size-body); line-height: 1.5; }
   a { color: inherit; text-decoration: none; }
   a:focus-visible, input:focus-visible, button:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; }
   .error { color: var(--c-danger-hover); }
 
-  .layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); height: 100%; }
-  .sidebar { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--c-border); background: var(--c-surface); }
+  .layout { display: grid; grid-template-columns: var(--sidebar-width, 300px) minmax(0, 1fr); height: 100%; }
+  .sidebar { position: relative; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--c-border); background: var(--c-surface); }
+  /* Files' sidebar edge: an invisible strip astride the border that drags the width, a double-click restoring it. */
+  .resize-handle { position: absolute; top: 0; bottom: 0; right: -4px; z-index: 1; width: 8px; cursor: col-resize; touch-action: none; }
   .sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 16px 16px 10px; }
   h1 { font-size: var(--font-size-heading); font-weight: var(--weight-semibold); line-height: 1.3; margin: 0; overflow-wrap: anywhere; }
-  input[type="search"] { margin: 0 16px 8px; padding: 6px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); font: inherit; }
+  /* The workspace's text field (workspace_ui components/Input.ts) with a glyph inside, as Getting Started's search. */
+  .search { position: relative; margin: 0 16px 8px; }
+  .search svg { position: absolute; top: 50%; left: 12px; width: 14px; height: 14px; transform: translateY(-50%); color: var(--c-text-faint); pointer-events: none; }
+  .search input { display: block; width: 100%; -webkit-appearance: none; appearance: none; padding: 8px 12px 8px 36px; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); color: var(--c-text-primary); font: inherit; font-size: var(--font-size-body); transition: border-color var(--dur-base), box-shadow var(--dur-base); }
+  .search input::placeholder { color: var(--c-text-faint); }
+  .search input:focus-visible { border-color: var(--c-accent); }
   .skill-list { flex: 1; overflow-y: auto; padding: 0 8px 16px; }
-  .skill-list h2 { font-size: var(--font-size-helper); font-weight: var(--weight-semibold); color: var(--c-text-secondary); margin: 12px 8px 4px; }
+  .skill-list h2 { margin: 8px 0 2px; font-size: inherit; }
+  .group-toggle { display: flex; align-items: center; gap: 4px; width: 100%; padding: 4px 8px 4px 4px; border: none; border-radius: var(--radius-sm); background: none; color: var(--c-text-secondary); font: inherit; font-size: var(--font-size-helper); font-weight: var(--weight-semibold); text-align: left; cursor: pointer; }
+  .group-toggle:hover { background: var(--c-fill-hover); color: var(--c-text-primary); }
+  .group-toggle svg { flex: none; width: 14px; height: 14px; transition: transform var(--dur-base); }
+  .group-toggle[aria-expanded="false"] svg { transform: rotate(-90deg); }
+  .group-count { margin-left: auto; font-weight: var(--weight-regular); color: var(--c-text-faint); }
   .skill-list ul { list-style: none; margin: 0; padding: 0; }
-  .skill-list li a { display: block; padding: 6px 8px; border-radius: var(--radius-sm); transition: background-color var(--dur-base); }
+  .skill-list li a { display: block; padding: 7px 8px; border-radius: var(--radius-sm); transition: background-color var(--dur-base); }
   .skill-list li a:hover { background: var(--c-fill-hover); }
   .skill-list li a:focus-visible { outline-offset: -2px; }
   .skill-list li a[aria-current="page"] { background: color-mix(in srgb, var(--c-accent) 11%, var(--c-surface)); }
-  .row-name { display: block; font-size: var(--font-size-row); font-weight: var(--weight-semibold); overflow-wrap: anywhere; }
-  .row-description { display: block; font-size: var(--font-size-helper); color: var(--c-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row-name { display: block; font-size: var(--font-size-body); font-weight: var(--weight-semibold); line-height: 1.35; color: var(--c-text-primary); overflow-wrap: anywhere; }
+  .row-description { display: block; margin-top: 1px; font-size: var(--font-size-helper); line-height: 1.4; color: var(--c-text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .empty { color: var(--c-text-secondary); padding: 12px 8px; margin: 0; }
 
   .actions { display: flex; flex: none; gap: 6px; }
   .icon-button { display: none; flex: none; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); color: var(--c-text-secondary); cursor: pointer; transition: background-color var(--dur-base); }
   .icon-button:hover { background: var(--c-fill-hover); color: var(--c-text-primary); }
   .icon-button svg { width: 16px; height: 16px; }
+  .icon-button.primary { border-color: var(--c-accent); color: var(--c-accent); }
+  .icon-button.primary:hover { background: var(--c-accent-light); color: var(--c-accent); }
   /* Each button asks the shell for something (a Files window, a chat), so it only shows once a shell frames the page. */
   :root[data-shell] .icon-button { display: inline-flex; }
 
@@ -114,6 +129,7 @@
   @media (max-width: 640px) {
     .layout { grid-template-columns: minmax(0, 1fr); }
     .sidebar { border-right: none; }
+    .resize-handle { display: none; }
     :root[data-view="skill"] .sidebar, :root[data-view="list"] .reader { display: none; }
     .back { display: inline-block; }
     article { padding: 16px; }
@@ -127,11 +143,14 @@
       <h1>Skills</h1>
       <div class="actions">
         <a class="icon-button" id="skills-folder" title="Open the skills folder in Files" aria-label="Open the skills folder in Files"></a>
-        <button type="button" class="icon-button" id="new-skill" title="Make a new skill" aria-label="Make a new skill"></button>
+        <button type="button" class="icon-button primary" id="new-skill" title="Make a new skill" aria-label="Make a new skill"></button>
       </div>
     </div>
-    <input type="search" id="search" placeholder="Search skills" aria-label="Search skills">
+    <div class="search" id="search-field">
+      <input type="search" id="search" placeholder="Search skills" aria-label="Search skills">
+    </div>
     <div class="skill-list" id="skill-list"><p class="empty">Loading...</p></div>
+    <div class="resize-handle" id="resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
   </nav>
   <main class="reader" id="reader" tabindex="-1"></main>
 </div>
@@ -152,6 +171,7 @@
     edit: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/>',
     plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
     "chevron-down": '<path d="m6 9 6 6 6-6"/>',
+    search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
   };
   // Files opens a file's ?edit page for this message (its app.toml); the shell routes it there without naming the app.
   const EDIT_FILE_MESSAGE = "edit:file";
@@ -166,6 +186,41 @@
   let shell;
   let latestLoad = 0;
   let isInstructionsExpanded = false;
+
+  // Per-viewer conveniences kept in this browser: the sidebar's width and which groups are folded. Storage can be
+  // missing or refuse (a private window), so every read and write is allowed to fail.
+  const SIDEBAR_WIDTH_KEY = "skills-sidebar-width";
+  const COLLAPSED_GROUPS_KEY = "skills-collapsed-groups";
+  const DEFAULT_SIDEBAR_WIDTH = 300;
+  const MIN_SIDEBAR_WIDTH = 220;
+  const MAX_SIDEBAR_WIDTH = 480;
+
+  function readStored(key) {
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  }
+
+  function writeStored(key, value) {
+    try {
+      localStorage.setItem(key, value);
+    } catch {
+      // Not kept: the page still works, it just forgets.
+    }
+  }
+
+  function storedCollapsedGroups() {
+    try {
+      const parsed = JSON.parse(readStored(COLLAPSED_GROUPS_KEY) ?? "[]");
+      return new Set(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      return new Set();
+    }
+  }
+
+  const collapsedGroups = storedCollapsedGroups();
 
   function element(tag, attributes = {}, children = []) {
     const node = document.createElement(tag);
@@ -249,21 +304,31 @@
   function renderList() {
     const query = search.value.trim().toLowerCase();
     const shown = skills.filter((skill) => !query || `${skill.name} ${skill.title} ${skill.description}`.toLowerCase().includes(query));
-    const sections = GROUPS.map(([heading, source]) => [heading, shown.filter((skill) => skill.source === source)])
-      .filter(([, members]) => members.length)
-      .map(([heading, members]) =>
-        element("section", {}, [
-          element("h2", { text: heading }),
-          element("ul", {}, members.map((skill) =>
-            element("li", {}, [
-              element("a", { href: `/${encodeURIComponent(skill.name)}`, "data-skill": skill.name }, [
-                element("span", { class: "row-name", text: skill.title }),
-                element("span", { class: "row-description", text: skill.description || "No description." }),
-              ]),
+    const sections = GROUPS.map(([heading, source]) => [heading, source, shown.filter((skill) => skill.source === source)])
+      .filter(([, , members]) => members.length)
+      .map(([heading, source, members]) => {
+        // A search shows its matches in every group, folded or not.
+        const isExpanded = Boolean(query) || !collapsedGroups.has(source);
+        const toggle = withIcon(element("button", { type: "button", class: "group-toggle", "aria-expanded": String(isExpanded) }, [
+          element("span", { text: heading }),
+          element("span", { class: "group-count", text: String(members.length) }),
+        ]), "chevron-down");
+        toggle.addEventListener("click", () => {
+          if (collapsedGroups.has(source)) collapsedGroups.delete(source);
+          else collapsedGroups.add(source);
+          writeStored(COLLAPSED_GROUPS_KEY, JSON.stringify([...collapsedGroups]));
+          renderList();
+        });
+        const rows = members.map((skill) =>
+          element("li", {}, [
+            element("a", { href: `/${encodeURIComponent(skill.name)}`, "data-skill": skill.name }, [
+              element("span", { class: "row-name", text: skill.title }),
+              element("span", { class: "row-description", text: skill.description || "No description." }),
             ]),
-          )),
-        ]),
-      );
+          ]),
+        );
+        return element("section", {}, [element("h2", {}, [toggle]), ...(isExpanded ? [element("ul", {}, rows)] : [])]);
+      });
     listNode.replaceChildren(...(sections.length ? sections : [element("p", { class: "empty", text: "No skills match." })]));
     markSelected();
   }
@@ -409,6 +474,39 @@
     first.focus();
   });
   search.addEventListener("input", renderList);
+  search.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !search.value) return;
+    event.preventDefault();
+    search.value = "";
+    renderList();
+  });
+  withIcon(document.getElementById("search-field"), "search");
+
+  function setSidebarWidth(width, persist) {
+    const clamped = Math.round(Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width)));
+    root.style.setProperty("--sidebar-width", `${clamped}px`);
+    if (persist) writeStored(SIDEBAR_WIDTH_KEY, String(clamped));
+  }
+
+  const storedWidth = Number.parseFloat(readStored(SIDEBAR_WIDTH_KEY) ?? "");
+  setSidebarWidth(Number.isFinite(storedWidth) ? storedWidth : DEFAULT_SIDEBAR_WIDTH, false);
+  const resizeHandle = document.getElementById("resize-handle");
+  resizeHandle.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    resizeHandle.setPointerCapture(event.pointerId);
+    const startX = event.clientX;
+    const startWidth = document.querySelector(".sidebar").getBoundingClientRect().width;
+    const widthAt = (moveEvent) => startWidth + moveEvent.clientX - startX;
+    const onMove = (moveEvent) => setSidebarWidth(widthAt(moveEvent), false);
+    const onUp = (upEvent) => {
+      resizeHandle.removeEventListener("pointermove", onMove);
+      resizeHandle.removeEventListener("pointerup", onUp);
+      setSidebarWidth(widthAt(upEvent), true);
+    };
+    resizeHandle.addEventListener("pointermove", onMove);
+    resizeHandle.addEventListener("pointerup", onUp);
+  });
+  resizeHandle.addEventListener("dblclick", () => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH, true));
   window.addEventListener("popstate", route);
   new ResizeObserver(() => {
     if (!isInstructionsExpanded) clampInstructions();

@@ -7,8 +7,9 @@ the `.claude/skills` symlink), codex, pi, opencode and antigravity all read --
 so a skill an agent made, changed or installed a moment ago is listed on the
 next load.
 
-One page, at `/` and at `/<name>`: a sidebar listing every skill (its name and
-the first line of its description) under three headings by the catalog's
+One page, at `/` and at `/<name>`: a sidebar (drag its edge to resize it; a
+double-click restores the width) listing every skill (its name, and under it
+the first line of its description) under three collapsible headings by the catalog's
 `source` -- **Made in this workspace**, **Installed** (from another repository,
 as a skills lock file records) and **Comes with Studio** (its author is
 `imbue`) -- with a search field; and, beside it, the skill being read: a chip
