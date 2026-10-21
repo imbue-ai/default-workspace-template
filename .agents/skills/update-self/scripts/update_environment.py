@@ -340,7 +340,8 @@ def _installed_tool_location(
 
 # CLEANUP: remove once no supported workspace can still carry a tool install
 # left by a pre-minds-v0.4.3 apply (those followed uv's $HOME default instead
-# of targeting the installation on PATH).
+# of targeting the installation on PATH) and tool_env.remove_app_tool_installs,
+# which the apply also hands these homes, is gone.
 def default_sweep_homes() -> list[Path]:
     """The homes a live apply sweeps for stale tool installs: the caller's
     ``$HOME`` (where a pre-minds-v0.4.3 apply left its copy) and the one the
