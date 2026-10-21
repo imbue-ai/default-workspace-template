@@ -1,0 +1,1 @@
+Files takes a new `edit:file {path}` message, which opens the file's edit page (raising a window already on it), so another app can ask to edit a text file without naming Files; the Skills app's pencil uses it for a skill's `SKILL.md`.

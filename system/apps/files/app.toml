@@ -26,3 +26,10 @@ params = [{name = "path", label = "Path", required = false}]
 type = "open:file"
 show = "{path}?view"
 showing = ["{path}", "{path}/", "{path}/?view"]
+
+# Another app's request to edit a text file (the Skills app's pencil on a skill's SKILL.md) opens the file's edit page,
+# raising a window already editing it.
+[[message_handlers]]
+type = "edit:file"
+show = "{path}?edit"
+showing = ["{path}?edit"]

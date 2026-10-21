@@ -166,6 +166,10 @@ itself, since Files reads `?view` on a folder as the folder. A window already on
 that file or folder, as `/a/b`, `/a/b/`, or `/a/b/?view`, is raised instead of
 opening another.
 
+It registers `edit:file {path}` the same way, for an app that asks to edit a
+text file (the Skills app's pencil on a skill's `SKILL.md`): the shell shows
+the file's `?edit` page, raising a window already on it.
+
 ## Tests
 
 `system/test_app_manifests.py` checks the manifest against the program line, and
