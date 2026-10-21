@@ -116,6 +116,9 @@
   <main class="reader" id="reader" tabindex="-1"></main>
 </div>
 <script type="module">
+  import { connectToShell } from "/_static/app_contract.js";
+  import { installElementContextMenu } from "/_static/context_menu.js";
+
   // A skill's own text is shown through textContent, and its instructions arrive as HTML the server rendered with
   // raw HTML escaped: a skill installed from elsewhere is content this page does not trust.
   const YOURS = new Set(["INSTALLED", "MADE_HERE", "NOT_SAVED"]);
@@ -130,7 +133,7 @@
   const search = document.getElementById("search");
   const skillsFolderLink = document.getElementById("skills-folder");
   let skills = [];
-  let shell = null;
+  let shell;
   let latestLoad = 0;
 
   function element(tag, attributes = {}, children = []) {
@@ -295,21 +298,16 @@
   search.addEventListener("input", renderList);
   window.addEventListener("popstate", route);
 
-  if (window.parent !== window) {
-    Promise.all([import("/_static/app_contract.js"), import("/_static/context_menu.js")])
-      .then(([{ connectToShell }, { installElementContextMenu }]) => {
-        let handshake = null;
-        shell = connectToShell({
-          onHandshake: (received) => {
-            handshake = received;
-            root.dataset.shell = "";
-            reportLocation();
-          },
-        });
-        installElementContextMenu({ connection: shell, handshake: () => handshake });
-      })
-      .catch((error) => console.warn("[skills] could not load the shell contract", error));
-  }
+  // Connected before the frame's load event, the only time the shell sends its handshake.
+  let handshake = null;
+  shell = connectToShell({
+    onHandshake: (received) => {
+      handshake = received;
+      root.dataset.shell = "";
+      reportLocation();
+    },
+  });
+  installElementContextMenu({ connection: shell, handshake: () => handshake });
 
   route();
   try {

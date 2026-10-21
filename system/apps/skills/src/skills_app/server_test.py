@@ -22,7 +22,7 @@ def test_every_page_path_serves_the_one_document_that_connects_to_the_shell(clie
         page = response.get_data(as_text=True)
         assert response.status_code == 200, path
         assert "<title>Skills</title>" in page
-        assert 'import("/_static/app_contract.js")' in page
+        assert page.index('import { connectToShell } from "/_static/app_contract.js"') < page.index("</body>")
         assert response.headers["Cache-Control"] == "no-store"
         # The page's inline scripts are admitted by hash, so a script injected later cannot run.
         assert "script-src 'self' 'sha256-" in response.headers["Content-Security-Policy"]
