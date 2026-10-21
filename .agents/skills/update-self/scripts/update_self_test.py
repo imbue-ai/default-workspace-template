@@ -7997,13 +7997,12 @@ def test_the_record_names_every_critical_app_the_apply_touched(
     assert record.programs == ["chat", "system_interface", "terminal"]
 
 
-def test_the_record_names_every_critical_app_whose_tool_the_apply_reinstalled(
+def test_the_record_names_every_critical_app_when_the_apply_resyncs_the_venv(
     apply_repo: Path,
 ) -> None:
-    """A shared backend manifest moves every app tool's closure, so the apply reinstalls
-    (and copies aside) each critical app's tool environment: a rollback that restores
-    those copies has to restart those apps too, so the record names them, not the shell
-    alone."""
+    """A backend manifest re-syncs the workspace venv every app runs from, and copies it
+    aside first: a rollback that restores that copy has to restart every critical app,
+    so the record names them all, not the shell alone."""
     _write_app(apply_repo, "chat", "chat", "chat-app", True)
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
 
