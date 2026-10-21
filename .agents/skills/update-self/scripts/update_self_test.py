@@ -5808,10 +5808,8 @@ def test_the_copy_taken_aside_is_the_environment_the_reinstall_rebuilds(
         (env_dir / "home.txt").write_text(name)
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
     if rung == "own":
-        mngr_shim = tool_env.bin_dir(homes["own"]) / update_layout.MNGR_EXECUTABLE
-        mngr_shim.parent.mkdir(parents=True)
-        mngr_shim.write_text(
-            f"#!{tool_env.tools_dir(homes['own'])}/{update_layout.MNGR_TOOL_NAME}/bin/python\n"
+        mngr_shim, _ = _install_tool(
+            homes["own"], update_layout.MNGR_TOOL_NAME, update_layout.MNGR_EXECUTABLE
         )
         runner.executables[update_layout.MNGR_EXECUTABLE] = str(mngr_shim)
     observed: list[tuple[str, str]] = []
