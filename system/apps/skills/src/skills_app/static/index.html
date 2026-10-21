@@ -19,6 +19,8 @@
     --c-border-faint: #efeeeb;
     --c-accent: #2f6b4f;
     --c-danger-hover: #b62d22;
+    --c-warning: #b45309;
+    --c-stop-button: #64748b;
     --c-fill-hover: rgb(0 0 0 / 0.07);
     --font-size-heading: 18px;
     --font-size-body: 14px;
@@ -66,15 +68,17 @@
 
   .reader { overflow-y: auto; min-height: 0; }
   .reader:focus { outline: none; }
-  article, .intro { max-width: 720px; padding: 24px 32px; }
+  article, .intro { max-width: 720px; margin: 0 auto; padding: 24px 32px; }
   .intro { color: var(--c-text-secondary); }
   .back { display: none; color: var(--c-text-secondary); font-size: var(--font-size-row); margin-bottom: 12px; }
   .back:hover { color: var(--c-text-primary); }
   .skill-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-  /* The workspace's badge (workspace_ui components/Badge.ts): outline chips, accent for what people here made. */
+  /* The workspace's badge (workspace_ui components/Badge.ts): outline chips, one tone per source of a skill. */
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .chip { display: inline-flex; align-items: center; padding: 2px 8px; border: 1px solid var(--c-border); border-radius: 8px; background: var(--c-surface); color: var(--c-text-secondary); font-size: var(--font-size-helper); line-height: 1.4; white-space: nowrap; }
-  .chip.accent { border-color: var(--c-accent); color: var(--c-accent); }
+  .chip.workspace { border-color: var(--c-accent); color: var(--c-accent); }
+  .chip.installed { border-color: var(--c-warning); color: var(--c-warning); }
+  .chip.studio { border-color: var(--c-stop-button); color: var(--c-stop-button); }
   .section-heading { display: flex; align-items: baseline; gap: 6px; font-size: var(--font-size-helper); font-weight: var(--weight-semibold); color: var(--c-text-secondary); line-height: 1.3; margin: 0; }
   .section-source { font-weight: var(--weight-regular); color: var(--c-text-faint); }
   .skill-section { margin-top: 20px; max-width: 68ch; font-size: 15px; }
@@ -195,11 +199,11 @@
   function authorChip(summary) {
     switch (summary.source) {
       case "STUDIO":
-        return element("span", { class: "chip", text: "Comes with Studio" });
+        return element("span", { class: "chip studio", text: "Comes with Studio" });
       case "INSTALLED":
-        return element("span", { class: "chip", text: summary.install_source ? `Installed from ${summary.install_source.source}` : "Installed" });
+        return element("span", { class: "chip installed", text: summary.install_source ? `Installed from ${summary.install_source.source}` : "Installed" });
       default:
-        return element("span", { class: "chip accent", text: summary.author ? `Made by ${summary.author}` : "Made in this workspace" });
+        return element("span", { class: "chip workspace", text: summary.author ? `Made by ${summary.author}` : "Made in this workspace" });
     }
   }
 
