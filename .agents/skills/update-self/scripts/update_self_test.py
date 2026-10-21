@@ -6359,7 +6359,7 @@ def test_a_rollback_into_a_pre_split_tree_reinstalls_the_shell_frontends_node_mo
     assert runner.cwds_of("npm", "run", "build") == [npm_root, str(shell_frontend)]
 
 
-def test_a_rollback_rebuilds_the_tool_envs_it_could_not_copy_aside(
+def test_a_rollback_rebuilds_the_mngr_tool_it_could_not_copy_aside(
     apply_repo: Path, capsys
 ) -> None:
     # The venv copy alone is not the environment: the mngr tool is recorded
