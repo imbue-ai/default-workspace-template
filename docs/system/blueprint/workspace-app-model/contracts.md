@@ -29,6 +29,8 @@ Parsed by the `app_manifest` library (section 14) with pydantic, `extra = "forbi
 |---|---|---|---|---|
 | `name` | string | yes | | An app name (section 1). Must equal the `--name` passed at registration. |
 | `display_name` | string | yes | | Non-empty, at most 64 characters. What users see. |
+| `description` | string | no | absent | One non-empty line, at most 200 characters: what the app is for, in the person's terms. Shown wherever the app is described to an agent (the visiting-agent primer's apps table). |
+| `api_schema_path` | string | no | absent | A path under the app's origin (the launch path rule: rooted, no query string, nothing to escape) that answers an OpenAPI 3.1 document describing the app's HTTP API, built from its routes by `app_schema.api_schema.register_api_schema_route` (`/api/schema` by convention). Absent when the app serves no API of its own (ttyd, datalib-http). An app that declares it also declares `description`, which the document carries as its own; the app keeps a route table naming each route's request and response models (or the reason it exchanges no JSON), reads bodies through `app_schema.routes.parse_request_body` and answers through `app_schema.routes.model_response`, which fail a request the table does not describe; the app's tests assert all of this, and that every route's view has a docstring (the operation's summary), with `app_schema.testing.assert_api_schema_describes_app`. |
 | `icon` | string | unless `internal` | | Path relative to the manifest, `.svg`, validated by `forward_port.py`'s `validate_icon` at registration. |
 | `instances` | bool | no | `false` | `true` exposes the instances API. |
 | `instances_url` | string | no | the app URL | `http://127.0.0.1:<port>` or `http://localhost:<port>`; where the shell reaches the instances API. Only allowed with `instances = true`. |
@@ -40,7 +42,7 @@ Parsed by the `app_manifest` library (section 14) with pydantic, `extra = "forbi
 | `default_shortcut` | table | no | absent | `{action = "<id>", launch = "<id>"?, mode = "focus" \| "new"}`. `action` must be a declared action id, or `open` for a single-instance app. `launch`, optional, is the desktop interface's spelling: a declared launch path id, or `open` when the app declares none. |
 | `actions` | array of tables | no | `[]` | Each `{id, label, params?}`; `id` matches `^[a-z0-9][a-z0-9-]{0,31}$` and is unique; `label` non-empty. `params` is an optional array of `{name, label, required}` describing the create body's `params` keys, for documentation and the New Tab page (an action with a `message` param is one the page can seed a first message into). Forbidden when `instances = false`. |
 | `launch_paths` | array of tables | no | `[]` | Each `{id, label, path, params?}`: the paths the desktop interface opens windows at (`docs/system/blueprint/desktop-interface/contracts.md` section 2). `id` follows the action id rule, is unique, and is never `open` (reserved for the synthesized root launch path); `path` is rooted with one slash, carries no query string or fragment, and nothing a URL would escape; `params` is the optional `{name, label, required}` array naming the query parameters the shell may append. Declared beside `actions` until the desktop interface replaces the tabbed shell. |
-| `launcher_rank` | integer | no | absent | At least 1. The app's place among the New Tab page's leading "Open new" tiles, lowest first; an app without one follows every ranked app. The built-ins declare 10 (`chat`), 20 (`files`), 30 (`browser`), 40 (`terminal`). |
+| `launcher_rank` | integer | no | absent | At least 1. The app's place among the New Tab page's leading "Open new" tiles, lowest first; an app without one follows every ranked app. The built-ins declare 10 (`chat`), 15 (`getting-started`), 20 (`files`), 30 (`browser`), 40 (`terminal`), 45 (`routines`), 50 (`system-monitor`). |
 | `references` | array of tables | no | `[]` | Each `{path, note?}`. `path` is a literal repo-root-relative POSIX file or directory the app owns outside its own folder (no globs, no `.` or `..` segments, no empty segments, no trailing slash, no backslashes, never under `system/vendor/` or `data/`, and never through a symlinked directory, which git does not report diffs through) and is unique within the manifest. `note` is one non-empty line, at most 200 characters, saying why it belongs to the app and which surface it uses. Location rules below. |
 | `scope` | table | no | `{}` | `{exclude = ["<glob>", ...]}`. Each glob is repo-root-relative gitignore syntax (non-empty, not absolute, no `.` or `..` segments, no empty segments, no backslashes, no leading `!` -- negation would re-include a built-in). A glob that covers the app's own directory or one of its references is rejected when the footprint is computed. A hard denylist for the footprint, combined with the built-in excludes `system/vendor/**`, `data/**`, `**/node_modules/**`, `**/dist/**`, `**/.venv/**`. |
 | `wiring` | table | no | `{}` | `{programs = ["<program>", ...]}`: further `[program:*]` blocks under `system/supervisord.conf.d/` the app owns beyond its own and its `<name>-<role>` sidecars (the browser declares `xvfb`). Unique, never the app's own `program`; each must have a block there when the footprint is computed. |
@@ -63,8 +65,9 @@ Built-in manifests:
 | `files` | false | `files` | `{launch = "new", mode = "new"}` | `new` ("New File Viewer" at `/home/user/workspace/`, param `path` optional) | the convention |
 | `browser` | false | `browser` | `{launch = "new", mode = "focus"}`; also `window_closed_path = "/api/window-closed"` | `new` ("New Browser" at `/new`, param `url` optional) | the convention |
 | `system-monitor` | false | `system-monitor` | `{launch = "open", mode = "focus"}`; also `launcher_rank = 50` | none; the shell synthesizes `open` at `/` | `SYSTEM_MONITOR_PORT = "{port:main}"` and `SYSTEM_MONITOR_HOST = "{host}"`, no copies (it stores nothing) |
+| `routines` | false | `routines` | `{launch = "open", mode = "focus"}`; also `launcher_rank = 45` and a `[[message_handlers]]` `type = "minds:show-routine", show = "/{routine_id}"` | none; the shell synthesizes `open` at `/` | `ROUTINES_APP_PORT = "{port:main}"`, `ROUTINES_APP_HOST = "{host}"` and `ROUTINES_APP_PREVIEW = "1"` (read-only over the live state: it refuses every change with `403`), no copies (it stores nothing) |
 
-The chat, terminal, browser, Getting Started, and Memory & disk declare `system = true`.
+The chat, terminal, browser, Getting Started, and System Monitor declare `system = true`; Routines does not.
 
 Every built-in except the shell and the terminal's pty points `icon` at an `icon.svg` beside its manifest; those two are `internal` and have none.
 
@@ -79,6 +82,8 @@ Each `[[apps]]` row:
 |---|---|---|
 | `name`, `url`, `label`, `icon`, `internal`, `program` | the registration (`name`, `icon`, `internal`, and `program` from the manifest when one is given) | `label` is the unguessable origin label, minted at first registration, and is never an identifier. |
 | `display_name` | manifest, or `--display-name` | Absent unless one was given; the shell then uses `name`. |
+| `description` | manifest | Absent unless the manifest declares one. |
+| `api_schema_path` | manifest | Absent unless the manifest declares one; the share gateway's primer links `https://<label>.<domain><api_schema_path>` for the app. |
 | `instances` | manifest | Absent reads as `false`. |
 | `instances_url` | manifest | Absent reads as `url`. |
 | `critical` | manifest | Absent reads as `false`. |
@@ -166,7 +171,7 @@ All routes below are on the shell (`MINDS_WORKSPACE_SERVER_URL`, default `http:/
 | `POST /api/tabs/<tab_id>/instance` | an app, loopback only | `{"app": "<name>", "key": "<key>"}` | `204`; unknown tab `404`; app mismatch with the tab's address `400` |
 | `POST /api/client-activity` | the chat app on a send; the shell itself on a view switch | `{"client_id", "device_kind", "view_id", "kind": "message" \| "view_switch", "app"?, "key"?, "text"?, "from_view_id"?}` | `204` |
 | `GET /api/health` | probes | | `200 {"status": "ok", "is_frontend_built": bool}`; the chat's answer additionally carries `agent_events` (section 4.3) |
-| `GET /api/updates/pending` | the browser; the update-app careful flow | | `200` with the update notice, or `null` when no rollback point is kept |
+| `GET /api/updates/pending` | the browser; the update-app careful flow | | `200 {"notice": notice \| null}`: the update notice, or `null` when no rollback point is kept |
 | `POST /api/updates/pending/confirm` | the browser ("Everything seems good", or Close on a settled notice) | empty | `204` after `update_self.py confirm-last` dropped the record, and the kept copies with it when no rollback ran on the point (a failed rollback's copies stay for an agent); `409` when none is kept; `500` naming the script's failure; a preview shell `403` |
 | `POST /api/updates/pending/rollback` | the browser ("Roll back") | empty | `202` once `update_self.py rollback-last`, started detached (its output goes to `data/.state/update-apply/rollback-last.log`), has written its first progress into the record, so a second window's press reads that progress rather than starting a second script (launches are serialized); `409` when none is kept, one is already running, the point was already taken back, or the script refused (a dirty tree, an apply in flight; the detail is the script's last line); `500` when the script could not be started or wrote no progress within 30s; a preview shell `403` |
 
@@ -364,7 +369,7 @@ The minds chrome does not forward a deep link's query to the shell frame; that l
 - `system/scripts/build_workspace.sh` loops over the manifest directories.
 - The update apply reinstalls the tool of every manifest app whose directory changed in the merge (excluding paths under `frontend/` and `static/`), and of every manifest app when a shared backend manifest changed, and snapshots the tool directory of every `critical` app before it does.
 - `system/apps/*` is in the root workspace's member glob, so one lockfile covers the tree, a pre-manifest app's `{ workspace = true }` source in the root pyproject resolves, and a user-built app needs no root-pyproject edit; `uv sync --all-packages` therefore also installs the manifest apps into the root venv, unused, which uv's shared cache makes nearly free. Membership and the tool environments answer different questions: the lock keeps every environment on the same versions, and a tool environment keeps its app running while the root venv is rewritten or broken.
-- The `app_manifest` and `app_instances` libraries are workspace members that apps depend on by path, so a tool install pulls them in editable.
+- The `app_manifest` and `app_schema` libraries are workspace members that apps depend on by path, so a tool install pulls them in editable.
 - Services run from the root venv under `uv run <name>`.
 
 ## 15. Memory priority

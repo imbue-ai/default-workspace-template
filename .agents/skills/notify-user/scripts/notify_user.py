@@ -41,7 +41,7 @@ Environment:
 Run via bare ``python3`` (standard library only), like ``forward_port.py`` and
 ``refresh_workspace_view.py``: the gateway is addressed directly with the same
 headers the in-app callers send rather than through ``latchkey curl`` (the
-``minds-api`` skill's usual route), so the script does not depend on the
+``imbue-studio`` skill's usual route), so the script does not depend on the
 latchkey CLI being on the PATH of whatever tool environment runs it.
 """
 

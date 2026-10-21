@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from app_manifest.manifest import load_manifest
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
+from app_schema.testing import assert_api_schema_describes_app
 from browser import runner
 from browser import session as bsession
 from browser.primitives import APP_NAME
@@ -28,6 +29,12 @@ def test_the_daemon_names_itself_after_its_manifest() -> None:
     ]
 
 
+def test_the_daemon_describes_its_api_the_way_its_manifest_says() -> None:
+    assert_api_schema_describes_app(
+        runner.application.test_client(), _APP_MANIFEST_PATH
+    )
+
+
 def test_the_viewer_page_imports_the_app_contract_from_its_own_origin() -> None:
     response = runner.application.test_client().get("/")
 
@@ -43,7 +50,7 @@ def test_the_app_contract_module_is_the_shells_build_output_served_from_this_ori
     monkeypatch.chdir(tmp_path)
     missing = runner.application.test_client().get("/_static/app_contract.js")
     assert missing.status_code == 404
-    assert "not built" in missing.get_json()["error"]
+    assert "not built" in missing.get_json()["detail"]
 
     source = "export function connectToShell() {}\n"
     built = tmp_path / SHELL_APP_CONTRACT_PATH
@@ -141,6 +148,25 @@ def test_a_window_closed_post_sweeps_at_once_and_answers_no_content(monkeypatch:
     wait_for(lambda: len(swept) == 1, timeout=5.0, poll_interval=0.02, error_message="the hinted sweep never ran")
 
 
+def test_a_window_closed_post_of_another_shape_is_refused_and_brings_no_sweep(monkeypatch: pytest.MonkeyPatch) -> None:
+    swept: list[str] = []
+
+    async def fake_sweep(self: bsession.BrowserSessionManager, shell_url: str) -> list[str] | None:
+        swept.append(shell_url)
+        return []
+
+    monkeypatch.setattr(bsession.BrowserSessionManager, "sweep_from_shell", fake_sweep)
+    client = runner.application.test_client()
+
+    odd_shape = client.post("/api/window-closed", json=["/?session=browser-1"])
+    partial = client.post("/api/window-closed", json={"path": "/?session=browser-1"})
+
+    assert [r.status_code for r in (odd_shape, partial)] == [400, 400]
+    assert "JSON object" in odd_shape.get_json()["detail"]
+    assert "window_id" in partial.get_json()["detail"]
+    assert swept == []
+
+
 def test_close_tab_closes_the_shown_tab_of_a_running_browser_and_refuses_the_rest() -> None:
     running = bsession.LiveBrowser(browser_id="browser-1")
     running._lifecycle = "running"
@@ -163,7 +189,7 @@ def test_close_tab_closes_the_shown_tab_of_a_running_browser_and_refuses_the_res
     assert cdp.closed == ["t1"]
     assert running._active_target_id == "t2"
     assert still_launching.status_code == 409
-    assert "not running" in still_launching.get_json()["error"]
+    assert "not running" in still_launching.get_json()["detail"]
     assert unknown.status_code == 404
 
 
@@ -237,7 +263,7 @@ def test_open_url_holds_the_page_while_an_agent_drives_and_the_viewer_can_cancel
     [
         pytest.param({"client_id": "c-link", "url": "https://example.com/"}, "only an address on this machine", id="external"),
         pytest.param({"client_id": "c-link", "url": "ftp://localhost/"}, "absolute http or https URL", id="not-http"),
-        pytest.param({"client_id": "c-link", "url": 7}, "url: must be a string", id="not-a-string"),
+        pytest.param({"client_id": "c-link", "url": 7}, "'url'", id="not-a-string"),
         pytest.param({"client_id": "not a client", "url": "http://localhost:3000/"}, "client_id", id="bad-client"),
     ],
 )

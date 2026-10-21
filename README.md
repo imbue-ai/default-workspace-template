@@ -13,9 +13,9 @@ you'll want to make:
 
 1. an "app" - something you can open as a tab and interact with
 2. a "skill" - teaches your agent how to do work you care about. A skill that
-   is automatically run on a schedule is called an "automation" (the
-   machinery that runs them lives in `system/libs/automations/`; the weekly
-   Caretaker is the built-in example)
+   is automatically run on a schedule is called an "automation": a routine
+   (see `routines/` and the Routines app; the weekly Caretaker is the
+   built-in example)
 3. some "data" - documents, images, notes, or data created by your apps and
    skills
 4. some "customizations" - changes to any of the above. Everything in Imbue Studio
@@ -24,10 +24,12 @@ you'll want to make:
 ## What's here
 
 - `apps/` - Everything you can open as a tab: the built-in apps (chat, the
-  terminal, the file viewer, the browser, Memory & disk) and the apps your agent builds for you. (A shortcut
+  terminal, Files, the browser, System Monitor) and the apps your agent builds for you. (A shortcut
   to `system/apps/`.)
 - `skills/` - Everything your agent knows how to do: the built-in skills and
   the ones it has learned for you. (A shortcut to `.agents/skills/`.)
+- `routines/` - Everything that runs on a schedule, one file each; the
+  Routines app shows them. (A shortcut to `system/routines/`.)
 - `data/` - Your workspace's data: documents and project folders, files
   you've uploaded, your agent's memories, and each app's stored data.
 - `docs/` - Guides to this workspace: what it is, how it works, and a history

@@ -165,6 +165,7 @@ export function placeTooltip(
  *  non-default placement in. */
 const TOOLTIP_ATTR = "data-hover-tooltip";
 const PLACEMENT_ATTR = "data-hover-tooltip-placement";
+const MAX_WIDTH_ATTR = "data-hover-tooltip-max-width";
 
 // One bubble is enough: only one tooltip is ever visible, so every trigger
 // shares it. ``pendingFor`` and ``shownFor`` name the trigger a scheduled or
@@ -214,6 +215,8 @@ function dropTooltip(): void {
 function showBubble(target: Element, text: string, placement: TooltipPlacement): void {
   const element = ensureBubble();
   element.textContent = text;
+  const maxWidth = target.getAttribute(MAX_WIDTH_ATTR);
+  element.style.maxWidth = maxWidth === null ? "" : `${maxWidth}px`;
   // Measure at the natural width: clear the width a previous show fixed, and
   // park the bubble at the origin first, since a stale ``left`` would cap the
   // shrink-to-fit width at (viewport - left) and wrap the label.
@@ -412,7 +415,11 @@ export function setHoverTooltip(element: Element, text: string | null, placement
  * redraws and runs only the current vnode's hooks, so anything a vanished
  * spread left behind would have nothing to clean it up.
  */
-export function hoverTooltipAttrs(text: string | null, placement: TooltipPlacement = "below"): m.Attributes {
+export function hoverTooltipAttrs(
+  text: string | null,
+  placement: TooltipPlacement = "below",
+  options: { maxWidth?: number } = {},
+): m.Attributes {
   wireListeners();
   // Null values are what mithril removes an attribute for, on the update where
   // they appear -- so a caller passing null, and a caller dropping the spread,
@@ -420,5 +427,7 @@ export function hoverTooltipAttrs(text: string | null, placement: TooltipPlaceme
   return {
     [TOOLTIP_ATTR]: text,
     [PLACEMENT_ATTR]: placement === "below" ? null : placement,
+    // A narrower bubble for a sentence or two of explanation, which reads better wrapped than in one long line.
+    [MAX_WIDTH_ATTR]: options.maxWidth ?? null,
   };
 }

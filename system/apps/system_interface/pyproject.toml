@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "app-manifest",
+    "app-schema",
+    "chat-background-tasks",
     # The staleness tracker runs git through concurrency_group's subprocess helper.
     "concurrency-group",
     # The avatar designs' validator parses registered SVG with DTDs and entities refused.
@@ -30,6 +32,7 @@ license-files = [
 
 [dependency-groups]
 dev = [
+    "app-schema[testing]",
     "playwright>=1.40",
     "pytest-playwright>=0.4",
     "pytest>=9.0",
@@ -76,7 +79,11 @@ artifacts = [
 packages = ["imbue"]
 
 [tool.pytest.ini_options]
+required_plugins = ["pytest-workspace-env"]
 timeout_func_only = true
+# Same tmp_path retention as the root config, which says why.
+tmp_path_retention_policy = "failed"
+tmp_path_retention_count = 1
 markers = [
     "acceptance: marks tests as requiring network access, Modal credentials, etc. These are required to pass in CI",
     "browser: marks tests that drive a browser",

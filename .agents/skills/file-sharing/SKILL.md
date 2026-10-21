@@ -1,6 +1,6 @@
 ---
 name: file-sharing
-description: Use to read and write files and directories on the user's local filesystem.
+description: Use to read and write files and directories on the user's local filesystem. Also useful for importing Apple Notes, Photos, and other similar locally stored data.
 metadata:
   author: imbue
 ---
@@ -49,11 +49,13 @@ no copy here.
 ### Whether your writes reach the user
 
 Only if you were granted **write** access to that path. Check before you rely
-on it -- the rules list names each permission `minds-file-server-read-<path>`
-or `minds-file-server-write-<path>`:
+on it -- the rules list names each permission
+`minds-file-server-read-<device ID>:<path>` or
+`minds-file-server-write-<device ID>:<path>` (a computer whose Imbue Studio
+predates per-device grants names them with no `<device ID>:`):
 
 ```bash
-latchkey curl http://latchkey-self.invalid/permissions/self | jq .rules
+latchkey curl -H "X-Latchkey-Device: <device ID>" http://latchkey-self.invalid/permissions/self | jq .rules
 ```
 
 With **read and write**, changes travel both ways: what you write here reaches

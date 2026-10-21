@@ -58,12 +58,12 @@ import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from imbue.imbue_common.mutable_model import MutableModel
 from loguru import logger
 from pydantic import PrivateAttr
-from workspace_layout.windows import parse_window_closed_hint, read_app_window_paths, window_query_value
+from workspace_layout.windows import WindowClosedHint, read_app_window_paths, window_query_value
 
 from browser import chrome_launcher
 from browser import manifest as fleet_manifest
@@ -72,24 +72,12 @@ from browser.cdp_proxy import BrowserProxy, ProxyServer
 from browser.errors import BrowserNotDrivableError, UnknownBrowserError
 from browser.names import first_free_numbered_browser_name, is_valid_browser_name
 from browser.oom_retag import notify_chromium_processes_expected
-from browser.primitives import APP_NAME, SESSION_QUERY_KEY
+from browser.primitives import APP_NAME, SESSION_QUERY_KEY, ControlOwner, Lifecycle
 
 # Errors expected when a target/CDP session goes away underneath us (tab closed,
 # navigation, browser killed). The bounded CDP helpers additionally catch broadly
 # (best-effort, must never wedge the loop).
 _BROWSER_ERRORS = (RuntimeError, ConnectionError, OSError)
-
-ControlOwner = Literal["human", "agent"]
-
-# Explicit per-browser lifecycle. A browser is REGISTERED in the fleet the instant
-# create() is called (so the viewer/CLI can address it at once), but its Chromium is
-# launched asynchronously and serialized, so it starts in ``init`` and flips to
-# ``running`` only once Chromium is up and the active tab is foregrounded. ``crashed`` is
-# terminal (Chromium died -- OOM/segfault). Driving/ownership only applies once
-# ``running``; the viewer renders deterministically off this field.
-# ``stopped``: the user ended this browser's Chromium but kept the browser (its record, profile,
-# and last known tabs); a start relaunches it from those. Unlike ``crashed`` it is not terminal.
-Lifecycle = Literal["init", "running", "crashed", "stopped"]
 
 # Fortress's fixed install path (see the env.d unit
 # system/scripts/env.d/1000-playwright-fortress.sh). A stealth, C++-patched
@@ -216,6 +204,10 @@ def _stop_xvfb(xvfb: "subprocess.Popen[bytes]") -> None:
 # fixed path: root otherwise leaves the socket group-gated and our clients get
 # "Access denied"); the only fleet change is one sink per browser instead of one global.
 _PULSE_SERVER = "unix:/var/run/pulse/native"
+# Every browser daemon in the workspace shares that pulse daemon, so a preview booted beside the live one names
+# its sinks under a prefix of its own; sharing the live names would route its audio into the live browsers' sinks
+# and unload them when it closes.
+_PULSE_SINK_PREFIX = os.environ.get("BROWSER_PULSE_SINK_PREFIX", "browser")
 
 
 def _pulse_env() -> dict[str, str]:
@@ -225,7 +217,7 @@ def _pulse_env() -> dict[str, str]:
 def _pulse_sink_name(browser_id: str) -> str:
     """A PulseAudio-safe null-sink name giving a browser its own audio bus."""
     safe = "".join(c if c.isalnum() else "_" for c in browser_id)
-    return f"browser_{safe}"
+    return f"{_PULSE_SINK_PREFIX}_{safe}"
 
 
 def _ensure_pulse_daemon() -> bool:
@@ -236,17 +228,18 @@ def _ensure_pulse_daemon() -> bool:
         if subprocess.run(["pactl", "info"], env=env, capture_output=True, timeout=5).returncode == 0:
             return True
         os.makedirs("/var/run/pulse", exist_ok=True)
-        # Foreground daemon as a detached background process. A clean service stop signals
-        # the browser daemon alone (stopasgroup=false, so it can checkpoint first), so this
-        # one outlives it and the next daemon adopts it through the ``pactl info`` probe
-        # above; only a stop that overruns stopwaitsecs reaps it with the group.
+        # Foreground daemon as a detached background process, in a session of its own: every
+        # browser daemon in the workspace shares it, so it must outlive the one that started it,
+        # and the next daemon adopts it through the ``pactl info`` probe above. A preview's
+        # teardown signals the preview's whole process group, which would otherwise take the
+        # live browsers' audio down with it.
         # --daemonize=yes double-forks and trips over a stale PID file in this container; a
         # plain Popen does not.
         daemon = subprocess.Popen(
             ["pulseaudio", "--system", "--daemonize=no", "--disallow-exit",
              "--exit-idle-time=-1", "--log-target=stderr", "-n",
              "-L", "module-native-protocol-unix auth-anonymous=1 socket=/var/run/pulse/native"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
         )
         _reap_on_exit(daemon, "pulseaudio")
         deadline = time.monotonic() + 10
@@ -1945,15 +1938,11 @@ class LiveBrowser(MutableModel):
             await asyncio.to_thread(_stop_xvfb, xvfb)
 
 
-def closed_window_browser(hint_body: object) -> str | None:
+def closed_window_browser(hint: WindowClosedHint) -> str | None:
     """The browser a closed window showed, from the ``path`` of the shell's close hint.
 
-    None for a path with no browser (the root, or one naming something that is not a browser name), or a body of
-    another shape than the shell posts.
+    None for a path with no browser (the root, or one naming something that is not a browser name).
     """
-    hint = parse_window_closed_hint(hint_body)
-    if hint is None:
-        return None
     return window_query_value(hint.path, SESSION_QUERY_KEY)
 
 

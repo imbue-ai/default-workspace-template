@@ -97,7 +97,10 @@ type EmbedderMessageHandler = (message: ContractMessage) => void;
 
 // Every embedder->workspace type the contract defines: the endpoint dispatches
 // only the types it is handed a handler for, and each of these reaches its own
-// handler and then the observer.
+// handler and then the observer. A type outside this list the endpoint drops
+// (the contract's tolerant policy), so an app message the chrome posts beside
+// the contract's own (a notification's destination, `minds:show-routine`, say)
+// never reaches the observer: the shell's relay.ts hands those on itself.
 const EMBEDDER_TO_WORKSPACE_TYPES: readonly string[] = [
   CLOSE_ACTIVE_TAB,
   OPEN_AI_KEYS_ACK,
@@ -155,11 +158,18 @@ export function setEmbedderMessageHandler(type: string, handler: EmbedderMessage
   handlerByType[type] = handler;
 }
 
-/** Observe every embedder->workspace message, whatever its type, after its
- * type's own handler (replaces any prior observer). */
+/** Observe every embedder->workspace message of a type the contract defines,
+ * after its type's own handler (replaces any prior observer). */
 export function setEmbedderMessageObserver(observer: EmbedderMessageHandler): void {
   getEndpoint();
   messageObserver = observer;
+}
+
+/** Whether `type` is an embedder->workspace type the contract defines, which the
+ * endpoint dispatches (and the observer sees); any other type from the chrome
+ * the endpoint drops. */
+export function isContractEmbedderMessageType(type: string): boolean {
+  return EMBEDDER_TO_WORKSPACE_TYPES.includes(type);
 }
 
 /** What a page says it handles when it announces itself ready. */

@@ -26,6 +26,7 @@ Imbue Studio desktop through ``mngr exec`` -- holds the same ``flock`` on the si
 """
 
 import fcntl
+import json
 import os
 import tomllib
 from collections.abc import Generator
@@ -149,9 +150,18 @@ def load_grants(path: Path) -> Grants:
     return parse_grants(text)
 
 
+def toml_string(value: str) -> str:
+    """``value`` as a TOML basic string.
+
+    A JSON string literal is one, with two differences: non-ASCII text must be
+    kept verbatim (TOML refuses the surrogate pairs JSON would otherwise spell
+    an astral character with), and DEL, which JSON leaves raw, must be escaped.
+    """
+    return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
+
+
 def _toml_string_array(values: set[str]) -> str:
-    quoted = ", ".join('"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"' for value in sorted(values))
-    return f"[{quoted}]"
+    return "[" + ", ".join(toml_string(value) for value in sorted(values)) + "]"
 
 
 def _toml_key(name: str) -> str:
@@ -207,12 +217,18 @@ def locked_grants_file(grants_path: Path) -> Generator[None, None, None]:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
+def write_text_atomic(path: Path, text: str, mode: int) -> None:
+    """Replace ``path`` through a same-directory temp file and a rename, creating its directory."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f".{path.name}.{uuid4().hex}")
+    temp_path.write_text(text)
+    os.chmod(temp_path, mode)
+    os.replace(temp_path, path)
+
+
 def write_grants_atomic(grants_path: Path, text: str) -> None:
     """Replace the grants document through a same-directory temp file and a rename."""
-    temp_path = grants_path.with_name(f".{grants_path.name}.{uuid4().hex}")
-    temp_path.write_text(text)
-    os.chmod(temp_path, 0o600)
-    os.replace(temp_path, grants_path)
+    write_text_atomic(grants_path, text, 0o600)
 
 
 def upgrade_invites_in_file(grants_path: Path, email: str, user_id: str) -> bool:

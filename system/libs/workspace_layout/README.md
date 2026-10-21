@@ -86,7 +86,8 @@ answer shapes live in one place the shell and its callers share.
   `read_app_window_paths(shell_url, app)` (every window path of the app, or
   None when the shell could not be read, never "no windows"),
   `window_query_value`, and the `WindowClosedHint` the
-  shell posts when a window closes, with `parse_window_closed_hint`.
+  shell posts when a window closes (an app reads it with
+  `app_schema.routes.parse_request_body`).
 - `workspace_layout.cli`: the `workspace-layout` console script (below).
 - `workspace_layout.testing`: `FakeShell`, an in-memory `ShellLayoutInterface`
   that records every request and answers or refuses as a test sets it;

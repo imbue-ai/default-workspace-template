@@ -1,0 +1,1 @@
+The terminal's wrapper pages now carry a `Content-Security-Policy`: the page's own inline module script by hash, frames of any http(s) page (the pty origin), fetches only to the terminal app, no plugins.

@@ -1,0 +1,1 @@
+The Getting Started page now carries a `Content-Security-Policy`: scripts only from its own origin, fetches only to its own API, images from its own origin and from the catalog's (the template thumbnails live beside the catalog), no plugins.

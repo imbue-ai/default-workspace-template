@@ -50,6 +50,7 @@ import {
 } from "../models/Chats";
 import type { ProvisionalChat } from "../models/Chats";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
+import { accountForFirstSend, openProviderChooser, whenAccountsReadyToChoose } from "../models/Providers";
 import { maybeApplyFastModeLimit } from "./fast-mode-limit";
 import { FastModeNotice } from "./FastModeNotice";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
@@ -297,18 +298,34 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     }
   }
 
-  function launch(chatId: string, accountId: string): void {
+  /** "Try again" on a failed create: on the account the chat was minted for, else (that account was signed out
+   *  since) the account a new chat would start on, else the one the provider chooser produces. */
+  async function relaunch(chatId: string, mintedAccountId: string): Promise<void> {
     if (launchInFlight) return;
     launchInFlight = true;
     launchError = null;
-    launchChat(chatId, accountId)
-      .catch((error: unknown) => {
-        launchError = describeRequestError(error);
-      })
-      .finally(() => {
-        launchInFlight = false;
-        m.redraw();
-      });
+    m.redraw();
+    await whenAccountsReadyToChoose();
+    const account = accountForFirstSend(mintedAccountId);
+    if (account === null) {
+      launchInFlight = false;
+      m.redraw();
+      openProviderChooser({ onSignedIn: (accountId) => void launchOn(chatId, accountId) });
+      return;
+    }
+    await launchOn(chatId, account.id);
+  }
+
+  async function launchOn(chatId: string, accountId: string): Promise<void> {
+    launchInFlight = true;
+    try {
+      await launchChat(chatId, accountId);
+    } catch (error) {
+      launchError = describeRequestError(error);
+    } finally {
+      launchInFlight = false;
+      m.redraw();
+    }
   }
 
   /** A conversation with nothing in it yet -- being created, loading, or empty -- drawn as the
@@ -354,7 +371,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 variant: "primary",
                 extra: "message-list-create-retry",
                 readonly: launchInFlight,
-                onclick: () => launch(chatId, provisional.account_id),
+                onclick: () => void relaunch(chatId, provisional.account_id),
               },
               launchInFlight ? "Starting…" : "Try again",
             )
@@ -761,7 +778,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 m(
                   "main",
                   {
-                    class: `app-content transcript-scroll flex-1 overflow-y-auto bg-chat ${isCompact ? "px-4 py-4" : "px-8 py-6"}`,
+                    class: `app-content transcript-scroll flex-1 overflow-y-auto bg-chat ${isCompact ? "px-4 py-4" : "px-6 py-6"}`,
                     // Focusable so native keyboard scrolling (PageUp/Down, Home/End)
                     // works; the engine's listeners classify the input source.
                     tabindex: 0,
@@ -792,7 +809,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
               ]),
               // Present for every chat, a create in flight included: a message typed while the
               // chat is being created is held and delivered when it lands.
-              m("footer", { class: `app-footer shrink-0 bg-chat ${isCompact ? "px-3" : "px-8"}` }, [
+              m("footer", { class: `app-footer shrink-0 bg-chat ${isCompact ? "px-3" : "px-6"}` }, [
                 m(EmptySlot, { name: "conversation-before-input" }),
                 // The switch dialog a provider choice opens (spec 5.1), and why a switch
                 // failed, with a retry on any account (spec 5.10).
@@ -828,7 +845,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
           // on the composer and sits evenly in its own band.
           m(
             "div",
-            { class: `chat-under-bar shrink-0 bg-chat pb-2 ${isCompact ? "px-3" : "px-8"}` },
+            { class: `chat-under-bar shrink-0 bg-chat pb-2 ${isCompact ? "px-3" : "px-6"}` },
             m(
               "div",
               {
@@ -837,8 +854,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 // whether or not anything in it has rendered yet, so the composer never moves;
                 // on a phone, where the chip is the settings button, only as tall as a notice in it.
                 class:
-                  `composer-under-bar relative mx-auto mt-2 flex w-full ${isCompact ? "" : "min-h-[30px]"} ` +
-                  "max-w-[calc(var(--width-message-column)+2*var(--radius-xl))] items-center gap-2",
+                  `composer-under-bar relative mx-auto mt-1 flex w-full ${isCompact ? "" : "min-h-[30px]"} ` +
+                  "max-w-(--width-message-column) items-center gap-2",
               },
               [
                 // On a phone a chat with no agent yet still names its account here: it has no menu to open.

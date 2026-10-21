@@ -28,7 +28,7 @@ import { frameFromViewportFractions } from "./geometry/frames";
 import type { OutsideLinkOpener, PopOutBridge } from "./store/DesktopStore";
 import { PointerGestureSource } from "./gestures/pointerGestures";
 import { startPresenceHeartbeat } from "./model/Presence";
-import { initEmbedderRelay } from "./relay";
+import { initEmbedderRelay, setEmbedderAppMessageHandler } from "./relay";
 import { reloadInterface } from "./reload";
 import { DesktopStore } from "./store/DesktopStore";
 import { ShellSocket } from "./store/socket";
@@ -131,8 +131,10 @@ function bootstrap(): void {
   document.addEventListener("visibilitychange", () =>
     desktopStore.onVisibilityChange(document.visibilityState === "visible"),
   );
-  // Every message the chrome sends also goes to the apps registered for its type.
+  // Every message the chrome sends also goes to the apps registered for its type: the contract's own
+  // types through the endpoint's observer, any other (a notification's destination) through the relay.
   setEmbedderMessageObserver((message) => void desktopStore.relayEmbedderMessage(message, null));
+  setEmbedderAppMessageHandler((message) => void desktopStore.relayEmbedderMessage(message, null));
   // The pull-out conversation's two asks from the chrome: what it can do, and a window to bring back.
   setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) => {
     desktopStore.setCanPopOut(message.canPopOut === true);

@@ -21,7 +21,7 @@ ENV PATH="/root/.local/bin:$PATH"
 # System toolchain (repo-independent). Shared verbatim with the Lima provider,
 # which runs this exact script in the VM. setup_system.sh installs the system
 # toolchain AND invokes the sibling installers (secret scanners, agy,
-# owner-exec, dufs), so every provisioning path -- docker-built images, Lima
+# owner-exec, earlyoom), so every provisioning path -- docker-built images, Lima
 # VMs, and the update apply's live re-run -- gets every global binary from one
 # common script; system/test_provisioner_single_entry.py holds it to that.
 # Copied with its sibling _provision_guard.sh (which setup_system.sh sources
@@ -50,10 +50,9 @@ COPY system/scripts/_provision_guard.sh /usr/local/bin/_provision_guard.sh
 COPY system/scripts/install_secret_scanners.sh /usr/local/bin/default-workspace-template-install-secret-scanners
 COPY system/scripts/agy_install-1.1.22.sh /usr/local/bin/default-workspace-template-install-agy
 COPY system/scripts/install_owner_exec.sh /usr/local/bin/default-workspace-template-install-owner-exec
-COPY system/scripts/install_dufs.sh /usr/local/bin/default-workspace-template-install-dufs
 COPY system/scripts/install_earlyoom.sh /usr/local/bin/default-workspace-template-install-earlyoom
 COPY system/scripts/install_agent_plugins.sh /usr/local/bin/default-workspace-template-install-agent-plugins
-RUN chmod +x /usr/local/bin/default-workspace-template-setup-system /usr/local/bin/default-workspace-template-install-secret-scanners /usr/local/bin/default-workspace-template-install-agy /usr/local/bin/default-workspace-template-install-owner-exec /usr/local/bin/default-workspace-template-install-dufs /usr/local/bin/default-workspace-template-install-earlyoom /usr/local/bin/default-workspace-template-install-agent-plugins && default-workspace-template-setup-system
+RUN chmod +x /usr/local/bin/default-workspace-template-setup-system /usr/local/bin/default-workspace-template-install-secret-scanners /usr/local/bin/default-workspace-template-install-agy /usr/local/bin/default-workspace-template-install-owner-exec /usr/local/bin/default-workspace-template-install-earlyoom /usr/local/bin/default-workspace-template-install-agent-plugins && default-workspace-template-setup-system
 
 # /var/cache/user is the off-volume cache target, pinned via ENV so BOTH the
 # build layers below (dependency pre-warm) and the runtime container cache to
@@ -80,6 +79,9 @@ COPY system/libs/github_sync/pyproject.toml /home/user/workspace/system/libs/git
 COPY system/apps/system_interface/pyproject.toml /home/user/workspace/system/apps/system_interface/pyproject.toml
 COPY system/apps/chat/pyproject.toml /home/user/workspace/system/apps/chat/pyproject.toml
 COPY system/apps/getting_started/pyproject.toml /home/user/workspace/system/apps/getting_started/pyproject.toml
+COPY system/apps/files/pyproject.toml /home/user/workspace/system/apps/files/pyproject.toml
+COPY system/libs/routines/pyproject.toml /home/user/workspace/system/libs/routines/pyproject.toml
+COPY system/apps/routines/pyproject.toml /home/user/workspace/system/apps/routines/pyproject.toml
 
 # Frontend npm manifests (the workspace root's lockfile + package.json, and each member's
 # package.json) -- install needs only these.
@@ -88,6 +90,8 @@ COPY system/libs/workspace_ui/package.json /home/user/workspace/system/libs/work
 COPY system/apps/system_interface/frontend/package.json /home/user/workspace/system/apps/system_interface/frontend/
 COPY system/apps/chat/frontend/package.json /home/user/workspace/system/apps/chat/frontend/
 COPY system/apps/getting_started/frontend/package.json /home/user/workspace/system/apps/getting_started/frontend/
+COPY system/apps/files/frontend/package.json /home/user/workspace/system/apps/files/frontend/
+COPY system/apps/routines/frontend/package.json /home/user/workspace/system/apps/routines/frontend/
 
 # Dependency install (manifests only). Shared verbatim with the Lima provider.
 # Copied with its sibling _mngr_git_auth.sh (which it sources via `dirname "$0"`).
@@ -106,7 +110,6 @@ RUN chmod +x /usr/local/bin/default-workspace-template-install-dependencies && d
 
 # End pre-COPY manifest layer. Source-changing layers begin below.
 
-# copy in all of our code:
 COPY . /home/user/workspace/
 
 # Build the workspace from full source. Shared verbatim with the Lima provider.

@@ -2,14 +2,14 @@
 report, an app's stop and start, the clients and the inventory, and the agent-facing op route."""
 
 import json
-from typing import Any
 from typing import Final
 from typing import assert_never
 
 from app_manifest.manifest import PinStyle
 from app_manifest.primitives import AppName
+from app_schema.routes import model_response
+from app_schema.routes import parse_request_body
 from flask import Flask
-from flask import jsonify
 from flask import request
 from flask.typing import ResponseReturnValue
 from loguru import logger
@@ -28,6 +28,10 @@ from workspace_layout.shell_url import LAYOUT_OP_ROUTE
 from workspace_layout.shell_url import POPPED_OUT_REFUSAL_STATUS
 
 from imbue.system_interface.app_context import get_state
+from imbue.system_interface.shell.api_models import AppRunningState
+from imbue.system_interface.shell.api_models import EmbedderMessageRelayResponse
+from imbue.system_interface.shell.api_models import PendingUpdateResponse
+from imbue.system_interface.shell.api_models import UpdateRollbackStarted
 from imbue.system_interface.shell.clients import client_view
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import ClientShownRequest
@@ -42,7 +46,7 @@ from imbue.system_interface.shell.embedder_messages import MessageDelivery
 from imbue.system_interface.shell.embedder_messages import ShownPage
 from imbue.system_interface.shell.embedder_messages import deliver_forwarded_message
 from imbue.system_interface.shell.embedder_messages import forwarded_messages
-from imbue.system_interface.shell.embedder_messages import message_delivery_wire_json
+from imbue.system_interface.shell.embedder_messages import message_delivery_view
 from imbue.system_interface.shell.embedder_messages import shown_pages
 from imbue.system_interface.shell.errors import AppLifecycleRefusedError
 from imbue.system_interface.shell.errors import ClientNotFoundError
@@ -79,7 +83,6 @@ from imbue.system_interface.shell.route_helpers import HTTP_NO_CONTENT
 from imbue.system_interface.shell.route_helpers import HTTP_OK
 from imbue.system_interface.shell.route_helpers import HTTP_PRECONDITION_FAILED
 from imbue.system_interface.shell.route_helpers import detail_response
-from imbue.system_interface.shell.route_helpers import parse_request_body
 from imbue.system_interface.shell.route_helpers import require_loopback
 from imbue.system_interface.shell.state import ShellState
 
@@ -160,6 +163,7 @@ def _entry_or_raise(name: str) -> AppInventoryEntry:
 
 
 def client_activity_route() -> ResponseReturnValue:
+    """Record what a client did (a message sent from a chat page), for the shell's activity log; loopback only."""
     refusal = require_loopback()
     if refusal is not None:
         return refusal
@@ -197,11 +201,8 @@ def _lifecycle(name: str, action: AppLifecycleAction) -> ResponseReturnValue:
     except SupervisorProgramActionError as e:
         return detail_response(str(e), HTTP_BAD_GATEWAY)
     refreshed = shell.inventory.entry(name)
-    return jsonify(
-        {
-            "name": name,
-            "is_running": refreshed.is_running if refreshed is not None else False,
-        }
+    return model_response(
+        AppRunningState(name=name, is_running=refreshed.is_running if refreshed is not None else False)
     )
 
 
@@ -222,6 +223,7 @@ def _stoppable_program_or_raise(shell: ShellState, entry: AppInventoryEntry) -> 
 
 
 def stop_app(name: str) -> ResponseReturnValue:
+    """Stop an app's program; refused for a critical app or one with no supervised program, and in a preview."""
     return _lifecycle(name, AppLifecycleAction.STOP)
 
 
@@ -238,10 +240,13 @@ def quit_app(name: str) -> ResponseReturnValue:
     except SupervisorProgramActionError as e:
         return detail_response(str(e), HTTP_BAD_GATEWAY)
     refreshed = shell.inventory.entry(name)
-    return jsonify({"name": name, "is_running": refreshed.is_running if refreshed is not None else False})
+    return model_response(
+        AppRunningState(name=name, is_running=refreshed.is_running if refreshed is not None else False)
+    )
 
 
 def start_app(name: str) -> ResponseReturnValue:
+    """Start a stopped app's program and answer whether it is running; refused as a stop is."""
     return _lifecycle(name, AppLifecycleAction.START)
 
 
@@ -249,6 +254,7 @@ def start_app(name: str) -> ResponseReturnValue:
 
 
 def list_clients() -> ResponseReturnValue:
+    """Every client known to the workspace (a browser or desktop that opened it), with whether it is connected now."""
     shell = _shell()
     desktops = shell.list_desktops()
     connected = shell.broadcaster.connected_client_ids()
@@ -258,11 +264,12 @@ def list_clients() -> ResponseReturnValue:
             for record in shell.clients.list_clients()
         )
     )
-    return jsonify(listing.model_dump(mode="json"))
+    return model_response(listing)
 
 
 def inventory_route() -> ResponseReturnValue:
-    return jsonify(inventory_document(_shell()).model_dump(mode="json"))
+    """The one document of everything the workspace shows: its name, its desktops, its apps, and its clients."""
+    return model_response(inventory_document(_shell()))
 
 
 def set_client_entry(client_id: str, app: str) -> ResponseReturnValue:
@@ -279,9 +286,7 @@ def set_client_entry(client_id: str, app: str) -> ResponseReturnValue:
             f"App {app!r} offers the plain style and {pin.style.value!r}, not {body.style.value!r}"
         )
     record = shell.set_client_entry_presentation(ClientId(client_id), AppName(app), body)
-    return jsonify(
-        client_view(record, str(record.id) in shell.broadcaster.connected_client_ids()).model_dump(mode="json")
-    )
+    return model_response(client_view(record, str(record.id) in shell.broadcaster.connected_client_ids()))
 
 
 def record_client_shown(client_id: str) -> ResponseReturnValue:
@@ -290,9 +295,7 @@ def record_client_shown(client_id: str) -> ResponseReturnValue:
     body = parse_request_body(ClientShownRequest)
     shell = _shell()
     record = shell.record_client_shown(ClientId(client_id), body.window_id)
-    return jsonify(
-        client_view(record, str(record.id) in shell.broadcaster.connected_client_ids()).model_dump(mode="json")
-    )
+    return model_response(client_view(record, str(record.id) in shell.broadcaster.connected_client_ids()))
 
 
 # Section 5.6: the embedder-message relay
@@ -322,15 +325,14 @@ def relay_embedder_message() -> ResponseReturnValue:
         relayed.client_id,
         ", ".join(f"{delivery.app} ({delivery.status})" for delivery in deliveries),
     )
-    answer: dict[str, Any] = {
-        "type": str(relayed.type),
-        "deliveries": [message_delivery_wire_json(delivery) for delivery in deliveries],
-    }
+    views = tuple(message_delivery_view(delivery) for delivery in deliveries)
     undelivered = [delivery for delivery in deliveries if not delivery.is_delivered]
     if not undelivered:
-        return jsonify(answer), HTTP_OK
+        return model_response(EmbedderMessageRelayResponse(type=str(relayed.type), deliveries=views, detail=None))
     detail = "; ".join(f"{delivery.app} did not take it: {delivery.detail}" for delivery in undelivered)
-    return jsonify({**answer, "detail": detail}), HTTP_BAD_GATEWAY
+    return model_response(
+        EmbedderMessageRelayResponse(type=str(relayed.type), deliveries=views, detail=detail), HTTP_BAD_GATEWAY
+    )
 
 
 def _show_relayed_page(shown: ShownPage, relayed: EmbedderMessageRelayRequest) -> MessageDelivery:
@@ -359,9 +361,8 @@ def _show_relayed_page(shown: ShownPage, relayed: EmbedderMessageRelayRequest) -
 
 
 def pending_update() -> ResponseReturnValue:
-    """The kept rollback point of the last careful-flow apply, or ``null`` when there is none."""
-    notice = _shell().update_notice.current()
-    return jsonify(notice.wire_json() if notice is not None else None)
+    """The kept rollback point of the last careful-flow apply as ``notice``, which is ``null`` when there is none."""
+    return model_response(PendingUpdateResponse(notice=_shell().update_notice.current()))
 
 
 def confirm_pending_update() -> ResponseReturnValue:
@@ -381,13 +382,14 @@ def rollback_pending_update() -> ResponseReturnValue:
     if refusal is not None:
         return refusal
     _shell().update_notice.launch_rollback()
-    return detail_response("The rollback has started.", HTTP_ACCEPTED)
+    return model_response(UpdateRollbackStarted(detail="The rollback has started."), HTTP_ACCEPTED)
 
 
 # Section 8: the agent-facing op route
 
 
 def layout_broadcast() -> ResponseReturnValue:
+    """Run one layout verb for an agent inside the workspace (open, show, place, close, refresh, ...); loopback only."""
     refusal = require_loopback()
     if refusal is not None:
         return refusal

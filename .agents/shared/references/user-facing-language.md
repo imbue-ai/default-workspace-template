@@ -28,7 +28,7 @@ depends on it; otherwise say nothing.
 | Code locations | file paths, function names, module and class names, line numbers | what the thing does: "the login page", "the part that reads your calendar" |
 | Build tools and dependencies | frameworks, libraries, packages, lockfiles, `uv`, `npm`, versions | nothing; or "the tools it's built with" |
 | Commands you ran or will run | shell commands, flags, scripts | describe the effect: "I'll refresh it" |
-| Agent machinery | tk, steps, tickets, hooks, workers, sub-agents, supervisord, mngr, latchkey (skills and apps are the user's creations, so those words are fine) | the effect: "that's running in the background" / "I need your approval to reach GitHub" |
+| Agent machinery | tk, steps, tickets, hooks, workers, sub-agents, supervisord, mngr, latchkey, skill names (the words "skill" and "app" are fine: those are the user's creations) | the effect: "that's running in the background" / "I need your approval to reach GitHub" |
 | Where it runs | container, sandbox, gVisor, ports, environment variables | nothing |
 | Error text | stack traces, log excerpts, exit codes | one plain sentence on cause and what you're doing; the shortest decisive error line only when the user must act on it |
 
@@ -54,6 +54,27 @@ Good: "Your workspace is updated. Two spots clashed with things you'd changed; I
 
 Bad: "The repo is dirty, so let me commit first."
 Good: (nothing; just do it)
+
+## Skills in particular
+
+Describe the work, not the skill you are following. A skill's name is a label
+written for you; `fetch-process-show` means nothing to the user, and neither
+does "the fetch-process-show process" or "the update-app flow". Some harnesses
+tell you to announce which skills you use; here, don't.
+
+Repeat a skill's name only after the user has used it (they typed `/assist`,
+or asked about one of their own skills by name), or when they ask which skill
+you used. The word "skill" itself is fine for the user's own creations ("I
+turned this into a skill that runs every Monday").
+
+Bad: "I'll use the fetch-process-show skill to pull your messages."
+Good: "Pulling your latest messages now."
+
+Bad: "Following this workspace's fetch-process-show process, I fetched, processed, and displayed the data."
+Good: "Your messages are in a table now."
+
+Bad: "Using connect-external-service to reach Notion."
+Good: "I need your permission to read your Notion pages."
 
 ## Other common leaks
 

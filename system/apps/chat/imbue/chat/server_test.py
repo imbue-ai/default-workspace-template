@@ -21,6 +21,9 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import pytest
+from app_schema.testing import assert_api_schema_describes_app
+from app_manifest.testing import assert_document_policy_admits_page
+from chat_background_tasks.listing import chats_from_agents_payload
 from flask import Flask
 from flask.testing import FlaskClient
 from mngr_cli_contract.contract import assert_mngr_argv_valid
@@ -32,6 +35,7 @@ from werkzeug.test import TestResponse
 from imbue.chat.accounts import INDEX_VERSION
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import commit_account
+from imbue.chat.accounts import delete_account
 from imbue.chat.accounts import index_path
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.activity_state import ActivityState
@@ -46,7 +50,9 @@ from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
+from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_naming import ChatNamer
+from imbue.chat.chat_naming import chat_naming_prompt
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_transcript import agent_switch_event_id
 from imbue.chat.config import Config
@@ -110,6 +116,7 @@ from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import seed_failed_chat
 from imbue.chat.testing import serve_app
 from imbue.chat.testing import utc_iso_seconds_ago
+from imbue.chat.testing import write_background_task_marker
 from imbue.chat.testing import write_compacting_marker
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -166,6 +173,22 @@ def client(app: Flask) -> FlaskClient:
     return app.test_client()
 
 
+def test_the_chat_documents_are_served_under_the_document_policy(client: FlaskClient) -> None:
+    """The chats document carries a policy a browser would run it under; the terminal frame and the markdown's
+    images, video and audio from anywhere are admitted (the shared default admits images from the chat's own
+    origin only; the sanitizer admits all three tags, see the frontend's markdown test), and a non-page answer
+    carries none."""
+    page = client.get("/")
+
+    assert page.status_code == 200
+    assert_document_policy_admits_page(page)
+    policy = page.headers["Content-Security-Policy"]
+    assert "frame-src http: https:" in policy
+    assert "img-src * data: blob:" in policy
+    assert "media-src * data: blob:" in policy
+    assert "Content-Security-Policy" not in client.get("/api/health").headers
+
+
 def test_list_agents_endpoint(client: FlaskClient) -> None:
     """The agents endpoint returns agent data."""
     with patch("imbue.chat.server.discover_agents") as mock_discover:
@@ -185,6 +208,88 @@ def test_list_agents_endpoint(client: FlaskClient) -> None:
     assert len(data["agents"]) == 1
     assert data["agents"][0]["name"] == "test-agent"
     assert data["agents"][0]["state"] == "RUNNING"
+
+
+def _busy_fields_by_agent(payload: dict[str, Any]) -> dict[str, tuple[Any, ...]]:
+    return {
+        agent["id"]: (agent["chat_id"], agent["is_busy"], agent["background_tasks"]) for agent in payload["agents"]
+    }
+
+
+def test_the_agent_and_chat_listings_carry_each_chats_busy_verdict_and_pending_tasks(
+    config: Config, tmp_path: Path
+) -> None:
+    """``/api/agents`` is what ``system/scripts/background_tasks.py`` asks first, so its answer is checked through the
+    script's own parser; ``/api/chats`` carries the same facts on each snapshot."""
+    reader = BackgroundTaskReader(root=tmp_path / "background_tasks")
+    manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path / "chats", background_tasks=reader)
+    state = build_test_state(config=config, agent_manager=manager)
+    manager.note_agent_list_known()
+    seed_agent_state(manager, "agent-waiting", name="Waiting", state="WAITING", activity_state=ActivityState.IDLE)
+    seed_agent_state(manager, "agent-turn", name="Turn", activity_state=ActivityState.THINKING)
+    seed_agent_state(manager, "agent-idle", name="Idle", state="WAITING", activity_state=ActivityState.IDLE)
+    write_background_task_marker(reader, "agent-waiting", "task-1", os.getpid())
+    manager._background_tasks_poller.poll_once()
+    discovered = [
+        AgentInfo(
+            id=agent_id,
+            name=agent_id,
+            state="RUNNING",
+            agent_state_dir=tmp_path / agent_id,
+            claude_config_dir=tmp_path / ".claude",
+        )
+        for agent_id in ("agent-waiting", "agent-turn", "agent-idle")
+    ]
+    client = create_application(state).test_client()
+    try:
+        with patch("imbue.chat.server.discover_agents", return_value=discovered):
+            agents_payload = client.get("/api/agents").get_json()
+        # The tracked view answers from the app's own agent list, with no discovery.
+        with patch("imbue.chat.server.discover_agents", side_effect=AssertionError("discovered")):
+            tracked_payload = client.get("/api/agents?tracked=true").get_json()
+        chats_payload = client.get("/api/chats").get_json()
+    finally:
+        state.shutdown()
+
+    assert _busy_fields_by_agent(tracked_payload) == _busy_fields_by_agent(agents_payload)
+    # The tracked view's states are the app's own, not discovery's.
+    assert {agent["id"]: agent["state"] for agent in tracked_payload["agents"]}["agent-waiting"] == "WAITING"
+
+    by_id = {agent["id"]: agent for agent in agents_payload["agents"]}
+    assert {agent_id: (agent["chat_id"], agent["is_busy"]) for agent_id, agent in by_id.items()} == {
+        "agent-waiting": ("agent-waiting", True),
+        "agent-turn": ("agent-turn", True),
+        "agent-idle": ("agent-idle", False),
+    }
+    (task,) = by_id["agent-waiting"]["background_tasks"]
+    assert (task["source"], task["id"], task["pid"]) == ("run_in_background", "task-1", os.getpid())
+    parsed = {chat.chat_id: chat for chat in chats_from_agents_payload(agents_payload)}
+    assert [task.id for task in parsed["agent-waiting"].tasks] == ["task-1"]
+    assert parsed["agent-turn"].is_busy and not parsed["agent-turn"].tasks
+
+    chats = {chat["chat_id"]: chat for chat in chats_payload["chats"]}
+    assert {chat_id: chat["status"] for chat_id, chat in chats.items()} == {
+        "agent-waiting": "background",
+        "agent-turn": "working",
+        "agent-idle": "idle",
+    }
+    assert chats["agent-waiting"]["active_agent"]["is_busy"] is True
+    assert chats["agent-waiting"]["active_agent"]["background_tasks"] == [
+        {
+            "id": "task-1",
+            "source": "run_in_background",
+            "harness": "",
+            "kind": "",
+            "description": "Rebuild the worker image",
+            "started_at": "2026-10-08T12:00:00+00:00",
+        }
+    ]
+
+
+def test_the_tracked_agent_listing_waits_for_the_agent_list(config: Config) -> None:
+    """Before the app has read its agent list, the tracked view has nothing true to say; the CLI reads the files."""
+    client = create_application(build_test_state(config=config)).test_client()
+    assert client.get("/api/agents?tracked=true").status_code == 503
 
 
 def test_health_reports_whether_lifecycle_events_are_arriving(client: FlaskClient) -> None:
@@ -683,6 +788,7 @@ def _fake_watcher(
     """A stand-in for ``build_watcher``'s result: no-op queue hooks around the given seed, start, and stop."""
     return SimpleNamespace(
         set_queue_snapshot_callback=lambda _callback: None,
+        set_finished_tasks_callback=lambda _callback: None,
         notify_idle=lambda: [],
         notify_busy=lambda: None,
         set_flush_hooks=lambda _send, _is_alive: None,
@@ -826,7 +932,7 @@ def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
         manager._agents[agent_id] = AgentStateItem(
             id=agent_id, name="Chat-4", state="RUNNING", labels={"display_name": "Chat 4"}, work_dir=None
         )
-    completion = ScriptedOneShotCompletion(["Rome trip: plan five days in May"])
+    completion = ScriptedOneShotCompletion(["Five days in Rome"])
     renames: list[tuple[ChatId, str]] = []
     namer = ChatNamer(
         chat_files_root=tmp_path / "chats",
@@ -844,8 +950,8 @@ def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
     response = client.post(f"/api/chats/{agent_id}/message", json={"message": "Help me plan 5 days in Rome"})
 
     assert response.status_code == 200
-    assert completion.prompts == ["Help me plan 5 days in Rome"]
-    assert renames == [(ChatId(agent_id), "Rome trip: plan five days in May")]
+    assert completion.prompts == [chat_naming_prompt("Help me plan 5 days in Rome")]
+    assert renames == [(ChatId(agent_id), "Five days in Rome")]
 
 
 def _client_with_account_labeled_chat(
@@ -3182,6 +3288,66 @@ def test_create_chat_refuses_an_id_it_never_minted(
     assert "never-minted" in response.get_json()["detail"]
 
 
+def test_create_chat_with_nothing_signed_in_is_refused_as_needing_a_provider(
+    client: FlaskClient, app: Flask, signed_in_account: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A create with no account left to run on says so in words, with the kind the chat root opens the provider
+    gate on."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-123", "primary", "RUNNING")
+    delete_account(signed_in_account)
+
+    response = client.post("/api/chats/create", json={})
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "detail": "Connect an AI provider to start chatting.",
+        "kind": "no_provider_account",
+    }
+
+
+def test_create_chat_naming_a_signed_out_account_is_refused_in_words(
+    client: FlaskClient, app: Flask, signed_in_account: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A create naming an account deleted since the page read the list is refused with the signed-out kind and a
+    sentence, not the account store's "no such account: <id>"."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-123", "primary", "RUNNING")
+    removed, _ = mint_account_dir()
+    commit_account(removed, "anthropic", "Anthropic")
+    delete_account(removed)
+
+    response = client.post("/api/chats/create", json={"account_id": removed})
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "detail": "The account this chat was going to start on was signed out. Choose a provider to start it on.",
+        "kind": "account_signed_out",
+    }
+
+
+def test_create_chat_naming_no_account_skips_a_removed_most_recent_one(
+    client: FlaskClient, app: Flask, signed_in_account: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rail's New chat names no account: once the most recently used account is removed, the create starts on
+    the account still signed in rather than the removed one."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-123", "primary", "RUNNING")
+    removed, _ = mint_account_dir()
+    commit_account(removed, "anthropic", "Anthropic")
+    delete_account(removed)
+
+    response = client.post("/api/chats/create", json={})
+
+    assert response.status_code == 201
+    provisional = state_of(app).agent_manager.get_provisional_chat(response.get_json()["chat_id"])
+    assert provisional is not None
+    assert provisional.account_id == signed_in_account
+
+
 def test_create_chat_rejects_a_conflicting_explicit_name_with_a_409(
     client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3488,6 +3654,26 @@ def test_ignores_requested_at_cache_busting_query(client: FlaskClient, tmp_path:
     assert tagged.content_type == "image/png"
     assert tagged.data == b"fake-png-bytes"
     assert tagged.headers["Cache-Control"] == "public, max-age=31536000, immutable"
+
+
+def test_serves_image_as_an_attachment_for_the_lightbox_download(client: FlaskClient, tmp_path: Path) -> None:
+    """The lightbox's Download asks for the image with ``download``, beside its message's cache key: the image comes
+    as an attachment under its own name, and a missing one is a not-found in plain words the lightbox can show."""
+    image_path = tmp_path / "chart.png"
+    image_path.write_bytes(b"fake-png-bytes")
+
+    downloaded = client.get(f"{image_path}?requested_at=2026-07-24T00%3A00%3A00Z&download=")
+
+    assert downloaded.status_code == 200
+    assert downloaded.content_type == "image/png"
+    assert downloaded.data == b"fake-png-bytes"
+    assert downloaded.headers["Content-Disposition"] == "attachment; filename=chart.png"
+
+    missing = client.get(f"{tmp_path / 'gone.png'}?download=")
+    assert missing.status_code == 404
+    assert missing.content_type.startswith("text/plain")
+    assert missing.get_data(as_text=True) == f"There's nothing at {tmp_path / 'gone.png'}."
+    assert "Content-Disposition" not in missing.headers
 
 
 def test_serves_image_in_nested_subdirectory(client: FlaskClient, tmp_path: Path) -> None:
@@ -4793,3 +4979,7 @@ def test_a_compaction_that_finished_while_no_watcher_ran_ends_when_the_chat_is_o
         assert agent_info.id not in manager._compaction_pending_by_agent
     finally:
         state.shutdown()
+
+
+def test_the_chat_describes_its_api_the_way_its_manifest_says(client: FlaskClient) -> None:
+    assert_api_schema_describes_app(client, Path(__file__).resolve().parents[2] / "app.toml")

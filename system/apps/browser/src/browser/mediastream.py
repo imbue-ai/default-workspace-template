@@ -29,15 +29,16 @@ from collections import deque
 from collections.abc import Coroutine
 from typing import Any, Callable
 
-from flask import Response, jsonify, request
+from app_schema.routes import error_response, model_response
+from flask import Response, request
 from flask.typing import ResponseReturnValue
 from loguru import logger
 from simple_websocket import ConnectionClosed
 
-from browser import telemetry
+from browser import telemetry, window_guardian
+from browser.api_models import ClipboardPasted
 from browser.audiopipe import AudioPipe, AudioPipeError
 from browser.audiopipe import is_available as is_audio_available
-from browser import window_guardian
 from browser.stream_conductor import StreamConnection, conductor
 from browser.videopipe import PixelfluxVideoPipe, VideoPipeError
 from browser.window_guardian import WindowGuardian
@@ -245,17 +246,17 @@ def clipboard_paste(
     that keyboard at the same moment, and a second X client pressing Ctrl+V beside it raced
     those (and depended on X input focus), which is what made pastes land only sometimes."""
     if not session.input_allowed:
-        return jsonify({"error": "not controlling"}), 409
+        return error_response("not controlling", 409)
     with _clip_lock:
         clip = _clips.get(browser_id)
         display = clip.display if clip is not None else None
         monitor = clip.monitor if clip is not None else None
     if display is None:
-        return jsonify({"error": "no active viewer"}), 409
+        return error_response("no active viewer", 409)
     if not data:
-        return jsonify({"error": "empty clipboard"}), 400
+        return error_response("empty clipboard", 400)
     if len(data) > _CLIPBOARD_MAX_BYTES:  # enforce the declared cap (was previously unused)
-        return jsonify({"error": "clipboard too large"}), 413
+        return error_response("clipboard too large", 413)
     try:
         # Recorded before the write: XFixes fires the moment xclip takes the selection, and
         # the monitor must already know to swallow that echo.
@@ -269,14 +270,14 @@ def clipboard_paste(
         # clipboard was set and the keystroke was delivered.
         if not _await_clipboard_owned(display):
             logger.warning("clipboard paste for {} never took ownership", browser_id)
-            return jsonify({"error": "clipboard not set"}), 500
+            return error_response("clipboard not set", 500)
     except ClipboardError as error:
         logger.warning("clipboard paste failed for {} ({})", browser_id, error)
-        return jsonify({"error": "paste failed"}), 500
+        return error_response("paste failed", 500)
     if not run_on_loop(session.paste_into_active_tab()):
         logger.warning("clipboard paste for {} could not reach the active tab", browser_id)
-        return jsonify({"error": "paste failed"}), 500
-    return jsonify({"ok": True})
+        return error_response("paste failed", 500)
+    return model_response(ClipboardPasted(ok=True))
 
 
 def clipboard_out(browser_id: str) -> Response:

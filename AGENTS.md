@@ -101,9 +101,11 @@ Assert on things that are true if and only if the feature worked correctly -- th
 
 # Communication
 
+The user may be reaching this workspace from the Imbue Studio desktop app, or through a sharing URL in a browser on a computer, phone, or tablet: once sharing is on, the whole workspace and each of its apps has one. The `use-from-phone` skill walks the user through setting that up.
+
 If the user talks to you about files or directories on disk, assume (unless context indicates otherwise) they mean their local disk, not the one in your sandbox -- use the `file-sharing` skill to bridge the two.
 
-When a chat reply points the user at a workspace file or folder, link it by its absolute path (`[Q4 report](/home/user/workspace/data/reports/q4.md)`); it opens in the File Viewer (the `show-files-in-chat` skill). Link an app by the `link` `uv run --no-sync workspace-layout list` prints for it, plus the page's path. Link anything else served in the workspace by its localhost URL (`[the preview](http://localhost:3000/)`). A path you only mention goes in code formatting (`data/reports/q4.md`).
+When a chat reply points the user at a workspace file or folder, link it by its absolute path (`[Q4 report](/home/user/workspace/data/reports/q4.md)`); it opens in Files (the `show-files-in-chat` skill). Link an app by the `link` `uv run --no-sync workspace-layout list` prints for it, plus the page's path. Link anything else served in the workspace by its localhost URL (`[the preview](http://localhost:3000/)`). A path you only mention goes in code formatting (`data/reports/q4.md`).
 
 If the user asks you to read or act on anything outside this workspace on their behalf -- a third-party tool they have an account with, a link they paste (a Notion page, Google Doc, or Slack thread), a site to sign in to, or a browser they want to watch -- load the `connect-external-service` skill before running any command against it. The skill decides how to reach the service and what to ask the user for; do not pick a method yourself first. The one exception is reading a public page that needs no account, which your web tools can do directly.
 
@@ -151,7 +153,7 @@ You can (and should) modify your own configuration to improve yourself:
 
 Commit your changes to git after making modifications, silently (see "Git" below).
 
-Users make "creations": apps (opened as windows), skills (a skill run automatically on a schedule is an "automation" -- run via the machinery in `system/libs/automations/`, see the manage-scheduled-tasks skill), data (documents, images, notes), and customizations of any of them. Templates are a publishable, reusable, bootable snapshot of the creations an agent has built (one repo can accumulate several); another agent can adapt one into itself.
+Users make "creations": apps (opened as windows), skills (a skill run automatically on a schedule is an "automation": a routine with a `skill`, run by `system/libs/routines/`, see the manage-routines skill), data (documents, images, notes), and customizations of any of them. Templates are a publishable, reusable, bootable snapshot of the creations an agent has built (one repo can accumulate several); another agent can adapt one into itself.
 
 # Updates
 
@@ -170,6 +172,8 @@ Fixing it locally is *not* an alternative: a fix to a file that is byte-identica
 - **A bare slash-command message invokes the skill of that name.** A user message that is exactly `/name` (possibly with arguments), such as `/assist`, means: read `.agents/skills/<name>/SKILL.md` and follow it as the user's instruction. Do it silently -- read the file without commentary and reply with what the skill says to reply, nothing else. Never narrate the mechanism ("I'm using the assist flow...", "let me look up that skill"): the user typed a command, not a question about how commands work. (Some harnesses expand these commands into the skill's instructions before you see them; if you are reading the raw `/name` text, the expansion is yours to do.)
 
 - **Prefer an applicable skill over reinventing.** Skill descriptions are auto-injected into your context, so match by purpose, not by name.
+
+- **Follow a skill without naming it.** Describe the work, not the skill, even when your harness tells you to announce which skills you use. Repeat a skill's name only after the user has used it (`.agents/shared/references/user-facing-language.md`, "Skills in particular").
 
 - **Run the creation, don't redo its job.** When a creation already does what's being asked -- an app that ingests this kind of data, a skill that runs this process -- run it, or extend it and run it. Producing the same result by hand beside it leaves the creation untested against the real case and the user with two sources of truth.
 
@@ -194,7 +198,7 @@ Supervisord (launched by `bootstrap` after first-boot setup) supervises them; ea
 To add, change, or remove a service, add/edit/delete its own `system/supervisord.conf.d/<name>.conf` and run `supervisorctl reread && supervisorctl update` (and `supervisorctl restart <name>` to bounce one). Inspect with `supervisorctl status` / `supervisorctl tail -f <name> stderr`.
 See the `update-app` skill for details.
 
-For routine jobs that run on a cadence and then exit (backups, health checks, the weekly Caretaker -- off by default, see the enable-caretaker skill), use cron via the **`manage-scheduled-tasks`** skill rather than a supervisord program; and after building or editing any service, use the `check-app-errors` skill to scan `/var/log/supervisor/` for errors (a clean exit code does not mean the service is healthy).
+Anything that runs on a schedule and then exits (a sync, a health check, a skill run every morning, the weekly Caretaker -- off by default) is a **routine**, made with the **`manage-routines`** skill, never a supervisord program or a cron line; the Routines app is where the user sees them. After building or editing any service, use the `check-app-errors` skill to scan `/var/log/supervisor/` for errors (a clean exit code does not mean the service is healthy).
 
 # Git
 

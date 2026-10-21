@@ -98,6 +98,8 @@ _APP_BACKEND_PREFIX = "system/apps/system_interface/imbue/"
 _IMPORTED_SOURCE_PREFIXES = (
     _APP_BACKEND_PREFIX,
     "system/libs/app_manifest/",
+    "system/libs/app_schema/",
+    "system/libs/chat_background_tasks/",
     "system/libs/workspace_layout/",
 )
 # The manifests this environment was resolved from. The root ``uv.lock`` is
@@ -116,6 +118,8 @@ _BACKEND_MANIFESTS = frozenset(
     {
         "system/apps/system_interface/pyproject.toml",
         "system/libs/app_manifest/pyproject.toml",
+        "system/libs/app_schema/pyproject.toml",
+        "system/libs/chat_background_tasks/pyproject.toml",
         "system/libs/workspace_layout/pyproject.toml",
         "pyproject.toml",
     }

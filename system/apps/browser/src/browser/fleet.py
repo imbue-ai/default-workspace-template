@@ -144,7 +144,7 @@ def _request(method: str, path: str, body: dict[str, Any] | None = None) -> tupl
         try:
             return e.code, json.loads(e.read() or b"{}")
         except json.JSONDecodeError:
-            return e.code, {"error": e.reason}
+            return e.code, {"detail": e.reason}
     except urllib.error.URLError as e:
         _err(f"cannot reach the browser daemon at {_daemon_url()} ({e.reason}). Is it running?")
         raise SystemExit(_EXIT_NO_DAEMON) from e
@@ -164,8 +164,8 @@ def _stream(path: str, body: dict[str, Any]) -> Iterator[dict[str, Any]]:
         try:
             payload = json.loads(e.read() or b"{}")
         except json.JSONDecodeError:
-            payload = {"error": e.reason}
-        yield {"type": "error", "text": payload.get("error", e.reason)}
+            payload = {"detail": e.reason}
+        yield {"type": "error", "text": payload.get("detail", e.reason)}
         return
     except urllib.error.URLError as e:
         _err(f"cannot reach the browser daemon at {_daemon_url()} ({e.reason}). Is it running?")
@@ -233,7 +233,7 @@ def _owner_label(browser: dict[str, Any], me: str | None) -> str:
 def cmd_ls(args: argparse.Namespace) -> int:
     status, payload = _request("GET", "/browsers")
     if status != 200:
-        _err(payload.get("error", f"ls failed ({status})"))
+        _err(payload.get("detail", f"ls failed ({status})"))
         return _EXIT_ERROR
     browsers = payload.get("browsers", [])
     if not browsers:
@@ -304,7 +304,7 @@ def cmd_new(args: argparse.Namespace) -> int:
         _out(f"started browser {payload['name']}")
         _print_attach(payload["name"])
         return _EXIT_OK
-    _err(payload.get("error", f"new failed ({status})"))
+    _err(payload.get("detail", f"new failed ({status})"))
     if status == 400:  # invalid name -> a usage problem the agent can fix by picking another.
         return _EXIT_USAGE
     # 409 = duplicate name / fleet full, 503 = chromium installing -- both "try later".
@@ -317,7 +317,7 @@ def cmd_close(args: argparse.Namespace) -> int:
     profile (cookies, logins) is deleted with it."""
     status, payload = _request("DELETE", f"/browsers/{args.name}")
     if status != 200:
-        _err(payload.get("error", f"close failed ({status})"))
+        _err(payload.get("detail", f"close failed ({status})"))
         return _EXIT_BUSY if status == 503 else _EXIT_ERROR  # 503 = fleet still restoring
     _out(f"closed browser {args.name}")
     return _EXIT_OK
@@ -392,7 +392,7 @@ def _render_event(event: dict[str, Any], browser_name: str) -> int | None:
 def cmd_release(args: argparse.Namespace) -> int:
     status, payload = _request("POST", f"/browsers/{args.name}/release")
     if status != 200:
-        _err(payload.get("error", f"release failed ({status})"))
+        _err(payload.get("detail", f"release failed ({status})"))
         return _EXIT_ERROR
     _out(f"released browser {args.name}" if payload.get("released") else f"browser {args.name} was not yours to release")
     return _EXIT_OK
@@ -447,10 +447,6 @@ def _render_action(payload: dict[str, Any], browser_name: str, kind: str) -> int
         _out(f"a human took control of browser {browser_name} mid-step; you weren't queued. Use a different "
              f"browser, or re-run `ls` later to check.")
         return _EXIT_BUSY
-    if status == "initializing":
-        _err("the browser fleet is still starting up (restoring your saved browsers) -- "
-             "try again in a few seconds. `ls` works now; this command needs the fleet ready.")
-        return _EXIT_BUSY
     if status == "starting":
         _err(f"browser {browser_name} is still starting up (Chromium is launching) -- "
              "try again in a few seconds. It'll be ready shortly; just retry this command.")
@@ -466,29 +462,33 @@ def _render_action(payload: dict[str, Any], browser_name: str, kind: str) -> int
         _err(f"browser {browser_name} was closed and is gone. Start a fresh one with `new` (it gets a new name).")
         return _EXIT_ERROR
     if status == "stale_index":
-        _err(payload.get("error") or f"that element index is stale -- run `state {browser_name}` again first")
+        _err(payload.get("detail") or f"that element index is stale -- run `state {browser_name}` again first")
         return _EXIT_ERROR
     if status == "timed_out":
         _err(f"browser {browser_name} stayed busy; gave up.")
         return _EXIT_TIMEOUT
-    _err(payload.get("error") or f"command failed ({status})")
+    _err(payload.get("detail") or f"command failed ({status})")
     return _EXIT_ERROR
 
 
-def _action(browser_name: str, verb: str, kind: str, body: dict[str, Any] | None = None) -> int:
-    status, payload = _request("POST", f"/browsers/{browser_name}/{verb}", body or {})
+def _refusal_exit_code(status: int, payload: dict[str, Any], browser_name: str) -> int | None:
+    """The exit code for an answer that refused before the verb ran, else None: no such browser (404) is an error;
+    a fleet still restoring its saved browsers, or one that could not start this browser yet (503), is "try again
+    in a few seconds" (`ls` works now; the verb needs the fleet ready)."""
     if status == 404:
-        _err(payload.get("error", f"no browser {browser_name}"))
+        _err(payload.get("detail", f"no browser {browser_name}"))
         return _EXIT_ERROR
-    # The first command for a browser (and the first after a human hands it back)
-    # opens its viewer as a window on your desktop, so the human can watch.
-    if payload.get("newly_acquired"):
-        _open_viewer_window(browser_name, is_minimized=True)
-    return _render_action(payload, browser_name, kind)
+    if status == 503:
+        _err(payload.get("detail", f"the browser fleet is not ready yet; try again in a few seconds ({status})"))
+        return _EXIT_BUSY
+    return None
 
 
 def cmd_acquire(args: argparse.Namespace) -> int:
-    _, payload = _request("POST", f"/browsers/{args.name}/acquire", {"reclaim": args.reclaim})
+    status, payload = _request("POST", f"/browsers/{args.name}/acquire", {"reclaim": args.reclaim})
+    refused = _refusal_exit_code(status, payload, args.name)
+    if refused is not None:
+        return refused
     if payload.get("ok"):
         _open_viewer_window(args.name, is_minimized=True)
         _out(f"acquired browser {args.name}")
@@ -500,9 +500,9 @@ def cmd_acquire(args: argparse.Namespace) -> int:
 def cmd_handoff(args: argparse.Namespace) -> int:
     """Hand a browser to the human for a CAPTCHA / robot-check / login you can't do."""
     status, payload = _request("POST", f"/browsers/{args.name}/handoff", {"reason": args.reason})
-    if status == 404:
-        _err(payload.get("error", f"no browser {args.name}"))
-        return _EXIT_ERROR
+    refused = _refusal_exit_code(status, payload, args.name)
+    if refused is not None:
+        return refused
     if payload.get("ok"):
         _open_viewer_window(args.name, is_minimized=False)  # the human has to act in it
         _out(

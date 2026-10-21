@@ -50,8 +50,8 @@ whichever of the two shows less headroom. A local docker workspace under runc
 publishes the same file for itself: the `publish_cgroup_meminfo` program
 (`bin/publish_cgroup_meminfo.py`, over `cgroup_meminfo`) reads the container's
 own cgroup v2 controller at `/sys/fs/cgroup` four times a second and writes the
-limit as MemTotal and the limit minus the usage plus the reclaimable page cache
-and slab as MemAvailable, with the same formula as the gen-2 VM. It removes the
+limit as MemTotal and the limit minus the usage plus the inactive file cache as
+MemAvailable, with the same formula as the gen-2 VM. It removes the
 file while the container is uncapped (and keeps checking, since `mngr docker
 resize` can cap a running container), and touches nothing where it has no
 answer: no cgroup v2 memory controller (lima's root cgroup, gVisor's own
@@ -77,10 +77,10 @@ ever acting on a laptop with swap.
   engagement and elapsed idle time (see "Dynamic chat band" below).
   Bands are positive-only: a negative value (true "never kill")
   needs `CAP_SYS_RESOURCE`, which the container does not have, so the never-kill
-  infrastructure (sshd, supervisord, earlyoom, tini, tmux) simply keeps the
-  inherited default of 0 and is additionally shielded by earlyoom `--avoid`. The
-  service order is a best-effort steer, not a hard guarantee -- see "Protection
-  is soft" below.
+  infrastructure (sshd, supervisord, earlyoom, earlyoom-stamp, tini, tmux)
+  simply keeps the inherited default of 0 and is additionally shielded by
+  earlyoom `--avoid`. The service order is a best-effort steer, not a hard
+  guarantee -- see "Protection is soft" below.
 - **`cgroup_meminfo`** -- the container's own memory headroom, read from its
   cgroup, in the form earlyoom's `--host-meminfo` takes; the
   `publish_cgroup_meminfo` program writes it under runc.
@@ -100,13 +100,13 @@ without inspecting the process tree:
 
 | What | When | Band | Set by |
 |---|---|---|---|
-| never-kill infra (sshd, supervisord, earlyoom, tini, tmux) | (inherited) | protected (0) | nothing -- 0 is the default, plus earlyoom `--avoid` |
+| never-kill infra (sshd, supervisord, earlyoom, earlyoom-stamp, tini, tmux) | (inherited) | protected (0) | nothing -- 0 is the default, plus earlyoom `--avoid` |
 | a built-in supervisord service or app | launch | its `SERVICE_BANDS` value (an app's is the `priority` its manifest declares) | `system/services/oom_priority/bin/oom_tag_service.py <service>` (command prefix) |
 | a user-created supervisord service or app | launch | user service (above every built-in) | `system/services/oom_priority/bin/oom_tag_service.py user` (command prefix) |
 | a workspace terminal's shell (a `terminal-N` tmux session's pane, and everything run in it) | session creation | `terminal-session` (the user-service level, 200) | `system/services/oom_priority/bin/oom_tag_service.py terminal-session bash -l`, the session command the terminal app gives `tmux new-session` (a pane otherwise inherits the tmux server's protected 0) |
 | an agent's main process | launch | chat -> the idle-but-fresh chat band (560); worker or unidentifiable -> worker agent | `system/services/oom_priority/bin/agent_oom_launch.py` |
 | an agent's subprocesses | each Bash tool call | agent subprocess (most expendable) | `system/scripts/agent_rewrite_bash_command.py` (PreToolUse; also sets the commit identity) |
-| the browser coordinator | launch | its `SERVICE_BANDS` value (70, an ordinary service band; the file viewer and Getting Started sit above it) | `system/services/oom_priority/bin/oom_tag_service.py browser` (command prefix) |
+| the browser coordinator | launch | its `SERVICE_BANDS` value (70, an ordinary service band; Files and Getting Started sit above it) | `system/services/oom_priority/bin/oom_tag_service.py browser` (command prefix) |
 | Chromium's own processes | on fleet events (launch, new page, navigation) | `[SHARED_BROWSER_FLOOR, SHARED_BROWSER]` (910-1000), renderers at the ceiling | the browser service's re-tagging sweep (`browser.oom_retag`) -- see "The Chromium exception" below |
 
 Each supervisord service tags itself the same way an agent's main process does:
@@ -263,7 +263,11 @@ The exception is a chat that is **mid-turn** (a running lifecycle state): it is
 doing work right now that a shed would destroy rather than defer, so its
 staleness climb is suspended for the duration of the turn and it stays below the
 worker band. Both edges of the turn count as engagement, so a chat that ran for
-three days starts aging from when its turn *ended*, not when it began.
+three days starts aging from when its turn *ended*, not when it began. A chat
+whose turn has ended to wait on one of its harness's own background tasks (one
+of Claude's, say) counts as mid-turn too, since a shed would end that task
+unreported. One waiting only on `run_in_background.py` commands does not: the
+runner outlives a shed, and its report revives the chat.
 
 Idle time is measured from the most recent of: a message sent through the UI, the
 moment its tab was switched to, either edge of a turn, or -- as a floor -- its own
@@ -340,6 +344,13 @@ It lists:
     example) are never listed;
   - is `WAITING`, meaning its turn has ended. A `RUNNING` agent is mid-turn, and
     a `STOPPED` or `DONE` agent holds no memory to free;
+  - is in a chat that is not busy. An agent that ended its turn to wait on a
+    background task (a command started through `run_in_background.py`, or one
+    of Claude's own) is `WAITING` too, but the task's completion will start its
+    next turn, so stopping it would lose work in flight. The chat is the
+    agent's `chat_id` label, else the agent's own id, and it is busy while it
+    holds a live marker under the chats' marker root, read through
+    `system/libs/chat_background_tasks`;
   - has had no activity for `IDLE_AFTER_SECONDS` (15 minutes). Its last
     activity is the latest of mngr's `user_activity_time`, `agent_activity_time`
     and `start_time`. mngr's own `idle_seconds` is not used, because it also
@@ -391,11 +402,11 @@ list and the free memory, and stops only what the user approves:
 Two things here are best-effort, not hard guarantees:
 
 - **The never-kill infrastructure isn't truly immortal.** Positive-only bands
-  plus `--avoid` keep sshd, supervisord, earlyoom, tini, and tmux very unlikely
-  to be shed, but under sustained pressure with nothing else to kill earlyoom
-  will eventually take one. Hard "never kill" protection (`oom_score_adj -1000`)
-  needs `CAP_SYS_RESOURCE`, which the container does not grant -- a deferred
-  follow-up.
+  plus `--avoid` keep sshd, supervisord, earlyoom, earlyoom-stamp, tini, and
+  tmux very unlikely to be shed, but under sustained pressure with nothing else
+  to kill earlyoom will eventually take one. Hard "never kill" protection
+  (`oom_score_adj -1000`) needs `CAP_SYS_RESOURCE`, which the container does not
+  grant -- a deferred follow-up.
 - **The service ordering can be reordered by memory usage.** earlyoom picks the
   highest badness, which adds each process's live memory on top of its
   `oom_score_adj` (one band point is worth MemTotal/1000 of memory). The service
@@ -410,3 +421,30 @@ Two things here are best-effort, not hard guarantees:
   been touched), and file pages and
   shared memory are not counted, so Chromium's shared buffers do not add to
   its badness.
+
+## The resource sampler
+
+`bin/resource_sampler.py` (the `resource_sampler` supervisord program) is not
+part of the shedding at all: it is the System Monitor app's source for CPU and
+the graphs, kept here because it is an always-on, stdlib-only `/proc` reader
+like the cgroup publisher, and because it credits a busy stretch's CPU through
+the agent-pid registry above. Every 5 s it reads each process's
+`/proc/<pid>/stat` once: the change in the sum over every live process of
+`utime + stime + cutime + cstime` is the CPU used since the last walk (a
+process that exited drops out of the sum while its parent's child counters
+grow by its whole lifetime, so nothing is lost or counted twice), which is the
+only CPU accounting that exists under gVisor, where `/proc/stat` and the load
+average read as zero. It writes under `data/.state/system-monitor/`: the
+latest reading with each process's share of capacity and the last 10 minutes
+(`recent.json`, replaced by rename every sample and read back on start so a
+restart does not cut the graph), a day of minute averages (`history.jsonl`),
+and a `cpu_stretch` event (`events/cpu_stretches/events.jsonl`) whenever usage
+stayed at or above 90% of the available cores for at least two minutes,
+crediting the CPU to the registered agents and supervised programs whose
+descendants used it (`resource_sampler.StretchTracker`). The supervised
+programs come from `supervisor_rpc`, the reader of supervisord's control
+socket (`supervised_pids`), which also carries `stop_program`, the stop the
+System Monitor app's Quit for one of the user's apps goes through (a program
+that is not running already counts as stopped). The memory figure beside each
+reading is the guard's own (`meminfo`, the headroom file while it is fresh,
+else `/proc/meminfo`). The design is `docs/system/specs/system-monitor.md`.

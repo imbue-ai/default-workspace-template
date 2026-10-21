@@ -2,7 +2,8 @@
  * A full-screen image viewer ("lightbox") opened by clicking an inline chat
  * image. It shows the image enlarged over a dimmed backdrop with a header:
  * the image's title (alt text, or the filename) centered, and Download and
- * close (X) icon buttons at the top right. It closes on a backdrop click, the X
+ * close (X) icon buttons at the top right. A download that fails says so in
+ * the title's place. It closes on a backdrop click, the X
  * button, or the Escape key.
  *
  * This is imperative (plain DOM) rather than a mithril component because chat
@@ -13,6 +14,7 @@
 import { setHoverTooltip } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { buttonClass } from "@imbue/workspace-ui/src/components/Button";
+import { startDownload } from "@imbue/workspace-ui/src/download";
 
 function filenameFromUrl(imageUrl: string): string {
   try {
@@ -21,6 +23,20 @@ function filenameFromUrl(imageUrl: string): string {
     return decodeURIComponent(basename) || "image";
   } catch {
     return "image";
+  }
+}
+
+/** The ``?download`` URL of the workspace's own image, or null for another site's (or an unparsable) one. */
+function ownDownloadUrl(imageUrl: string): string | null {
+  try {
+    const url = new URL(imageUrl, window.location.href);
+    if (url.origin !== window.location.origin) {
+      return null;
+    }
+    url.searchParams.set("download", "");
+    return url.href;
+  } catch {
+    return null;
   }
 }
 
@@ -67,10 +83,11 @@ export function openImageLightbox(imageUrl: string, altText: string): void {
   const header = document.createElement("div");
   header.className = "image-lightbox-header relative flex min-h-[44px] items-center justify-center px-4 py-2.5";
 
+  const titleText = altText || filename;
   const title = document.createElement("div");
   title.className =
     "image-lightbox-title max-w-[60%] truncate text-center text-(length:--font-size-body) font-medium text-white/90";
-  title.textContent = altText || filename;
+  title.textContent = titleText;
 
   const actions = document.createElement("div");
   actions.className = "image-lightbox-actions absolute top-1/2 right-3 flex -translate-y-1/2 gap-1";
@@ -78,13 +95,25 @@ export function openImageLightbox(imageUrl: string, altText: string): void {
   const downloadLink = document.createElement("a");
   downloadLink.className = buttonClass("ghost-inverse", { icon: true, extra: "image-lightbox-iconbtn no-underline" });
   downloadLink.href = imageUrl;
-  downloadLink.download = filename;
-  // Same-origin images download in place; a cross-origin (public-URL) image the
-  // browser refuses to download opens in a new tab rather than navigating away.
+  // The workspace's own image downloads through startDownload below. Otherwise the link itself acts: a public-URL
+  // image, which the browser will not download from another site, opens in a new tab rather than navigating away,
+  // and a data: (or unparsable) one downloads through the link's download attribute.
   downloadLink.target = "_blank";
   downloadLink.rel = "noopener noreferrer";
   downloadLink.setAttribute("aria-label", "Download image");
   downloadLink.innerHTML = icon("download", { size: 20 });
+  const downloadUrl = ownDownloadUrl(imageUrl);
+  if (downloadUrl !== null) {
+    downloadLink.addEventListener("click", (event) => {
+      event.preventDefault();
+      title.textContent = titleText;
+      startDownload(document, downloadUrl, filename, (note) => {
+        title.textContent = note;
+      });
+    });
+  } else {
+    downloadLink.download = filename;
+  }
 
   const closeButton = document.createElement("button");
   closeButton.className = buttonClass("ghost-inverse", { icon: true, extra: "image-lightbox-iconbtn" });

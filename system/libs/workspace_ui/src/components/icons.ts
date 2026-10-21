@@ -82,6 +82,30 @@ const STROKE_PATHS = {
   edit: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/>',
   "folder-plus":
     '<path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  // The Files app's chrome: its view switcher, its sidebar's shortcuts and shares, and the verbs of its menus. All lucide.
+  "layout-grid":
+    '<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>',
+  list: '<path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M3 6h.01"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M8 6h13"/>',
+  columns: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="M15 3v18"/>',
+  plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  upload:
+    '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>',
+  // A laptop struck through: a computer that is not answering.
+  "laptop-off": '<rect x="4" y="5" width="16" height="10.5" rx="1.5"/><path d="M2 19h20"/><path d="m2 2 20 20"/>',
+  "panel-left": '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  ellipsis: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+  // Folder and page in the Files app icon's hand: no edge quite straight (system/apps/files/icon.svg).
+  folder:
+    '<path d="M5.34 3.72C7.32 3.67 8.61 3.72 9.46 3.81C10.45 3.91 10.97 4.43 11.54 5.28C12.11 6.13 12.44 6.56 13.34 6.61C15.22 6.7 17.72 6.51 19.66 6.61C21.27 6.7 22.09 7.93 21.99 9.49C21.85 12.04 21.47 15.26 21.04 17.77C20.76 19.38 19.77 20.18 17.97 20.23C13.81 20.32 8.37 20.32 4.72 20.18C2.97 20.09 2.23 19.52 2.11 17.77C1.79 13.39 2.26 9.21 2.5 6.56C2.64 4.71 3.54 3.77 5.34 3.72Z"/>',
+  page: '<path d="M6.46 2.1C8.94 1.94 11.5 1.97 13.76 2.05C14.3 2.06 14.66 2.23 15.04 2.6L18.66 6.28C19 6.64 19.15 7.01 19.15 7.55C19.22 11.28 18.84 16.28 18.14 20.32C18.05 21.5 17.4 21.97 16.32 22.03C13.22 22.13 9.26 21.77 6.6 21.61C5.52 21.52 4.94 20.98 4.85 19.94C4.67 16.32 4.69 9.8 4.89 3.77C4.93 2.64 5.43 2.15 6.46 2.1Z"/><path d="M13.85 2.12C14.07 3.61 14.03 4.91 14.12 5.93C14.2 6.73 14.59 7.1 15.4 7.16C16.61 7.23 17.92 7.18 19.09 7.23"/>',
+  house:
+    '<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  inbox:
+    '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  "file-plus":
+    '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M9 15h6"/><path d="M12 18v-6"/>',
+  copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
   settings:
     '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
 } as const;
@@ -129,12 +153,23 @@ export function warningIcon(size = 26): string {
   );
 }
 
-/** Animated login spinner. Not a CSS ring like .spinner (the faded ring +
+/** A filled disc with a white exclamation, in the current colour: something needs a look. */
+export function alertDotIcon(size = 12, className = ""): string {
+  const cls = className === "" ? "" : ` class="${className}"`;
+  return (
+    `<svg xmlns="${XMLNS}"${cls} width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true">` +
+    `<circle cx="12" cy="12" r="11" fill="currentColor"/>` +
+    `<path d="M12 6.8v6" stroke="#fff" stroke-width="2.8" stroke-linecap="round"/>` +
+    `<circle cx="12" cy="17" r="1.6" fill="#fff"/></svg>`
+  );
+}
+
+/** Animated spinner: sign-in, an attachment's upload. Not a CSS ring like .spinner (the faded ring +
  *  solid arc are drawn in the SVG itself), so it carries its own size and
  *  rotation -- the animation references the shared @keyframes spin. */
-export function loginSpinnerIcon(size = 32): string {
+export function spinnerIcon(size = 32): string {
   return (
-    `<svg xmlns="${XMLNS}" width="${size}" height="${size}" class="claude-login-spinner animate-[spin_800ms_linear_infinite]" viewBox="0 0 24 24" fill="none" aria-hidden="true">` +
+    `<svg xmlns="${XMLNS}" width="${size}" height="${size}" class="spinner-icon animate-[spin_800ms_linear_infinite]" viewBox="0 0 24 24" fill="none" aria-hidden="true">` +
     `<circle cx="12" cy="12" r="10" stroke="currentColor" stroke-opacity="0.18" stroke-width="3"/>` +
     `<path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>`
   );
