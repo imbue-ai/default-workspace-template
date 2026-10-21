@@ -1,10 +1,11 @@
 import subprocess
 from pathlib import Path
+from typing import Final
 
 from skills_catalog.primitives import SKILLS_DIR
 from skills_catalog.primitives import SKILL_FILENAME
 
-TEMPLATE_BRANCH: str = "template-upstream"
+TEMPLATE_BRANCH: Final[str] = "template-upstream"
 
 
 def run_git(repo_root: Path, *arguments: str) -> str:

@@ -121,7 +121,7 @@ def _list_skill_files(directory: Path) -> list[SkillFile]:
         directory_names[:] = sorted(name for name in directory_names if name not in _SKIPPED_DIRECTORY_NAMES)
         for file_name in sorted(file_names):
             path = Path(current_root) / file_name
-            files.append(SkillFile(path=path.relative_to(directory), size_bytes=path.stat().st_size))
+            files.append(SkillFile(path=path.relative_to(directory), size_bytes=path.lstat().st_size))
     return files
 
 

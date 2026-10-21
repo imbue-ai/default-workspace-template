@@ -145,3 +145,11 @@ def test_a_plain_directory_name_is_a_skill_name() -> None:
 def test_the_repo_root_defaults_to_the_current_directory() -> None:
     assert repo_root_from_environment({}) == Path.cwd()
     assert repo_root_from_environment({"SKILLS_CATALOG_REPO_ROOT": "/elsewhere"}) == Path("/elsewhere")
+
+
+def test_a_broken_link_in_a_skill_folder_is_listed_not_fatal(workspace_root: Path, catalog: SkillsCatalog) -> None:
+    (workspace_root / SKILLS_DIR / "assist" / "gone.md").symlink_to(workspace_root / "no-such-target.md")
+
+    detail = catalog.describe_skill(SkillName("assist"))
+
+    assert Path("gone.md") in [file.path for file in detail.files]
