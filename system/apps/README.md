@@ -79,9 +79,10 @@ ignores both tables, so a stale reference can never stop the app.
 
 Every Python app runs from the workspace venv, the one install of it:
 `uv sync --all-packages` (run by `system/scripts/build_workspace.sh`, by the
-build-app scaffold for a new app, and by the update-self apply when a
-manifest changes) installs each package here editable, and an app's program
-line execs its entry point from `.venv/bin` rather than through `uv run`.
+build-app scaffold for a new app, and by the update-self apply when an app's
+`pyproject.toml` or `uv.lock` changes) installs each package here editable, and
+an app's program line execs its entry point from `.venv/bin` rather than
+through `uv run`.
 Python packages here are picked up by the workspace's `system/apps/*` uv member
 glob, so one lockfile covers the whole tree and nothing in the root
 `pyproject.toml` needs editing for a new app.
