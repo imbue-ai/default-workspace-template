@@ -3,7 +3,7 @@ name = "share-gateway"
 version = "0.1.0"
 description = "In-workspace sharing gateway: TLS termination, grants enforcement, and the frpc relay tunnel for shared workspaces"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "cryptography>=42",
     "flask>=3.0",

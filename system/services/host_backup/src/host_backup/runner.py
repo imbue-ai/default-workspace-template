@@ -80,8 +80,8 @@ SLOW_BACKUP_NOTICE_INTERVAL_SECONDS: Final[float] = 24 * 3600.0
 
 SLOW_BACKUP_HINT: Final[str] = (
     "Backup time follows how many files and directories the backup walks, not "
-    "their size. Run `uv run --no-sync host-backup-heavy-dirs` to see which directories "
-    f"hold them, and read 'Slow backups' in {HOST_BACKUP_README_PATH}."
+    "their size. Run `uv run --no-sync host-backup-heavy-dirs` to see which "
+    f"directories hold them, and read 'Slow backups' in {HOST_BACKUP_README_PATH}."
 )
 
 # The restic-call signatures the backup and retention steps depend on, injected so

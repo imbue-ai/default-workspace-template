@@ -73,7 +73,7 @@ import sys
 import tempfile
 import tomllib
 import xml.etree.ElementTree as ElementTree
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Any
 
@@ -932,7 +932,7 @@ def _remove(path: Path, name: str) -> None:
 
 
 @contextlib.contextmanager
-def _registry_lock(path: Path) -> Iterator[None]:
+def _registry_lock(path: Path) -> Generator[None, None, None]:
     """Hold the registry's lock: every writer, in any process, takes it before reading."""
     lock_path = path.parent / ".apps.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)

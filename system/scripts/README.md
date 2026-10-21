@@ -2,16 +2,17 @@
 
 Provisioning and utility scripts. Their Python lives in one of two packages
 here (one uv project, `pyproject.toml`): `workspace_bare_scripts/`, which the
-system `python3` runs with no venv and which imports only the standard library,
-through entry stubs at the paths below, and `workspace_scripts/`, whose modules
-run by their own path from the root venv (`uv run --no-sync`). See
+system `python3` runs with no venv and which imports only the standard library
+(and the stdlib-only libraries its hook stubs put on `sys.path`), through entry
+stubs at the paths below, and `workspace_scripts/`, whose modules run by their
+own path from the root venv (`uv run --no-sync`). See
 `.agents/shared/references/running-python.md`.
 
 - Image build / provisioning: `setup_system.sh`, `install_dependencies.sh`,
   `build_workspace.sh`, `write_apt_sources.sh`, `seed_home_skeleton.sh`,
   `default_workspace_template_seed.sh`, `install_secret_scanners.sh`,
   `_provision_guard.sh`, `_tool_env.sh`, `install_mngr.py`, `tool_env.py`
-  (vendored byte-identically into `.agents/skills/update-self/python/update_self_skill/`,
+  (its module, `workspace_bare_scripts/tool_env.py`, is vendored byte-identically into `.agents/skills/update-self/python/update_self_skill/`,
   which the apply runs as a self-contained unit), and the boot-convergence units in
   `env.d/`.
 - Cross-harness agent policy hooks (`agent_*.sh` / `agent_*.py`), wired in
@@ -35,6 +36,10 @@ run by their own path from the root venv (`uv run --no-sync`). See
   type's `config_overrides`. Existing reviewer settings still control gates;
   the worker's disabled review/CI/fetch gates are unchanged. mngr's existing
   workspace-trust consent governs hook execution.
+- Session start: `session_start_sync.sh`, claude's `SessionStart` hook (wired in
+  `.claude/settings.json`). It regenerates a `uv.lock` that drifted from
+  `pyproject.toml` once, telling the agent to commit it, then syncs the venv
+  `--frozen`.
 - Claude status line: `claude_status_line.sh`, wired in `.claude/settings.json`. It prints
   nothing; it records each agent's live model state for the chat model bar.
 - Utility scripts: `forward_port.py` (port registry), `message_chat.py` (send a
@@ -43,7 +48,8 @@ run by their own path from the root venv (`uv run --no-sync`). See
   the same way, with `mngr create` as the backoff), `run_in_background.py` (run a
   command detached and, when it exits, send its exit code and output to the
   caller's own chat as a message that starts the agent's next turn, on any
-  harness; how a lead waits for a worker's report; vendored byte-identically into
+  harness; how a lead waits for a worker's report; its module,
+  `workspace_bare_scripts/run_in_background.py`, is vendored byte-identically into
   `.agents/skills/update-self/python/update_self_skill/`, whose staged copy update-self waits
   through), `background_tasks.py` (the background tasks each chat is waiting
   on, one marker file per task under `data/.apps/chat/background_tasks/<chat-id>/`,

@@ -1111,6 +1111,7 @@ dev = [
     { name = "pyyaml" },
     { name = "ruff" },
     { name = "tomlkit" },
+    { name = "ty" },
 ]
 
 [package.metadata]
@@ -1149,6 +1150,7 @@ dev = [
     { name = "pyyaml", specifier = ">=6" },
     { name = "ruff", specifier = ">=0.4" },
     { name = "tomlkit", specifier = ">=0.12" },
+    { name = "ty", specifier = "==0.0.85" },
 ]
 
 [[package]]

@@ -240,7 +240,8 @@ Selection reads only what the workspace declares. A path selects:
   both, that file alone -- except for a path in an app's frontend, which
   selects only what the npm package bullet below says;
 - its consumers: every workspace member that depends on its package, directly
-  or transitively (`pyproject.toml` dependencies and dependency groups) -- not
+  or transitively (`pyproject.toml` dependencies and dependency groups), a
+  member inside a skill (its `python/` project) selecting the whole skill -- not
   for a test file, which nothing that depends on the package runs, and not for
   a path in an app's frontend, which is built into the app's own bundle;
 - for a path in an app other than a test file or a frontend path, the tests

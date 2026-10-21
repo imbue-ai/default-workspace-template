@@ -237,7 +237,7 @@
 - **`requires-python >=3.12`** in the 16 projects at `>=3.11` and in the new skill/shared/scripts projects. Relock with `uvx uv@latest lock`.
 - **Root `system/test_no_type_errors.py`**:
   - root check: `check_no_type_errors` from the repo root;
-  - bare check: create an empty venv (`python3.12 -m venv --without-pip` in tmp), then `ty check --python <empty venv> --python-version 3.12 --extra-search-path <bare roots>` over the bare package, update-self's package, `oom_priority/bin` and the `tk_command_parsing` / `oom_priority` `src/` trees. Bare roots: `system/scripts`, `.agents/skills/update-self/scripts`, `system/libs/tk_command_parsing/src`, `system/services/oom_priority/src`.
+  - bare check: create an empty venv (`python3.12 -m venv --without-pip` in tmp), then `ty check --python <empty venv> --python-version 3.12 --extra-search-path <bare roots>` over the bare package, update-self's package, `oom_priority/bin` and the `tk_command_parsing` / `oom_priority` `src/` trees. Bare roots: `system/scripts`, `.agents/skills/update-self/python`, `system/libs/tk_command_parsing/src`, `system/services/oom_priority/src`.
   - Delete `system/scripts/stdlib_only_scripts_test.py`.
 - **Fix the 114 errors** measured at #831's tip (`1f5697934`: `.agents` 20 plus 1 warning, `system/scripts` 19, `system/*.py` 75, `conftest.py` 0), plus anything the restructure moved or exposed. No suppressions unless the code is correct and ty can't express it.
   - The main group is `system/test_app_manifests.py`'s `dict[AppName, ...]` indexed with string literals (about 70).

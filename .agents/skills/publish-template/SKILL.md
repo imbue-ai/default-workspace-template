@@ -1240,7 +1240,7 @@ retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
   paragraph, and the empty sections `## Workspace`, `## Migrations`,
   `## Templates`, `## Adopted templates` in that order (byte-identical to
   the shipped root file; the exact block is `_VERSION_HISTORY_STARTER` in
-  `update-self`'s `scripts/update_self.py`) -- then append.
+  `update-self`'s `python/update_self_skill/update_ledger.py`) -- then append.
 
 - **Seed the `## Workspace` origin line if it is absent** -- exactly once per
   workspace, as the FIRST line under `## Workspace`. Resolve where the agent

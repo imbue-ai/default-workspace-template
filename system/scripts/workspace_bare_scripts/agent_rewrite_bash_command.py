@@ -179,9 +179,10 @@ def _identity_in_prefix(command: str) -> tuple[str, str] | None:
         tokens = [lexer.get_token() for _ in range(6)]
     except ValueError:
         return None
-    if None in tokens or tokens[5] != ";":
+    words = [token for token in tokens if token is not None]
+    if len(words) != 6 or words[5] != ";":
         return None
-    return tokens[1].partition("=")[2], tokens[3].partition("=")[2]
+    return words[1].partition("=")[2], words[3].partition("=")[2]
 
 
 def build_hook_output(

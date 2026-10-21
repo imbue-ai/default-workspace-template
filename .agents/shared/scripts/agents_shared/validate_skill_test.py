@@ -20,7 +20,7 @@ _PYPROJECT = """\
 [project]
 name = "{project}"
 version = "0.1.0"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = []
 
 [build-system]
@@ -345,6 +345,26 @@ def test_check_runnable_reports_an_entry_that_cannot_import(tmp_path: Path) -> N
     assert "missing_dependency" in error
 
 
+@pytest.mark.timeout(120)
+def test_check_runnable_catches_a_broken_import_through_real_uv(tmp_path: Path) -> None:
+    skill = _write_skill(tmp_path, "s", include_scripts=True)
+    (skill / "scripts" / "run.py").write_text(
+        "import this_module_definitely_does_not_exist_xyz\n"
+    )
+    subprocess.run(
+        ["uv", "lock", "--quiet"],
+        cwd=skill / "python",
+        check=True,
+        timeout=60,
+    )
+
+    error = validate_skill.check_runnable(skill)
+
+    assert error is not None
+    assert "run.py --help" in error
+    assert "this_module_definitely_does_not_exist_xyz" in error
+
+
 def test_check_runnable_timeout(tmp_path: Path) -> None:
     skill = _write_skill(tmp_path, "s", include_scripts=True)
 
@@ -370,6 +390,13 @@ def test_check_runnable_uv_missing(tmp_path: Path) -> None:
 _SKILLS_WITH_PYTHON = sorted(
     path.parent for path in (_REPO_ROOT / ".agents" / "skills").glob("*/python")
 )
+
+
+@pytest.mark.parametrize("skill", _SKILLS_WITH_PYTHON, ids=lambda path: path.name)
+def test_every_built_in_skill_with_python_names_its_project_and_package(
+    skill: Path,
+) -> None:
+    assert validate_skill._validate_python_project(skill, skill.name) is None
 
 
 # Real `uv lock --check` and `uv run --no-sync <entry> --help` runs against the workspace:

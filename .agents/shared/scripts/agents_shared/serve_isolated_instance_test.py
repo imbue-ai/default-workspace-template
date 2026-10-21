@@ -204,6 +204,7 @@ def test_the_self_hint_still_names_where_this_script_actually_lives() -> None:
     # learns its instance name from that hint -- so the spelling has to stay
     # runnable. A move or rename would leave the hardcoded constant naming a path
     # that no longer exists, which nothing else here would notice.
+    assert _SCRIPT.is_file()
     assert str(_SCRIPT).endswith(mod._SELF_HINT)
 
 

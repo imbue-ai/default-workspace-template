@@ -15,40 +15,37 @@ import sys
 from pathlib import Path
 
 import pytest
-
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-_SYSTEM_SCRIPTS = _REPO_ROOT / "system" / "scripts"
-_UPDATE_SELF_SCRIPTS = _REPO_ROOT / ".agents" / "skills" / "update-self" / "scripts"
+from entry_points_testing import (
+    IMPORT_PROBE,
+    REPO_ROOT,
+    SYSTEM_SCRIPTS,
+    UPDATE_SELF_SCRIPTS,
+)
 
 # (path, arguments) for each bare path an outside caller runs; every one is harmless.
 _BARE_CALLS: tuple[tuple[Path, tuple[str, ...]], ...] = (
-    (_SYSTEM_SCRIPTS / "seed_welcome_chat.py", ("--help",)),
-    (_SYSTEM_SCRIPTS / "message_chat.py", ("--help",)),
-    (_SYSTEM_SCRIPTS / "forward_port.py", ("--help",)),
-    (_SYSTEM_SCRIPTS / "provision_backups.py", ("--help",)),
-    (_SYSTEM_SCRIPTS / "set_mngr_pin.py", ("--help",)),
-    (_SYSTEM_SCRIPTS / "vendor_mngr_skill.py", ("--help",)),
-    (_SYSTEM_SCRIPTS / "run_in_background.py", ("--help",)),
-    (_SYSTEM_SCRIPTS / "background_tasks.py", ("--help",)),
-    (_SYSTEM_SCRIPTS / "claude_background_task_hooks.py", ("--help",)),
+    (SYSTEM_SCRIPTS / "seed_welcome_chat.py", ("--help",)),
+    (SYSTEM_SCRIPTS / "message_chat.py", ("--help",)),
+    (SYSTEM_SCRIPTS / "forward_port.py", ("--help",)),
+    (SYSTEM_SCRIPTS / "provision_backups.py", ("--help",)),
+    (SYSTEM_SCRIPTS / "set_mngr_pin.py", ("--help",)),
+    (SYSTEM_SCRIPTS / "vendor_mngr_skill.py", ("--help",)),
+    (SYSTEM_SCRIPTS / "run_in_background.py", ("--help",)),
+    (SYSTEM_SCRIPTS / "background_tasks.py", ("--help",)),
+    (SYSTEM_SCRIPTS / "claude_background_task_hooks.py", ("--help",)),
     # Outside a workspace (no agent id in the environment) the gate lets everything through.
-    (_SYSTEM_SCRIPTS / "require_create_account.py", ()),
-    (_UPDATE_SELF_SCRIPTS / "update_self.py", ("--help",)),
-    (_UPDATE_SELF_SCRIPTS / "run_in_background.py", ("--help",)),
+    (SYSTEM_SCRIPTS / "require_create_account.py", ()),
+    (UPDATE_SELF_SCRIPTS / "update_self.py", ("--help",)),
+    (UPDATE_SELF_SCRIPTS / "run_in_background.py", ("--help",)),
 )
 
-# Probes: run the stub without letting its __main__ block act (a run would collect a real
-# bug report), which still resolves every import a real run makes at startup.
-_IMPORT_PROBE = (
-    "import importlib.util, sys; path = sys.argv[1]; sys.path.insert(0, path.rsplit('/', 1)[0]); "
-    "spec = importlib.util.spec_from_file_location('_probe', path); "
-    "spec.loader.exec_module(importlib.util.module_from_spec(spec))"
-)
-_BARE_IMPORTS = (_SYSTEM_SCRIPTS / "collect_bug_report_diagnostics.py",)
+# Imported without letting the __main__ block act (a run would collect a real bug report), which
+# still resolves every import a real run makes at startup.
+_BARE_IMPORTS = (SYSTEM_SCRIPTS / "collect_bug_report_diagnostics.py",)
 
 _VENV_CALLS: tuple[tuple[Path, tuple[str, ...]], ...] = (
     (
-        _REPO_ROOT
+        REPO_ROOT
         / ".agents"
         / "skills"
         / "launch-task"
@@ -57,6 +54,14 @@ _VENV_CALLS: tuple[tuple[Path, tuple[str, ...]], ...] = (
         ("--help",),
     ),
 )
+
+
+def _call_id(value: Path | tuple[str, ...]) -> str:
+    return (
+        str(value.relative_to(REPO_ROOT))
+        if isinstance(value, Path)
+        else " ".join(value)
+    )
 
 
 def _bare_environment() -> dict[str, str]:
@@ -71,14 +76,6 @@ def _run(
     )
 
 
-def _call_id(value: object) -> str:
-    """A script as the repo-relative path its callers name, and its arguments as typed."""
-    if isinstance(value, Path):
-        return str(value.relative_to(_REPO_ROOT))
-    assert isinstance(value, tuple)
-    return " ".join(value) or "no-arguments"
-
-
 @pytest.mark.timeout(60)
 @pytest.mark.parametrize(("script", "arguments"), _BARE_CALLS, ids=_call_id)
 def test_a_bare_external_path_runs_without_the_venv(
@@ -86,7 +83,7 @@ def test_a_bare_external_path_runs_without_the_venv(
 ) -> None:
     result = _run(
         [sys.executable, "-S", "-s", str(script), *arguments],
-        _REPO_ROOT,
+        REPO_ROOT,
         _bare_environment(),
     )
 
@@ -97,8 +94,8 @@ def test_a_bare_external_path_runs_without_the_venv(
 @pytest.mark.parametrize("script", _BARE_IMPORTS, ids=lambda path: path.name)
 def test_a_bare_external_path_imports_without_the_venv(script: Path) -> None:
     result = _run(
-        [sys.executable, "-S", "-s", "-c", _IMPORT_PROBE, str(script)],
-        _REPO_ROOT,
+        [sys.executable, "-S", "-s", "-c", IMPORT_PROBE, str(script)],
+        REPO_ROOT,
         _bare_environment(),
     )
 
@@ -117,7 +114,7 @@ def test_the_secrets_wrapper_runs_a_command_without_the_venv(tmp_path: Path) -> 
             sys.executable,
             "-S",
             "-s",
-            str(_SYSTEM_SCRIPTS / "with_secrets.py"),
+            str(SYSTEM_SCRIPTS / "with_secrets.py"),
             "data/.secrets/probe.env",
             "--",
             "sh",
@@ -137,7 +134,7 @@ def test_a_venv_external_path_runs_from_the_root_venv(
     script: Path, arguments: tuple[str, ...]
 ) -> None:
     result = _run(
-        [sys.executable, str(script), *arguments], _REPO_ROOT, dict(os.environ)
+        [sys.executable, str(script), *arguments], REPO_ROOT, dict(os.environ)
     )
 
     assert result.returncode == 0, result.stderr

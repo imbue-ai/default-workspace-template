@@ -1,7 +1,7 @@
 """The create gate as mngr runs it, end to end through the real `mngr create`.
 
-The unit tests beside this file (`require_create_account_test.py`) run the script directly
-and settle what it decides. What they cannot show is that mngr reaches it at all: the gate is
+The unit tests (`workspace_bare_scripts/require_create_account_test.py`) run the script
+directly and settle what it decides. What they cannot show is that mngr reaches it at all: the gate is
 a `pre_command_scripts.create` entry in the committed `.mngr/settings.toml`, and everything
 that matters about it -- the shell test that keeps `python3` out of a create run on the
 user's own machine, the project root mngr runs the entry from, and the script's stderr

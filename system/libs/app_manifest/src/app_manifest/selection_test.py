@@ -166,6 +166,36 @@ def test_a_skill_change_runs_only_that_skills_suite(workspace: Path) -> None:
     assert selection.paths[0].classes == (ChangedPathClass.SKILL,)
 
 
+def test_a_skills_python_project_runs_as_part_of_the_skills_suite(workspace: Path) -> None:
+    root_pyproject = workspace / "pyproject.toml"
+    root_pyproject.write_text(
+        root_pyproject.read_text().replace('"system/apps/*"]', '"system/apps/*", ".agents/skills/*/python"]', 1)
+    )
+    write_repo_file(
+        workspace,
+        ".agents/skills/refresh/python/pyproject.toml",
+        '[project]\nname = "refresh-skill"\ndependencies = ["corelib"]\n\n'
+        '[tool.hatch.build.targets.wheel]\npackages = ["refresh_skill"]\n',
+    )
+    write_repo_file(workspace, ".agents/skills/refresh/python/refresh_skill/__init__.py", "")
+    write_repo_file(
+        workspace, ".agents/skills/refresh/python/refresh_skill/core_test.py", "def test_core() -> None:\n    pass\n"
+    )
+    write_app_manifest(
+        workspace,
+        "notes",
+        'name = "notes"\ndisplay_name = "Notes"\nicon = "icon.svg"\n\n'
+        '[[references]]\npath = ".agents/skills/refresh"\n',
+        is_icon_written=True,
+    )
+    commit_everything(workspace, "the refresh skill's python project depends on corelib")
+
+    selection = _select(workspace, ["system/libs/corelib/src/corelib/core.py", "system/apps/notes/src/notes/core.py"])
+
+    skill_runs = [line for line in _command_lines(selection) if ".agents/skills/refresh" in line]
+    assert skill_runs == ["uv run --no-sync pytest .agents/skills/refresh"]
+
+
 @pytest.mark.parametrize(
     "path",
     [

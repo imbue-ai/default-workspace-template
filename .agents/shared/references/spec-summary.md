@@ -165,7 +165,7 @@ the one workspace lock and its package installs into the root venv:
   [project]
   name = "<name>-skill"
   version = "0.1.0"
-  requires-python = ">=3.11"
+  requires-python = ">=3.12"
   dependencies = ["rich>=13"]
 
   [build-system]

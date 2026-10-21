@@ -36,7 +36,10 @@ target release's own copy (or the local one, when the ref predates the skill).
   `.agents/skills/update-self/scripts/update_self.py` resolves to the
   workspace's own copy, which may predate a subcommand the prose relies on --
   the `run-status` writes in particular fail exactly on the first update into
-  the release that ships them.
+  the release that ships them. The one exception is Step 3a's verdict after the
+  staged copy exits 75 (system Python older than the target's floor): the
+  staged copy exits 75 on every subcommand there, so that verdict goes through
+  the local copy, and is skipped when the local copy predates `run-status`.
 - **The task-file template keeps `lead_agent` and `finish_report_path`** (a
   test holds this too): an older workspace's lead follows the staged prose but
   launches with its own `launch-task/create_worker.py`, which may predate
@@ -66,8 +69,8 @@ must keep tolerating older pre-merge trees: guarded imports (the
 wholesale when it lacks any attribute the apply reads), no assumptions about
 the pre-merge layout, and a skill directory that is staged and run as one unit
 (the entry scripts put the skill's own `python/` on `sys.path` and import the
-`update_self_skill` package from there, so the staged copy never reaches the
-workspace's own tree or venv).
+`update_self_skill` package from there, so the staged copy's own code never
+resolves from the workspace's tree or venv).
 
 ## Trust
 

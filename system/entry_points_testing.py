@@ -19,6 +19,8 @@ from pathlib import Path
 from agents_shared.validate_skill import package_entry_modules
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+SYSTEM_SCRIPTS = REPO_ROOT / "system" / "scripts"
+UPDATE_SELF_SCRIPTS = REPO_ROOT / ".agents" / "skills" / "update-self" / "scripts"
 
 # The packages the system python3 runs: stdlib only, no venv.
 BARE_PACKAGES = frozenset({"workspace_bare_scripts", "update_self_skill"})
@@ -32,7 +34,20 @@ STANDALONE_BARE_SCRIPTS = (
     REPO_ROOT / "system" / "apps" / "datalib" / "launch_datalib_http.py",
 )
 
-# Where a scripts directory declares the heavy modules an entry point may load at import.
+# ``python -c`` source taking an entry's path: imports the entry the way running it would (its
+# directory first on sys.path) without running its __main__ block, then prints every top-level
+# module left loaded, as JSON.
+IMPORT_PROBE = """
+import importlib.util, json, sys
+path = sys.argv[1]
+sys.path.insert(0, path.rsplit("/", 1)[0])
+spec = importlib.util.spec_from_file_location("_entry_point_probe", path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+print(json.dumps(sorted({name.split(".")[0] for name in sys.modules})))
+"""
+
+# Where an entry point's project declares the heavy modules the entry may load at import.
 ENTRY_POINTS_TABLE = ("workspace-template", "entry-points")
 
 
@@ -72,6 +87,20 @@ def is_test_file(path: Path) -> bool:
 
 def entry_files(scripts_dir: Path) -> list[Path]:
     return sorted(path for path in scripts_dir.glob("*.py") if not is_test_file(path))
+
+
+def all_entry_points() -> list[Path]:
+    """Every entry point, venv and bare: the scripts directories' stubs, the package modules run
+    by their own path, and the standalone bare ones."""
+    entries = [
+        entry for directory in scripts_dirs() for entry in entry_files(directory)
+    ]
+    entries += [
+        path for directory in STANDALONE_BARE_DIRS for path in entry_files(directory)
+    ]
+    entries += STANDALONE_BARE_SCRIPTS
+    entries += module_entry_points()
+    return entries
 
 
 def project_dir(entry: Path) -> Path:

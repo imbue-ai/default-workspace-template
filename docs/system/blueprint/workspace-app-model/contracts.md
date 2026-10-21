@@ -369,7 +369,7 @@ The minds chrome does not forward a deep link's query to the shell frame; that l
 - The update apply reinstalls the tool of every manifest app whose directory changed in the merge (excluding paths under `frontend/` and `static/`), and of every manifest app when a shared backend manifest changed, and snapshots the tool directory of every `critical` app before it does.
 - `system/apps/*` is in the root workspace's member glob, so one lockfile covers the tree, a pre-manifest app's `{ workspace = true }` source in the root pyproject resolves, and a user-built app needs no root-pyproject edit; `uv sync --all-packages` therefore also installs the manifest apps into the root venv, unused, which uv's shared cache makes nearly free. Membership and the tool environments answer different questions: the lock keeps every environment on the same versions, and a tool environment keeps its app running while the root venv is rewritten or broken.
 - The `app_manifest` and `app_schema` libraries are workspace members that apps depend on by path, so a tool install pulls them in editable.
-- Services run from the root venv: a `--frozen` sync, then `exec .venv/bin/<name>`.
+- Services run from the root venv as `.venv/bin/<name>` after a `--frozen` sync, never under `uv run` (`.agents/shared/references/running-python.md`).
 
 ## 15. Memory priority
 

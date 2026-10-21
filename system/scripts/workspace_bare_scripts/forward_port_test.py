@@ -1216,7 +1216,7 @@ def test_the_writer_round_trips_an_icon_with_quotes_newlines_and_the_real_files_
         .strip()
     )
     awkward_icon = '<svg xmlns="http://www.w3.org/2000/svg"\n  viewBox="0 0 24 24">\n\t<path d="M2 2h20"/>\\\n</svg>'
-    apps = [
+    apps: list[dict[str, object]] = [
         {
             "name": "files",
             "url": "http://localhost:8300",
@@ -1250,7 +1250,7 @@ def test_the_writer_round_trips_an_icon_with_quotes_newlines_and_the_real_files_
 
 
 def test_the_writer_round_trips_a_preset_whose_name_is_not_a_bare_key() -> None:
-    apps = [
+    apps: list[dict[str, object]] = [
         {
             "name": "web",
             "url": "http://localhost:8000",
@@ -1278,7 +1278,7 @@ def test_the_writer_round_trips_a_preset_whose_name_is_not_a_bare_key() -> None:
 
 
 def test_the_writer_escapes_control_characters(tmp_path: Path) -> None:
-    apps = [
+    apps: list[dict[str, object]] = [
         {"name": "web", "url": "http://localhost:8000", "label": "bell\x07 and \x7f"}
     ]
 
@@ -1352,8 +1352,8 @@ def test_the_script_imports_under_an_isolated_stdlib_only_interpreter() -> None:
     result = subprocess.run(
         [
             sys.executable,
+            "-I",
             "-S",
-            "-s",
             "-c",
             f"import sys; sys.path.insert(0, {str(_SCRIPT.parent)!r}); from workspace_bare_scripts import forward_port; print(forward_port.DEFAULT_APPS_FILE)",
         ],

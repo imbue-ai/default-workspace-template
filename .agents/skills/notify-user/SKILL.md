@@ -1,7 +1,7 @@
 ---
 name: notify-user
 description: "Tell the user, through a notification in the Imbue Studio app, that a turn in THIS CHAT ended with something they will want to know about or act on: a finished deliverable, a result they were waiting for, or a question only they can answer. For chat agents only -- never for launch-task workers, whose results reach the user through their parent chat. Not for chitchat, acknowledgements, progress with no result yet, or trivial answers."
-compatibility: Requires the latchkey gateway env mngr injects into every agent (LATCHKEY_GATEWAY, LATCHKEY_GATEWAY_PASSWORD); python3 only.
+compatibility: Requires the latchkey gateway env mngr injects into every agent (LATCHKEY_GATEWAY, LATCHKEY_GATEWAY_PASSWORD); runs from the root venv (`uv run --no-sync`).
 metadata:
   author: imbue
 ---

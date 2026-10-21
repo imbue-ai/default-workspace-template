@@ -2,7 +2,7 @@
 name = "migrate-workspace-skill"
 version = "0.1.0"
 description = "Moves a workspace's work onto a fresh template checkout"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "agents-shared",
 ]

@@ -3,7 +3,7 @@ name = "browser"
 version = "0.1.0"
 description = "Live Chromium with human-in-the-loop control, streamed, driven by agents over gated CDP"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     # The manifest primitives the daemon names itself with.
     "app-manifest",

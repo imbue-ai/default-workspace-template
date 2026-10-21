@@ -16,7 +16,8 @@ here rather than at some adopter's first boot.
 
 Run from the repo root being validated:
 
-    uv run --no-project --with 'pydantic>=2' python validate_template.py [REPO_ROOT]
+    uv run --no-project --with 'pydantic>=2' python \\
+        .agents/skills/publish-template/scripts/validate_template.py [REPO_ROOT]
 
 `--no-project` is load-bearing. This runs inside the assembly worker's
 worktree, which `build_template.sh` has reset with `git read-tree -u --reset`

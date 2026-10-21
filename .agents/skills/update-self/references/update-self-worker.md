@@ -314,12 +314,19 @@ in your report.
 - **Environment gate first**, whenever a manifest or lockfile is in the
   merged set: `uv lock --check` then `uv sync --all-packages`. A failure here
   is a precise blocker (an unparseable root lock means no service in the
-  workspace can start); fix it before running anything else. A failure on the
-  workspace's own skills, services or docs that the update's changelog ties to
-  a changed rule (for example a user skill's PEP 723 script that
-  `system/test_entry_point_import_cost.py` cannot import, or a user service
-  whose program line runs under `uv run`) is fixed by following
+  workspace can start); fix it before running anything else. A failure here
+  or in the suites below on the workspace's own skills, apps, services or docs
+  that the update's changelog ties to a changed rule (for example a user
+  skill's PEP 723 script that `system/test_entry_point_import_cost.py` cannot
+  import, a user service whose program line runs under `uv run`, or a type
+  error in a user skill or app) is fixed by following
   `references/python-packaging-migration.md`.
+  Separately, before any suite or boot below runs, sync the venv
+  (`uv sync --all-packages --frozen`) whenever the merge changed a
+  `pyproject.toml` or `uv.lock` at all, merged or pulled in
+  (`git diff --name-only "$MERGE^1" "$MERGE" -- '*pyproject.toml' '*uv.lock'`
+  lists one, `$MERGE` as below): everything below runs `uv run --no-sync`,
+  which never syncs, so it would otherwise run on the pre-merge environment.
 - **Suites, lint, ratchets** for what the merged set, the update's changes to
   your creations, 4a's impacted consumers, and your own edits can reach, and
   for nothing else (with none of them, no suite runs at all). The test

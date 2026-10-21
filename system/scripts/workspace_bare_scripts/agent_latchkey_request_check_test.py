@@ -38,10 +38,11 @@ _MULTILINE_REQUEST = (
 _SECRET_REQUEST_PATH = (
     ".agents/skills/connect-external-service/scripts/request_secret.py"
 )
-_SECRET_REQUEST = (
-    f"python3 {_SECRET_REQUEST_PATH} "
+_SECRET_REQUEST_ARGS = (
+    f"{_SECRET_REQUEST_PATH} "
     "--file svc --var SVC_TOKEN --rationale 'I need your key to call the widget API'"
 )
+_SECRET_REQUEST = f"uv run --no-sync {_SECRET_REQUEST_ARGS}"
 # The same filing with its rationale left open, so a test can put more inside the quotes.
 _SECRET_REQUEST_UNCLOSED = _SECRET_REQUEST.removesuffix("'")
 
@@ -50,8 +51,9 @@ _ALLOWED = [
     _REQUEST,
     _MULTILINE_REQUEST,
     _SECRET_REQUEST,
-    f"uv run {_SECRET_REQUEST.removeprefix('python3 ')}",
-    f"uv run --no-sync {_SECRET_REQUEST.removeprefix('python3 ')}",
+    f"uv run {_SECRET_REQUEST_ARGS}",
+    # An older release's skill ran the script with python3.
+    f"python3 {_SECRET_REQUEST_ARGS}",
     # A rationale that mentions operators, or the script's own name, stays one token.
     f"{_SECRET_REQUEST_UNCLOSED} && run request_secret.py again'",
     "git commit -m 'document request_secret.py usage' && git push",
@@ -92,7 +94,7 @@ _BLOCKED = [
     f"{_REQUEST} && {_REQUEST}",  # two requests batched into one call
     # A secret request is held to the same rule, alone or alongside a permission request.
     f"{_SECRET_REQUEST} && {_SECRET_REQUEST}",
-    f"uv run --no-sync {_SECRET_REQUEST.removeprefix('python3 ')} && {_SECRET_REQUEST}",
+    f"python3 {_SECRET_REQUEST_ARGS} && {_SECRET_REQUEST}",
     f"{_SECRET_REQUEST} && {_REQUEST}",
     f"{_SECRET_REQUEST} > /tmp/filed.json",
     f"{_SECRET_REQUEST} | jq .request_id",

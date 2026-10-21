@@ -210,7 +210,7 @@ GitHub sync is opt-in via the `github-sync` skill. When the user has enabled it:
 
 When GitHub sync is not enabled, there is no auto-push and no GitHub remote to push to; commits stay local (the restic `host-backup` still protects the whole host dir).
 
-- Don't include auto-generated lockfile churn (`uv.lock`, `package-lock.json`, etc.) in commits unless the change intentionally bumps a dependency.
+- Don't include auto-generated lockfile churn (`uv.lock`, `package-lock.json`, etc.) in commits unless the change intentionally bumps a dependency. A `uv.lock` change that follows from a `pyproject.toml` change -- a dependency, or a new skill `python/` project -- is not churn: commit it.
 
 # Silly error workarounds
 

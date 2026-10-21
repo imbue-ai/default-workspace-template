@@ -33,7 +33,7 @@ crystallized skill path. The standard switch is:
 | -------------------------------------------------------------- | -------------------------------------------------------- |
 | `data/.tasks/fetch-process-show/<slug>/fetch.py`                     | `.agents/skills/<name>/scripts/run.py`                   |
 | `data/.tasks/fetch-process-show/<slug>/sample.json`                  | run the skill with `--output <path>` to regenerate       |
-| Inline import of the fetch script                              | `from <name_with_underscores>_skill.<module> import ...` (the skill's package, installed in the root venv) |
+| Inline import of the fetch script                              | `from <name_with_underscores>_skill.<module> import ...`, with `<name>-skill` added to the consumer's own `pyproject.toml` dependencies (an app runs from its own environment) and `<name>-skill = { workspace = true }` to the root `pyproject.toml`'s `[tool.uv.sources]`, then `uv lock`, or `subprocess.run(["uv", "run", "--no-sync", ".agents/skills/<name>/scripts/run.py", ...])` |
 
 If a consumer has explicit fallback logic (e.g. "use the skill if
 installed, else use the runtime path"), that fallback can stay until

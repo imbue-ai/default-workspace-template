@@ -199,6 +199,14 @@ Merge the **pinned sha, never the branch tip** (the tip keeps moving):
 git merge --no-ff <commit> -m "Provisional merge of <WORKER_NAME> at milestone <name>"
 ```
 
+If the merge changed a `pyproject.toml` or `uv.lock` (a new skill's `python/`
+project, a dependency added to a skill or an app), bring the venv up to date
+before running anything from it; `uv run --no-sync` never installs:
+
+```bash
+git diff --quiet HEAD^1 HEAD -- '*pyproject.toml' uv.lock || uv sync --all-packages --frozen
+```
+
 Then the **provisional go-live**, the minimum needed to use the thing: a skill
 is on disk at `.agents/skills/<name>/` and invocable (one with a `python/`
 project only after `uv sync --all-packages --frozen`, which installs its package
@@ -271,6 +279,13 @@ On `type: status`:
   reports: provisional merge") are ancestors of HEAD, so this merge brings only
   the remainder and the freshness check covers exactly the window since that
   provisional merge.
+  If the merge changed a `pyproject.toml` or `uv.lock` (a new skill's `python/`
+  project, a dependency added to a skill or an app), bring the venv up to date
+  before running anything from it; `uv run --no-sync` never installs:
+
+  ```bash
+  git diff --quiet HEAD^1 HEAD -- '*pyproject.toml' uv.lock || uv sync --all-packages --frozen
+  ```
   On a clean merge, close any tracking ticket and destroy the worker before
   the calling skill's go-live:
   ```bash

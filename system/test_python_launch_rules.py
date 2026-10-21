@@ -28,14 +28,13 @@ import subprocess
 import tomllib
 from pathlib import Path, PurePosixPath
 
-from entry_points_testing import is_bare_entry
+from entry_points_testing import REPO_ROOT, is_bare_entry
 from imbue.mngr.interfaces.host import NamedCommand
 from inline_snapshot import snapshot
 from vendor_testing import resolves_into_vendor
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-_SUPERVISORD_DIR = _REPO_ROOT / "system"
-_MNGR_SETTINGS = _REPO_ROOT / ".mngr" / "settings.toml"
+_SUPERVISORD_DIR = REPO_ROOT / "system"
+_MNGR_SETTINGS = REPO_ROOT / ".mngr" / "settings.toml"
 
 _SHELL_PROGRAMS = frozenset({"bash", "sh", "zsh", "dash"})
 _EXTRA_WINDOW_KEYS = frozenset(
@@ -57,7 +56,20 @@ _DOCS_ROOT = "docs"
 _DESIGN_RECORD_PARTS = frozenset({"blueprint", "specs"})
 _LIVING_CONTRACT_NAME = "contracts.md"
 
-_UV_RUN_RE = re.compile(r"\buv run\b")
+# uv's global options that take a separate value word; any of them, or a flag, may come
+# between ``uv`` and its ``run`` subcommand.
+_UV_GLOBAL_OPTIONS_WITH_VALUES = (
+    "--directory",
+    "--project",
+    "--config-file",
+    "--cache-dir",
+    "--color",
+)
+_UV_RUN_RE = re.compile(
+    r"\buv(?:\s+(?:(?:"
+    + "|".join(_UV_GLOBAL_OPTIONS_WITH_VALUES)
+    + r")(?:=|\s+)\S+|--?[a-z][\w-]*))*\s+run\b"
+)
 # Options after which ``uv run`` neither syncs the workspace venv nor touches uv.lock.
 _NON_SYNCING_OPTIONS = frozenset({"--no-sync", "--no-project"})
 # uv run options that take a separate value word.
@@ -94,15 +106,34 @@ _DELIBERATE_SYNCS: tuple[tuple[str, str], ...] = (
 
 
 def _shell_command_string(words: list[str], shell_index: int) -> str | None:
-    """The command string a shell at ``shell_index`` runs (``-c``, ``-lc``, ``--login -c``), or None."""
-    for index in range(shell_index + 1, len(words)):
-        word = words[index]
+    """The command string a shell at ``shell_index`` runs (``-c``, ``-lc``, ``--login -c``), or None.
+
+    ``-o`` / ``-O`` take the next word as their value (``-o pipefail``, ``-euo pipefail``), so
+    the string is the first word after the options.
+    """
+    takes_command = False
+    arguments = iter(words[shell_index + 1 :])
+    for word in arguments:
+        if not word.startswith(("-", "+")):
+            return word if takes_command else None
         if word.startswith("--"):
             continue
-        if not word.startswith("-"):
-            return None
-        if "c" in word[1:]:
-            return words[index + 1] if index + 1 < len(words) else None
+        letters = word[1:]
+        if "c" in letters:
+            takes_command = True
+        for _ in range(letters.count("o") + letters.count("O")):
+            next(arguments, None)
+    return None
+
+
+def _uv_subcommand(arguments: list[str]) -> str | None:
+    """The subcommand ``uv`` runs from ``arguments``, past its global options."""
+    words = iter(arguments)
+    for argument in words:
+        if not argument.startswith("-"):
+            return argument
+        if argument in _UV_GLOBAL_OPTIONS_WITH_VALUES:
+            next(words, None)
     return None
 
 
@@ -110,7 +141,10 @@ def _runs_uv_run(command: str) -> bool:
     """Whether a program command executes ``uv run``, directly or inside a ``bash -c`` string."""
     words = shlex.split(command)
     for index, word in enumerate(words):
-        if PurePosixPath(word).name == "uv" and words[index + 1 : index + 2] == ["run"]:
+        if (
+            PurePosixPath(word).name == "uv"
+            and _uv_subcommand(words[index + 1 :]) == "run"
+        ):
             return True
         if PurePosixPath(word).name in _SHELL_PROGRAMS:
             shell_command = _shell_command_string(words, index)
@@ -253,7 +287,7 @@ def _is_scanned(relative: str, suffixes: tuple[str, ...]) -> bool:
 
 
 def _scanned_files(
-    suffixes: tuple[str, ...] = _UV_RUN_SCANNED_SUFFIXES, repo_root: Path = _REPO_ROOT
+    suffixes: tuple[str, ...] = _UV_RUN_SCANNED_SUFFIXES, repo_root: Path = REPO_ROOT
 ) -> list[Path]:
     """The tracked files agents read commands from.
 
@@ -288,7 +322,7 @@ def _plain_uv_run_violations() -> list[tuple[str, str]]:
             else _plain_uv_runs(text)
         )
         violations.extend(
-            (str(path.relative_to(_REPO_ROOT)), line) for _, line in found
+            (str(path.relative_to(REPO_ROOT)), line) for _, line in found
         )
     return violations
 
@@ -326,6 +360,12 @@ def test_a_planted_uv_run_program_is_caught_in_any_form(tmp_path: Path) -> None:
     (dropins / "longopt.conf").write_text(
         '[program:longopt]\ncommand=bash --login -c "exec uv run longopt"\n'
     )
+    (dropins / "pipefail.conf").write_text(
+        '[program:pipefail]\ncommand=bash -euo pipefail -c "exec uv run pipefail"\n'
+    )
+    (dropins / "quiet.conf").write_text(
+        '[program:quiet]\ncommand=bash -c "uv --directory /srv -q run quiet"\n'
+    )
     (dropins / "fine.conf").write_text(
         "; never `command=uv run fine`: uv would stay resident as its parent\n"
         '[program:fine]\ncommand=bash -c "uv sync --all-packages --frozen && exec .venv/bin/fine"\n'
@@ -337,6 +377,8 @@ def test_a_planted_uv_run_program_is_caught_in_any_form(tmp_path: Path) -> None:
         "[program:direct",
         "[program:login",
         "[program:longopt",
+        "[program:pipefail",
+        "[program:quiet",
         "[program:spaced",
         "[program:tagged",
     ]
@@ -407,10 +449,12 @@ def test_the_plain_uv_run_scan_catches_a_planted_command_and_skips_mentions() ->
             "uv run system/scripts/workspace_scripts/smoketest_app.py todo",
             "uv run python3 .agents/skills/notify-user/scripts/notify_user.py done",
             "uv run --no-sync system/scripts/workspace_scripts/smoketest_app.py todo",
+            "uv --quiet run pytest; uv --directory /srv run --no-sync tk ls",
+            "Check `uv --version` to run the right one.",
         ]
     )
 
-    assert [number for number, _ in _plain_uv_runs(text)] == [1, 2, 5, 6, 7]
+    assert [number for number, _ in _plain_uv_runs(text)] == [1, 2, 5, 6, 7, 9]
 
 
 def test_the_python_scan_catches_strings_and_argv_and_skips_comparisons() -> None:
@@ -429,11 +473,16 @@ def test_the_python_scan_catches_strings_and_argv_and_skips_comparisons() -> Non
 
 
 def test_scanning_skips_records_and_tests_but_reaches_living_contracts() -> None:
-    scanned = {str(path.relative_to(_REPO_ROOT)) for path in _scanned_files()}
+    scanned = {str(path.relative_to(REPO_ROOT)) for path in _scanned_files()}
 
     assert not any(
         "/changelog/" in path or path.endswith("CHANGELOG.md") for path in scanned
     )
+    assert (
+        "system/apps/chat/imbue/chat/harnesses/antigravity/fixtures/README.md"
+        not in scanned
+    )
+    assert not any("fixtures" in PurePosixPath(path).parts for path in scanned)
     assert not any(PurePosixPath(path).name.endswith("_test.py") for path in scanned)
     assert (
         "docs/system/blueprint/workspace-app-model/plan-workspace-app-model.md"
@@ -538,7 +587,7 @@ def _python3_violations(files: list[Path], repo_root: Path) -> list[str]:
 
 
 def test_python3_invocations_name_bare_entry_points() -> None:
-    offenders = _python3_violations(_scanned_files(_PYTHON3_SCANNED_SUFFIXES), _REPO_ROOT)
+    offenders = _python3_violations(_scanned_files(_PYTHON3_SCANNED_SUFFIXES), REPO_ROOT)
     assert not offenders, (
         "These run a script with the system python3, but it is not a bare entry point (or does not exist): "
         "the system python3 has no venv. Run it with `uv run --no-sync <path>` instead "
@@ -562,7 +611,7 @@ def test_the_python3_scan_catches_a_venv_script_and_a_stale_path(tmp_path: Path)
 
     offenders = [
         written
-        for written, resolved in _named_python3_scripts(doc.read_text(), doc.parent, _REPO_ROOT)
+        for written, resolved in _named_python3_scripts(doc.read_text(), doc.parent, REPO_ROOT)
         if resolved is None or not is_bare_entry(resolved)
     ]
 
@@ -574,8 +623,8 @@ def test_the_python3_scan_catches_a_venv_script_and_a_stale_path(tmp_path: Path)
 
 def test_uv_run_invocations_name_scripts_that_exist() -> None:
     offenders = [
-        f"{path.relative_to(_REPO_ROOT)}: uv run {written}"
-        for path, written in _missing_uv_run_scripts(_scanned_files(_PYTHON3_SCANNED_SUFFIXES), _REPO_ROOT)
+        f"{path.relative_to(REPO_ROOT)}: uv run {written}"
+        for path, written in _missing_uv_run_scripts(_scanned_files(_PYTHON3_SCANNED_SUFFIXES), REPO_ROOT)
     ]
     assert not offenders, (
         "These run a script that is not in the tree, likely one that moved into its package "
@@ -597,7 +646,7 @@ def test_the_uv_run_scan_catches_a_moved_script(tmp_path: Path) -> None:
         )
     )
 
-    assert _missing_uv_run_scripts([doc], _REPO_ROOT) == [(doc, ".agents/shared/scripts/validate_skill.py")]
+    assert _missing_uv_run_scripts([doc], REPO_ROOT) == [(doc, ".agents/shared/scripts/validate_skill.py")]
 
 
 # Calls that put a directory on the import path without naming ``sys.path``.
@@ -710,7 +759,7 @@ def _sys_path_editors(repo_root: Path) -> list[str]:
 
 
 def test_prevent_sys_path_edits() -> None:
-    offenders = _sys_path_editors(_REPO_ROOT)
+    offenders = _sys_path_editors(REPO_ROOT)
     assert len(offenders) <= snapshot(17), (
         "These edit the import path (sys.path, PYTHONPATH, or a pytest pythonpath setting). Import the package instead: a skill's modules live in its python/ "
         "project and a system script's beside it, all importable from the root venv:\n"
@@ -781,7 +830,7 @@ def _path_loading_sites(repo_root: Path) -> list[str]:
 
 
 def test_prevent_loading_modules_by_file_path() -> None:
-    sites = _path_loading_sites(_REPO_ROOT)
+    sites = _path_loading_sites(REPO_ROOT)
     assert len(sites) <= snapshot(6), (
         "These load a module from a file path. Import it instead: a skill's modules live in its "
         "python/ project and a system script's beside it, all importable from the root venv:\n"
