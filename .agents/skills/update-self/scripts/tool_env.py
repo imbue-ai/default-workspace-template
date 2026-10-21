@@ -180,9 +180,8 @@ def remove_app_tool_installs(homes: Sequence[Path], apps_dir: Path) -> list[Path
     Every app runs from the workspace venv, so such a tool is a second, unmaintained
     install. An environment is an app's tool when its receipt names its own package as an
     editable install from under ``apps_dir``, so a user-built app goes too and nothing
-    installed any other way is touched. Paths are
-    compared after ``resolve()``, because the receipt spells the checkout the way the build
-    reached it.
+    installed any other way is touched. Paths are compared after ``resolve()``, because the
+    receipt spells the checkout the way the build reached it.
     """
     apps = apps_dir.resolve()
     removed: list[Path] = []
