@@ -535,10 +535,10 @@ E5, E8, E9, E15, F5, X4), then these. Numbering continues each group's.
   holds for an untouched point; after a rollback that failed, the copies must survive Close.
 - **D5's `--timeout` is the worker's own completion time.** Pass one the stand-in can meet,
   or accept `timed_out: true` beside the right `branch`.
-- **Tool-environment copies need uv-tool launchers.** The staging image's root-venv
-  entrypoints are not uv tools, so its snapshots held bundles only (F3, E15). E20 and E24's
-  tool-environment variants need an image whose critical apps run from uv tools; record
-  which the target is (`uv tool list`, and the snapshot locator's note in the apply output).
+- **An app's environment copy is the venv's.** Every critical app runs from the workspace
+  venv, which the apply copies aside only when a backend manifest changed, so a chat-only
+  or frontend apply holds bundles only (F3, E15). E20 and E24's environment variants need
+  an apply that changes a backend manifest (an app's `pyproject.toml` will do).
 
 ### B. The shared script
 
@@ -593,13 +593,13 @@ E5, E8, E9, E15, F5, X4), then these. Numbering continues each group's.
     prevent installing worker bundles built from stale or unverified source.
 - **E20 A shared backend manifest touches every critical app.** Apply a harmless edit to
   `system/apps/system_interface/pyproject.toml` (a `description` change) with the flag.
-  Pass: the plan reinstalls every app's tool environment (`plan.app_tools` names all three;
-  the apply output lists three reinstalls); the record's `apps` and `programs` name `chat`,
-  `system_interface`, and `terminal`; `snapshots` include a tool-environment copy per app on
-  a uv-tool image; band on chat and terminal tabs and the shell's banner. Roll back: all
-  three restart, each instances API is held to the settled verdict, every band shows the
-  outcome. Before, the record named the shell alone and the rollback left the chat and
-  terminal running the updated code over the restored environment.
+  Pass: the plan counts the change as a backend manifest, so the apply re-syncs the
+  workspace venv every app runs from; the record's `apps` and `programs` name `chat`,
+  `system_interface`, and `terminal`; `snapshots` include the venv and the mngr tool
+  environment; band on chat and terminal tabs and the shell's banner. Roll back: all
+  three restart onto the restored venv, each instances API is held to the settled verdict,
+  every band shows the outcome. Before, the record named the shell alone and the rollback
+  left the chat and terminal running the updated code over the restored environment.
 - **E21 A startup-only change, through the banner.** E8 through the UI: a comment change
   under `system/libs/bootstrap/`, applied with the flag. Pass: `apps: []`, `programs: []`,
   `needs_system_services_restart: true`; the shell's top banner reads "The workspace was
@@ -663,7 +663,7 @@ E5, E8, E9, E15, F5, X4), then these. Numbering continues each group's.
 | `serve_isolated_instance.py up` inner-path check, `is_frontend_built` probe | B11 B12 C16 |
 | `preview_app.py` reframe on sibling down / re-up | C14 |
 | unregistered sidecar: no nudge, no discovery event | C15 |
-| bundle stamp comparison, tool-environment touch | E19 E20 |
+| bundle stamp comparison, venv re-sync touch | E19 E20 |
 | workspace-only notice, fast-settling rollback answered as under way | E21 |
 | serialized launch, refusal relayed verbatim, refusal scoped to its notice state | E22 E23 |
 | restored-page check, copies kept on failure, `confirm-last` on a touched point | E24 |
