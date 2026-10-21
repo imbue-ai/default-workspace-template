@@ -1,0 +1,1 @@
+The comment on the backup's exclusion of the update apply's snapshot directory now lists what that directory holds (the venv, the mngr tool and the built bundles): apps no longer have uv tools of their own to copy aside. Backups are unchanged.
