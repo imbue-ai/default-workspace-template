@@ -114,8 +114,9 @@ def _script_entry_points(script_name: str) -> list[tuple[Path, str]]:
     """Every app package declaring a console script, with the ``module:function`` it points at.
 
     One package may declare several (the terminal's declares ``terminal-app`` and
-    ``terminal-pty`` both), and several packages may declare the same name, in which case only
-    whichever is on PATH runs -- a declaration alone does not say a package runs anything.
+    ``terminal-pty`` both), and several packages may declare the same name, in which case the
+    venv's bin directory holds only whichever installed last -- a declaration alone does not
+    say a package runs anything.
     """
     return [
         (package, scripts[script_name])
