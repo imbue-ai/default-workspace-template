@@ -427,7 +427,8 @@ shell's, chat's, and terminal's supervisord pids and `git rev-parse HEAD`.
   naming the chat's instances API.
 - **E15 Rollback that does not restore health (exit 3).** Only in a workspace you can
   afford to break: after an apply of a chat change with the flag, sabotage the kept
-  snapshot copy of the chat's tool environment (or the bundle) so the restore yields an
+  copy of the chat's bundle (or of the venv, when the apply also changed a backend
+  manifest) so the restore yields an
   unbootable chat, then Roll back. Pass: the outcome says "did not come back healthy",
   `emergency.json` exists, reloading the shell shows the staleness banner, exit 3 in the
   log. Recover by hand (`git revert` of the revert, rebuild) and confirm the banner clears.
