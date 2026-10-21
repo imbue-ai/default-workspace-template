@@ -36,7 +36,7 @@
   html, body { height: 100%; }
   body { margin: 0; font-family: var(--font-sans); color: var(--c-text-primary); background: var(--c-bg); font-size: var(--font-size-body); line-height: 1.5; }
   a { color: inherit; text-decoration: none; }
-  a:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; }
+  a:focus-visible, input:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; }
   .error { color: var(--c-danger-hover); }
 
   .layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); height: 100%; }
@@ -68,9 +68,16 @@
   .back:hover { color: var(--c-text-primary); }
   .skill-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
   .origin { color: var(--c-text-secondary); font-size: var(--font-size-helper); margin: 2px 0 0; }
-  .lede { font-size: 15px; margin: 12px 0 0; max-width: 68ch; }
+  .section-heading { font-size: var(--font-size-helper); font-weight: var(--weight-semibold); color: var(--c-text-secondary); line-height: 1.3; margin: 0; }
+  .description { margin-top: 20px; }
+  .description p { font-size: 15px; margin: 4px 0 0; max-width: 68ch; }
 
-  .instructions { margin-top: 20px; padding-top: 4px; border-top: 1px solid var(--c-border); max-width: 68ch; line-height: 1.6; overflow-wrap: anywhere; }
+  /* The instructions read as the file they come from: a panel of their own, under a strip that names it. */
+  .document { margin-top: 24px; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); }
+  .document-head { display: flex; align-items: baseline; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--c-border-faint); background: var(--c-surface-secondary); border-radius: var(--radius-md) var(--radius-md) 0 0; }
+  .document-file { font-family: var(--font-mono); font-size: var(--font-size-helper); color: var(--c-text-faint); }
+  .instructions { padding: 16px 20px 8px; max-width: calc(68ch + 40px); line-height: 1.6; overflow-wrap: anywhere; }
+  .instructions > :first-child { margin-top: 0; }
   .instructions h1, .instructions h2, .instructions h3, .instructions h4 { font-weight: var(--weight-semibold); line-height: 1.3; margin: 24px 0 8px; }
   .instructions h1 { font-size: 16px; }
   .instructions h2 { font-size: 15px; }
@@ -88,10 +95,6 @@
   .instructions th { font-weight: var(--weight-semibold); border-bottom-color: var(--c-border); }
   .instructions hr { border: none; border-top: 1px solid var(--c-border); margin: 20px 0; }
 
-  details.source { margin-top: 28px; }
-  details.source summary { cursor: pointer; color: var(--c-text-secondary); font-size: var(--font-size-helper); width: max-content; }
-  details.source summary:hover { color: var(--c-text-primary); }
-  pre.raw { margin: 8px 0 0; padding: 12px; border-radius: var(--radius-md); background: var(--c-surface-secondary); font-family: var(--font-mono); font-size: var(--font-size-helper); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 
   /* Too narrow for both panes: the list, or one skill with a way back to it. */
   @media (max-width: 640px) {
@@ -100,6 +103,7 @@
     :root[data-view="skill"] .sidebar, :root[data-view="list"] .reader { display: none; }
     .back { display: inline-block; }
     article { padding: 16px 16px 40px; }
+    .instructions { padding: 12px 14px 4px; }
   }
 </style>
 </head>
@@ -144,6 +148,12 @@
     }
     for (const child of children) node.append(child);
     return node;
+  }
+
+  // "Build an app", "build-app" and "Build_App" all name the same skill.
+  function isSameName(heading, name) {
+    const words = (text) => text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    return words(heading) === words(name);
   }
 
   function fileUrl(path) {
@@ -243,6 +253,11 @@
     document.title = `${summary.title} - Skills`;
     const body = element("div", { class: "instructions" });
     body.innerHTML = instructions.html;
+    // Headings that only repeat what the page already says above them: the skill's name, or the section's own label.
+    const repeated = [summary.name, summary.title, "Instructions"];
+    while (body.firstElementChild?.matches("h1, h2") && repeated.some((name) => isSameName(body.firstElementChild.textContent, name))) {
+      body.firstElementChild.remove();
+    }
     reader.replaceChildren(
       element("article", {}, [
         element("a", { class: "back", href: "/", text: "All skills" }),
@@ -250,9 +265,17 @@
           element("div", {}, [element("h1", { text: summary.title }), element("p", { class: "origin", text: originText(summary) })]),
           element("a", { class: "files-link", href: fileUrl(detail.directory), title: "Open this skill's folder in Files", text: "Show in Files" }),
         ]),
-        element("p", { class: "lede", text: summary.description || "No description." }),
-        body,
-        element("details", { class: "source" }, [element("summary", { text: "Show source" }), element("pre", { class: "raw", text: detail.content })]),
+        element("section", { class: "description", "aria-labelledby": "description-heading" }, [
+          element("h2", { class: "section-heading", id: "description-heading", text: "Description" }),
+          element("p", { text: summary.description || "No description." }),
+        ]),
+        element("section", { class: "document", "aria-labelledby": "instructions-heading" }, [
+          element("div", { class: "document-head" }, [
+            element("h2", { class: "section-heading", id: "instructions-heading", text: "Instructions" }),
+            element("span", { class: "document-file", text: "SKILL.md" }),
+          ]),
+          body,
+        ]),
       ]),
     );
     reader.scrollTop = 0;

@@ -12,7 +12,8 @@ the first line of its description) under two headings, **Yours** (made or
 installed in this workspace) and **Built in** (arrived with the template, changed
 here or not), with a search field; and, beside it, the skill being read: where
 it came from, its description, and its instructions rendered from its
-`SKILL.md`, with the file as written behind "Show source". Choosing a skill
+`SKILL.md` in a panel of their own, labelled with the file's name (a first
+heading that only repeats the skill's name or "Instructions" is left out). Choosing a skill
 changes the address in place, so the shell reopens the window on it, and the
 arrow keys walk the list. Below 640px the page shows the list or one skill, with
 a way back. "Show in Files" opens the skills folder, or the skill's own folder,
