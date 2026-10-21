@@ -43,6 +43,11 @@ FILES_DIR = "system/apps/files"
 
 FILES_FRONTEND_DIR = f"{FILES_DIR}/frontend"
 
+# The Routines app, whose bundle its own server serves from inside its package.
+ROUTINES_DIR = "system/apps/routines"
+
+ROUTINES_FRONTEND_DIR = f"{ROUTINES_DIR}/frontend"
+
 # The frontends' shared library (source only: each app's build compiles what it imports) and
 # the npm workspace every frontend belongs to -- one ``npm ci`` at its root, one lockfile.
 FRONTEND_LIB_DIR = "system/libs/workspace_ui"
@@ -60,6 +65,7 @@ NPM_MANIFEST_PATHS = frozenset(
         f"{CHAT_FRONTEND_DIR}/package.json",
         f"{GETTING_STARTED_FRONTEND_DIR}/package.json",
         f"{FILES_FRONTEND_DIR}/package.json",
+        f"{ROUTINES_FRONTEND_DIR}/package.json",
         f"{FRONTEND_LIB_DIR}/package.json",
     }
 )
@@ -79,6 +85,7 @@ FRONTEND_SOURCE_DIRS = (
     CHAT_FRONTEND_DIR,
     GETTING_STARTED_FRONTEND_DIR,
     FILES_FRONTEND_DIR,
+    ROUTINES_FRONTEND_DIR,
     FRONTEND_LIB_DIR,
 )
 
@@ -142,6 +149,9 @@ GETTING_STARTED_FRONTEND_BUILD_INDEX = f"{GETTING_STARTED_STATIC_DIR}/index.html
 FILES_STATIC_DIR = f"{FILES_DIR}/static"
 FILES_FRONTEND_BUILD_INDEX = f"{FILES_STATIC_DIR}/index.html"
 
+ROUTINES_STATIC_DIR = f"{ROUTINES_DIR}/src/routines_app/static"
+ROUTINES_FRONTEND_BUILD_INDEX = f"{ROUTINES_STATIC_DIR}/index.html"
+
 
 class FrontendBundle(NamedTuple):
     """One frontend's build: the app it belongs to, its sources, and the bundle its backend serves.
@@ -183,6 +193,13 @@ FRONTEND_BUNDLES = (
         FILES_FRONTEND_DIR,
         FILES_STATIC_DIR,
         FILES_FRONTEND_BUILD_INDEX,
+    ),
+    FrontendBundle(
+        "routines",
+        "routines_bundle",
+        ROUTINES_FRONTEND_DIR,
+        ROUTINES_STATIC_DIR,
+        ROUTINES_FRONTEND_BUILD_INDEX,
     ),
 )
 

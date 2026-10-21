@@ -1,5 +1,7 @@
 name = "files"
 display_name = "Files"
+description = "The workspace's file browser: the files here and on the person's connected computers, to open, upload and share."
+api_schema_path = "/__files/api/schema"
 icon = "icon.svg"
 critical = false
 # Files holds nothing between windows: the shell stops it once none shows it.

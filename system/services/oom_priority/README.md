@@ -421,3 +421,30 @@ Two things here are best-effort, not hard guarantees:
   been touched), and file pages and
   shared memory are not counted, so Chromium's shared buffers do not add to
   its badness.
+
+## The resource sampler
+
+`bin/resource_sampler.py` (the `resource_sampler` supervisord program) is not
+part of the shedding at all: it is the System Monitor app's source for CPU and
+the graphs, kept here because it is an always-on, stdlib-only `/proc` reader
+like the cgroup publisher, and because it credits a busy stretch's CPU through
+the agent-pid registry above. Every 5 s it reads each process's
+`/proc/<pid>/stat` once: the change in the sum over every live process of
+`utime + stime + cutime + cstime` is the CPU used since the last walk (a
+process that exited drops out of the sum while its parent's child counters
+grow by its whole lifetime, so nothing is lost or counted twice), which is the
+only CPU accounting that exists under gVisor, where `/proc/stat` and the load
+average read as zero. It writes under `data/.state/system-monitor/`: the
+latest reading with each process's share of capacity and the last 10 minutes
+(`recent.json`, replaced by rename every sample and read back on start so a
+restart does not cut the graph), a day of minute averages (`history.jsonl`),
+and a `cpu_stretch` event (`events/cpu_stretches/events.jsonl`) whenever usage
+stayed at or above 90% of the available cores for at least two minutes,
+crediting the CPU to the registered agents and supervised programs whose
+descendants used it (`resource_sampler.StretchTracker`). The supervised
+programs come from `supervisor_rpc`, the reader of supervisord's control
+socket (`supervised_pids`), which also carries `stop_program`, the stop the
+System Monitor app's Quit for one of the user's apps goes through (a program
+that is not running already counts as stopped). The memory figure beside each
+reading is the guard's own (`meminfo`, the headroom file while it is fresh,
+else `/proc/meminfo`). The design is `docs/system/specs/system-monitor.md`.

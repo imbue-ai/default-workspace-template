@@ -89,9 +89,10 @@ describe("parseMessageRelay", () => {
     const relay = parseMessageRelay({
       type: "open:file",
       deliveries: [
-        { app: "logger", status: 200, detail: "" },
+        { app: "logger", status: 200, detail: "", shown: null, has_no_desktop_window: null, window_id: null },
         { app: "files", status: 200, detail: "", shown: "opened", has_no_desktop_window: true, window_id: "win-1" },
       ],
+      detail: null,
     });
     expect(relay.deliveries).toEqual([
       { app: "logger", has_no_desktop_window: false },

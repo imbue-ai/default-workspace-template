@@ -15,17 +15,23 @@ state, so the module never imports the router.
 
 from __future__ import annotations
 
+from typing import Final
+
+from app_schema.api_schema import RouteModels
+from app_schema.api_schema import RouteTable
+from app_schema.routes import error_response
+from app_schema.routes import model_response
+from app_schema.routes import parse_request_body
 from flask import Flask
 from flask import Response
 from loguru import logger as _loguru_logger
+from pydantic import Field
 
 from imbue.chat.harnesses.message_display import SecretResolutionVerdict
 from imbue.chat.harnesses.message_display import format_secret_resolution_notice
-from imbue.chat.models import ErrorResponse
-from imbue.chat.request_helpers import json_response
-from imbue.chat.request_helpers import parse_json_object_body
 from imbue.chat.secret_requests import ChatLookup
 from imbue.chat.secret_requests import FiledSecretRequest
+from imbue.chat.secret_requests import FiledSecretRequestResponse
 from imbue.chat.secret_requests import InvalidSecretRequestError
 from imbue.chat.secret_requests import NoticeDeliveryError
 from imbue.chat.secret_requests import SecretFileWriteError
@@ -33,11 +39,34 @@ from imbue.chat.secret_requests import SecretRequest
 from imbue.chat.secret_requests import SecretRequestChatBridge
 from imbue.chat.secret_requests import SecretRequestError
 from imbue.chat.secret_requests import SecretRequestNotPendingError
+from imbue.chat.secret_requests import SecretRequestResponse
 from imbue.chat.secret_requests import SecretValuesMismatchError
 from imbue.chat.secret_requests import UnknownSecretRequestError
 from imbue.chat.state import get_state
+from imbue.imbue_common.frozen_model import FrozenModel
 
 logger = _loguru_logger
+
+
+class FileSecretRequestBody(FrozenModel):
+    """Request body for POST /api/secret-requests: what an agent asks the person for."""
+
+    chat_id: str = Field(min_length=1, description="The chat whose agent is asking")
+    file: str = Field(description="The <file> of data/.secrets/<file>.env the values go to")
+    variables: tuple[str, ...] = Field(description="The variable names asked for, in order")
+    rationale: str = Field(description="Why the agent needs them, shown on the card")
+
+
+class SubmitSecretRequestBody(FrozenModel):
+    """Request body for POST /api/secret-requests/{request_id}/submit."""
+
+    values: dict[str, str] = Field(description="The values, by variable name; written to the file and nowhere else")
+
+
+class DeclineSecretRequestBody(FrozenModel):
+    """Request body for POST /api/secret-requests/{request_id}/decline."""
+
+    note: str | None = Field(default=None, description="A note for the agent on why; None for none")
 
 
 class SecretRequestBridgeMissingError(SecretRequestError, RuntimeError):
@@ -53,7 +82,7 @@ def _bridge() -> SecretRequestChatBridge:
 
 def _error_response(detail: str, status_code: int = 400) -> Response:
     logger.warning("Returning secret-request error response ({}): {}", status_code, detail)
-    return json_response(ErrorResponse(detail=detail).model_dump(), status_code=status_code)
+    return error_response(detail, status_code)
 
 
 def _refusal_on_a_secondary_chat() -> Response | None:
@@ -71,10 +100,7 @@ def _refusal_on_a_secondary_chat() -> Response | None:
 
 
 def _request_response(request: SecretRequest, is_notice_delivered: bool | None) -> Response:
-    body = {**request.model_dump(mode="json"), "env_path": request.env_path}
-    if is_notice_delivered is not None:
-        body["is_notice_delivered"] = is_notice_delivered
-    return json_response(body)
+    return model_response(SecretRequestResponse.of(request, is_notice_delivered))
 
 
 def _deliver(request: SecretRequest, verdict: SecretResolutionVerdict) -> bool:
@@ -104,38 +130,31 @@ def _notify_superseded_in_other_chats(filed: FiledSecretRequest) -> None:
 
 
 def file_request() -> Response:
-    payload = parse_json_object_body()
-    if isinstance(payload, Response):
-        return payload
-    chat_id = payload.get("chat_id")
-    file = payload.get("file")
-    variables = payload.get("variables")
-    rationale = payload.get("rationale")
-    if not isinstance(chat_id, str) or not chat_id:
-        return _error_response("chat_id must be a non-empty string")
-    if not isinstance(file, str) or not isinstance(rationale, str):
-        return _error_response("file and rationale must be strings")
-    if not isinstance(variables, list) or not all(isinstance(name, str) for name in variables):
-        return _error_response("variables must be a list of strings")
-    match _bridge().lookup_chat(chat_id):
+    """File a request for secret values (``file``, ``variables``, ``rationale``) from a chat, for the person to answer.
+
+    An agent's ``request_secret.py`` posts it; the chat shows the person a card, and the filed request is answered.
+    """
+    body = parse_request_body(FileSecretRequestBody)
+    match _bridge().lookup_chat(body.chat_id):
         case ChatLookup.NOT_READY:
             return _error_response("The chat app has not read its agent list from mngr yet; try again shortly.", 503)
         case ChatLookup.UNKNOWN:
-            return _error_response(f"Chat '{chat_id}' not found", 404)
+            return _error_response(f"Chat '{body.chat_id}' not found", 404)
         case ChatLookup.KNOWN:
             pass
     try:
-        filed = get_state().secret_requests.file_request(chat_id, file, variables, rationale)
+        filed = get_state().secret_requests.file_request(body.chat_id, body.file, body.variables, body.rationale)
     except InvalidSecretRequestError as e:
         return _error_response(str(e))
     except SecretFileWriteError as e:
         # Filing reads the file already there to report what a submit would replace.
         return _error_response(str(e), 500)
     _notify_superseded_in_other_chats(filed)
-    return json_response(filed.as_wire(), status_code=201)
+    return model_response(filed.as_response(), 201)
 
 
 def get_request(request_id: str) -> Response:
+    """One secret request as filed: pending, stored, declined, or superseded."""
     request = get_state().secret_requests.get(request_id)
     if request is None:
         return _error_response(f"No secret request with id {request_id!r}", 404)
@@ -143,19 +162,13 @@ def get_request(request_id: str) -> Response:
 
 
 def submit(request_id: str) -> Response:
+    """Answer a secret request with the values (``values``, by variable name); they are written to the secrets file."""
     refusal = _refusal_on_a_secondary_chat()
     if refusal is not None:
         return refusal
-    payload = parse_json_object_body()
-    if isinstance(payload, Response):
-        return payload
-    values = payload.get("values")
-    if not isinstance(values, dict) or not all(
-        isinstance(name, str) and isinstance(value, str) for name, value in values.items()
-    ):
-        return _error_response("values must be an object of variable name to string")
+    body = parse_request_body(SubmitSecretRequestBody)
     try:
-        stored = get_state().secret_requests.submit(request_id, values)
+        stored = get_state().secret_requests.submit(request_id, body.values)
     except UnknownSecretRequestError as e:
         return _error_response(str(e), 404)
     except SecretRequestNotPendingError as e:
@@ -168,17 +181,13 @@ def submit(request_id: str) -> Response:
 
 
 def decline(request_id: str) -> Response:
+    """Decline a secret request, with an optional ``note`` for the agent."""
     refusal = _refusal_on_a_secondary_chat()
     if refusal is not None:
         return refusal
-    payload = parse_json_object_body()
-    if isinstance(payload, Response):
-        return payload
-    note = payload.get("note")
-    if note is not None and not isinstance(note, str):
-        return _error_response("note must be a string")
+    body = parse_request_body(DeclineSecretRequestBody)
     try:
-        declined = get_state().secret_requests.decline(request_id, note)
+        declined = get_state().secret_requests.decline(request_id, body.note)
     except UnknownSecretRequestError as e:
         return _error_response(str(e), 404)
     except SecretRequestNotPendingError as e:
@@ -186,6 +195,20 @@ def decline(request_id: str) -> Response:
     except InvalidSecretRequestError as e:
         return _error_response(str(e))
     return _request_response(declined, _deliver(declined, SecretResolutionVerdict.DECLINED))
+
+
+ROUTE_TABLE: Final[RouteTable] = {
+    ("POST", "/api/secret-requests"): RouteModels(
+        request_model=FileSecretRequestBody, response_model=FiledSecretRequestResponse, success_status=201
+    ),
+    ("GET", "/api/secret-requests/{request_id}"): RouteModels(response_model=SecretRequestResponse),
+    ("POST", "/api/secret-requests/{request_id}/submit"): RouteModels(
+        request_model=SubmitSecretRequestBody, response_model=SecretRequestResponse
+    ),
+    ("POST", "/api/secret-requests/{request_id}/decline"): RouteModels(
+        request_model=DeclineSecretRequestBody, response_model=SecretRequestResponse
+    ),
+}
 
 
 def register_routes(application: Flask) -> None:

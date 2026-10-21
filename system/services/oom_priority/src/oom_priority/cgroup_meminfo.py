@@ -119,7 +119,7 @@ def render_host_meminfo(
 
 
 def write_replacing(target_path: Path, content: str) -> None:
-    """Replace the file by rename, since earlyoom rereads it on every poll."""
+    """Replace the file by rename, so a reader (earlyoom on every poll, the system monitor) never sees a half-written one."""
     target_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = target_path.with_name(f"{target_path.name}.{os.getpid()}.tmp")
     temp_path.write_text(content)

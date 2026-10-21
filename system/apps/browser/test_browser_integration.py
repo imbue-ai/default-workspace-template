@@ -137,7 +137,7 @@ def test_http_new_browser_blocked_until_chromium_installed(monkeypatch: pytest.M
     monkeypatch.delenv("BROWSER_SKIP_INSTALL_CHECK", raising=False)
     monkeypatch.setattr(bsession, "_FORTRESS_EXECUTABLE", "/nonexistent/tilion")
     client = runner.application.test_client()
-    resp = client.post("/browsers")
+    resp = client.post("/browsers", json={})
     assert resp.status_code == 503
 
 
@@ -261,7 +261,7 @@ def test_http_cast_does_not_tell_a_running_browser_viewer_it_is_initializing(mon
 
 
 def test_init_gate_blocks_ownership_but_not_read_only_or_create(monkeypatch: pytest.MonkeyPatch) -> None:
-    # While the fleet is still restoring, taking ownership returns 503 "initializing", but
+    # While the fleet is still restoring, taking ownership returns a 503 saying so, but
     # read-only routes (ls/health) AND create stay open -- the locked "init must not block
     # create" decision (a create queues behind the serialized restore on the manager lock).
     _install_fake_browser(monkeypatch)
@@ -270,7 +270,7 @@ def test_init_gate_blocks_ownership_but_not_read_only_or_create(monkeypatch: pyt
     # Acquiring an existing browser is gated during init. This is the FIRST thing an agent
     # does, so it is where the retryable state has to surface.
     acq = client.post("/browsers/alex-smith/acquire", json={}, headers={"X-Mngr-Agent-Id": "A"})
-    assert acq.status_code == 503 and acq.get_json()["status"] == "initializing"
+    assert acq.status_code == 503 and "restoring" in acq.get_json()["detail"]
     # Read-only routes stay open.
     assert client.get("/browsers").status_code == 200
     assert client.get("/health").get_json()["initializing"] is True
@@ -289,7 +289,7 @@ def test_init_gate_blocks_ownership_but_not_read_only_or_create(monkeypatch: pyt
     monkeypatch.setattr(bsession.BrowserSessionManager, "create", fake_create)
     create = client.post("/browsers", json={"name": "morgan-lee"})
     assert create.status_code == 200 and create.get_json()["name"] == "morgan-lee"
-    existing = client.post("/browsers")
+    existing = client.post("/browsers", json={})
     assert existing.status_code == 200 and existing.get_json()["name"] == "alex-smith"
     # conftest re-sets _init_done on teardown.
 
@@ -833,7 +833,9 @@ def test_every_paste_lands_and_leaves_no_key_held_real_chromium() -> None:
                     return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=30)
 
                 def paste(text: str) -> int:
-                    with runner.application.test_request_context():
+                    # The paste view answers through the route table, which is keyed by the matched route.
+                    paste_path = f"/browsers/{browser.browser_id}/clipboard/paste"
+                    with runner.application.test_request_context(paste_path, method="POST"):
                         returned = mediastream.clipboard_paste(
                             browser.browser_id, browser, text.encode(), "text/plain", run_on_loop
                         )

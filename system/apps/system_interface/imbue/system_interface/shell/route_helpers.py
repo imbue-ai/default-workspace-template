@@ -2,20 +2,15 @@
 identity, and how an op settles on the one client it targets (desktop contracts.md section 8)."""
 
 from typing import Final
-from typing import TypeVar
 
-from app_manifest.manifest import describe_validation_error
-from flask import jsonify
+from app_schema.routes import error_response
 from flask import request
 from flask.typing import ResponseReturnValue
-from pydantic import BaseModel
-from pydantic import ValidationError
 from workspace_layout.ops import OpRequester
 from workspace_layout.primitives import ClientId
 
 from imbue.system_interface.shell.client_activity import find_client_id_for_page
 from imbue.system_interface.shell.errors import ClientNotFoundError
-from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import NoTargetClientError
 from imbue.system_interface.shell.identity import IDENTITY_HEADER
 from imbue.system_interface.shell.identity import RequestIdentity
@@ -37,24 +32,9 @@ HTTP_INTERNAL_ERROR: Final[int] = 500
 HTTP_BAD_GATEWAY: Final[int] = 502
 HTTP_SERVICE_UNAVAILABLE: Final[int] = 503
 
-_RequestModel = TypeVar("_RequestModel", bound=BaseModel)
-
-
 def detail_response(message: str, status_code: int) -> ResponseReturnValue:
-    return jsonify({"detail": message}), status_code
-
-
-def parse_request_body(model: type[_RequestModel]) -> _RequestModel:
-    """The current request's body as ``model``; a body that is not a JSON object or not the shape raises
-    InvalidShellValueError (a 400)."""
-    # force=True: a script and curl alike may post without a JSON content type.
-    body = request.get_json(force=True, silent=True)
-    if not isinstance(body, dict):
-        raise InvalidShellValueError("the request body must be a JSON object")
-    try:
-        return model.model_validate(body)
-    except ValidationError as e:
-        raise InvalidShellValueError(describe_validation_error(e)) from e
+    """A refusal or a failure as the ``ErrorResponse`` every route answers them with."""
+    return error_response(message, status_code)
 
 
 def request_identity() -> RequestIdentity:

@@ -754,6 +754,8 @@ def _write_manifest(tmp_path: Path, body: str, icon: str | None = _ICON) -> Path
 _FULL_MANIFEST = """
 name = "files"
 display_name = "Files"
+description = "Browse and open the files in this workspace."
+api_schema_path = "/api/schema"
 icon = "icon.svg"
 critical = false
 stop_when_no_windows = true
@@ -833,6 +835,8 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     assert list(row["default_shortcut"]) == ["launch", "mode"]
     assert row["launcher_rank"] == 20
     assert row["window_closed_path"] == "/api/window-closed"
+    assert row["description"] == "Browse and open the files in this workspace."
+    assert row["api_schema_path"] == "/api/schema"
     assert "actions" not in row
     # The row carries each launch path's param NAMES (the launcher reads them), its presets, and its method, text
     # and draft params, and none of those keys at all for a launch path that declares none of them.
@@ -981,6 +985,8 @@ def test_manifest_registration_is_authoritative_on_every_call(tmp_path: Path) ->
     assert row["program"] == "files-sidecar"
     assert row["critical"] is True
     for stale_key in (
+        "description",
+        "api_schema_path",
         "instances",
         "instances_url",
         "stop_when_no_windows",

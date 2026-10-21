@@ -21,6 +21,8 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import pytest
+from app_schema.testing import assert_api_schema_describes_app
+from app_manifest.testing import assert_document_policy_admits_page
 from chat_background_tasks.listing import chats_from_agents_payload
 from flask import Flask
 from flask.testing import FlaskClient
@@ -33,6 +35,7 @@ from werkzeug.test import TestResponse
 from imbue.chat.accounts import INDEX_VERSION
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import commit_account
+from imbue.chat.accounts import delete_account
 from imbue.chat.accounts import index_path
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.activity_state import ActivityState
@@ -168,6 +171,22 @@ def app(config: Config, signed_in_account: str, tmp_path: Path, messenger: Recor
 @pytest.fixture
 def client(app: Flask) -> FlaskClient:
     return app.test_client()
+
+
+def test_the_chat_documents_are_served_under_the_document_policy(client: FlaskClient) -> None:
+    """The chats document carries a policy a browser would run it under; the terminal frame and the markdown's
+    images, video and audio from anywhere are admitted (the shared default admits images from the chat's own
+    origin only; the sanitizer admits all three tags, see the frontend's markdown test), and a non-page answer
+    carries none."""
+    page = client.get("/")
+
+    assert page.status_code == 200
+    assert_document_policy_admits_page(page)
+    policy = page.headers["Content-Security-Policy"]
+    assert "frame-src http: https:" in policy
+    assert "img-src * data: blob:" in policy
+    assert "media-src * data: blob:" in policy
+    assert "Content-Security-Policy" not in client.get("/api/health").headers
 
 
 def test_list_agents_endpoint(client: FlaskClient) -> None:
@@ -3269,6 +3288,66 @@ def test_create_chat_refuses_an_id_it_never_minted(
     assert "never-minted" in response.get_json()["detail"]
 
 
+def test_create_chat_with_nothing_signed_in_is_refused_as_needing_a_provider(
+    client: FlaskClient, app: Flask, signed_in_account: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A create with no account left to run on says so in words, with the kind the chat root opens the provider
+    gate on."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-123", "primary", "RUNNING")
+    delete_account(signed_in_account)
+
+    response = client.post("/api/chats/create", json={})
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "detail": "Connect an AI provider to start chatting.",
+        "kind": "no_provider_account",
+    }
+
+
+def test_create_chat_naming_a_signed_out_account_is_refused_in_words(
+    client: FlaskClient, app: Flask, signed_in_account: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A create naming an account deleted since the page read the list is refused with the signed-out kind and a
+    sentence, not the account store's "no such account: <id>"."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-123", "primary", "RUNNING")
+    removed, _ = mint_account_dir()
+    commit_account(removed, "anthropic", "Anthropic")
+    delete_account(removed)
+
+    response = client.post("/api/chats/create", json={"account_id": removed})
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "detail": "The account this chat was going to start on was signed out. Choose a provider to start it on.",
+        "kind": "account_signed_out",
+    }
+
+
+def test_create_chat_naming_no_account_skips_a_removed_most_recent_one(
+    client: FlaskClient, app: Flask, signed_in_account: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rail's New chat names no account: once the most recently used account is removed, the create starts on
+    the account still signed in rather than the removed one."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-123", "primary", "RUNNING")
+    removed, _ = mint_account_dir()
+    commit_account(removed, "anthropic", "Anthropic")
+    delete_account(removed)
+
+    response = client.post("/api/chats/create", json={})
+
+    assert response.status_code == 201
+    provisional = state_of(app).agent_manager.get_provisional_chat(response.get_json()["chat_id"])
+    assert provisional is not None
+    assert provisional.account_id == signed_in_account
+
+
 def test_create_chat_rejects_a_conflicting_explicit_name_with_a_409(
     client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -4927,3 +5006,7 @@ def test_a_compaction_that_finished_while_no_watcher_ran_ends_when_the_chat_is_o
         assert agent_info.id not in manager._compaction_pending_by_agent
     finally:
         state.shutdown()
+
+
+def test_the_chat_describes_its_api_the_way_its_manifest_says(client: FlaskClient) -> None:
+    assert_api_schema_describes_app(client, Path(__file__).resolve().parents[2] / "app.toml")

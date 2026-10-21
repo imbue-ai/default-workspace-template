@@ -5,6 +5,8 @@
 # focuses the one window it is for, as the browser's does.
 name = "getting-started"
 display_name = "Getting Started"
+description = "The ways into the workspace: things to start, and the published templates to adapt."
+api_schema_path = "/api/schema"
 icon = "icon.svg"
 critical = false
 # One static page: the shell stops it once no window shows it (and never before the first visit).

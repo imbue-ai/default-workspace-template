@@ -2421,7 +2421,7 @@ def test_a_kept_rollback_point_raises_one_banner_naming_its_apps_and_everything_
     banner.locator(".update-notice-confirm").click()
 
     expect(page.locator(".update-notice-banner")).to_have_count(0, timeout=15000)
-    assert _get_json(f"{e2e_server.base_url}/api/updates/pending") is None
+    assert _get_json(f"{e2e_server.base_url}/api/updates/pending") == {"notice": None}
 
 
 # Past the grace a freshly torn-out pop-out gives the desktop's detach save before writing the detach itself

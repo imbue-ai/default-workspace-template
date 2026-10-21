@@ -17,6 +17,7 @@ import { stageElementReferences } from "../models/elementReferences";
 import { drainToComposer, getEventsForChat, interruptAgent, mintMessageId, sendMessage } from "../models/Response";
 import type { SendStatus } from "../models/Response";
 import { cancelHandoff, switchChat } from "../models/Handoffs";
+import { addModelChoiceFailureListener } from "../models/ModelSettings";
 import {
   getPendingPick,
   isSwitchSending,
@@ -331,6 +332,17 @@ function catchUpOnSignedOutAccount(sendError: unknown): void {
   );
 }
 
+// A pick in the model bar the chat app refused (the chat is switching providers, say) is told in the chat's notice.
+addModelChoiceFailureListener((chatId, detail) =>
+  raiseFailureNotice(chatId, { title: "Couldn't change the model", detail }),
+);
+
+/** The provider chooser for a chat whose account was signed out: the account signed in to or picked is the one the
+ *  chat's next message moves it to. */
+function chooseProviderToContinue(chatId: string): void {
+  openProviderChooser({ onSignedIn: (chosen) => beginSwitchToAccountId(chatId, chosen) });
+}
+
 export function MessageInput(): m.Component<MessageInputAttrs> {
   let messageText = "";
   let currentChatId: string | null = null;
@@ -381,6 +393,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   const authCommandNotice = makeNoticeDialog();
   // mngr's classification of the failure, which decides which recoveries are worth offering.
   let actionFailureKind: SendFailureKind = "unknown";
+  // Whether the chat app refused the send because the chat's account was signed out: sending again cannot help, so
+  // the notice offers choosing a provider instead of Retry and Force.
+  let isActionFailureOnSignedOutAccount = false;
   // Retry for a failure raised by a sibling view, which knows how to repeat its own operation.
   let externalRetry: (() => Promise<void>) | null = null;
   let fileInputElement: HTMLInputElement | null = null;
@@ -767,6 +782,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
               actionFailureTitle = "Couldn't send your message";
               actionFailureDetail = detail;
               actionFailureKind = describeRequestErrorKind(err);
+              isActionFailureOnSignedOutAccount = sendFailureKind(err) === ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND;
               actionFailureRecovery = { chatId, text: sentText, sentText: finalText, attachments: sentAttachments };
             }
           }
@@ -1055,6 +1071,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         actionFailureInFlight = null;
         externalRetry = null;
         actionFailureKind = "unknown";
+        isActionFailureOnSignedOutAccount = false;
         actionFailureTitle = "Couldn't send your message";
       }
 
@@ -1132,6 +1149,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             // The reason can change between attempts -- a blocked input can become an agent that
             // is gone -- and the buttons follow the kind, so it has to be re-read with the text.
             actionFailureKind = describeRequestErrorKind(err);
+            isActionFailureOnSignedOutAccount = sendFailureKind(err) === ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND;
             actionFailureInFlight = null;
           } else {
             clearActionFailureNotice();
@@ -1179,6 +1197,26 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
 
       function renderActionFailureNotice(detail: string): m.Children {
         const recovery = actionFailureRecovery;
+        if (isActionFailureOnSignedOutAccount) {
+          // The message is back in the composer; it goes out on the provider chosen here, with the chat's next send.
+          const signedOutChatId = recovery?.chatId ?? chatId;
+          return m(actionFailureNotice, {
+            title: actionFailureTitle,
+            body: [detail],
+            dismissLabel: "Cancel",
+            onDismiss: dismissActionFailureNotice,
+            actions: [
+              {
+                label: "Choose a provider",
+                run: () => {
+                  clearActionFailureNotice();
+                  m.redraw();
+                  if (signedOutChatId) chooseProviderToContinue(signedOutChatId);
+                },
+              },
+            ],
+          });
+        }
         // A pane that is gone is not going to be there on the next attempt, so Retry is not
         // offered at all rather than offered and guaranteed to fail. Every other kind -- and
         // anything unclassified -- keeps it.
@@ -1317,7 +1355,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         return providerNotice(
           "message-input-signed-out",
           "You signed out of the account this chat runs on. Choose a provider to continue it on.",
-          () => openProviderChooser({ onSignedIn: (chosen) => beginSwitchToAccountId(signedOutChatId, chosen) }),
+          () => chooseProviderToContinue(signedOutChatId),
         );
       }
 

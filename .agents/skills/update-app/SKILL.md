@@ -156,15 +156,33 @@ with the app through hardening, testing, and publishing.
 Check the app's `stop_when_no_windows` against what the change makes it do.
 The scaffold writes `true`: the shell stops the program a minute after the
 app's last window closes and starts it again only on the next request. If
-the change gives the app work between requests -- a background thread or
-scheduler that refreshes data, a poller or file watcher, a websocket or
-subscription to an outside service, a job that must finish after the user
-closes the window, or an API another agent drives with no window open --
-set it to `false` in `app.toml`, or that work is lost or interrupted at the
-stop. The reverse holds: an app that no longer does anything between
+the change gives the app work between requests -- a poller or file watcher,
+a websocket or subscription to an outside service, a job that must finish
+after the user closes the window, or an API another agent drives with no
+window open -- set it to `false` in `app.toml`, or that work is lost or
+interrupted at the stop. Work that runs on a schedule and then exits (a
+refresh of the app's data every hour, a nightly sync) is not a reason to
+keep the service up: it is a routine with `--app <name>`, made with the
+`manage-routines` skill, never a thread or scheduler inside the service.
+The reverse holds: an app that no longer does anything between
 requests can go back to `true`. The field is read at registration, so the
 restart in step 2 is what applies it; `uv run app-manifest validate-manifest
 system/apps/<package>/app.toml` checks the file.
+
+An app with an `api_schema_path` in its manifest describes its own API there:
+an OpenAPI document built from its routes on every request, which is what a
+visiting agent reads instead of the code (`build-app`, "The app describes its
+own API"). A route the change adds is listed on its own; what the change owes
+the document is a docstring on each new or changed view (its first paragraph is
+the operation's summary, in the user's terms), an entry in the app's route table
+for each new route (`RouteModels` with the pydantic models it reads through
+`parse_request_body` and answers through `model_response`, or `SchemalessRoute`
+with the reason it exchanges no JSON), the table updated when a route's models
+or status change, and an updated `description` in `app.toml` when the change
+moves what the app is for. A parse or an answer the table does not name fails
+the request, and the app's own test (`runner_test.py` in a scaffolded app) fails
+when the document and the manifest disagree, a view has no docstring, or a
+route is missing from the table, so run it with the change.
 
 ### 2. Apply it so it actually takes effect
 

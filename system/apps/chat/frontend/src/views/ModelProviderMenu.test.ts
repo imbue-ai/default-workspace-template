@@ -36,6 +36,7 @@ vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
 const settingsState: { choice: unknown } = { choice: null };
 const picks: unknown[] = [];
 vi.mock("../models/ModelSettings", () => ({
+  addModelChoiceFailureListener: () => undefined,
   effectiveChoice: () => settingsState.choice,
   changedAxes: () => ["model"],
   setModelChoice: (...args: unknown[]) => picks.push(args),

@@ -136,7 +136,7 @@ def test_the_sidebar_lists_the_shortcuts_and_every_share_with_how_it_reaches_the
     (notes_copy / "todo.md").write_text("- call\n")
     (files_root / "home/user/synced_folders/host-mac/Users/kim/Brand Fonts").mkdir(parents=True)
     connections.listed = {
-        "devices": [{"id": "host-mac", "name": "Kims-Mac.local"}],
+        "devices": [{"id": "host-mac", "name": "Kims-Mac.local", "has_device_paths": True}],
         "shares": [
             {
                 "device": "host-mac",
@@ -253,7 +253,7 @@ def test_a_file_dropped_on_a_shared_folder_uploads_into_it(
     copy = files_root / "home/user/synced_folders/host-mac/Users/kim/notes"
     copy.mkdir(parents=True)
     connections.listed = {
-        "devices": [{"id": "host-mac", "name": "Kims-Mac.local"}],
+        "devices": [{"id": "host-mac", "name": "Kims-Mac.local", "has_device_paths": True}],
         "shares": [
             {
                 "device": "host-mac",

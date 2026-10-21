@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from system_monitor.programs import chat_agent_id, is_code_checker
+from system_monitor.tail import read_tail
 
 # The guard's own log: the ledger keeps only a thread name ("MainThread"), but this names the
 # full command of everything it stopped, and how low memory was.
@@ -27,17 +28,6 @@ STOPS_WINDOW = timedelta(hours=24)
 _SENDING = re.compile(
     r'^sending SIG\w+ to process (\d+) uid \d+ "([^"]*)".*?cmdline "(.*)$'
 )
-
-
-def _read_tail(path: Path, limit_bytes: int) -> list[str]:
-    """The lines in the last ``limit_bytes`` of ``path``; a line cut in two at the start is
-    dropped. Raises OSError like ``read_text``."""
-    with path.open("rb") as file:
-        size = file.seek(0, 2)
-        start = max(0, size - limit_bytes)
-        file.seek(start)
-        lines = file.read().decode(errors="replace").splitlines()
-    return lines[1:] if start > 0 else lines
 
 
 def read_shed_log(log: Path = SHED_LOG) -> list[dict[str, Any]]:
@@ -57,7 +47,7 @@ def read_shed_log(log: Path = SHED_LOG) -> list[dict[str, Any]]:
 def _parse_shed_log(log: Path, mtime_ns: int, size: int) -> list[dict[str, Any]]:
     # mtime_ns and size are only the cache key: a change to either reads the file afresh.
     try:
-        lines = _read_tail(log, SHED_LOG_TAIL_BYTES)
+        lines = read_tail(log, SHED_LOG_TAIL_BYTES)
     except OSError:
         return []
     out: list[dict[str, Any]] = []
@@ -132,7 +122,7 @@ def read_ledger(ledger: Path) -> list[dict[str, Any]]:
 @functools.lru_cache(maxsize=2)
 def _parse_ledger(ledger: Path, mtime_ns: int, size: int) -> list[dict[str, Any]]:
     try:
-        lines = _read_tail(ledger, LEDGER_TAIL_BYTES)
+        lines = read_tail(ledger, LEDGER_TAIL_BYTES)
     except OSError:
         return []
     records: list[dict[str, Any]] = []

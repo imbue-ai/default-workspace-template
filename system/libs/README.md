@@ -8,6 +8,9 @@ README for details.
 - `app_manifest/` - The app manifest (`system/apps/<package>/app.toml`) and
   app registry (`data/.state/apps.toml`) models every app is described by,
   and the `app-manifest validate-manifest` command.
+- `app_schema/` - An app's self-description: the OpenAPI document of its HTTP
+  API, built from its Flask routes and served at the path its manifest names
+  in `api_schema_path`, and the assertion an app's tests make about it.
 - `workspace_layout/` - The shell's layout routes as one typed client the
   apps share, and the agent-facing `uv run --no-sync workspace-layout` command that
   reads and arranges the desktop.
@@ -15,9 +18,10 @@ README for details.
   a member of the npm workspace at `system/package.json`): the design
   system's token layer, the shared components, and the browser-side app
   contract and embed modules the frontends build from.
-- `automations/` - The machinery that runs automations (skills on a
-  schedule): the durable recurring-job runner, the cron env wrapper, and the
-  automation-agent waker (see the manage-scheduled-tasks skill).
+- `routines/` - Everything that runs on a schedule: the routine definitions
+  under `system/routines/`, the scheduler, the runner for command runs and
+  skill runs (automations), the run ledger, the cron env wrapper, and the
+  `routines` command (see the manage-routines skill and the Routines app).
 - `bootstrap/` - First-boot setup; then launches supervisord, which supervises
   the apps and services.
 - `chat_background_tasks/` - The marker files recording the background tasks

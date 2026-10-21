@@ -1,0 +1,33 @@
+# The Routines app: everything in the workspace that runs on a schedule (system/libs/routines), with each
+# routine's health, next run and history, and run-now, on/off, reschedule and fix controls. Its pages are
+# the list at ``/``, a routine at ``/<id>``, a run at ``/<id>/runs/<run id>`` and its whole log at
+# ``/<id>/runs/<run id>/log``; it stores nothing of its own
+# (the library's state under data/.state/routines is what it reads). It declares no launch path, so the
+# desktop offers the synthesized ``open`` at its root; its shortcut focuses the one window it is for.
+name = "routines"
+display_name = "Routines"
+description = "Everything that runs on a schedule: each routine's health, next run and history, with run-now, on/off, reschedule and fix controls."
+api_schema_path = "/api/schema"
+icon = "icon.svg"
+critical = false
+# Only answers requests: the shell stops it once no window shows it and starts it again on the next request.
+stop_when_no_windows = true
+priority = "routines"
+# After the terminal (40) and before System Monitor (50).
+launcher_rank = 45
+
+[default_shortcut]
+launch = "open"
+mode = "focus"
+
+# A notification from the routines runner (a routine failing, needing the user, or working again) lands on the
+# routine's page: the desktop posts this message into the shell, which shows the page for the declaring app.
+[[message_handlers]]
+type = "minds:show-routine"
+show = "/{routine_id}"
+
+# A preview serves the pages on a free port over the live state, read-only: it refuses to start runs or rewrite
+# definitions, which would reach the live workspace, and the library's state is nothing of this app's to copy.
+[preview]
+env = {ROUTINES_APP_PORT = "{port:main}", ROUTINES_APP_HOST = "{host}", ROUTINES_APP_PREVIEW = "1"}
+health_path = "/api/health"

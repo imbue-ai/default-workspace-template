@@ -2,6 +2,7 @@ from datetime import datetime
 from enum import auto
 from pathlib import Path
 
+from app_schema.api_schema import ErrorResponse
 from chat_background_tasks.markers import TaskSource
 from pydantic import Field
 from pydantic import SecretStr
@@ -35,6 +36,18 @@ class AgentCreationError(ValueError):
     ...
 
 
+class NoProviderAccountError(AgentCreationError):
+    """Raised when a create names no account and none is signed in: the user has to choose a provider first."""
+
+    ...
+
+
+class SignedOutAccountError(AgentCreationError):
+    """Raised when a create names an account that has been signed out since the caller read the account list."""
+
+    ...
+
+
 class AgentEventsStatus(FrozenModel):
     """Whether the agent-lifecycle event stream is actually feeding this chat instance.
 
@@ -45,6 +58,20 @@ class AgentEventsStatus(FrozenModel):
 
     is_stream_healthy: bool = Field(description="Whether lifecycle events are actually reaching this instance")
     detail: str = Field(description="Human-readable explanation of the current state")
+
+
+class HealthResponse(FrozenModel):
+    """Response from GET /api/health: the probe's answer."""
+
+    status: str = Field(description="'ok' whenever the app answers at all")
+    is_frontend_built: bool = Field(description="Whether the built chat page is being served")
+    agent_events: AgentEventsStatus = Field(description="Whether agent lifecycle events are reaching this instance")
+
+
+class OkResponse(FrozenModel):
+    """The answer of a route that has nothing to say beyond that it did what was asked."""
+
+    status: str = Field(default="ok", description="'ok'")
 
 
 class AgentRenameError(ValueError):
@@ -203,6 +230,19 @@ class InterruptAgentResponse(FrozenModel):
     status: str = Field(description="Status of the interrupt operation")
 
 
+class ScreenCaptureResponse(FrozenModel):
+    """Response from GET /api/chats/{id}/screen: the agent's terminal pane as text."""
+
+    screen: str | None = Field(description="The pane's visible text (and scrollback when asked); None when it failed")
+    error: str | None = Field(default=None, description="Why the capture failed; None when it succeeded")
+
+
+class ChatWatchersResponse(FrozenModel):
+    """Response from GET /api/chats/{id}/watchers."""
+
+    watched_by: tuple[str, ...] = Field(description="The page instances shown and focused on the chat now")
+
+
 class DrainToComposerResponse(FrozenModel):
     """Response from POST /api/chats/{id}/drain-to-composer.
 
@@ -273,12 +313,6 @@ class HandoffError(ValueError):
     """Raised when a switch (a handoff or a rebind) cannot begin, be cancelled, or be retried as asked (a 400)."""
 
     ...
-
-
-class ErrorResponse(FrozenModel):
-    """Error response body."""
-
-    detail: str = Field(description="Human-readable error description")
 
 
 class QueuedMessageState(FrozenModel):
@@ -484,6 +518,13 @@ class HandoffState(FrozenModel):
     failed_step: HandoffFailedStep | None = Field(
         default=None, description="Which step failed, in the failed phase: the agent's start, or the model pick"
     )
+    is_fresh_start: bool = Field(
+        default=False,
+        description=(
+            "Whether the chat had no user turn to carry over, so the switch only starts it on the target: the page "
+            "shows no handoff for it"
+        ),
+    )
     has_landed: bool = Field(
         default=False,
         description=(
@@ -524,6 +565,18 @@ class HeldSendResponse(FrozenModel):
     """Response from the message route while the chat is converging: the send is held for the successor."""
 
     status: str = Field(description="'held'")
+    phase: HandoffPhase = Field(description="The phase the chat is in")
+
+
+class SendFailureResponse(ErrorResponse):
+    """A send the chat could not take, with the kind of failure so the page knows what to offer."""
+
+    kind: str = Field(description="The failure's kind: what trying again can and cannot help with")
+
+
+class ConvergingResponse(ErrorResponse):
+    """The 409 a verb answers while the chat converges on a new agent, with the handoff's phase."""
+
     phase: HandoffPhase = Field(description="The phase the chat is in")
 
 
@@ -681,6 +734,10 @@ class CreateChatRequest(FrozenModel):
         default=None,
         description="The model the chat runs on, applied once the agent is up and before its first message; "
         "None for the harness's default",
+    )
+    project_id: str = Field(
+        default="",
+        description="The project the chat is started in, recorded as the agent's ``project`` label; empty for none",
     )
 
 
@@ -936,6 +993,15 @@ class ClaudeAuthCredentialsRequest(FrozenModel):
     """
 
     credentials: SecretStr = Field(description="Env-var-style credential lines (KEY=VALUE per line)")
+
+
+class ClaudeAuthCredentialsResponse(FrozenModel):
+    """Response from POST /api/claude-auth/submit-credentials: the account the paste minted."""
+
+    account_id: str = Field(description="The minted account's id")
+    display: str = Field(description="The provider noun the account shows as")
+    logged_in: bool = Field(description="True: the account exists, which is the signed-in-with-Imbue flag")
+    auth_mode: str = Field(description="The auth mode the paste was understood as ('imbue', 'api_key', ...)")
 
 
 class LatchkeyPermissionInfo(FrozenModel):
