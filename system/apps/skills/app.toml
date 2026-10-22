@@ -12,7 +12,6 @@ critical = false
 # Only answers requests: the shell stops it once no window shows it and starts it again on the next request.
 stop_when_no_windows = true
 priority = "skills"
-# After Routines (45) and before System Monitor (50).
 launcher_rank = 48
 # It reports on the workspace itself, so the Share tab lists it under its System group.
 system = true
