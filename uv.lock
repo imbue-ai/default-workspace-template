@@ -26,7 +26,6 @@ resolution-markers = [
 members = [
     "app-manifest",
     "app-schema",
-    "automations",
     "bootstrap",
     "caretaker",
     "chat",
@@ -41,6 +40,8 @@ members = [
     "oom-priority",
     "pytest-executable-tmp",
     "pytest-workspace-env",
+    "routines",
+    "routines-app",
     "screen",
     "share-gateway",
     "system-interface",
@@ -340,21 +341,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/9a/8e/82a0fe20a541c0314
 wheels = [
     { url = "https://files.pythonhosted.org/packages/64/b4/17d4b0b2a2dc85a6df63d1157e028ed19f90d4cd97c36717afef2bc2f395/attrs-26.1.0-py3-none-any.whl", hash = "sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309", size = 67548, upload-time = "2026-03-19T14:22:23.645Z" },
 ]
-
-[[package]]
-name = "automations"
-version = "0.1.0"
-source = { virtual = "system/libs/automations" }
-
-[package.dev-dependencies]
-dev = [
-    { name = "ty" },
-]
-
-[package.metadata]
-
-[package.metadata.requires-dev]
-dev = [{ name = "ty", specifier = "==0.0.85" }]
 
 [[package]]
 name = "bcrypt"
@@ -974,6 +960,7 @@ dependencies = [
     { name = "imbue-common" },
     { name = "litellm" },
     { name = "playwright" },
+    { name = "routines" },
     { name = "share-gateway" },
     { name = "tk-command-parsing" },
     { name = "tomlkit" },
@@ -1012,6 +999,7 @@ requires-dist = [
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=b3b1beefc17772a597bd64b7d61f0c64b52d38f0" },
     { name = "litellm", specifier = ">=1.88.1" },
     { name = "playwright", specifier = "==1.58.0" },
+    { name = "routines", editable = "system/libs/routines" },
     { name = "share-gateway", editable = "system/services/share_gateway" },
     { name = "tk-command-parsing", editable = "system/libs/tk_command_parsing" },
     { name = "tomlkit", specifier = ">=0.12" },
@@ -3423,6 +3411,94 @@ wheels = [
 ]
 
 [[package]]
+name = "routines"
+version = "0.1.0"
+source = { editable = "system/libs/routines" }
+dependencies = [
+    { name = "app-manifest" },
+    { name = "chat-background-tasks" },
+    { name = "click" },
+    { name = "httpx" },
+    { name = "imbue-common" },
+    { name = "loguru" },
+    { name = "pydantic" },
+    { name = "tomlkit" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "inline-snapshot" },
+    { name = "pytest" },
+    { name = "ty" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "app-manifest", editable = "system/libs/app_manifest" },
+    { name = "chat-background-tasks", editable = "system/libs/chat_background_tasks" },
+    { name = "click", specifier = ">=8.1" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=b3b1beefc17772a597bd64b7d61f0c64b52d38f0" },
+    { name = "loguru", specifier = ">=0.7" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "tomlkit", specifier = ">=0.12" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "inline-snapshot", specifier = ">=0.13" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "ty", specifier = "==0.0.85" },
+]
+
+[[package]]
+name = "routines-app"
+version = "0.1.0"
+source = { editable = "system/apps/routines" }
+dependencies = [
+    { name = "app-manifest" },
+    { name = "app-schema" },
+    { name = "flask" },
+    { name = "imbue-common" },
+    { name = "loguru" },
+    { name = "pydantic" },
+    { name = "routines" },
+    { name = "werkzeug" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "app-schema", extra = ["testing"] },
+    { name = "inline-snapshot" },
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+    { name = "ruff" },
+    { name = "ty" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "app-manifest", editable = "system/libs/app_manifest" },
+    { name = "app-schema", editable = "system/libs/app_schema" },
+    { name = "flask", specifier = ">=3.0" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=b3b1beefc17772a597bd64b7d61f0c64b52d38f0" },
+    { name = "loguru", specifier = ">=0.7" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "routines", editable = "system/libs/routines" },
+    { name = "werkzeug", specifier = ">=3.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
+    { name = "inline-snapshot", specifier = ">=0.13" },
+    { name = "pytest", specifier = ">=9.0" },
+    { name = "pytest-timeout", specifier = ">=2.3.0" },
+    { name = "ruff", specifier = "~=0.12.8" },
+    { name = "ty", specifier = "==0.0.85" },
+]
+
+[[package]]
 name = "rpds-py"
 version = "2026.6.3"
 source = { registry = "https://pypi.org/simple" }
@@ -3857,6 +3933,8 @@ dependencies = [
     { name = "app-manifest" },
     { name = "app-schema" },
     { name = "flask" },
+    { name = "host-backup" },
+    { name = "httpx" },
     { name = "imbue-common" },
     { name = "oom-priority" },
     { name = "pydantic" },
@@ -3874,6 +3952,8 @@ requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "app-schema", editable = "system/libs/app_schema" },
     { name = "flask", specifier = ">=3.0" },
+    { name = "host-backup", editable = "system/services/host_backup" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=b3b1beefc17772a597bd64b7d61f0c64b52d38f0" },
     { name = "oom-priority", editable = "system/services/oom_priority" },
     { name = "pydantic", specifier = ">=2.0" },

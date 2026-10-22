@@ -52,6 +52,7 @@ from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
 from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_naming import ChatNamer
+from imbue.chat.chat_naming import chat_naming_prompt
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_transcript import agent_switch_event_id
 from imbue.chat.config import Config
@@ -931,7 +932,7 @@ def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
         manager._agents[agent_id] = AgentStateItem(
             id=agent_id, name="Chat-4", state="RUNNING", labels={"display_name": "Chat 4"}, work_dir=None
         )
-    completion = ScriptedOneShotCompletion(["Rome trip: plan five days in May"])
+    completion = ScriptedOneShotCompletion(["Five days in Rome"])
     renames: list[tuple[ChatId, str]] = []
     namer = ChatNamer(
         chat_files_root=tmp_path / "chats",
@@ -949,8 +950,8 @@ def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
     response = client.post(f"/api/chats/{agent_id}/message", json={"message": "Help me plan 5 days in Rome"})
 
     assert response.status_code == 200
-    assert completion.prompts == ["Help me plan 5 days in Rome"]
-    assert renames == [(ChatId(agent_id), "Rome trip: plan five days in May")]
+    assert completion.prompts == [chat_naming_prompt("Help me plan 5 days in Rome")]
+    assert renames == [(ChatId(agent_id), "Five days in Rome")]
 
 
 def _client_with_account_labeled_chat(
@@ -3653,6 +3654,26 @@ def test_ignores_requested_at_cache_busting_query(client: FlaskClient, tmp_path:
     assert tagged.content_type == "image/png"
     assert tagged.data == b"fake-png-bytes"
     assert tagged.headers["Cache-Control"] == "public, max-age=31536000, immutable"
+
+
+def test_serves_image_as_an_attachment_for_the_lightbox_download(client: FlaskClient, tmp_path: Path) -> None:
+    """The lightbox's Download asks for the image with ``download``, beside its message's cache key: the image comes
+    as an attachment under its own name, and a missing one is a not-found in plain words the lightbox can show."""
+    image_path = tmp_path / "chart.png"
+    image_path.write_bytes(b"fake-png-bytes")
+
+    downloaded = client.get(f"{image_path}?requested_at=2026-07-24T00%3A00%3A00Z&download=")
+
+    assert downloaded.status_code == 200
+    assert downloaded.content_type == "image/png"
+    assert downloaded.data == b"fake-png-bytes"
+    assert downloaded.headers["Content-Disposition"] == "attachment; filename=chart.png"
+
+    missing = client.get(f"{tmp_path / 'gone.png'}?download=")
+    assert missing.status_code == 404
+    assert missing.content_type.startswith("text/plain")
+    assert missing.get_data(as_text=True) == f"There's nothing at {tmp_path / 'gone.png'}."
+    assert "Content-Disposition" not in missing.headers
 
 
 def test_serves_image_in_nested_subdirectory(client: FlaskClient, tmp_path: Path) -> None:

@@ -2197,11 +2197,11 @@ def _serve_file_or_document(path: str) -> Response:
     """Serve an agent-authored file by its absolute on-disk path, else the chat page for a one-segment key.
 
     A chat page's markdown names files by their absolute path (``/home/user/...``), which the
-    browser resolves against this origin; ``try_serve_file`` answers those (an image inline,
-    any other existing file as a download). A single path segment that is no file is a chat
-    page's key; anything else is not found.
+    browser resolves against this origin; ``try_serve_file`` answers those (an image inline, or
+    as a download when asked for with ``?download``; any other existing file as a download). A
+    single path segment that is no file is a chat page's key; anything else is not found.
     """
-    file_response = try_serve_file(path)
+    file_response = try_serve_file(path, is_download="download" in request.args)
     if file_response is not None:
         return file_response
     if "/" in path:

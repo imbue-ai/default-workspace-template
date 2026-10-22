@@ -10,7 +10,7 @@ set -euo pipefail
 # Keep in lockstep with the version ci.yml installs on the runner: the two talk
 # to each other (offload applies each run's source diff inside the image with
 # this binary).
-readonly OFFLOAD_VERSION="0.9.14"
+readonly OFFLOAD_VERSION="0.10.0"
 readonly REPO_ROOT="/home/user/workspace"
 
 cd "$REPO_ROOT"

@@ -76,7 +76,7 @@
         },
         {
           "summary": "no weekly schedule ships with the template",
-          "resolution": "schedule the pipeline's 'run all' on a cadence (e.g. Monday morning) via the manage-scheduled-tasks skill"
+          "resolution": "schedule the pipeline's 'run all' on a cadence (e.g. Monday morning) as a routine via the manage-routines skill"
         },
         {
           "summary": "the web view's 'Meh' de-emphasize control is client-side only",

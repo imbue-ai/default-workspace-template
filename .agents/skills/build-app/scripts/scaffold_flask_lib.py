@@ -733,8 +733,10 @@ program = "{name}"
 # The shell stops the app once no window shows it (a minute after the last one
 # closes) and starts it again on the next request; false keeps it running for
 # the life of the workspace. Set false if the app does work between requests
-# (a background thread, a poller, a scheduled refresh, a subscription to an
-# outside service, a job that outlives the window): a stop loses that work.
+# (a background thread, a poller, a subscription to an outside service, a job
+# that outlives the window): a stop loses that work. Periodic work (a refresh
+# every N minutes, a nightly sync) is a routine, not a loop in the service:
+# see the manage-routines skill.
 stop_when_no_windows = true
 
 # How update-app boots a throwaway preview of this app: on a free port, over a
@@ -876,7 +878,6 @@ def _run_uv_sync(repo_root: Path) -> None:
 def _start_and_wait(
     repo_root: Path, name: str, port: int, timeout: float = 10.0
 ) -> None:
-    # Reload supervisord to pick up the new program block
     _run_checked(["supervisorctl", "reread"], repo_root, "supervisorctl reread")
     _run_checked(["supervisorctl", "update"], repo_root, "supervisorctl update")
 

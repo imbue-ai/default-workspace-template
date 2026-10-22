@@ -43,10 +43,29 @@ Built-in apps:
   the Screen, the `browser` launch path, the fleet API and the CDP proxy agents
   drive it through, `agentic-browser-fleet`). Served on port 8090 by the
   `screen-service` package.
-- `system_monitor/` - Memory & disk: one page showing how much memory and disk
-  the workspace is using, which chats, code checkers, and apps hold the memory,
-  and which programs the memory guard stopped in the last 24 hours. Served on
-  port 8040 by the `system-monitor` package; it keeps nothing on disk.
+
+
+- `routines/` - Routines: everything that runs on a schedule (the routines
+
+  library, `system/libs/routines/`), each with its health, next run and history,
+
+  and run-now, on/off, reschedule and fix controls. Served on port 8050 by the
+
+  `routines-app` package; it stores nothing of its own.
+
+- `system_monitor/` - System Monitor: how much CPU, memory and disk the
+
+  workspace is using, on an overview and a view per resource: which chats,
+
+  code checkers, and apps use them, the busy stretches, which programs the
+
+  memory guard stopped in the last 24 hours, and the state of the backups.
+
+  Served on port 8040 by the `system-monitor` package; it keeps nothing on
+
+  disk (its graphs come from the `resource_sampler` program beside the memory
+
+  guard, `system/services/oom_priority/`).
 - `datalib/` - The Datalib app: datalib's web UI (`datalib-http`) over the store
   the `datalib` skill writes. Not announced to users yet: its program is not in
   `system/supervisord.conf.d/` until that skill's install script copies it there,

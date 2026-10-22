@@ -32,6 +32,7 @@ _BUILT_IN_APP_PACKAGES = (
     "files",
     "getting_started",
     "screen",
+    "routines",
     "system_interface",
     "system_monitor",
     "terminal",
@@ -438,9 +439,9 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert [
         (handler.type, handler.path) for handler in by_name["screen"].message_handlers
     ] == [("open:url", "/api/open-url")]
-    # The stop-when-no-windows spec, section 4.2: Files, Getting Started, and Memory & disk stop once no
-    # window shows them; the Screen never stops for emptiness (the Screen spec, D3); and the critical ones (which
-    # the manifest refuses the field on) never stop.
+    # The stop-when-no-windows spec, section 4.2: Files, Getting Started, Routines, and System Monitor stop
+    # once no window shows them; the Screen never stops for emptiness (the Screen spec, D3); and the critical
+    # ones (which the manifest refuses the field on) never stop.
     assert {
         name: manifest.stop_when_no_windows for name, manifest in by_name.items()
     } == {
@@ -451,6 +452,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "files": True,
         "screen": False,
         "getting-started": True,
+        "routines": True,
         "system-monitor": True,
     }
     # Where the minds Share tab lists each built-in: never for an internal one, under its System group for the
@@ -470,6 +472,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "files": "app",
         "screen": "system",
         "getting-started": "system",
+        "routines": "app",
         "system-monitor": "system",
     }
     # Getting Started (launcher-and-getting-started plan section 3.6): one window is what it is for, so its shortcut
@@ -488,8 +491,8 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "getting-started",
         "--no-register",
     )
-    # Memory & disk: one polling page, focused like Getting Started, with its own band so it is shed after every
-    # user service.
+    # System Monitor: one polling page (its views are paths of it, reached inside the app), focused like Getting
+    # Started, with its own band so it is shed after every user service.
     assert by_name["system-monitor"].critical is False
     assert by_name["system-monitor"].program == "system-monitor"
     assert by_name["system-monitor"].priority == "system-monitor"
@@ -497,6 +500,19 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["system-monitor"].default_shortcut is not None
     assert by_name["system-monitor"].default_shortcut.launch == "open"
     assert by_name["system-monitor"].default_shortcut.mode == "focus"
+    # Routines: one window over the schedule, focused like System Monitor; the runner's notifications land on a
+    # routine's page through the one message type it registers, with the library's routine_id field as the path.
+    assert by_name["routines"].critical is False
+    assert by_name["routines"].program == "routines"
+    assert by_name["routines"].priority == "routines"
+    assert by_name["routines"].launch_paths == ()
+    assert by_name["routines"].default_shortcut is not None
+    assert by_name["routines"].default_shortcut.launch == "open"
+    assert by_name["routines"].default_shortcut.mode == "focus"
+    assert [
+        (handler.type, handler.show) for handler in by_name["routines"].message_handlers
+    ] == [("minds:show-routine", "/{routine_id}")]
+    assert by_name["routines"].preview.env["ROUTINES_APP_PREVIEW"] == "1"
     # One order for the built-ins: the desktop seeds its shortcuts in it and the launcher lists its apps in it.
     assert sorted(
         (manifest.launcher_rank, manifest.name)
@@ -508,6 +524,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         (20, "files"),
         (30, "screen"),
         (40, "terminal"),
+        (45, "routines"),
         (50, "system-monitor"),
     ]
     # Every seeded shortcut opens a new window of its app; the one Screen is focused instead (the Screen spec D2).

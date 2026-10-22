@@ -22,6 +22,10 @@ dependencies = [
     # Agents run `uv run --no-sync workspace-layout` from the repo root, so its console script
     # must survive a sync of the root closure.
     "workspace-layout",
+    # The cron tick, the boot migration, the Caretaker's check and the skills run
+    # `uv run --no-sync routines ...` from the repo root, so its console script must
+    # survive a sync of the root closure too.
+    "routines",
     "imbue-common",
     "tomlkit>=0.12",
     "playwright==1.58.0",
@@ -115,6 +119,7 @@ oom-priority = { workspace = true }
 app-manifest = { workspace = true }
 app-schema = { workspace = true }
 workspace-layout = { workspace = true }
+routines = { workspace = true }
 # Apps that other members depend on (their test suites boot each other).
 system-interface = { workspace = true }
 chat = { workspace = true }
@@ -162,7 +167,15 @@ norecursedirs = [
     "venv",
     "{arch}",
 ]
+# Without it a test sees the environment of the agent running the suite; the chat and system interface pyprojects,
+# the other pytest roots, require it too.
+required_plugins = ["pytest-workspace-env"]
 timeout_func_only = true
+# Delete a passing test's tmp_path as soon as it finishes and keep only the latest
+# session's leftovers. /tmp is a tmpfs, and under gVisor every file or directory there
+# also holds sandbox memory until it is deleted.
+tmp_path_retention_policy = "failed"
+tmp_path_retention_count = 1
 # Each app's pyproject declares the same markers for its own run.
 markers = [
     "acceptance: marks tests as requiring network access, Modal credentials, etc. These are required to pass in CI",

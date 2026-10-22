@@ -3,10 +3,11 @@
 The workspace frontends' shared JavaScript library: what the shell
 (`system/apps/system_interface/frontend`), the chat page
 (`system/apps/chat/frontend`), the Getting Started page
-(`system/apps/getting_started/frontend`), and Files
-(`system/apps/files/frontend`) have in common. Source only: there is
+(`system/apps/getting_started/frontend`), Files
+(`system/apps/files/frontend`), and Routines
+(`system/apps/routines/frontend`) have in common. Source only: there is
 no build here, each app's vite build compiles the modules it imports
-(`@imbue/workspace-ui/src/<module>`), and the five packages are one npm
+(`@imbue/workspace-ui/src/<module>`), and the six packages are one npm
 workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
 
 - `src/base.css`: the design system's token layer (colour and type tokens, the
@@ -51,6 +52,11 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   link handed to it with it, and the chat every link of a message it renders;
   its test holds its external rule (the app contract's `isExternalUrl`) to the
   desktop app's (the vendored `link-externality-vectors.json`).
+- `src/download.ts`: `startDownload`, how the workspace's own pages download a
+  file of their own origin: by loading it in a hidden frame rather than through
+  a `download` link, whose request the browser sends without the workspace's
+  session cookie when Imbue Studio frames the page, and reporting what the
+  server said instead when it answers with something other than a file.
 - `src/search.ts`: `matchesQuery`, the one text match of the workspace's
   typeaheads (every whitespace token of the query occurring in one of the given
   texts, case-insensitively), which the desktop's launcher, the Getting Started

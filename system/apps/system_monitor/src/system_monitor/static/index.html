@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Memory &amp; disk</title>
+<title>System Monitor</title>
 <style>
   /* The workspace's design tokens, copied by name and value from
      system/libs/workspace_ui/src/base.css (this page is plain HTML with no build step, so it
@@ -22,11 +22,14 @@
     --c-border-faint: #efeeeb;
     --c-border-strong: #cfcdc7;
     --c-accent: #2f6b4f;
+    --c-accent-light: #e9f2ee;
     --c-danger: #d83a2c;
     --c-danger-hover: #b62d22;
     --c-warning: #b45309;
+    --c-success: #22a06b;
+    --c-success-bg: #e0f2ea;
     --c-fill-hover: rgb(0 0 0 / 0.07);
-    --font-size-heading-lg: 24px;
+    --c-fill-active: rgb(0 0 0 / 0.11);
     --font-size-heading: 18px;
     --font-size-body: 14px;
     --font-size-row: 13px;
@@ -37,46 +40,127 @@
     --font-mono: "SF Mono", "Cascadia Code", ui-monospace, monospace;
     --radius-sm: 4px;
     --radius-md: 6px;
+    --radius-lg: 8px;
     --dur-base: 120ms;
+    /* The inks of the two graphs. */
+    --ink-cpu: var(--c-accent);
+    --ink-mem: var(--c-text-primary);
+    --ink-disk: #7096b7;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: var(--font-sans); color: var(--c-text-primary); background: var(--c-bg); font-size: var(--font-size-body); line-height: 1.5; }
-  main { max-width: 640px; margin: 0 auto; padding: 24px 24px 40px; }
-  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 16px; }
+  body { margin: 0; font-family: var(--font-sans); color: var(--c-text-primary); background: var(--c-bg); font-size: var(--font-size-body); line-height: 1.5; -webkit-font-smoothing: antialiased; }
+  main { max-width: 640px; margin: 0 auto; padding: 20px 24px 40px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; min-height: 28px; }
   h1 { font-size: var(--font-size-heading); font-weight: var(--weight-semibold); line-height: 1.3; margin: 0; }
+  h2 { font-size: var(--font-size-helper); font-weight: var(--weight-semibold); line-height: 1.3; text-transform: uppercase; letter-spacing: 0.05em; color: var(--c-text-secondary); margin: 0 0 12px; }
+  p { margin: 0; }
+  a { color: var(--c-accent); }
+  .crumb { display: flex; align-items: center; gap: 8px; }
+  .back { display: inline-flex; align-items: center; gap: 4px; margin-left: -6px; padding: 2px 6px; border-radius: var(--radius-sm); color: var(--c-text-secondary); font-size: var(--font-size-row); text-decoration: none; }
+  .back:hover { background: var(--c-fill-hover); color: var(--c-text-primary); }
   .offline { color: var(--c-danger-hover); font-size: var(--font-size-helper); display: flex; align-items: center; gap: 6px; }
   .offline[hidden] { display: none; }
-  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--c-danger); }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--c-text-faint); flex: none; }
+  .dot.live { background: var(--c-success); }
+  .dot.warn { background: var(--c-warning); }
+  .dot.bad { background: var(--c-danger); }
   section { padding: 16px 0; border-top: 1px solid var(--c-border); }
-  /* type-section */
-  h2 { font-size: var(--font-size-helper); font-weight: var(--weight-semibold); line-height: 1.3; text-transform: uppercase; letter-spacing: 0.05em; color: var(--c-text-secondary); margin: 0 0 12px; }
-  /* type-heading-lg, with tabular figures */
-  .big { font-size: var(--font-size-heading-lg); font-weight: var(--weight-semibold); line-height: 1.25; font-variant-numeric: tabular-nums; }
+  section:first-of-type { border-top: 0; }
+  .view[hidden] { display: none; }
+  .tag { font-size: var(--font-size-helper); color: var(--c-text-faint); font-weight: var(--weight-regular); margin-left: 6px; text-transform: none; letter-spacing: 0; }
+  .secondary { color: var(--c-text-secondary); }
+  .faint { color: var(--c-text-faint); }
+  .num { font-variant-numeric: tabular-nums; }
+  .empty { color: var(--c-text-secondary); }
+  .hint { color: var(--c-text-faint); font-size: var(--font-size-helper); margin: -4px 0 8px; }
+
+  /* The tiles: one per resource, each a link to its view. */
+  .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .tile { display: block; padding: 12px 12px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-lg); background: var(--c-surface); color: inherit; text-decoration: none; transition: border-color var(--dur-base), background-color var(--dur-base); }
+  .tile:hover { border-color: var(--c-border-strong); background: color-mix(in srgb, var(--c-fill-hover) 50%, var(--c-surface)); }
+  .tile:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; }
+  .tile .label { display: flex; justify-content: space-between; align-items: center; color: var(--c-text-secondary); font-size: var(--font-size-helper); margin-bottom: 4px; }
+  .tile .label .chev { color: var(--c-text-faint); }
+  .tile .value { font-size: 22px; font-weight: var(--weight-semibold); line-height: 1.2; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .tile .value small { font-size: var(--font-size-helper); font-weight: var(--weight-regular); color: var(--c-text-secondary); margin-left: 4px; }
+  .tile svg { width: 100%; height: 36px; margin-top: 10px; display: block; }
+  .tile .bar { margin: 24px 0 0; }
+  @media (max-width: 480px) {
+    main { padding-left: 16px; padding-right: 16px; }
+    .tiles { grid-template-columns: 1fr; gap: 8px; }
+    .tile { display: grid; grid-template-columns: 1fr 120px; align-items: center; column-gap: 12px; padding: 10px 12px; }
+    .tile .label { grid-column: 1; margin-bottom: 2px; }
+    .tile .value { grid-column: 1; }
+    .tile svg, .tile .bar { grid-column: 2; grid-row: 1 / 3; margin: 0; height: 32px; }
+    .tile .bar { height: 6px; align-self: center; }
+    table td.num, table th.num { width: 56px; }
+    table .tag { display: none; }
+  }
+
+  /* Meters and bars. */
+  .big { font-size: 24px; font-weight: var(--weight-semibold); line-height: 1.25; font-variant-numeric: tabular-nums; }
   .big small { font-size: var(--font-size-body); font-weight: var(--weight-regular); color: var(--c-text-secondary); }
   .bar { height: 8px; border-radius: var(--radius-sm); background: var(--c-border); overflow: hidden; margin: 10px 0 6px; display: flex; }
-  .bar span { display: block; height: 100%; transition: width var(--dur-base); }
-  .row { display: flex; justify-content: space-between; color: var(--c-text-secondary); font-size: var(--font-size-helper); }
-  .note { margin-top: 12px; padding: 8px 12px; border-radius: var(--radius-md); font-size: var(--font-size-row); }
+  .bar.thin { height: 4px; margin: 6px 0 4px; }
+  .bar > span { display: block; height: 100%; transition: width var(--dur-base); }
+  .bar > span + span { margin-left: 2px; }
+  .bar .ok { background: var(--c-accent); }
+  .bar .warn { background: var(--c-warning); }
+  .bar .bad { background: var(--c-danger); }
+  .bar .cpu { background: var(--ink-cpu); }
+  .bar .mem { background: var(--ink-mem); }
+  .bar .disk { background: var(--ink-disk); }
+  .guard-bar { position: relative; overflow: visible; }
+  .guard-bar .mark { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--c-danger); opacity: 0.7; }
+  .row { display: flex; justify-content: space-between; gap: 12px; color: var(--c-text-secondary); font-size: var(--font-size-helper); font-variant-numeric: tabular-nums; }
+  .note { margin-top: 12px; padding: 8px 12px; border-radius: var(--radius-md); font-size: var(--font-size-row); background: var(--c-surface-secondary); }
   .note.warn { background: color-mix(in srgb, var(--c-warning) 10%, var(--c-surface)); color: var(--c-warning); }
-  /* The memory graph sits on its own shaded panel, so the dashed "full" line reads as part of the
-     graph, with its legend centred underneath. */
+  .note[hidden] { display: none; }
+
+  /* The graphs: a shaded panel with the scale on the left and the line beside it. */
   .chart { margin-top: 12px; padding: 12px 12px 8px; border-radius: var(--radius-md); background: var(--c-surface-secondary); }
-  /* The scale (0 to 100 percent) on the left, the graph beside it, both the same height. */
-  .plot { display: grid; grid-template-columns: auto 1fr; gap: 8px; padding: 6px 0; }
-  .axis { position: relative; height: 96px; width: 32px; color: var(--c-text-faint); font-size: var(--font-size-helper); font-variant-numeric: tabular-nums; }
+  .chart-title { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 8px; color: var(--c-text-secondary); font-size: var(--font-size-helper); }
+  .plot { display: grid; grid-template-columns: auto 1fr; gap: 8px; padding: 4px 0; position: relative; }
+  .axis { position: relative; height: 110px; width: 32px; color: var(--c-text-faint); font-size: var(--font-size-helper); font-variant-numeric: tabular-nums; }
   .axis span { position: absolute; right: 0; line-height: 1; transform: translateY(-50%); }
-  svg.spark { width: 100%; height: 96px; display: block; overflow: visible; }
-  .legend { display: flex; justify-content: center; gap: 16px; margin-top: 8px; color: var(--c-text-secondary); font-size: var(--font-size-helper); }
+  svg.spark { width: 100%; height: 110px; display: block; overflow: visible; }
+  .legend { display: flex; justify-content: center; flex-wrap: wrap; gap: 14px; margin-top: 8px; color: var(--c-text-secondary); font-size: var(--font-size-helper); }
   .legend span { display: inline-flex; align-items: center; gap: 6px; }
-  .legend svg { width: 16px; height: 2px; }
-  /* The graph's own title: what it plots and over what span, read before the line. */
-  .chart-title { margin: 0 0 10px; color: var(--c-text-secondary); font-size: var(--font-size-helper); }
+  .legend i { display: inline-block; width: 14px; height: 2px; }
+  .legend i.dash { background: repeating-linear-gradient(90deg, currentColor 0 3px, transparent 3px 6px); height: 1px; }
+  .legend i.sw { width: 8px; height: 8px; border-radius: 2px; }
+  .spark-tip { position: absolute; pointer-events: none; padding: 4px 8px; border-radius: var(--radius-md); background: var(--c-inverse-surface); color: var(--c-text-on-accent); font-size: var(--font-size-helper); white-space: nowrap; box-shadow: var(--shadow-overlay); transform: translate(-50%, calc(-100% - 8px)); z-index: 10; }
+  .spark-tip[hidden] { display: none; }
+  .no-readings { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--c-text-faint); font-size: var(--font-size-helper); }
+  .no-readings[hidden] { display: none; }
+  .range { display: inline-flex; gap: 2px; }
+  .range button { height: 20px; padding: 0 6px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--c-text-faint); font: inherit; font-size: var(--font-size-helper); cursor: pointer; }
+  .range button[aria-pressed="true"] { background: var(--c-fill-active); color: var(--c-text-primary); }
+
+  /* Tables. */
   table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-  td { padding: 6px 0; border-bottom: 1px solid var(--c-border-faint); vertical-align: top; }
-  td.num { text-align: right; white-space: nowrap; width: 80px; }
+  td, th { padding: 6px 0; border-bottom: 1px solid var(--c-border-faint); vertical-align: top; text-align: left; }
+  th { font-size: var(--font-size-helper); font-weight: var(--weight-regular); color: var(--c-text-faint); }
+  td.num, th.num { text-align: right; white-space: nowrap; width: 72px; }
   td.sub { color: var(--c-text-secondary); font-size: var(--font-size-row); padding-left: 16px; }
   tr.group td { font-weight: var(--weight-semibold); }
-  .tag { font-size: var(--font-size-helper); color: var(--c-text-faint); font-weight: var(--weight-regular); margin-left: 6px; text-transform: none; letter-spacing: 0; }
+  td .dot { margin-right: 6px; vertical-align: 1px; }
+  td .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 8px; }
+
+  /* The Stop button at the end of a row: shown when the pointer is over the row (always where
+     there is no pointer to hover with), and replaced by a question before anything stops. */
+  td.act, th.act { width: 28px; padding-left: 8px; text-align: right; white-space: nowrap; }
+  td.act.asking { width: auto; }
+  .stop { width: 20px; height: 20px; padding: 0; border: 0; border-radius: var(--radius-sm); background: none; color: var(--c-text-faint); font: inherit; font-size: 16px; line-height: 1; cursor: pointer; opacity: 0; transition: background-color var(--dur-base), opacity var(--dur-base); }
+  tr:hover .stop, .stop:focus-visible { opacity: 1; }
+  .stop:hover, .stop:focus-visible { background: var(--c-fill-hover); color: var(--c-danger); outline: none; }
+  @media (hover: none), (max-width: 480px) { .stop { opacity: 1; } }
+  .confirm { display: inline-flex; align-items: center; gap: 6px; font-size: var(--font-size-helper); color: var(--c-text-secondary); white-space: nowrap; }
+  .confirm .btn { height: 22px; padding: 0 8px; font-size: var(--font-size-helper); }
+  .confirm .btn.danger { color: var(--c-danger); }
+  .confirm .btn.danger:hover { background: color-mix(in srgb, var(--c-danger) 10%, var(--c-surface)); }
+  .confirm .err { color: var(--c-danger-hover); }
+
   /* An info icon whose explanation pops up on hover or keyboard focus, in the dark style of the
      workspace's own tooltips (workspace_ui's hoverTooltip). */
   .info { position: relative; display: inline-flex; vertical-align: -2px; margin-left: 4px; padding: 0; border: 0; background: none; color: var(--c-text-faint); cursor: help; }
@@ -84,84 +168,160 @@
   .info:hover, .info:focus-visible { color: var(--c-text-secondary); outline: none; }
   .info .tip { display: none; position: absolute; top: calc(100% + 6px); left: -8px; z-index: 10; width: 260px; padding: 6px 10px; border-radius: var(--radius-md); background: var(--c-inverse-surface); color: var(--c-text-on-accent); box-shadow: var(--shadow-overlay); font-size: var(--font-size-helper); font-weight: var(--weight-regular); line-height: 1.4; text-align: left; }
   .info:hover .tip, .info:focus-visible .tip { display: block; }
-  .stops ul { list-style: none; margin: 0; padding: 0; }
-  /* One stop: time | what happened | Details toggle; its records open in one panel under the text. */
-  .stops li { display: grid; grid-template-columns: 64px 1fr auto; column-gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--c-border-faint); }
-  .stops li.empty { display: block; }
-  .stops time { color: var(--c-text-secondary); font-variant-numeric: tabular-nums; }
-  .stops .toggle { align-self: start; border: 0; border-radius: var(--radius-sm); background: none; color: var(--c-text-secondary); font: inherit; font-size: var(--font-size-helper); padding: 2px 6px; cursor: pointer; transition: background-color var(--dur-base); }
-  .stops .toggle:hover, .stops .toggle:focus-visible { background: var(--c-fill-hover); color: var(--c-text-primary); outline: none; }
+
+  /* Events and stops: time | what happened | an action. */
+  .events { list-style: none; margin: 0; padding: 0; }
+  .events li { display: grid; grid-template-columns: 64px 1fr auto; column-gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--c-border-faint); }
+  .events li.empty { display: block; }
+  .events time { color: var(--c-text-secondary); font-variant-numeric: tabular-nums; }
+  .events .what small { display: block; color: var(--c-text-faint); font-size: var(--font-size-helper); }
+  .events a.more { font-size: var(--font-size-helper); text-decoration: none; align-self: start; padding: 2px 6px; margin-right: -6px; border-radius: var(--radius-sm); }
+  .events a.more:hover { background: var(--c-fill-hover); }
+  .toggle { align-self: start; border: 0; border-radius: var(--radius-sm); background: none; color: var(--c-text-secondary); font: inherit; font-size: var(--font-size-helper); padding: 2px 6px; cursor: pointer; transition: background-color var(--dur-base); }
+  .toggle:hover, .toggle:focus-visible { background: var(--c-fill-hover); color: var(--c-text-primary); outline: none; }
   .stop-details { grid-column: 2 / -1; display: flex; flex-direction: column; gap: 10px; margin-top: 8px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--c-surface-secondary); }
   .stop-details[hidden] { display: none; }
   .stop-details .label { margin-bottom: 2px; color: var(--c-text-secondary); font-size: var(--font-size-helper); font-weight: var(--weight-semibold); }
   .stop-details pre { margin: 0; font-family: var(--font-mono); font-size: var(--font-size-helper); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .empty { color: var(--c-text-secondary); }
-  .hint { color: var(--c-text-faint); font-size: var(--font-size-helper); margin: -4px 0 8px; }
+
+  /* Buttons (the secondary and ghost recipes of workspace_ui's Button). */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: var(--radius-md); border: 1px solid var(--c-border); background: var(--c-surface); color: inherit; font: inherit; font-size: var(--font-size-body); font-weight: 500; line-height: 1; white-space: nowrap; cursor: pointer; transition: background-color var(--dur-base); }
+  .btn:hover { background: var(--c-fill-hover); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; }
+  .scan-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+  .scan-head p { color: var(--c-text-secondary); font-size: var(--font-size-row); }
+
+  /* The backups summary. */
+  .backup { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; align-items: baseline; }
+  .backup .dot { align-self: center; }
+  .backup b { font-weight: var(--weight-semibold); }
+  .backup p { grid-column: 2; color: var(--c-text-secondary); font-size: var(--font-size-row); }
+  .backup a { grid-column: 2; margin-top: 6px; font-size: var(--font-size-row); text-decoration: none; }
+  .backup a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
 <main>
   <header>
-    <h1>Memory &amp; disk</h1>
-    <span class="offline" id="offline" hidden><span class="dot"></span>Can't reach the workspace, retrying</span>
+    <div class="crumb" id="crumb"><h1>System Monitor</h1></div>
+    <span class="offline" id="offline" hidden><span class="dot bad"></span>Can't reach the workspace, retrying</span>
   </header>
 
-  <section id="memory">
-    <h2>Memory</h2>
-    <div class="big"><span id="mem-used">--</span> <small>of <span id="mem-total">--</span> used</small></div>
-    <div class="bar"><span id="mem-bar"></span></div>
-    <div class="row"><span id="mem-pct"></span><span id="mem-free"></span></div>
-    <div class="chart">
-      <p class="chart-title">Memory in use · last 10 minutes</p>
-      <div class="plot">
-        <div class="axis" aria-hidden="true">
-          <span style="top: 0%">100%</span>
-          <span style="top: 25%">75%</span>
-          <span style="top: 50%">50%</span>
-          <span style="top: 75%">25%</span>
-          <span style="top: 100%">0%</span>
+  <div class="view" id="view-overview" hidden>
+    <section>
+      <div class="tiles">
+        <a class="tile" href="/cpu" aria-label="Open the CPU view">
+          <div class="label"><span>CPU</span><span class="chev" aria-hidden="true">›</span></div>
+          <div class="value"><span id="tile-cpu">--</span><small id="tile-cpu-unit"></small></div>
+          <svg id="tile-cpu-spark" aria-label="CPU over the last 10 minutes"></svg>
+        </a>
+        <a class="tile" href="/memory" aria-label="Open the Memory view">
+          <div class="label"><span>Memory</span><span class="chev" aria-hidden="true">›</span></div>
+          <div class="value"><span id="tile-mem">--</span><small id="tile-mem-unit"></small></div>
+          <svg id="tile-mem-spark" aria-label="memory over the last 10 minutes"></svg>
+        </a>
+        <a class="tile" href="/disk" aria-label="Open the Disk view">
+          <div class="label"><span>Disk</span><span class="chev" aria-hidden="true">›</span></div>
+          <div class="value"><span id="tile-disk">--</span><small id="tile-disk-unit"></small></div>
+          <div class="bar thin"><span class="disk" id="tile-disk-bar"></span></div>
+        </a>
+      </div>
+    </section>
+    <section>
+      <h2>What's using the workspace</h2>
+      <p class="hint" id="usage-note" hidden>Memory use is approximate.</p>
+      <table id="usage-table"><thead><tr><th></th><th class="num">CPU</th><th class="num">Memory</th><th class="act"></th></tr></thead><tbody></tbody></table>
+    </section>
+    <section>
+      <h2>Recent events <span class="tag">last 24 hours</span></h2>
+      <ul class="events" id="events"></ul>
+    </section>
+  </div>
+
+  <div class="view" id="view-cpu" hidden>
+    <section>
+      <div class="big"><span id="cpu-pct">--</span> <small id="cpu-cores"></small></div>
+      <div class="bar"><span class="cpu" id="cpu-bar"></span></div>
+      <div class="row"><span id="cpu-when"></span><span id="cpu-procs"></span></div>
+      <div class="chart">
+        <p class="chart-title"><span>CPU in use</span><span class="range" data-chart="cpu"><button type="button" aria-pressed="true" data-span="10m">10 min</button><button type="button" data-span="1h">1 h</button><button type="button" data-span="24h">24 h</button></span></p>
+        <div class="plot">
+          <div class="axis" aria-hidden="true"><span style="top:0%">100%</span><span style="top:50%">50%</span><span style="top:100%">0%</span></div>
+          <svg class="spark" id="cpu-spark" aria-label="CPU in use over time"></svg>
+          <div class="no-readings" id="cpu-none" hidden>No readings yet</div>
         </div>
-        <!-- y runs 0 (full) to 100 (empty), so a share of memory v sits at (1 - v) * 100. -->
-        <svg class="spark" viewBox="0 0 300 100" preserveAspectRatio="none" aria-label="memory in use over the last few minutes, from 0 to 100 percent">
-          <path d="M0 25 H300 M0 50 H300 M0 75 H300" stroke="var(--c-border)" stroke-width="1" vector-effect="non-scaling-stroke"/>
-          <path d="M0 100 H300" stroke="var(--c-border-strong)" stroke-width="1" vector-effect="non-scaling-stroke"/>
-          <path d="M0 0 H300" stroke="var(--c-danger)" stroke-dasharray="3 3" stroke-width="1" opacity=".6" vector-effect="non-scaling-stroke"/>
-          <path id="spark" fill="none" stroke="var(--c-text-primary)" stroke-width="1.6" vector-effect="non-scaling-stroke"/>
-        </svg>
       </div>
-      <div class="legend">
-        <span><svg viewBox="0 0 16 2" aria-hidden="true"><path d="M0 1 H16" stroke="var(--c-text-primary)" stroke-width="2"/></svg>In use</span>
+    </section>
+    <section>
+      <h2>What's using the CPU</h2>
+      <p class="hint">A chat's share includes whatever it is running: tests, builds, a browser.</p>
+      <table id="cpu-table"><tbody></tbody></table>
+    </section>
+    <section>
+      <h2>Busy stretches <span class="tag">last 24 hours</span></h2>
+      <ul class="events" id="busy"></ul>
+    </section>
+  </div>
+
+  <div class="view" id="view-memory" hidden>
+    <section>
+      <div class="big"><span id="mem-used">--</span> <small>of <span id="mem-total">--</span> used</small></div>
+      <div class="bar guard-bar"><span class="mem" id="mem-bar"></span><i class="mark" style="left:90%" title="Above 90% the workspace stops programs to free memory"></i></div>
+      <div class="row"><span id="mem-pct"></span><span id="mem-free"></span></div>
+      <div class="chart">
+        <p class="chart-title"><span>Memory in use</span><span class="range" data-chart="mem"><button type="button" aria-pressed="true" data-span="10m">10 min</button><button type="button" data-span="1h">1 h</button><button type="button" data-span="24h">24 h</button></span></p>
+        <div class="plot">
+          <div class="axis" aria-hidden="true"><span style="top:0%">100%</span><span style="top:50%">50%</span><span style="top:100%">0%</span></div>
+          <svg class="spark" id="mem-spark" aria-label="memory in use over time"></svg>
+          <div class="no-readings" id="mem-none" hidden>No readings yet</div>
+        </div>
+        <div class="legend"><span><i style="background:var(--ink-mem)"></i>In use</span><span><i class="dash" style="color:var(--c-danger)"></i>Programs stopped above this</span></div>
       </div>
-    </div>
-    <div class="note" id="mem-note" hidden></div>
-  </section>
+      <div class="note" id="mem-note" hidden></div>
+    </section>
+    <section>
+      <h2>What's using memory</h2>
+      <p class="hint" id="mem-usage-note" hidden>Memory use is approximate.</p>
+      <table id="mem-table"><tbody></tbody></table>
+    </section>
+    <section>
+      <h2>Programs stopped to free memory <span class="tag">last 24 hours</span></h2>
+      <ul class="events" id="stops"></ul>
+    </section>
+  </div>
 
-  <section id="usage">
-    <h2>What's using memory</h2>
-    <p class="hint" id="usage-note" hidden></p>
-    <table id="usage-table"></table>
-  </section>
-
-  <section id="disk">
-    <h2>Disk</h2>
-    <div class="big"><span id="disk-used">--</span> <small>of <span id="disk-total">--</span></small></div>
-    <div class="bar"><span id="disk-bar"></span></div>
-    <div class="row"><span id="disk-pct"></span><span id="disk-free"></span></div>
-  </section>
-
-  <section class="stops">
-    <h2>Programs stopped to free memory <span class="tag">last 24 hours</span></h2>
-    <ul id="stops"></ul>
-  </section>
+  <div class="view" id="view-disk" hidden>
+    <section>
+      <div class="big"><span id="disk-used">--</span> <small>of <span id="disk-total">--</span> used on the machine's disk</small></div>
+      <div class="bar"><span class="disk" id="disk-bar"></span></div>
+      <div class="row"><span id="disk-pct"></span><span id="disk-free"></span></div>
+      <p class="hint" style="margin-top:4px">The whole disk of the machine this workspace runs on, shared with everything else on it.</p>
+    </section>
+    <section>
+      <h2>What's using the disk</h2>
+      <div class="scan-head"><p id="scan-note">Measuring what is on the disk takes a moment, so it runs only when you ask.</p><button type="button" class="btn" id="scan">See what's using the disk</button></div>
+      <table id="disk-table" hidden><tbody></tbody></table>
+      <p class="hint" id="scan-missing" hidden style="margin-top:8px"></p>
+    </section>
+    <section>
+      <h2>Backups</h2>
+      <div class="backup" id="backup"></div>
+    </section>
+  </div>
 </main>
 <script>
 (() => {
-  const EVERY_MS = 5000, WINDOW_MS = 10 * 60 * 1000;  // poll every 5 seconds, graph the last 10 minutes
-  // The app records a reading every 5 seconds while it runs (s.history; memory.SAMPLE_EVERY_SECONDS).
-  // Readings further apart than this mean the app was not running in between, and the line is
-  // left blank there.
-  const SAMPLE_MS = 5000, GAP_MS = 3 * SAMPLE_MS;
+  const EVERY_MS = 5000, TEN_MINUTES_MS = 10 * 60 * 1000;
+  // The sampler records a reading every 5 s; readings further apart than this mean it was not
+  // running in between (the machine was paused), and the line is left blank there.
+  const GAP_MS = { "10m": 15000, "1h": 180000, "24h": 900000 };
+  const SPAN_MS = { "10m": TEN_MINUTES_MS, "1h": 3600000, "24h": 24 * 3600000 };
+  const GUARD_PERCENT = 90;
   const $ = (id) => document.getElementById(id);
+  const VIEWS = { "/": "overview", "/cpu": "cpu", "/memory": "memory", "/disk": "disk" };
+  const TITLES = { cpu: "CPU", memory: "Memory", disk: "Disk" };
+  const view = VIEWS[location.pathname.replace(/\/+$/, "") || "/"] || "overview";
 
   function size(bytes) {
     const gb = bytes / 2 ** 30;
@@ -170,68 +330,166 @@
     return `${Math.round(bytes / 2 ** 20)} MB`;
   }
   const pct = (part, whole) => (whole ? Math.round((part / whole) * 100) : 0);
+  const sharePct = (share) => (share === null || share === undefined ? `<span class="faint">–</span>` : `${(share * 100).toFixed(share < 0.1 ? 1 : 0)}%`);
   const level = (p, warn, bad) => (p >= bad ? "bad" : p >= warn ? "warn" : "ok");
-  const LEVEL_COLOR = { ok: "--c-accent", warn: "--c-warning", bad: "--c-danger" };
-  function setBar(id, p, lvl) { const el = $(id); el.style.width = `${p}%`; el.style.background = `var(${LEVEL_COLOR[lvl]})`; }
   const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
   // Descriptions arrive as sentence fragments ("a code checker"); shown on their own line, they start capitalized.
   const cap = (t) => (t ? t[0].toUpperCase() + t.slice(1) : t);
+  const clock = (d) => d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const when = (iso) => { const at = new Date(iso); return clock(at) + (at.toDateString() === new Date().toDateString() ? "" : " yesterday"); };
+  const ago = (seconds) => seconds < 90 ? "just now" : seconds < 3600 ? `${Math.round(seconds / 60)} min ago` : seconds < 86400 ? `${Math.round(seconds / 3600)} h ago` : `${Math.round(seconds / 86400)} d ago`;
 
-  function render(s) {
-    // One level for memory: orange from 80% used (the memory guard starts stopping programs at
-    // 90%); the percentage says how close it is, so there is no separate red level.
-    const m = s.memory, mp = pct(m.used, m.total), ml = level(mp, 80, Infinity);
-    $("mem-used").textContent = size(m.used);
-    $("mem-total").textContent = size(m.total);
-    $("mem-free").textContent = `${size(m.available)} free`;
-    $("mem-pct").textContent = `${mp}% used`;
-    setBar("mem-bar", mp, ml);
+  // The header: the view's name with a way back, or the app's name on the overview.
+  if (view !== "overview") {
+    $("crumb").innerHTML = `<a class="back" href="/" aria-label="Back to the overview">‹ System Monitor</a><h1>${TITLES[view]}</h1>`;
+    document.title = `${TITLES[view]} · System Monitor`;
+  }
+  $(`view-${view}`).hidden = false;
 
-    // x runs over the 10 minutes ending at the app's newest reading (its clock, not the browser's),
-    // so the newest reading sits at the right edge.
-    const history = s.history || [];
-    const now = history.length ? history[history.length - 1].t : Date.now();
-    $("spark").setAttribute("d", history.map((p, i) => {
-      const x = 300 - ((now - p.t) / WINDOW_MS) * 300, y = (1 - p.v) * 100;
-      const move = i === 0 || p.t - history[i - 1].t > GAP_MS;
-      return `${move ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`;
-    }).join(" "));
-
-    const stopsToday = s.stops.length;
-    const note = $("mem-note");
-    if (ml !== "ok" || stopsToday) {
-      // How full memory is and what happens when it fills; what the guard already stopped; and,
-      // when memory is short, which kind of memory the user can free is the largest.
-      // The memory guard (earlyoom -m 10,5) stops programs once less than 10% of memory is free.
-      // One message from 80% up; the percentage carries how serious it is.
-      const head = ml !== "ok"
-        ? `<strong>Memory is ${mp}% full.</strong> Above 90%, the workspace stops programs to free memory.`
-        : `<strong>Memory is ${mp}% full.</strong>`;
-      const stopped = stopsToday
-        ? ` The workspace stopped ${stopsToday} program${stopsToday > 1 ? "s" : ""} in the last 24 hours.`
-        : "";
-      note.className = "note warn";
-      note.innerHTML = head + esc(stopped) + (ml !== "ok" ? esc(freeingAdvice(s)) : "");
-      note.hidden = false;
-    } else note.hidden = true;
-
-    // Exact rows (the system reports each program's own memory) need no note; the estimate that
-    // shrinks every row by one factor does, so it says the values are approximate.
-    $("usage-note").hidden = s.usage_mode === "exact";
-    $("usage-note").textContent = "Memory use is approximate.";
-    renderUsage(s.usage);
-
-    const d = s.disk, dp = pct(d.used, d.total);
-    $("disk-used").textContent = size(d.used); $("disk-total").textContent = size(d.total);
-    $("disk-free").textContent = `${size(d.free)} free`; $("disk-pct").textContent = `${dp}% used`;
-    setBar("disk-bar", dp, level(dp, 80, 92));
-
-    renderStops(s.stops);
+  // Graphs: a line (and area) for samples over a span ending now, in a 300 x 100 box; y runs 0
+  // (full) to 100 (empty). A gap longer than gapMs breaks the line.
+  function sparkPath(samples, key, { w = 300, h = 100, spanMs, gapMs, area = false, end }) {
+    const pts = samples.map((p) => ({ t: p.t, x: w - ((end - p.t) / spanMs) * w, y: (1 - p[key]) * h, v: p[key] }));
+    let d = "", segStart = null;
+    pts.forEach((pt, i) => {
+      if (pt.v === null || pt.v === undefined) return;
+      const gap = i === 0 || pt.t - pts[i - 1].t > gapMs || pts[i - 1].v === null;
+      if (gap) {
+        if (area && segStart !== null) d += ` L${pts[i - 1].x.toFixed(1)} ${h} L${segStart.toFixed(1)} ${h} Z`;
+        segStart = pt.x;
+        d += `${area ? " M" + pt.x.toFixed(1) + " " + h + " L" : " M"}${pt.x.toFixed(1)} ${pt.y.toFixed(1)}`;
+      } else d += ` L${pt.x.toFixed(1)} ${pt.y.toFixed(1)}`;
+    });
+    if (area && segStart !== null && pts.length) d += ` L${pts[pts.length - 1].x.toFixed(1)} ${h} L${segStart.toFixed(1)} ${h} Z`;
+    return d.trim();
+  }
+  function drawSpark(svg, samples, key, { spanMs, gapMs, color, guard = false, format }) {
+    const w = 300, h = 100, end = samples.length ? samples[samples.length - 1].t : Date.now();
+    svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    svg.setAttribute("preserveAspectRatio", "none");
+    let inner = `<path d="M0 50 H${w}" stroke="var(--c-border)" stroke-width="1" vector-effect="non-scaling-stroke"/>`
+      + `<path d="M0 ${h} H${w}" stroke="var(--c-border-strong)" stroke-width="1" vector-effect="non-scaling-stroke"/>`;
+    if (guard) inner += `<path d="M0 ${h - GUARD_PERCENT} H${w}" stroke="var(--c-danger)" stroke-dasharray="3 3" stroke-width="1" opacity=".6" vector-effect="non-scaling-stroke"/>`;
+    inner += `<path d="${sparkPath(samples, key, { w, h, spanMs, gapMs, area: true, end })}" fill="${color}" opacity="0.08"/>`
+      + `<path d="${sparkPath(samples, key, { w, h, spanMs, gapMs, end })}" fill="none" stroke="${color}" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`
+      + `<line class="cursor" x1="0" x2="0" y1="0" y2="${h}" stroke="var(--c-text-faint)" stroke-width="1" vector-effect="non-scaling-stroke" opacity="0"/>`;
+    svg.innerHTML = inner;
+    attachReadout(svg, samples, key, spanMs, end, format);
+  }
+  // Hover: the nearest reading at the pointer's time, shown above the line.
+  function attachReadout(svg, samples, key, spanMs, end, format) {
+    const host = svg.parentElement;
+    let tip = host.querySelector(".spark-tip");
+    if (!tip) { tip = document.createElement("div"); tip.className = "spark-tip"; tip.hidden = true; host.appendChild(tip); }
+    svg.onpointermove = (e) => {
+      const box = svg.getBoundingClientRect(), hostBox = host.getBoundingClientRect();
+      const frac = Math.min(1, Math.max(0, (e.clientX - box.left) / box.width));
+      const t = end - (1 - frac) * spanMs;
+      let best = null;
+      for (const p of samples) if (p[key] !== null && (!best || Math.abs(p.t - t) < Math.abs(best.t - t))) best = p;
+      if (!best) return;
+      tip.textContent = `${clock(new Date(best.t))} · ${format ? format(best[key]) : Math.round(best[key] * 100) + "%"}`;
+      tip.hidden = false;
+      tip.style.left = `${e.clientX - hostBox.left}px`;
+      tip.style.top = `${box.top - hostBox.top}px`;
+      const cursor = svg.querySelector(".cursor");
+      cursor.setAttribute("x1", (frac * 300).toFixed(1)); cursor.setAttribute("x2", (frac * 300).toFixed(1)); cursor.setAttribute("opacity", "1");
+    };
+    svg.onpointerleave = () => { tip.hidden = true; svg.querySelector(".cursor").setAttribute("opacity", "0"); };
+  }
+  function drawMiniSpark(svg, samples, key, color) {
+    const w = 300, h = 40, end = samples.length ? samples[samples.length - 1].t : Date.now();
+    svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    svg.setAttribute("preserveAspectRatio", "none");
+    svg.innerHTML = `<path d="${sparkPath(samples, key, { w, h, spanMs: TEN_MINUTES_MS, gapMs: GAP_MS["10m"], area: true, end })}" fill="${color}" opacity="0.1"/>`
+      + `<path d="${sparkPath(samples, key, { w, h, spanMs: TEN_MINUTES_MS, gapMs: GAP_MS["10m"], end })}" fill="none" stroke="${color}" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`;
   }
 
-  // The stop list is rebuilt only when its stops or today's date change (a stop from before
-  // midnight then reads "yesterday"), so a refresh never closes a Details panel or drops the
-  // pointer's hover. Which panels are open is kept by stop, across rebuilds.
+  // The breakdown rows are rebuilt only when what they list changes; otherwise only their figures
+  // update in place, so an open info popup is not torn down by the five-second refresh.
+  const SCRATCH_INFO = `<button type="button" class="info" aria-label="What are temporary files?">`
+    + `<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.75" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 7.2v4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="4.9" r="0.95" fill="currentColor"/></svg>`
+    + `<span class="tip" role="tooltip">Temporary files are created by programs while they work, such as downloads in progress or screenshots from a test run. They are kept in memory, so they count toward memory use. They are cleared when the workspace restarts.</span></button>`;
+  function usageTag(g) {
+    if (g.id === "scratch") return `of ${size(g.limit)} limit`;
+    if (g.hint) return g.hint;
+    if (!["chats", "checkers", "apps"].includes(g.id)) return "";
+    return g.items.length ? `${g.items.length} running` : "none running";
+  }
+  // A row that lists nothing and holds nothing says nothing worth a line: Code checkers and Your
+  // apps are left out until something runs under them.
+  const shownRows = (usage) => usage.filter((g) => !(["checkers", "apps"].includes(g.id) && !g.items.length && !g.bytes));
+  // What each kind of Stop button asks before it acts, and what it is called.
+  const STOP_WORDS = {
+    chat: { verb: "Stop", busy: "Stopping…", ask: "Stop this chat? Its next message starts it again." },
+    checkers: { verb: "Stop", busy: "Stopping…", ask: "Stop this chat's code checkers? The chat starts them again when it needs them." },
+    app: { verb: "Quit", busy: "Quitting…", ask: "Quit this app? Opening it starts it again." },
+  };
+  const tableShapes = {};
+  // columns: which figures each row shows, in order: "cpu", "mem".
+  function renderUsage(tableId, usage, columns) {
+    const table = $(tableId);
+    const shape = JSON.stringify(usage.map((g) => [g.id, usageTag(g), g.items.map((i) => [i.name, i.stop])]));
+    if (shape !== tableShapes[tableId]) {
+      tableShapes[tableId] = shape;
+      table.querySelector("tbody").innerHTML = usage.map((g, gi) => {
+        const tag = usageTag(g);
+        const cells = (ref) => columns.map((c) => `<td class="num${ref.includes(".") ? " sub" : ""}" data-${c}="${ref}"></td>`).join("");
+        const act = (i) => i && i.stop
+          ? `<td class="act"><button type="button" class="stop" data-kind="${esc(i.stop.kind)}" data-id="${esc(i.stop.id)}" data-name="${esc(i.name)}" aria-label="${STOP_WORDS[i.stop.kind].verb} ${esc(i.name)}" title="${STOP_WORDS[i.stop.kind].verb}">×</button></td>`
+          : `<td class="act"></td>`;
+        const rows = g.items.map((i, ii) => `<tr><td class="sub">${esc(i.name)}</td>${cells(`${gi}.${ii}`)}${act(i)}</tr>`).join("");
+        return `<tr class="group" data-group="${g.id}"><td>${esc(g.label)}${g.id === "scratch" ? SCRATCH_INFO : ""}${tag ? ` <span class="tag">${esc(tag)}</span>` : ""}</td>${cells(String(gi))}${act(null)}</tr>${rows}`;
+      }).join("");
+      table.querySelectorAll("button.stop").forEach((button) => button.addEventListener("click", () => askToStop(button)));
+    }
+    const fill = (ref, g) => {
+      const cpuCell = table.querySelector(`[data-cpu="${ref}"]`), memCell = table.querySelector(`[data-mem="${ref}"]`);
+      if (cpuCell) cpuCell.innerHTML = sharePct(g.cpu);
+      if (memCell) memCell.textContent = size(g.bytes);
+    };
+    usage.forEach((g, gi) => { fill(String(gi), g); g.items.forEach((i, ii) => fill(`${gi}.${ii}`, i)); });
+  }
+
+  // The Stop button turns into a question in its own cell; the answer posts the stop and the
+  // next refresh shows the row gone (or the refusal, in its place, until the next rebuild).
+  function askToStop(button) {
+    const cell = button.parentElement, words = STOP_WORDS[button.dataset.kind];
+    const restore = () => { cell.classList.remove("asking"); cell.innerHTML = ""; cell.appendChild(button); };
+    cell.classList.add("asking");
+    cell.innerHTML = `<span class="confirm"><span>${esc(words.ask)}</span><button type="button" class="btn danger">${words.verb}</button><button type="button" class="btn">Cancel</button></span>`;
+    const [go, cancel] = cell.querySelectorAll("button");
+    cancel.addEventListener("click", restore);
+    go.addEventListener("click", async () => {
+      go.disabled = cancel.disabled = true;
+      go.textContent = words.busy;
+      let failure = "";
+      try {
+        const res = await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: button.dataset.kind, id: button.dataset.id }) });
+        if (!res.ok) failure = ((await res.json().catch(() => ({}))).detail) || `Could not ${words.verb.toLowerCase()} it (${res.status})`;
+      } catch (e) { failure = `Could not ${words.verb.toLowerCase()} it: the workspace did not answer`; }
+      if (failure) { cell.innerHTML = `<span class="confirm"><span class="err">${esc(failure)}</span><button type="button" class="btn">OK</button></span>`; cell.querySelector("button").addEventListener("click", restore); }
+      else { tableShapes[button.closest("table").id] = null; refresh(); }
+    });
+  }
+
+  // What the user can do about the largest kind of memory they can free (the memory view's note).
+  const ADVICE_MIN_BYTES = 100 * 2 ** 20;
+  function freeingAdvice(usage) {
+    const freeable = usage.filter((g) => ["chats", "apps", "checkers", "scratch"].includes(g.id)).map((g) => ({ id: g.id, bytes: g.bytes }));
+    if (!freeable.length) return "";
+    const top = freeable.reduce((a, b) => (b.bytes > a.bytes ? b : a));
+    if (top.bytes < ADVICE_MIN_BYTES) return "";
+    return {
+      chats: " Chats are using the most memory. Stopping chats you aren't using frees memory.",
+      apps: " Your apps are using the most memory. Quitting apps you aren't using frees memory.",
+      checkers: " Code checkers are using the most memory. Asking an agent to stop its code checkers, or stopping its chat, frees memory.",
+      scratch: ` Temporary files are using ${size(top.bytes)}. They're cleared when the workspace restarts.`,
+    }[top.id];
+  }
+
+  // The stop list is rebuilt only when its stops or today's date change, so a refresh never closes
+  // a Details panel; which panels are open is kept by stop, across rebuilds.
   const openStops = new Set();
   let stopsShape = null;
   const toggleLabel = (isOpen) => (isOpen ? "Hide details" : "Details");
@@ -240,20 +498,13 @@
     if (shape === stopsShape) return;
     stopsShape = shape;
     const list = $("stops");
-    if (!stops.length) {
-      list.innerHTML = `<li class="empty">Nothing stopped in the last 24 hours.</li>`;
-      return;
-    }
+    if (!stops.length) { list.innerHTML = `<li class="empty">Nothing stopped in the last 24 hours.</li>`; return; }
     list.innerHTML = stops.map((x, i) => {
-      const at = new Date(x.at);
-      const when = at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-      const day = at.toDateString() === new Date().toDateString() ? "" : " yesterday";
       const isOpen = openStops.has(x.at);
-      const head = `<li><time datetime="${x.at}">${when}${day}</time><span class="what">${esc(cap(x.what))}</span>`;
+      const head = `<li><time datetime="${x.at}">${when(x.at)}</time><span class="what">${esc(cap(x.what))}</span>`;
       if (!x.command) return `${head}</li>`;
-      return head
-        + `<button type="button" class="toggle" data-stop="${i}" aria-expanded="${isOpen}" aria-controls="stop-${i}">${toggleLabel(isOpen)}</button>`
-        + `<div class="stop-details" id="stop-${i}"${isOpen ? "" : " hidden"}>${detailHtml(x)}</div></li>`;
+      return head + `<button type="button" class="toggle" data-stop="${i}" aria-expanded="${isOpen}" aria-controls="stop-${i}">${toggleLabel(isOpen)}</button>`
+        + `<div class="stop-details" id="stop-${i}"${isOpen ? "" : " hidden"}><div><div class="label">Command</div><pre>${esc(x.command)}</pre></div></div></li>`;
     }).join("");
     list.querySelectorAll("button.toggle").forEach((button) => button.addEventListener("click", () => {
       const stop = stops[Number(button.dataset.stop)];
@@ -266,89 +517,159 @@
     }));
   }
 
-  const SCRATCH_INFO = `<button type="button" class="info" aria-label="What are temporary files?" aria-describedby="scratch-tip">`
-    + `<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.75" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 7.2v4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="4.9" r="0.95" fill="currentColor"/></svg>`
-    + `<span class="tip" id="scratch-tip" role="tooltip">Temporary files are created by programs while they work, such as downloads in progress or screenshots from a test run. They are kept in memory, so they count toward memory use. They are cleared when the workspace restarts.</span></button>`;
-
-  // The small grey text beside a row's label: its description; for scratch space, its limit;
-  // for the rows that list programs (chats, code checkers, your apps), how many run.
-  function usageTag(g) {
-    if (g.id === "scratch") return `of ${size(g.limit)} limit`;
-    if (g.hint) return g.hint;
-    if (!["chats", "checkers", "apps"].includes(g.id)) return "";
-    return g.items.length ? `${g.items.length} running` : "none running";
+  function renderEvents(listId, events, emptyText) {
+    const list = $(listId);
+    if (!events.length) { list.innerHTML = `<li class="empty">${emptyText}</li>`; return; }
+    list.innerHTML = events.map((e) => {
+      const causes = e.top && e.top.length ? `<small>${esc(e.top.map((c) => `${c.name} ${Math.round(c.share * 100)}%`).join(" · "))}</small>` : "";
+      const link = listId === "events" ? `<a class="more" href="${e.kind === "stop" ? "/memory" : "/cpu"}">Details</a>` : "<span></span>";
+      return `<li><time datetime="${e.at}">${when(e.at)}</time><span class="what">${esc(e.what)}${causes}</span>${link}</li>`;
+    }).join("");
   }
 
-  // The rows are rebuilt only when what they list changes; otherwise only their sizes update
-  // in place, so an open info popup is not torn down by the five-second refresh.
-  let usageShape = null;
-  function renderUsage(usage) {
-    const shape = JSON.stringify(usage.map((g) => [g.id, usageTag(g), g.items.map((i) => i.name)]));
-    if (shape !== usageShape) {
-      usageShape = shape;
-      $("usage-table").innerHTML = usage.map((g, gi) => {
-        const tag = usageTag(g);
-        const tagHtml = tag ? ` <span class="tag">${esc(tag)}</span>` : "";
-        const info = g.id === "scratch" ? SCRATCH_INFO : "";
-        const rows = g.items.map((i, ii) => `<tr><td class="sub">${esc(i.name)}</td><td class="num sub" data-size="${gi}.${ii}"></td></tr>`).join("");
-        return `<tr class="group" data-group="${g.id}"><td>${esc(g.label)}${info}${tagHtml}</td><td class="num" data-size="${gi}"></td></tr>${rows}`;
-      }).join("");
+  // The longer spans come from the history route; the 10-minute one rides with every reading.
+  const spans = { cpu: "10m", mem: "10m" };
+  let latest = null;
+  const longHistory = {};
+  async function loadSpan(span) {
+    if (span === "10m") return latest ? latest.history : [];
+    if (!longHistory[span] || Date.now() - longHistory[span].at > 60000) {
+      const res = await fetch(`/api/history?span=${span}`, { cache: "no-store" });
+      if (!res.ok) return [];
+      longHistory[span] = { at: Date.now(), samples: (await res.json()).samples };
     }
-    usage.forEach((g, gi) => {
-      $("usage-table").querySelector(`[data-size="${gi}"]`).textContent = size(g.bytes);
-      g.items.forEach((i, ii) => { $("usage-table").querySelector(`[data-size="${gi}.${ii}"]`).textContent = size(i.bytes); });
+    return longHistory[span].samples;
+  }
+  async function drawChart(kind) {
+    const span = spans[kind], samples = await loadSpan(span);
+    const isCpu = kind === "cpu";
+    const svg = $(isCpu ? "cpu-spark" : "mem-spark");
+    $(isCpu ? "cpu-none" : "mem-none").hidden = samples.length > 0;
+    drawSpark(svg, samples, isCpu ? "cpu" : "memory", {
+      spanMs: SPAN_MS[span], gapMs: GAP_MS[span], color: isCpu ? "var(--ink-cpu)" : "var(--ink-mem)", guard: !isCpu,
+      format: isCpu ? null : (v) => `${size(v * (latest ? latest.memory.total : 0))} (${Math.round(v * 100)}%)`,
     });
   }
+  document.querySelectorAll(".range").forEach((range) => range.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
+    range.querySelectorAll("button").forEach((o) => o.setAttribute("aria-pressed", String(o === b)));
+    spans[range.dataset.chart] = b.dataset.span;
+    drawChart(range.dataset.chart);
+  })));
 
-  // What the user can do about the largest kind of memory they can free: chats, their apps,
-  // code checkers, or files in scratch space. Never names one chat or app; says nothing when none
-  // of them holds much.
-  const ADVICE_MIN_BYTES = 100 * 2 ** 20;
-  function freeingAdvice(s) {
-    // Scratch space counts only where it is held in memory, which is when it has a row.
-    const freeable = s.usage
-      .filter((g) => ["chats", "apps", "checkers", "scratch"].includes(g.id))
-      .map((g) => ({ id: g.id, bytes: g.bytes }));
-    if (!freeable.length) return "";
-    const top = freeable.reduce((a, b) => (b.bytes > a.bytes ? b : a));
-    if (top.bytes < ADVICE_MIN_BYTES) return "";
-    return {
-      chats: " Chats are using the most memory. Stopping chats you aren't using frees memory.",
-      apps: " Your apps are using the most memory. Quitting apps you aren't using frees memory.",
-      checkers: " Code checkers are using the most memory. Asking an agent to stop its code checkers, or stopping its chat, frees memory.",
-      scratch: ` Temporary files are using ${size(top.bytes)}. They're cleared when the workspace restarts.`,
-    }[top.id];
+  function render(s) {
+    latest = s;
+    const m = s.memory, mp = pct(m.used, m.total), ml = level(mp, 80, Infinity);
+    const d = s.disk, dp = pct(d.used, d.total);
+    const hasCpu = s.cpu.sampled_at !== null, cp = Math.round(s.cpu.usage * 100);
+    if (view === "overview") {
+      $("tile-cpu").textContent = hasCpu ? `${cp}%` : "--";
+      $("tile-cpu-unit").textContent = hasCpu ? `of ${s.cpu.cores} core${s.cpu.cores === 1 ? "" : "s"}` : "no reading";
+      $("tile-mem").textContent = `${mp}%`; $("tile-mem-unit").textContent = `of ${size(m.total)}`;
+      $("tile-disk").textContent = `${dp}%`; $("tile-disk-unit").textContent = `of ${size(d.total)}`;
+      $("tile-disk-bar").style.width = `${dp}%`;
+      drawMiniSpark($("tile-cpu-spark"), s.history, "cpu", "var(--ink-cpu)");
+      drawMiniSpark($("tile-mem-spark"), s.history, "memory", "var(--ink-mem)");
+      $("usage-note").hidden = s.usage_mode === "exact";
+      renderUsage("usage-table", shownRows(s.usage), ["cpu", "mem"]);
+      renderEvents("events", s.events, "Nothing in the last 24 hours.");
+    } else if (view === "cpu") {
+      $("cpu-pct").textContent = hasCpu ? `${cp}%` : "--";
+      $("cpu-cores").textContent = hasCpu ? `of ${s.cpu.cores} core${s.cpu.cores === 1 ? "" : "s"} busy` : "no reading yet";
+      $("cpu-bar").style.width = `${hasCpu ? cp : 0}%`;
+      $("cpu-when").textContent = hasCpu ? `read ${ago(Date.now() / 1000 - s.cpu.sampled_at)}` : "the sampler has not reported";
+      $("cpu-procs").textContent = `${s.cpu.processes} process${s.cpu.processes === 1 ? "" : "es"}`;
+      // Sorted by share; without a reading, the rows that have processes keep their order and show dashes.
+      const byCpu = hasCpu
+        ? shownRows(s.usage).filter((g) => g.cpu !== null && g.cpu !== undefined).sort((a, b) => b.cpu - a.cpu)
+          .map((g) => ({ ...g, items: [...g.items].sort((a, b) => (b.cpu || 0) - (a.cpu || 0)) }))
+        : shownRows(s.usage).filter((g) => ["chats", "checkers", "workspace", "apps"].includes(g.id));
+      renderUsage("cpu-table", byCpu, ["cpu"]);
+      renderEvents("busy", s.events.filter((e) => e.kind === "busy"), "No busy stretches in the last 24 hours.");
+      drawChart("cpu");
+    } else if (view === "memory") {
+      $("mem-used").textContent = size(m.used); $("mem-total").textContent = size(m.total);
+      $("mem-free").textContent = `${size(m.available)} free`; $("mem-pct").textContent = `${mp}% used`;
+      $("mem-bar").style.width = `${mp}%`;
+      $("mem-bar").style.background = ml === "ok" ? "var(--ink-mem)" : "var(--c-warning)";
+      const stopsToday = s.stops.length, note = $("mem-note");
+      if (ml !== "ok" || stopsToday) {
+        // How full memory is and what happens when it fills; what the guard already stopped; and,
+        // when memory is short, which kind of memory the user can free is the largest.
+        const head = ml !== "ok" ? `<strong>Memory is ${mp}% full.</strong> Above ${GUARD_PERCENT}%, the workspace stops programs to free memory.` : `<strong>Memory is ${mp}% full.</strong>`;
+        const stopped = stopsToday ? ` The workspace stopped ${stopsToday} program${stopsToday > 1 ? "s" : ""} in the last 24 hours.` : "";
+        note.className = "note warn";
+        note.innerHTML = head + esc(stopped) + (ml !== "ok" ? esc(freeingAdvice(s.usage)) : "");
+        note.hidden = false;
+      } else note.hidden = true;
+      $("mem-usage-note").hidden = s.usage_mode === "exact";
+      renderUsage("mem-table", shownRows(s.usage), ["mem"]);
+      renderStops(s.stops);
+      drawChart("mem");
+    }
   }
 
-  // Details is the exact command that was stopped, from the memory guard's log; a stop the log
-  // no longer has gets no Details.
-  function detailHtml(x) {
-    return `<div><div class="label">Command</div><pre>${esc(x.command)}</pre></div>`;
+  // The disk view polls its own route: the figures, the backups, and the walk's state.
+  const BACKUP_TEXT = {
+    not_configured: (b) => ["", "Backups aren't set up for this workspace.", "Nothing is backed up until a repository is configured."],
+    running: (b) => ["live", "Backing up now.", b.last_success_at ? `The last backup completed ${ago((Date.now() - Date.parse(b.last_success_at)) / 1000)}.` : "This is the first backup."],
+    up_to_date: (b) => ["live", `Backed up ${ago((Date.now() - Date.parse(b.last_success_at)) / 1000)}.`, "Up to date."],
+    stale: (b) => ["warn", b.last_success_at ? `Last backed up ${ago((Date.now() - Date.parse(b.last_success_at)) / 1000)}.` : "Not backed up yet.", "A backup is overdue."],
+    failing: (b) => ["bad", `The last backup failed${b.last_failure_at ? " " + ago((Date.now() - Date.parse(b.last_failure_at)) / 1000) : ""}.`, b.last_success_at ? `The last one that completed was ${ago((Date.now() - Date.parse(b.last_success_at)) / 1000)}.` : "None has completed yet."],
+  };
+  function renderDisk(r) {
+    const d = r.disk, dp = pct(d.used, d.total);
+    $("disk-used").textContent = size(d.used); $("disk-total").textContent = size(d.total);
+    $("disk-free").textContent = `${size(d.free)} free`; $("disk-pct").textContent = `${dp}% used`;
+    $("disk-bar").style.width = `${dp}%`;
+    const b = r.backups, [tone, head, sub] = BACKUP_TEXT[b.state](b);
+    const minutes = Math.round(b.interval_seconds / 60);
+    const every = b.interval_seconds >= 3600 ? `every ${Math.round(b.interval_seconds / 3600)} hour${b.interval_seconds >= 7200 ? "s" : ""}` : `every ${minutes} minute${minutes === 1 ? "" : "s"}`;
+    const failures = b.failures_last_day ? ` ${b.failures_last_day} backup${b.failures_last_day > 1 ? "s" : ""} failed in the last 24 hours.` : "";
+    $("backup").innerHTML = `<span class="dot ${tone}" aria-hidden="true"></span><span><b>${esc(head)}</b> ${esc(sub)}</span>`
+      + (b.state === "not_configured" ? "" : `<p>The whole workspace is backed up ${every}, encrypted.${esc(failures)}</p>`)
+      + `<a href="file://${esc(b.readme_path)}">Learn more about backups ›</a>`;
+    const scan = r.scan, button = $("scan"), note = $("scan-note");
+    button.disabled = scan.state === "scanning";
+    button.textContent = { scanning: "Measuring…", done: "Measure again", failed: "Try again" }[scan.state] || "See what's using the disk";
+    if (scan.state === "done") {
+      note.textContent = `As of ${clock(new Date(scan.scanned_at))}.`;
+      const shades = { workspace: "#7096b7", uploads: "#8eafcb", apps: "#aac3d9", caches: "#c6d7e5", other: "#cfcdc7" };
+      $("disk-table").hidden = false;
+      $("disk-table").querySelector("tbody").innerHTML = scan.rows.map((row) => {
+        const items = row.items.map((i) => `<tr><td class="sub">${esc(i.name)}${i.hint ? ` <span class="tag">${esc(i.hint)}</span>` : ""}</td><td class="num sub">${size(i.bytes)}</td></tr>`).join("");
+        return `<tr class="group"><td><i class="sw" style="background:${shades[row.id] || "#cfcdc7"}"></i>${esc(row.label)}${row.hint ? ` <span class="tag">${esc(row.hint)}</span>` : ""}</td><td class="num">${size(row.bytes)}</td></tr>${items}`;
+      }).join("");
+      $("scan-missing").hidden = !scan.missing.length;
+      $("scan-missing").textContent = scan.missing.length ? `Could not measure: ${scan.missing.join(", ")}.` : "";
+    } else if (scan.state === "scanning") note.textContent = "Measuring what is on the disk…";
+    else if (scan.state === "failed") { note.textContent = `Could not measure what is on the disk (tried at ${clock(new Date(scan.scanned_at))}).`; $("disk-table").hidden = true; $("scan-missing").hidden = true; }
+    return scan.state === "scanning";
   }
+  $("scan").addEventListener("click", async () => {
+    $("scan").disabled = true;
+    try { await fetch("/api/disk/scan", { method: "POST" }); } catch (e) { $("scan").disabled = false; }
+    refresh();
+  });
 
   // The page refreshes every few seconds on its own, so the header says nothing while that works and
-  // only speaks up when a refresh fails.
+  // only speaks up when a refresh fails. While a disk walk runs, the disk view refreshes faster on one
+  // timer of its own, so the interval's refreshes never start a second chain.
+  let isScanning = false, timer = null, scanTimer = null;
   async function refresh() {
     let failing = false;
     try {
-      const res = await fetch("/api/stats", { cache: "no-store" });
+      const res = await fetch(view === "disk" ? "/api/disk" : "/api/stats", { cache: "no-store" });
       if (!res.ok) throw new Error(res.status);
-      render(await res.json());
+      const body = await res.json();
+      if (view === "disk") isScanning = renderDisk(body); else render(body);
     } catch (e) { failing = true; }
     $("offline").hidden = !failing;
+    if (isScanning && timer !== null && scanTimer === null) scanTimer = setTimeout(() => { scanTimer = null; refresh(); }, 1500);
   }
   // Poll only while the page can be seen: a hidden or minimised window asks for nothing, and
   // catches up the moment it is shown again.
-  let timer = null;
-  function startPolling() {
-    if (timer !== null) return;
-    refresh();
-    timer = setInterval(refresh, EVERY_MS);
-  }
-  function stopPolling() {
-    clearInterval(timer);
-    timer = null;
-  }
+  function startPolling() { if (timer !== null) return; timer = setInterval(refresh, EVERY_MS); refresh(); }
+  function stopPolling() { clearInterval(timer); clearTimeout(scanTimer); timer = scanTimer = null; }
   document.addEventListener("visibilitychange", () => (document.hidden ? stopPolling() : startPolling()));
   if (!document.hidden) startPolling();
 })();

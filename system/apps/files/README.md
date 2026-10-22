@@ -23,15 +23,17 @@ both offer the verbs `sources.py` names. For either:
   with the path's page data filled in (base64 JSON in `#index-data`: a folder's
   entries, or whether the file is small and reads as text), and `?json` is that
   data alone;
-- a file's plain GET is its bytes (a `Range` honoured), and `?zip` a folder as a
-  zip, written as it is sent (linked folders are not followed, and what can't be
-  read is left out);
+- a file's plain GET is its bytes (a `Range` honoured), `?download` the same
+  bytes saved under the file's name, and `?zip` a folder as a zip, written as
+  it is sent (linked folders are not followed, and what can't be read is left
+  out);
 - PUT writes a file (creating the folders above it, writing through a symlink to
   its file, and keeping a written-over file's mode), swapped in whole so an upload
   cut short leaves the old file; MKCOL makes a folder; MOVE renames, never over
   something already there; DELETE removes;
 - a path that isn't there is answered with `404.html` when a page was asked for
-  (the request accepts `text/html`), and in plain words otherwise.
+  (the request accepts `text/html` and is not a `?json`, `?zip`, or `?download`),
+  and in plain words otherwise.
 
 A computer's file server has no MOVE, and a folder there is not offered as a zip,
 so those are refused, as is a MOVE from the workspace onto a computer. Each name
@@ -108,6 +110,10 @@ shared by every window.
   ahead of the workspace's own element-menu rows; right-click on a folder's
   background offers New Folder, New File, Upload Files, and Upload Folder,
   which the + button offers too.
+- Download, here and on a file's page, loads the file's `?download` (a folder's
+  `?zip`) in a hidden frame (`workspace_ui`'s `startDownload`), so the request
+  carries the workspace's session inside Imbue Studio; what the server says
+  instead of sending the file shows as a toast.
 - Files dragged in from outside upload into the folder under the pointer (a
   folder's tile or row, a column, a shortcut, a path segment) or else the folder
   on show, folders included; entries dragged onto a folder move into it, except

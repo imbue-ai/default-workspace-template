@@ -20,6 +20,8 @@ from bootstrap.manager import (
     BOOTSTRAP_EVENTS_RELATIVE_PATH,
     BOOTSTRAP_STEP_COMPLETED_EVENT,
     BOOTSTRAP_STEP_STARTED_EVENT,
+    ROUTINES_ENV_WRAPPER,
+    ROUTINES_TICK_CRON_NAME,
     UPDATE_APPLY_MARKER,
     UPDATE_APPLY_SCRIPT,
     UPDATE_RECOVER_CRON_NAME,
@@ -32,12 +34,14 @@ from bootstrap.manager import (
     _fetch_user_timezone,
     _initialize_workspace_main_branch,
     _install_runtime_cron_entries,
+    _migrate_cron_entries_to_routines,
     _parse_timezone_response,
     _read_host_name,
     _read_update_marker_dri_agent,
     _recover_interrupted_update,
     _set_container_timezone,
     _wake_update_dri_agent,
+    _write_routines_tick_cron_entry,
     _write_update_recovery_cron_entry,
     main,
 )
@@ -126,6 +130,7 @@ class _StubSubprocess:
     def __init__(self, returncode: int = 0, stdout: str = "") -> None:
         self.returncode = returncode
         self.stdout = stdout
+        self.stderr = ""
         self.calls: list[list[str]] = []
         self.kwargs: list[dict[str, object]] = []
         self.on_command: Callable[[list[str]], None] | None = None
@@ -140,7 +145,7 @@ class _StubSubprocess:
             if token in cmd:
                 raise error
         return subprocess.CompletedProcess(
-            args=cmd, returncode=self.returncode, stdout=self.stdout, stderr=""
+            args=cmd, returncode=self.returncode, stdout=self.stdout, stderr=self.stderr
         )
 
 
@@ -865,6 +870,7 @@ def _prepare_boot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _StubSubpr
     for name in (
         "_migrate_legacy_claude_state_best_effort",
         "_write_update_recovery_cron_entry",
+        "_write_routines_tick_cron_entry",
         "_ensure_supervisor_log_dir",
     ):
         monkeypatch.setattr(f"bootstrap.manager.{name}", lambda: None)
@@ -903,7 +909,11 @@ def test_main_announces_each_boot_step_to_the_agent_events_in_order(
 
     main()
 
-    lines = (_agent_state_dir(tmp_path) / BOOTSTRAP_EVENTS_RELATIVE_PATH).read_text().splitlines()
+    lines = (
+        (_agent_state_dir(tmp_path) / BOOTSTRAP_EVENTS_RELATIVE_PATH)
+        .read_text()
+        .splitlines()
+    )
     events = [json.loads(line) for line in lines]
     assert all(event["source"] == "bootstrap" for event in events)
     assert all(
@@ -944,6 +954,87 @@ def test_main_announces_each_boot_step_to_the_agent_events_in_order(
     ]
 
 
+def test_main_converts_old_cron_entries_after_the_recovery_guard_and_before_the_tick_entry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The migration rewrites what data/.state/cron.d holds, so it runs before the tick entry and
+    # the runtime install lay down what is left, and after the guard, which a same-named runtime
+    # entry may still override.
+    order: list[str] = []
+    stub = _prepare_boot(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "bootstrap.manager._write_update_recovery_cron_entry",
+        lambda: order.append("guard"),
+    )
+    monkeypatch.setattr(
+        "bootstrap.manager._write_routines_tick_cron_entry",
+        lambda: order.append("tick"),
+    )
+    monkeypatch.setattr(
+        "bootstrap.manager._install_runtime_cron_entries",
+        lambda: order.append("runtime"),
+    )
+    clear_marker = stub.on_command
+
+    def record_migration(cmd: list[str]) -> None:
+        if clear_marker is not None:
+            clear_marker(cmd)
+        if cmd[-1] == "migrate-cron":
+            order.append("migrate")
+
+    stub.on_command = record_migration
+    monkeypatch.setattr("bootstrap.manager._exec_supervisord", lambda: None)
+
+    main()
+
+    migration = ["uv", "run", "--no-sync", "routines", "migrate-cron"]
+    assert migration in stub.calls
+    assert order == ["guard", "migrate", "tick", "runtime"]
+    # The CLI's own INFO lines go to stderr; only its warnings belong in the boot log.
+    environment = stub.kwargs[stub.calls.index(migration)]["env"]
+    assert isinstance(environment, dict)
+    assert environment["ROUTINES_LOG_LEVEL"] == "WARNING"
+
+
+def test_main_boots_when_the_cron_migration_cannot_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The venv may be mid-rebuild; the migration happens on the next boot and the boot still
+    # reaches supervisord.
+    stub = _prepare_boot(monkeypatch, tmp_path)
+    stub.raise_on["migrate-cron"] = OSError("no routines yet")
+    handed_off: list[bool] = []
+    monkeypatch.setattr(
+        "bootstrap.manager._exec_supervisord", lambda: handed_off.append(True)
+    )
+
+    main()
+
+    assert handed_off == [True]
+
+
+def test_a_cron_migration_that_fails_is_a_warning_in_its_own_words(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The boot goes on without the migration; what the command said is what the boot log keeps.
+    monkeypatch.chdir(tmp_path)
+    stub = _StubSubprocess(returncode=1)
+    stub.stderr = "a definition could not be written"
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+    warnings: list[str] = []
+    sink = logger.add(lambda message: warnings.append(str(message)), level="WARNING")
+    try:
+        _migrate_cron_entries_to_routines()
+    finally:
+        logger.remove(sink)
+
+    assert stub.calls == [["uv", "run", "--no-sync", "routines", "migrate-cron"]]
+    assert any(
+        "migration failed: a definition could not be written" in line
+        for line in warnings
+    )
+
+
 def test_main_boots_without_an_agent_state_dir(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -972,3 +1063,57 @@ def test_recover_names_nobody_when_the_marker_recorded_no_agent(
 
     assert len(stub.calls) == 1  # the recover invocation, and no mngr calls
     assert not UPDATE_APPLY_MARKER.exists()
+
+
+# _write_routines_tick_cron_entry
+
+
+def test_routines_tick_cron_entry_is_rewritten_every_boot(tmp_path: Path) -> None:
+    # Like the recovery guard: /etc/cron.d does not survive container recreation, and a stale
+    # entry from an older image has to be replaced rather than left alone.
+    target = tmp_path / "etc-cron-d"
+    target.mkdir()
+    installed = target / ROUTINES_TICK_CRON_NAME
+    installed.write_text("* * * * * root true  # a stale entry\n")
+
+    _write_routines_tick_cron_entry(target_dir=target)
+
+    entry = installed.read_text()
+    assert "stale entry" not in entry
+    assert entry.startswith("* * * * * root ")
+    assert (
+        f"{WORKSPACE_ROOT_DIR / ROUTINES_ENV_WRAPPER} uv run --no-sync routines tick"
+        in entry
+    )
+    assert (installed.stat().st_mode & 0o777) == 0o644
+
+
+def test_routines_tick_cron_entry_runs_through_the_env_wrapper_and_logs_to_the_supervisor_dir(
+    tmp_path: Path,
+) -> None:
+    # cron hands a drop-in a bare environment; the wrapper restores the services agent's and runs
+    # from the repo root, which is what lets `uv run` find the venv and the library find its files.
+    target = tmp_path / "etc-cron-d"
+    target.mkdir()
+    _write_routines_tick_cron_entry(target_dir=target)
+    entry = (target / ROUTINES_TICK_CRON_NAME).read_text()
+    assert entry.count("\n") == 1
+    assert ">> /var/log/supervisor/routines-tick.log 2>&1" in entry
+    # cron's own PATH is bare: the wrapper is named by its absolute path, and the wrapper sets the rest.
+    wrapper_in_entry = entry.split()[6]
+    assert wrapper_in_entry == str(WORKSPACE_ROOT_DIR / ROUTINES_ENV_WRAPPER)
+    assert Path(wrapper_in_entry).is_absolute()
+    # The wrapper the line names has to be in the tree and runnable, or the tick fails at every fire.
+    # This file sits at system/libs/bootstrap/src/bootstrap/, five levels under the checkout.
+    wrapper = Path(__file__).resolve().parents[5] / ROUTINES_ENV_WRAPPER
+    assert wrapper.is_file()
+    assert os.access(wrapper, os.X_OK)
+
+
+def test_routines_tick_cron_entry_tolerates_an_unwritable_target(
+    tmp_path: Path,
+) -> None:
+    # The target is not made on the way: the boot goes on, and the entry waits for a boot that can write it.
+    _write_routines_tick_cron_entry(target_dir=tmp_path / "missing")
+
+    assert not (tmp_path / "missing").exists()

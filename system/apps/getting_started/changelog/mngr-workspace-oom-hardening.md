@@ -1,0 +1,1 @@
+This app's pytest config deletes a passing test's `tmp_path` as soon as it finishes and keeps only the latest session's leftovers (`tmp_path_retention_policy = "failed"`, `tmp_path_retention_count = 1`), the same as the root config. Leftover test directories in the workspace's tmpfs `/tmp` held sandbox memory until deleted.

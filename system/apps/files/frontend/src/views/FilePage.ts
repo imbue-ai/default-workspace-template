@@ -12,6 +12,7 @@ import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { createMenu, type Menu } from "@imbue/workspace-ui/src/components/menu";
 import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
 import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
+import { startDownload } from "@imbue/workspace-ui/src/download";
 
 import { isLiveShared } from "../models/connections";
 import * as server from "../models/server";
@@ -19,7 +20,6 @@ import { isTextLike, previewKindOf } from "../models/fileKinds";
 import { formatSize } from "../models/format";
 import { childPath, nameOf, parentOf } from "../models/paths";
 import { Dialogs } from "./dialogs";
-import { startDownload } from "./download";
 import { FileIcon } from "./FileIcon";
 import { iconButton } from "./iconButton";
 
@@ -181,13 +181,13 @@ function body(page: FilePageModel): m.Children {
         m(FileIcon, { entry: { name, path, isFolder: false, isSymlink: false, size: 0, mtime: 0 }, size: 128 }),
         m("div", { class: "type-label text-secondary" }, "No preview available"),
         m("div", { class: "type-helper text-faint" }, "This file is too large to show, or isn't text."),
-        m(Button, { sm: true, extra: "mt-2", onclick: () => downloadFile(path) }, "Download"),
+        m(Button, { sm: true, extra: "mt-2", onclick: () => downloadFile(page, path) }, "Download"),
       ]);
   }
 }
 
-function downloadFile(path: string): void {
-  startDownload(document, server.urlOf(path), nameOf(path));
+function downloadFile(page: FilePageModel, path: string): void {
+  startDownload(document, server.downloadUrlOf(path, false), nameOf(path), (note) => page.toasts.show(note));
 }
 
 export function FilePage(): m.Component<{ page: FilePageModel }> {
@@ -264,7 +264,7 @@ export function FilePage(): m.Component<{ page: FilePageModel }> {
                   m.trust(icon("edit", { size: 16 })),
                 )
               : null,
-          iconButton("Download", "download", { "data-action": "download", onclick: () => downloadFile(path) }),
+          iconButton("Download", "download", { "data-action": "download", onclick: () => downloadFile(page, path) }),
           m("div", { class: "flex shrink-0" }, [
             iconButton("More", "ellipsis", { "data-action": "more", ...menu.triggerAttrs() }),
             menu.view([

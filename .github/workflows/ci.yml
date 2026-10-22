@@ -164,6 +164,18 @@ jobs:
           fi
           rm /tmp/exec-probe
 
+      # An agent runs the suites with its own identity in the environment, which
+      # pytest-workspace-env clears before any test code runs. Fake values here
+      # mean a pytest root that fails to load the plugin fails here, not in an agent.
+      - name: Set an agent's environment, as an agent's test run has it
+        if: steps.python_suites.outputs.on_runner == 'true'
+        run: |
+          {
+            echo "MNGR_AGENT_ID=agent-c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1"
+            echo "MNGR_AGENT_NAME=ci-not-an-agent"
+            echo "MINDS_CHAT_ID=agent-c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2"
+          } >> "$GITHUB_ENV"
+
       - name: Run root tests
         if: steps.python_suites.outputs.on_runner == 'true'
         run: uv run pytest
@@ -204,7 +216,7 @@ jobs:
       # The runner's offload and the one built into the image (OFFLOAD_VERSION in
       # system/scripts/offload_sandbox_init.sh) talk to each other, so they stay
       # in lockstep; system/test_offload_configs.py checks that.
-      OFFLOAD_VERSION: "0.9.14"
+      OFFLOAD_VERSION: "0.10.0"
     steps:
       - name: Fetch the Modal token from Vault
         uses: imbue-ai/use-vault-secrets@main

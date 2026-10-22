@@ -58,9 +58,9 @@ Built-in manifests:
 | `terminal-pty` | true | false | `terminal` | | none | none; `internal = true`, `program = "terminal-pty"` |
 | `files` | false | true | `files` | 20 | `{launch = "new", mode = "new"}` | `new` ("File Viewer", `/home/user/workspace/`, params `path` optional) |
 | `screen` | false | false | `screen` | 30 | `{launch = "screen", mode = "focus"}` | `screen` ("Screen", `/`, no params); `browser` ("Browser", POST `/launch/browser`, params `url` optional) |
-| `system-monitor` | false | true | `system-monitor` | 50 | `{launch = "open", mode = "focus"}` | none; the shell synthesizes `open` ("Open Memory & disk", `/`) |
+| `system-monitor` | false | true | `system-monitor` | 50 | `{launch = "open", mode = "focus"}` | none; the shell synthesizes `open` ("Open System Monitor", `/`) |
 
-The chat, terminal, Screen, Getting Started, and Memory & disk manifests declare `system = true`.
+The chat, terminal, Screen, Getting Started, and System Monitor manifests declare `system = true`; Routines does not.
 The Screen (`docs/system/specs/screen/spec.md`) is the workspace's one streamed Linux desktop; the browser is its `browser` launch path, and the browser app that used to hold a row here is gone.
 The chat manifest also declares `[pin] path = "/", style = "avatar", scope = "independent", default_mode = "floating"` and `[[message_handlers]] type = "minds:focus-chat", path = "/api/focus-chat"`.
 The files manifest declares `[[message_handlers]] type = "open:file", show = "{path}?view", showing = ["{path}", "{path}/", "{path}/?view"]`, and the Screen's `[[message_handlers]] type = "open:url", path = "/api/open-url"`.

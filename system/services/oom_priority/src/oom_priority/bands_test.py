@@ -56,8 +56,10 @@ _BUILTIN_SERVICE_ORDER = (
     "cron",
     "screen",
     "files",
+    "routines",
     "getting-started",
     "system-monitor",
+    "resource_sampler",
 )
 
 

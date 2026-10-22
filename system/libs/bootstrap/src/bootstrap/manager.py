@@ -45,11 +45,11 @@ SUPERVISOR_LOG_DIR = Path("/var/log/supervisor")
 
 STATE_DIR = Path("data/.state")
 
-# Durable home for user-editable cron entries. /etc/cron.d lives on the
-# container rootfs and is lost when the container is recreated; files under
-# data/.state/cron.d persist with the container volume, and the bootstrap
-# installs them into /etc/cron.d at each boot. The entry file is still the
-# on/off switch for its job -- it just lives where it survives.
+# The durable copies of the cron entries a workspace wrote before routines
+# existed: what `routines migrate-cron` could not convert stays here, and the
+# bootstrap installs it into /etc/cron.d (on the container rootfs, lost when
+# the container is recreated) at each boot. Scheduled work is otherwise a
+# routine; nothing new is written here.
 RUNTIME_CRON_DIR = STATE_DIR / "cron.d"
 # cron silently ignores drop-ins with dots or other odd characters in their
 # names; install only names it will accept and warn about the rest.
@@ -72,6 +72,11 @@ UPDATE_APPLY_SCRIPT = Path(".agents/skills/update-self/scripts/update_self.py")
 # than this process's.
 WORKSPACE_ROOT_DIR = Path("/home/user/workspace")
 UPDATE_RECOVER_CRON_NAME = "update-apply-recover"
+# The routines tick: the one cron entry that runs every routine the workspace defines (the
+# routines library, system/libs/routines). Code-owned like the recovery guard, so it is
+# written straight into /etc/cron.d at every boot.
+ROUTINES_TICK_CRON_NAME = "routines"
+ROUTINES_ENV_WRAPPER = Path("system/libs/routines/with_agent_env.sh")
 # Directly under /run rather than in /var/lock: the image's /var/lock is a
 # symlink to /run/lock, and a container whose /run is a fresh tmpfs has no
 # /run/lock, so `flock` there fails and the guard never runs.
@@ -508,10 +513,10 @@ def _write_update_recovery_cron_entry(target_dir: Path = Path("/etc/cron.d")) ->
     nothing else would stop them overlapping.
 
     This is also the one cron entry that deliberately does NOT go through
-    ``system/libs/automations/with_agent_env.sh`` (which every other job,
-    built-in or user-added, is required to use, and which would supply that
-    PATH and cwd for free). The wrapper reconstructs the agent environment by
-    sourcing ``/home/user/.mngr/env`` and parsing the host dir with ``jq``, and
+    ``system/libs/routines/with_agent_env.sh`` (which the routines tick
+    goes through, and which would supply that PATH and cwd for free). The
+    wrapper reconstructs the agent environment by sourcing
+    ``/home/user/.mngr/env`` and parsing the host dir with ``jq``, and
     exits non-zero when either is missing -- and a workspace left mid-apply is
     exactly where that assumption is least safe. The guard needs no agent
     environment beyond PATH: everything it shells out to resolves from ``$HOME``
@@ -538,6 +543,63 @@ def _write_update_recovery_cron_entry(target_dir: Path = Path("/etc/cron.d")) ->
         logger.warning("Failed to install the update-recovery cron entry: {}", e)
         return
     logger.info("Installed the update-recovery cron entry at {}", target)
+
+
+def _write_routines_tick_cron_entry(target_dir: Path = Path("/etc/cron.d")) -> None:
+    """Install the routines tick into /etc/cron.d, at every boot like the recovery guard.
+
+    One line for the whole workspace: every minute it runs ``routines tick`` through the
+    env wrapper, which restores the services agent's environment cron scrubs and runs from
+    the repo root. The routines themselves are definition files, never cron entries.
+    """
+    entry = (
+        f"* * * * * root {WORKSPACE_ROOT_DIR / ROUTINES_ENV_WRAPPER} uv run --no-sync routines tick "
+        f">> {SUPERVISOR_LOG_DIR}/{ROUTINES_TICK_CRON_NAME}-tick.log 2>&1\n"
+    )
+    target = target_dir / ROUTINES_TICK_CRON_NAME
+    try:
+        target.write_text(entry)
+        target.chmod(0o644)
+    except OSError as e:
+        logger.warning("Failed to install the routines tick cron entry: {}", e)
+        return
+    logger.info("Installed the routines tick cron entry at {}", target)
+
+
+def _migrate_cron_entries_to_routines() -> None:
+    """Convert the cron entries a workspace wrote before routines existed; a no-op once there are none.
+
+    CLEANUP: remove with ``routines.migrate`` once every workspace has booted a release with routines.
+
+    Runs ``routines migrate-cron`` as a subprocess from the root venv rather than importing the
+    library, so a workspace whose venv is mid-rebuild still boots; the migration then happens
+    on the next boot. Best-effort: the boot must reach supervisord either way.
+    """
+    try:
+        completed = subprocess.run(
+            ["uv", "run", "--no-sync", "routines", "migrate-cron"],
+            cwd=WORKSPACE_ROOT_DIR if WORKSPACE_ROOT_DIR.is_dir() else None,
+            # The CLI logs to stderr at INFO by default; only its warnings belong in the boot log.
+            env={**os.environ, "ROUTINES_LOG_LEVEL": "WARNING"},
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.warning("Skipped the cron-to-routines migration: {}", e)
+        return
+    if completed.returncode != 0:
+        logger.warning(
+            "The cron-to-routines migration failed: {}",
+            (completed.stderr or completed.stdout).strip(),
+        )
+        return
+    for line in completed.stdout.splitlines():
+        logger.info("routines migrate-cron: {}", line)
+    for line in completed.stderr.splitlines():
+        if line.strip():
+            logger.warning("routines migrate-cron: {}", line)
 
 
 def _install_runtime_cron_entries(target_dir: Path = Path("/etc/cron.d")) -> None:
@@ -971,13 +1033,16 @@ def main() -> None:
     if update_dri_agent:
         _wake_update_dri_agent(update_dri_agent)
 
-    # Lay down the update-recovery guard, then reinstall any cron entries
-    # persisted under data/.state/cron.d (e.g. the Caretaker's schedule) so
-    # they survive container recreation. Both must precede _exec_supervisord so
-    # the entries exist before cron starts; the guard goes first so a
-    # deliberate same-named runtime entry still overrides it.
+    # Lay down the update-recovery guard, convert any cron entries left from
+    # before routines existed, lay down the routines tick, then reinstall what
+    # the migration left under data/.state/cron.d so it survives container
+    # recreation. All must precede _exec_supervisord so the entries exist
+    # before cron starts; the guard goes first so a deliberate same-named
+    # runtime entry still overrides it.
     with _bootstrap_step("install_cron", "Installing scheduled jobs"):
         _write_update_recovery_cron_entry()
+        _migrate_cron_entries_to_routines()
+        _write_routines_tick_cron_entry()
         _install_runtime_cron_entries()
 
     # Make sure supervisord's log directory exists, then hand off: replace this
