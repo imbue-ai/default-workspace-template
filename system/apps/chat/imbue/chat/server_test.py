@@ -5480,6 +5480,23 @@ def test_a_mention_of_the_agent_from_a_room_reaches_the_main_chat_prefixed_until
     assert malformed.status_code == 400
 
 
+def test_a_room_title_the_prefix_could_not_carry_is_cleaned_in_the_delivered_mention(
+    tmp_path: Path, messenger: RecordingMngrMessenger
+) -> None:
+    app = _peopled_app(tmp_path, messenger)
+    client = app.test_client()
+    room_id = client.post("/api/rooms", json={"title": "Ops] team\nnight"}).get_json()["id"]
+
+    client.post(
+        f"/api/chats/{room_id}/message",
+        json={"message": "@agent ping", "message_id": "m-1"},
+        headers=_identity_header(_VISITOR),
+    )
+
+    wait_until_true(lambda: len(messenger.sent) == 1, 5.0, "the mention to reach the main chat")
+    assert messenger.sent == [(_MAIN_ID, "[from: Bob in #Ops team night] @agent ping")]
+
+
 def test_a_mention_of_a_person_is_pending_until_a_page_of_theirs_watches_the_chat(
     tmp_path: Path, messenger: RecordingMngrMessenger
 ) -> None:

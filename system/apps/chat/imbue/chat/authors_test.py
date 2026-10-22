@@ -11,6 +11,7 @@ from imbue.chat.authors import author_prefix
 from imbue.chat.authors import is_unprefixable_input
 from imbue.chat.authors import new_author_annotation
 from imbue.chat.authors import prefix_safe_name
+from imbue.chat.authors import prefix_safe_text
 from imbue.chat.authors import resolve_author
 from imbue.chat.authors import split_author_prefix
 from imbue.chat.authors import stamp_authors
@@ -76,6 +77,16 @@ def test_a_name_is_made_safe_for_the_prefix_and_reads_back_from_it(name: str, ex
     safe = prefix_safe_name(name, _BOB)
     assert safe == expected
     assert split_author_prefix(author_prefix(safe) + "hi") == (safe, "hi")
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [("Lounge", "Lounge"), ("Ops] team\nnight", "Ops team night"), ("]", "room-0123456789abcdef")],
+)
+def test_a_room_title_is_made_safe_for_the_prefix_and_the_name_reads_back_from_it(title: str, expected: str) -> None:
+    safe = prefix_safe_text(title, "room-0123456789abcdef")
+    assert safe == expected
+    assert split_author_prefix(author_prefix("Bob", safe) + "hi") == ("Bob", "hi")
 
 
 @pytest.mark.parametrize(

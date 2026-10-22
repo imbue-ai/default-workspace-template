@@ -38,6 +38,7 @@ from workspace_layout.roster import RosterParticipant
 from imbue.chat.authors import author_prefix
 from imbue.chat.authors import new_author_annotation
 from imbue.chat.authors import prefix_safe_name
+from imbue.chat.authors import prefix_safe_text
 from imbue.chat.identity import request_identity
 from imbue.chat.identity import request_participant
 from imbue.chat.mention_parser import MentionTable
@@ -216,7 +217,7 @@ class MentionHandler(MentionActions):
             chat_id = target.chat_id
         else:
             return
-        delivered = author_prefix(sender_name, room_title) + text
+        delivered = author_prefix(sender_name, prefix_safe_text(room_title, str(room_id))) + text
         # Annotated before delivery, so the chat's turn is stamped with the sender's own key (section 5.2).
         self.state.authors.record(chat_id, new_author_annotation(message_id, sender, sender_name, delivered))
         self.state.rooms.note_agent_asked(room_id, chat_id)
