@@ -100,10 +100,12 @@ SHELL_ROUTE_TABLE: RouteTable = {
     ("GET", "/api/ws"): SchemalessRoute(reason="the shell's socket, which every page holds"),
     ("GET", "/api/health"): RouteModels(response_model=ShellHealthResponse),
     ("GET", PRESENCE_PATH): RouteModels(response_model=PresenceListing),
+    # The view reads the body itself: a page from before the body was sent posts none.
     ("POST", PRESENCE_HEARTBEAT_PATH): RouteModels(
         request_model=HeartbeatRequest,
         response_model=HeartbeatResponse,
         alternate_responses=(AlternateResponse(status=HTTP_NO_CONTENT),),
+        is_body_parsed_by_view=True,
     ),
     ("GET", ROSTER_ROUTE): RouteModels(response_model=RosterDocument),
     # Section 5.1 and 5: the client-activity report, and an app's lifecycle

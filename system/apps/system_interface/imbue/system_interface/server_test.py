@@ -676,6 +676,10 @@ def test_presence_heartbeat_ignores_whatever_body_an_older_page_still_sends(clie
         "/api/presence/heartbeat", json={"session_id": "tab-0001-aaaa"}, headers=identity_headers(_VISITOR_IDENTITY)
     )
     assert response.status_code == 200
+    # A page from before the body was sent posts none at all.
+    bodiless = client.post("/api/presence/heartbeat", headers=identity_headers(_VISITOR_IDENTITY))
+    assert bodiless.status_code == 200
+    assert bodiless.get_json()["participant"] == "user:user-bob-4471"
 
 
 def test_presence_heartbeat_records_the_owner_of_an_unshared_workspace_under_the_owner_key(

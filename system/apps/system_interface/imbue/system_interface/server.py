@@ -8,15 +8,16 @@ from typing import Any
 from typing import Final
 
 from app_manifest.content_security_policy import attach_document_policy
+from app_manifest.manifest import describe_validation_error
 from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import CONTEXT_MENU_ROUTE
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import SHELL_CONTEXT_MENU_PATH
 from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
 from app_schema.api_schema import register_api_schema_route
+from app_schema.errors import InvalidRequestBodyError
 from app_schema.routes import error_response
 from app_schema.routes import model_response
-from app_schema.routes import parse_request_body
 from flask import Flask
 from flask import Response
 from flask import request
@@ -491,6 +492,20 @@ def _roster_endpoint() -> Response:
     return model_response(get_state().roster.document(utc_now()))
 
 
+def _parse_heartbeat() -> HeartbeatRequest:
+    """The heartbeat's body, read here rather than by ``parse_request_body`` because a page from before the body was
+    sent posts none at all, which is a heartbeat carrying nothing; anything else is refused as the helper refuses it."""
+    if not request.get_data():
+        return HeartbeatRequest()
+    body = request.get_json(force=True, silent=True)
+    if not isinstance(body, dict):
+        raise InvalidRequestBodyError("the request body must be a JSON object")
+    try:
+        return HeartbeatRequest.model_validate(body)
+    except ValidationError as e:
+        raise InvalidRequestBodyError(describe_validation_error(e)) from e
+
+
 def _presence_heartbeat_endpoint() -> Response:
     """One shell page's heartbeat: record the requester's presence (the owner of an unshared workspace under the
     ``owner`` key) and the page's newest input time, and answer their own identity record and participant key.
@@ -498,7 +513,7 @@ def _presence_heartbeat_endpoint() -> Response:
     Answers 204 and records nothing for a visiting agent, which never heartbeats: there is no file for one here.
     """
     identity = request_identity()
-    heartbeat = parse_request_body(HeartbeatRequest)
+    heartbeat = _parse_heartbeat()
     if identity.agent_id is not None:
         return Response(status=204)
     try:
