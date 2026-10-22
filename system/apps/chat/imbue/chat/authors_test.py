@@ -46,6 +46,7 @@ def _user_event(content: str, timestamp: str = "2026-10-22T10:00:00.500Z") -> di
         ("[from: Bob in #Lounge] hello", ("Bob", "hello")),
         ("hello", (None, "hello")),
         ("[from: ] hello", (None, "[from: ] hello")),
+        ("[from:  ] hello", (None, "[from:  ] hello")),
         ("first\n[from: Ana María] second\nthird", ("Ana María", "first\nsecond\nthird")),
     ],
 )
@@ -98,6 +99,8 @@ def test_a_prefix_without_a_matching_hash_resolves_by_name_else_to_a_synthetic_k
         "Someone Else",
     )
     assert resolve_author("plain words", "2026-10-22T10:00:01Z", annotations) is None
+    # A prefix naming nobody (only spaces) is not a prefix, so it is the owner's and never makes an empty key.
+    assert resolve_author("[from:  ] typed by hand", "2026-10-22T10:00:01Z", annotations) is None
 
 
 def test_stamping_marks_only_user_messages_with_an_author_and_never_restamps() -> None:

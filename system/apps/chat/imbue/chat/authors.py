@@ -54,7 +54,7 @@ AUTHOR_NAME_FIELD: Final[str] = "author_name"
 # The prefix the agent reads an author from: ``[from: Name] `` or ``[from: Name in #Room title] ``, at the start of
 # a line. The room form is for a mention delivered from a room (section 7.4); either way the name is the author.
 AUTHOR_PREFIX_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"^\[from: (?P<name>[^\]\n]+?)(?: in #(?P<room>[^\]\n]+?))?\] "
+    r"^\[from: (?P<name>[^\]\n\s][^\]\n]*?)(?: in #(?P<room>[^\]\n]+?))?\] "
 )
 
 # The key of an author known only from a prefix nobody annotated (typed by hand, or whose annotation was lost).
