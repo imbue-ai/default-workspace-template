@@ -717,8 +717,10 @@ def parse_line_detail(raw_line: str) -> dict[str, dict[str, Any]]:
 # so are dropped by ``parse_lines`` at the DAG guard. They obey a conservation
 # law: ``enqueue = dequeue + remove + popAll`` -- every parked message leaves the
 # queue through exactly one dequeue/remove/popAll record. In the real Imbue Studio flow
-# EVERY message is delivered via mngr (typed into the TUI), so a mid-turn message
-# commits as a ``dequeue`` whose ``promptSource`` is "typed" (NOT "queued"), and
+# EVERY message is delivered via mngr (typed into the TUI), so a parked message
+# commits as a ``dequeue`` whose ``promptSource`` is "typed" (NOT "queued") -- or,
+# when Claude folds it into the running turn at a tool result, as a ``remove``
+# beside a ``queued_command`` attachment -- and
 # slash commands / task-notifications also leave via dequeue/remove -- none of
 # which the user record or the ``queued_command`` attachment reliably marks. So
 # resolution keys off the ledger's LEAVE ops ONLY (one record = one leave), never
