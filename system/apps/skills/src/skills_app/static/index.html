@@ -272,11 +272,17 @@
   const LIST_REFRESH_MS = 10_000;
   // The sidebar's search survives the page loads moving between skills, in this tab only.
   const SIDEBAR_SEARCH_KEY = "skills-sidebar-search";
+  // "+ Add" toggles Add a skill: open, it leads back to the skill (or empty pane) that was showing before; closed, it
+  // reopens Add a skill on the search last typed there. Both are kept for the tab, as the sidebar's search is.
+  const LAST_PANE_KEY = "skills-last-pane";
+  const ADD_SEARCH_KEY = "skills-add-search";
   const root = document.documentElement;
   const listNode = document.getElementById("skill-list");
   const reader = document.getElementById("reader");
   const search = document.getElementById("search");
   const skillsFolderLink = document.getElementById("skills-folder");
+  const addButton = document.getElementById("new-skill");
+  const ADD_BUTTON_TITLE = addButton.title;
   let skills = [];
   let shell;
   let latestLoad = 0;
@@ -435,6 +441,16 @@
     return `/?find=${encodeURIComponent(query)}`;
   }
 
+  function addPageUrl() {
+    return findUrl(readSessionStored(ADD_SEARCH_KEY) ?? "");
+  }
+
+  // A skill removed since it was showing leaves nothing to go back to but the empty pane.
+  function lastPaneUrl() {
+    const name = readSessionStored(LAST_PANE_KEY) ?? "";
+    return name && skills.some((skill) => skill.name === name) ? `/${encodeURIComponent(name)}` : "/";
+  }
+
   function renderList() {
     const query = search.value.trim().toLowerCase();
     const shown = skills.filter((skill) => !query || `${skill.name} ${skill.title} ${skill.description}`.toLowerCase().includes(query));
@@ -486,9 +502,15 @@
       else link.removeAttribute("aria-current");
     }
     const found = findQuery();
-    const addButton = document.getElementById("new-skill");
-    if (found !== null) addButton.setAttribute("aria-current", "page");
-    else addButton.removeAttribute("aria-current");
+    if (found !== null) {
+      addButton.setAttribute("aria-current", "page");
+      addButton.href = lastPaneUrl();
+      addButton.title = "Close Add a skill and go back";
+    } else {
+      addButton.removeAttribute("aria-current");
+      addButton.href = addPageUrl();
+      addButton.title = ADD_BUTTON_TITLE;
+    }
     for (const button of listNode.querySelectorAll("a[data-find]")) {
       if (button.dataset.find === found) button.setAttribute("aria-current", "page");
       else button.removeAttribute("aria-current");
@@ -503,7 +525,7 @@
       " in a chat or press Try it.",
     ]);
     const pick = element("p", { class: "intro-hint", text: "Pick a skill on the left to read or edit it, or add a new one: find it online, or have your agent make it." });
-    const add = withIcon(element("a", { class: "add-button", href: findUrl(""), text: "Add a skill" }), "plus");
+    const add = withIcon(element("a", { class: "add-button", href: addPageUrl(), text: "Add a skill" }), "plus");
     reader.replaceChildren(element("div", { class: "intro" }, [element("p", { class: "intro-lead", text: "Skills are what your agents know how to do." }), usage, pick, add]));
     reportLocation();
   }
@@ -688,6 +710,7 @@
   // A search from the page itself keeps the page (and the field's focus): its address follows the field, so the
   // window reopens on the last search, without a history entry per search.
   function searchOnline(query, resultsNode) {
+    writeSessionStored(ADD_SEARCH_KEY, query);
     history.replaceState(null, "", findUrl(query));
     reportLocation();
     markSelected();
@@ -699,10 +722,12 @@
     document.title = "Add a skill - Skills";
     const field = element("input", { type: "text", role: "searchbox", "aria-label": "Search for a skill, or describe one to make", placeholder: "Search for a skill, or describe one to make", autocomplete: "off", spellcheck: "false" });
     field.value = query;
+    writeSessionStored(ADD_SEARCH_KEY, query);
     const results = element("div", { id: "find-results" });
     let typingTimer = null;
     field.addEventListener("input", () => {
       clearTimeout(typingTimer);
+      writeSessionStored(ADD_SEARCH_KEY, field.value);
       const next = field.value.trim();
       if (!next) {
         ++latestLoad;
@@ -741,6 +766,7 @@
     const name = selectedName();
     const found = findQuery();
     root.dataset.view = name || found !== null ? "skill" : "list";
+    if (found === null) writeSessionStored(LAST_PANE_KEY, name);
     markSelected();
     if (name) showSkill(name);
     else if (found !== null) showFind(found);
@@ -899,7 +925,7 @@
   window.addEventListener("focus", () => void pollListing());
 
   withIcon(skillsFolderLink, "folder");
-  withIcon(document.getElementById("new-skill"), "plus");
+  withIcon(addButton, "plus");
 
   // The page connects itself, as Routines and Getting Started do, rather than through a runner-injected page script:
   // its buttons hand drafts and messages to the shell through the connection. Connected before the frame's load event,

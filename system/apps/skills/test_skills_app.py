@@ -142,6 +142,34 @@ def test_clearing_add_a_skill_s_field_goes_back_to_its_suggestions(
     expect(page).to_have_url(page.url.split("?")[0] + "?find=")
 
 
+def test_add_closes_back_to_the_skill_that_was_showing_and_reopens_on_its_last_search(
+    searcher: RecordingSkillIndexSearcher, open_skills_page: OpenPage
+) -> None:
+    searcher.matches = (indexed_skill("anthropics/skills", "pdf", installs=214612),)
+    page = open_skills_page("/assist", *_DESKTOP)
+    origin = page.url.removesuffix("/assist")
+    add = page.locator("#new-skill")
+
+    add.click()
+    page.locator(".find-search input").fill("pdf")
+
+    expect(page).to_have_url(f"{origin}/?find=pdf")
+    expect(page.locator(".online-skills li")).to_have_count(1)
+    expect(add).to_have_attribute("href", "/assist")
+
+    add.click()
+
+    expect(page).to_have_url(f"{origin}/assist")
+    expect(page.locator("article .skill-head h1")).to_have_text("assist")
+    expect(add).not_to_have_attribute("aria-current", "page")
+
+    add.click()
+
+    expect(page).to_have_url(f"{origin}/?find=pdf")
+    expect(page.locator(".find-search input")).to_have_value("pdf")
+    expect(page.locator(".online-skills li")).to_have_count(1)
+
+
 def test_add_a_skill_says_when_skills_sh_cannot_be_reached(
     searcher: RecordingSkillIndexSearcher, open_skills_page: OpenPage
 ) -> None:
