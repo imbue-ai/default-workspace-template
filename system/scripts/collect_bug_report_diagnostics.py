@@ -1141,7 +1141,9 @@ def release_scanned_members(
     withheld: list[tuple[str, str]] = []
     for member, staged_member in zip(class_members, staged, strict=True):
         name_reason = verdicts.get(staged_member.name_path, NOTE_SCANNER_UNAVAILABLE)
-        content_reason = verdicts.get(staged_member.content_path, NOTE_SCANNER_UNAVAILABLE)
+        content_reason = verdicts.get(
+            staged_member.content_path, NOTE_SCANNER_UNAVAILABLE
+        )
         if name_reason is None and content_reason is None:
             released.append(member)
         elif name_reason is None:
@@ -1153,7 +1155,9 @@ def release_scanned_members(
         return [], ["{}: {}".format(label, withheld[0][1])]
     notes = ["{}: {}: {}".format(label, name, reason) for name, reason in withheld]
     if dropped_count:
-        notes.append("{}: {}".format(label, NOTE_TRIMMED_TO_BUDGET.format(dropped_count)))
+        notes.append(
+            "{}: {}".format(label, NOTE_TRIMMED_TO_BUDGET.format(dropped_count))
+        )
     return released, notes
 
 
@@ -1230,7 +1234,14 @@ def main(argv: Sequence[str]) -> None:
     # scan still reads the result, so a credential the blanking misses is still
     # withheld.
     collected = [
-        (key, label, [(name, redact_url_credentials(content), mtime) for name, content, mtime in class_members])
+        (
+            key,
+            label,
+            [
+                (name, redact_url_credentials(content), mtime)
+                for name, content, mtime in class_members
+            ],
+        )
         for key, label, class_members in collected
     ]
 

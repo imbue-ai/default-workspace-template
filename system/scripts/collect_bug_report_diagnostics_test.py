@@ -377,7 +377,6 @@ def _notes_lines(archive: zipfile.ZipFile) -> list[str]:
     return archive.read("collection-notes.txt").decode("utf-8").splitlines()
 
 
-
 def test_the_scan_gate_path_points_at_a_gate_that_exists_in_this_repo() -> None:
     """The gate is addressed by a hardcoded path, so a rename silently disables it.
 
@@ -443,7 +442,6 @@ def test_select_log_files_drops_logs_not_written_to_in_the_last_day(
     ]
 
 
-
 def test_select_log_files_keeps_every_programs_logs_both_streams(
     tmp_path: Path,
 ) -> None:
@@ -468,7 +466,6 @@ def test_select_log_files_keeps_every_programs_logs_both_streams(
         "terminal-stdout.log",
         "geopolitical-dashboard-stderr.log",
     ]
-
 
 
 def test_every_agent_is_a_transcript_candidate(
@@ -776,7 +773,6 @@ def test_transcript_member_names_stay_unique_within_one_archive() -> None:
     assert second.endswith(".jsonl")
 
 
-
 def test_zip_records_an_epoch_fallback_mtime_at_the_formats_floor() -> None:
     """A transcript whose mtime falls back to the 1970 epoch is clamped to the
     earliest instant a zip can record, rather than failing the whole archive --
@@ -812,7 +808,6 @@ def test_zip_records_a_far_future_chat_at_the_formats_ceiling() -> None:
         # The last instant the format holds, read back a second early because a
         # DOS time records seconds in two-second steps.
         assert archive.infolist()[0].date_time == (2107, 12, 31, 23, 59, 58)
-
 
 
 def test_scan_targets_releases_every_file_on_a_clean_scan(tmp_path: Path) -> None:
@@ -946,7 +941,6 @@ def test_scan_targets_fails_closed_when_the_scan_times_out(tmp_path: Path) -> No
         "/tmp/logs.txt": module.NOTE_SCANNER_UNAVAILABLE,
         "/tmp/transcript.txt": module.NOTE_SCANNER_UNAVAILABLE,
     }
-
 
 
 def test_main_prints_only_the_base64_zip_line_with_all_content_on_a_clean_scan(
@@ -1214,7 +1208,9 @@ def test_a_credential_in_a_url_query_string_is_blanked_and_its_chat_still_ships(
         assert archive.namelist() == ["chats/agent-reader-claude.jsonl"]
         chat = archive.read("chats/agent-reader-claude.jsonl").decode("utf-8")
         assert secret not in chat
-        assert "https://news.example.com/p/article?token=REDACTED&utm_source=email" in chat
+        assert (
+            "https://news.example.com/p/article?token=REDACTED&utm_source=email" in chat
+        )
 
 
 @pytest.mark.parametrize(
@@ -1340,7 +1336,6 @@ def test_main_reports_everything_scanner_unavailable_when_the_gate_is_missing(
         ]
 
 
-
 def test_main_packs_every_collected_chat_with_no_size_cap(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1373,7 +1368,6 @@ def test_main_packs_every_collected_chat_with_no_size_cap(
             "chats/agent-b-claude.jsonl",
             "chats/agent-a-claude.jsonl",
         ]
-
 
 
 def test_agent_logs_are_collected_from_every_shape_a_harness_writes(
