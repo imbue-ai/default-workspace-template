@@ -124,7 +124,7 @@ class ChatImportSourceView(FrozenModel):
     """One source as the card sees it: the skill's record without the sync's process id."""
 
     state: ChatImportState = Field(description="Where the source's last import got to")
-    conversations: int = Field(description="Conversations imported so far")
+    conversations: int = Field(description="Conversations downloaded so far")
     updated_at: str = Field(description="When the record was last written, ISO 8601")
     detail: str = Field(description="What went wrong, or what is still to come; empty when nothing is")
     fetched: int | None = Field(
