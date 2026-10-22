@@ -535,11 +535,12 @@ def read_agent_last_seen_times(path: Path) -> dict[str, datetime]:
     times: dict[str, datetime] = {}
     for agent_id, value in raw.items():
         if not isinstance(value, str):
+            _logger.debug("Skipped the last-seen time of %s at %s: not a string", agent_id, path)
             continue
         try:
             times[agent_id] = _parse_timestamp(value, "last_seen")
-        except AgentGrantsError:
-            continue
+        except AgentGrantsError as exc:
+            _logger.debug("Skipped the last-seen time of %s at %s: %s", agent_id, path, exc)
     return times
 
 

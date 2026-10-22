@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -93,9 +94,16 @@ def test_last_seen_times_read_an_absent_file_quietly_and_warn_about_one_that_can
     assert read_agent_last_seen_times(path) == {}
     assert [record.levelname for record in caplog.records] == ["WARNING", "WARNING"]
 
-    # An entry whose time cannot be read is left out rather than failing the read.
+    # An entry whose time cannot be read is left out rather than failing the read, each noted at debug level.
+    caplog.clear()
+    caplog.set_level(logging.DEBUG, logger="share_grants.agent_grants")
     path.write_text(json.dumps({"va-1": "2026-10-15T18:00:00+00:00", "va-2": "yesterday", "va-3": 3}))
     assert read_agent_last_seen_times(path) == {"va-1": _NOW}
+    assert [record.levelname for record in caplog.records] == ["DEBUG", "DEBUG"]
+    assert [record.getMessage().split(" at ")[0] for record in caplog.records] == [
+        "Skipped the last-seen time of va-2",
+        "Skipped the last-seen time of va-3",
+    ]
 
 
 def test_fingerprint_of_public_key_line_matches_openssh() -> None:
