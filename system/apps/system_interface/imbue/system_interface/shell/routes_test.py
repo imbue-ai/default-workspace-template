@@ -2569,6 +2569,7 @@ def test_a_post_launch_path_is_posted_with_its_presets_params_and_envelope_and_l
             LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-1"}),
             LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-2"}),
             LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-2"}),
+            LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-3"}),
         ]
     )
     app = _launching_shell(tmp_path, broadcaster, poster)
@@ -2619,6 +2620,26 @@ def test_a_post_launch_path_is_posted_with_its_presets_params_and_envelope_and_l
         {"app": "buddy", "launch": "new", "params": {}, "target": {"kind": "window", "window_id": pinned["id"]}},
     )
     assert poster.posts[2].body["window_path"] == "/?chat=agent-2"
+    # A text that is not about the window's page is posted without it, and the window still follows the answer.
+    withheld = _launch(
+        client,
+        {
+            "app": "buddy",
+            "launch": "new",
+            "params": {},
+            "target": {"kind": "window", "window_id": pinned["id"], "sends_window_path": False},
+        },
+    )
+    assert withheld.status_code == 200, withheld.get_json()
+    assert "window_path" not in poster.posts[3].body
+    assert withheld.get_json()["window"]["path"] == "/?chat=agent-3"
+    # Only a window target has a page to withhold.
+    assert (
+        _launch(
+            client, {"app": "buddy", "launch": "new", "target": {"kind": "new", "sends_window_path": False}}
+        ).status_code
+        == 400
+    )
     # A window of another app cannot be the target.
     terminal = _open_window(client, "terminal", "/?session=t1").get_json()["window"]
     assert (
@@ -2628,7 +2649,7 @@ def test_a_post_launch_path_is_posted_with_its_presets_params_and_envelope_and_l
         == 400
     )
     # Nothing was posted for the refused launches.
-    assert len(poster.posts) == 3
+    assert len(poster.posts) == 4
 
 
 def test_a_post_launch_the_app_refuses_or_cannot_answer_is_passed_on_and_opens_nothing(

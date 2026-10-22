@@ -30,9 +30,13 @@ def provisional_chat_created_message(provisional: ProvisionalChat) -> dict[str, 
     return {"type": "provisional_chat_created", **provisional.model_dump(mode="json")}
 
 
-def chats_updated_message(snapshots: list[ChatSnapshot]) -> dict[str, Any]:
-    """The ``chats_updated`` message: every chat's snapshot."""
-    return {"type": "chats_updated", "chats": [snapshot.model_dump(mode="json") for snapshot in snapshots]}
+def chats_updated_message(snapshots: list[ChatSnapshot], main_chat_id: ChatId | None) -> dict[str, Any]:
+    """The ``chats_updated`` message: every chat's snapshot, and the main chat's id (``main_chat.py``)."""
+    return {
+        "type": "chats_updated",
+        "chats": [snapshot.model_dump(mode="json") for snapshot in snapshots],
+        "main_chat_id": main_chat_id,
+    }
 
 
 def _drain_queue(client_queue: queue.Queue[str | None]) -> None:
@@ -122,9 +126,9 @@ class WebSocketBroadcaster(MutableModel):
             _MAX_CONSECUTIVE_QUEUE_FULL,
         )
 
-    def broadcast_chats_updated(self, snapshots: list[ChatSnapshot]) -> None:
-        """Broadcast a chats_updated event: every chat's snapshot."""
-        self.broadcast(chats_updated_message(snapshots))
+    def broadcast_chats_updated(self, snapshots: list[ChatSnapshot], main_chat_id: ChatId | None) -> None:
+        """Broadcast a chats_updated event: every chat's snapshot, and the main chat's id."""
+        self.broadcast(chats_updated_message(snapshots, main_chat_id))
 
     def broadcast_provisional_chat_created(self, provisional: ProvisionalChat) -> None:
         """Broadcast a provisional_chat_created event: a provisional chat, minted or moved to a new phase."""

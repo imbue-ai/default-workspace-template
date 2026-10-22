@@ -284,7 +284,9 @@ export class FakeDesktopApi implements DesktopApi {
    *  is ``postLaunchAnswer``; then an open (``new``, ``focus``) or a location write (``window``). */
   async launch(desktopId: string, request: LaunchRequest): Promise<LaunchOutcome> {
     const targetSpelling =
-      request.target.kind === "window" ? `window:${request.target.windowId}` : request.target.kind;
+      request.target.kind === "window"
+        ? `window:${request.target.windowId}` + (request.target.sendsWindowPath === false ? ":without-page" : "")
+        : request.target.kind;
     this.calls.push(
       `launch:${desktopId}:${request.app}:${request.launch}:${JSON.stringify(request.params)}:${targetSpelling}` +
         (request.isMinimized ? ":minimized" : ""),

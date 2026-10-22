@@ -456,7 +456,7 @@ describe("the avatar chooser", () => {
     expect(document.querySelector("[data-avatar-chooser]")).toBeNull();
     await settle();
     expect(api.calls).toContain(
-      `launch:home:buddy:draft:${JSON.stringify({ message: AVATAR_DESIGN_PROMPT })}:window:win-9`,
+      `launch:home:buddy:draft:${JSON.stringify({ message: AVATAR_DESIGN_PROMPT })}:window:win-9:without-page`,
     );
     expect(api.calls).toContain(`reportWindowLocation:home:win-9:${CLIENT}:/?chat=agent-1:`);
     expect(api.calls.some((call) => call.startsWith("openWindow:"))).toBe(false);
