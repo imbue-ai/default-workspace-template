@@ -1101,6 +1101,27 @@ def test_an_unreadable_status_file_is_an_error_rather_than_a_fresh_start(
         import_chats.read_status(status_path)
 
 
+def test_a_sync_whose_status_cannot_be_recorded_is_an_import_error_naming_the_file(
+    tmp_path: Path, workspace: _SyncWorkspace
+) -> None:
+    (tmp_path / "not-a-directory").write_text("")
+    status_path = tmp_path / "not-a-directory" / "status.json"
+
+    with pytest.raises(import_chats.ImportChatsError) as raised:
+        import_chats.sync(
+            [CLAUDE],
+            workspace.datalib,
+            Path("install_datalib.sh"),
+            status_path,
+            _FakeDatalib(),
+        )
+
+    assert str(status_path) in str(raised.value)
+    with pytest.raises(import_chats.ImportChatsError) as raised:
+        import_chats.record_source(status_path, "claude", "imported", 0, "", pid=None)
+    assert f"cannot record the claude import in {status_path}" in str(raised.value)
+
+
 def test_a_record_waits_for_another_writer_and_keeps_what_it_wrote(
     tmp_path: Path,
 ) -> None:

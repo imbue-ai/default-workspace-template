@@ -186,6 +186,8 @@ def read_status(path: Path) -> dict:
         document = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {"sources": {}}
+    except OSError as e:
+        raise ImportChatsError(f"cannot read the status file {path}: {e}") from e
     except ValueError as e:
         raise ImportChatsError(f"the status file {path} is not JSON: {e}") from e
     if not isinstance(document, dict) or not isinstance(document.get("sources"), dict):
@@ -241,18 +243,21 @@ def record_source(
     pid: int | None,
     fetch_progress: FetchProgress | None = None,
 ) -> None:
-    with status_lock(path):
-        document = read_status(path)
-        document["sources"][key] = {
-            "state": state,
-            "conversations": conversations,
-            "updated_at": _now(),
-            "detail": detail,
-            "pid": pid,
-            "fetched": None if fetch_progress is None else fetch_progress.fetched,
-            "to_fetch": None if fetch_progress is None else fetch_progress.total,
-        }
-        write_status(path, document)
+    try:
+        with status_lock(path):
+            document = read_status(path)
+            document["sources"][key] = {
+                "state": state,
+                "conversations": conversations,
+                "updated_at": _now(),
+                "detail": detail,
+                "pid": pid,
+                "fetched": None if fetch_progress is None else fetch_progress.fetched,
+                "to_fetch": None if fetch_progress is None else fetch_progress.total,
+            }
+            write_status(path, document)
+    except OSError as e:
+        raise ImportChatsError(f"cannot record the {key} import in {path}: {e}") from e
 
 
 @dataclass(frozen=True)
@@ -874,7 +879,7 @@ def _record_progress_until(
                     pid=os.getpid(),
                     fetch_progress=progress.of(source),
                 )
-            except (OSError, ImportChatsError) as e:
+            except ImportChatsError as e:
                 print(
                     f"import-chats: could not record the {source.label} import's progress: {e}",
                     file=sys.stderr,
