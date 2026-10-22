@@ -382,9 +382,8 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["terminal"].critical is True
     assert by_name["files"].critical is False
     assert by_name["browser"].critical is False
-    # The stop-when-no-windows spec, section 4.2: Files, Getting Started, Routines, Skills, and System Monitor stop
-    # once no window shows them; the browser keeps running, since agents drive its browsers with no window; and the
-    # critical ones (which the manifest refuses the field on) never stop.
+    # The stop-when-no-windows spec, section 4.2: the browser keeps running, since agents drive its browsers with no
+    # window, and the critical ones (which the manifest refuses the field on) never stop.
     assert {name: manifest.stop_when_no_windows for name, manifest in by_name.items()} == {
         "system_interface": False,
         "chat": False,
@@ -449,7 +448,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         ("minds:show-routine", "/{routine_id}")
     ]
     assert by_name["routines"].preview.env["ROUTINES_APP_PREVIEW"] == "1"
-    # Skills: one read-only window over .agents/skills, focused like Routines, in its own band.
+    # Skills: one read-only window over .agents/skills, so its shortcut focuses it.
     assert by_name["skills"].critical is False
     assert by_name["skills"].program == "skills"
     assert by_name["skills"].priority == "skills"
@@ -457,7 +456,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["skills"].default_shortcut is not None
     assert by_name["skills"].default_shortcut.launch == "open"
     assert by_name["skills"].default_shortcut.mode == "focus"
-    # Files takes a file to show and a file to edit (the Skills app's pencil on a SKILL.md), each as its own page.
+    # Files takes a file to show and a file to edit, each as its own page.
     assert [(handler.type, handler.show, handler.showing) for handler in by_name["files"].message_handlers] == [
         ("open:file", "{path}?view", ("{path}", "{path}/", "{path}/?view")),
         ("edit:file", "{path}?edit", ("{path}?edit",)),

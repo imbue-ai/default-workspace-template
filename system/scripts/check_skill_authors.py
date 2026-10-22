@@ -4,9 +4,9 @@
 Each is marked as Imbue's (``metadata.author: imbue``): the Skills app lists a skill by that author, so one the
 template ships without it reads as made in the user's own workspace. A ``metadata.audience``, where one is given, is
 ``system``, the only value that means anything (the agents' own procedure, kept behind the scenes); any other spelling
-would silently read as a skill for people. Run by the template repository's CI alone (its ``skill-authors`` job), never
-in a workspace made from the template, which holds skills by other authors. The vendored imbue-studio skill's author
-is the mngr repository's to mark, and its own test there requires it.
+would silently read as a skill for people. Run by the template repository's CI alone, never in a workspace made from
+the template, which holds skills by other authors. The vendored imbue-studio skill's author is the mngr repository's
+to mark, and its own test there requires it.
 
     check_skill_authors.py                     # check the checkout in the current directory
     check_skill_authors.py --repo-root <dir>   # check another checkout
