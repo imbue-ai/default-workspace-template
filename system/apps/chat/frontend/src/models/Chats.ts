@@ -178,7 +178,7 @@ export interface ProvisionalChat {
 }
 
 type WsEvent =
-  | { type: "chats_updated"; chats: ChatSnapshot[] }
+  | { type: "chats_updated"; chats: ChatSnapshot[]; main_chat_id: string | null }
   | ({ type: "provisional_chat_created" } & ProvisionalChat)
   | { type: "provisional_chat_completed"; chat_id: string; success: boolean; error: string | null }
   | { type: "accounts_updated" };
@@ -197,6 +197,9 @@ export type ChatActivityListener = (chatId: string, previous: string | null, cur
 export type ChatActiveAgentListener = (chatId: string, previousAgentId: string, currentAgentId: string) => void;
 
 let chats: ChatSnapshot[] = [];
+// The workspace's main chat (the backend's ``main_chat.py``): listed first, and where a text with no chat of its
+// own goes. It can be a chat that is still provisional. Null while the workspace has no chat to take it.
+let mainChatId: string | null = null;
 // The JSON of the last chats_updated payload, to skip redundant identical pushes.
 let lastChatsSerialized = "";
 let provisionalChats: ProvisionalChat[] = [];
@@ -291,9 +294,10 @@ function handleEvent(event: WsEvent): void {
       isChatListReceived = true;
       // The backend can broadcast the same snapshot many times during a turn (transcript
       // churn), and a redraw on each identical push makes the model bar visibly flicker.
-      const serialized = JSON.stringify(event.chats);
+      const serialized = JSON.stringify([event.chats, event.main_chat_id]);
       if (serialized === lastChatsSerialized) break;
       lastChatsSerialized = serialized;
+      mainChatId = event.main_chat_id;
       // Diff against the outgoing snapshot (still in `chats` here) so per-chat activity
       // transitions can be reported before replacing it.
       const previousActivityById = new Map(chats.map((c) => [c.chat_id, c.active_agent.activity_state]));
@@ -418,6 +422,10 @@ export function hasReceivedChatList(): boolean {
  *  out of the snapshots it pushes, so nothing here needs filtering. */
 export function getChats(): ChatSnapshot[] {
   return chats;
+}
+
+export function getMainChatId(): string | null {
+  return mainChatId;
 }
 
 export function getChatById(chatId: string): ChatSnapshot | undefined {

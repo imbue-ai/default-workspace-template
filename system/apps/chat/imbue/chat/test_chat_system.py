@@ -96,7 +96,7 @@ def test_chat_lists_what_the_real_observer_reports_and_rides_out_its_restart(tmp
             )
             listed = client.get("/api/chats")
             assert listed.status_code == 200
-            assert listed.get_json() == {"chats": []}
+            assert listed.get_json() == {"chats": [], "main_chat_id": None}
 
         # The observer is gone. Nothing changes under the follower's directory watch, so the
         # outage is noticed by the fallback poll (ten seconds); the list stays served meanwhile.
