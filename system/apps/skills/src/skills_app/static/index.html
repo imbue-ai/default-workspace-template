@@ -617,9 +617,13 @@
   }
 
   // Fills the results under the page's search field; a poll redraws them in place, without the "Searching" note.
+  // data-answered says whether the search showing has its answer yet: a poll leaves a pending search to draw its own.
   async function loadFindResults(query, resultsNode, { isRefresh = false } = {}) {
     const load = ++latestLoad;
-    if (!isRefresh) resultsNode.replaceChildren(element("p", { class: "find-status", text: "Searching skills.sh…" }));
+    if (!isRefresh) {
+      resultsNode.dataset.answered = "false";
+      resultsNode.replaceChildren(element("p", { class: "find-status", text: "Searching skills.sh…" }));
+    }
     let results;
     try {
       results = await fetchJson(`/api/find?q=${encodeURIComponent(query)}`);
@@ -628,9 +632,11 @@
       const retry = element("button", { type: "button", class: "retry-button", text: "Try again" });
       retry.addEventListener("click", () => loadFindResults(query, resultsNode));
       resultsNode.replaceChildren(element("p", { class: "find-status error", text: error.message }), retry, makeRow(query));
+      resultsNode.dataset.answered = "true";
       return;
     }
     if (load !== latestLoad) return;
+    resultsNode.dataset.answered = "true";
     const wasExpanded = resultsNode.dataset.expanded === "true";
     const list = element("ul", { class: "online-skills" });
     const showRows = (count) => list.replaceChildren(...results.skills.slice(0, count).map(onlineSkillRow));
@@ -866,7 +872,7 @@
     }
     const found = findQuery();
     const results = document.getElementById("find-results");
-    if (found !== null && results && found.trim().length >= MIN_FIND_QUERY_LENGTH) loadFindResults(found.trim(), results, { isRefresh: true });
+    if (found !== null && results?.dataset.answered === "true" && found.trim().length >= MIN_FIND_QUERY_LENGTH) loadFindResults(found.trim(), results, { isRefresh: true });
     if (name && name === selectedName() && JSON.stringify(skills.find((skill) => skill.name === name) ?? null) !== before) {
       showSkill(name, { isRefresh: true });
     }
