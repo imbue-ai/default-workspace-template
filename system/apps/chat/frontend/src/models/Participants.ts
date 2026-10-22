@@ -48,11 +48,6 @@ export function isViewerOwner(): boolean {
   return participants.some((entry) => entry.key === ownParticipant && entry.is_owner);
 }
 
-/** The roster as this page last saw it. */
-export function getParticipants(): Participant[] {
-  return participants;
-}
-
 export function getParticipant(key: string): Participant | null {
   return participants.find((entry) => entry.key === key) ?? null;
 }
