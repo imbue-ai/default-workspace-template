@@ -1000,15 +1000,7 @@ def _send_message_endpoint(chat_id: str) -> Response:
     )
     if isinstance(accepted, _SendRefused):
         return model_response(accepted.answer, accepted.status)
-    snapshot = agent_manager.get_chat_snapshot(chat_id)
-    act_on_chat_mentions(
-        state,
-        ChatId(chat_id),
-        snapshot.title if snapshot is not None else chat_id,
-        message_id,
-        send_message_request.message,
-        request_identity(),
-    )
+    act_on_chat_mentions(state, ChatId(chat_id), message_id, send_message_request.message, request_identity())
     # A 202 tells the page to keep its "Sending" placeholder and the script that nothing needs
     # backing off.
     if accepted.held_phase is not None:
@@ -1910,8 +1902,8 @@ def _deliver_intake_send(
     state: ChatAppState, chat_id: ChatId, intake: IntakeRequest, identity: RequestIdentity
 ) -> _SendRefused | None:
     """Send an intake's text to a chat that is an agent through the ordinary send path, attributed to the sender
-    ``identity`` vouches for as a message-route send is; None when it landed (or was held for a converging chat),
-    else the refusal: what the message route would answer, and under which status."""
+    ``identity`` vouches for and acted on for its mentions as a message-route send is; None when it landed (or was
+    held for a converging chat), else the refusal: what the message route would answer, and under which status."""
     message_id = uuid4().hex
     send_message_request = SendMessageRequest(
         message=intake.message, message_id=message_id, client_id=intake.client_id, desktop_id=intake.desktop_id
@@ -1926,7 +1918,10 @@ def _deliver_intake_send(
         is_refused_on_signed_out_account=True,
         delivered_text=delivered_text,
     )
-    return accepted if isinstance(accepted, _SendRefused) else None
+    if isinstance(accepted, _SendRefused):
+        return accepted
+    act_on_chat_mentions(state, chat_id, message_id, intake.message, identity)
+    return None
 
 
 def _log_undelivered_intake_send(

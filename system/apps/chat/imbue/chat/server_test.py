@@ -5603,6 +5603,26 @@ def test_a_mention_in_an_agent_chat_marks_a_person_and_leaves_the_agent_as_words
     assert [mention["chat_id"] for mention in bobs["mentions"]] == [_MAIN_ID]
 
 
+def test_a_mention_in_an_intake_marks_the_person_like_one_in_the_message_route(
+    tmp_path: Path, messenger: RecordingMngrMessenger
+) -> None:
+    app = _peopled_app(tmp_path, messenger)
+    client = app.test_client()
+
+    response = client.post(
+        "/api/chats/intake",
+        json={"message": "@Josh please deploy", "target": "chat", "chat_id": _MAIN_ID, "is_delivery_awaited": True},
+        headers=_identity_header(_VISITOR),
+    )
+
+    assert response.status_code == 200, response.get_data(as_text=True)
+    assert messenger.sent == [(_MAIN_ID, "[from: Bob] @Josh please deploy")]
+    joshs = client.get("/api/mentions/pending", headers=_identity_header(_JOSH)).get_json()
+    assert [(mention["chat_id"], mention["sender"]) for mention in joshs["mentions"]] == [
+        (_MAIN_ID, "user:user-bob-4471")
+    ]
+
+
 def test_the_handle_table_lists_people_then_agents_then_chats_by_title(
     tmp_path: Path, messenger: RecordingMngrMessenger
 ) -> None:

@@ -326,14 +326,18 @@ def rename_room_response(state: ChatAppState, room_id: str, title: str, success:
 
 
 def act_on_chat_mentions(
-    state: ChatAppState, chat_id: ChatId, chat_title: str, message_id: str, text: str, identity: RequestIdentity
+    state: ChatAppState, chat_id: ChatId, message_id: str, text: str, identity: RequestIdentity
 ) -> None:
-    """What a mention in an agent chat does: people are marked (and the owner notified); agents and chats are plain
-    words the agent reads like any other (section 7.4)."""
+    """What a mention in an agent chat does, once the send was accepted: people are marked (and the owner notified);
+    agents and chats are plain words the agent reads like any other (section 7.4). Called by every path a person's
+    text enters an agent chat through (the message route, the intake), so it takes the sender's ``identity``
+    rather than reading the request's: an intake nobody waits on is delivered on a thread of its own."""
     handler = _handler(state)
     targets = tuple(target for target in handler.resolve(text) if target.key is not None and not target.is_chat)
     if not targets:
         return
+    snapshot = state.agent_manager.get_chat_snapshot(str(chat_id))
+    chat_title = snapshot.title if snapshot is not None else str(chat_id)
     sender = participant_key_of(identity)
     handler.act(chat_id, chat_title, message_id, text, sender, _author_name(state, sender, identity), targets, None)
 
