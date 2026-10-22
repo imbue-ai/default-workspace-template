@@ -37,6 +37,22 @@ rereads the list every 10 seconds and whenever its window takes focus or is
 shown again, redrawing only what changed, so a skill made or edited elsewhere
 (a chat beside it, Files) appears without a reload.
 
+**Finding skills online.** The sidebar's search filters the workspace's own
+skills; while it holds two or more characters, its last row (and its empty
+state) offers "Find '…' online", which opens **Find skills** at `/?find=<query>`.
+That page lists what skills.sh -- the index `npx skills find` searches -- has for
+the query, most installed first: each skill's name, source repository and
+install count, a link to its page on skills.sh (which shows what it does and its
+instructions), and "Install", which drafts the install request with its
+`npx skills add owner/repo@name` command into the chat, so the agent installs it
+and reads it first. A skill the workspace already has from that source shows
+"Installed" (a link to it here); one whose name a different skill of the
+workspace's already uses shows "Name in use", since installing it would land on
+that one. Nothing is searched until the person asks, since the query leaves the
+workspace; the server asks skills.sh on the page's behalf
+(`src/skills_app/online_search.py`, the page's own fetches being kept to its
+origin) and keeps each answer for five minutes.
+
 The app is read-only and stores nothing. A skill installed from elsewhere is
 untrusted content, so everything the page shows from a skill is set as text,
 except its instructions, which the server renders with markdown-it with raw
@@ -49,11 +65,12 @@ Files rather than as a page of this app.
 | `GET /api/skills` | The listing (`SkillListing`). |
 | `GET /api/skills/<name>` | One skill (`SkillDetail`); 404 for a name that is not a skill. |
 | `GET /api/skills/<name>/instructions` | Its `SKILL.md` body rendered for reading (`RenderedInstructions`); 404 as above. |
+| `GET /api/find?q=<query>` | What skills.sh has for the query, each marked against the workspace's skills (`OnlineSkillResults`); 400 for a query under two characters, 502 when skills.sh cannot be reached. |
 | `GET /api/health` | Whether the app is up. |
 
 Either listing route answers 500 with the reason when the workspace's git
 history cannot be read. The API is typed through `app_schema` and published at
-`/api/schema`; every model but `RenderedInstructions` and `HealthResponse` is the catalog's.
+`/api/schema`; every model but `RenderedInstructions`, `OnlineSkillResults` and `HealthResponse` is the catalog's.
 
 The page is one hand-written document (`src/skills_app/static/index.html`, no
 build step) that reads its path and connects itself to the shell. It serves on port

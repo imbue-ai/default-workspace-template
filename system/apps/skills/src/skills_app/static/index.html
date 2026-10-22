@@ -68,6 +68,30 @@
   .empty-search p { margin: 0; color: var(--c-text-secondary); overflow-wrap: anywhere; }
   .clear-search { padding: 3px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); color: var(--c-text-primary); font: inherit; font-size: var(--font-size-row); cursor: pointer; }
   .clear-search:hover { background: var(--c-fill-hover); }
+  /* The list's last row while searching: the way from what the workspace has to what is published online. */
+  .find-online { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 8px; padding: 7px 8px; border: none; border-radius: var(--radius-sm); background: none; color: var(--c-text-secondary); font: inherit; font-size: var(--font-size-row); text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+  .find-online:hover { background: var(--c-fill-hover); color: var(--c-text-primary); }
+  .find-online[aria-current="page"] { background: color-mix(in srgb, var(--c-accent) 11%, var(--c-surface)); color: var(--c-text-primary); }
+  .find-online svg { flex: none; width: 14px; height: 14px; }
+  .empty-search .find-online { margin-top: 0; padding-left: 0; }
+
+  /* Find skills: what skills.sh has for a search, most installed first, each against the workspace's own. */
+  .find-intro { margin: 4px 0 0; color: var(--c-text-secondary); font-size: var(--font-size-row); }
+  .find-form { display: flex; gap: 8px; margin-top: 12px; }
+  .find-form .search { flex: 1; margin: 0; }
+  .find-form button { flex: none; height: 32px; padding: 0 12px; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); color: var(--c-text-primary); font: inherit; font-size: var(--font-size-row); cursor: pointer; }
+  .find-form button:hover { background: var(--c-fill-hover); }
+  .find-status { margin: 20px 0 0; color: var(--c-text-secondary); }
+  .online-skills { list-style: none; margin: 16px 0 0; padding: 0; }
+  .online-skills li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--c-border-faint); }
+  .online-main { min-width: 0; }
+  .online-name { display: block; font-size: var(--font-size-body); font-weight: var(--weight-semibold); overflow-wrap: anywhere; }
+  .online-meta { display: flex; flex-wrap: wrap; gap: 0 10px; font-size: var(--font-size-helper); color: var(--c-text-secondary); }
+  .online-actions { display: flex; flex: none; align-items: center; gap: 8px; }
+  .view-link { font-size: var(--font-size-row); color: var(--c-text-secondary); text-decoration: underline; text-underline-offset: 2px; white-space: nowrap; }
+  .view-link:hover { color: var(--c-text-primary); }
+  a.chip { cursor: pointer; }
+  .find-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 20px 0 0; color: var(--c-text-secondary); font-size: var(--font-size-row); }
   /* The sidebar's right-hand line: 8px in, or the width of a scrollbar that takes room in the list (the page measures
      it into --sidebar-scrollbar), so the header's buttons, the search field and the rows' highlight all end on it. */
   .sidebar { --sidebar-right: max(8px, var(--sidebar-scrollbar, 0px)); }
@@ -226,6 +250,9 @@
   const EDIT_FILE_MESSAGE = "edit:file";
   // Drafted into the chat on screen (else the most recent, else a new one), unsent, for the user to finish.
   const NEW_SKILL_DRAFT = "Help me make or find a new skill online that ";
+  // skills.sh's search needs this much to go on (the server checks it too).
+  const MIN_FIND_QUERY_LENGTH = 2;
+  const installsFormat = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
   // A chat message that is exactly /<name> runs that skill (the template's AGENTS.md).
   const skillCommand = (name) => `/${name}`;
   const LIST_REFRESH_MS = 10_000;
@@ -362,10 +389,22 @@
     shell?.location(location.pathname + location.search, document.title);
   }
 
-  function go(name) {
-    const path = name ? `/${encodeURIComponent(name)}` : "/";
-    if (path !== location.pathname) history.pushState(null, "", path);
+  // The Find skills page lives at /?find=<query>, which no skill's name can collide with.
+  function findQuery() {
+    return location.pathname === "/" ? new URLSearchParams(location.search).get("find") : null;
+  }
+
+  function navigate(path) {
+    if (path !== location.pathname + location.search) history.pushState(null, "", path);
     route();
+  }
+
+  function go(name) {
+    navigate(name ? `/${encodeURIComponent(name)}` : "/");
+  }
+
+  function goFind(query) {
+    navigate(`/?find=${encodeURIComponent(query)}`);
   }
 
   function isPlainClick(event) {
@@ -402,7 +441,9 @@
         );
         return element("section", {}, [element("h2", {}, [toggle]), ...(isExpanded ? [element("ul", {}, rows)] : [])]);
       });
-    listNode.replaceChildren(...(sections.length ? sections : [emptySearch(search.value.trim())]));
+    const trimmed = search.value.trim();
+    if (!sections.length) listNode.replaceChildren(emptySearch(trimmed));
+    else listNode.replaceChildren(...sections, ...(trimmed.length >= MIN_FIND_QUERY_LENGTH ? [findOnlineButton(trimmed)] : []));
     markSelected();
   }
 
@@ -414,7 +455,15 @@
       renderList();
       search.focus();
     });
-    return element("div", { class: "empty-search" }, [element("p", { text: `No skills match “${query}”.` }), clear]);
+    const found = query.length >= MIN_FIND_QUERY_LENGTH ? [findOnlineButton(query)] : [];
+    return element("div", { class: "empty-search" }, [element("p", { text: `No skills match “${query}”.` }), ...found, clear]);
+  }
+
+  function findOnlineButton(query) {
+    const button = element("button", { type: "button", class: "find-online", "data-find": query }, [element("span", { text: `Find “${query}” online` })]);
+    button.insertAdjacentHTML("afterbegin", iconSvg("search"));
+    button.addEventListener("click", () => goFind(query));
+    return button;
   }
 
   function markSelected() {
@@ -422,6 +471,11 @@
     for (const link of listNode.querySelectorAll("a[data-skill]")) {
       if (link.dataset.skill === name) link.setAttribute("aria-current", "page");
       else link.removeAttribute("aria-current");
+    }
+    const found = findQuery();
+    for (const button of listNode.querySelectorAll("button[data-find]")) {
+      if (button.dataset.find === found) button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
     }
   }
 
@@ -504,11 +558,94 @@
     reportLocation();
   }
 
+  function onlineSkillRow(skill) {
+    const actions = element("div", { class: "online-actions" }, [
+      element("a", { class: "view-link", href: skill.page_url, target: "_blank", rel: "noopener", title: "What it does and its instructions, on skills.sh", text: "View on skills.sh" }),
+    ]);
+    if (skill.state === "INSTALLED") {
+      actions.append(element("a", { class: "chip workspace", href: `/${encodeURIComponent(skill.name)}`, title: "Open it here", text: "Installed" }));
+    } else if (skill.state === "NAME_TAKEN") {
+      actions.append(element("span", { class: "chip", title: `You have a different skill called ${skill.name}, which installing this one would land on.`, text: "Name in use" }));
+    } else {
+      const install = element("button", { type: "button", class: "text-button", title: "Put the install request in the chat, to send when ready", text: "Install" });
+      // The agent installs it, so it can read it first: a skill is instructions it will follow.
+      install.addEventListener("click", () => shell.draftText(`Install the ${skill.name} skill from ${skill.source} into this workspace: \`${skill.install_command}\``));
+      actions.append(install);
+    }
+    return element("li", {}, [
+      element("div", { class: "online-main" }, [
+        element("span", { class: "online-name", text: skill.name }),
+        element("span", { class: "online-meta" }, [
+          element("span", { text: skill.source }),
+          element("span", { text: `${installsFormat.format(skill.installs)} installs` }),
+        ]),
+      ]),
+      actions,
+    ]);
+  }
+
+  function makeItButton(query) {
+    const button = element("button", { type: "button", class: "text-button", text: "Make it with your agent" });
+    button.addEventListener("click", () => shell.draftText(`Help me make a new skill for “${query}” that `));
+    return button;
+  }
+
+  // Fills the results under the page's search field; a poll redraws them in place, without the "Searching" note.
+  async function loadFindResults(query, resultsNode, { isRefresh = false } = {}) {
+    const load = ++latestLoad;
+    if (!isRefresh) resultsNode.replaceChildren(element("p", { class: "find-status", text: "Searching skills.sh…" }));
+    let results;
+    try {
+      results = await fetchJson(`/api/find?q=${encodeURIComponent(query)}`);
+    } catch (error) {
+      if (load !== latestLoad || isRefresh) return;
+      const retry = element("button", { type: "button", class: "clear-search", text: "Try again" });
+      retry.addEventListener("click", () => loadFindResults(query, resultsNode));
+      resultsNode.replaceChildren(element("p", { class: "find-status error", text: error.message }), retry);
+      return;
+    }
+    if (load !== latestLoad) return;
+    const footer = element("p", { class: "find-footer" }, [results.skills.length ? "Nothing fits?" : `Nothing on skills.sh matches “${query}”.`, makeItButton(query)]);
+    resultsNode.replaceChildren(
+      ...(results.skills.length ? [element("ul", { class: "online-skills" }, results.skills.map(onlineSkillRow))] : []),
+      footer,
+    );
+  }
+
+  function showFind(query) {
+    document.title = "Find skills - Skills";
+    const field = element("input", { type: "text", role: "searchbox", "aria-label": "Search skills.sh", placeholder: "Search skills.sh", autocomplete: "off", spellcheck: "false" });
+    field.value = query;
+    const fieldWrap = withIcon(element("div", { class: "search" }, [field]), "search");
+    const form = element("form", { class: "find-form", role: "search" }, [fieldWrap, element("button", { type: "submit", text: "Search" })]);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const next = field.value.trim();
+      if (next.length >= MIN_FIND_QUERY_LENGTH) goFind(next);
+    });
+    const results = element("div", { id: "find-results" });
+    reader.replaceChildren(
+      element("article", {}, [
+        element("a", { class: "back", href: "/", text: "All skills" }),
+        element("header", { class: "skill-head" }, [element("h1", { text: "Find skills" })]),
+        element("p", { class: "find-intro", text: "Skills published for any agent, from skills.sh, most installed first. Installing one asks your agent, who reads it first." }),
+        form,
+        results,
+      ]),
+    );
+    reader.scrollTop = 0;
+    reportLocation();
+    if (query.trim().length >= MIN_FIND_QUERY_LENGTH) loadFindResults(query.trim(), results);
+    else results.replaceChildren(element("p", { class: "find-status", text: "Search for at least two characters." }));
+  }
+
   function route() {
     const name = selectedName();
-    root.dataset.view = name ? "skill" : "list";
+    const found = findQuery();
+    root.dataset.view = name || found !== null ? "skill" : "list";
     markSelected();
     if (name) showSkill(name);
+    else if (found !== null) showFind(found);
     else showIntro();
   }
 
@@ -656,6 +793,9 @@
     const name = selectedName();
     const before = JSON.stringify(skills.find((skill) => skill.name === name) ?? null);
     if (!(await loadListing({ isPoll: true }))) return;
+    const found = findQuery();
+    const results = document.getElementById("find-results");
+    if (found !== null && results && found.trim().length >= MIN_FIND_QUERY_LENGTH) loadFindResults(found.trim(), results, { isRefresh: true });
     if (name && name === selectedName() && JSON.stringify(skills.find((skill) => skill.name === name) ?? null) !== before) {
       showSkill(name, { isRefresh: true });
     }

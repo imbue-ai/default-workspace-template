@@ -5,6 +5,8 @@ from flask.testing import FlaskClient
 from app_schema.testing import assert_api_schema_describes_app
 from skills_app.server import STATIC_DIR
 from skills_app.server import create_app
+from skills_app.testing import FakeSkillIndexSearcher
+from skills_app.testing import indexed_skill
 from skills_catalog.catalog import build_catalog
 from skills_catalog.testing import commit_all
 from skills_catalog.testing import write_skill
@@ -88,12 +90,62 @@ def test_a_missing_or_unnameable_skill_is_not_found(client: FlaskClient) -> None
 
 def test_a_checkout_whose_history_cannot_be_read_answers_the_reason(tmp_path: Path) -> None:
     write_skill(tmp_path, "assist", "Not in a git checkout.")
-    client = create_app(build_catalog(tmp_path), STATIC_DIR).test_client()
+    client = create_app(build_catalog(tmp_path), STATIC_DIR, FakeSkillIndexSearcher()).test_client()
 
     response = client.get("/api/skills")
 
     assert response.status_code == 500
     assert "Couldn't read where the skills came from" in response.get_json()["detail"]
+
+
+def test_find_marks_each_online_match_against_the_workspace_s_skills(
+    workspace_root: Path, client: FlaskClient, searcher: FakeSkillIndexSearcher
+) -> None:
+    write_skill(workspace_root, "web-design", "Design guidelines.")
+    (workspace_root / "skills-lock.json").write_text(
+        '{"version": 1, "skills": {"web-design": {"source": "vercel-labs/agent-skills", "sourceType": "github",'
+        ' "skillPath": "skills/web-design/SKILL.md", "computedHash": "abc"}}}'
+    )
+    commit_all(workspace_root, "npx skills add vercel-labs/agent-skills")
+    searcher.matches = (
+        indexed_skill("vercel-labs/agent-skills", "web-design", installs=900),
+        indexed_skill("someone/skills", "assist", installs=50),
+        indexed_skill("anthropics/skills", "pdf", installs=214612),
+    )
+
+    response = client.get("/api/find?q=%20design%20")
+
+    results = response.get_json()
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    assert searcher.queries == ["design"]
+    assert results["query"] == "design"
+    assert [(skill["name"], skill["state"]) for skill in results["skills"]] == [
+        ("web-design", "INSTALLED"),
+        ("assist", "NAME_TAKEN"),
+        ("pdf", "AVAILABLE"),
+    ]
+    assert results["skills"][2]["page_url"] == "https://skills.sh/anthropics/skills/pdf"
+    assert results["skills"][2]["install_command"] == "npx skills add anthropics/skills@pdf"
+
+
+def test_find_refuses_a_query_too_short_to_search(client: FlaskClient, searcher: FakeSkillIndexSearcher) -> None:
+    response = client.get("/api/find?q=a")
+
+    assert response.status_code == 400
+    assert "at least 2 characters" in response.get_json()["detail"]
+    assert searcher.queries == []
+
+
+def test_find_says_when_the_online_index_cannot_be_reached(
+    client: FlaskClient, searcher: FakeSkillIndexSearcher
+) -> None:
+    searcher.is_unreachable = True
+
+    response = client.get("/api/find?q=pdf")
+
+    assert response.status_code == 502
+    assert "Couldn't reach skills.sh" in response.get_json()["detail"]
 
 
 def test_only_the_two_shell_modules_are_served(client: FlaskClient) -> None:

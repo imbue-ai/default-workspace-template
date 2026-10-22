@@ -1,4 +1,5 @@
-"""The Skills app: the page at ``/`` and ``/<name>`` (the skills beside the one being read), and the API it reads.
+"""The Skills app: the page at ``/`` and ``/<name>`` (the skills beside the one being read, or ``/?find=<query>``,
+skills found online), and the API it reads.
 
 Services run from /home/user/workspace (the repo root). The app stores nothing and changes nothing: everything it
 shows is read from ``.agents/skills`` through the skills catalog (``system/libs/skills_catalog``) on every request,
@@ -18,6 +19,7 @@ from typing import Final
 from flask import Flask
 from flask import Response
 from flask import abort
+from flask import request
 from flask import send_file
 from flask.typing import ResponseReturnValue
 from loguru import logger
@@ -34,8 +36,13 @@ from app_schema.routes import error_response
 from app_schema.routes import model_response
 from imbue.imbue_common.logging import setup_logging
 from skills_app.data_types import HealthResponse
+from skills_app.data_types import OnlineSkillResults
 from skills_app.data_types import RenderedInstructions
 from skills_app.instructions import render_instructions
+from skills_app.online_search import MIN_QUERY_LENGTH
+from skills_app.online_search import SkillIndexSearcherInterface
+from skills_app.online_search import SkillsShSearcher
+from skills_app.online_search import online_skills
 from skills_catalog.catalog import build_catalog
 from skills_catalog.catalog import parse_skill_name
 from skills_catalog.catalog import repo_root_from_environment
@@ -57,8 +64,10 @@ STATIC_DIR: Final[Path] = Path(__file__).parent / "static"
 PAGE_DOCUMENT_FILENAME: Final[str] = "index.html"
 HEALTH_PATH: Final[str] = "/api/health"
 
+HTTP_BAD_REQUEST: Final[int] = 400
 HTTP_NOT_FOUND: Final[int] = 404
 HTTP_INTERNAL_SERVER_ERROR: Final[int] = 500
+HTTP_BAD_GATEWAY: Final[int] = 502
 
 # The browser-side modules the workspace shell builds and every app serves from its own origin, by file name.
 SHELL_MODULES: Final[dict[str, Path]] = {path.name: path for path in SHELL_MODULE_PATHS}
@@ -71,10 +80,13 @@ ROUTE_TABLE: RouteTable = {
     ("GET", "/api/skills"): RouteModels(response_model=SkillListing),
     ("GET", "/api/skills/{name}"): RouteModels(response_model=SkillDetail),
     ("GET", "/api/skills/{name}/instructions"): RouteModels(response_model=RenderedInstructions),
+    ("GET", "/api/find"): RouteModels(response_model=OnlineSkillResults),
 }
 
 
-def create_app(catalog: SkillsCatalogInterface, static_directory: Path) -> Flask:
+def create_app(
+    catalog: SkillsCatalogInterface, static_directory: Path, searcher: SkillIndexSearcherInterface
+) -> Flask:
     app = Flask("skills_app", static_folder=None)
     register_api_schema_route(
         app, DEFAULT_API_SCHEMA_PATH, title=APP_DISPLAY_NAME, description=APP_DESCRIPTION, route_table=ROUTE_TABLE
@@ -157,12 +169,31 @@ def create_app(catalog: SkillsCatalogInterface, static_directory: Path) -> Flask
         response.headers["Cache-Control"] = "no-store"
         return response
 
+    @app.get("/api/find")
+    def find() -> ResponseReturnValue:
+        """The skills the online index matches for ``q``, most installed first, marked against the workspace's own."""
+        query = request.args.get("q", "").strip()
+        if len(query) < MIN_QUERY_LENGTH:
+            return error_response(f"Search for at least {MIN_QUERY_LENGTH} characters.", HTTP_BAD_REQUEST)
+        matches = searcher.search(query)
+        if matches is None:
+            return error_response(
+                "Couldn't reach skills.sh. Check the workspace's internet connection and try again.", HTTP_BAD_GATEWAY
+            )
+        try:
+            installed = catalog.list_skills().skills
+        except GitHistoryError as e:
+            return unreadable_history(e)
+        response = model_response(OnlineSkillResults(query=query, skills=online_skills(matches, installed)))
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     return app
 
 
 def main() -> None:
     setup_logging(level=os.environ.get("SKILLS_APP_LOG_LEVEL", "INFO"))
-    app = create_app(build_catalog(repo_root_from_environment(os.environ)), STATIC_DIR)
+    app = create_app(build_catalog(repo_root_from_environment(os.environ)), STATIC_DIR, SkillsShSearcher())
     logger.info("Serving the Skills app at http://{}:{}/", HOST, PORT)
     run_simple(HOST, PORT, app, threaded=True, use_reloader=False, use_debugger=False)
 

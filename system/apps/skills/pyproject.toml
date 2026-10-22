@@ -8,6 +8,8 @@ dependencies = [
     "app-manifest",
     "app-schema",
     "flask>=3.0",
+    # Asks skills.sh's search on the Find skills page's behalf.
+    "httpx>=0.27",
     "imbue-common",
     # Splits a SKILL.md's frontmatter from its body the way the agents' own loaders do.
     "imbue-mngr",
