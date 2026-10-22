@@ -188,6 +188,22 @@ describe("user-message-display other people's turns", () => {
     expect(ownersTurn.querySelector("[data-participant-picture]")?.textContent).toBe("J");
   });
 
+  it("redraws a turn drawn before the page knew who it was, once the roster lands", () => {
+    const root = document.createElement("div");
+    const event = turn({ author: "user:bob-2", author_name: "Bob" });
+    m.render(root, renderUserMessage(event));
+    expect(root.querySelector(".message-author")).toBeNull();
+
+    setParticipantsForTesting("user:owner-1", roster());
+    m.render(root, renderUserMessage(event));
+
+    expect(root.firstElementChild?.className).toContain("message-other");
+    expect(root.querySelector(".message-author")?.textContent).toBe("Bob");
+    expect(root.querySelector("[data-participant-picture] img")?.getAttribute("src")).toBe(
+      "https://p.example/bob.png",
+    );
+  });
+
   it("names an author the roster no longer lists by the name the turn carried", () => {
     setParticipantsForTesting("owner", roster());
     const root = mounted(turn({ author: "name:Someone Else", author_name: "Someone Else" }));

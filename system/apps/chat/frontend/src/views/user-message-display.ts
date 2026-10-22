@@ -86,13 +86,21 @@ export function renderNotice(label: string, body: string): m.Vnode {
 
 export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
   let renderedEventId: string | null = null;
+  // The page learns who it is beside the transcript (ensureParticipants), so a turn drawn before
+  // then resolves no author; it is redrawn once the resolution changes.
+  let renderedAuthorKey: string | null = null;
   return {
     onbeforeupdate(vnode) {
-      return vnode.attrs.event.event_id !== renderedEventId;
+      return (
+        vnode.attrs.event.event_id !== renderedEventId ||
+        (authorOfTurn(vnode.attrs.event)?.key ?? null) !== renderedAuthorKey
+      );
     },
     view(vnode) {
       const event = vnode.attrs.event;
       renderedEventId = event.event_id;
+      const author = authorOfTurn(event);
+      renderedAuthorKey = author?.key ?? null;
       const cls = classifyUserMessage(event);
       // Every branch below draws the classification's body, never the raw content: for a
       // message the backend wrapped, the two differ and the bubble owes the user their words.
@@ -119,7 +127,6 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       if (attachmentBlock !== null) {
         bubbleChildren.push(m(MarkdownContent, { content: attachmentBlock, requestedAt: event.timestamp }));
       }
-      const author = authorOfTurn(event);
       if (author === null) return m("div", { class: USER_BUBBLE_CLASS }, bubbleChildren);
       // Another person's turn: their name above, their picture at the left, the bubble squared at its top-left.
       const entry = getParticipant(author.key);
