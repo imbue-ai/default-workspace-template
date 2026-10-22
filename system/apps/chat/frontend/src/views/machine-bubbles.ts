@@ -16,15 +16,18 @@ export const MACHINE_FACE_SIZE_PX = 24;
 export function splitParagraphs(text: string): string[] {
   const paragraphs: string[] = [];
   let current: string[] = [];
-  let isInFence = false;
+  // The marker of the open fence (``` or ~~~); a fence closes only on its own marker.
+  let openFence: string | null = null;
   const flush = (): void => {
     const joined = current.join("\n").trim();
     if (joined) paragraphs.push(joined);
     current = [];
   };
   for (const line of text.split("\n")) {
-    if (/^\s*(```|~~~)/.test(line)) isInFence = !isInFence;
-    if (!isInFence && line.trim() === "") {
+    const fence = /^\s*(```|~~~)/.exec(line)?.[1] ?? null;
+    if (fence !== null && openFence === null) openFence = fence;
+    else if (fence === openFence) openFence = null;
+    if (openFence === null && line.trim() === "") {
       flush();
       continue;
     }

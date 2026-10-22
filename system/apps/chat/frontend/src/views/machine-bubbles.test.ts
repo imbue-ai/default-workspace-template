@@ -26,6 +26,11 @@ describe("splitParagraphs", () => {
     expect(splitParagraphs(text)).toEqual(["before", "```python\nx = 1\n\ny = 2\n```", "after"]);
   });
 
+  it("closes a fence only on its own marker", () => {
+    const text = "```\n~~~ not a closer\n\nstill code\n```\n\nafter";
+    expect(splitParagraphs(text)).toEqual(["```\n~~~ not a closer\n\nstill code\n```", "after"]);
+  });
+
   it("yields nothing for whitespace", () => {
     expect(splitParagraphs(" \n\n ")).toEqual([]);
   });
