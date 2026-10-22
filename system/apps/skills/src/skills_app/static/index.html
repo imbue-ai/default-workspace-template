@@ -484,9 +484,9 @@
   function showIntro() {
     document.title = "Skills";
     const usage = element("p", { class: "intro-hint" }, [
-      "Your agents use one on their own when a request calls for it. To run one yourself, type a slash and its name in a chat, like ",
+      "Agents use them on their own. To run one yourself, type ",
       element("code", { text: "/skill-name" }),
-      ", or open it here and press Try it.",
+      " in a chat or press Try it.",
     ]);
     const pick = element("p", { class: "intro-hint" }, [
       "Pick a skill on the left to read or edit it, or press ",
