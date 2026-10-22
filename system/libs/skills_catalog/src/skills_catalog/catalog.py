@@ -121,7 +121,13 @@ def _newest_file_time(directory: Path) -> datetime:
     for current_root, directory_names, file_names in os.walk(directory):
         directory_names[:] = [name for name in directory_names if name not in _SKIPPED_DIRECTORY_NAMES]
         for file_name in file_names:
-            newest = max(newest, (Path(current_root) / file_name).lstat().st_mtime)
+            file_path = Path(current_root) / file_name
+            try:
+                modified_at = file_path.lstat().st_mtime
+            except FileNotFoundError:
+                logger.trace("Skipped {}, removed while the skill's files were read", file_path)
+                continue
+            newest = max(newest, modified_at)
     return datetime.fromtimestamp(newest, tz=UTC)
 
 
