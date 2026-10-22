@@ -67,6 +67,13 @@ export function getWorkspaceAgent(): Participant | null {
   return getParticipant(WORKSPACE_AGENT_KEY);
 }
 
+/** The workspace agent's name and picture as one string, empty before the roster lands: what a memoized
+ *  assistant row compares to know the header over its bubbles has to be drawn again. */
+export function workspaceAgentSignature(): string {
+  const agent = getWorkspaceAgent();
+  return agent === null ? "" : `${agent.display_name}|${agent.profile_picture_url ?? ""}`;
+}
+
 /** The display name of an author key: the roster's, else the name the turn carried, else the key. */
 export function participantName(key: string, fallbackName: string | null): string {
   return getParticipant(key)?.display_name ?? fallbackName ?? key;

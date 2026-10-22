@@ -8,6 +8,7 @@ import { MarkdownContent } from "../markdown";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
 import { getEventDetailState, getEventDetailVersion, requestEventDetail } from "../models/Response";
 import { getChatById } from "../models/Chats";
+import { workspaceAgentSignature } from "../models/Participants";
 import { accountForAgent, areAccountsLoaded, openProviderChooser } from "../models/Providers";
 import { openSubagentView } from "../shell";
 import { beginSwitchToAccountId } from "./SwitchDialog";
@@ -214,6 +215,9 @@ export function StableAssistantMessage(): m.Component<{
   let renderedSubagentCardCount = 0;
   let renderedResultSignature = "";
   let renderedReauthSignature = "";
+  // The header over the run's first bubbles reads the roster, which lands beside the
+  // transcript (ensureParticipants); a row painted before then wears the fallback.
+  let renderedAgentSignature = "";
   let renderedDetailVersion = -1;
   let renderedExpansionVersion = -1;
   return {
@@ -237,6 +241,7 @@ export function StableAssistantMessage(): m.Component<{
         currentSubagentCardCount !== renderedSubagentCardCount ||
         currentResultSignature !== renderedResultSignature ||
         reauthNoteSignature(event, chatId) !== renderedReauthSignature ||
+        workspaceAgentSignature() !== renderedAgentSignature ||
         getEventDetailVersion(chatId) !== renderedDetailVersion ||
         // Opening a tool chip swaps WHICH detail panel exists, so it needs a
         // real re-render to build one.
@@ -252,6 +257,7 @@ export function StableAssistantMessage(): m.Component<{
       renderedSubagentCardCount = countSubagentCards(event.tool_calls);
       renderedResultSignature = resolvedResultSignature(event.tool_calls, toolResults);
       renderedReauthSignature = reauthNoteSignature(event, chatId);
+      renderedAgentSignature = workspaceAgentSignature();
       renderedDetailVersion = getEventDetailVersion(chatId);
       renderedExpansionVersion = getExpansionVersion();
 
