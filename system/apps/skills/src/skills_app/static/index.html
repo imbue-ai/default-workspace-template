@@ -85,8 +85,15 @@
   .reader:focus { outline: none; }
   /* The reading column's first two rows sit level with the sidebar's: its title and buttons with the sidebar's
      header (16px down, a 28px row), its chips with the search field (10px below, as tall as the field). */
-  article, .intro { max-width: 720px; margin: 0 auto; padding: 16px 32px 24px; }
-  .intro { color: var(--c-text-secondary); }
+  article { max-width: 720px; margin: 0 auto; padding: 16px 32px 24px; }
+  /* With no skill chosen, the pane holds one centred note. */
+  .intro { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 100%; padding: 24px 32px; text-align: center; }
+  .intro p { margin: 0; max-width: 44ch; }
+  .intro-lead { font-size: 15px; font-weight: var(--weight-semibold); }
+  .intro-hint { color: var(--c-text-secondary); }
+  /* The sidebar's + button in miniature, so the note shows which button it means. */
+  .inline-button { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin: 0 2px; border: 1px solid var(--c-accent); border-radius: var(--radius-sm); color: var(--c-accent); vertical-align: -4px; }
+  .inline-button svg { width: 12px; height: 12px; }
   .back { display: none; color: var(--c-text-secondary); font-size: var(--font-size-row); margin-bottom: 12px; }
   .back:hover { color: var(--c-text-primary); }
   .skill-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 28px; }
@@ -340,7 +347,11 @@
 
   function showIntro() {
     document.title = "Skills";
-    reader.replaceChildren(element("p", { class: "intro", text: "Skills are what your agents know how to do. Pick one to read its instructions." }));
+    const hint = element("p", { class: "intro-hint" }, ["Pick one on the left to read and edit its instructions"]);
+    // The + only works through the shell, so outside one the note does not point at it.
+    if (root.hasAttribute("data-shell")) hint.append(", or press ", withIcon(element("span", { class: "inline-button", "aria-label": "the + button" }), "plus"), " to make a new one");
+    hint.append(".");
+    reader.replaceChildren(element("div", { class: "intro" }, [element("p", { class: "intro-lead", text: "Skills are what your agents know how to do." }), hint]));
     reportLocation();
   }
 
@@ -500,7 +511,8 @@
     onHandshake: (received) => {
       handshake = received;
       root.dataset.shell = "";
-      reportLocation();
+      if (selectedName()) reportLocation();
+      else showIntro();
     },
     onShown: () => void refresh(),
   });
