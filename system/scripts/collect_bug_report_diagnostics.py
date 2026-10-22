@@ -1175,9 +1175,9 @@ def main(argv: Sequence[str]) -> None:
     # a reader who is holding none of it.
     dropped_by_key: dict[str, int] = {}
 
-    # The classes the archive is built from, each released or withheld on its
-    # own so one chat carrying a secret costs the report its conversations and
-    # not its logs. The label is what a note calls the class in plain words;
+    # The classes the archive is built from. Every file in them is released or
+    # withheld on its own, so one chat carrying a secret costs the report that
+    # chat alone. The label is what a note calls the class in plain words;
     # members ride the archive in this order.
     collected: list[tuple[str, str, list[tuple[str, str, float]]]] = []
     if "--logs" in flags:
