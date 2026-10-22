@@ -27,6 +27,7 @@ Run via bare ``python3`` (standard library only, no venv needed):
 import argparse
 import html
 import json
+import os
 import sys
 import tomllib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -36,8 +37,10 @@ from pathlib import Path
 REGISTRY_PATH = Path("data/.state/apps.toml")
 
 
-def registered_label(inner_service: str, registry_path: Path = REGISTRY_PATH) -> str:
+def registered_label(inner_service: str, registry_path: Path | None = None) -> str:
     """Find the label issued to the inner service when it was registered."""
+    if registry_path is None:
+        registry_path = Path(os.environ.get("MINDS_APPS_FILE", REGISTRY_PATH))
     with registry_path.open("rb") as registry_file:
         registry = tomllib.load(registry_file)
     for app in registry.get("apps", []):

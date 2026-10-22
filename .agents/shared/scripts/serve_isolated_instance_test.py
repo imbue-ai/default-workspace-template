@@ -1221,6 +1221,15 @@ def test_wrapper_uses_registered_service_label(tmp_path: Path) -> None:
         wrapper_mod.registered_label("missing", registry_path)
 
 
+def test_wrapper_uses_the_instance_registry_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    registry_path = tmp_path / "apps.toml"
+    registry_path.write_text(
+        '[[apps]]\nname = "chat-preview-app"\nlabel = "chat-preview-app-a1b2c3d4"\n'
+    )
+    monkeypatch.setenv("MINDS_APPS_FILE", str(registry_path))
+    assert wrapper_mod.registered_label("chat-preview-app") == "chat-preview-app-a1b2c3d4"
+
+
 def test_a_boot_whose_health_says_the_frontend_is_not_built_is_not_up(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
