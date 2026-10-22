@@ -59,6 +59,7 @@ from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
+from imbue.chat.authors import author_prefix
 from imbue.chat.authors import text_sha256
 from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_naming import ChatNamer
@@ -5504,7 +5505,7 @@ def test_a_room_title_the_prefix_could_not_carry_is_cleaned_in_the_delivered_men
     )
 
     wait_until_true(lambda: len(messenger.sent) == 1, 5.0, "the mention to reach the main chat")
-    assert messenger.sent == [(_MAIN_ID, "[from: Bob in #Ops team night] @agent ping")]
+    assert messenger.sent == [(_MAIN_ID, author_prefix("Bob", "Ops team night") + "@agent ping")]
 
 
 def test_a_mention_of_a_person_is_pending_until_a_page_of_theirs_watches_the_chat(
