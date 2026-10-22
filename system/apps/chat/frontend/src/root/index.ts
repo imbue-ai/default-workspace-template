@@ -120,12 +120,12 @@ let isOpeningChatForEmptyList = false;
 // empty after that brings no push to ask again on (an unchanged list is not passed on).
 const emptyListChatBackoff = new ReconnectBackoff();
 
-/** The rail's rows in display order: the main chat first, then the most recent. */
 /** Every row's source: the chats, the chats not yet agents, the main chat, the rooms, and the viewer's mentions. */
 function allRows(): ChatRow[] {
   return rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId(), getRooms(), getMentionedChatIds());
 }
 
+/** The rail's rows in display order: the main chat first, then the most recent. */
 function railRows(): ChatRow[] {
   return groupedRows(allRows(), startedHere);
 }

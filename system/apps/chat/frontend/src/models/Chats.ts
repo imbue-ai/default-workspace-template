@@ -478,7 +478,6 @@ export function getShoulderTapAvailableForChat(chatId: string): boolean {
   return getChatById(chatId)?.active_agent.shoulder_tap_available === true;
 }
 
-/** Every chat the app has minted that is not an agent yet, for the root's list. */
 /** The rooms as the chat app last listed them. */
 export function getRooms(): RoomSnapshot[] {
   return rooms;
@@ -527,6 +526,7 @@ export function setRoomsForTesting(list: RoomSnapshot[]): void {
   lastRoomsSerialized = "";
 }
 
+/** Every chat the app has minted that is not an agent yet, for the root's list. */
 export function getProvisionalChats(): ProvisionalChat[] {
   return provisionalChats;
 }

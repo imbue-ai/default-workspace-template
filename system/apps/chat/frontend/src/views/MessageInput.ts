@@ -857,10 +857,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       /**
        * The account a chat's first send launches it on: the one the chat was minted for when it
        * names one (an intake's), else the signed-in one when there is one, else whatever the
-       * provider chooser produces, or null when it is dismissed instead.
+       * provider chooser produces; ``"room"`` when the chooser's room row was picked instead
+       * (section 7.3), or null when the chooser closed with neither.
        */
-      /** The account the first send launches on, ``"room"`` when the chooser's room row was picked instead
-       *  (section 7.3), or null when the chooser closed with neither. */
       async function chooseAccountForFirstSend(provisional: ProvisionalChat): Promise<string | "room" | null> {
         await whenAccountsReadyToChoose();
         const account = accountForFirstSend(provisional.account_id);
