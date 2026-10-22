@@ -1711,12 +1711,11 @@ def test_a_log_db_row_the_render_cannot_format_reports_itself_rather_than_raisin
 def test_a_secret_in_a_log_db_does_not_cost_the_report_its_harness_logs(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The log db is scanned as its own class, so a row the allowlist did not
-    anticipate costs the report the db and nothing else.
+    """A row the allowlist did not anticipate costs the report the db and
+    nothing else.
 
-    Sharing a class with the harness log files would mean one such row withholds
-    ``app_server.log`` and every agent's ``stderr.log`` -- the logs most likely
-    to explain the bug -- which is the opposite of what collecting the db is for.
+    Losing ``app_server.log`` with it -- the log most likely to explain the
+    bug -- would be the opposite of what collecting the db is for.
     """
     agents_dir = tmp_path / "agents"
     now = time.time()
