@@ -3,7 +3,8 @@ import type { Participant } from "./Participants";
 
 const { mockRequest } = vi.hoisted(() => ({ mockRequest: vi.fn() }));
 vi.mock("mithril", () => ({ default: { request: mockRequest, redraw: vi.fn() } }));
-vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
+// The page is served under a base path, which every API URL and every origin-relative picture must carry.
+vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => `/base${path}` }));
 
 // The page's own key and the roster are module-level state, so each test gets a fresh module.
 async function loadParticipants(): Promise<typeof import("./Participants")> {
@@ -32,19 +33,24 @@ function participant(key: string, overrides: Partial<Participant> = {}): Partici
 const ROSTER = [
   participant("user:owner-1", { display_name: "Josh", is_owner: true }),
   participant("user:bob-2", { display_name: "Bob", profile_picture_url: "https://pictures.example/bob.png" }),
-  participant("workspace-agent", { display_name: "Atlas", kind: "workspace_agent", handle: "agent" }),
+  participant("workspace-agent", {
+    display_name: "Atlas",
+    kind: "workspace_agent",
+    handle: "agent",
+    profile_picture_url: "/api/participants/workspace-agent/picture",
+  }),
 ];
 
 function answerRequests(me: string, roster: Participant[]): void {
   mockRequest.mockImplementation(({ url }: { url: string }) => {
-    if (url === "/api/me") return Promise.resolve({ participant: me });
-    if (url === "/api/participants") return Promise.resolve({ participants: roster });
+    if (url === "/base/api/me") return Promise.resolve({ participant: me });
+    if (url === "/base/api/participants") return Promise.resolve({ participants: roster });
     return Promise.reject(new Error(`unexpected ${url}`));
   });
 }
 
 describe("ensureParticipants", () => {
-  it("loads the page's own key and the roster once, and later calls share the load", async () => {
+  it("loads the page's own key and the roster once under the base path, and later calls share the load", async () => {
     const participants = await loadParticipants();
     answerRequests("user:bob-2", ROSTER);
 
@@ -58,6 +64,11 @@ describe("ensureParticipants", () => {
     expect(participants.getParticipant("user:bob-2")?.display_name).toBe("Bob");
     expect(participants.getOwner()?.key).toBe("user:owner-1");
     expect(participants.getWorkspaceAgent()?.display_name).toBe("Atlas");
+    // The agent's picture is this app's, so it is reached under the base path; Bob's is wherever it is.
+    expect(participants.getWorkspaceAgent()?.profile_picture_url).toBe(
+      "/base/api/participants/workspace-agent/picture",
+    );
+    expect(participants.getParticipant("user:bob-2")?.profile_picture_url).toBe("https://pictures.example/bob.png");
   });
 
   it("leaves the page as an owner's page would be after a failed load, and asks again by itself later", async () => {

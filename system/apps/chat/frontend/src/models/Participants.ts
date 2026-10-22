@@ -72,6 +72,13 @@ export function participantName(key: string, fallbackName: string | null): strin
   return getParticipant(key)?.display_name ?? fallbackName ?? key;
 }
 
+/** A picture the roster names by an origin-relative path (the workspace agent's, served by this app) is reached
+ *  under the page's base path, as every other API URL is; an absolute URL (a person's) is left alone. */
+function withPictureOnThisOrigin(entry: Participant): Participant {
+  const url = entry.profile_picture_url;
+  return url !== null && url.startsWith("/") ? { ...entry, profile_picture_url: apiUrl(url) } : entry;
+}
+
 /**
  * Load the page's own key and the roster once; later calls share the first load. A load that fails is warned
  * about and leaves the page as an owner's page would be (every unannotated turn its own) until the next attempt,
@@ -86,7 +93,7 @@ export function ensureParticipants(): Promise<void> {
   ])
     .then(([me, roster]) => {
       ownParticipant = me.participant;
-      participants = roster.participants;
+      participants = roster.participants.map(withPictureOnThisOrigin);
       m.redraw();
     })
     .catch((error: unknown) => {
