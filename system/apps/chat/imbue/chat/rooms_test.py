@@ -93,8 +93,9 @@ def test_rename_delete_and_the_lounge(tmp_path: Path) -> None:
     assert store.rename(ChatId("room-0000000000000000"), "x") is None
     assert store.find_by_title("new") is not None and store.find_by_title(LOUNGE_TITLE) is None
 
-    lounge = store.ensure_lounge(_BOB)
-    assert lounge.title == LOUNGE_TITLE and store.ensure_lounge(_OWNER).id == lounge.id
+    lounge, is_created = store.ensure_lounge(_BOB)
+    assert lounge.title == LOUNGE_TITLE and is_created
+    assert store.ensure_lounge(_OWNER) == (lounge, False)
 
     assert store.delete(room.id) is True and store.delete(room.id) is False
     assert store.read(room.id) is None and store.messages(room.id) == ()

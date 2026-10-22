@@ -54,7 +54,6 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import parse_chat_ref
 from imbue.chat.request_helpers import json_response
 from imbue.chat.request_helpers import require_loopback
-from imbue.chat.rooms import LOUNGE_TITLE
 from imbue.chat.rooms import RoomRecord
 from imbue.chat.rooms import RoomSnapshot
 from imbue.chat.rooms import new_room_message
@@ -336,9 +335,8 @@ def _create_room() -> Response:
 def _lounge() -> Response:
     """``POST /api/rooms/lounge``: the Lounge (section 7.5), made now if it does not exist."""
     state = get_state()
-    existing = state.rooms.find_by_title(LOUNGE_TITLE)
-    record = state.rooms.ensure_lounge(request_participant())
-    if existing is None:
+    record, is_created = state.rooms.ensure_lounge(request_participant())
+    if is_created:
         broadcast_rooms(state)
     return model_response(state.rooms.snapshot(record))
 

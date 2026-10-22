@@ -203,6 +203,9 @@ class RoomStore(MutableModel):
 
     def find_by_title(self, title: str) -> RoomRecord | None:
         """The room called ``title`` (case-insensitively), the oldest when several are."""
+        return self._find_by_title_locked(title)
+
+    def _find_by_title_locked(self, title: str) -> RoomRecord | None:
         wanted = title.strip().casefold()
         return next((record for record in self.read_all() if record.title.casefold() == wanted), None)
 
@@ -210,20 +213,16 @@ class RoomStore(MutableModel):
         """Make a room; an empty title takes the first free "Room N". A caller passes ``room_id`` to turn an
         awaiting chat into a room under the id its page already opened on."""
         with self._lock:
-            record = RoomRecord(
-                id=room_id if room_id is not None else mint_room_id(),
-                title=title.strip() or self._mint_title_locked(),
-                created_at=now_timestamp(),
-                created_by=created_by,
-            )
-            self._write_record_locked(record)
-        logger.info("Created room {} ({!r})", record.id, record.title)
-        return record
+            return self._create_locked(title, created_by, room_id)
 
-    def ensure_lounge(self, created_by: ParticipantKey) -> RoomRecord:
-        """The Lounge (section 7.5), made now if none is called that."""
-        existing = self.find_by_title(LOUNGE_TITLE)
-        return existing if existing is not None else self.create(LOUNGE_TITLE, created_by)
+    def ensure_lounge(self, created_by: ParticipantKey) -> tuple[RoomRecord, bool]:
+        """The Lounge (section 7.5), made now if none is called that, and whether this call made it. Found and made
+        under one lock, so two callers asking at once get the same room."""
+        with self._lock:
+            existing = self._find_by_title_locked(LOUNGE_TITLE)
+            if existing is not None:
+                return existing, False
+            return self._create_locked(LOUNGE_TITLE, created_by, None), True
 
     def rename(self, room_id: ChatId, title: str) -> RoomRecord | None:
         """The room under its new title, or None for no such room."""
@@ -307,6 +306,17 @@ class RoomStore(MutableModel):
 
     def snapshots(self) -> list[RoomSnapshot]:
         return [self.snapshot(record) for record in self.read_all()]
+
+    def _create_locked(self, title: str, created_by: ParticipantKey, room_id: ChatId | None) -> RoomRecord:
+        record = RoomRecord(
+            id=room_id if room_id is not None else mint_room_id(),
+            title=title.strip() or self._mint_title_locked(),
+            created_at=now_timestamp(),
+            created_by=created_by,
+        )
+        self._write_record_locked(record)
+        logger.info("Created room {} ({!r})", record.id, record.title)
+        return record
 
     def _mint_title_locked(self) -> str:
         taken = {record.title.casefold() for record in self.read_all()}
