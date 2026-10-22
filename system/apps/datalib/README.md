@@ -71,6 +71,27 @@ in) and the skill can read the same file for its bearer token. When the file
 is missing or unusable the launcher mints one, and `datalib-http` writes it
 there.
 
+## Being framed
+
+`datalib-http`'s app page refuses to be framed unless
+`DATALIB_FRAME_ANCESTORS` names who may frame it, and a proxy's own
+`frame-ancestors` cannot loosen that: the browser enforces both. The launcher
+sets one fixed list (`FRAME_ANCESTORS` in `launch_datalib_http.py`):
+
+- the desktop app: `http://localhost:*`, `http://127.0.0.1:*` and
+  `https://*.localhost:*`, which only pages served from the laptop match;
+- a share: `https://*.<content domain>` for each of Imbue's content domains,
+  and each hosted chrome origin. These also admit other users' shares; the
+  share gateway appends a `frame-ancestors` for this workspace's own share
+  domain, and the browser enforces that too.
+
+A content domain or chrome origin Studio adds needs adding here.
+
+The session cookie works inside the frame because `datalib-http` sets it twice:
+`SameSite=Lax`, and `SameSite=None; Secure; Partitioned` for a frame on another
+site (imbue-ai/datalib#1318). An older `datalib-http` ignores
+`DATALIB_FRAME_ANCESTORS` and stays unframable.
+
 ## Staying up with no window
 
 `app.toml` sets `stop_when_no_windows = false`: a sync started from the Manage
