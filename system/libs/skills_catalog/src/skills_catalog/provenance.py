@@ -21,7 +21,8 @@ LOG_RECORD_SEPARATOR: Final[str] = "\x1e"
 LOG_FIELD_SEPARATOR: Final[str] = "\x1f"
 LOG_FORMAT: Final[str] = f"{LOG_RECORD_SEPARATOR}%H{LOG_FIELD_SEPARATOR}%cI"
 _SKILLS_PREFIX: Final[str] = f"{SKILLS_DIR.as_posix()}/"
-# The porcelain status codes whose entry is followed by the path the change came from.
+# The porcelain status codes, in either the index's column or the worktree's, whose entry is followed by the path the
+# change came from.
 _STATUS_CODES_WITH_ORIGIN_PATH: Final[frozenset[str]] = frozenset({"R", "C"})
 
 
@@ -60,7 +61,7 @@ def skill_names_with_unsaved_changes(status_output: str) -> frozenset[str]:
         name = skill_name_of_path(entry[3:])
         if name is not None:
             names.add(name)
-        if entry[0] in _STATUS_CODES_WITH_ORIGIN_PATH:
+        if not _STATUS_CODES_WITH_ORIGIN_PATH.isdisjoint(entry[:2]):
             origin_name = skill_name_of_path(next(entries, ""))
             if origin_name is not None:
                 names.add(origin_name)

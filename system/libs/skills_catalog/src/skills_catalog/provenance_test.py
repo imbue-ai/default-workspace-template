@@ -68,12 +68,21 @@ def test_unsaved_changes_name_every_skill_a_status_entry_touches_including_a_ren
             " M .agents/skills/assist/scripts/run.py",
             "R  .agents/skills/renamed/SKILL.md",
             ".agents/skills/old-name/SKILL.md",
+            " R .agents/skills/moved-to/notes.md",
+            ".agents/skills/moved-from/notes.md",
             " M .agents/skills-lock.json",
             "",
         )
     )
 
-    assert skill_names_with_unsaved_changes(status_output) == {"new-skill", "assist", "renamed", "old-name"}
+    assert skill_names_with_unsaved_changes(status_output) == {
+        "new-skill",
+        "assist",
+        "renamed",
+        "old-name",
+        "moved-to",
+        "moved-from",
+    }
 
 
 def test_a_lock_file_records_each_skill_source() -> None:
