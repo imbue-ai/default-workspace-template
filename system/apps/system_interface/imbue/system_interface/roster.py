@@ -104,6 +104,24 @@ def _format_moment(moment: datetime) -> str:
 
 
 @pure
+def _anonymous_owner_entry(presence: ParticipantPresence | None) -> _Entry:
+    """The owner of a workspace that has not shared: no account, so a fixed name and no profile, present as their
+    heartbeats under the ``owner`` key say."""
+    return _Entry(
+        key=OWNER_PARTICIPANT_KEY,
+        kind=ParticipantKind.PERSON,
+        display_name=ANONYMOUS_OWNER_NAME,
+        handle_name=ANONYMOUS_OWNER_NAME,
+        profile_picture_url=None,
+        email=None,
+        is_owner=True,
+        is_connected=presence.is_connected if presence is not None else False,
+        last_seen=presence.last_seen if presence is not None else None,
+        last_input_at=presence.last_input_at if presence is not None else None,
+    )
+
+
+@pure
 def _with_handles(entries: list[_Entry]) -> list[RosterParticipant]:
     """The entries as the wire carries them: handles assigned in order, the agent's reserved, each with its colour."""
     people = [entry for entry in entries if entry.kind is not ParticipantKind.WORKSPACE_AGENT]
@@ -171,20 +189,7 @@ class RosterSource(MutableModel):
         for key in ordered:
             presence = presence_by_key.get(key)
             if key == OWNER_PARTICIPANT_KEY:
-                entries.append(
-                    _Entry(
-                        key=key,
-                        kind=ParticipantKind.PERSON,
-                        display_name=ANONYMOUS_OWNER_NAME,
-                        handle_name=ANONYMOUS_OWNER_NAME,
-                        profile_picture_url=None,
-                        email=None,
-                        is_owner=True,
-                        is_connected=presence.is_connected if presence is not None else False,
-                        last_seen=presence.last_seen if presence is not None else None,
-                        last_input_at=presence.last_input_at if presence is not None else None,
-                    )
-                )
+                entries.append(_anonymous_owner_entry(presence))
                 continue
             user_id = str(key).removeprefix("user:")
             profile = profile_by_user_id.get(user_id)
