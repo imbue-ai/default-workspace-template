@@ -1,32 +1,24 @@
 import logging
-import threading
 import urllib.request
-from collections.abc import Generator
-from contextlib import contextmanager
 from uuid import uuid4
 
 import pytest
-from werkzeug.serving import make_server
 from werkzeug.wrappers import Request
 from werkzeug.wrappers import Response
 
 from share_gateway.access_log import QueryOmittingRequestHandler
+from share_gateway.testing import serve_wsgi
 
 
-@contextmanager
-def _serve_through_the_handler() -> Generator[str, None, None]:
-    @Request.application
-    def app(request: Request) -> Response:
-        return Response("ok")
+@Request.application
+def _ok_app(request: Request) -> Response:
+    return Response("ok")
 
-    server = make_server("127.0.0.1", 0, app, request_handler=QueryOmittingRequestHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}"
-    finally:
-        server.shutdown()
-        thread.join()
+
+def _get_through_the_handler(path_and_query: str) -> None:
+    with serve_wsgi(_ok_app, request_handler=QueryOmittingRequestHandler) as base_url:
+        with urllib.request.urlopen(f"{base_url}{path_and_query}", timeout=10) as response:
+            response.read()
 
 
 def _logged_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
@@ -35,8 +27,8 @@ def _logged_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
 
 def test_the_login_callbacks_token_never_reaches_the_access_log(caplog: pytest.LogCaptureFixture) -> None:
     token = f"eyJ{uuid4().hex}.{uuid4().hex}.{uuid4().hex}"
-    with caplog.at_level(logging.INFO, logger="werkzeug"), _serve_through_the_handler() as base_url:
-        urllib.request.urlopen(f"{base_url}/_auth/callback?token={token}&state={uuid4().hex}", timeout=10).read()
+    with caplog.at_level(logging.INFO, logger="werkzeug"):
+        _get_through_the_handler(f"/_auth/callback?token={token}&state={uuid4().hex}")
 
     lines = _logged_lines(caplog)
     assert len(lines) == 1
@@ -45,8 +37,8 @@ def test_the_login_callbacks_token_never_reaches_the_access_log(caplog: pytest.L
 
 
 def test_a_request_without_a_query_is_logged_by_its_whole_path(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.INFO, logger="werkzeug"), _serve_through_the_handler() as base_url:
-        urllib.request.urlopen(f"{base_url}/_auth/verify", timeout=10).read()
+    with caplog.at_level(logging.INFO, logger="werkzeug"):
+        _get_through_the_handler("/_auth/verify")
 
     (line,) = _logged_lines(caplog)
     assert '"GET /_auth/verify HTTP/1.1" 200' in line
