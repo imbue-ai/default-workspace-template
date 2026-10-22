@@ -542,8 +542,8 @@
           // button a hurried click lands on.
           element("div", { class: "actions" }, [
             withIcon(element("a", { class: "icon-button", href: fileUrl(detail.directory), title: "Open this skill's folder in Files", "aria-label": "Open this skill's folder in Files" }), "folder"),
-            // The agents' own procedures are read here, not started by hand.
             ...(remove ? [remove] : []),
+            // The agents' own procedures are read here, not started by hand.
             ...(isForPeople(summary) ? [useButton] : []),
           ]),
         ]),
