@@ -5,8 +5,8 @@ records where it came from in a skills lock file; skills.sh is the index it sear
 (``/api/search?q=&limit=``, the CLI's ``searchSkillsAPI``) answers each match's name, source repository and install
 count, most installed first. The page cannot reach another site itself (its content security policy keeps fetches on
 its own origin), so this server asks on its behalf, holding each answer for a few minutes: the index changes slowly,
-and the page asks again whenever the workspace's skills change, to keep its "Installed" marks current. Nothing is searched until a person asks
-to look online, since the query leaves the workspace.
+and the page asks again whenever the workspace's skills change, to keep its "Installed" marks current. Nothing is
+searched until a person asks to look online, since the query leaves the workspace.
 """
 
 import time
