@@ -57,7 +57,11 @@ class RosterClient(MutableModel):
         """The roster as the shell last answered it; empty when it has never answered."""
         with self._lock:
             now = self.clock()
-            if self._fetched_at is not None and now - self._fetched_at < self.cache_seconds and self._document is not None:
+            if (
+                self._fetched_at is not None
+                and now - self._fetched_at < self.cache_seconds
+                and self._document is not None
+            ):
                 return self._document
             try:
                 self._document = self.shell.roster()

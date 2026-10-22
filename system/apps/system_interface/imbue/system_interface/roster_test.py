@@ -54,7 +54,9 @@ def _source(tmp_path: Path) -> RosterSource:
         presence=PresenceStore(directory=tmp_path / "presence"),
         profiles=ProfileResolver(cache_directory=tmp_path / "profiles", share_env_path=tmp_path / "no-share.env"),
         users=UserStore(state_directory=tmp_path / "state"),
-        share_grants=ShareGrantsReader(share_env_path=secrets / "share.env", share_grants_path=secrets / "grants.toml"),
+        share_grants=ShareGrantsReader(
+            share_env_path=secrets / "share.env", share_grants_path=secrets / "grants.toml"
+        ),
         agent_grants=AgentGrantsReader(agent_grants_path=secrets / "agent_grants.toml"),
         agent_last_seen_path=tmp_path / "state" / "agent_access" / "last_seen.json",
         workspace_name=workspace_name_source("Atlas", {}),
@@ -114,10 +116,20 @@ def test_a_shared_workspace_lists_the_owner_first_then_grants_invited_and_visiti
     ]
     owner, bob, carol, friend, claude, agent = document.participants
     # No connector: a person is named after their email's local part, a visitor after what their arrival recorded.
-    assert (owner.display_name, owner.is_owner, owner.is_connected, owner.email) == ("owner", True, False, "owner@example.com")
+    assert (owner.display_name, owner.is_owner, owner.is_connected, owner.email) == (
+        "owner",
+        True,
+        False,
+        "owner@example.com",
+    )
     assert owner.last_seen is not None
     assert (bob.display_name, bob.is_connected, bob.last_input_at) == ("bob", True, "2026-10-22T09:59:50.000000000Z")
-    assert (carol.display_name, carol.email, carol.is_connected, carol.last_seen) == ("Carol", "carol@example.com", False, None)
+    assert (carol.display_name, carol.email, carol.is_connected, carol.last_seen) == (
+        "Carol",
+        "carol@example.com",
+        False,
+        None,
+    )
     assert (friend.kind, friend.display_name, friend.handle, friend.is_connected) == (
         "invited",
         "friend@example.com",

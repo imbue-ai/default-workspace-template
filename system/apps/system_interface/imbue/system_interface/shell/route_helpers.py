@@ -32,6 +32,7 @@ HTTP_INTERNAL_ERROR: Final[int] = 500
 HTTP_BAD_GATEWAY: Final[int] = 502
 HTTP_SERVICE_UNAVAILABLE: Final[int] = 503
 
+
 def detail_response(message: str, status_code: int) -> ResponseReturnValue:
     """A refusal or a failure as the ``ErrorResponse`` every route answers them with."""
     return error_response(message, status_code)

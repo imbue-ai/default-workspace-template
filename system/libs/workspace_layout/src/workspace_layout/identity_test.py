@@ -39,7 +39,10 @@ def test_a_visiting_agent_header_carries_the_grant_and_no_user() -> None:
         ('{"owner":true}', "owner"),
         ('{"owner":true,"user_id":"user-owner-9c21","email":"owner@example.com"}', "user:user-owner-9c21"),
         ('{"owner":false,"user_id":"user-bob-4471","email":"bob@example.com"}', "user:user-bob-4471"),
-        ('{"owner":false,"agent_id":"va-0123456789abcdef0123456789abcdef","agent_name":"Visitor","granter":"x"}', "agent:va-0123456789abcdef0123456789abcdef"),
+        (
+            '{"owner":false,"agent_id":"va-0123456789abcdef0123456789abcdef","agent_name":"Visitor","granter":"x"}',
+            "agent:va-0123456789abcdef0123456789abcdef",
+        ),
     ],
 )
 def test_the_participant_key_follows_the_header(header: str, expected_key: str) -> None:
@@ -55,4 +58,7 @@ def test_the_owner_is_the_owner_under_either_key_and_never_a_visiting_agent() ->
 def test_only_a_signed_in_visitor_has_a_visiting_user_id() -> None:
     assert visiting_user_id(ANONYMOUS_OWNER) is None
     assert visiting_user_id(RequestIdentity(owner=True, user_id="user-owner-9c21", email="o@example.com")) is None
-    assert visiting_user_id(RequestIdentity(owner=False, user_id="user-bob-4471", email="b@example.com")) == "user-bob-4471"
+    assert (
+        visiting_user_id(RequestIdentity(owner=False, user_id="user-bob-4471", email="b@example.com"))
+        == "user-bob-4471"
+    )

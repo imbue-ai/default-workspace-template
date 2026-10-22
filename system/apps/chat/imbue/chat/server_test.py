@@ -5074,7 +5074,9 @@ _VISITING_AGENT = RequestIdentity(
 _OWNER_ACCOUNT = RequestIdentity(owner=True, user_id="user-owner-9c21", email="owner@example.com")
 
 
-def test_a_visitors_message_reaches_the_agent_prefixed_and_is_annotated(app: Flask, messenger: RecordingMngrMessenger) -> None:
+def test_a_visitors_message_reaches_the_agent_prefixed_and_is_annotated(
+    app: Flask, messenger: RecordingMngrMessenger
+) -> None:
     agent_id = "agent-00000000000000000000000000000031"
     seed_agent_state(state_of(app).agent_manager, agent_id, name="Chat-31")
     client = app.test_client()
@@ -5105,7 +5107,9 @@ def test_a_visitors_slash_command_is_delivered_as_typed_but_still_annotated(
     client = app.test_client()
 
     client.post(
-        f"/api/chats/{agent_id}/message", json={"message": "/clear", "message_id": "m-2"}, headers=_identity_header(_VISITING_AGENT)
+        f"/api/chats/{agent_id}/message",
+        json={"message": "/clear", "message_id": "m-2"},
+        headers=_identity_header(_VISITING_AGENT),
     )
 
     assert messenger.sent == [(agent_id, "/clear")]
@@ -5133,7 +5137,9 @@ def test_the_owners_messages_are_never_prefixed_nor_annotated_under_either_key(
 def test_me_answers_the_requesters_participant_key(app: Flask) -> None:
     client = app.test_client()
     assert client.get("/api/me").get_json() == {"participant": "owner"}
-    assert client.get("/api/me", headers=_identity_header(_VISITOR)).get_json() == {"participant": "user:user-bob-4471"}
+    assert client.get("/api/me", headers=_identity_header(_VISITOR)).get_json() == {
+        "participant": "user:user-bob-4471"
+    }
     assert client.get("/api/me", headers=_identity_header(_OWNER_ACCOUNT)).get_json() == {
         "participant": "user:user-owner-9c21"
     }

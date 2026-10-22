@@ -23,13 +23,20 @@ _CLAUDE = ParticipantKey("agent:va-0123456789abcdef0123456789abcdef")
 _CHAT = ChatId("agent-00000000000000000000000000000001")
 
 
-def _annotation(message_id: str, author: ParticipantKey, name: str, delivered: str, timestamp: str) -> AuthorAnnotation:
+def _annotation(
+    message_id: str, author: ParticipantKey, name: str, delivered: str, timestamp: str
+) -> AuthorAnnotation:
     annotation = new_author_annotation(message_id, author, name, delivered)
     return annotation.model_copy_update(to_update(annotation.field_ref().timestamp, IsoTimestamp(timestamp)))
 
 
 def _user_event(content: str, timestamp: str = "2026-10-22T10:00:00.500Z") -> dict[str, Any]:
-    return {"type": "user_message", "event_id": f"evt-{text_sha256(content)[:8]}", "content": content, "timestamp": timestamp}
+    return {
+        "type": "user_message",
+        "event_id": f"evt-{text_sha256(content)[:8]}",
+        "content": content,
+        "timestamp": timestamp,
+    }
 
 
 @pytest.mark.parametrize(
@@ -54,7 +61,9 @@ def test_the_prefix_is_rendered_for_a_person_and_for_a_room() -> None:
     assert split_author_prefix(author_prefix("Bob", "Lounge") + "hi") == ("Bob", "hi")
 
 
-@pytest.mark.parametrize(("text", "expected"), [("/compact", True), ("  !ls", True), ("hello /there", False), ("", False)])
+@pytest.mark.parametrize(
+    ("text", "expected"), [("/compact", True), ("  !ls", True), ("hello /there", False), ("", False)]
+)
 def test_a_slash_command_or_bash_input_is_never_prefixed(text: str, expected: bool) -> None:
     assert is_unprefixable_input(text) is expected
 

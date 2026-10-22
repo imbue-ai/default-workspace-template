@@ -364,9 +364,7 @@ def arrival_answer(shell: ShellState, outcome: ClientArrivalOutcome | None) -> C
         return ClientArrivalResponse(desktop_id=None, created_desktop=None, replaced_desktop_name=None)
     return ClientArrivalResponse(
         desktop_id=str(outcome.desktop_id),
-        created_desktop=(
-            shell.desktop_view(outcome.created_desktop) if outcome.created_desktop is not None else None
-        ),
+        created_desktop=(shell.desktop_view(outcome.created_desktop) if outcome.created_desktop is not None else None),
         replaced_desktop_name=outcome.replaced_desktop_name,
     )
 

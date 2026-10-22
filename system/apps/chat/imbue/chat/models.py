@@ -152,7 +152,9 @@ class SendMessageRequest(FrozenModel):
 class MeResponse(FrozenModel):
     """What ``GET /api/me`` answers: the participant key of the requester (the multiplayer spec, section 5.4)."""
 
-    participant: ParticipantKey = Field(description="The requester's participant key; ``owner`` on an unshared workspace")
+    participant: ParticipantKey = Field(
+        description="The requester's participant key; ``owner`` on an unshared workspace"
+    )
 
 
 class ParticipantsResponse(FrozenModel):

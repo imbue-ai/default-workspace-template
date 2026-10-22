@@ -181,7 +181,10 @@ def test_the_owner_of_an_unshared_workspace_is_recorded_under_the_owner_key_and_
     assert owner.user_id == "owner" and owner.owner is True and owner.is_anonymous_owner is True
     assert owner.participant == "owner"
     assert (store.users_directory / "owner.json").exists()
-    assert present_users_wire_json([owner], ProfileResolver(cache_directory=tmp_path, share_env_path=tmp_path / "x"), _T0) == []
+    assert (
+        present_users_wire_json([owner], ProfileResolver(cache_directory=tmp_path, share_env_path=tmp_path / "x"), _T0)
+        == []
+    )
     assert store.presence_by_participant(_T0)[OWNER_PARTICIPANT_KEY].is_connected is True
 
 

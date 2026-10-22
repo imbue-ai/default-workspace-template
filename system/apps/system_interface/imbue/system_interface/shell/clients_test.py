@@ -237,7 +237,9 @@ def test_the_shown_history_holds_the_newest_distinct_entries_most_recent_last(tm
     assert again.last_seen == TEST_NOW + timedelta(minutes=1)
     # A later report and arrival keep it, and it is what the store reads back.
     store.record_report(client_report("c1", "research"), TEST_NOW + timedelta(minutes=2), is_redirected=False)
-    store.record_arrival(ClientId("c1"), None, OWNER_PARTICIPANT_KEY, DesktopId("home"), TEST_NOW + timedelta(minutes=3))
+    store.record_arrival(
+        ClientId("c1"), None, OWNER_PARTICIPANT_KEY, DesktopId("home"), TEST_NOW + timedelta(minutes=3)
+    )
     reread = ClientStore(state_directory=tmp_path).get_client("c1")
     assert reread is not None and reread.shown_history == expected
     assert client_view(reread, False).model_dump(mode="json")["shown_history"] == list(expected)

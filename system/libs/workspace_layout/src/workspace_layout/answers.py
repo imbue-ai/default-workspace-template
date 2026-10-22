@@ -102,7 +102,8 @@ class InventoryClient(ClientView):
     it popped out of any desktop."""
 
     shown: tuple[WindowId, ...] = Field(
-        default=(), description="The windows of its active desktop its layout does not minimize; none from an older shell"
+        default=(),
+        description="The windows of its active desktop its layout does not minimize; none from an older shell",
     )
     popped_out: tuple[PoppedOutWindow, ...] = Field(
         default=(), description="The windows its layouts of every desktop say are popped out; none from an older shell"

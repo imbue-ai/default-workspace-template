@@ -237,7 +237,10 @@ class RosterSource(MutableModel):
     def _visiting_agents(self, now: datetime) -> list[_Entry]:
         """Every unexpired agent grant, connected while the gateway saw it within the window."""
         last_seen_by_id = read_agent_last_seen_times(self.agent_last_seen_path)
-        return [self._visiting_agent(grant, last_seen_by_id.get(grant.agent_id), now) for grant in self.agent_grants.read_active_grants(now)]
+        return [
+            self._visiting_agent(grant, last_seen_by_id.get(grant.agent_id), now)
+            for grant in self.agent_grants.read_active_grants(now)
+        ]
 
     def _visiting_agent(self, grant: AgentGrant, last_seen: datetime | None, now: datetime) -> _Entry:
         return _Entry(

@@ -57,7 +57,12 @@ def test_an_unreachable_shell_keeps_the_last_roster_and_names_a_sender_from_thei
     now[0] = 10.0
     assert client.participant(_BOB) is not None
     unknown = ParticipantKey("user:user-carol-1138")
-    assert client.display_name_of(unknown, RequestIdentity(owner=False, user_id="user-carol-1138", email="carol@example.com")) == "carol"
+    assert (
+        client.display_name_of(
+            unknown, RequestIdentity(owner=False, user_id="user-carol-1138", email="carol@example.com")
+        )
+        == "carol"
+    )
 
     client.forget()
     fresh = RosterClient(shell=FakeShell(listing_error=ShellUnreachableError("down")))
@@ -67,4 +72,6 @@ def test_an_unreachable_shell_keeps_the_last_roster_and_names_a_sender_from_thei
 def test_the_fallback_name_prefers_an_agents_grant_name_then_the_emails_local_part() -> None:
     agent = RequestIdentity(owner=False, agent_id="va-1", agent_name="Josh's Claude", granter="x")
     assert fallback_display_name(ParticipantKey("agent:va-1"), agent) == "Josh's Claude"
-    assert fallback_display_name(_BOB, RequestIdentity(owner=False, user_id="user-bob-4471", email="@nowhere")) == str(_BOB)
+    assert fallback_display_name(_BOB, RequestIdentity(owner=False, user_id="user-bob-4471", email="@nowhere")) == str(
+        _BOB
+    )

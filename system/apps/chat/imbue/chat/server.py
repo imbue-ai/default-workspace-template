@@ -928,7 +928,9 @@ def _workspace_agent_picture_endpoint() -> Response:
     if agent is None or agent.profile_picture_url is None:
         return error_response("The workspace agent has no picture yet", 404)
     try:
-        answer = state.http_client.get(f"{shell_base_url()}{agent.profile_picture_url}", timeout=_PICTURE_TIMEOUT_SECONDS)
+        answer = state.http_client.get(
+            f"{shell_base_url()}{agent.profile_picture_url}", timeout=_PICTURE_TIMEOUT_SECONDS
+        )
     except httpx.HTTPError as e:
         logger.debug("Could not fetch the workspace agent's picture from the shell: {}", e)
         return error_response("The workspace agent's picture could not be fetched", 502)
