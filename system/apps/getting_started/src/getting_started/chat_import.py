@@ -75,7 +75,10 @@ def is_heartbeat_stale(updated_at: str, now: datetime) -> bool:
     """
     try:
         written = datetime.fromisoformat(updated_at)
-    except ValueError:
+    except ValueError as e:
+        logger.trace(
+            "A chat import record's updated_at {!r} is not a time, so its pid alone decides: {}", updated_at, e
+        )
         return False
     if written.tzinfo is None:
         written = written.replace(tzinfo=timezone.utc)
