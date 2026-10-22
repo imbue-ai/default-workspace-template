@@ -580,12 +580,10 @@ def collect_agent_log_db_members(
 ) -> tuple[list[tuple[str, str, float]], int]:
     """Every agent's rendered harness log db, as ``(member name, content, mtime)``, and the drop count.
 
-    Separate from the harness log files, and scanned as its own class, because
-    the two fail differently. A log db is the harness's own TRACE stream and has
-    already been observed carrying credentials it wrote about itself; a stderr
-    log is what the harness chose to print. Sharing a class would mean one row
-    the allowlist did not anticipate costs the report ``app_server.log`` and
-    every agent's ``stderr.log`` too -- the logs most likely to explain the bug.
+    Separate from the harness log files, with a byte budget of its own: a log
+    db is the harness's whole TRACE stream, so sharing their budget would let it
+    push ``app_server.log`` and every agent's ``stderr.log`` out of the report --
+    the logs most likely to explain the bug.
     """
     members: list[tuple[str, str, float]] = []
     used_names: set[str] = set()
@@ -1213,9 +1211,8 @@ def main(argv: Sequence[str]) -> None:
         collected.append((AGENT_LOGS_KEY, "agent logs", agent_log_members))
 
         # Its own class, not part of the agent logs above: a harness log db is
-        # the harness's whole TRACE stream and has been observed carrying
-        # credentials the harness logged about itself, so a row the target
-        # allowlist did not anticipate must cost the report this class alone.
+        # the harness's whole TRACE stream, so it fills a byte budget of its own
+        # rather than crowding the harness logs out of theirs.
         log_db_members, dropped_log_dbs = collect_agent_log_db_members(
             scan_timeout_seconds
         )
