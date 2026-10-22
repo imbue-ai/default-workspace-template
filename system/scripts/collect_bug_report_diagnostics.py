@@ -1153,7 +1153,7 @@ def release_scanned_members(
     if withheld and not released and len(reasons) == 1:
         return [], ["{}: {}".format(label, withheld[0][1])]
     notes = ["{}: {}: {}".format(label, name, reason) for name, reason in withheld]
-    if dropped_count:
+    if dropped_count and released:
         notes.append(
             "{}: {}".format(label, NOTE_TRIMMED_TO_BUDGET.format(dropped_count))
         )
