@@ -1,3 +1,4 @@
+import re
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -184,6 +185,25 @@ def test_a_skill_removed_while_its_page_is_open_closes_the_page(
 
     expect(page.locator(".intro-lead")).to_be_visible()
     expect(page.locator('a[data-skill="draft-skill"]')).to_have_count(0)
+
+
+def test_a_failed_reread_of_the_open_skill_keeps_it_showing(workspace_root: Path, open_skills_page: OpenPage) -> None:
+    write_skill(workspace_root, "draft-skill", "Not saved yet.")
+    page = open_skills_page("/draft-skill", *_DESKTOP)
+    expect(page.locator(".skill-section p").first).to_have_text("Not saved yet.")
+    page.route(
+        re.compile(r".*/api/skills/draft-skill(/instructions)?$"),
+        lambda route: route.fulfill(status=500, json={"detail": "The workspace is restarting."}),
+    )
+
+    # The edit changes the skill's entry in the list, so the page rereads the skill, and that fails.
+    write_skill(workspace_root, "draft-skill", "Edited.")
+    with page.expect_console_message(lambda message: "could not reread the skill" in message.text):
+        page.evaluate("window.dispatchEvent(new Event('focus'))")
+
+    expect(page.locator("article .skill-head h1")).to_have_text("draft-skill")
+    expect(page.locator(".skill-section p").first).to_have_text("Not saved yet.")
+    expect(page.locator("#reader .error")).to_have_count(0)
 
 
 def test_a_narrow_window_shows_the_list_or_one_skill(open_skills_page: OpenPage) -> None:

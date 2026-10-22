@@ -502,7 +502,8 @@
     reportLocation();
   }
 
-  // A refresh of the skill already showing keeps where the reader was scrolled to.
+  // A refresh of the skill already showing keeps where the reader was scrolled to, and keeps the skill showing when it
+  // fails, as a failed poll of the list does.
   async function showSkill(name, { isRefresh = false } = {}) {
     const load = ++latestLoad;
     const scrolledTo = reader.scrollTop;
@@ -515,6 +516,10 @@
       ]);
     } catch (error) {
       if (load !== latestLoad) return;
+      if (isRefresh) {
+        console.warn("[skills] could not reread the skill", error);
+        return;
+      }
       reader.replaceChildren(element("article", {}, [element("a", { class: "back", href: "/" , text: "All skills" }), element("p", { class: "error", text: error.message })]));
       return;
     }
