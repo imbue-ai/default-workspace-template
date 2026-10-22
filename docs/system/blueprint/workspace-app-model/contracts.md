@@ -68,7 +68,7 @@ Built-in manifests:
 | `skills` | false | `skills` | `{launch = "open", mode = "focus"}`; also `launcher_rank = 48` and `system = true` | none; the shell synthesizes `open` at `/` | `SKILLS_APP_PORT = "{port:main}"` and `SKILLS_APP_HOST = "{host}"`, no copies (it only reads the live checkout) |
 | `routines` | false | `routines` | `{launch = "open", mode = "focus"}`; also `launcher_rank = 45` and a `[[message_handlers]]` `type = "minds:show-routine", show = "/{routine_id}"` | none; the shell synthesizes `open` at `/` | `ROUTINES_APP_PORT = "{port:main}"`, `ROUTINES_APP_HOST = "{host}"` and `ROUTINES_APP_PREVIEW = "1"` (read-only over the live state: it refuses every change with `403`), no copies (it stores nothing) |
 
-The chat, terminal, browser, Getting Started, and System Monitor declare `system = true`; Routines does not.
+The chat, terminal, browser, Getting Started, Skills, and System Monitor declare `system = true`; Routines does not.
 
 Every built-in except the shell and the terminal's pty points `icon` at an `icon.svg` beside its manifest; those two are `internal` and have none.
 
