@@ -252,8 +252,9 @@ NOTE_TRIMMED_TO_BUDGET = "{} file(s) were left out to fit the collection's size 
 # after ``?``, ``&`` or ``;`` (the last for ``&amp;`` in HTML), and the value
 # runs to the next delimiter, whitespace, quote, or backslash (a JSON escape).
 URL_CREDENTIAL_PARAMETER = re.compile(
-    r"([?&;](?:access_?token|id_?token|refresh_?token|auth_?token|token|api_?key|key"
-    r"|code|sig|signature|secret|password)=)[^&#;\s\"'<>\\]+",
+    r"([?&;](?:x-amz-|x-goog-)?(?:access_?token|id_?token|refresh_?token|auth_?token"
+    r"|security-?token|token|api_?key|key|credential|code|sig|signature|secret|password)=)"
+    r"[^&#;\s\"'<>\\]+",
     re.IGNORECASE,
 )
 REDACTED_URL_CREDENTIAL = "REDACTED"

@@ -1229,6 +1229,15 @@ def test_a_credential_in_a_url_query_string_is_blanked_and_its_chat_still_ships(
             '{"url": "https://x.test/?api_key=REDACTED\\"}',
         ),
         (
+            "https://b.s3.amazonaws.com/f?X-Amz-Algorithm=AWS4-HMAC-SHA256"
+            "&X-Amz-Credential=ASIAIOSFODNN7EXAMPLE%2F20250101%2Fus-east-1%2Fs3%2Faws4_request"
+            "&X-Amz-Date=20250101T000000Z&X-Amz-Security-Token=IQo.b3JpZ2lu"
+            "&X-Amz-Signature=8f2a",
+            "https://b.s3.amazonaws.com/f?X-Amz-Algorithm=AWS4-HMAC-SHA256"
+            "&X-Amz-Credential=REDACTED&X-Amz-Date=20250101T000000Z"
+            "&X-Amz-Security-Token=REDACTED&X-Amz-Signature=REDACTED",
+        ),
+        (
             "https://x.test/?monkey=1&keyboard=2&post_id=3#key=4",
             "https://x.test/?monkey=1&keyboard=2&post_id=3#key=4",
         ),
