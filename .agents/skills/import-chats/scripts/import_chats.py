@@ -98,6 +98,8 @@ _INSTALL_TIMEOUT_SECONDS = 900.0
 _DATALIB_COMMAND_TIMEOUT_SECONDS = 120.0
 # Short enough that a slow count never stalls the heartbeat past the Getting Started app's staleness limit.
 _COUNT_TIMEOUT_SECONDS = 20.0
+# Reading the index's rows walks every downloaded conversation, and is not on the heartbeat.
+_INDEX_READ_TIMEOUT_SECONDS = _DATALIB_COMMAND_TIMEOUT_SECONDS
 # How often a running sync rewrites each source's record, so the Getting Started card counts up as chats arrive.
 PROGRESS_INTERVAL_SECONDS = 10.0
 
@@ -461,9 +463,10 @@ def query_raw_store(
     source: ChatSource,
     sql: str,
     run: Callable[..., subprocess.CompletedProcess],
+    timeout_seconds: float,
 ) -> list[dict] | None:
-    """The rows ``sql`` reads from the source's raw store; None when there is no store yet. A store that cannot be
-    read raises ``ImportChatsError`` saying why."""
+    """The rows ``sql`` reads from the source's raw store within ``timeout_seconds``; None when there is no store
+    yet. A store that cannot be read raises ``ImportChatsError`` saying why."""
     store = datalib.raw_store(source)
     doltlite = datalib.binary("datalib-doltlite")
     # datalib-doltlite creates a database it is pointed at that does not exist.
@@ -475,7 +478,7 @@ def query_raw_store(
             capture_output=True,
             encoding="utf-8",
             errors="replace",
-            timeout=_COUNT_TIMEOUT_SECONDS,
+            timeout=timeout_seconds,
         )
     except subprocess.TimeoutExpired as e:
         raise ImportChatsError(
@@ -517,6 +520,7 @@ def count_conversations(
         source,
         f"SELECT count(*) AS n FROM ({source.conversations_query})",
         run,
+        _COUNT_TIMEOUT_SECONDS,
     )
     if rows is None:
         return None
@@ -604,7 +608,7 @@ def read_index_entries(
         queries.append((source.projects_query, source.project_url, True))
     entries: list[IndexEntry] = []
     for sql, url, is_project in queries:
-        rows = query_raw_store(datalib, source, sql, run)
+        rows = query_raw_store(datalib, source, sql, run, _INDEX_READ_TIMEOUT_SECONDS)
         if rows is None:
             return None
         for row in rows:

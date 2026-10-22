@@ -566,7 +566,11 @@ def test_a_query_that_matches_nothing_reads_as_no_rows(
 
     assert (
         import_chats.query_raw_store(
-            workspace.datalib, CHATGPT, CHATGPT.conversations_query, _FakeDatalib()
+            workspace.datalib,
+            CHATGPT,
+            CHATGPT.conversations_query,
+            _FakeDatalib(),
+            timeout_seconds=5.0,
         )
         == []
     )
@@ -580,6 +584,28 @@ def _store_is_locked(
     command: Sequence[str], **_kwargs: object
 ) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(command, 1, "", "Error: database is locked\n")
+
+
+def test_a_count_is_held_to_the_heartbeats_limit_and_an_index_read_is_not(
+    workspace: _SyncWorkspace,
+) -> None:
+    _raw_store(workspace.data_root, CHATGPT, [("a", "A", None)])
+    timeouts: list[object] = []
+
+    def run(command: Sequence[str], **kwargs: object) -> subprocess.CompletedProcess:
+        timeouts.append(kwargs.get("timeout"))
+        return _FakeDatalib()(command, **kwargs)
+
+    import_chats.count_conversations(workspace.datalib, CHATGPT, run)
+    import_chats.read_index_entries(workspace.datalib, CHATGPT, run)
+
+    assert timeouts == [
+        import_chats._COUNT_TIMEOUT_SECONDS,
+        import_chats._INDEX_READ_TIMEOUT_SECONDS,
+    ]
+    assert (
+        import_chats._INDEX_READ_TIMEOUT_SECONDS > import_chats._COUNT_TIMEOUT_SECONDS
+    )
 
 
 def test_a_raw_store_that_cannot_be_read_is_an_error_saying_why(
