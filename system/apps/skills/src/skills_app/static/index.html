@@ -68,9 +68,9 @@
   .search input:focus-visible { border-color: var(--c-accent); }
   .skill-list { flex: 1; overflow-y: auto; padding: 0 8px 16px; }
   .skill-list h2 { margin: 8px 0 2px; font-size: inherit; }
-  .group-toggle { display: flex; align-items: center; gap: 4px; width: 100%; padding: 4px 8px 4px 4px; border: none; border-radius: var(--radius-sm); background: none; color: var(--c-text-secondary); font: inherit; font-size: var(--font-size-helper); font-weight: var(--weight-semibold); text-align: left; cursor: pointer; }
+  .group-toggle { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 8px; border: none; border-radius: var(--radius-sm); background: none; color: var(--c-text-secondary); font: inherit; font-size: var(--font-size-helper); font-weight: var(--weight-semibold); text-align: left; cursor: pointer; }
   .group-toggle:hover { background: var(--c-fill-hover); color: var(--c-text-primary); }
-  .group-toggle svg { flex: none; width: 14px; height: 14px; transition: transform var(--dur-base); }
+  .group-toggle svg { flex: none; width: 14px; height: 14px; margin-right: -2px; transition: transform var(--dur-base); }
   .group-toggle[aria-expanded="false"] svg { transform: rotate(-90deg); }
   .group-count { margin-left: auto; font-weight: var(--weight-regular); color: var(--c-text-secondary); }
   .skill-list ul { list-style: none; margin: 0; padding: 0; }
@@ -296,7 +296,26 @@
     return new Date(time.getFullYear(), time.getMonth(), time.getDate()).getTime();
   }
 
-  // Files' wording for when something changed (apps/files/frontend/src/models/format.ts).
+  // How long ago, as Routines says it ("10 minutes ago"), for a week; then the date, its year only when not this one.
+  function formatAgo(iso, now = new Date()) {
+    const when = new Date(iso);
+    const minutes = Math.floor((now - when) / 60_000);
+    if (minutes < 1) return "just now";
+    if (minutes < 60) return `${minutes} min ago`;
+    const hours = Math.floor(minutes / 60);
+    const dayDelta = Math.round((startOfDay(now) - startOfDay(when)) / 86_400_000);
+    if (dayDelta === 0) return hours === 1 ? "1 hour ago" : `${hours} hours ago`;
+    if (dayDelta === 1) return "yesterday";
+    if (dayDelta < 7) return `${dayDelta} days ago`;
+    const sameYear = when.getFullYear() === now.getFullYear();
+    return when.toLocaleDateString(undefined, sameYear ? { day: "numeric", month: "short" } : { day: "numeric", month: "short", year: "numeric" });
+  }
+
+  function updatedChip(iso) {
+    return element("span", { class: "chip", "data-updated": iso, title: `Last updated ${formatWhen(iso)}`, text: `Updated ${formatAgo(iso)}` });
+  }
+
+  // Files' wording for when something changed (apps/files/frontend/src/models/format.ts), for the chip's tooltip.
   function formatWhen(iso) {
     const when = new Date(iso);
     const clock = when.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
@@ -339,10 +358,12 @@
       .map(([heading, source, members]) => {
         // A search shows its matches in every group, folded or not.
         const isExpanded = Boolean(query) || !collapsedGroups.has(source);
-        const toggle = withIcon(element("button", { type: "button", class: "group-toggle", "aria-expanded": String(isExpanded) }, [
+        // The heading's text starts where the skills' names do; its count and chevron sit at the right end.
+        const toggle = element("button", { type: "button", class: "group-toggle", "aria-expanded": String(isExpanded) }, [
           element("span", { text: heading }),
           element("span", { class: "group-count", text: String(members.length) }),
-        ]), "chevron-down");
+        ]);
+        toggle.insertAdjacentHTML("beforeend", iconSvg("chevron-down"));
         toggle.addEventListener("click", () => {
           if (collapsedGroups.has(source)) collapsedGroups.delete(source);
           else collapsedGroups.add(source);
@@ -439,7 +460,7 @@
             useButton,
           ]),
         ]),
-        element("div", { class: "chips" }, [authorChip(summary), element("span", { class: "chip", text: `Last updated ${formatWhen(summary.last_updated_at)}` })]),
+        element("div", { class: "chips" }, [authorChip(summary), updatedChip(summary.last_updated_at)]),
         element("section", { class: "skill-section", "aria-labelledby": "description-heading" }, [
           element("h2", { class: "section-heading", id: "description-heading", text: "Description" }),
           element("p", { text: summary.description || "No description." }),
@@ -588,6 +609,7 @@
   function schedulePoll() {
     setTimeout(async () => {
       await pollListing();
+      for (const chip of reader.querySelectorAll("[data-updated]")) chip.textContent = `Updated ${formatAgo(chip.dataset.updated)}`;
       schedulePoll();
     }, LIST_REFRESH_MS);
   }

@@ -14,8 +14,8 @@ the first line of its description) under three collapsible headings by the catal
 as a skills lock file records) and **Comes with Studio** (its author is
 `imbue`) -- with a search field; and, beside it, the skill being read: a chip
 for who made it ("Made by <author>", "Installed from <repo>" or "Comes with
-Studio") and one for when it was last updated (in Files' wording: "today at
-2:03 PM"), its description, and its instructions rendered from its
+Studio") and one for when it was last updated ("Updated 3 days ago", the date after a
+week, the full time on hover), its description, and its instructions rendered from its
 `SKILL.md` under the same kind of heading as the description ("Instructions,
 from SKILL.md"; a first heading that only repeats the skill's name or
 "Instructions" is left out), below a faint rule that sets them apart from the
