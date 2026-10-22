@@ -89,8 +89,25 @@ def test_datalib_http_is_told_the_data_root_and_not_to_open_a_browser() -> None:
     ]
 
 
-def test_datalib_http_binds_loopback_and_requires_the_token() -> None:
+def test_datalib_http_binds_loopback_requires_the_token_and_may_be_framed_by_studio() -> (
+    None
+):
     assert launcher.child_environment(8731, _TOKEN) == {
         "DATALIB_BIND": "127.0.0.1:8731",
         "DATALIB_TOKEN": _TOKEN,
+        "DATALIB_FRAME_ANCESTORS": launcher.FRAME_ANCESTORS,
     }
+
+
+def test_frame_ancestors_cover_studio_desktop_and_every_share_tier() -> None:
+    sources = launcher.FRAME_ANCESTORS.split()
+    for expected in (
+        "http://localhost:*",
+        "https://*.localhost:*",
+        "https://*.personal-imbue.com",
+        "https://studio.imbue.com",
+    ):
+        assert expected in sources
+    # datalib-http refuses to start on anything but CSP sources; a ';' would end the directive.
+    assert all(";" not in s and "," not in s and "'" not in s for s in sources)
+    assert len(sources) == len(set(sources))
