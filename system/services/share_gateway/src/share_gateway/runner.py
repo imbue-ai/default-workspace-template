@@ -44,14 +44,15 @@ from inotify_simple import flags as inotify_flags
 from werkzeug.serving import BaseWSGIServer
 from werkzeug.serving import make_server
 
+from share_grants.agent_grants import AGENT_LAST_SEEN_FILE
+from share_grants.agent_grants import AgentGrantsError
+from share_grants.agent_grants import utc_now as agent_access_now
+
 from share_gateway import materials as materials_module
 from share_gateway.agent_access import LastSeenStore
 from share_gateway.agent_access import default_agent_access_paths
 from share_gateway.agent_access import reconcile as reconcile_agent_access
 from share_gateway.agent_audit import events_dir_from_environ
-from share_grants.agent_grants import AGENT_LAST_SEEN_FILE
-from share_grants.agent_grants import AgentGrantsError
-from share_grants.agent_grants import utc_now as agent_access_now
 from share_gateway.agent_orientation import SKILLS_INDEX_CACHE_PATH
 from share_gateway.agent_routes import AgentAccessContext
 from share_gateway.agent_routes import register_agent_routes
