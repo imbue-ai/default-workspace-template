@@ -6,24 +6,15 @@ from pydantic import Field
 from imbue.imbue_common.frozen_model import FrozenModel
 from skills_catalog.primitives import SkillAudience
 from skills_catalog.primitives import SkillName
-from skills_catalog.primitives import SkillOrigin
 from skills_catalog.primitives import SkillSource
 
 
-class SkillCommitFacts(FrozenModel):
-    """What the git history says about one skill's directory."""
-
-    is_added_by_template: bool = Field(description="Whether the oldest commit touching it came from the template")
-    is_last_changed_by_template: bool = Field(
-        description="Whether the newest commit touching it came from the template"
-    )
-    last_changed_at: datetime = Field(description="When the newest commit touching it was made")
-
-
 class SkillsHistory(FrozenModel):
-    """The git facts for every skill directory the history has ever touched, by directory name."""
+    """When a commit last changed each skill directory the history has touched."""
 
-    facts_by_skill_name: dict[str, SkillCommitFacts] = Field(description="Facts per skill directory name")
+    last_changed_at_by_skill_name: dict[str, datetime] = Field(
+        description="The newest commit's time per skill directory name"
+    )
 
 
 class InstallSource(FrozenModel):
@@ -44,21 +35,10 @@ class SkillSummary(FrozenModel):
     author: str = Field(description="The frontmatter's metadata author; empty when it names none")
     source: SkillSource = Field(description="Who it comes from")
     audience: SkillAudience = Field(description="Who it is for: people, or the agents themselves")
-    origin: SkillOrigin = Field(description="Where it came from")
     install_source: InstallSource | None = Field(description="What a skills lock file records for it, if anything")
-    last_changed_at: datetime | None = Field(description="When a commit last changed it; null until one has")
     last_updated_at: datetime = Field(
         description="When it last changed: its newest file's time while it has unsaved changes, else its newest commit's"
     )
-    has_unsaved_changes: bool = Field(description="Whether its directory has changes no commit has saved")
-    problems: tuple[str, ...] = Field(description="How its SKILL.md departs from the agentskills.io layout")
-
-
-class SkillFile(FrozenModel):
-    """One file inside a skill's directory."""
-
-    path: Path = Field(description="Relative to the skill's directory")
-    size_bytes: int = Field(description="Its size")
 
 
 class SkillDetail(FrozenModel):
@@ -66,10 +46,7 @@ class SkillDetail(FrozenModel):
 
     summary: SkillSummary = Field(description="What the list shows")
     directory: Path = Field(description="Its folder, as an absolute path")
-    skill_file_path: Path = Field(description="Its SKILL.md, relative to the checkout")
     content: str = Field(description="Its SKILL.md exactly as written, frontmatter included")
-    files: tuple[SkillFile, ...] = Field(description="Every file in its directory, by path")
-    is_file_list_truncated: bool = Field(description="Whether the directory held more files than are listed")
 
 
 class SkillListing(FrozenModel):

@@ -9,11 +9,9 @@ from typing import Final
 from loguru import logger
 from pydantic import Field
 
-from imbue.mngr.utils.agent_skills import skill_shape_problems
 from imbue.mngr.utils.agent_skills import split_skill_frontmatter
 from skills_catalog.data_types import InstallSource
 from skills_catalog.data_types import SkillDetail
-from skills_catalog.data_types import SkillFile
 from skills_catalog.data_types import SkillListing
 from skills_catalog.data_types import SkillSummary
 from skills_catalog.data_types import SkillsHistory
@@ -27,7 +25,6 @@ from skills_catalog.primitives import SKILLS_DIR
 from skills_catalog.primitives import SKILL_FILENAME
 from skills_catalog.primitives import SkillName
 from skills_catalog.provenance import classify_skill_audience
-from skills_catalog.provenance import classify_skill_origin
 from skills_catalog.provenance import classify_skill_source
 from skills_catalog.provenance import install_sources_from_lock_text
 from skills_catalog.provenance import merge_install_sources
@@ -35,8 +32,7 @@ from skills_catalog.provenance import merge_install_sources
 # Names another checkout; absent, the repo root is the current directory, which supervisord and the agents set to
 # the workspace checkout.
 REPO_ROOT_ENV: Final[str] = "SKILLS_CATALOG_REPO_ROOT"
-# A skill's page lists at most this many of its files, so a directory holding a vendored tree stays readable.
-MAX_LISTED_FILES: Final[int] = 200
+# Not the skill's own files: caches and installed dependencies, whose times say nothing about when it was edited.
 _SKIPPED_DIRECTORY_NAMES: Final[frozenset[str]] = frozenset({"__pycache__", "node_modules", ".venv"})
 
 
@@ -72,14 +68,10 @@ class SkillsCatalog(SkillsCatalogInterface):
             self.history_reader.read_names_with_unsaved_changes(),
             self._read_install_sources(),
         )
-        files = _list_skill_files(directory)
         return SkillDetail(
             summary=summary,
             directory=directory.absolute(),
-            skill_file_path=SKILLS_DIR / name / SKILL_FILENAME,
             content=skill_file.read_text(encoding="utf-8", errors="replace"),
-            files=files[:MAX_LISTED_FILES],
-            is_file_list_truncated=len(files) > MAX_LISTED_FILES,
         )
 
     def _summarize(
@@ -95,8 +87,7 @@ class SkillsCatalog(SkillsCatalogInterface):
         # The line-by-line frontmatter reader flattens the metadata map, so its author and audience are fields of their
         # own.
         author = document.fields.get("author", "")
-        facts = history.facts_by_skill_name.get(directory.name)
-        has_unsaved_changes = directory.name in unsaved_names
+        last_changed_at = history.last_changed_at_by_skill_name.get(directory.name)
         return SkillSummary(
             name=SkillName(directory.name),
             title=document.fields.get("name") or directory.name,
@@ -104,16 +95,13 @@ class SkillsCatalog(SkillsCatalogInterface):
             author=author,
             source=classify_skill_source(author, install_source is not None),
             audience=classify_skill_audience(document.fields.get("audience", "")),
-            origin=classify_skill_origin(facts, install_source is not None),
             install_source=install_source,
-            last_changed_at=facts.last_changed_at if facts is not None else None,
+            # A skill no commit has saved, or with edits none has, was last updated when its files were.
             last_updated_at=(
-                facts.last_changed_at
-                if facts is not None and not has_unsaved_changes
+                last_changed_at
+                if last_changed_at is not None and directory.name not in unsaved_names
                 else _newest_file_time(directory)
             ),
-            has_unsaved_changes=has_unsaved_changes,
-            problems=skill_shape_problems(skill_file),
         )
 
     def _read_install_sources(self) -> dict[str, InstallSource]:
@@ -126,17 +114,6 @@ class SkillsCatalog(SkillsCatalogInterface):
                 continue
             sources_by_lock_file[lock_file] = install_sources_from_lock_text(lock_text, lock_file)
         return merge_install_sources(sources_by_lock_file)
-
-
-def _list_skill_files(directory: Path) -> list[SkillFile]:
-    """Every file under the directory by relative path, skipping caches and installed dependencies."""
-    files: list[SkillFile] = []
-    for current_root, directory_names, file_names in os.walk(directory):
-        directory_names[:] = sorted(name for name in directory_names if name not in _SKIPPED_DIRECTORY_NAMES)
-        for file_name in sorted(file_names):
-            path = Path(current_root) / file_name
-            files.append(SkillFile(path=path.relative_to(directory), size_bytes=path.lstat().st_size))
-    return files
 
 
 def _newest_file_time(directory: Path) -> datetime:

@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from skills_catalog.catalog import MAX_LISTED_FILES
 from skills_catalog.catalog import SkillsCatalog
 from skills_catalog.catalog import build_catalog
 from skills_catalog.catalog import parse_skill_name
@@ -15,37 +14,16 @@ from skills_catalog.errors import SkillNotFoundError
 from skills_catalog.primitives import SKILLS_DIR
 from skills_catalog.primitives import SkillAudience
 from skills_catalog.primitives import SkillName
-from skills_catalog.primitives import SkillOrigin
 from skills_catalog.primitives import SkillSource
 from skills_catalog.testing import commit_all
 from skills_catalog.testing import init_workspace_repo
+from skills_catalog.testing import run_git
 from skills_catalog.testing import write_skill
 
 _INSTALL_LOCK = (
     '{"version": 1, "skills": {"web-design": {"source": "vercel-labs/agent-skills", "sourceType": "github",'
     ' "skillPath": "skills/web-design/SKILL.md", "computedHash": "abc"}}}'
 )
-
-
-def _origin_by_name(catalog: SkillsCatalog) -> dict[str, SkillOrigin]:
-    return {summary.name: summary.origin for summary in catalog.list_skills().skills}
-
-
-def test_the_listing_classifies_every_kind_of_skill(workspace_root: Path, catalog: SkillsCatalog) -> None:
-    write_skill(workspace_root, "assist", "Edited in this workspace.")
-    write_skill(workspace_root, "news-digest", "Summarize the news.")
-    write_skill(workspace_root, "web-design", "Design guidelines.")
-    (workspace_root / "skills-lock.json").write_text(_INSTALL_LOCK)
-    commit_all(workspace_root, "Workspace changes")
-    write_skill(workspace_root, "draft-skill", "Not saved yet.")
-
-    assert _origin_by_name(catalog) == {
-        "assist": SkillOrigin.CHANGED_HERE,
-        "draft-skill": SkillOrigin.NOT_SAVED,
-        "news-digest": SkillOrigin.MADE_HERE,
-        "notify-user": SkillOrigin.BUILT_IN,
-        "web-design": SkillOrigin.INSTALLED,
-    }
 
 
 def test_who_a_skill_comes_from_follows_its_author_then_the_lock_files(
@@ -95,14 +73,23 @@ def test_a_skill_is_for_people_unless_its_frontmatter_marks_it_as_the_system_s(
 def test_a_saved_skill_was_last_updated_by_its_newest_commit_and_an_edited_one_by_its_files(
     workspace_root: Path, catalog: SkillsCatalog
 ) -> None:
+    saved_at = run_git(workspace_root, "log", "-1", "--format=%cI").strip()
     edited_file = write_skill(workspace_root, "assist", "Edited, not saved.")
     os.utime(edited_file, (1_800_000_000, 1_800_000_000))
+    # A cache written later says nothing about when the skill was edited.
+    cache = edited_file.parent / "__pycache__" / "helper.cpython-312.pyc"
+    cache.parent.mkdir()
+    cache.write_bytes(b"\0")
+    os.utime(cache, (1_900_000_000, 1_900_000_000))
+    draft_file = write_skill(workspace_root, "draft-skill", "Never saved.")
+    for path in (draft_file, draft_file.parent):
+        os.utime(path, (1_700_000_000, 1_700_000_000))
 
     by_name: dict[str, SkillSummary] = {summary.name: summary for summary in catalog.list_skills().skills}
 
-    assert by_name["notify-user"].last_updated_at == by_name["notify-user"].last_changed_at
-    assert by_name["assist"].has_unsaved_changes is True
+    assert by_name["notify-user"].last_updated_at == datetime.fromisoformat(saved_at)
     assert by_name["assist"].last_updated_at == datetime.fromtimestamp(1_800_000_000, tz=UTC)
+    assert by_name["draft-skill"].last_updated_at == datetime.fromtimestamp(1_700_000_000, tz=UTC)
 
 
 def test_an_installed_skill_carries_its_lock_file_source(workspace_root: Path, catalog: SkillsCatalog) -> None:
@@ -128,17 +115,8 @@ def test_the_listing_reads_title_and_description_from_the_frontmatter(
 
     assert by_name["assist"].title == "assist"
     assert by_name["assist"].description == "The template's assist."
-    assert by_name["assist"].problems == ()
-    assert by_name["assist"].has_unsaved_changes is False
-    assert by_name["assist"].last_changed_at is not None
     assert by_name["no-frontmatter"].title == "no-frontmatter"
     assert by_name["no-frontmatter"].description == ""
-    assert by_name["no-frontmatter"].has_unsaved_changes is True
-    assert by_name["no-frontmatter"].last_changed_at is None
-    assert by_name["no-frontmatter"].problems == (
-        "frontmatter name None must equal the directory name 'no-frontmatter'",
-        "frontmatter needs a description",
-    )
 
 
 def test_the_listing_skips_directories_without_a_skill_file_and_hidden_ones(
@@ -149,7 +127,7 @@ def test_the_listing_skips_directories_without_a_skill_file_and_hidden_ones(
     write_skill(workspace_root, ".hidden", "Not a skill.")
     (workspace_root / SKILLS_DIR / "README.md").write_text("the skills folder\n")
 
-    assert set(_origin_by_name(catalog)) == {"assist", "notify-user"}
+    assert [summary.name for summary in catalog.list_skills().skills] == ["assist", "notify-user"]
 
 
 def test_the_listing_names_the_skills_folder_absolutely(workspace_root: Path, catalog: SkillsCatalog) -> None:
@@ -162,37 +140,14 @@ def test_a_workspace_without_a_skills_folder_lists_nothing(tmp_path: Path) -> No
     assert catalog.list_skills().skills == ()
 
 
-def test_a_skill_page_carries_its_file_exactly_and_its_files_without_caches(
-    workspace_root: Path, catalog: SkillsCatalog
-) -> None:
+def test_a_skill_page_carries_its_file_exactly_and_its_folder(workspace_root: Path, catalog: SkillsCatalog) -> None:
     skill_directory = workspace_root / SKILLS_DIR / "assist"
-    (skill_directory / "scripts").mkdir()
-    (skill_directory / "scripts" / "run.py").write_text("print('hi')\n")
-    (skill_directory / "scripts" / "__pycache__").mkdir()
-    (skill_directory / "scripts" / "__pycache__" / "run.cpython-312.pyc").write_bytes(b"\0")
 
     detail = catalog.describe_skill(SkillName("assist"))
 
+    assert detail.summary.name == "assist"
     assert detail.content == (skill_directory / "SKILL.md").read_text()
     assert detail.directory == skill_directory.absolute()
-    assert detail.skill_file_path == Path(".agents/skills/assist/SKILL.md")
-    assert [(file.path, file.size_bytes) for file in detail.files] == [
-        (Path("SKILL.md"), len(detail.content.encode())),
-        (Path("scripts/run.py"), len("print('hi')\n")),
-    ]
-    assert detail.is_file_list_truncated is False
-
-
-def test_a_skill_page_lists_at_most_the_file_limit(workspace_root: Path, catalog: SkillsCatalog) -> None:
-    data_directory = workspace_root / SKILLS_DIR / "assist" / "data"
-    data_directory.mkdir()
-    for idx in range(MAX_LISTED_FILES):
-        (data_directory / f"{idx:04d}.txt").write_text("x")
-
-    detail = catalog.describe_skill(SkillName("assist"))
-
-    assert len(detail.files) == MAX_LISTED_FILES
-    assert detail.is_file_list_truncated is True
 
 
 def test_a_missing_skill_is_not_found(catalog: SkillsCatalog) -> None:
@@ -214,9 +169,14 @@ def test_the_repo_root_defaults_to_the_current_directory() -> None:
     assert repo_root_from_environment({"SKILLS_CATALOG_REPO_ROOT": "/elsewhere"}) == Path("/elsewhere")
 
 
-def test_a_broken_link_in_a_skill_folder_is_listed_not_fatal(workspace_root: Path, catalog: SkillsCatalog) -> None:
-    (workspace_root / SKILLS_DIR / "assist" / "gone.md").symlink_to(workspace_root / "no-such-target.md")
+def test_a_broken_link_in_an_edited_skill_s_folder_does_not_stop_the_listing(
+    workspace_root: Path, catalog: SkillsCatalog
+) -> None:
+    skill_directory = workspace_root / SKILLS_DIR / "assist"
+    (skill_directory / "gone.md").symlink_to(workspace_root / "no-such-target.md")
+    for path in (skill_directory / "gone.md", skill_directory / "SKILL.md", skill_directory):
+        os.utime(path, (1_800_000_000, 1_800_000_000), follow_symlinks=False)
 
-    detail = catalog.describe_skill(SkillName("assist"))
+    by_name: dict[str, SkillSummary] = {summary.name: summary for summary in catalog.list_skills().skills}
 
-    assert Path("gone.md") in [file.path for file in detail.files]
+    assert by_name["assist"].last_updated_at == datetime.fromtimestamp(1_800_000_000, tz=UTC)

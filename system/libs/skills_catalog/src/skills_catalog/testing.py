@@ -1,11 +1,8 @@
 import subprocess
 from pathlib import Path
-from typing import Final
 
 from skills_catalog.primitives import SKILLS_DIR
 from skills_catalog.primitives import SKILL_FILENAME
-
-TEMPLATE_BRANCH: Final[str] = "template-upstream"
 
 
 def run_git(repo_root: Path, *arguments: str) -> str:
@@ -45,14 +42,3 @@ def init_workspace_repo(repo_root: Path, template_skill_names: tuple[str, ...]) 
         write_skill(repo_root, name, f"The template's {name}.")
     commit_all(repo_root, "Initial template")
     return repo_root
-
-
-def merge_template_update(repo_root: Path, skill_names: tuple[str, ...], message: str) -> None:
-    """Add the named skills on an upstream line off the root commit, then merge it as update-self does."""
-    root_commit = run_git(repo_root, "rev-list", "--max-parents=0", "HEAD").strip()
-    run_git(repo_root, "checkout", "-q", "-B", TEMPLATE_BRANCH, root_commit)
-    for name in skill_names:
-        write_skill(repo_root, name, f"The template's newer {name}.")
-    commit_all(repo_root, "Upstream template change")
-    run_git(repo_root, "checkout", "-q", "main")
-    run_git(repo_root, "merge", "-q", "--no-ff", "-m", message, TEMPLATE_BRANCH)

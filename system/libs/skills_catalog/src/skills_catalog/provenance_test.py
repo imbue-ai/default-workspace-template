@@ -5,11 +5,12 @@ from pathlib import Path
 import pytest
 
 from skills_catalog.data_types import InstallSource
-from skills_catalog.data_types import SkillCommitFacts
-from skills_catalog.primitives import SkillOrigin
+from skills_catalog.primitives import SkillAudience
+from skills_catalog.primitives import SkillSource
 from skills_catalog.provenance import LOG_FIELD_SEPARATOR
 from skills_catalog.provenance import LOG_RECORD_SEPARATOR
-from skills_catalog.provenance import classify_skill_origin
+from skills_catalog.provenance import classify_skill_audience
+from skills_catalog.provenance import classify_skill_source
 from skills_catalog.provenance import history_from_git_log
 from skills_catalog.provenance import install_sources_from_lock_text
 from skills_catalog.provenance import merge_install_sources
@@ -40,36 +41,24 @@ def _log_record(commit_hash: str, committed_at: str, paths: tuple[str, ...]) -> 
     return f"{LOG_RECORD_SEPARATOR}{commit_hash}{LOG_FIELD_SEPARATOR}{committed_at}\n\n" + "\n".join(paths) + "\n"
 
 
-def test_history_takes_the_newest_commit_as_last_change_and_the_oldest_as_the_addition() -> None:
+def test_history_dates_each_skill_by_the_newest_commit_touching_it() -> None:
     log_output = (
         _log_record("c3", "2026-10-03T00:00:00+00:00", (".agents/skills/assist/SKILL.md",))
         + _log_record("c2", "2026-10-02T00:00:00+00:00", (".agents/skills/report/SKILL.md",))
         + _log_record("c1", "2026-10-01T00:00:00+00:00", (".agents/skills/assist/SKILL.md", ".agents/skills/x/a.py"))
     )
 
-    history = history_from_git_log(log_output, template_commits=frozenset({"c1"}))
+    history = history_from_git_log(log_output)
 
-    assert history.facts_by_skill_name == {
-        "assist": SkillCommitFacts(
-            is_added_by_template=True,
-            is_last_changed_by_template=False,
-            last_changed_at=datetime(2026, 10, 3, tzinfo=timezone.utc),
-        ),
-        "report": SkillCommitFacts(
-            is_added_by_template=False,
-            is_last_changed_by_template=False,
-            last_changed_at=datetime(2026, 10, 2, tzinfo=timezone.utc),
-        ),
-        "x": SkillCommitFacts(
-            is_added_by_template=True,
-            is_last_changed_by_template=True,
-            last_changed_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
-        ),
+    assert history.last_changed_at_by_skill_name == {
+        "assist": datetime(2026, 10, 3, tzinfo=timezone.utc),
+        "report": datetime(2026, 10, 2, tzinfo=timezone.utc),
+        "x": datetime(2026, 10, 1, tzinfo=timezone.utc),
     }
 
 
 def test_history_of_an_empty_log_has_no_skills() -> None:
-    assert history_from_git_log("", template_commits=frozenset()).facts_by_skill_name == {}
+    assert history_from_git_log("").last_changed_at_by_skill_name == {}
 
 
 def test_unsaved_changes_name_every_skill_a_status_entry_touches_including_a_rename_origin() -> None:
@@ -126,27 +115,31 @@ def test_the_first_lock_file_listing_a_skill_wins() -> None:
     assert merged["x"].lock_file == _ROOT_LOCK
 
 
-def _facts(is_added_by_template: bool, is_last_changed_by_template: bool) -> SkillCommitFacts:
-    return SkillCommitFacts(
-        is_added_by_template=is_added_by_template,
-        is_last_changed_by_template=is_last_changed_by_template,
-        last_changed_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
-    )
+@pytest.mark.parametrize(
+    ("author", "is_recorded_in_lock_file", "expected"),
+    [
+        ("imbue", False, SkillSource.STUDIO),
+        (" Imbue ", True, SkillSource.STUDIO),
+        ("vercel", True, SkillSource.INSTALLED),
+        ("", True, SkillSource.INSTALLED),
+        ("user", False, SkillSource.WORKSPACE),
+        ("", False, SkillSource.WORKSPACE),
+    ],
+)
+def test_a_skill_comes_from_studio_by_its_author_else_from_a_lock_file_or_the_workspace(
+    author: str, is_recorded_in_lock_file: bool, expected: SkillSource
+) -> None:
+    assert classify_skill_source(author, is_recorded_in_lock_file) == expected
 
 
 @pytest.mark.parametrize(
-    ("facts", "is_recorded_in_lock_file", "expected"),
+    ("audience", "expected"),
     [
-        (None, False, SkillOrigin.NOT_SAVED),
-        (None, True, SkillOrigin.NOT_SAVED),
-        (_facts(True, True), False, SkillOrigin.BUILT_IN),
-        (_facts(True, True), True, SkillOrigin.BUILT_IN),
-        (_facts(True, False), False, SkillOrigin.CHANGED_HERE),
-        (_facts(False, False), True, SkillOrigin.INSTALLED),
-        (_facts(False, False), False, SkillOrigin.MADE_HERE),
+        ("system", SkillAudience.SYSTEM),
+        (" System ", SkillAudience.SYSTEM),
+        ("people", SkillAudience.PEOPLE),
+        ("", SkillAudience.PEOPLE),
     ],
 )
-def test_classify_skill_origin(
-    facts: SkillCommitFacts | None, is_recorded_in_lock_file: bool, expected: SkillOrigin
-) -> None:
-    assert classify_skill_origin(facts, is_recorded_in_lock_file) == expected
+def test_a_skill_is_for_people_unless_its_audience_is_system(audience: str, expected: SkillAudience) -> None:
+    assert classify_skill_audience(audience) == expected

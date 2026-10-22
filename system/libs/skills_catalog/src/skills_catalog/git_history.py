@@ -18,8 +18,6 @@ from skills_catalog.provenance import skill_names_with_unsaved_changes
 GIT_TIMEOUT_SECONDS: Final[float] = 30.0
 # A git read slower than this still answers, but is logged so a slowing checkout is noticed.
 GIT_SLOW_WARNING_SECONDS: Final[float] = 5.0
-# The update-self skill merges the upstream template with a commit subject starting this.
-UPDATE_SELF_SUBJECT_PREFIX: Final[str] = "update-self:"
 
 
 class GitSkillHistoryReader(SkillHistoryReaderInterface):
@@ -34,7 +32,7 @@ class GitSkillHistoryReader(SkillHistoryReaderInterface):
         if self.cached_history is not None and self.cached_head == head:
             return self.cached_history
         log_output = self._run_git(("log", f"--format={LOG_FORMAT}", "--name-only", head, "--", SKILLS_DIR.as_posix()))
-        history = history_from_git_log(log_output, self._read_template_commits(head))
+        history = history_from_git_log(log_output)
         self.cached_head = head
         self.cached_history = history
         return history
@@ -44,21 +42,6 @@ class GitSkillHistoryReader(SkillHistoryReaderInterface):
             ("status", "--porcelain", "-z", "--untracked-files=all", "--", SKILLS_DIR.as_posix())
         )
         return skill_names_with_unsaved_changes(status_output)
-
-    def _read_template_commits(self, head: str) -> frozenset[str]:
-        """The commits that came from the template: the root commit, and the upstream side of every update-self merge.
-
-        Only a merge's second parent is followed: its first parent is the workspace's own line, whose commits
-        were made here.
-        """
-        root_commits = self._run_git(("rev-list", "--max-parents=0", head)).split()
-        update_merges = self._run_git(
-            ("log", "--merges", f"--grep=^{UPDATE_SELF_SUBJECT_PREFIX}", "--format=%H", head)
-        ).split()
-        upstream_commits = (
-            self._run_git(("rev-list", *(f"{merge}^2" for merge in update_merges))).split() if update_merges else []
-        )
-        return frozenset(root_commits) | frozenset(upstream_commits)
 
     def _run_git(self, arguments: Sequence[str]) -> str:
         started_at = time.monotonic()

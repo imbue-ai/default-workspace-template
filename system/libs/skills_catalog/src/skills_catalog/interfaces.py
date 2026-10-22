@@ -13,7 +13,7 @@ class SkillHistoryReaderInterface(MutableModel, ABC):
 
     @abstractmethod
     def read_history(self) -> SkillsHistory:
-        """The commit facts per skill directory; raises GitHistoryError when the history cannot be read."""
+        """When a commit last changed each skill directory; raises GitHistoryError when the history cannot be read."""
 
     @abstractmethod
     def read_names_with_unsaved_changes(self) -> frozenset[str]:
@@ -29,4 +29,4 @@ class SkillsCatalogInterface(MutableModel, ABC):
 
     @abstractmethod
     def describe_skill(self, name: SkillName) -> SkillDetail:
-        """One skill with its SKILL.md and files; raises SkillNotFoundError when there is no such skill."""
+        """One skill with its SKILL.md as written; raises SkillNotFoundError when there is no such skill."""

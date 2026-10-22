@@ -30,18 +30,22 @@ def test_every_page_path_serves_the_one_document_that_connects_to_the_shell(clie
         assert "script-src 'self' 'sha256-" in response.headers["Content-Security-Policy"]
 
 
-def test_the_listing_answers_every_skill_with_its_origin(workspace_root: Path, client: FlaskClient) -> None:
-    write_skill(workspace_root, "news-digest", "Summarize the news.")
+def test_the_listing_answers_every_skill_with_who_it_comes_from(workspace_root: Path, client: FlaskClient) -> None:
+    write_skill(workspace_root, "news-digest", "Summarize the news.", author="user")
+    write_skill(workspace_root, "handoff-summary", "Hand a chat over.", author="imbue", audience="system")
     commit_all(workspace_root, "Crystallize news-digest")
 
     response = client.get("/api/skills")
 
     assert response.headers["Cache-Control"] == "no-store"
     assert response.get_json()["skills_directory"] == str((workspace_root / ".agents/skills").absolute())
-    assert [(skill["name"], skill["origin"]) for skill in response.get_json()["skills"]] == [
-        ("assist", "BUILT_IN"),
-        ("news-digest", "MADE_HERE"),
-        ("notify-user", "BUILT_IN"),
+    assert [
+        (skill["name"], skill["author"], skill["source"], skill["audience"]) for skill in response.get_json()["skills"]
+    ] == [
+        ("assist", "", "WORKSPACE", "PEOPLE"),
+        ("handoff-summary", "imbue", "STUDIO", "SYSTEM"),
+        ("news-digest", "user", "WORKSPACE", "PEOPLE"),
+        ("notify-user", "", "WORKSPACE", "PEOPLE"),
     ]
 
 
@@ -52,9 +56,8 @@ def test_a_skill_written_after_the_app_started_is_listed_on_the_next_request(
 
     write_skill(workspace_root, "draft-skill", "Not saved yet.")
 
-    by_name = {skill["name"]: skill for skill in client.get("/api/skills").get_json()["skills"]}
-    assert by_name["draft-skill"]["origin"] == "NOT_SAVED"
-    assert by_name["draft-skill"]["has_unsaved_changes"] is True
+    names = [skill["name"] for skill in client.get("/api/skills").get_json()["skills"]]
+    assert names == ["assist", "draft-skill", "notify-user"]
 
 
 def test_a_skill_page_answers_its_file_as_written(workspace_root: Path, client: FlaskClient) -> None:
@@ -64,9 +67,7 @@ def test_a_skill_page_answers_its_file_as_written(workspace_root: Path, client: 
     assert response.status_code == 200
     assert detail["summary"]["description"] == "The template's assist."
     assert detail["directory"] == str((workspace_root / ".agents/skills/assist").absolute())
-    assert detail["skill_file_path"] == ".agents/skills/assist/SKILL.md"
     assert detail["content"] == (workspace_root / ".agents/skills/assist/SKILL.md").read_text()
-    assert [file["path"] for file in detail["files"]] == ["SKILL.md"]
 
 
 def test_a_skill_s_instructions_are_its_body_rendered_without_the_frontmatter(

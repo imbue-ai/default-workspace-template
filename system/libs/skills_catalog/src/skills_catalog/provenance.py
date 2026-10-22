@@ -1,6 +1,5 @@
 import json
 from collections.abc import Mapping
-from collections.abc import Set
 from datetime import datetime
 from pathlib import Path
 from typing import Final
@@ -10,13 +9,11 @@ from pydantic import ValidationError
 
 from imbue.imbue_common.pure import pure
 from skills_catalog.data_types import InstallSource
-from skills_catalog.data_types import SkillCommitFacts
 from skills_catalog.data_types import SkillsHistory
 from skills_catalog.primitives import SKILLS_DIR
 from skills_catalog.primitives import STUDIO_AUTHOR
 from skills_catalog.primitives import SYSTEM_AUDIENCE
 from skills_catalog.primitives import SkillAudience
-from skills_catalog.primitives import SkillOrigin
 from skills_catalog.primitives import SkillSource
 
 # Separators for the one `git log` read of the skills directory: a record per commit, then the hash and date.
@@ -38,29 +35,18 @@ def skill_name_of_path(repo_relative_path: str) -> str | None:
 
 
 @pure
-def history_from_git_log(log_output: str, template_commits: Set[str]) -> SkillsHistory:
-    """The facts per skill from `git log --format=LOG_FORMAT --name-only` output, newest commit first."""
-    newest_by_name: dict[str, tuple[str, datetime]] = {}
-    oldest_commit_by_name: dict[str, str] = {}
+def history_from_git_log(log_output: str) -> SkillsHistory:
+    """When a commit last changed each skill, from `git log --format=LOG_FORMAT --name-only` output, newest first."""
+    last_changed_at_by_skill_name: dict[str, datetime] = {}
     for record in log_output.split(LOG_RECORD_SEPARATOR):
         header, _, body = record.strip().partition("\n")
-        commit_hash, separator, committed_at = header.partition(LOG_FIELD_SEPARATOR)
+        _, separator, committed_at = header.partition(LOG_FIELD_SEPARATOR)
         if not separator:
             continue
         names_or_none = {skill_name_of_path(line.strip()) for line in body.splitlines()}
         for name in (candidate for candidate in names_or_none if candidate is not None):
-            newest_by_name.setdefault(name, (commit_hash, datetime.fromisoformat(committed_at)))
-            oldest_commit_by_name[name] = commit_hash
-    return SkillsHistory(
-        facts_by_skill_name={
-            name: SkillCommitFacts(
-                is_added_by_template=oldest_commit_by_name[name] in template_commits,
-                is_last_changed_by_template=newest_commit in template_commits,
-                last_changed_at=newest_at,
-            )
-            for name, (newest_commit, newest_at) in newest_by_name.items()
-        }
-    )
+            last_changed_at_by_skill_name.setdefault(name, datetime.fromisoformat(committed_at))
+    return SkillsHistory(last_changed_at_by_skill_name=last_changed_at_by_skill_name)
 
 
 @pure
@@ -120,15 +106,6 @@ def merge_install_sources(
         for name, source in sources.items():
             merged.setdefault(name, source)
     return merged
-
-
-@pure
-def classify_skill_origin(facts: SkillCommitFacts | None, is_recorded_in_lock_file: bool) -> SkillOrigin:
-    if facts is None:
-        return SkillOrigin.NOT_SAVED
-    if facts.is_added_by_template:
-        return SkillOrigin.BUILT_IN if facts.is_last_changed_by_template else SkillOrigin.CHANGED_HERE
-    return SkillOrigin.INSTALLED if is_recorded_in_lock_file else SkillOrigin.MADE_HERE
 
 
 @pure

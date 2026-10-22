@@ -29,21 +29,6 @@ class SkillName(NonEmptyStr):
         return super().__new__(cls, value)
 
 
-class SkillOrigin(UpperCaseStrEnum):
-    """Where a skill came from, judged from the workspace's git history and the skills lock files."""
-
-    # Arrived with the template (its first commit or an update-self merge) and unchanged here since.
-    BUILT_IN = auto()
-    # Arrived with the template, then changed in this workspace.
-    CHANGED_HERE = auto()
-    # Added in this workspace from another repository, as a skills lock file records.
-    INSTALLED = auto()
-    # Written in this workspace.
-    MADE_HERE = auto()
-    # In the folder, but no commit has saved it yet.
-    NOT_SAVED = auto()
-
-
 class SkillSource(UpperCaseStrEnum):
     """Who a skill comes from, judged from its frontmatter author and the skills lock files."""
 
