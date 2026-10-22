@@ -50,6 +50,14 @@
   .sidebar { position: relative; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--c-border); background: var(--c-surface); }
   /* Files' sidebar edge: an invisible strip astride the border that drags the width, a double-click restoring it. */
   .resize-handle { position: absolute; top: 0; bottom: 0; right: -4px; z-index: 1; width: 8px; cursor: col-resize; touch-action: none; }
+  /* The chat list's edge (apps/chat ChatRail.ts): an accent line shows where to drag on hover, focus and mid-drag. */
+  .resize-handle::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: var(--c-accent); opacity: 0; transition: opacity var(--dur-base); }
+  .resize-handle:hover::after, .resize-handle:focus-visible::after, .resize-handle.dragging::after { opacity: 1; }
+  .resize-handle:focus-visible { outline: none; }
+  .empty-search { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 12px 8px; }
+  .empty-search p { margin: 0; color: var(--c-text-secondary); overflow-wrap: anywhere; }
+  .clear-search { padding: 3px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); color: var(--c-text-primary); font: inherit; font-size: var(--font-size-row); cursor: pointer; }
+  .clear-search:hover { background: var(--c-fill-hover); }
   .sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 16px 16px 10px; }
   h1 { font-size: var(--font-size-heading); font-weight: var(--weight-semibold); line-height: 1.3; margin: 0; overflow-wrap: anywhere; }
   /* The workspace's text field (workspace_ui components/Input.ts) with a glyph inside, as Getting Started's search. */
@@ -169,7 +177,7 @@
       <input type="search" id="search" placeholder="Search skills" aria-label="Search skills">
     </div>
     <div class="skill-list" id="skill-list"><p class="empty">Loading...</p></div>
-    <div class="resize-handle" id="resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
+    <div class="resize-handle" id="resize-handle" role="separator" tabindex="0" aria-orientation="vertical" aria-label="Resize sidebar" aria-valuemin="220" aria-valuemax="480"></div>
   </nav>
   <main class="reader" id="reader" tabindex="-1"></main>
 </div>
@@ -351,8 +359,19 @@
         );
         return element("section", {}, [element("h2", {}, [toggle]), ...(isExpanded ? [element("ul", {}, rows)] : [])]);
       });
-    listNode.replaceChildren(...(sections.length ? sections : [element("p", { class: "empty", text: "No skills match." })]));
+    listNode.replaceChildren(...(sections.length ? sections : [emptySearch(search.value.trim())]));
     markSelected();
+  }
+
+  // A search that finds nothing says what was searched for and offers the way back to the whole list.
+  function emptySearch(query) {
+    const clear = element("button", { type: "button", class: "clear-search", title: "Clear search (Esc)", text: "Clear search" });
+    clear.addEventListener("click", () => {
+      search.value = "";
+      renderList();
+      search.focus();
+    });
+    return element("div", { class: "empty-search" }, [element("p", { text: `No skills match “${query}”.` }), clear]);
   }
 
   function markSelected() {
@@ -491,6 +510,7 @@
   function setSidebarWidth(width, persist) {
     const clamped = Math.round(Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width)));
     root.style.setProperty("--sidebar-width", `${clamped}px`);
+    document.getElementById("resize-handle").setAttribute("aria-valuenow", String(clamped));
     if (persist) writeStored(SIDEBAR_WIDTH_KEY, String(clamped));
   }
 
@@ -498,8 +518,10 @@
   setSidebarWidth(Number.isFinite(storedWidth) ? storedWidth : DEFAULT_SIDEBAR_WIDTH, false);
   const resizeHandle = document.getElementById("resize-handle");
   resizeHandle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
     event.preventDefault();
     resizeHandle.setPointerCapture(event.pointerId);
+    resizeHandle.classList.add("dragging");
     const startX = event.clientX;
     const startWidth = document.querySelector(".sidebar").getBoundingClientRect().width;
     const widthAt = (moveEvent) => startWidth + moveEvent.clientX - startX;
@@ -507,12 +529,21 @@
     const onUp = (upEvent) => {
       resizeHandle.removeEventListener("pointermove", onMove);
       resizeHandle.removeEventListener("pointerup", onUp);
+      resizeHandle.classList.remove("dragging");
       setSidebarWidth(widthAt(upEvent), true);
     };
     resizeHandle.addEventListener("pointermove", onMove);
     resizeHandle.addEventListener("pointerup", onUp);
   });
   resizeHandle.addEventListener("dblclick", () => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH, true));
+  // Focused, the arrow keys move the edge, as the chat list's do.
+  const RESIZE_KEY_STEP_PX = 16;
+  resizeHandle.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const width = document.querySelector(".sidebar").getBoundingClientRect().width;
+    setSidebarWidth(width + (event.key === "ArrowRight" ? RESIZE_KEY_STEP_PX : -RESIZE_KEY_STEP_PX), true);
+  });
   window.addEventListener("popstate", route);
 
   // Coming back to the window after editing a skill in Files shows the edit.
