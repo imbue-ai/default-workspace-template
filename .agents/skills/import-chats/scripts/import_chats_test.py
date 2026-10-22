@@ -293,11 +293,11 @@ def test_adding_sources_to_an_empty_root_checks_the_config_then_turns_their_sear
 
     assert added == [CLAUDE, CHATGPT]
     config_path = workspace.datalib.config_path
+    candidate = str(config_path.with_name("config.toml.import-chats"))
     check, *_ = datalib.commands
-    assert check[1:] == [
-        "--check",
-        str(config_path.with_name("config.toml.import-chats")),
-    ]
+    assert check[1:] == ["--check", candidate]
+    # Turned off in the checked candidate, so the config in place never holds the steps turned on.
+    assert {c[2] for c in datalib.commands if c[1] == "turn-off"} == {candidate}
     assert datalib.turned_off == [
         "claude_chats/render_markdown",
         "claude_chats/keyword_index",
@@ -395,7 +395,7 @@ def test_a_config_datalib_refuses_is_never_put_in_place(
 @pytest.mark.parametrize(
     "previous", [None, "# mine\n"], ids=["no-config-before", "a-config-before"]
 )
-def test_a_search_step_that_cannot_be_turned_off_puts_the_config_back(
+def test_a_search_step_that_cannot_be_turned_off_leaves_the_config_as_it_was(
     workspace: _SyncWorkspace, previous: str | None
 ) -> None:
     config_path = workspace.datalib.config_path
@@ -411,6 +411,7 @@ def test_a_search_step_that_cannot_be_turned_off_puts_the_config_back(
         import_chats.ensure_sources(workspace.datalib, [CLAUDE], datalib)
 
     assert (config_path.read_text() if config_path.exists() else None) == previous
+    assert not config_path.with_name("config.toml.import-chats").exists()
 
 
 # --- datalib's and latchkey's answers --------------------------------------------------------------------------------

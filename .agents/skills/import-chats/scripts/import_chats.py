@@ -24,8 +24,8 @@ A sync of a large account takes a while: run it through ``system/scripts/run_in_
 The store is the datalib skill's (``data/.skills/datalib/``), shared with anything else the user
 mirrors there. A source this script adds gets an ingest step (the download into the raw store
 ``<group>/ingest/entities.doltlite_db``), a ``render_markdown`` step and a ``keyword_index`` step,
-and the last two are turned off as soon as they are added: a first import only downloads, which is
-what keeps it quick and light. Turning them on, which the skill does only when the user asks for
+and the last two are turned off before the config holding them is put in place: a first import only
+downloads, which is what keeps it quick and light. Turning them on, which the skill does only when the user asks for
 search over their chats, is ``datalib-dag turn-on``. A source already in the config is never
 rewritten, so whatever was turned on or changed there stays.
 
@@ -378,9 +378,8 @@ def ensure_sources(
     """Add each of ``named`` that the config lacks, with its search steps turned off, and return the ones added.
 
     The rest of the config, other sources' and anything already there for these, is left as it is. The new config
-    is checked with ``datalib-dag --check`` before it replaces the old one (a loop running on this root re-reads
-    it), and put back the way it was if a search step cannot be turned off, so a failed add never leaves a source
-    that would render on its first sync."""
+    replaces the old one (a loop running on this root re-reads it) only once ``datalib-dag --check`` accepts it and
+    the new search steps are off, so no add, failed or cut short, leaves a source that would render on its sync."""
     config_path = datalib.config_path
     try:
         previous = config_path.read_text(encoding="utf-8")
@@ -399,25 +398,23 @@ def ensure_sources(
         return []
     stanzas = "\n".join(source_stanza(source) for source in added)
     existing = (previous or "").rstrip("\n")
-    _put_checked_config(
-        datalib, f"{existing}\n\n{stanzas}" if existing else stanzas, run
+    _put_config_with_search_off(
+        datalib, f"{existing}\n\n{stanzas}" if existing else stanzas, added, run
     )
-    try:
-        _turn_off_search(datalib, added, run)
-    except ImportChatsError:
-        if previous is None:
-            config_path.unlink(missing_ok=True)
-        else:
-            _write_text_atomic(config_path, previous)
-        raise
     return added
 
 
-def _put_checked_config(
-    datalib: Datalib, text: str, run: Callable[..., subprocess.CompletedProcess]
+def _put_config_with_search_off(
+    datalib: Datalib,
+    text: str,
+    added: Sequence[ChatSource],
+    run: Callable[..., subprocess.CompletedProcess],
 ) -> None:
-    """Replace the config with ``text`` once ``datalib-dag --check`` accepts it; a refused one is never put in
-    place."""
+    """Replace the config with ``text`` once ``datalib-dag --check`` accepts it and ``added``'s search steps are
+    turned off; a refused one is never put in place.
+
+    The steps are turned off against the candidate file, which sits in the data root beside the config (datalib
+    takes the root from the file's directory), so the config in place never holds a source whose search is on."""
     config_path = datalib.config_path
     candidate = config_path.with_name(f"{config_path.name}.import-chats")
     candidate.parent.mkdir(parents=True, exist_ok=True)
@@ -429,6 +426,7 @@ def _put_checked_config(
             raise ImportChatsError(
                 f"datalib refused the config with the chat sources added:\n{said}"
             )
+        _turn_off_search(datalib, candidate, added, run)
         os.replace(candidate, config_path)
     finally:
         candidate.unlink(missing_ok=True)
@@ -436,10 +434,12 @@ def _put_checked_config(
 
 def _turn_off_search(
     datalib: Datalib,
+    config_path: Path,
     added: Sequence[ChatSource],
     run: Callable[..., subprocess.CompletedProcess],
 ) -> None:
-    """Turn off each of ``added``'s search steps, raising at the first one datalib refuses."""
+    """Turn off each of ``added``'s search steps, named in ``config_path``, raising at the first one datalib
+    refuses."""
     for source in added:
         for function in SEARCH_FUNCTIONS:
             step = f"{source.group}/{function}"
@@ -448,7 +448,7 @@ def _turn_off_search(
                 run,
                 "datalib-dag",
                 "turn-off",
-                str(datalib.config_path),
+                str(config_path),
                 step,
                 "--by",
                 SYNC_REQUESTER,
