@@ -544,6 +544,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         for entry in by_name["chat"].launch_paths
     ] == [
         ("root", "/", "GET"),
+        ("main", "/api/chats/intake", "POST"),
         ("new", "/api/chats/intake", "POST"),
         ("send", "/api/chats/intake", "POST"),
         ("draft", "/api/chats/intake", "POST"),

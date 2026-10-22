@@ -19,11 +19,12 @@ observe`, its own supervised service) writes, and serves:
 
 - `GET /`: the chat root, the built `root.html`: the chat list down the left
   (`frontend/src/root/`, grouped by the chat that started each helper and
-  ordered by recency, with rename, stop and restart, and delete) beside an inner
+  ordered by recency under the main chat, with rename, make main, stop and restart, and delete) beside an inner
   frame of the selected chat's page. The selection is the `chat` query parameter,
   so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
-  chat's title. Loading the page sends and writes nothing. With nothing selected it
-  shows the most recent chat, and with no chats one awaiting its first send
+  chat's title. Loading the page sends and writes nothing. With nothing selected
+  (opened bare, or after the chat on screen is deleted) it shows the main chat
+  (below), else the most recent chat, and with no chats one awaiting its first send
   (`POST /api/chats/awaiting`, held in memory until that send launches it).
   With nothing signed in, a chat awaiting its first send shows "Connect an AI
   provider to start chatting." and a "Choose a provider" button above its
@@ -73,7 +74,7 @@ observe`, its own supervised service) writes, and serves:
   no pty is registered) in meta tags. Every chat page reports its path and the
   chat's title to the shell.
 - Every `/api/chats/<chat-id>/...` route (events, streams, sends, model choice,
-  the queue actions, presence and watchers, destroy, rename, start, stop; the subagent reads under
+  the queue actions, presence and watchers, destroy, rename, make-main, start, stop; the subagent reads under
   `/api/chats/<chat-id>/agents/<agent-id>/subagents/<session-id>/`),
   `/api/chats/create`, `/api/chats/awaiting` (the chat an empty chat list opens on), `/api/chats`,
   `/api/harnesses`, `/api/uploads`,
@@ -332,8 +333,9 @@ seconds is retried rather than mistaken for an unknown chat. See `docs/system/bl
 
 The intake route is how a text enters a chat from outside a chat page
 (`docs/system/blueprint/post-launch-paths/`): `POST /api/chats/intake` takes the
-text, how the receiving chat is chosen (`target`: `new_chat`, `current_chat` from
-the `window_path` the text was typed into, else the most recently messaged chat;
+text, how the receiving chat is chosen (`target`: `new_chat`, `main_chat` (the
+main chat, else the most recently messaged chat, else a new one; the desktop launcher's Enter), `current_chat` from
+the `window_path` the text was typed into, else the main chat, else the most recently messaged chat;
 `chat_selector`, the one chat there is or the user's pick; or `chat` with a
 `chat_id`), and whether the text is sent or drafted (`is_draft`), plus the
 sender's `client_id` and `desktop_id` for the shell's activity log. The chat's
@@ -411,6 +413,28 @@ out as typed, since a harness runs a command only when the slash leads the
 message. The seed survives a restart of this app because
 the record does; discarding the chat before its first send drops both.
 
+The workspace has one **main chat**, where a text with no chat of its own goes
+(`main_chat.py`). It is a pointer, like a star on one chat, kept in
+`data/.apps/chat/main_chat.json`; no chat is special in itself, so a handoff, a
+crash, or a relaunch leaves it where it is. The seeded chat takes it first, named
+"Main" (`MAIN_CHAT_NAME`) whatever title the Mind app sent, and a chat's "Make main chat" menu row (`POST
+/api/chats/<chat-id>/make-main`, 409 for a helper another agent started) moves it there.
+When the chat it names is deleted, another takes it at once: the chat
+messaged most recently, never a helper another agent started; with no chat left, the
+chat the list opens (one awaiting its first send) takes it. Every `chats_updated` push
+and `GET /api/chats` carry its id as `main_chat_id`. The chat list leads with it, alone
+above a rule and in a medium weight, its helpers right under the rule; the root
+shows it when nothing is selected, including after the chat on screen is deleted; a text
+sent from the desktop launcher with Enter (the `main` launch path, a `main_chat` intake) lands in it;
+and a `current_chat` intake from a window showing no chat lands in it. It can be renamed and
+deleted like any chat, even before its first message: a chat that is not an agent yet takes a
+rename as the name its first agent will be created with (a seeded one keeps it on its record as
+`chosen_name`, so a restart keeps it) and a delete discards it, seed and all, refusing either only
+while its create runs. It never sleeps: whenever a chat-list push finds its agent stopped (a stop
+from elsewhere, a routine, the memory guard shedding it), the app starts it again with
+`mngr start --no-resume`, trying again no sooner than a minute after a start that did not
+take, and its menu offers no stop or restart.
+
 A chat that starts with no message sends nothing and waits for the user's
 first one. Fast mode is a per-chat setting with three modes
 (`chat_fast_mode.py`, kept in the chat's folder as `fast_mode.json`,
@@ -468,8 +492,9 @@ back. The name is set once and does not follow the chat as its topic drifts. An
 opening with no clear subject ("hi") leaves "Chat N" and the next message is
 tried, up to three messages. A title another chat already has gets the first
 free number after it ("Simple map app 2"), up to 9. Only a chat still wearing a
-name nobody chose is renamed: exactly "Chat N", or a seeded chat's seed title
-(the Mind app's "Welcome"), named from the first message the user sends in it. A
+name nobody chose is renamed: exactly "Chat N", or a seed title other than
+"Main" (an older Mind app's "Welcome"), named from the first message the
+user sends in it. A
 name the user or an agent chose is left alone. What has been tried is kept in
 `naming.json` in the chat's folder, so a restart neither renames a named chat
 nor retries past the limit. A harness with no `OneShotCompletion` (Pi,

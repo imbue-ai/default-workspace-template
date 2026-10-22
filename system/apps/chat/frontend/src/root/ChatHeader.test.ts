@@ -10,6 +10,7 @@ const verbs = vi.hoisted(() => ({
   stopChat: vi.fn(async (_chatId: string) => undefined),
   startChat: vi.fn(async (_chatId: string) => undefined),
   renameChat: vi.fn(async (_chatId: string, _title: string) => undefined),
+  makeMainChat: vi.fn(async (_chatId: string) => undefined),
   // A delete still under way: it never settles within the test.
   destroyChat: vi.fn((_chatId: string) => new Promise<undefined>(() => undefined)),
 }));
@@ -19,17 +20,11 @@ import m from "mithril";
 import { ChatDrawer } from "./ChatDrawer";
 import { ChatHeader } from "./ChatHeader";
 import { chatRailAttrsFixture } from "./chatRailAttrsFixture";
+import { chatRowFixture } from "./chatRowFixture";
 import type { ChatRow } from "./rows";
 
-const ONLY_CHAT: ChatRow = {
-  chatId: "agent-1",
-  title: "Plan the launch",
-  status: "idle",
-  labels: {},
-  agentIds: ["agent-1"],
-  lastActiveMs: null,
-  isProvisional: false,
-};
+// The workspace's only chat, so its main chat too.
+const ONLY_CHAT: ChatRow = chatRowFixture("agent-1", { title: "Plan the launch", isMain: true });
 
 // The rename case's chat: the delete case leaves its chat marked as being deleted for the rest of the file.
 const RENAMED_CHAT: ChatRow = { ...ONLY_CHAT, chatId: "agent-2", agentIds: ["agent-2"] };
@@ -62,7 +57,6 @@ describe("the chat header", () => {
     const menuRows = [...document.querySelectorAll<HTMLElement>(".chat-header-menu [data-menu-row]")];
     expect(menuRows.map((menuRow) => menuRow.getAttribute("data-menu-row"))).toEqual([
       "rename",
-      "stop",
       "delete",
       "copy-reference",
       "explain-element",

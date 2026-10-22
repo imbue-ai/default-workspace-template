@@ -681,6 +681,9 @@ class ChatListResponse(FrozenModel):
     """Response from GET /api/chats: every chat this app lists, as the pages see it."""
 
     chats: tuple[ChatSnapshot, ...] = Field(description="One snapshot per listed chat")
+    main_chat_id: ChatId | None = Field(
+        description="The workspace's main chat (``main_chat.py``), or None while it has no chat to take it"
+    )
 
 
 class CreateChatRequest(FrozenModel):
@@ -791,7 +794,8 @@ class ProvisionalChat(FrozenModel):
 class SeedChatRequest(FrozenModel):
     """Request body for POST /api/chats/seed: the conversation the Imbue Studio app had before the workspace existed."""
 
-    title: str = Field(default="", description='The chat\'s display name; empty mints the first free "Chat N"')
+    # CLEANUP: drop ``title`` once no Imbue Studio app in use sends it (released ones send "Welcome").
+    title: str = Field(default="", description="Ignored: the seeded chat is named ``MAIN_CHAT_NAME``")
     turns: tuple[SeedTurn, ...] = Field(min_length=1, description="The turns, in order")
 
 
@@ -800,7 +804,10 @@ class IntakeTarget(LowerCaseStrEnum):
 
     # A chat created for the text, on the named account or the workspace's default.
     NEW_CHAT = auto()
-    # The chat the window the text was typed into shows, else the most recently messaged one, else a new one.
+    # The main chat, else the most recently messaged one, else a new one.
+    MAIN_CHAT = auto()
+    # The chat the window the text was typed into shows, else the main chat, else the most recently messaged one,
+    # else a new one.
     CURRENT_CHAT = auto()
     # The one chat there is, else the chat the user picks from the root's picker, else a new one.
     CHAT_SELECTOR = auto()

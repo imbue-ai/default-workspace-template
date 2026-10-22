@@ -78,6 +78,7 @@ from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.latchkey_gateway import GatewayAccess
+from imbue.chat.main_chat import MAIN_CHAT_NAME
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import CreateChatRequest
 from imbue.chat.models import HandoffPhase
@@ -3021,7 +3022,8 @@ def _seed_body() -> dict[str, Any]:
 
 def test_seeding_a_chat_lists_it_awaiting_its_first_send_with_the_turns_as_its_transcript(tmp_path: Path) -> None:
     """The Imbue Studio app's onboarding conversation arrives whole: the chat is created (201) as a
-    provisional chat awaiting the user, and its events route reads the seeded turns."""
+    provisional chat awaiting the user, named the main chat whatever title the app sent, and its events
+    route reads the seeded turns."""
     agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
     agent_manager.note_agent_list_known()
     client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
@@ -3030,7 +3032,7 @@ def test_seeding_a_chat_lists_it_awaiting_its_first_send_with_the_turns_as_its_t
 
     assert response.status_code == 201
     created = response.get_json()
-    assert created["display_name"] == "Getting started"
+    assert created["display_name"] == MAIN_CHAT_NAME
     provisional = agent_manager.get_provisional_chat(created["chat_id"])
     assert provisional is not None
     assert provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
@@ -3043,10 +3045,21 @@ def test_seeding_a_chat_lists_it_awaiting_its_first_send_with_the_turns_as_its_t
     assert events["events"][0]["content"] == "Wait.. what is honest software?"
 
 
-def test_seeding_a_chat_refuses_a_title_with_no_usable_characters(client: FlaskClient) -> None:
-    response = client.post("/api/chats/seed", json={**_seed_body(), "title": "!!!"})
-    assert response.status_code == 400
-    assert "no usable characters" in response.get_json()["detail"]
+def test_a_seeded_chat_waiting_for_its_first_send_can_be_renamed_and_deleted_through_its_routes(
+    app: Flask, client: FlaskClient
+) -> None:
+    agent_manager = state_of(app).agent_manager
+    chat_id = client.post("/api/chats/seed", json=_seed_body()).get_json()["chat_id"]
+
+    renamed = client.post(f"/api/chats/{chat_id}/rename", json={"title": "Planning"})
+    provisional = agent_manager.get_provisional_chat(chat_id)
+    deleted = client.post(f"/api/chats/{chat_id}/destroy")
+
+    assert renamed.status_code == 200
+    assert provisional is not None and provisional.name == "Planning"
+    assert deleted.status_code == 200
+    assert agent_manager.get_provisional_chat(chat_id) is None
+    assert client.post(f"/api/chats/{chat_id}/destroy").status_code == 404
 
 
 def test_seeding_a_chat_refuses_a_body_without_turns(client: FlaskClient) -> None:
@@ -4399,6 +4412,42 @@ def test_intake_current_chat_falls_back_to_the_most_recently_messaged_chat(
     assert response.get_json()["path"].startswith("/?chat=agent-00000000000000000000000000000002&intake=")
 
 
+def test_making_a_chat_the_main_chat_stars_it_and_refuses_a_helper_or_an_unknown_chat(
+    app: Flask, client: FlaskClient
+) -> None:
+    agent_manager = state_of(app).agent_manager
+    seed_agent_state(agent_manager, "agent-00000000000000000000000000000001", name="first")
+    seed_agent_state(agent_manager, "agent-00000000000000000000000000000002", name="second")
+    seed_agent_state(
+        agent_manager, "agent-00000000000000000000000000000003", name="helper", labels={"agent_created": "true"}
+    )
+
+    starred = client.post("/api/chats/agent-00000000000000000000000000000002/make-main")
+    helper = client.post("/api/chats/agent-00000000000000000000000000000003/make-main")
+    unknown = client.post("/api/chats/agent-00000000000000000000000000000009/make-main")
+
+    assert starred.status_code == 200
+    assert client.get("/api/chats").get_json()["main_chat_id"] == "agent-00000000000000000000000000000002"
+    assert helper.status_code == 409
+    assert unknown.status_code == 404
+    assert agent_manager.get_main_chat_id() == ChatId("agent-00000000000000000000000000000002")
+
+
+def test_intake_current_chat_falls_back_to_the_main_chat_over_a_more_recently_messaged_one(
+    app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A text typed where no chat is on screen goes to the welcome chat, even while it still awaits its first send."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    welcome_id = client.post("/api/chats/seed", json=_seed_body()).get_json()["chat_id"]
+    _track_claude_agent(app, "agent-00000000000000000000000000000002", "second", tmp_path / "claude_config")
+    state_of(app).agent_manager.record_message_sent(ChatId("agent-00000000000000000000000000000002"))
+
+    response = _intake(client, message="Draft", target="current_chat", is_draft=True, window_path="/")
+
+    assert response.status_code == 200
+    assert response.get_json()["path"].startswith(f"/?chat={welcome_id}&intake=")
+
+
 def test_intake_with_several_chats_to_choose_from_holds_the_choice_for_the_picker(
     app: Flask, client: FlaskClient, messenger: RecordingMngrMessenger, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -4439,6 +4488,44 @@ def test_intake_with_one_chat_sends_to_it_without_a_pick(
     assert response.status_code == 200
     assert response.get_json() == {"path": "/?chat=agent-00000000000000000000000000000001"}
     assert messenger.sent == [("agent-00000000000000000000000000000001", "Carry on")]
+
+
+def test_intake_main_chat_sends_to_the_main_chat_over_a_more_recently_messaged_one(
+    app: Flask, client: FlaskClient, messenger: RecordingMngrMessenger, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The launcher's Enter: a text sent to ``main_chat`` lands in the main chat, with no pick among several."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    _track_claude_agent(app, "agent-00000000000000000000000000000001", "first", tmp_path / "claude_config")
+    _track_claude_agent(app, "agent-00000000000000000000000000000002", "second", tmp_path / "claude_config")
+    agent_manager: AgentManager = state_of(app).agent_manager
+    assert agent_manager.make_main_chat(ChatId("agent-00000000000000000000000000000001"))
+    agent_manager.record_message_sent(ChatId("agent-00000000000000000000000000000002"))
+
+    response = _intake(client, message="Carry on", target="main_chat", is_delivery_awaited=True)
+
+    assert response.status_code == 200
+    assert response.get_json() == {"path": "/?chat=agent-00000000000000000000000000000001"}
+    assert messenger.sent == [("agent-00000000000000000000000000000001", "Carry on")]
+
+
+def test_intake_main_chat_with_no_chats_falls_back_to_a_new_chat(
+    app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no chat to be the main chat, a ``main_chat`` intake follows the ``new_chat`` rules: here a draft
+    mints a chat awaiting its first send and holds the text for its composer."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    agent_manager: AgentManager = state_of(app).agent_manager
+
+    response = _intake(client, message="Draw me a seal", target="main_chat", is_draft="true")
+
+    assert response.status_code == 200
+    path = response.get_json()["path"]
+    token = _token_of(path)
+    provisional = agent_manager.get_provisional_chat(parse_qs(urlparse(path).query)["chat"][0])
+    assert provisional is not None
+    assert provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+    applied = client.post(f"/api/chats/intakes/{token}/apply", json={})
+    assert applied.get_json()["composer_text"] == "Draw me a seal"
 
 
 def test_intake_dismissed_picker_drops_the_intake(

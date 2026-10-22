@@ -132,7 +132,14 @@ export async function openWindow(desktopId: string, request: WindowOpenRequest):
 /** Where a launch's page goes (post-launch-paths plan section 3.3): a new window, a window already at the path (else
  *  a new one), or a named window this client points at it. */
 export type LaunchTarget =
-  { readonly kind: "new" } | { readonly kind: "focus" } | { readonly kind: "window"; readonly windowId: string };
+  | { readonly kind: "new" }
+  | { readonly kind: "focus" }
+  | {
+      readonly kind: "window";
+      readonly windowId: string;
+      /** False for a text that is not about the window's page: the app is not told which page it shows. */
+      readonly sendsWindowPath?: boolean;
+    };
 
 export interface LaunchRequest {
   readonly app: string;
@@ -157,7 +164,10 @@ export interface LaunchOutcome {
  *  GET launch path, asked of the app for a POST one) and opens or navigates a window there. */
 export async function launch(desktopId: string, request: LaunchRequest): Promise<LaunchOutcome> {
   const target: Record<string, unknown> = { kind: request.target.kind };
-  if (request.target.kind === "window") target.window_id = request.target.windowId;
+  if (request.target.kind === "window") {
+    target.window_id = request.target.windowId;
+    if (request.target.sendsWindowPath === false) target.sends_window_path = false;
+  }
   const data = await postJson<{ window: unknown; path: string; is_new: boolean }>(desktopUrl(desktopId, "/launch"), {
     app: request.app,
     launch: request.launch,

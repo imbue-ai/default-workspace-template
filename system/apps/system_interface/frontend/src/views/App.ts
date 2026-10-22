@@ -824,7 +824,7 @@ export function App(): m.Component<AppAttrs> {
           ? null
           : () => {
               avatarChooser = null;
-              void current.draftIntoPinnedWindow(AVATAR_DESIGN_PROMPT);
+              void current.draftIntoPinnedWindow(AVATAR_DESIGN_PROMPT, false);
             },
       onClose: () => {
         avatarChooser = null;
