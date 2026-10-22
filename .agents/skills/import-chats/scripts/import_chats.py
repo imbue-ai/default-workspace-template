@@ -397,11 +397,30 @@ def ensure_sources(
         return []
     stanzas = "\n".join(source_stanza(source) for source in added)
     existing = (previous or "").rstrip("\n")
-    candidate_text = f"{existing}\n\n{stanzas}" if existing else stanzas
+    _put_checked_config(
+        datalib, f"{existing}\n\n{stanzas}" if existing else stanzas, run
+    )
+    try:
+        _turn_off_search(datalib, added, run)
+    except ImportChatsError:
+        if previous is None:
+            config_path.unlink(missing_ok=True)
+        else:
+            _write_text_atomic(config_path, previous)
+        raise
+    return added
+
+
+def _put_checked_config(
+    datalib: Datalib, text: str, run: Callable[..., subprocess.CompletedProcess]
+) -> None:
+    """Replace the config with ``text`` once ``datalib-dag --check`` accepts it; a refused one is never put in
+    place."""
+    config_path = datalib.config_path
     candidate = config_path.with_name(f"{config_path.name}.import-chats")
     candidate.parent.mkdir(parents=True, exist_ok=True)
-    candidate.write_text(candidate_text, encoding="utf-8")
     try:
+        candidate.write_text(text, encoding="utf-8")
         checked = _run_datalib(datalib, run, "datalib-dag", "--check", str(candidate))
         if checked.returncode != 0:
             said = (checked.stdout + checked.stderr).strip()
@@ -411,30 +430,30 @@ def ensure_sources(
         os.replace(candidate, config_path)
     finally:
         candidate.unlink(missing_ok=True)
-    try:
-        for source in added:
-            for function in SEARCH_FUNCTIONS:
-                step = f"{source.group}/{function}"
-                turned_off = _run_datalib(
-                    datalib,
-                    run,
-                    "datalib-dag",
-                    "turn-off",
-                    str(config_path),
-                    step,
-                    "--by",
-                    SYNC_REQUESTER,
-                )
-                if turned_off.returncode != 0:
-                    said = turned_off.stderr.strip() or turned_off.stdout.strip()
-                    raise ImportChatsError(f"could not turn off {step}: {said}")
-    except ImportChatsError:
-        if previous is None:
-            config_path.unlink(missing_ok=True)
-        else:
-            _write_text_atomic(config_path, previous)
-        raise
-    return added
+
+
+def _turn_off_search(
+    datalib: Datalib,
+    added: Sequence[ChatSource],
+    run: Callable[..., subprocess.CompletedProcess],
+) -> None:
+    """Turn off each of ``added``'s search steps, raising at the first one datalib refuses."""
+    for source in added:
+        for function in SEARCH_FUNCTIONS:
+            step = f"{source.group}/{function}"
+            turned_off = _run_datalib(
+                datalib,
+                run,
+                "datalib-dag",
+                "turn-off",
+                str(datalib.config_path),
+                step,
+                "--by",
+                SYNC_REQUESTER,
+            )
+            if turned_off.returncode != 0:
+                said = turned_off.stderr.strip() or turned_off.stdout.strip()
+                raise ImportChatsError(f"could not turn off {step}: {said}")
 
 
 def query_raw_store(
