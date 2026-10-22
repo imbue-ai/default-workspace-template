@@ -5306,9 +5306,11 @@ _JOSH = RequestIdentity(owner=True, user_id="user-josh-0001", email="josh@exampl
 _MAIN_ID = "agent-00000000000000000000000000000041"
 
 
-def _peopled_app(tmp_path: Path, messenger: RecordingMngrMessenger) -> Flask:
+def _peopled_app(
+    tmp_path: Path, messenger: RecordingMngrMessenger, imbue_studio_gateway: GatewayAccess | None = None
+) -> Flask:
     """An app whose shell answers a roster of Josh (the owner), Bob, and the workspace agent Atlas, with a running
-    main chat Josh started."""
+    main chat Josh started; ``imbue_studio_gateway`` is where the owner's notifications go, when given."""
     shell = FakeShell(
         roster_document=RosterDocument(
             participants=(
@@ -5323,7 +5325,12 @@ def _peopled_app(tmp_path: Path, messenger: RecordingMngrMessenger) -> Flask:
             )
         )
     )
-    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger, chat_files_root=tmp_path / "chats")
+    manager = AgentManager.build(
+        WebSocketBroadcaster(),
+        messenger=messenger,
+        chat_files_root=tmp_path / "chats",
+        imbue_studio_gateway=imbue_studio_gateway,
+    )
     state = build_test_state(agent_manager=manager, shell=shell)
     manager.note_agent_list_known()
     seed_agent_state(manager, _MAIN_ID, name="Main")
@@ -5524,6 +5531,41 @@ def test_a_mention_of_a_person_is_pending_until_a_page_of_theirs_watches_the_cha
         == 200
     )
     assert client.get("/api/mentions/pending", headers=_identity_header(_VISITOR)).get_json() == {"mentions": []}
+
+
+def test_a_mention_of_the_owner_is_marked_and_told_to_the_imbue_studio_app_as_the_main_chats_agent(
+    tmp_path: Path, messenger: RecordingMngrMessenger
+) -> None:
+    gateway = RecordingGateway(status=200)
+    with serve_app(gateway.application) as served:
+        access = GatewayAccess(
+            base_url=served.http_url, password=SecretStr("gateway-password-7731"), permissions_override=None
+        )
+        app = _peopled_app(tmp_path, messenger, imbue_studio_gateway=access)
+        client = app.test_client()
+        room_id = client.post("/api/rooms", json={"title": "Lounge"}).get_json()["id"]
+        try:
+            client.post(
+                f"/api/chats/{room_id}/message",
+                json={"message": "@Josh look at this", "message_id": "m-1"},
+                headers=_identity_header(_VISITOR),
+            )
+            wait_for(
+                lambda: len(gateway.received) >= 1, timeout=15.0, error_message="the mention never reached the app"
+            )
+        finally:
+            state_of(app).agent_manager._imbue_studio_notifications.shutdown()
+
+    joshs = client.get("/api/mentions/pending", headers=_identity_header(_JOSH)).get_json()
+    assert joshs == {"mentions": [{"chat_id": room_id, "message_id": "m-1", "sender": "user:user-bob-4471"}]}
+    (received,) = gateway.received
+    assert received.path == f"/minds-api-proxy/api/v1/agents/{_MAIN_ID}/notifications"
+    assert received.body == {
+        "title": "Bob mentioned you in Lounge",
+        "message": "@Josh look at this",
+        "destination": {"type": "minds:focus-chat", "chatId": room_id},
+    }
+    assert messenger.sent == []
 
 
 def test_a_mention_in_an_agent_chat_marks_a_person_and_leaves_the_agent_as_words(
