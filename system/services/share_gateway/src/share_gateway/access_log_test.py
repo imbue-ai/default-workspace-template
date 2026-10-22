@@ -1,4 +1,5 @@
 import logging
+import socket
 import urllib.request
 from uuid import uuid4
 
@@ -42,3 +43,18 @@ def test_a_request_without_a_query_is_logged_by_its_whole_path(caplog: pytest.Lo
 
     (line,) = _logged_lines(caplog)
     assert '"GET /_auth/verify HTTP/1.1" 200' in line
+
+
+def test_control_characters_in_the_request_line_are_escaped_in_the_access_log(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.INFO, logger="werkzeug"):
+        with serve_wsgi(_ok_app, request_handler=QueryOmittingRequestHandler) as base_url:
+            host, port = base_url.removeprefix("http://").rsplit(":", 1)
+            # urllib refuses a control character in a URL, so the request line goes out over a raw socket.
+            with socket.create_connection((host, int(port)), timeout=10) as connection:
+                connection.sendall(b"GET /a\x1b[31mb\x7f\\c HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                while connection.recv(4096):
+                    pass
+
+    (line,) = _logged_lines(caplog)
+    assert '"GET /a\\x1b[31mb\\x7f\\\\c HTTP/1.1" 200' in line
+    assert "\x1b" not in line
