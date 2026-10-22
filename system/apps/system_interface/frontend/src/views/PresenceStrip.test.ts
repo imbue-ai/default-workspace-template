@@ -28,7 +28,12 @@ function pictures(root: HTMLElement): Element[] {
 
 /** Make this page ``userId``'s, as the heartbeat's answer would. */
 function signInAs(userId: string): void {
-  setOwnIdentityForTesting({ owner: false, user_id: userId, email: `${userId}@example.com`, participant: `user:${userId}` });
+  setOwnIdentityForTesting({
+    owner: false,
+    user_id: userId,
+    email: `${userId}@example.com`,
+    participant: `user:${userId}`,
+  });
 }
 
 afterEach(() => {
