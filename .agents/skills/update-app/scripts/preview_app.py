@@ -298,6 +298,8 @@ def build_up_argv(
         "--inner-path",
         inner_path,
     ]
+    if manifest.uses_microphone:
+        argv.append("--preview-uses-microphone")
     for port_name in preview.ports:
         argv.extend(["--port", str(port_name)])
     for key, value in preview.env.items():

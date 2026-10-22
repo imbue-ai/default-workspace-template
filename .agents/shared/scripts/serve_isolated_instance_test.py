@@ -502,6 +502,15 @@ def test_up_preview_boots_wrapper_registers_both_and_reports_tab(
     assert isinstance(state["wrapper_port"], int)
 
 
+def test_microphone_preview_grants_permission_to_the_outer_window(tmp_path: Path) -> None:
+    runner = _RecordingRunner()
+    assert _up_preview(tmp_path, runner=runner, preview_uses_microphone=True) == 0
+    registrations = runner.argvs_starting(*mod.FORWARD_PORT_CMD, "--name")
+    by_name = {argv[argv.index("--name") + 1]: argv for argv in registrations}
+    assert "--uses-microphone" in by_name["demo-preview"]
+    assert "--uses-microphone" not in by_name["demo-app"]
+
+
 def test_up_preview_surfaces_only_the_frame_and_titles_it(tmp_path: Path) -> None:
     """One preview puts one app in the launcher and the window list, reading as the app
     it previews. The inner service keeps its origin (the frame reaches it by

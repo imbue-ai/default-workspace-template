@@ -35,6 +35,7 @@ display_name = "Chat"
 icon = "icon.svg"
 critical = true
 priority = "chat"
+uses_microphone = true
 
 [[launch_paths]]
 id = "new"
@@ -189,6 +190,7 @@ def test_up_hands_the_manifests_table_to_the_shared_script_with_its_own_placehol
     assert _flag_values(argv, "--health-path") == ["/api/health"]
     assert _flag_values(argv, "--service-name") == ["chat-preview-app"]
     assert _flag_values(argv, "--preview-service-name") == ["chat-preview"]
+    assert "--preview-uses-microphone" in argv
     assert _flag_values(argv, "--inner-path") == ["/?chat=agent-1"]
     # The shared script's placeholders pass through untouched.
     assert _flag_values(argv, "--env") == [
