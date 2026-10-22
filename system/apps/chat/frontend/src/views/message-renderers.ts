@@ -21,6 +21,7 @@ import { SecretCard, isFiledSecretRequest, parseSecretRequest } from "./secret-c
 import { ToolChipGroup, type ChipEntry } from "./ToolChipGroup";
 import { AutocompactNotice } from "./AutocompactNotice";
 import { compactionChips, type CompactionPart } from "./compaction-chips";
+import { machineBubbles } from "./machine-bubbles";
 import { badgeClass } from "@imbue/workspace-ui/src/components/Badge";
 
 /** A permission-request tool call's own verdict: its own request id's entry in
@@ -572,6 +573,8 @@ export function renderAssistantRun(
   // fresh array here would leave it pushing into the flushed one.
   const pendingChips: ChipEntry[] = [];
   let isNoticeUnderRow = false;
+  // The run's first prose wears the agent's face and name; the rest of its bubbles follow under them.
+  const header = { isDrawn: false };
 
   // Anything that is not a tool chip ends the run in progress: the row has to
   // land above whatever interrupted it, in transcript order.
@@ -599,6 +602,7 @@ export function renderAssistantRun(
       children,
       pendingChips,
       flushChips,
+      header,
     );
   }
   flushChips();
@@ -638,6 +642,7 @@ function appendEventParts(
   children: m.Children[],
   pendingChips: ChipEntry[],
   flushChips: () => void,
+  header: { isDrawn: boolean },
 ): void {
   const textContent = event.text || "";
   const toolCalls = event.tool_calls || [];
@@ -674,9 +679,16 @@ function appendEventParts(
         ]),
       );
     } else {
+      // The agent speaking: one bubble per paragraph, the run's first group headed by its face and name.
       children.push(
-        m(MarkdownContent, { content: textContent, requestedAt: event.timestamp, expansionKeyPrefix: event.event_id }),
+        machineBubbles({
+          text: textContent,
+          timestamp: event.timestamp,
+          expansionKeyPrefix: event.event_id,
+          isHeaded: !header.isDrawn,
+        }),
       );
+      header.isDrawn = true;
     }
   }
   for (const toolCall of toolCalls) {

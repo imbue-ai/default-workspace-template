@@ -13,6 +13,7 @@ def test_a_missing_or_unreadable_header_reads_as_the_anonymous_owner() -> None:
     assert parse_identity_header("   ") == ANONYMOUS_OWNER
     assert parse_identity_header("{not json") == ANONYMOUS_OWNER
     assert parse_identity_header('{"owner": "yes"}') == ANONYMOUS_OWNER
+    assert parse_identity_header('{"owner": "false"}') == ANONYMOUS_OWNER
 
 
 def test_a_person_header_keeps_the_account_and_ignores_fields_it_does_not_know() -> None:

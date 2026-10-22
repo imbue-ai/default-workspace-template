@@ -460,6 +460,23 @@ describe("renderAssistantRun", () => {
     expect(chipRows(children)).toEqual([["t1"], ["t2"]]);
   });
 
+  it("heads only the run's first prose with the agent's face, the rest of its bubbles following under it", () => {
+    const children = renderAssistantRun(
+      [assistantEvent("a1", "first words", [call("t1")]), assistantEvent("a2", "and more", [])],
+      new Map(),
+      "agent-x",
+    );
+    const groups = children.filter(
+      (c) => (c as m.Vnode<{ "data-machine-bubbles"?: string }>).attrs?.["data-machine-bubbles"] !== undefined,
+    );
+    expect(groups).toHaveLength(2);
+    const headers = groups.map((group) => {
+      const [header] = (group as m.Vnode).children as m.Children[];
+      return header !== null && header !== undefined;
+    });
+    expect(headers).toEqual([true, false]);
+  });
+
   it("keeps each chip pointing at the event that issued it", () => {
     const children = renderAssistantRun(
       [assistantEvent("a1", "", [call("t1")]), assistantEvent("a2", "", [call("t2")])],

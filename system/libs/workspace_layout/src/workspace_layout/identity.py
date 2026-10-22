@@ -26,7 +26,8 @@ class RequestIdentity(FrozenModel):
     # know -- or no longer reads, like the display name older proxies stamp -- must never make it unreadable.
     model_config = ConfigDict(extra="ignore")
 
-    owner: bool = Field(description="Whether the requester is the workspace's owner")
+    # Strict: a proxy stamps a real boolean, and a header that spells one as text is not a proxy's.
+    owner: bool = Field(strict=True, description="Whether the requester is the workspace's owner")
     user_id: str | None = Field(default=None, description="The account's user id (absent for an unshared workspace)")
     email: str | None = Field(
         default=None, description="The account's verified email, present exactly when user_id is"

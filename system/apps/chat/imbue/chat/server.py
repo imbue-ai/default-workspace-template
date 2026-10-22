@@ -20,6 +20,7 @@ from typing import Final
 from typing import assert_never
 from uuid import uuid4
 
+import httpx
 from app_manifest.content_security_policy import attach_document_policy
 from app_manifest.primitives import AppName
 from app_manifest.registry import read_origin_label
@@ -47,11 +48,15 @@ from pydantic import Field
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
 from workspace_layout.errors import InvalidLayoutValueError
+from workspace_layout.identity import is_owner_participant
+from workspace_layout.identity import participant_key_of
 from workspace_layout.interfaces import ShellLayoutInterface
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.primitives import ClientActivityKind
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
+from workspace_layout.shell_url import shell_base_url
 
 from imbue.chat import accounts_endpoints
 from imbue.chat import focus_chat
@@ -77,6 +82,9 @@ from imbue.chat.attachments import delete_upload
 from imbue.chat.attachments import get_uploads_directory
 from imbue.chat.attachments import resolve_upload_path
 from imbue.chat.attachments import store_uploaded_file
+from imbue.chat.authors import author_prefix
+from imbue.chat.authors import is_unprefixable_input
+from imbue.chat.authors import new_author_annotation
 from imbue.chat.background_tasks import unreported_runner_ends_notice
 from imbue.chat.chat_autocompact import ChatAutocompactState
 from imbue.chat.chat_fast_mode import ChatFastModeState
@@ -121,6 +129,8 @@ from imbue.chat.harnesses.session import AgentHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptReader
+from imbue.chat.identity import request_identity
+from imbue.chat.identity import request_participant
 from imbue.chat.main_chat import MAIN_CHAT_NAME
 from imbue.chat.models import AgentCreationError
 from imbue.chat.models import AgentDestroyError
@@ -161,9 +171,11 @@ from imbue.chat.models import IntakeRequest
 from imbue.chat.models import IntakeResponse
 from imbue.chat.models import IntakeTarget
 from imbue.chat.models import InterruptAgentResponse
+from imbue.chat.models import MeResponse
 from imbue.chat.models import ModelOptionsResponse
 from imbue.chat.models import NoProviderAccountError
 from imbue.chat.models import OkResponse
+from imbue.chat.models import ParticipantsResponse
 from imbue.chat.models import PendingIntakeView
 from imbue.chat.models import PoweredByResponse
 from imbue.chat.models import ProvisionalChat
@@ -204,6 +216,7 @@ from imbue.chat.ws_broadcaster import provisional_chat_created_message
 from imbue.chat.wsgi import build_sock
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.mngr.errors import AgentNotFoundError
 from imbue.mngr.errors import MngrError
@@ -375,6 +388,7 @@ def _get_events(chat_id: str) -> Response:
         # Initial load: the newest `limit` events (the live tail). Bounded read
         # from the end; the client pages/jumps from here.
         events = transcript.get_tail_events(limit)
+    get_state().authors.stamp_events(ChatId(chat_id), events)
 
     # `total` is the full transcript length and `offset` is the global index of the
     # first returned event. Together they place the loaded window in the whole
@@ -692,6 +706,7 @@ class _ServerSecretRequestBridge(SecretRequestChatBridge):
             # The notice answers a request the agent itself filed, so it reaches the agent whatever
             # account it runs on.
             is_refused_on_signed_out_account=False,
+            delivered_text=text,
         )
         if isinstance(accepted, _SendRefused):
             raise NoticeDeliveryError(accepted.answer.detail)
@@ -764,6 +779,9 @@ def _send_to_chat(
     # A chat whose account was signed out takes no more of the user's messages until it moves to
     # another provider: its agent still holds the credential it loaded, and would keep using it.
     is_refused_on_signed_out_account: bool,
+    # What the agent is handed: the request's words, prefixed with the author for a sender other than the owner
+    # (``_attributed_delivery``). The stamp, the activity report, and the naming read the words alone.
+    delivered_text: str,
 ) -> _SendAccepted | _SendRefused:
     """The ordinary send path, shared by the message route, the intake, and the secret-request notice: hold the send
     while the chat converges, else deliver it to the active agent; either way record the client's activity and the
@@ -771,9 +789,7 @@ def _send_to_chat(
     agent_manager: AgentManager = state.agent_manager
     # While the chat converges on a new agent every send is held for it (spec 5.7): accepted,
     # persisted on the record, and delivered in order once the successor runs.
-    held_phase = agent_manager.hold_send(
-        chat_id, message_id, send_message_request.message, _held_send_origin(send_message_request)
-    )
+    held_phase = agent_manager.hold_send(chat_id, message_id, delivered_text, _held_send_origin(send_message_request))
     is_compaction_requested = False
     if held_phase is None:
         # Resolved after the hold said the chat is not converging: a handoff that finished between
@@ -788,7 +804,7 @@ def _send_to_chat(
                 answer=SendFailureResponse(detail=detail, kind=ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND), status=409
             )
         try:
-            outcome = _deliver_message(state, agent_info, send_message_request.message, message_id)
+            outcome = _deliver_message(state, agent_info, delivered_text, message_id)
         except AgentNotFoundError as e:
             # Destroyed while the send was in flight: the chat is gone, not refusing.
             logger.info("Agent {} was destroyed while a message to it was in flight: {}", agent_info.name, e)
@@ -861,11 +877,64 @@ def _deliver_unreported_runner_ends_notice(
             message_id,
             # The commands were the agent's own, so it hears of them whatever account it runs on.
             is_refused_on_signed_out_account=False,
+            delivered_text=notice,
         )
     if isinstance(accepted, _SendRefused):
         logger.warning(
             "Could not tell chat {} of its unreported background commands: {}", chat_id, accepted.answer.detail
         )
+
+
+def _attributed_delivery(state: ChatAppState, chat_id: ChatId, message: str, message_id: str) -> str:
+    """The text the agent is handed for the current request's sender (the multiplayer spec, sections 5.1 and 5.3):
+    the words as they are for the owner (under either key) and for a slash command or bash input, else prefixed
+    ``[from: <name>] ``; a sender other than the owner is recorded in the chat's annotations before delivery."""
+    identity = request_identity()
+    if is_owner_participant(identity):
+        return message
+    sender = participant_key_of(identity)
+    display_name = state.roster.display_name_of(sender, identity)
+    delivered = message if is_unprefixable_input(message) else author_prefix(display_name) + message
+    state.authors.record(chat_id, new_author_annotation(message_id, sender, display_name, delivered))
+    return delivered
+
+
+def _me_endpoint() -> Response:
+    """``GET /api/me``: the requester's participant key, which the page tells its own turns by."""
+    return model_response(MeResponse(participant=request_participant()))
+
+
+# Where this app serves the workspace agent's picture from its own origin (the roster names it on the shell's).
+WORKSPACE_AGENT_PICTURE_ROUTE: Final[str] = "/api/participants/workspace-agent/picture"
+_PICTURE_TIMEOUT_SECONDS: Final[float] = 5.0
+
+
+def _participants_endpoint() -> Response:
+    """``GET /api/participants``: the roster as the shell holds it, the workspace agent's picture pointed at this
+    origin, since the page cannot fetch the shell's."""
+    participants = tuple(
+        entry.model_copy_update(to_update(entry.field_ref().profile_picture_url, WORKSPACE_AGENT_PICTURE_ROUTE))
+        if entry.key == WORKSPACE_AGENT_PARTICIPANT_KEY and entry.profile_picture_url is not None
+        else entry
+        for entry in get_state().roster.document().participants
+    )
+    return model_response(ParticipantsResponse(participants=participants))
+
+
+def _workspace_agent_picture_endpoint() -> Response:
+    """The workspace agent's picture, fetched from the shell over loopback: the selected avatar design's icon."""
+    state = get_state()
+    agent = state.roster.participant(WORKSPACE_AGENT_PARTICIPANT_KEY)
+    if agent is None or agent.profile_picture_url is None:
+        return error_response("The workspace agent has no picture yet", 404)
+    try:
+        answer = state.http_client.get(f"{shell_base_url()}{agent.profile_picture_url}", timeout=_PICTURE_TIMEOUT_SECONDS)
+    except httpx.HTTPError as e:
+        logger.debug("Could not fetch the workspace agent's picture from the shell: {}", e)
+        return error_response("The workspace agent's picture could not be fetched", 502)
+    if not answer.is_success:
+        return error_response(f"The shell answered {answer.status_code} for the picture", 502)
+    return Response(answer.content, mimetype=answer.headers.get("Content-Type", "image/png"))
 
 
 def _send_message_endpoint(chat_id: str) -> Response:
@@ -886,8 +955,14 @@ def _send_message_endpoint(chat_id: str) -> Response:
     # Alongside the delivery rather than after it, which can take seconds: the name should land
     # while the agent is still answering.
     _consider_naming_chat(state, ChatId(chat_id), send_message_request.message)
+    delivered_text = _attributed_delivery(state, ChatId(chat_id), send_message_request.message, message_id)
     accepted = _send_to_chat(
-        state, ChatId(chat_id), send_message_request, message_id, is_refused_on_signed_out_account=True
+        state,
+        ChatId(chat_id),
+        send_message_request,
+        message_id,
+        is_refused_on_signed_out_account=True,
+        delivered_text=delivered_text,
     )
     if isinstance(accepted, _SendRefused):
         return model_response(accepted.answer, accepted.status)
@@ -1796,7 +1871,14 @@ def _deliver_intake_send(state: ChatAppState, chat_id: ChatId, intake: IntakeReq
         message=intake.message, message_id=message_id, client_id=intake.client_id, desktop_id=intake.desktop_id
     )
     _consider_naming_chat(state, chat_id, intake.message)
-    accepted = _send_to_chat(state, chat_id, send_message_request, message_id, is_refused_on_signed_out_account=True)
+    accepted = _send_to_chat(
+        state,
+        chat_id,
+        send_message_request,
+        message_id,
+        is_refused_on_signed_out_account=True,
+        delivered_text=intake.message,
+    )
     return accepted if isinstance(accepted, _SendRefused) else None
 
 
@@ -2401,6 +2483,9 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ("GET", "/api/harnesses"): RouteModels(response_model=HarnessCatalogsResponse),
     ("GET", "/api/agents"): RouteModels(response_model=AgentListResponse),
     ("GET", "/api/chats"): RouteModels(response_model=ChatListResponse),
+    ("GET", "/api/me"): RouteModels(response_model=MeResponse),
+    ("GET", "/api/participants"): RouteModels(response_model=ParticipantsResponse),
+    ("GET", WORKSPACE_AGENT_PICTURE_ROUTE): SchemalessRoute(reason="The workspace agent's picture, an image"),
     ("POST", "/api/chats/create"): RouteModels(
         request_model=CreateChatRequest,
         response_model=CreateChatResponse,
@@ -2537,6 +2622,11 @@ def create_application(state: ChatAppState) -> Flask:
     application.add_url_rule("/plugins/<basename>", view_func=_serve_static_file, methods=["GET"])
     application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
     application.add_url_rule("/api/chats", view_func=_list_chats_endpoint, methods=["GET"])
+    application.add_url_rule("/api/me", view_func=_me_endpoint, methods=["GET"])
+    application.add_url_rule("/api/participants", view_func=_participants_endpoint, methods=["GET"])
+    application.add_url_rule(
+        WORKSPACE_AGENT_PICTURE_ROUTE, view_func=_workspace_agent_picture_endpoint, methods=["GET"]
+    )
     application.add_url_rule("/api/chats/create", view_func=_create_chat, methods=["POST"])
     application.add_url_rule("/api/chats/seed", view_func=_seed_chat, methods=["POST"])
     application.add_url_rule("/api/chats/awaiting", view_func=_awaiting_chat_for_empty_list, methods=["POST"])

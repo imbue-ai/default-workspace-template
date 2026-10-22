@@ -14,7 +14,9 @@ import m from "mithril";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { MarkdownContent } from "../markdown";
 import { parseMessageAttachments } from "../models/attachments";
+import { getOwner, getOwnParticipant, getParticipant, isViewerOwner, participantName } from "../models/Participants";
 import type { UserMessageEvent } from "../models/Response";
+import { participantPicture } from "./participant-picture";
 import { classifyUserMessage, isHiddenUserMessage } from "./message-classification";
 import { UserMessageKind } from "./message-kinds";
 import { renderToolBlock } from "./ToolCallBlock";
@@ -26,6 +28,27 @@ import { renderToolBlock } from "./ToolCallBlock";
  *  them. The row recipe carries no bottom margin: each caller sets its own
  *  rhythm. */
 export const USER_MESSAGE_ROW_CLASS = "message message-user flex flex-col items-end";
+/** Another person's turn (the multiplayer spec, section 5.4): left-aligned, their picture beside the bubble. */
+export const OTHER_PERSON_ROW_CLASS = "message message-user message-other flex flex-col items-start";
+/** The side of the picture beside another person's bubble. */
+export const AUTHOR_PICTURE_SIZE_PX = 24;
+
+/** Who a user turn was said by, for drawing: null for the viewer's own turn (right-aligned, no name), else the
+ *  author's key and name. A turn with no author is the owner's: the viewer's own when the viewer is the owner, and
+ *  the owner's entry otherwise. Until the page knows who it is, every turn reads as the viewer's own. */
+export function authorOfTurn(
+  event: Pick<UserMessageEvent, "author" | "author_name">,
+): { key: string; name: string } | null {
+  const own = getOwnParticipant();
+  if (own === null) return null;
+  if (event.author === undefined) {
+    if (isViewerOwner()) return null;
+    const owner = getOwner();
+    return owner === null ? null : { key: owner.key, name: owner.display_name };
+  }
+  if (event.author === own) return null;
+  return { key: event.author, name: participantName(event.author, event.author_name ?? null) };
+}
 
 /** wrap-break-word: long unbreakable tokens (API keys, URLs) wrap inside the
  *  bubble instead of overflowing past its edge. Code inside a bubble is
@@ -96,7 +119,22 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       if (attachmentBlock !== null) {
         bubbleChildren.push(m(MarkdownContent, { content: attachmentBlock, requestedAt: event.timestamp }));
       }
-      return m("div", { class: USER_BUBBLE_CLASS }, bubbleChildren);
+      const author = authorOfTurn(event);
+      if (author === null) return m("div", { class: USER_BUBBLE_CLASS }, bubbleChildren);
+      // Another person's turn: their name above, their picture at the left, the bubble squared at its top-left.
+      const entry = getParticipant(author.key);
+      return m("div", { class: "message-other-turn flex flex-col items-start", "data-author": author.key }, [
+        m("div", { class: "message-author mb-1 ml-8 text-(length:--font-size-helper) text-secondary" }, author.name),
+        m("div", { class: "flex items-start gap-2" }, [
+          participantPicture({
+            name: author.name,
+            pictureUrl: entry?.profile_picture_url ?? null,
+            size: AUTHOR_PICTURE_SIZE_PX,
+            extra: "message-author-picture mt-0.5",
+          }),
+          m("div", { class: `${USER_BUBBLE_CLASS} rounded-br-xl rounded-tl-sm` }, bubbleChildren),
+        ]),
+      ]);
     },
   };
 }
@@ -118,7 +156,9 @@ export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
       ? "message message-system-collapsed mb-1 flex flex-col items-end"
       : kind === UserMessageKind.Notice
         ? `message message-notice-row ${NOTICE_ROW_SPACING_CLASS}`
-        : `${USER_MESSAGE_ROW_CLASS} mb-5`;
+        : authorOfTurn(event) === null
+          ? `${USER_MESSAGE_ROW_CLASS} mb-5`
+          : `${OTHER_PERSON_ROW_CLASS} mb-5`;
   // id mirrors the assistant rows so the virtualized list can measure every
   // rendered row's height by querying ``.message-list > [id]``.
   return m("div", { id: event.event_id, class: messageClass, key: event.event_id }, m(StableUserMessage, { event }));

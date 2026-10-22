@@ -13,6 +13,7 @@ from workspace_layout.interfaces import ShellLayoutInterface
 
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.authors import AuthorStore
 from imbue.chat.chat_intakes import PendingIntakeStore
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_settings import ChatSettingsStore
@@ -28,6 +29,7 @@ from imbue.chat.harnesses.registry import get_harness_spec
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
 from imbue.chat.primitives import ChatId
+from imbue.chat.roster_client import RosterClient
 from imbue.chat.secret_requests import SecretRequestChatBridge
 from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -107,6 +109,8 @@ class ChatAppState(MutableModel):
         description="The shell's layout, for the routes that put a window on a client's screen and the sends that "
         "report a client's activity; the auto-open reactor is handed the same one"
     )
+    authors: AuthorStore = Field(description="Who wrote each message a visitor or a visiting agent sent, per chat")
+    roster: RosterClient = Field(description="The shell's roster: names, keys, and handles, cached briefly")
     # The secret requests agents file and the env files their answers are written to, and
     # the router's bridge the routes reach the chats through (attached by ``create_application``).
     secret_requests: SecretRequestStore
@@ -158,11 +162,14 @@ class ChatAppState(MutableModel):
 
             def on_events(agent_id: str, events: list[dict[str, Any]]) -> None:
                 self.agent_manager.stamp_compaction_events(agent_info, events)
+                chat_id = self.agent_manager.chat_id_of_agent(agent_id)
+                # The stored events are the same dicts, so the author stamps outlive this broadcast.
+                self.authors.stamp_events(ChatId(str(chat_id)), events)
                 # Deliver-live-only: session events are persisted in JSONL and recoverable
                 # via the REST /events endpoint, so nothing is buffered for replay. The
                 # fan-out is keyed by chat, so a page's stream follows the chat across a
                 # handoff rather than the agent it happened to open on.
-                self.event_queues.broadcast_batch(str(self.agent_manager.chat_id_of_agent(agent_id)), events)
+                self.event_queues.broadcast_batch(str(chat_id), events)
                 # Fold the delta into the per-agent activity signals. The tracker is
                 # incremental (seeded with the full backlog below), so it only ever
                 # needs the newly parsed events.
@@ -211,6 +218,7 @@ class ChatAppState(MutableModel):
             backlog = watcher.get_all_events()
             # A compaction that finished while no watcher ran (a chat nobody had open) ends here.
             self.agent_manager.stamp_compaction_events(agent_info, backlog)
+            self.authors.stamp_events(ChatId(str(self.agent_manager.chat_id_of_agent(agent_info.id))), backlog)
             self.agent_manager.update_session_events(agent_info.id, backlog)
             watcher.start()
         finally:

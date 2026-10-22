@@ -870,6 +870,33 @@ chat from unwatched to watched, the app is told the chat was read
 (`imbue_studio_notifications.py`, through the latchkey gateway as the chat's current
 agent, off the request thread).
 
+## Who said what
+
+Every request reaches the chat app with the shell's `X-Imbue-Identity` header
+(`identity.py`; the keys are `workspace_layout.identity`): the owner, a signed-in
+person the workspace is shared with (`user:<id>`), or a visiting agent
+(`agent:<id>`). A send from anyone but the owner is delivered to the harness as
+`[from: <name>] <text>` (`authors.py`; never for a slash command or bash-mode
+input, which the harness would not understand prefixed), and the send is recorded
+in the chat's `authors.jsonl` beside its transcript: the message id, the sender's
+key and name, and the hash of the delivered text. The owner's sends are delivered
+as typed and recorded nowhere. When the transcript's `user_message` events are
+read (the backlog, the live stream, `GET /api/chats/<chat-id>/events`), each is
+stamped `author` and `author_name` from the nearest annotation whose hash matches
+its text, else from a `[from: <name>]` prefix the harness kept (a turn merged from
+several queued messages), else not at all: an unstamped turn is the owner's. The
+prefix is stripped into `display_body` so the page never shows it; the terminal
+view shows the pane as it is.
+
+The page draws its own turns on the right and another person's on the left under
+their name and picture, from two routes: `GET /api/me` answers the page's own
+participant key, and `GET /api/participants` relays the shell's roster
+(`GET /api/roster` there; `roster_client.py` caches it briefly), with the
+workspace agent's picture rewritten to `GET /api/participants/workspace-agent/picture`,
+which the chat app proxies from the shell so the page needs no second origin.
+The agent's prose is drawn as bubbles under that picture and the workspace's name,
+one per paragraph.
+
 ## Memory shedding
 
 The chat app re-tags chat agents' `oom_score_adj` from live activity

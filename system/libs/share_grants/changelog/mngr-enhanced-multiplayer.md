@@ -1,0 +1,1 @@
+New library: the parsers for the workspace's share grants (`share.env`, `grants.toml`) and agent grants (`agent_grants.toml`, and the gateway's last-seen record), shared by the share gateway and the shell so each reads the same files one way.

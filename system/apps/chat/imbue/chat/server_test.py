@@ -21,8 +21,8 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import pytest
-from app_schema.testing import assert_api_schema_describes_app
 from app_manifest.testing import assert_document_policy_admits_page
+from app_schema.testing import assert_api_schema_describes_app
 from chat_background_tasks.listing import chats_from_agents_payload
 from flask import Flask
 from flask.testing import FlaskClient
@@ -31,6 +31,13 @@ from oom_priority import bands
 from pydantic import Field
 from pydantic import SecretStr
 from werkzeug.test import TestResponse
+from workspace_layout.identity import IDENTITY_HEADER
+from workspace_layout.identity import RequestIdentity
+from workspace_layout.primitives import ParticipantKey
+from workspace_layout.primitives import ParticipantKind
+from workspace_layout.roster import RosterDocument
+from workspace_layout.roster import RosterParticipant
+from workspace_layout.testing import FakeShell
 
 from imbue.chat.accounts import INDEX_VERSION
 from imbue.chat.accounts import account_dir
@@ -50,6 +57,7 @@ from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
+from imbue.chat.authors import text_sha256
 from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_naming import chat_naming_prompt
@@ -5053,3 +5061,110 @@ def test_a_compaction_that_finished_while_no_watcher_ran_ends_when_the_chat_is_o
 
 def test_the_chat_describes_its_api_the_way_its_manifest_says(client: FlaskClient) -> None:
     assert_api_schema_describes_app(client, Path(__file__).resolve().parents[2] / "app.toml")
+
+
+def _identity_header(identity: RequestIdentity) -> dict[str, str]:
+    return {IDENTITY_HEADER: identity.model_dump_json(exclude_none=True)}
+
+
+_VISITOR = RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@example.com")
+_VISITING_AGENT = RequestIdentity(
+    owner=False, agent_id="va-0123456789abcdef0123456789abcdef", agent_name="Josh's Claude", granter="user:8c0f"
+)
+_OWNER_ACCOUNT = RequestIdentity(owner=True, user_id="user-owner-9c21", email="owner@example.com")
+
+
+def test_a_visitors_message_reaches_the_agent_prefixed_and_is_annotated(app: Flask, messenger: RecordingMngrMessenger) -> None:
+    agent_id = "agent-00000000000000000000000000000031"
+    seed_agent_state(state_of(app).agent_manager, agent_id, name="Chat-31")
+    client = app.test_client()
+
+    response = client.post(
+        f"/api/chats/{agent_id}/message",
+        json={"message": "please rebase", "message_id": "m-1"},
+        headers=_identity_header(_VISITOR),
+    )
+
+    assert response.status_code == 200
+    # No shell to ask for a name, so the visitor is named after their email.
+    assert messenger.sent == [(agent_id, "[from: bob] please rebase")]
+    (annotation,) = state_of(app).authors.annotations(ChatId(agent_id))
+    assert (annotation.message_id, str(annotation.author), annotation.display_name) == (
+        "m-1",
+        "user:user-bob-4471",
+        "bob",
+    )
+    assert annotation.text_sha256 == text_sha256("[from: bob] please rebase")
+
+
+def test_a_visitors_slash_command_is_delivered_as_typed_but_still_annotated(
+    app: Flask, messenger: RecordingMngrMessenger
+) -> None:
+    agent_id = "agent-00000000000000000000000000000032"
+    seed_agent_state(state_of(app).agent_manager, agent_id, name="Chat-32")
+    client = app.test_client()
+
+    client.post(
+        f"/api/chats/{agent_id}/message", json={"message": "/clear", "message_id": "m-2"}, headers=_identity_header(_VISITING_AGENT)
+    )
+
+    assert messenger.sent == [(agent_id, "/clear")]
+    (annotation,) = state_of(app).authors.annotations(ChatId(agent_id))
+    assert (str(annotation.author), annotation.display_name) == (
+        "agent:va-0123456789abcdef0123456789abcdef",
+        "Josh's Claude",
+    )
+
+
+def test_the_owners_messages_are_never_prefixed_nor_annotated_under_either_key(
+    app: Flask, messenger: RecordingMngrMessenger
+) -> None:
+    agent_id = "agent-00000000000000000000000000000033"
+    seed_agent_state(state_of(app).agent_manager, agent_id, name="Chat-33")
+    client = app.test_client()
+
+    client.post(f"/api/chats/{agent_id}/message", json={"message": "one"})
+    client.post(f"/api/chats/{agent_id}/message", json={"message": "two"}, headers=_identity_header(_OWNER_ACCOUNT))
+
+    assert messenger.sent == [(agent_id, "one"), (agent_id, "two")]
+    assert state_of(app).authors.annotations(ChatId(agent_id)) == ()
+
+
+def test_me_answers_the_requesters_participant_key(app: Flask) -> None:
+    client = app.test_client()
+    assert client.get("/api/me").get_json() == {"participant": "owner"}
+    assert client.get("/api/me", headers=_identity_header(_VISITOR)).get_json() == {"participant": "user:user-bob-4471"}
+    assert client.get("/api/me", headers=_identity_header(_OWNER_ACCOUNT)).get_json() == {
+        "participant": "user:user-owner-9c21"
+    }
+
+
+def test_participants_are_the_shells_roster_with_the_agents_picture_on_this_origin(
+    config: Config, signed_in_account: str, tmp_path: Path
+) -> None:
+    shell = FakeShell(
+        roster_document=RosterDocument(
+            participants=(
+                RosterParticipant(
+                    key=ParticipantKey("workspace-agent"),
+                    kind=ParticipantKind.WORKSPACE_AGENT,
+                    display_name="Atlas",
+                    profile_picture_url="/api/avatars/imbue-character/icon.png?size=64",
+                    email=None,
+                    handle="agent",
+                    color="#2f6b4f",
+                    is_owner=False,
+                    is_connected=True,
+                    last_seen=None,
+                    last_input_at=None,
+                ),
+            )
+        )
+    )
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger(), chat_files_root=tmp_path)
+    client = create_application(build_test_state(config=config, agent_manager=manager, shell=shell)).test_client()
+
+    (agent,) = client.get("/api/participants").get_json()["participants"]
+
+    assert (agent["key"], agent["display_name"], agent["handle"]) == ("workspace-agent", "Atlas", "agent")
+    assert agent["profile_picture_url"] == "/api/participants/workspace-agent/picture"
