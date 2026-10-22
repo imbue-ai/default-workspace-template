@@ -315,6 +315,14 @@ def skip_unless_pinned_claude() -> None:
         pytest.skip(f"claude on PATH is {installed!r}, not the pinned {pinned!r}; these tests assert the pin")
 
 
+def skip_unless_real_claude_agent_can_start() -> None:
+    """Skip the calling test unless ``real_claude_agent`` can start the pinned ``claude`` (mngr, tmux and git)."""
+    skip_unless_pinned_claude()
+    for binary in ("mngr", "tmux", "git"):
+        if shutil.which(binary) is None:
+            pytest.skip(f"{binary} not on PATH")
+
+
 def prepare_isolated_mngr_host_dir(host_dir: Path) -> None:
     """An isolated mngr host dir with its own profile, opted into pytest, local provider only.
 

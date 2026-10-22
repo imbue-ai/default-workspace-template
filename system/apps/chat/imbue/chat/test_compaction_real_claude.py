@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import threading
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -39,7 +38,7 @@ from imbue.chat.testing import private_tmux_server
 from imbue.chat.testing import real_claude_agent
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import serve_app
-from imbue.chat.testing import skip_unless_pinned_claude
+from imbue.chat.testing import skip_unless_real_claude_agent_can_start
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_claude.claude_config import COMPACTING_MARKER_FILENAME
@@ -61,13 +60,6 @@ _SUMMARY_TEXT = "Stand-in summary: the user asked for a one-word reply and got i
 # The pinned Claude Code's compaction prompt, which asks for an analysis block and then a summary block.
 _COMPACTION_PROMPT = "Your task is to create a detailed summary of the conversation so far"
 _TURN_TIMEOUT_MS = 120_000
-
-
-def _skip_unless_runnable() -> None:
-    skip_unless_pinned_claude()
-    for binary in ("mngr", "tmux", "git"):
-        if shutil.which(binary) is None:
-            pytest.skip(f"{binary} not on PATH")
 
 
 def _is_compaction_request(body: dict[str, Any]) -> bool:
@@ -108,7 +100,7 @@ def _chat_app_over(agent: AgentInfo, chats_root: Path) -> Generator[ServedApp, N
 def test_a_compact_typed_in_a_real_claude_chat_shows_compacting_then_lands_the_chips(
     tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _skip_unless_runnable()
+    skip_unless_real_claude_agent_can_start()
     project_dir = tmp_path / "project"
     make_git_project(project_dir)
     replies = _CompactionHoldingReplies()

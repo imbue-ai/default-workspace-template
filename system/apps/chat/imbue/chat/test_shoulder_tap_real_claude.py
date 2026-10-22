@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import threading
 from collections.abc import Callable
 from collections.abc import Generator
@@ -36,7 +35,7 @@ from imbue.chat.testing import prepare_stand_in_claude_profile
 from imbue.chat.testing import private_tmux_server
 from imbue.chat.testing import real_claude_agent
 from imbue.chat.testing import seed_agent_state
-from imbue.chat.testing import skip_unless_pinned_claude
+from imbue.chat.testing import skip_unless_real_claude_agent_can_start
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.utils.polling import wait_for
@@ -46,13 +45,6 @@ pytestmark = [pytest.mark.real_claude]
 _STAND_IN_API_KEY = "sk-ant-api03-stand-in-shoulder-tap"
 _HOLD_SECONDS = 120.0
 _WAIT_SECONDS = 120.0
-
-
-def _skip_unless_runnable() -> None:
-    skip_unless_pinned_claude()
-    for binary in ("mngr", "tmux", "git"):
-        if shutil.which(binary) is None:
-            pytest.skip(f"{binary} not on PATH")
 
 
 def _is_main_loop_request(body: dict[str, Any]) -> bool:
@@ -120,7 +112,7 @@ def _chat_state_over(agent: AgentInfo) -> Generator[tuple[ChatAppState, AgentMan
 def _real_claude_chat(
     tmp_path: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch, replies: _ScriptedReplies
 ) -> Generator[tuple[AgentInfo, AgentManager, AgentSessionWatcher], None, None]:
-    _skip_unless_runnable()
+    skip_unless_real_claude_agent_can_start()
     make_git_project(project_dir)
     # mngr approves the key it finds in its own environment, so claude asks nothing about it.
     monkeypatch.setenv("ANTHROPIC_API_KEY", _STAND_IN_API_KEY)
