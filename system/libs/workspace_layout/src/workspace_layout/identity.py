@@ -70,8 +70,9 @@ def participant_key_of(identity: RequestIdentity) -> ParticipantKey:
 
 @pure
 def is_owner_participant(identity: RequestIdentity) -> bool:
-    """Whether the requester is the owner, under either of the owner's keys (S12)."""
-    return identity.owner and identity.agent_id is None
+    """Whether the requester is the owner, under either of the owner's keys (S12): the header says so, or it names
+    no account and no grant, which ``participant_key_of`` keys ``owner`` whatever the flag says."""
+    return identity.agent_id is None and (identity.owner or identity.user_id is None)
 
 
 @pure

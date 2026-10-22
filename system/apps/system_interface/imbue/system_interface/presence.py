@@ -299,11 +299,11 @@ def _parse_timestamp(value: str) -> datetime:
 def _require_user_id(identity: RequestIdentity) -> UserId:
     """The file a requester's presence is kept under: their user id, or ``owner`` for the owner of a workspace
     that has not shared (S12); a visiting agent never heartbeats, so it has no file here."""
+    if identity.agent_id is not None:
+        raise InvalidShellValueError("presence needs a person (the identity names a visiting agent)")
     if identity.user_id is not None:
         return UserId(identity.user_id)
-    if identity.owner and identity.agent_id is None:
-        return UserId(OWNER_PARTICIPANT_KEY_VALUE)
-    raise InvalidShellValueError("presence needs a person (the identity names neither an account nor the owner)")
+    return UserId(OWNER_PARTICIPANT_KEY_VALUE)
 
 
 @pure

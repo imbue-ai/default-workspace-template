@@ -37,6 +37,7 @@ def test_a_visiting_agent_header_carries_the_grant_and_no_user() -> None:
     ("header", "expected_key"),
     [
         ('{"owner":true}', "owner"),
+        ('{"owner":false}', "owner"),
         ('{"owner":true,"user_id":"user-owner-9c21","email":"owner@example.com"}', "user:user-owner-9c21"),
         ('{"owner":false,"user_id":"user-bob-4471","email":"bob@example.com"}', "user:user-bob-4471"),
         (
@@ -53,6 +54,9 @@ def test_the_owner_is_the_owner_under_either_key_and_never_a_visiting_agent() ->
     assert is_owner_participant(ANONYMOUS_OWNER) is True
     assert is_owner_participant(RequestIdentity(owner=True, user_id="user-owner-9c21", email="o@example.com")) is True
     assert is_owner_participant(RequestIdentity(owner=False, user_id="user-bob-4471", email="b@example.com")) is False
+    # Keyed ``owner`` by participant_key_of, so the owner here too, whatever the flag says.
+    assert is_owner_participant(RequestIdentity(owner=False)) is True
+    assert is_owner_participant(RequestIdentity(owner=False, agent_id="va-0123", agent_name="V", granter="x")) is False
 
 
 def test_only_a_signed_in_visitor_has_a_visiting_user_id() -> None:

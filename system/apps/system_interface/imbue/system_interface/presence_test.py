@@ -186,6 +186,10 @@ def test_the_owner_of_an_unshared_workspace_is_recorded_under_the_owner_key_and_
         == []
     )
     assert store.presence_by_participant(_T0)[OWNER_PARTICIPANT_KEY].is_connected is True
+    # An identity naming neither an account nor a grant is keyed ``owner`` whatever its flag says, so it is
+    # recorded there too.
+    (same,) = store.heartbeat(RequestIdentity(owner=False), _T0).users
+    assert same.participant == "owner"
 
 
 def test_a_visiting_agent_cannot_be_recorded(tmp_path: Path) -> None:
