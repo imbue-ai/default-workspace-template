@@ -32,6 +32,7 @@ from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import ValidationError
+from workspace_layout.primitives import MAX_PARTICIPANT_NAME_LENGTH
 from workspace_layout.primitives import ParticipantKey
 
 from imbue.chat.primitives import ChatId
@@ -63,8 +64,6 @@ AUTHOR_PREFIX_PATTERN: Final[re.Pattern[str]] = re.compile(
 _WHITESPACE_RUN: Final[re.Pattern[str]] = re.compile(r"\s+")
 # The key of an author known only from a prefix nobody annotated (typed by hand, or whose annotation was lost).
 NAME_KEY_PREFIX: Final[str] = "name:"
-# A name a prefix carries may hold anything but the bracket; the key form holds it to one line of at most this.
-_MAX_NAME_KEY_LENGTH: Final[int] = 60
 
 
 class AuthorAnnotation(EventEnvelope):
@@ -120,7 +119,7 @@ def text_sha256(text: str) -> str:
 @pure
 def name_key(display_name: str) -> ParticipantKey:
     """The synthetic key of an author known only by the name a prefix carries."""
-    return ParticipantKey(f"{NAME_KEY_PREFIX}{display_name.strip()[:_MAX_NAME_KEY_LENGTH]}")
+    return ParticipantKey(f"{NAME_KEY_PREFIX}{display_name.strip()[:MAX_PARTICIPANT_NAME_LENGTH]}")
 
 
 def new_author_annotation(
