@@ -65,6 +65,7 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_discovery import SendFailure
+from imbue.chat.agent_discovery import discover_agents
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_naming import ChatNamer
@@ -158,16 +159,24 @@ def observer_holding_the_lock(events_base_dir: Path) -> Generator[None, None, No
         release_observe_lock(fd)
 
 
+class StandInToolUse(FrozenModel):
+    """A tool call the stand-in answers a message request with, in place of text."""
+
+    tool_use_id: str = Field(description="The id Claude Code echoes back on the call's tool_result")
+    name: str = Field(description="The tool to call, e.g. ``Read``")
+    arguments: dict[str, Any] = Field(description="The tool's input")
+
+
 class StandInAnthropicApi:
     """A loopback stand-in for the Anthropic API, to point Claude Code at with ``ANTHROPIC_BASE_URL``.
 
     It records every request's path, auth headers and body. With ``reply_for`` set, ``POST /v1/messages`` gets a
-    valid answer carrying the text ``reply_for`` picks from the request body: the server-sent events of a streamed
-    message when the request asks for a stream, else the message as JSON. Every other request, and every request
-    when ``reply_for`` is None, is answered 401, which is enough to observe the credential a request carries.
+    valid answer carrying the text or tool call ``reply_for`` picks from the request body: the server-sent events of
+    a streamed message when the request asks for a stream, else the message as JSON. Every other request, and every
+    request when ``reply_for`` is None, is answered 401, which is enough to observe the credential a request carries.
     """
 
-    def __init__(self, reply_for: Callable[[dict[str, Any]], str] | None = None) -> None:
+    def __init__(self, reply_for: Callable[[dict[str, Any]], str | StandInToolUse] | None = None) -> None:
         self.captured: list[dict[str, Any]] = []
         self.first_request_event = threading.Event()
         captured = self.captured
@@ -197,12 +206,12 @@ class StandInAnthropicApi:
 
             do_GET = do_POST
 
-            def _answer_message(self, body: dict[str, Any], text: str) -> None:
+            def _answer_message(self, body: dict[str, Any], reply: str | StandInToolUse) -> None:
                 model = str(body.get("model", "claude-haiku-4-5"))
                 if body.get("stream"):
-                    self._send(200, "text/event-stream", _streamed_message_events(model, text))
+                    self._send(200, "text/event-stream", _streamed_message_events(model, reply))
                 else:
-                    self._send(200, "application/json", json.dumps(_message(model, text)).encode())
+                    self._send(200, "application/json", json.dumps(_message(model, reply)).encode())
 
             def _send(self, status: int, content_type: str, payload: bytes) -> None:
                 self.send_response(status)
@@ -237,42 +246,53 @@ def _anthropic_error(error_type: str, message: str) -> bytes:
     return json.dumps({"type": "error", "error": {"type": error_type, "message": message}}).encode()
 
 
-def _message(model: str, text: str) -> dict[str, Any]:
+def _content_block(reply: str | StandInToolUse) -> dict[str, Any]:
+    if isinstance(reply, StandInToolUse):
+        return {"type": "tool_use", "id": reply.tool_use_id, "name": reply.name, "input": reply.arguments}
+    return {"type": "text", "text": reply}
+
+
+def _stop_reason(reply: str | StandInToolUse) -> str:
+    return "tool_use" if isinstance(reply, StandInToolUse) else "end_turn"
+
+
+def _message(model: str, reply: str | StandInToolUse) -> dict[str, Any]:
     return {
         "id": "msg_stand_in",
         "type": "message",
         "role": "assistant",
         "model": model,
-        "content": [{"type": "text", "text": text}],
-        "stop_reason": "end_turn",
+        "content": [_content_block(reply)],
+        "stop_reason": _stop_reason(reply),
         "stop_sequence": None,
         "usage": {"input_tokens": 10, "output_tokens": 5},
     }
 
 
-def _streamed_message_events(model: str, text: str) -> bytes:
+def _streamed_message_events(model: str, reply: str | StandInToolUse) -> bytes:
     started = {
         **_message(model, ""),
         "content": [],
         "stop_reason": None,
         "usage": {"input_tokens": 10, "output_tokens": 1},
     }
+    # A streamed block opens empty and its content arrives as one delta: a tool call's input as partial JSON.
+    if isinstance(reply, StandInToolUse):
+        opening_block = {**_content_block(reply), "input": {}}
+        delta = {"type": "input_json_delta", "partial_json": json.dumps(reply.arguments)}
+    else:
+        opening_block = {"type": "text", "text": ""}
+        delta = {"type": "text_delta", "text": reply}
     events: list[tuple[str, dict[str, Any]]] = [
         ("message_start", {"type": "message_start", "message": started}),
-        (
-            "content_block_start",
-            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
-        ),
-        (
-            "content_block_delta",
-            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
-        ),
+        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": opening_block}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": delta}),
         ("content_block_stop", {"type": "content_block_stop", "index": 0}),
         (
             "message_delta",
             {
                 "type": "message_delta",
-                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "delta": {"stop_reason": _stop_reason(reply), "stop_sequence": None},
                 "usage": {"output_tokens": 5},
             },
         ),
@@ -308,6 +328,109 @@ def prepare_isolated_mngr_host_dir(host_dir: Path) -> None:
         "is_allowed_in_pytest = true\n\n[providers.modal]\nis_enabled = false\n\n[providers.docker]\nis_enabled = false\n"
     )
     (profile_dir / "tmux_onboarding_shown").write_text("")
+
+
+_REAL_CLAUDE_CREATE_TIMEOUT_SECONDS: Final[float] = 300.0
+
+
+def environment_without_own_agent_identity() -> dict[str, str]:
+    """This process's environment without the conftest's own-agent identity, which would make mngr act as that agent."""
+    return {key: value for key, value in os.environ.items() if not key.startswith("MNGR_AGENT_")}
+
+
+@contextmanager
+def private_tmux_server(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    """Point every tmux call (mngr's subprocesses and its in-process sends) at a server of this test's own.
+
+    The directory is short because tmux refuses a socket path over about 100 bytes. The server's sessions are
+    killed by name at the end, never with ``kill-server``.
+    """
+    tmux_dir = Path(tempfile.mkdtemp(prefix="cmp", dir="/tmp"))
+    monkeypatch.delenv("TMUX", raising=False)
+    monkeypatch.setenv("TMUX_TMPDIR", str(tmux_dir))
+    socket_path = tmux_dir / f"tmux-{os.getuid()}" / "default"
+    try:
+        yield
+    finally:
+        if socket_path.exists():
+            listed = subprocess.run(
+                ["tmux", "-S", str(socket_path), "list-sessions", "-F", "#{session_name}"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            for session_name in listed.stdout.split():
+                subprocess.run(
+                    ["tmux", "-S", str(socket_path), "kill-session", "-t", f"={session_name}"],
+                    capture_output=True,
+                    timeout=30,
+                )
+        shutil.rmtree(tmux_dir, ignore_errors=True)
+
+
+def make_git_project(project_dir: Path) -> None:
+    """An empty git repository with one commit, for ``mngr create`` to start an agent in."""
+    project_dir.mkdir()
+    git_env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "test",
+        "GIT_AUTHOR_EMAIL": "test@test.com",
+        "GIT_COMMITTER_NAME": "test",
+        "GIT_COMMITTER_EMAIL": "test@test.com",
+    }
+    subprocess.run(["git", "init", "-q", str(project_dir)], check=True, timeout=30)
+    subprocess.run(
+        ["git", "-C", str(project_dir), "commit", "-q", "--allow-empty", "-m", "init"],
+        check=True,
+        env=git_env,
+        timeout=30,
+    )
+
+
+def prepare_stand_in_claude_profile(host_dir: Path, api: StandInAnthropicApi, api_key: str) -> None:
+    """An isolated mngr profile whose Claude agents start without dialogs and talk to ``api``.
+
+    The URL and key go in the agent's settings ``env``, which Claude Code applies over its process environment
+    (``test_claude_settings_env_auth.py``), so a key the agent's login shell exports cannot replace the stand-in's.
+    The ``env`` extends the home settings' own rather than replacing it, which mngr refuses as a narrowing.
+    """
+    prepare_isolated_mngr_host_dir(host_dir)
+    with (host_dir / "profiles" / "isolated" / "settings.toml").open("a") as settings:
+        settings.write(
+            "\n[agent_types.claude]\nauto_dismiss_dialogs_at_startup = true\n"
+            "\n[agent_types.claude.settings_overrides.env]\n"
+            f'ANTHROPIC_BASE_URL = "{api.base_url}"\n'
+            f'ANTHROPIC_API_KEY = "{api_key}"\n'
+            '\n[agent_types.claude.settings_overrides.__mngr_merge]\n"env" = "extend"\n'
+        )
+
+
+@contextmanager
+def real_claude_agent(project_dir: Path, log_path: Path, agent_name: str) -> Generator[AgentInfo, None, None]:
+    """A Claude agent ``mngr create`` starts in ``project_dir``, destroyed on exit; mngr's output goes to ``log_path``."""
+    try:
+        with open(log_path, "ab") as log:
+            created = subprocess.run(
+                ["mngr", "create", agent_name, "--type", "claude", "--no-connect", "--transfer", "none", "--yes"],
+                cwd=project_dir,
+                env=environment_without_own_agent_identity(),
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                timeout=_REAL_CLAUDE_CREATE_TIMEOUT_SECONDS,
+            )
+        assert created.returncode == 0, f"mngr create failed:\n{log_path.read_text()[-4000:]}"
+        (agent,) = [candidate for candidate in discover_agents() if candidate.name == agent_name]
+        yield agent
+    finally:
+        with open(log_path, "ab") as log:
+            subprocess.run(
+                ["mngr", "destroy", agent_name, "--force"],
+                cwd=project_dir,
+                env=environment_without_own_agent_identity(),
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                timeout=120,
+            )
 
 
 def is_chat_frontend_built() -> bool:
