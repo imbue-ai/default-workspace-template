@@ -255,9 +255,6 @@ def workspace(tmp_path: Path) -> _SyncWorkspace:
     )
 
 
-# --- the config ----------------------------------------------------------------------------------------------------
-
-
 def test_a_sources_stanza_downloads_over_the_api_and_carries_its_search_steps_unwired() -> (
     None
 ):
@@ -414,9 +411,6 @@ def test_a_search_step_that_cannot_be_turned_off_leaves_the_config_as_it_was(
     assert not config_path.with_name("config.toml.import-chats").exists()
 
 
-# --- datalib's and latchkey's answers --------------------------------------------------------------------------------
-
-
 def test_the_run_summary_is_read_from_the_last_summary_line_among_the_event_stream() -> (
     None
 ):
@@ -531,9 +525,6 @@ def test_a_check_without_latchkey_says_so() -> None:
         import_chats.check(CLAUDE, run)
 
 
-# --- the raw stores --------------------------------------------------------------------------------------------------
-
-
 def test_the_raw_store_counts_only_conversations_whose_detail_arrived(
     workspace: _SyncWorkspace,
 ) -> None:
@@ -642,9 +633,6 @@ def test_a_raw_stores_timestamp_that_is_none_of_those_is_no_date(
     raw: str | None,
 ) -> None:
     assert import_chats.parse_updated_at(raw) is None
-
-
-# --- the index -------------------------------------------------------------------------------------------------------
 
 
 def _rendered_page(data_root: Path, group: str, uuid: str, external_id: str) -> Path:
@@ -769,9 +757,6 @@ def test_a_long_title_with_tabs_is_one_line_cut_short_in_the_index(
     assert title.startswith("word word ")
     assert title.endswith("word…")
     assert entry.endswith("(https://chatgpt.com/c/x)")
-
-
-# --- a sync ----------------------------------------------------------------------------------------------------------
 
 
 def test_a_sync_installs_adds_the_sources_runs_their_downloads_and_records_what_it_imported(
@@ -1139,9 +1124,6 @@ def test_a_record_waits_for_another_writer_and_keeps_what_it_wrote(
         "imported",
         "importing",
     )
-
-
-# --- progress --------------------------------------------------------------------------------------------------------
 
 
 def test_a_running_sync_records_the_conversations_downloaded_so_far(
