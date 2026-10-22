@@ -204,7 +204,8 @@ class RoomStore(MutableModel):
 
     def find_by_title(self, title: str) -> RoomRecord | None:
         """The room called ``title`` (case-insensitively), the oldest when several are."""
-        return self._find_by_title_locked(title)
+        with self._lock:
+            return self._find_by_title_locked(title)
 
     def _find_by_title_locked(self, title: str) -> RoomRecord | None:
         wanted = title.strip().casefold()
