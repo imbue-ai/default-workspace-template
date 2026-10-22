@@ -17,9 +17,9 @@ describe("rowsFromSnapshots", () => {
       null,
     );
 
-    expect(rows.map((row) => [row.chatId, row.title, row.status, row.lastActiveMs, row.isProvisional])).toEqual([
-      ["agent-a", "Plan", "idle", 1_700_000_000_000, false],
-      ["agent-b", "New chat", "error", null, true],
+    expect(rows.map((row) => [row.chatId, row.title, row.status, row.lastActiveMs, row.kind])).toEqual([
+      ["agent-a", "Plan", "idle", 1_700_000_000_000, "agent"],
+      ["agent-b", "New chat", "error", null, "provisional"],
     ]);
   });
 });
@@ -126,5 +126,50 @@ describe("groupedRows", () => {
     const rows = rowsFromSnapshots([chatSnapshotFixture("agent-a"), chatSnapshotFixture("agent-b")], [], null);
 
     expect(startsWithMainChat(groupedRows(rows, NONE))).toBe(false);
+  });
+});
+
+describe("rowsFromSnapshots with rooms", () => {
+  const room = (id: string, title: string, awaiting: string[] = [], lastMessagedAt: number | null = null) => ({
+    id,
+    kind: "room" as const,
+    title,
+    last_messaged_at: lastMessagedAt,
+    awaiting_chat_ids: awaiting,
+  });
+
+  it("lists rooms as a third source, with the mention mark the viewer's unseen mentions give", () => {
+    const rows = rowsFromSnapshots(
+      [chatSnapshotFixture("agent-a", { title: "Plan" })],
+      [provisional("agent-b", "awaiting_first_send")],
+      null,
+      [room("room-0123456789abcdef", "Lounge", [], 1_700_000_000)],
+      new Set(["room-0123456789abcdef"]),
+    );
+
+    expect(rows.map((row) => [row.chatId, row.kind, row.title, row.lastActiveMs, row.hasMention])).toEqual([
+      ["agent-a", "agent", "Plan", null, false],
+      ["room-0123456789abcdef", "room", "Lounge", 1_700_000_000_000, true],
+      ["agent-b", "provisional", "New chat", null, false],
+    ]);
+  });
+
+  it("works while an agent chat the room asked is working, and is idle otherwise", () => {
+    const working = chatSnapshotFixture("agent-a", { status: "working" });
+    const idle = chatSnapshotFixture("agent-b", { status: "idle" });
+    const asked = room("room-0123456789abcdef", "Lounge", ["agent-a"]);
+    const unasked = room("room-fedcba9876543210", "Hall", ["agent-b"]);
+
+    const statuses = rowsFromSnapshots([working, idle], [], null, [asked, unasked]).map((row) => row.status);
+
+    expect(statuses).toEqual(["working", "idle", "working", "idle"]);
+  });
+
+  it("lists an awaiting chat turned into a room under its id once, as the room", () => {
+    const rows = rowsFromSnapshots([], [provisional("agent-x", "awaiting_first_send")], null, [
+      room("agent-x", "Chat 2"),
+    ]);
+
+    expect(rows.map((row) => [row.chatId, row.kind])).toEqual([["agent-x", "room"]]);
   });
 });

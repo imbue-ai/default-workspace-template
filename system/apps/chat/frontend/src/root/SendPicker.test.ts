@@ -6,7 +6,7 @@ import type { ChatRow } from "./rows";
 import { SendPicker, pickableRows } from "./SendPicker";
 
 function row(chatId: string, title: string, isProvisional = false): ChatRow {
-  return chatRowFixture(chatId, { title, isProvisional });
+  return chatRowFixture(chatId, { title, kind: isProvisional ? "provisional" : "agent" });
 }
 
 const ROWS = [row("agent-1", "Plan the launch"), row("agent-2", "Fix the tests"), row("agent-3", "New chat", true)];

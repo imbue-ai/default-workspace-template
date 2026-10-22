@@ -36,6 +36,8 @@ import {
   getChats,
   getMainChatId,
   getProvisionalChats,
+  getRoomById,
+  getRooms,
   hasReceivedChatList,
   initChats,
   launchChat,
@@ -52,9 +54,12 @@ import type { ChatRailAttrs } from "./ChatRail";
 import { SendPicker } from "./SendPicker";
 import { initChatUnread, markRead, noteStatuses } from "./chatUnread";
 import { initRailWidth } from "./railWidth";
+import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
+import { createRoom } from "./verbs";
 import { startNewChat } from "./newChat";
 import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
+import { getMentionedChatIds, watchPendingMentions } from "../models/Mentions";
 import { groupedRows, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
 import { intakeTokenFromSearch, rootPathFor, selectionFromSearch, slotFill } from "./selection";
@@ -88,7 +93,7 @@ let isDrawerOpen = false;
 
 function selectedTitle(): string {
   if (selectedChatId === null) return "";
-  return getChatById(selectedChatId)?.title ?? "";
+  return getChatById(selectedChatId)?.title ?? getRoomById(selectedChatId)?.title ?? "";
 }
 
 interface ReportedLocation {
@@ -116,8 +121,13 @@ let isOpeningChatForEmptyList = false;
 const emptyListChatBackoff = new ReconnectBackoff();
 
 /** The rail's rows in display order: the main chat first, then the most recent. */
+/** Every row's source: the chats, the chats not yet agents, the main chat, the rooms, and the viewer's mentions. */
+function allRows(): ChatRow[] {
+  return rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId(), getRooms(), getMentionedChatIds());
+}
+
 function railRows(): ChatRow[] {
-  return groupedRows(rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId()), startedHere);
+  return groupedRows(allRows(), startedHere);
 }
 
 function slotFillFor(chatId: string | null): SlotFill {
@@ -186,6 +196,18 @@ async function openNewChat(): Promise<void> {
   if (outcome.kind === "created") startedHere.add(outcome.chatId);
   awaitingListing.add(outcome.chatId);
   select(outcome.chatId);
+}
+
+/** The New room button: a room named the first free "Room N", shown at once. */
+async function openNewRoom(): Promise<void> {
+  try {
+    const roomId = await createRoom();
+    awaitingListing.add(roomId);
+    select(roomId);
+  } catch (error) {
+    newChatRefusal = describeRequestError(error);
+    m.redraw();
+  }
 }
 
 /** Show ``chatId`` once the pending intake is applied or given up, reporting the selection even when it is the one
@@ -298,7 +320,7 @@ function dismissPick(): void {
 }
 
 function onChatsUpdated(): void {
-  const rows = rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId());
+  const rows = allRows();
   noteStatuses(new Map(rows.map((row) => [row.chatId, row.status])), isRootShown ? selectedChatId : null);
   // A chat that has messaged is no longer new; a deleted chat's frame goes with it.
   for (const chatId of startedHere) {
@@ -414,6 +436,7 @@ function railAttrs(rows: readonly ChatRow[], isCompact: boolean): ChatRailAttrs 
     isTouch: isCompact && touchQuery.matches,
     onPick: (chatId: string) => select(chatId),
     onNew: () => void openNewChat(),
+    onNewRoom: () => void openNewRoom(),
     referenceScope: scopeOfHandshake(handshake),
     onDraftReference: draftReference,
     isReferenceDraftAvailable: isReferenceDraftAvailable(),
@@ -481,6 +504,8 @@ function bootstrap(): void {
   initChats();
   const accountsLoaded = loadAccountsWithRetry();
   addChatsUpdatedListener(onChatsUpdated);
+  // The rows' ``@`` marks: the viewer's unseen mentions, re-read on every push that changes them.
+  void watchPendingMentions().then(() => m.redraw());
   compactQuery.addEventListener("change", () => {
     pool?.setCompact(compactQuery.matches);
     fillSlot();

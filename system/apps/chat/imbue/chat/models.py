@@ -25,6 +25,7 @@ from imbue.chat.harnesses.model import ModelChoice
 from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.primitives import AGENT_ID_PATTERN
 from imbue.chat.primitives import ChatId
+from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.primitives import SUBAGENT_KEY_SEPARATOR
 from imbue.imbue_common.enums import LowerCaseStrEnum
@@ -658,6 +659,9 @@ class ChatSnapshot(FrozenModel):
     """One chat as the chat pages see it: what the ``chats_updated`` WebSocket message carries."""
 
     chat_id: ChatId = Field(description="The chat's id")
+    kind: ChatKind = Field(
+        default=ChatKind.AGENT, description="Always ``agent``: a room is listed by ``GET /api/rooms``"
+    )
     title: str = Field(description="The name the user sees (the ``display_name`` label, else the mngr name)")
     name: str = Field(description="The chat's canonical mngr name")
     project: str | None = Field(description="The project the chat was created in, or None")

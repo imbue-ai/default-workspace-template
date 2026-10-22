@@ -5,6 +5,7 @@
  */
 
 import m from "mithril";
+import { getChatKind } from "../document-meta";
 import { apiUrl, wsUrl } from "@imbue/workspace-ui/src/base-path";
 import { getTerminalOriginLabel } from "../document-meta";
 import { deriveAppOrigin } from "@imbue/workspace-ui/src/origin";
@@ -120,6 +121,8 @@ export function isHandoffCancellable(handoff: HandoffState): boolean {
 /** One chat as the pages see it (the backend's ``ChatSnapshot``, one entry of ``chats_updated``). */
 export interface ChatSnapshot {
   chat_id: string;
+  /** Always "agent": a room is listed by ``getRooms`` instead. */
+  kind?: "agent" | "room";
   // The name the user sees: the ``display_name`` label, else the mngr name.
   title: string;
   // The chat's canonical mngr name, the only way to address it by name.
@@ -177,8 +180,21 @@ export interface ProvisionalChat {
   is_seeded: boolean;
 }
 
+/** A room as the chat app lists it (``rooms.py``): a chat among the workspace's people with no agent. */
+export interface RoomSnapshot {
+  id: string;
+  kind: "room";
+  title: string;
+  /** Epoch seconds of the room's most recent message, or null while it has none. */
+  last_messaged_at: number | null;
+  /** The agent chats a mention from the room sent to and has not heard back from. */
+  awaiting_chat_ids: string[];
+}
+
 type WsEvent =
   | { type: "chats_updated"; chats: ChatSnapshot[]; main_chat_id: string | null }
+  | { type: "rooms_updated"; rooms: RoomSnapshot[] }
+  | { type: "mentions_updated" }
   | ({ type: "provisional_chat_created" } & ProvisionalChat)
   | { type: "provisional_chat_completed"; chat_id: string; success: boolean; error: string | null }
   | { type: "accounts_updated" };
@@ -203,6 +219,8 @@ let mainChatId: string | null = null;
 // The JSON of the last chats_updated payload, to skip redundant identical pushes.
 let lastChatsSerialized = "";
 let provisionalChats: ProvisionalChat[] = [];
+let rooms: RoomSnapshot[] = [];
+let lastRoomsSerialized = "";
 // Whether the chat app has sent its chat list at least once: before that, a chat the page names
 // may simply not be known here yet.
 let isChatListReceived = false;
@@ -213,6 +231,7 @@ let replayedProvisionalIds: Set<string> | null = null;
 // created), settled by the push that registers it or the one that fails it.
 const registrationWaiters = new Map<string, { resolve: () => void; reject: (error: Error) => void }[]>();
 let chatsUpdatedListeners: ChatsUpdatedListener[] = [];
+let mentionsUpdatedListeners: (() => void)[] = [];
 let chatActivityListeners: ChatActivityListener[] = [];
 let chatActiveAgentListeners: ChatActiveAgentListener[] = [];
 let ws: WebSocket | null = null;
@@ -240,6 +259,7 @@ function connect(): void {
     // connection; the list ends the replay and must be handled even when nothing changed.
     replayedProvisionalIds = new Set();
     lastChatsSerialized = "";
+    lastRoomsSerialized = "";
     m.redraw();
   };
 
@@ -289,6 +309,22 @@ function handleEvent(event: WsEvent): void {
   switch (event.type) {
     case "accounts_updated":
       rereadAccounts();
+      break;
+    case "rooms_updated": {
+      const serialized = JSON.stringify(event.rooms);
+      if (serialized === lastRoomsSerialized) break;
+      lastRoomsSerialized = serialized;
+      rooms = event.rooms;
+      // A room is a row of the same list, so the list's listeners hear of it as of any chat.
+      for (const listener of chatsUpdatedListeners) {
+        listener(getChats());
+      }
+      break;
+    }
+    case "mentions_updated":
+      for (const listener of mentionsUpdatedListeners) {
+        listener();
+      }
       break;
     case "chats_updated": {
       isChatListReceived = true;
@@ -443,6 +479,54 @@ export function getShoulderTapAvailableForChat(chatId: string): boolean {
 }
 
 /** Every chat the app has minted that is not an agent yet, for the root's list. */
+/** The rooms as the chat app last listed them. */
+export function getRooms(): RoomSnapshot[] {
+  return rooms;
+}
+
+export function getRoomById(chatId: string): RoomSnapshot | undefined {
+  return rooms.find((room) => room.id === chatId);
+}
+
+/** Whether the page's chat is a room: its document says so, or the list names it as one (a chat awaiting its first
+ *  send turned into a room under the id this page opened on). */
+export function isRoomChat(chatId: string): boolean {
+  return getChatKind() === "room" || getRoomById(chatId) !== undefined;
+}
+
+/** Resolves once the list names ``chatId`` as a room, or after ``timeoutMs`` either way (a push can be lost). */
+export function whenRoomListed(chatId: string, timeoutMs = 5000): Promise<void> {
+  if (getRoomById(chatId) !== undefined) return Promise.resolve();
+  return new Promise((resolve) => {
+    const listener: ChatsUpdatedListener = () => {
+      if (getRoomById(chatId) === undefined) return;
+      removeChatsUpdatedListener(listener);
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      removeChatsUpdatedListener(listener);
+      resolve();
+    }, timeoutMs);
+    addChatsUpdatedListener(listener);
+  });
+}
+
+/** Notified when someone's pending mentions changed, so a page reads its own again. */
+export function addMentionsUpdatedListener(listener: () => void): void {
+  mentionsUpdatedListeners.push(listener);
+}
+
+export function removeMentionsUpdatedListener(listener: () => void): void {
+  mentionsUpdatedListeners = mentionsUpdatedListeners.filter((entry) => entry !== listener);
+}
+
+/** Make the room list a given one, without a push. Test-only. */
+export function setRoomsForTesting(list: RoomSnapshot[]): void {
+  rooms = list;
+  lastRoomsSerialized = "";
+}
+
 export function getProvisionalChats(): ProvisionalChat[] {
   return provisionalChats;
 }

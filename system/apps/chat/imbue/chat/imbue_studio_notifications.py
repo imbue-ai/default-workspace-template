@@ -53,9 +53,50 @@ class ImbueStudioNotificationsClient(MutableModel):
         """Queue the read call for ``chat_id``; the future settles once it has been posted, or dropped."""
         return self._executor.submit(self._post_chat_read, chat_id)
 
+    def notify_mention(self, sender_chat_id: ChatId, mentioned_in: ChatId, title: str, message: str) -> Future[None]:
+        """Queue a notification that the owner was mentioned in ``mentioned_in`` (the multiplayer spec, section
+        7.4), posted as the agent ``sender_chat_id`` runs on (the main chat's), opening that chat when clicked."""
+        return self._executor.submit(self._post_mention, sender_chat_id, mentioned_in, title, message)
+
     def shutdown(self) -> None:
         """Drop the calls not yet started and let the one in flight finish on its own. Idempotent."""
         self._executor.shutdown(wait=False, cancel_futures=True)
+
+    def _post_mention(self, sender_chat_id: ChatId, mentioned_in: ChatId, title: str, message: str) -> None:
+        gateway = self.gateway
+        if gateway is None:
+            logger.debug("Not notifying the owner of a mention in {}: no latchkey gateway", mentioned_in)
+            return
+        agent_id = self.resolve_agent_id(sender_chat_id)
+        if agent_id is None:
+            logger.debug(
+                "Not notifying the owner of a mention in {}: chat {} runs on no agent", mentioned_in, sender_chat_id
+            )
+            return
+        payload = {
+            "message": message,
+            "title": title,
+            "destination": {"type": "minds:focus-chat", "chatId": str(mentioned_in)},
+        }
+        try:
+            response = httpx.post(
+                gateway.url(f"/minds-api-proxy/api/v1/agents/{agent_id}/notifications"),
+                json=payload,
+                headers=gateway.headers(),
+                timeout=_READ_TIMEOUT_SECONDS,
+            )
+        except httpx.HTTPError as e:
+            logger.debug("Could not notify the owner of a mention in {}: {}", mentioned_in, e)
+            return
+        if not response.is_success:
+            logger.warning(
+                "The Imbue Studio app answered {} to a mention notification for {}: {}",
+                response.status_code,
+                mentioned_in,
+                response.text[:200],
+            )
+        else:
+            logger.debug("Notified the owner of a mention in {}", mentioned_in)
 
     def _post_chat_read(self, chat_id: ChatId) -> None:
         gateway = self.gateway

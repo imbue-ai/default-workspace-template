@@ -28,7 +28,10 @@ from imbue.chat.harnesses.registry import build_watcher
 from imbue.chat.harnesses.registry import get_harness_spec
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
+from imbue.chat.mentions import MentionActions
+from imbue.chat.mentions import MentionStore
 from imbue.chat.primitives import ChatId
+from imbue.chat.rooms import RoomStore
 from imbue.chat.roster_client import RosterClient
 from imbue.chat.secret_requests import SecretRequestChatBridge
 from imbue.chat.secret_requests import SecretRequestStore
@@ -111,10 +114,15 @@ class ChatAppState(MutableModel):
     )
     authors: AuthorStore = Field(description="Who wrote each message a visitor or a visiting agent sent, per chat")
     roster: RosterClient = Field(description="The shell's roster: names, keys, and handles, cached briefly")
+    rooms: RoomStore = Field(description="The rooms: chats among the workspace's people with no agent (section 7.3)")
+    mentions: MentionStore = Field(description="The mentions each person has not looked at yet (section 7.4)")
     # The secret requests agents file and the env files their answers are written to, and
     # the router's bridge the routes reach the chats through (attached by ``create_application``).
     secret_requests: SecretRequestStore
     secret_request_bridge: SecretRequestChatBridge | None = None
+    mention_handler: MentionActions | None = Field(
+        default=None, description="What a send's mentions do; attached by ``create_application`` beside the routes"
+    )
     watchers: dict[str, AgentSessionWatcher] = {}
     # The archived segments read so far, by agent id: loaded on the first read that reaches
     # one and dropped with the chat (``stop_and_remove_watcher``, or

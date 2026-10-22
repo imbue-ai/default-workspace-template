@@ -10,21 +10,26 @@
  * level deep, and the pair moves together.
  */
 
-import type { ChatSnapshot, ProvisionalChat, ProvisionalChatPhase } from "../models/Chats";
+import type { ChatSnapshot, ProvisionalChat, ProvisionalChatPhase, RoomSnapshot } from "../models/Chats";
+
+/** What a row is: a chat with an agent, one the app has minted but that is not an agent yet, or a room. */
+export type ChatRowKind = "agent" | "provisional" | "room";
 
 export interface ChatRow {
   chatId: string;
+  kind: ChatRowKind;
   title: string;
-  /** The contract's status: the backend's ``ChatStatus`` value. */
+  /** The contract's status: the backend's ``ChatStatus`` value; a room's is ``working`` while an agent it asked
+   *  works, else ``idle``. */
   status: string;
   labels: Readonly<Record<string, string>>;
   /** Every agent of the chat, in order; a chat that moved to a new agent keeps its old ones. */
   agentIds: readonly string[];
   lastActiveMs: number | null;
-  /** True for a chat the app has minted but that is not an agent yet. */
-  isProvisional: boolean;
   /** True for the workspace's main chat, where a text with no chat of its own goes. */
   isMain: boolean;
+  /** True while the viewer has a mention in the chat they have not looked at. */
+  hasMention: boolean;
 }
 
 // What a chat that is not an agent yet is doing, as a chat status.
@@ -36,33 +41,58 @@ const STATUS_BY_PROVISIONAL_PHASE: Readonly<Record<ProvisionalChatPhase, string>
 
 const PROVISIONAL_TITLE = "New chat";
 
+/** A room's status: working while an agent chat it asked (by mention) is still working on the answer. */
+function roomStatus(room: RoomSnapshot, chats: readonly ChatSnapshot[]): string {
+  const isAsked = (chat: ChatSnapshot): boolean => room.awaiting_chat_ids.includes(chat.chat_id);
+  return chats.some((chat) => isAsked(chat) && chat.status === "working") ? "working" : "idle";
+}
+
 export function rowsFromSnapshots(
   chats: readonly ChatSnapshot[],
   provisional: readonly ProvisionalChat[],
   mainChatId: string | null,
+  rooms: readonly RoomSnapshot[] = [],
+  mentionedChatIds: ReadonlySet<string> = new Set(),
 ): ChatRow[] {
   const known = new Set(chats.map((chat) => chat.chat_id));
   const rows: ChatRow[] = chats.map((chat) => ({
     chatId: chat.chat_id,
+    kind: "agent",
     title: chat.title,
     status: chat.status,
     labels: chat.labels,
     agentIds: chat.agent_ids,
     lastActiveMs: chat.last_messaged_at === null ? null : chat.last_messaged_at * 1000,
-    isProvisional: false,
     isMain: chat.chat_id === mainChatId,
+    hasMention: mentionedChatIds.has(chat.chat_id),
   }));
+  for (const room of rooms) {
+    if (known.has(room.id)) continue;
+    known.add(room.id);
+    rows.push({
+      chatId: room.id,
+      kind: "room",
+      title: room.title,
+      status: roomStatus(room, chats),
+      labels: {},
+      agentIds: [],
+      lastActiveMs: room.last_messaged_at === null ? null : room.last_messaged_at * 1000,
+      isMain: false,
+      hasMention: mentionedChatIds.has(room.id),
+    });
+  }
   for (const chat of provisional) {
     if (known.has(chat.chat_id)) continue;
     rows.push({
       chatId: chat.chat_id,
+      kind: "provisional",
       title: chat.name === "" ? PROVISIONAL_TITLE : chat.name,
       status: STATUS_BY_PROVISIONAL_PHASE[chat.phase],
       labels: {},
       agentIds: [],
       lastActiveMs: null,
-      isProvisional: true,
       isMain: chat.chat_id === mainChatId,
+      hasMention: false,
     });
   }
   return rows;
@@ -70,7 +100,11 @@ export function rowsFromSnapshots(
 
 /** A chat whose first agent is being created: it takes no rename, delete, or other verb until it is up. */
 export function isBeingCreated(row: ChatRow): boolean {
-  return row.isProvisional && row.status === STATUS_BY_PROVISIONAL_PHASE.creating;
+  return row.kind === "provisional" && row.status === STATUS_BY_PROVISIONAL_PHASE.creating;
+}
+
+export function isRoom(row: ChatRow): boolean {
+  return row.kind === "room";
 }
 
 export function isAgentStarted(row: ChatRow): boolean {

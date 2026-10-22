@@ -31,7 +31,7 @@ export interface SendPickerAttrs {
 
 /** The rows a query keeps: the chats that are agents, whose title the query matches. */
 export function pickableRows(rows: readonly ChatRow[], query: string): ChatRow[] {
-  return rows.filter((row) => !row.isProvisional && matchesQuery(query, row.title));
+  return rows.filter((row) => row.kind !== "provisional" && matchesQuery(query, row.title));
 }
 
 export function SendPicker(): m.Component<SendPickerAttrs> {

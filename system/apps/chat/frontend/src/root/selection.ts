@@ -6,8 +6,8 @@
  * account; the root then reports the selection alone.
  */
 
-// A chat id is its first agent's id (the backend's ``AGENT_ID_PATTERN`` in ``primitives.py``).
-const AGENT_ID_PATTERN = /^agent-[A-Za-z0-9_-]{1,120}$/;
+// A chat id is its first agent's id, or a room's (the backend's ``CHAT_ID_PATTERN`` in ``primitives.py``).
+const CHAT_ID_PATTERN = /^(?:agent-[A-Za-z0-9_-]{1,120}|room-[0-9a-f]{16})$/;
 
 export const CHAT_QUERY_KEY = "chat";
 export const INTAKE_QUERY_KEY = "intake";
@@ -15,7 +15,7 @@ export const INTAKE_QUERY_KEY = "intake";
 /** The chat the URL selects, or null for none (or an id that cannot be a chat's). */
 export function selectionFromSearch(search: string): string | null {
   const value = new URLSearchParams(search).get(CHAT_QUERY_KEY);
-  if (value === null || !AGENT_ID_PATTERN.test(value)) return null;
+  if (value === null || !CHAT_ID_PATTERN.test(value)) return null;
   return value;
 }
 

@@ -49,13 +49,20 @@ import {
   getChatById,
   getProvisionalChat,
   isHandoffCancellable,
+  isRoomChat,
   launchChat,
   whenChatRegistered,
+  whenRoomListed,
 } from "../models/Chats";
 import { COMPACTING_STATE, isWorkingActivityState } from "../models/activityState";
 import { harnessLabel } from "./harness-labels";
 import { handoffComposerPlaceholder } from "./handoff-phase";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
+import { ensureMentionHandles, matchingHandles } from "../models/Mentions";
+import type { MentionHandle } from "../models/Mentions";
+import { MENTION_ROW_CAP, insertMention, mentionDraftAt, mentionPopover } from "./MentionPopover";
+import type { MentionDraft } from "./MentionPopover";
+import { makeRoom } from "../root/verbs";
 import { icon, spinnerIcon, stopIcon } from "@imbue/workspace-ui/src/components/icons";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { ATTACHMENT_CHIP_HEIGHT_CLASS, AttachmentStrip } from "./AttachmentStrip";
@@ -312,7 +319,7 @@ function providerNotice(markerClass: string, sentence: string, onChoose: () => v
 function composeRow(leading: m.Children | undefined, boxChildren: m.Children[]): m.Vnode {
   return m("div", { class: "message-input-compose-row flex items-end gap-1.5" }, [
     leading ?? null,
-    m("div", { class: `${INPUT_BOX_CLASS} min-w-0 flex-1` }, boxChildren),
+    m("div", { class: `${INPUT_BOX_CLASS} relative min-w-0 flex-1` }, boxChildren),
   ]);
 }
 
@@ -405,6 +412,53 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   // The chat whose switch-and-send message is still being prepared (uploads, the composer guard):
   // not sent yet, so the switch is still the next send's.
   let switchPreparingChatId: string | null = null;
+  // The mention being typed, while the caret follows an ``@`` (section 7.2); null otherwise.
+  let mentionDraft: MentionDraft | null = null;
+
+  function mentionRows(): MentionHandle[] {
+    return mentionDraft === null ? [] : matchingHandles(mentionDraft.query).slice(0, MENTION_ROW_CAP);
+  }
+
+  /** Read the mention under the caret after the text changed or the caret moved; a fresh ``@`` asks for the table. */
+  function updateMentionDraft(textarea: HTMLTextAreaElement): void {
+    const previous = mentionDraft;
+    mentionDraft = mentionDraftAt(textarea.value, textarea.selectionStart ?? textarea.value.length, previous);
+    if (mentionDraft !== null && previous === null) void ensureMentionHandles().then(() => m.redraw());
+  }
+
+  function pickMention(handle: MentionHandle): void {
+    if (mentionDraft === null || messageTextareaElement === null || currentChatId === null) return;
+    const inserted = insertMention(messageText, mentionDraft, handle.handle);
+    messageText = inserted.text;
+    messageTextareaElement.value = inserted.text;
+    messageTextareaElement.setSelectionRange(inserted.caret, inserted.caret);
+    localStorage.setItem(messageTextKey(currentChatId), messageText);
+    mentionDraft = null;
+    refitComposer();
+    focusMessageTextarea();
+    m.redraw();
+  }
+
+  /** The popover's keys while a mention is being typed; whether the key was taken. */
+  function handleMentionKeydown(event: KeyboardEvent): boolean {
+    if (mentionDraft === null) return false;
+    const rows = mentionRows();
+    if (event.key === "Escape") {
+      mentionDraft = null;
+      return true;
+    }
+    if (rows.length === 0) return false;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      mentionDraft = { ...mentionDraft, index: (mentionDraft.index + step + rows.length) % rows.length };
+      return true;
+    }
+    if (event.key === "Enter" || event.key === "Tab") {
+      pickMention(rows[Math.min(mentionDraft.index, rows.length - 1)]);
+      return true;
+    }
+    return false;
+  }
 
   function focusMessageTextarea(): void {
     messageTextareaElement?.focus();
@@ -734,6 +788,14 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
               m.redraw();
               return;
             }
+            if (accountId === "room") {
+              // The chat becomes a room under this id, and the message is its first.
+              await makeRoom(chatId);
+              await whenRoomListed(chatId);
+              await sendMessage(chatId, finalText, messageId);
+              refocusAfterSend();
+              return;
+            }
             await launchChat(chatId, accountId, finalText);
             try {
               await whenChatRegistered(chatId);
@@ -797,14 +859,20 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
        * names one (an intake's), else the signed-in one when there is one, else whatever the
        * provider chooser produces, or null when it is dismissed instead.
        */
-      async function chooseAccountForFirstSend(provisional: ProvisionalChat): Promise<string | null> {
+      /** The account the first send launches on, ``"room"`` when the chooser's room row was picked instead
+       *  (section 7.3), or null when the chooser closed with neither. */
+      async function chooseAccountForFirstSend(provisional: ProvisionalChat): Promise<string | "room" | null> {
         await whenAccountsReadyToChoose();
         const account = accountForFirstSend(provisional.account_id);
         if (account !== null) {
           return account.id;
         }
         return new Promise((resolve) => {
-          openProviderChooser({ onSignedIn: (accountId) => resolve(accountId), onDismissed: () => resolve(null) });
+          openProviderChooser({
+            onSignedIn: (accountId) => resolve(accountId),
+            onDismissed: () => resolve(null),
+            onRoomChosen: () => resolve("room"),
+          });
         });
       }
 
@@ -961,6 +1029,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       }
 
       function handleKeydown(event: KeyboardEvent): void {
+        if (handleMentionKeydown(event)) {
+          event.preventDefault();
+          m.redraw();
+          return;
+        }
         if (event.key === "Enter" && !event.shiftKey) {
           event.preventDefault();
           void handleSubmit();
@@ -1362,12 +1435,19 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       /** In place of the composer while nothing is signed in that a new chat could start on. The chooser opens as the
        *  notice appears, and its button opens it again once dismissed. */
       function renderNoProviderNotice(): m.Children {
-        return providerNotice(
-          "message-input-no-provider",
-          "Connect an AI provider to start chatting.",
-          () => openProviderChooser(),
-          () => openProviderChooser(),
-        );
+        const open = (): void => openProviderChooser({ onRoomChosen: () => void makeRoomOf(chatId) });
+        return providerNotice("message-input-no-provider", "Connect an AI provider to start chatting.", open, open);
+      }
+
+      /** The notice's room choice: the awaiting chat becomes a room, which the page then draws itself as. */
+      async function makeRoomOf(roomChatId: string | null): Promise<void> {
+        if (roomChatId === null) return;
+        try {
+          await makeRoom(roomChatId);
+        } catch (error) {
+          raiseFailureNotice(roomChatId, { title: "Couldn't make a room", detail: describeRequestError(error) });
+        }
+        m.redraw();
       }
 
       const attachments = getComposerAttachments(chatId);
@@ -1447,6 +1527,14 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           vnode.attrs.leading,
           // With no provider to send to, the composer stays in view, holding any draft, but takes nothing.
           [
+            mentionPopover({
+              rows: mentionRows(),
+              selectedIndex: mentionDraft?.index ?? 0,
+              onPick: pickMention,
+              onHover: (index) => {
+                if (mentionDraft !== null) mentionDraft = { ...mentionDraft, index };
+              },
+            }),
             m(
               "div",
               {
@@ -1462,8 +1550,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                     "px-1 py-1 font-sans text-(length:--font-size-body) leading-[1.4] text-primary focus:outline-none " +
                     "placeholder:text-faint group-data-[stacked]/row:col-span-3 group-data-[stacked]/row:col-start-1 " +
                     "disabled:cursor-not-allowed disabled:opacity-60",
-                  placeholder:
-                    handoff !== null
+                  placeholder: isRoomChat(chatId)
+                    ? "Message (tag @agent to ask the agent)"
+                    : handoff !== null
                       ? handoffComposerPlaceholder(handoff)
                       : isAgentWorking
                         ? "Type to queue more messages..."
@@ -1490,7 +1579,12 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                     const textarea = event.target as HTMLTextAreaElement;
                     messageText = textarea.value;
                     localStorage.setItem(messageTextKey(chatId), messageText);
+                    updateMentionDraft(textarea);
                     refitComposer();
+                  },
+                  onclick: (event: MouseEvent) => updateMentionDraft(event.target as HTMLTextAreaElement),
+                  onblur: () => {
+                    mentionDraft = null;
                   },
                   onkeydown: handleKeydown,
                   onpaste: handlePaste,

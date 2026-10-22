@@ -154,6 +154,18 @@ function notConnectedChip(onSignedIn?: (accountId: string) => void): m.Vnode {
   );
 }
 
+/** The chip of a room (section 7.3): it says what the chat is, and opens nothing, since a room runs on no model. */
+export function roomChip(): m.Vnode {
+  return m(
+    "span",
+    {
+      class: `model-selector-room ${css.PROVISIONAL_CHIP}`,
+      ...hoverTooltipAttrs("A chat among the people here", "above"),
+    },
+    "Chat room",
+  );
+}
+
 /** The chip while what the row would say has not arrived: it keeps the row from reading empty. */
 function loadingChip(): m.Vnode {
   return m("span", { class: `model-selector-loading ${css.PROVISIONAL_CHIP}` }, "Loading…");

@@ -29,7 +29,7 @@ from workspace_layout.primitives import WindowPath
 
 from imbue.chat.auto_open import CHAT_ROOT_PAGE
 from imbue.chat.auto_open import chat_root_path
-from imbue.chat.primitives import AGENT_ID_PATTERN
+from imbue.chat.primitives import CHAT_ID_PATTERN
 from imbue.chat.primitives import ChatId
 from imbue.chat.shell_client import chat_show_args
 from imbue.chat.state import get_state
@@ -81,7 +81,7 @@ def focus_chat_endpoint() -> Response:
     window; 400 for a chat or client id of the wrong shape, 403 in a secondary chat (it opens no windows), and 502
     when the shell could not be reached, refused, or answered something that is not a show's answer."""
     focus_request = parse_request_body(FocusChatRequest)
-    if not AGENT_ID_PATTERN.fullmatch(focus_request.chat_id):
+    if not CHAT_ID_PATTERN.fullmatch(focus_request.chat_id):
         return error_response(f"{focus_request.chat_id!r} is not a chat id", HTTP_BAD_REQUEST)
     state = get_state()
     if state.is_secondary:

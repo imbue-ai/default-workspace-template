@@ -609,6 +609,53 @@ def test_another_persons_turn_is_drawn_under_their_name_without_the_prefix(
     expect(_chat(page).locator(".message-user").first).not_to_have_class(re.compile(r"message-other"))
 
 
+@pytest.mark.timeout(90, func_only=False)
+def test_a_room_lists_beside_the_chats_and_draws_each_persons_message_under_their_name(
+    e2e_server: RunningWorkspace, page: Page
+) -> None:
+    """A room (the multiplayer spec, section 7.3) shows up in the chat list with the people glyph, its page takes
+    a message from the owner and draws a visitor's as the visitor's turn, and its composer says how to reach the
+    agent."""
+    _open_fixture_chat(page, e2e_server)
+    room_id = urllib.request.urlopen(
+        urllib.request.Request(
+            f"{e2e_server.chat_url}/api/rooms",
+            data=b'{"title": "Lounge"}',
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+    ).read()
+    room_id = json.loads(room_id)["id"]
+
+    row = _chat_root(page).locator(f'.chat-rail-row[data-chat-id="{room_id}"]')
+    expect(row).to_be_visible(timeout=15000)
+    expect(row.locator(".chat-rail-room-glyph")).to_be_visible()
+    row.click()
+
+    composer = _chat(page, room_id).locator("textarea.message-input-textbox")
+    expect(composer).to_have_attribute("placeholder", "Message (tag @agent to ask the agent)", timeout=15000)
+    expect(_chat(page, room_id).locator(".model-selector-room")).to_have_text("Chat room")
+    composer.fill("hello room")
+    composer.press("Enter")
+    expect(_chat(page, room_id).locator(".message-user", has_text="hello room")).to_be_visible(timeout=10000)
+
+    posted = urllib.request.urlopen(
+        urllib.request.Request(
+            f"{e2e_server.chat_url}/api/rooms/{room_id}/messages",
+            data=b'{"message": "hi from Bob", "message_id": "m-bob"}',
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-Imbue-Identity": '{"owner": false, "user_id": "user-bob-4471", "email": "bob@example.com"}',
+            },
+        )
+    )
+    assert posted.status == 200
+    bobs = _chat(page, room_id).locator(".message-other", has_text="hi from Bob")
+    expect(bobs).to_be_visible(timeout=10000)
+    expect(bobs.locator(".message-author")).to_have_text("bob")
+
+
 # A conversation whose transcript ends with an unresolved enqueue, so the Claude queue
 # populator surfaces one currently-queued message while a turn is in flight.
 _QUEUED_SESSION_EVENTS: list[dict[str, Any]] = [

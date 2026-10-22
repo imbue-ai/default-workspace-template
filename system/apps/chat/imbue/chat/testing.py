@@ -82,6 +82,7 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.signed_in import SignedIn
+from imbue.chat.mentions import MentionStore
 from imbue.chat.models import ActiveAgentSnapshot
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import ChatSnapshot
@@ -93,6 +94,7 @@ from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatStatus
+from imbue.chat.rooms import RoomStore
 from imbue.chat.roster_client import RosterClient
 from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.server import create_application
@@ -706,6 +708,8 @@ def build_test_state(
     secret_requests: SecretRequestStore | None = None,
     chat_namer: ChatNamer | None = None,
     authors: AuthorStore | None = None,
+    rooms: RoomStore | None = None,
+    mentions: MentionStore | None = None,
 ) -> ChatAppState:
     """Build a `ChatAppState` for tests, injecting fakes where provided.
 
@@ -746,6 +750,10 @@ def build_test_state(
         # Never this package's own data/: a test that reads the annotations back injects a store under its tmp_path.
         authors=authors if authors is not None else AuthorStore(root=Path(tempfile.mkdtemp(prefix="chat-authors-"))),
         roster=RosterClient(shell=shell if shell is not None else DisconnectedShell()),
+        rooms=rooms if rooms is not None else RoomStore(root=Path(tempfile.mkdtemp(prefix="chat-rooms-"))),
+        mentions=mentions
+        if mentions is not None
+        else MentionStore(root=Path(tempfile.mkdtemp(prefix="chat-mentions-"))),
     )
     # Match production: eviction drops a destroyed agent's transcripts, the release a stopped chat's
     # that nobody is streaming, and removing a chat's active agent ends the chat's streams.

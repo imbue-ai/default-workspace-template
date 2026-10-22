@@ -901,6 +901,45 @@ which the chat app proxies from the shell so the page needs no second origin.
 The agent's prose is drawn as bubbles under that picture and the workspace's name,
 one per paragraph.
 
+## Rooms and mentions
+
+A room is a second kind of chat (the multiplayer spec, section 7.3): a message log
+among the workspace's people with no agent, kept under `data/.apps/chat/rooms/<id>/`
+(`room.json` and `messages.jsonl`, one envelope line per message with its author's
+key and name and whom it mentioned; `rooms.py`). Every chat, whatever its kind, has
+one `ChatId`; a room's is minted `room-<16 hex>`, and a chat awaiting its first send
+that is turned into a room (`POST /api/chats/awaiting/<id>/make-room`, the chooser's
+"Chat room (no provider)" row) keeps the agent-shaped id its page opened on, so the
+kind is what the room store answers, never the id's shape. The list's "New room"
+button makes one named the first free "Room N" (`POST /api/rooms`); `POST /api/rooms/lounge`
+makes or answers the Lounge (section 7.5). `GET /api/rooms` lists them, and the
+`rooms_updated` push on `/api/ws` follows every change (sent after the chat list on
+connect); `POST /api/rooms/<id>/rename` and `DELETE /api/rooms/<id>` are the verbs.
+
+A room's page is the chat page: the chat routes hand a room's id to the room store
+(`/events` answers its messages as `user_message` events stamped with their authors,
+`/stream` its live ones, `/message` appends, `/rename` and `/destroy` rename and delete
+it), and a route only an agent chat can answer (the model, the queue, the terminal)
+refuses a room with a 409 by its kind; `make-main` refuses one too. Scripts and
+visiting agents read `GET /api/rooms/<id>/messages?after=<event_id>` and post
+`POST /api/rooms/<id>/messages`; `POST /api/rooms/<id>/post` (loopback only) is what
+`system/scripts/chat_room.py post` and a visiting agent say into a room with, as the
+workspace agent (named after the workspace) or `agent:<id>`.
+
+A mention is `@<handle>` (`mention_parser.py`, section 7.1): the roster's handles as
+the shell assigned them, `@agent` for the workspace's agent, and every chat's title
+(spaces as hyphens, `@Main-chat`), resolved case-insensitively after the people;
+`GET /api/mentions` answers the table the composer's `@` popover offers. On every
+accepted send the chat app acts on the mentions (`rooms_endpoints.py`, section 7.4):
+a mentioned person's pending mentions (`data/.apps/chat/mentions/<key>.jsonl`;
+`GET /api/mentions/pending` answers the requester's own) mark the chat's row with an
+`@` until a page of theirs watches the chat, and the owner is told through the Imbue
+Studio app's feed; from a room, `@agent` or a chat's title sends that chat (the main
+chat for `@agent`) the room's message as `[from: <name> in #<room>] <text>`, the room's
+row showing a working dot until an agent posts into the room; from an agent chat the
+agent reads a handle like any other word. A message an agent posted mentions people
+only, so no loop forms.
+
 ## Memory shedding
 
 The chat app re-tags chat agents' `oom_score_adj` from live activity

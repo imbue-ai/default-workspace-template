@@ -1930,6 +1930,15 @@ class AgentManager:
         if transition.is_newly_watched:
             self._imbue_studio_notifications.mark_chat_read(chat_id)
 
+    def notify_owner_mentioned(self, mentioned_in: ChatId, title: str, message: str) -> None:
+        """Tell the Imbue Studio app's feed the owner was mentioned in ``mentioned_in`` (the multiplayer spec,
+        section 7.4), as the main chat's agent, so the notification opens that chat; a workspace with no main chat
+        posts as the mentioning chat's own agent, which a room never has, so a room's mention then goes unposted."""
+        sender = self.get_main_chat_id()
+        self._imbue_studio_notifications.notify_mention(
+            sender if sender is not None else mentioned_in, mentioned_in, title, message
+        )
+
     def chat_watchers(self, chat_id: ChatId) -> list[str]:
         """The page instances watching the chat now (shown and focused, recently reported)."""
         return self._presence.watchers(chat_id)
