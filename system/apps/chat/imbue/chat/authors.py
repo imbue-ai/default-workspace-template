@@ -2,8 +2,10 @@
 message from someone other than the owner, and how it is joined to the transcript turn it became.
 
 A message reaches the agent through its pane, so the transcript knows nothing of its author; the chat app keeps,
-per chat, an append-only ``authors.jsonl`` under the standard event envelope, one line per accepted send by a
-visitor or a visiting agent, keyed by the composer's ``message_id`` and carrying the hash of the delivered text.
+per chat, an append-only ``authors.jsonl`` under the standard event envelope, one line per send a visitor or a
+visiting agent makes, keyed by the composer's ``message_id`` and carrying the hash of the delivered text. The line
+is written before the text is delivered, so the turn's first stamp (which may run before the send route returns)
+already sees it; a send the chat then refuses leaves a line that matches no turn.
 A message with no annotation is the owner's, as is every message from before the convention. The agent learns a
 non-owner author from the ``[from: <name>] `` prefix the send route puts on the delivered text (never on a slash
 command or bash-mode input, which a harness runs only when it leads the message).
