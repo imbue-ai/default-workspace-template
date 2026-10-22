@@ -14,11 +14,9 @@ wrapper page -- so the same mechanism can wrap a preview of any service, not
 just the system interface itself.
 
 The wrapper itself is registered as its own service, so it is served at its
-own origin too. Every service origin prefixes the service name as one hostname
-label on the workspace host (``<name>.<workspace-host>``), and the workspace
-host cannot be known server-side -- so the inner iframe's ``src`` is derived
-in the page's JavaScript from ``location.host`` by swapping the wrapper's own
-leading label for the inner service's name.
+own origin too. Service origins use an unguessable registered label, so the
+wrapper reads the inner service's label from the app registry at startup. The
+page derives the rest of the hostname from its own origin.
 
 Run via bare ``python3`` (standard library only, no venv needed):
 
@@ -30,11 +28,29 @@ import argparse
 import html
 import json
 import sys
+import tomllib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 
-def build_wrapper_html(inner_service: str, title: str, inner_path: str = "/") -> str:
-    """Build the wrapper chrome page embedding ``inner_service`` in an iframe.
+REGISTRY_PATH = Path("data/.state/apps.toml")
+
+
+def registered_label(inner_service: str, registry_path: Path = REGISTRY_PATH) -> str:
+    """Find the label issued to the inner service when it was registered."""
+    with registry_path.open("rb") as registry_file:
+        registry = tomllib.load(registry_file)
+    for app in registry.get("apps", []):
+        if app.get("name") == inner_service:
+            label = app.get("label")
+            if isinstance(label, str) and label:
+                return label
+            break
+    raise ValueError(f"inner service {inner_service!r} has no registered label")
+
+
+def build_wrapper_html(inner_label: str, title: str, inner_path: str = "/") -> str:
+    """Build the wrapper chrome page embedding the registered inner origin.
 
     ``title`` is shown in the banner (HTML-escaped). The inner iframe ``src`` is
     assigned from JavaScript because the inner service's origin is a sibling of
@@ -47,7 +63,7 @@ def build_wrapper_html(inner_service: str, title: str, inner_path: str = "/") ->
         raise ValueError(f"inner path must start with '/', got {inner_path!r}")
     safe_title = html.escape(title)
     # json.dumps yields safe, quoted JS string literals for the service name and path.
-    service_literal = json.dumps(inner_service)
+    service_literal = json.dumps(inner_label)
     path_literal = json.dumps(inner_path)
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -112,9 +128,8 @@ def build_wrapper_html(inner_service: str, title: str, inner_path: str = "/") ->
   </div>
   <script>
     // Derive the inner service's sibling origin from this page's own host.
-    // Every service origin is <name>.<workspace-host> (the same prefix rule
-    // locally and on shares), so the wrapper at <wrapper>.<workspace-host>
-    // reaches the inner service by swapping its own leading label.
+    // The wrapper and inner service have sibling origins. Use the inner
+    // service's registered label; its bare name is not a valid shared origin.
     // The origin scheme is owned by deriveAppOrigin in
     // system/libs/workspace_ui/src/origin.ts; if it changes, this sibling-swap
     // must change too.
@@ -155,7 +170,7 @@ def _make_handler(page_html: str) -> type[BaseHTTPRequestHandler]:
 
 def serve(port: int, inner_service: str, title: str, inner_path: str) -> None:
     page_html = build_wrapper_html(
-        inner_service=inner_service, title=title, inner_path=inner_path
+        inner_label=registered_label(inner_service), title=title, inner_path=inner_path
     )
     server = ThreadingHTTPServer(("127.0.0.1", port), _make_handler(page_html))
     server.serve_forever()
