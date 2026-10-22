@@ -55,6 +55,43 @@ STATE_DIRECTORY: Final[Path] = Path("data/.state/datalib-app")
 ENV_BIND: Final[str] = "DATALIB_BIND"
 ENV_TOKEN: Final[str] = "DATALIB_TOKEN"
 
+# Who may frame datalib's app page (embed.rs, FRAME_ANCESTORS_ENV): every place Studio shows it
+# from. One fixed list, so nothing changes when the workspace is shared or moves domain.
+ENV_FRAME_ANCESTORS: Final[str] = "DATALIB_FRAME_ANCESTORS"
+
+# Desktop: the Studio window's own page is http://localhost on a random port, and the app is a
+# nested frame on https://<label>.agent-<hex>.localhost:<forward port>. Only pages served from
+# the laptop itself match these.
+_DESKTOP_FRAME_ANCESTORS: Final[tuple[str, ...]] = (
+    "http://localhost:*",
+    "http://127.0.0.1:*",
+    "https://*.localhost:*",
+)
+
+# Share: the workspace shell on the share domain, under one of Imbue's content domains, inside
+# the hosted chrome. Every tier's are listed (mngr's apps/minds config envs). These also admit
+# other users' shares; the share gateway's Caddy appends frame-ancestors for this workspace's
+# share domain alone, and the browser enforces both.
+_SHARE_CONTENT_DOMAINS: Final[tuple[str, ...]] = (
+    "personal-imbue.com",
+    "personal-imbue-staging.com",
+    "personal-imbue-dev.com",
+)
+_CHROME_ORIGINS: Final[tuple[str, ...]] = (
+    "https://studio.imbue.com",
+    "https://minds.imbue.com",
+    "https://studio.imbue-staging.com",
+    "https://minds.imbue-staging.com",
+)
+
+FRAME_ANCESTORS: Final[str] = " ".join(
+    (
+        *_DESKTOP_FRAME_ANCESTORS,
+        *(f"https://*.{domain}" for domain in _SHARE_CONTENT_DOMAINS),
+        *_CHROME_ORIGINS,
+    )
+)
+
 # datalib-http's query key for the token on a launch URL (auth.rs, TOKEN_QUERY_KEY).
 TOKEN_QUERY_KEY: Final[str] = "token"
 
@@ -174,8 +211,12 @@ def build_datalib_http_argv(datalib_http_path: Path, data_root: Path) -> list[st
 
 
 def child_environment(port: int, token: str) -> dict[str, str]:
-    """What datalib-http reads from its environment: the loopback bind and the token to require."""
-    return {ENV_BIND: f"{BIND_HOST}:{port}", ENV_TOKEN: token}
+    """What datalib-http reads from its environment: the loopback bind, the token to require, and who may frame it."""
+    return {
+        ENV_BIND: f"{BIND_HOST}:{port}",
+        ENV_TOKEN: token,
+        ENV_FRAME_ANCESTORS: FRAME_ANCESTORS,
+    }
 
 
 def register_app(
