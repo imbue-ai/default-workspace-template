@@ -42,6 +42,27 @@ def test_a_skill_without_frontmatter_or_an_author_names_none() -> None:
     assert check_skill_authors.frontmatter_field(_skill(""), "author") is None
 
 
+def test_a_later_key_replaces_an_earlier_one_as_in_mngr_s_reader() -> None:
+    text = _skill("author: user\nmetadata:\n  author: imbue\n  audience: system\n")
+
+    assert check_skill_authors.frontmatter_field(text, "author") == "imbue"
+    assert (
+        check_skill_authors.frontmatter_field(
+            _skill("author: imbue\nauthor: user\n"), "author"
+        )
+        == "user"
+    )
+
+
+def test_a_frontmatter_block_that_never_closes_has_no_fields() -> None:
+    assert (
+        check_skill_authors.frontmatter_fields(
+            "---\nname: a-skill\nmetadata:\n  author: imbue\n\n# A skill\n"
+        )
+        == {}
+    )
+
+
 def test_every_skill_not_marked_as_imbue_s_is_reported_except_the_vendored_one(
     tmp_path: Path,
 ) -> None:

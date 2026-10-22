@@ -25,19 +25,34 @@ SYSTEM_AUDIENCE = "system"
 _FRONTMATTER_DELIMITER = "---"
 
 
-def frontmatter_field(text: str, field: str) -> str | None:
-    """The value a SKILL.md's frontmatter gives ``field``, read line by line as mngr's skill reader does (so a key of
-    the ``metadata`` map counts); None when it gives none."""
+def frontmatter_fields(text: str) -> dict[str, str]:
+    """A SKILL.md's frontmatter as mngr's ``split_skill_frontmatter`` reads it, which is what the Skills app reads:
+    line by line (so a key of the ``metadata`` map counts), a later key replacing an earlier one, and no fields at all
+    when the block never closes. Mirrored here because CI runs this script without mngr installed."""
     lines = text.splitlines()
     if not lines or lines[0].strip() != _FRONTMATTER_DELIMITER:
-        return None
-    for line in lines[1:]:
-        if line.strip() == _FRONTMATTER_DELIMITER:
-            return None
+        return {}
+    closing_index = next(
+        (
+            index
+            for index, line in enumerate(lines[1:], start=1)
+            if line.strip() == _FRONTMATTER_DELIMITER
+        ),
+        None,
+    )
+    if closing_index is None:
+        return {}
+    fields: dict[str, str] = {}
+    for line in lines[1:closing_index]:
         key, separator, value = line.partition(":")
-        if separator and key.strip() == field:
-            return value.strip().strip('"')
-    return None
+        if separator and key.strip():
+            fields[key.strip()] = value.strip().strip('"')
+    return fields
+
+
+def frontmatter_field(text: str, field: str) -> str | None:
+    """The value a SKILL.md's frontmatter gives ``field``; None when it gives none."""
+    return frontmatter_fields(text).get(field)
 
 
 def _skill_files(root: Path) -> list[Path]:
