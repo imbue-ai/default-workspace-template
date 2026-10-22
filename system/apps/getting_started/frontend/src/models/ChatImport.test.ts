@@ -43,6 +43,33 @@ describe("the imported summary", () => {
   });
 });
 
+describe("following a running import", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("polls while a source is importing and stops once none is", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    const answers = [chatImport({ claude: source("importing", 3) }), chatImport({ claude: source("imported", 9) })];
+    const fetched = vi.fn(async () => new Response(JSON.stringify(answers.shift()), { status: 200 }));
+    vi.stubGlobal("fetch", fetched);
+    const model = await import("./ChatImport");
+
+    await model.refreshChatImport();
+    expect(fetched).toHaveBeenCalledTimes(1);
+    expect(model.cardPhase(model.getChatImport())).toBe("importing");
+
+    await vi.advanceTimersByTimeAsync(model.POLL_INTERVAL_MS);
+    expect(fetched).toHaveBeenCalledTimes(2);
+    expect(model.cardPhase(model.getChatImport())).toBe("imported");
+
+    await vi.advanceTimersByTimeAsync(3 * model.POLL_INTERVAL_MS);
+    expect(fetched).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("putting the card away", () => {
   afterEach(() => vi.unstubAllGlobals());
 
