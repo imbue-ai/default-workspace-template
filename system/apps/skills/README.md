@@ -85,8 +85,8 @@ Files rather than as a page of this app.
 | `GET /api/find?q=<query>` | What skills.sh has for the query, each marked against the workspace's skills (`OnlineSkillResults`); 400 for a query under two characters, 502 when skills.sh cannot be reached. |
 | `GET /api/health` | Whether the app is up. |
 
-Either listing route answers 500 with the reason when the workspace's git
-history cannot be read. The API is typed through `app_schema` and published at
+Every route above but the health check answers 500 with the reason when the
+workspace's git history cannot be read. The API is typed through `app_schema` and published at
 `/api/schema`; every model but `RenderedInstructions`, `OnlineSkillResults` and `HealthResponse` is the catalog's.
 
 The page is one hand-written document (`src/skills_app/static/index.html`, no
