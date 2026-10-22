@@ -217,6 +217,7 @@ from imbue.chat.rooms_endpoints import MentionHandler
 from imbue.chat.rooms_endpoints import act_on_chat_mentions
 from imbue.chat.rooms_endpoints import broadcast_rooms
 from imbue.chat.rooms_endpoints import post_room_message
+from imbue.chat.rooms_endpoints import rename_room_response
 from imbue.chat.rooms_endpoints import room_events_response
 from imbue.chat.secret_requests import ChatLookup
 from imbue.chat.secret_requests import NoticeDeliveryError
@@ -2217,9 +2218,8 @@ def _rename_chat(chat_id: str) -> Response:
     agent_manager: AgentManager = state.agent_manager
     room = _room_of(chat_id)
     if room is not None:
-        state.rooms.rename(room.id, parse_request_body(RenameChatRequest).title)
-        broadcast_rooms(state)
-        return model_response(RenameChatResponse(status="ok"))
+        title = parse_request_body(RenameChatRequest).title
+        return rename_room_response(state, str(room.id), title, RenameChatResponse(status="ok"))
     agent_info = _find_active_agent(chat_id)
     if agent_info is None and agent_manager.get_provisional_chat(chat_id) is None:
         return _chat_not_found_response(chat_id)

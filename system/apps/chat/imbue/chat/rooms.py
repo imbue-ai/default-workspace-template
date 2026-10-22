@@ -61,6 +61,10 @@ LOUNGE_TITLE: Final[str] = "Lounge"
 ROOM_TITLE_STEM: Final[str] = "Room"
 
 
+class BlankRoomTitleError(ValueError):
+    """A room was given a title with nothing in it."""
+
+
 class RoomRecord(FrozenModel):
     """What a room is: ``room.json``."""
 
@@ -225,12 +229,15 @@ class RoomStore(MutableModel):
             return self._create_locked(LOUNGE_TITLE, created_by, None), True
 
     def rename(self, room_id: ChatId, title: str) -> RoomRecord | None:
-        """The room under its new title, or None for no such room."""
+        """The room under its new title, or None for no such room; a title that is only whitespace raises."""
+        stripped = title.strip()
+        if not stripped:
+            raise BlankRoomTitleError("A room's title cannot be blank")
         with self._lock:
             record = _read_record(self._record_path(room_id))
             if record is None:
                 return None
-            renamed = record.model_copy_update(to_update(record.field_ref().title, title.strip()))
+            renamed = record.model_copy_update(to_update(record.field_ref().title, stripped))
             self._write_record_locked(renamed)
             return renamed
 

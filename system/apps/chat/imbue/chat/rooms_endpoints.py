@@ -55,6 +55,7 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import parse_chat_ref
 from imbue.chat.request_helpers import json_response
 from imbue.chat.request_helpers import require_loopback
+from imbue.chat.rooms import BlankRoomTitleError
 from imbue.chat.rooms import RoomRecord
 from imbue.chat.rooms import RoomSnapshot
 from imbue.chat.rooms import new_room_message
@@ -299,6 +300,20 @@ def room_events_response(state: ChatAppState, room: RoomRecord, after: str | Non
     return json_response({"events": events, "offset": offset, "total": total})
 
 
+def rename_room_response(state: ChatAppState, room_id: str, title: str, success: FrozenModel) -> Response:
+    """Rename the room and push the list, answering ``success``; 400 for a blank title, 404 for no such room. Shared
+    by the room route and the chat route, which answer under their own response models."""
+    parsed = parse_chat_ref(room_id)
+    try:
+        renamed = None if parsed is None else state.rooms.rename(parsed, title)
+    except BlankRoomTitleError as e:
+        return error_response(str(e), 400)
+    if renamed is None:
+        return _room_not_found(room_id)
+    broadcast_rooms(state)
+    return model_response(success)
+
+
 def act_on_chat_mentions(
     state: ChatAppState, chat_id: ChatId, chat_title: str, message_id: str, text: str, identity: RequestIdentity
 ) -> None:
@@ -342,14 +357,7 @@ def _lounge() -> Response:
 
 def _rename_room(room_id: str) -> Response:
     """``POST /api/rooms/<id>/rename``: the room's new title."""
-    state = get_state()
-    body = parse_request_body(RenameRoomRequest)
-    parsed = parse_chat_ref(room_id)
-    renamed = None if parsed is None else state.rooms.rename(parsed, body.title)
-    if renamed is None:
-        return _room_not_found(room_id)
-    broadcast_rooms(state)
-    return model_response(OkResponse())
+    return rename_room_response(get_state(), room_id, parse_request_body(RenameRoomRequest).title, OkResponse())
 
 
 def _delete_room(room_id: str) -> Response:

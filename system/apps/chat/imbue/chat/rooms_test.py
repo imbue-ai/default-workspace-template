@@ -1,11 +1,13 @@
 import json
 from pathlib import Path
 
+import pytest
 from workspace_layout.primitives import ParticipantKey
 
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ROOM_ID_PATTERN
 from imbue.chat.primitives import is_room_id
+from imbue.chat.rooms import BlankRoomTitleError
 from imbue.chat.rooms import LOUNGE_TITLE
 from imbue.chat.rooms import ROOM_MESSAGES_FILENAME
 from imbue.chat.rooms import ROOM_RECORD_FILENAME
@@ -91,6 +93,8 @@ def test_rename_delete_and_the_lounge(tmp_path: Path) -> None:
     reread = store.read(room.id)
     assert reread is not None and reread.title == "New"
     assert store.rename(ChatId("room-0000000000000000"), "x") is None
+    with pytest.raises(BlankRoomTitleError):
+        store.rename(room.id, "  ")
     assert store.find_by_title("new") is not None and store.find_by_title(LOUNGE_TITLE) is None
 
     lounge, is_created = store.ensure_lounge(_BOB)

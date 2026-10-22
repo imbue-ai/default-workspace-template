@@ -5400,6 +5400,9 @@ def test_a_rooms_page_reads_and_posts_through_the_chat_routes(app: Flask, messen
     # the kind, not reported missing.
     assert client.post(f"/api/chats/{room_id}/rename", json={"title": "Hall"}).status_code == 200
     assert client.get("/api/rooms").get_json()["rooms"][0]["title"] == "Hall"
+    assert client.post(f"/api/chats/{room_id}/rename", json={"title": "  "}).status_code == 400
+    assert client.post(f"/api/rooms/{room_id}/rename", json={"title": "  "}).status_code == 400
+    assert client.get("/api/rooms").get_json()["rooms"][0]["title"] == "Hall"
     assert client.post(f"/api/chats/{room_id}/make-main").status_code == 409
     assert client.get(f"/api/chats/{room_id}/model-options").status_code == 409
     assert client.post(f"/api/chats/{room_id}/destroy").get_json() == {"status": "ok"}
