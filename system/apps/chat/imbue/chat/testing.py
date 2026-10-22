@@ -441,6 +441,34 @@ def real_claude_agent(project_dir: Path, log_path: Path, agent_name: str) -> Gen
             )
 
 
+@contextmanager
+def stand_in_real_claude_agent(
+    project_dir: Path,
+    mngr_log_path: Path,
+    agent_name: str,
+    reply_for: Callable[[dict[str, Any]], str | StandInToolUse],
+    api_key: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Generator[tuple[StandInAnthropicApi, AgentInfo], None, None]:
+    """A ``real_claude_agent`` in a fresh git project at ``project_dir``, talking to a ``StandInAnthropicApi``.
+
+    Skips the calling test unless the agent can start. Yields the stand-in, whose ``captured`` requests stay readable
+    after the block, and the agent.
+    """
+    skip_unless_real_claude_agent_can_start()
+    make_git_project(project_dir)
+    # mngr approves the key it finds in its own environment, so claude asks nothing about it.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", api_key)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    with (
+        StandInAnthropicApi(reply_for=reply_for) as api,
+        private_tmux_server(monkeypatch),
+    ):
+        prepare_stand_in_claude_profile(Path(os.environ["MNGR_HOST_DIR"]), api, api_key)
+        with real_claude_agent(project_dir, mngr_log_path, agent_name) as agent:
+            yield api, agent
+
+
 def is_chat_frontend_built() -> bool:
     """True when the chat page's bundle (``static/chat.html``) exists, which the browser tests serve."""
     return (Path(__file__).parent / "static" / "chat.html").is_file()

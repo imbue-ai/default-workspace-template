@@ -9,7 +9,6 @@ to stay in flight.
 from __future__ import annotations
 
 import json
-import os
 import threading
 from collections.abc import Callable
 from collections.abc import Generator
@@ -27,15 +26,10 @@ from imbue.chat.harnesses.claude.tap import RECOVERY_MESSAGE
 from imbue.chat.harnesses.claude.tap import TAP_CHORD
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.state import ChatAppState
-from imbue.chat.testing import StandInAnthropicApi
 from imbue.chat.testing import StandInToolUse
 from imbue.chat.testing import build_test_state
-from imbue.chat.testing import make_git_project
-from imbue.chat.testing import prepare_stand_in_claude_profile
-from imbue.chat.testing import private_tmux_server
-from imbue.chat.testing import real_claude_agent
 from imbue.chat.testing import seed_agent_state
-from imbue.chat.testing import skip_unless_real_claude_agent_can_start
+from imbue.chat.testing import stand_in_real_claude_agent
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.utils.polling import wait_for
@@ -112,21 +106,13 @@ def _chat_state_over(agent: AgentInfo) -> Generator[tuple[ChatAppState, AgentMan
 def _real_claude_chat(
     tmp_path: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch, replies: _ScriptedReplies
 ) -> Generator[tuple[AgentInfo, AgentManager, AgentSessionWatcher], None, None]:
-    skip_unless_real_claude_agent_can_start()
-    make_git_project(project_dir)
-    # mngr approves the key it finds in its own environment, so claude asks nothing about it.
-    monkeypatch.setenv("ANTHROPIC_API_KEY", _STAND_IN_API_KEY)
-    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     with (
-        StandInAnthropicApi(reply_for=replies) as api,
-        private_tmux_server(monkeypatch),
+        stand_in_real_claude_agent(
+            project_dir, tmp_path / "mngr.log", f"tap-probe-{uuid4().hex}", replies, _STAND_IN_API_KEY, monkeypatch
+        ) as (_api, agent),
+        _chat_state_over(agent) as (state, manager),
     ):
-        prepare_stand_in_claude_profile(Path(os.environ["MNGR_HOST_DIR"]), api, _STAND_IN_API_KEY)
-        with (
-            real_claude_agent(project_dir, tmp_path / "mngr.log", f"tap-probe-{uuid4().hex}") as agent,
-            _chat_state_over(agent) as (state, manager),
-        ):
-            yield agent, manager, state.get_or_create_watcher(agent)
+        yield agent, manager, state.get_or_create_watcher(agent)
 
 
 def _send(manager: AgentManager, agent: AgentInfo, text: str) -> None:

@@ -10,7 +10,6 @@ request with canned text, so no credential or network is needed.
 from __future__ import annotations
 
 import json
-import os
 import threading
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -28,17 +27,12 @@ from imbue.chat.auto_open import chat_root_path
 from imbue.chat.primitives import ChatId
 from imbue.chat.server import create_application
 from imbue.chat.testing import ServedApp
-from imbue.chat.testing import StandInAnthropicApi
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import is_chat_frontend_built
 from imbue.chat.testing import is_e2e_browser_installed
-from imbue.chat.testing import make_git_project
-from imbue.chat.testing import prepare_stand_in_claude_profile
-from imbue.chat.testing import private_tmux_server
-from imbue.chat.testing import real_claude_agent
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import serve_app
-from imbue.chat.testing import skip_unless_real_claude_agent_can_start
+from imbue.chat.testing import stand_in_real_claude_agent
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_claude.claude_config import COMPACTING_MARKER_FILENAME
@@ -100,24 +94,17 @@ def _chat_app_over(agent: AgentInfo, chats_root: Path) -> Generator[ServedApp, N
 def test_a_compact_typed_in_a_real_claude_chat_shows_compacting_then_lands_the_chips(
     tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    skip_unless_real_claude_agent_can_start()
-    project_dir = tmp_path / "project"
-    make_git_project(project_dir)
     replies = _CompactionHoldingReplies()
-    # mngr approves the key it finds in its own environment, so claude asks nothing about it.
-    monkeypatch.setenv("ANTHROPIC_API_KEY", _STAND_IN_API_KEY)
-    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
-
-    with (
-        StandInAnthropicApi(reply_for=replies) as api,
-        private_tmux_server(monkeypatch),
-    ):
-        prepare_stand_in_claude_profile(Path(os.environ["MNGR_HOST_DIR"]), api, _STAND_IN_API_KEY)
+    with stand_in_real_claude_agent(
+        tmp_path / "project",
+        tmp_path / "mngr.log",
+        f"compaction-probe-{uuid4().hex}",
+        replies,
+        _STAND_IN_API_KEY,
+        monkeypatch,
+    ) as (api, agent):
         try:
-            with (
-                real_claude_agent(project_dir, tmp_path / "mngr.log", f"compaction-probe-{uuid4().hex}") as agent,
-                _chat_app_over(agent, tmp_path / "chats") as served,
-            ):
+            with _chat_app_over(agent, tmp_path / "chats") as served:
                 page.goto(f"{served.http_url}{chat_root_path(ChatId(agent.id))}")
                 chat = page.frame_locator(f'iframe.chat-root-frame[data-chat-id="{agent.id}"]')
                 textbox = chat.locator(".message-input-textbox")
