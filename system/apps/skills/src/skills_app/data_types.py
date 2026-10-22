@@ -53,7 +53,7 @@ class OnlineSkillState(UpperCaseStrEnum):
 
 
 class OnlineSkill(FrozenModel):
-    """One skill the online index matched, as the Find skills page shows it."""
+    """One skill the online index matched, as the Add a skill page shows it."""
 
     name: str = Field(description="Its name, which the skills CLI installs it by")
     source: str = Field(description="Where it is published: a GitHub owner/repo, or a host")
