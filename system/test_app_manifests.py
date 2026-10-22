@@ -563,31 +563,37 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         assert by_name[name].default_shortcut.launch == "new", name
     assert [param.name for param in by_name["chat"].launch_paths[0].params] == []
     assert [param.name for param in by_name["chat"].launch_paths[1].params] == [
-        "account_id",
-        "message",
+        "message"
     ]
     assert [param.name for param in by_name["chat"].launch_paths[2].params] == [
-        "message"
+        "account_id",
+        "message",
     ]
     assert [param.name for param in by_name["chat"].launch_paths[3].params] == [
         "message"
     ]
+    assert [param.name for param in by_name["chat"].launch_paths[4].params] == [
+        "message"
+    ]
     # The intake's presets (post-launch-paths plan section 3.5): how each launch path chooses the receiving chat.
     assert by_name["chat"].launch_paths[0].presets == {}
-    assert by_name["chat"].launch_paths[1].presets == {"target": "new_chat"}
-    assert by_name["chat"].launch_paths[2].presets == {"target": "chat_selector"}
-    assert by_name["chat"].launch_paths[3].presets == {
+    assert by_name["chat"].launch_paths[1].presets == {"target": "main_chat"}
+    assert by_name["chat"].launch_paths[2].presets == {"target": "new_chat"}
+    assert by_name["chat"].launch_paths[3].presets == {"target": "chat_selector"}
+    assert by_name["chat"].launch_paths[4].presets == {
         "target": "current_chat",
         "is_draft": "true",
     }
-    # The launcher's free-text rows (launcher-and-getting-started plan section 3.1): the chat's ``new`` takes the
-    # typed text as its first message, its ``send`` as a message to an existing chat, and its ``draft`` as text
-    # for a composer; nothing else declares a text or draft param.
+    # The launcher's free-text rows (launcher-and-getting-started plan section 3.1): the chat's ``main`` (the
+    # launcher's Enter) sends the typed text to the main chat, its ``new`` takes it as a new chat's first message,
+    # its ``send`` as a message to an existing chat, and its ``draft`` as text for a composer; nothing else declares a
+    # text or draft param.
     assert by_name["chat"].launch_paths[0].text_param is None
     assert by_name["chat"].launch_paths[1].text_param == "message"
     assert by_name["chat"].launch_paths[2].text_param == "message"
-    assert by_name["chat"].launch_paths[3].text_param is None
-    assert by_name["chat"].launch_paths[3].draft_param == "message"
+    assert by_name["chat"].launch_paths[3].text_param == "message"
+    assert by_name["chat"].launch_paths[4].text_param is None
+    assert by_name["chat"].launch_paths[4].draft_param == "message"
     for name in ("terminal", "files"):
         assert by_name[name].launch_paths[0].text_param is None, name
         assert by_name[name].launch_paths[0].draft_param is None, name
