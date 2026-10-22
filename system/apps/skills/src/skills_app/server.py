@@ -45,13 +45,14 @@ from skills_app.online_search import MIN_QUERY_LENGTH
 from skills_app.online_search import SkillsShSearcher
 from skills_app.online_search import online_skills
 from skills_catalog.catalog import build_catalog
-from skills_catalog.catalog import parse_skill_name
 from skills_catalog.catalog import repo_root_from_environment
 from skills_catalog.data_types import SkillDetail
 from skills_catalog.data_types import SkillListing
 from skills_catalog.errors import GitHistoryError
+from skills_catalog.errors import InvalidSkillNameError
 from skills_catalog.errors import SkillNotFoundError
 from skills_catalog.interfaces import SkillsCatalogInterface
+from skills_catalog.primitives import SkillName
 
 HOST: Final[str] = os.environ.get("SKILLS_APP_HOST", "127.0.0.1")
 PORT: Final[int] = int(os.environ.get("SKILLS_APP_PORT", "8060"))
@@ -101,6 +102,15 @@ def create_app(
             page_document.read_text(encoding="utf-8"), mimetype="text/html", headers={"Cache-Control": "no-store"}
         )
 
+    @app.errorhandler(InvalidSkillNameError)
+    def unnameable_skill(error: InvalidSkillNameError) -> ResponseReturnValue:
+        return error_response(str(error), HTTP_NOT_FOUND)
+
+    @app.errorhandler(SkillNotFoundError)
+    def missing_skill(error: SkillNotFoundError) -> ResponseReturnValue:
+        return error_response(str(error), HTTP_NOT_FOUND)
+
+    @app.errorhandler(GitHistoryError)
     def unreadable_history(error: GitHistoryError) -> ResponseReturnValue:
         logger.warning("Failed to read the skills' history: {}", error)
         return error_response(f"Couldn't read where the skills came from: {error}", HTTP_INTERNAL_SERVER_ERROR)
@@ -131,41 +141,21 @@ def create_app(
     @app.get("/api/skills")
     def listing() -> ResponseReturnValue:
         """Every skill under .agents/skills with where it came from, by name."""
-        try:
-            response = model_response(catalog.list_skills())
-        except GitHistoryError as e:
-            return unreadable_history(e)
+        response = model_response(catalog.list_skills())
         response.headers["Cache-Control"] = "no-store"
         return response
-
-    def described(name: str) -> SkillDetail | ResponseReturnValue:
-        """The skill a request names, or the error response saying why there is none."""
-        wanted = parse_skill_name(name)
-        if wanted is None:
-            return error_response(f"There is no skill called {name!r}.", HTTP_NOT_FOUND)
-        try:
-            return catalog.describe_skill(wanted)
-        except SkillNotFoundError as e:
-            return error_response(str(e), HTTP_NOT_FOUND)
-        except GitHistoryError as e:
-            return unreadable_history(e)
 
     @app.get("/api/skills/<name>")
     def detail(name: str) -> ResponseReturnValue:
         """One skill with its folder and its SKILL.md as written."""
-        found = described(name)
-        if not isinstance(found, SkillDetail):
-            return found
-        response = model_response(found)
+        response = model_response(catalog.describe_skill(SkillName(name)))
         response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.get("/api/skills/<name>/instructions")
     def instructions(name: str) -> ResponseReturnValue:
         """One skill's SKILL.md body, rendered for reading."""
-        found = described(name)
-        if not isinstance(found, SkillDetail):
-            return found
+        found = catalog.describe_skill(SkillName(name))
         response = model_response(RenderedInstructions(html=render_instructions(found.content, found.directory)))
         response.headers["Cache-Control"] = "no-store"
         return response
@@ -183,10 +173,7 @@ def create_app(
             return error_response(
                 "Couldn't reach skills.sh. Check the workspace's internet connection and try again.", HTTP_BAD_GATEWAY
             )
-        try:
-            installed = catalog.list_skills().skills
-        except GitHistoryError as e:
-            return unreadable_history(e)
+        installed = catalog.list_skills().skills
         response = model_response(OnlineSkillResults(query=query, skills=online_skills(matches, installed)))
         response.headers["Cache-Control"] = "no-store"
         return response

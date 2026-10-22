@@ -15,7 +15,6 @@ from skills_catalog.data_types import SkillDetail
 from skills_catalog.data_types import SkillListing
 from skills_catalog.data_types import SkillSummary
 from skills_catalog.data_types import SkillsHistory
-from skills_catalog.errors import InvalidSkillNameError
 from skills_catalog.errors import SkillNotFoundError
 from skills_catalog.git_history import GitSkillHistoryReader
 from skills_catalog.interfaces import SkillHistoryReaderInterface
@@ -124,14 +123,6 @@ def _newest_file_time(directory: Path) -> datetime:
         for file_name in file_names:
             newest = max(newest, (Path(current_root) / file_name).lstat().st_mtime)
     return datetime.fromtimestamp(newest, tz=UTC)
-
-
-def parse_skill_name(raw_name: str) -> SkillName | None:
-    """The skill name a request names, or None when it cannot name a skill."""
-    try:
-        return SkillName(raw_name)
-    except InvalidSkillNameError:
-        return None
 
 
 def build_catalog(repo_root: Path) -> SkillsCatalog:

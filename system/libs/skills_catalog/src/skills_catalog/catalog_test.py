@@ -7,7 +7,6 @@ import pytest
 
 from skills_catalog.catalog import SkillsCatalog
 from skills_catalog.catalog import build_catalog
-from skills_catalog.catalog import parse_skill_name
 from skills_catalog.catalog import repo_root_from_environment
 from skills_catalog.data_types import SkillSummary
 from skills_catalog.errors import SkillNotFoundError
@@ -147,15 +146,6 @@ def test_a_skill_page_carries_its_file_exactly_and_its_folder(workspace_root: Pa
 def test_a_missing_skill_is_not_found(catalog: SkillsCatalog) -> None:
     with pytest.raises(SkillNotFoundError, match="no-such-skill"):
         catalog.describe_skill(SkillName("no-such-skill"))
-
-
-@pytest.mark.parametrize("raw_name", ["", "..", ".hidden", "a/b", "a\\b"])
-def test_a_request_cannot_name_a_path_outside_the_skills_folder(raw_name: str) -> None:
-    assert parse_skill_name(raw_name) is None
-
-
-def test_a_plain_directory_name_is_a_skill_name() -> None:
-    assert parse_skill_name("build-app") == "build-app"
 
 
 def test_the_repo_root_defaults_to_the_current_directory() -> None:
