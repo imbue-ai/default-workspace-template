@@ -1227,8 +1227,8 @@ def main(argv: Sequence[str]) -> None:
     # A credential riding in a URL's query string is blanked before the scan, so
     # a link pasted into a chat or logged by a service costs the report that
     # value rather than the whole file the scan would otherwise withhold. The
-    # scan still reads the result, so a credential the blanking misses is
-    # withheld as before.
+    # scan still reads the result, so a credential the blanking misses is still
+    # withheld.
     collected = [
         (key, label, [(name, redact_url_credentials(content), mtime) for name, content, mtime in class_members])
         for key, label, class_members in collected

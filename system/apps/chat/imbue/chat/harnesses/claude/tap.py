@@ -494,9 +494,9 @@ def execute_claude_shoulder_tap(
         )
 
     # NEEDS_RECOVERY: the messages were committed into the turn the chord cancelled, and no turn of
-    # their own started to answer them (a post-chord dequeue would have resolved to FLUSHED). Nudge
-    # the agent to address the already-committed messages via the confirmed send path -- UNLESS a stop-button
-    # interrupt fired for this agent since the tap began. A stop delivers its own cancel chord,
+    # their own started to answer them. Nudge the agent to address the already-committed messages
+    # via the confirmed send path -- UNLESS a stop-button interrupt fired for this agent since the
+    # tap began. A stop delivers its own cancel chord,
     # whose post-baseline sentinel is indistinguishable from the tap's own cancelled-follow-on
     # signature; resending here would re-drive the very turn the user just stopped. Suppress it.
     if _stop_ran_since(str(agent_state_dir), tap_started_at):
