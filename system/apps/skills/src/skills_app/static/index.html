@@ -868,6 +868,13 @@
     const name = selectedName();
     const before = JSON.stringify(skills.find((skill) => skill.name === name) ?? null);
     if (!(await loadListing({ isPoll: true }))) return;
+    // The skill being read is gone (removed through the chat, or elsewhere): the pane goes back to its note, taking
+    // the gone skill's address with it, so Back does not lead to a page about nothing.
+    if (name && name === selectedName() && !skills.some((skill) => skill.name === name)) {
+      history.replaceState(null, "", "/");
+      route();
+      return;
+    }
     const found = findQuery();
     const results = document.getElementById("find-results");
     if (found !== null && results && found.trim().length >= MIN_FIND_QUERY_LENGTH) loadFindResults(found.trim(), results, { isRefresh: true });
