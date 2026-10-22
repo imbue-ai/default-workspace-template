@@ -184,6 +184,23 @@ def test_outside_the_shell_the_buttons_that_need_it_are_hidden(open_skills_page:
     expect(page.locator("#new-skill")).to_be_visible()
 
 
+def test_inside_the_shell_add_a_skill_stays_on_its_search(
+    searcher: RecordingSkillIndexSearcher, open_framed_skills_page: Callable[[str], Page]
+) -> None:
+    searcher.matches = (indexed_skill("anthropics/skills", "pdf", installs=214612),)
+
+    shell = open_framed_skills_page("/?find=pdf")
+
+    frame = shell.frame_locator("#app")
+    shell.wait_for_function("window.messages.some((m) => m.type === 'shell:location')")
+    expect(frame.locator(".online-name")).to_have_text(["pdf"])
+    expect(frame.locator("article .skill-head h1")).to_have_text("Add a skill")
+    expect(frame.locator(".intro")).to_have_count(0)
+    assert {"type": "shell:location", "path": "/?find=pdf", "title": "Add a skill - Skills"} in shell.evaluate(
+        "window.messages"
+    )
+
+
 def test_inside_the_shell_a_skill_s_buttons_hand_it_to_files_and_the_chat(
     workspace_root: Path, open_framed_skills_page: Callable[[str], Page]
 ) -> None:

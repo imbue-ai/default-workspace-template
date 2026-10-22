@@ -897,8 +897,7 @@
     onHandshake: (received) => {
       handshake = received;
       root.dataset.shell = "";
-      if (selectedName()) reportLocation();
-      else showIntro();
+      reportLocation();
     },
     onShown: () => void refresh(),
   });
