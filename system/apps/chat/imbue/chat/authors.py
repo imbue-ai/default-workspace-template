@@ -40,6 +40,7 @@ from imbue.imbue_common.event_envelope import EventId
 from imbue.imbue_common.event_envelope import EventSource
 from imbue.imbue_common.event_envelope import EventType
 from imbue.imbue_common.event_envelope import IsoTimestamp
+from imbue.imbue_common.event_envelope import parse_iso_timestamp
 from imbue.imbue_common.logging import format_nanosecond_iso_timestamp
 from imbue.imbue_common.logging import generate_log_event_id
 from imbue.imbue_common.mutable_model import MutableModel
@@ -141,23 +142,11 @@ def new_author_annotation(
     )
 
 
-# fromisoformat reads at most six fraction digits; a nanosecond timestamp is cut to microseconds.
-_LONG_FRACTION: Final[re.Pattern[str]] = re.compile(r"\.(\d{6})\d+")
-
-
 @pure
 def _moment_of(timestamp: str) -> float | None:
     """Seconds since the epoch of an ISO 8601 timestamp of any fraction length; None when it does not read."""
-    trimmed = _LONG_FRACTION.sub(r".\1", timestamp.strip())
-    if trimmed.endswith("Z"):
-        trimmed = trimmed[:-1] + "+00:00"
-    try:
-        parsed = datetime.fromisoformat(trimmed)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.timestamp()
+    parsed = parse_iso_timestamp(timestamp)
+    return parsed.timestamp() if parsed is not None else None
 
 
 @pure
