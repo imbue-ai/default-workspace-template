@@ -43,10 +43,12 @@
      colour, not size, part the levels within each, and nothing in a skill's instructions outranks its title. */
   * { box-sizing: border-box; }
   html, body { height: 100%; }
-  /* The chat's scrollbars (apps/chat transcript-scrollbar): out of sight until the pane scrolls, or the pointer
-     nears its right edge, then fading away again. The thumb's colour is a registered property so it can transition. */
+  /* The reading pane's scrollbar is the chat's (apps/chat transcript-scrollbar): out of sight until the pane scrolls,
+     or the pointer nears its right edge, then fading away again. The sidebar's stays in sight, quietly, since in a
+     list where you are matters; it darkens the same way. The thumb's colour is a registered property so it can fade. */
   @property --scrollbar-thumb { syntax: "<color>"; inherits: true; initial-value: transparent; }
   .skill-list, .reader { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; transition: --scrollbar-thumb var(--dur-slow) ease; }
+  .skill-list { --scrollbar-thumb: var(--c-border); }
   .skill-list.scrollbar-shown, .reader.scrollbar-shown { --scrollbar-thumb: color-mix(in srgb, var(--c-text-secondary) 55%, transparent); }
   .instructions pre, .instructions table { scrollbar-width: thin; scrollbar-color: var(--c-border) transparent; }
   body { margin: 0; font-family: var(--font-sans); color: var(--c-text-primary); background: var(--c-surface); font-size: var(--font-size-body); line-height: 1.5; }
@@ -66,17 +68,20 @@
   .empty-search p { margin: 0; color: var(--c-text-secondary); overflow-wrap: anywhere; }
   .clear-search { padding: 3px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); color: var(--c-text-primary); font: inherit; font-size: var(--font-size-row); cursor: pointer; }
   .clear-search:hover { background: var(--c-fill-hover); }
-  .sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 16px 8px 12px 16px; }
+  /* The sidebar's right-hand line: 8px in, or the width of a scrollbar that takes room in the list (the page measures
+     it into --sidebar-scrollbar), so the header's buttons, the search field and the rows' highlight all end on it. */
+  .sidebar { --sidebar-right: max(8px, var(--sidebar-scrollbar, 0px)); }
+  .sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 16px var(--sidebar-right) 12px 16px; }
   h1 { font-size: var(--font-size-heading); font-weight: var(--weight-semibold); line-height: 1.3; margin: 0; overflow-wrap: anywhere; }
   /* The workspace's text field (workspace_ui components/Input.ts) with a glyph inside, as Getting Started's search. */
   /* Compact, at the rows' size: 32px tall with 13px text, 12px clear above and below. Its box sits 8px in, on the
      same line as the rows' highlight; its glyph 16px in, on the same line as the text. */
-  .search { position: relative; margin: 0 8px 12px; }
+  .search { position: relative; margin: 0 var(--sidebar-right) 12px 8px; }
   .search svg { position: absolute; top: 50%; left: 8px; width: 14px; height: 14px; transform: translateY(-50%); color: var(--c-text-faint); pointer-events: none; }
   .search input { display: block; width: 100%; -webkit-appearance: none; appearance: none; height: 32px; padding: 0 10px 0 30px; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); color: var(--c-text-primary); font: inherit; font-size: var(--font-size-row); transition: border-color var(--dur-base), box-shadow var(--dur-base); }
   .search input::placeholder { color: var(--c-text-faint); }
   .search input:focus-visible { border-color: var(--c-accent); }
-  .skill-list { flex: 1; overflow-y: auto; padding: 0 8px 16px; }
+  .skill-list { flex: 1; overflow-y: auto; padding: 0 calc(var(--sidebar-right) - var(--sidebar-scrollbar, 0px)) 16px 8px; }
   .skill-list h2 { margin: 8px 0 2px; font-size: inherit; }
   .skill-list section:first-child h2 { margin-top: 0; }
   .group-toggle { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 8px; border: none; border-radius: var(--radius-sm); background: none; color: var(--c-text-secondary); font: inherit; font-size: var(--font-size-helper); font-weight: var(--weight-semibold); text-align: left; cursor: pointer; }
@@ -580,6 +585,12 @@
 
   // Each scrolling pane shows its scrollbar while it scrolls and for a moment after (the chat's 1.2s), and while the
   // pointer is over the strip where the bar is drawn.
+  // A scrollbar that takes room in the list (classic scrollbars) moves the rows' right edge in; the sidebar's other
+  // boxes follow it. An overlay scrollbar takes none.
+  function measureSidebarScrollbar() {
+    root.style.setProperty("--sidebar-scrollbar", `${listNode.offsetWidth - listNode.clientWidth}px`);
+  }
+  new ResizeObserver(measureSidebarScrollbar).observe(listNode);
   const SCROLLBAR_SHOW_MS = 1200;
   const SCROLLBAR_HOVER_PX = 16;
   for (const pane of [listNode, reader]) {
