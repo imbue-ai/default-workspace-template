@@ -28,8 +28,8 @@ The model is the conservation law ``enqueue = dequeue + remove + popAll`` (see
 This keys resolution off the ledger's LEAVE ops ONLY -- never ``promptSource`` or
 the ``queued_command`` attachment -- because in the real Imbue Studio flow every message
 is delivered via mngr (typed into the TUI) and commits as a ``dequeue`` whose
-``promptSource`` is "typed" (or, folded into the running turn, as a ``remove``),
-which those markers do not catch. Resolution is
+``promptSource`` is "typed", which those markers do not catch; a message Claude folds
+into the running turn leaves as a ``remove`` instead. Resolution is
 POSITIONAL (drop the FIFO head): the ledger carries no correlation id. There is NO
 fuzzy text matching -- the only content use is the ``<task-notification>`` prefix /
 blank check that decides phantom-ness, and salting the ``queued_id`` hash.
