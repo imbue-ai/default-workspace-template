@@ -52,9 +52,11 @@ function bubbleHeader(): m.Vnode {
   ]);
 }
 
-/** The agent's prose as bubbles: the first of a run squared at its top-left corner, where the header points. */
-export function machineBubbles(attrs: MachineBubblesAttrs): m.Vnode {
+/** The agent's prose as bubbles: the first of a run squared at its top-left corner, where the header points.
+ *  Null for text with no paragraph in it (a lone newline before a tool call), which draws nothing. */
+export function machineBubbles(attrs: MachineBubblesAttrs): m.Vnode | null {
   const paragraphs = splitParagraphs(attrs.text);
+  if (paragraphs.length === 0) return null;
   return m("div", { class: "machine-bubbles flex flex-col items-start gap-1.5", "data-machine-bubbles": "" }, [
     attrs.isHeaded ? bubbleHeader() : null,
     ...paragraphs.map((paragraph, index) =>

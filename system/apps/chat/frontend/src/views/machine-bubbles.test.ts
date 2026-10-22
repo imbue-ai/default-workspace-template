@@ -61,6 +61,10 @@ describe("machineBubbles", () => {
     expect(bubbles[1].className).not.toContain("rounded-tl-sm");
   });
 
+  it("draws nothing for text with no paragraph in it", () => {
+    expect(machineBubbles({ ...attrs, text: "\n", isHeaded: true })).toBeNull();
+  });
+
   it("wears no header past the run's first group, and a monogram before the roster has landed", () => {
     expect(render(machineBubbles({ ...attrs, isHeaded: false })).querySelector("[data-machine-header]")).toBeNull();
 

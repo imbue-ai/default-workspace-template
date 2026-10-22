@@ -680,15 +680,16 @@ function appendEventParts(
       );
     } else {
       // The agent speaking: one bubble per paragraph, the run's first group headed by its face and name.
-      children.push(
-        machineBubbles({
-          text: textContent,
-          timestamp: event.timestamp,
-          expansionKeyPrefix: event.event_id,
-          isHeaded: !header.isDrawn,
-        }),
-      );
-      header.isDrawn = true;
+      const bubbles = machineBubbles({
+        text: textContent,
+        timestamp: event.timestamp,
+        expansionKeyPrefix: event.event_id,
+        isHeaded: !header.isDrawn,
+      });
+      if (bubbles !== null) {
+        children.push(bubbles);
+        header.isDrawn = true;
+      }
     }
   }
   for (const toolCall of toolCalls) {

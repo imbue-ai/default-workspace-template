@@ -477,6 +477,20 @@ describe("renderAssistantRun", () => {
     expect(headers).toEqual([true, false]);
   });
 
+  it("keeps the header for the run's first real prose when a whitespace text comes before it", () => {
+    const children = renderAssistantRun(
+      [assistantEvent("a1", "\n", [call("t1")]), assistantEvent("a2", "the words", [])],
+      new Map(),
+      "agent-x",
+    );
+    const groups = children.filter(
+      (c) => (c as m.Vnode<{ "data-machine-bubbles"?: string }>).attrs?.["data-machine-bubbles"] !== undefined,
+    );
+    expect(groups).toHaveLength(1);
+    const [header] = (groups[0] as m.Vnode).children as m.Children[];
+    expect(header).not.toBeNull();
+  });
+
   it("keeps each chip pointing at the event that issued it", () => {
     const children = renderAssistantRun(
       [assistantEvent("a1", "", [call("t1")]), assistantEvent("a2", "", [call("t2")])],
