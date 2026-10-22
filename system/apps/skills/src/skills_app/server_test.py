@@ -10,6 +10,7 @@ from skills_app.testing import indexed_skill
 from skills_catalog.catalog import build_catalog
 from skills_catalog.testing import commit_all
 from skills_catalog.testing import write_skill
+from skills_catalog.testing import write_skills_lock
 
 MANIFEST_PATH = Path(__file__).resolve().parents[2] / "app.toml"
 
@@ -103,10 +104,7 @@ def test_find_marks_each_online_match_against_the_workspace_s_skills(
     workspace_root: Path, client: FlaskClient, searcher: RecordingSkillIndexSearcher
 ) -> None:
     write_skill(workspace_root, "web-design", "Design guidelines.")
-    (workspace_root / "skills-lock.json").write_text(
-        '{"version": 1, "skills": {"web-design": {"source": "vercel-labs/agent-skills", "sourceType": "github",'
-        ' "skillPath": "skills/web-design/SKILL.md", "computedHash": "abc"}}}'
-    )
+    write_skills_lock(workspace_root, {"web-design": "vercel-labs/agent-skills"})
     commit_all(workspace_root, "npx skills add vercel-labs/agent-skills")
     searcher.matches = (
         indexed_skill("vercel-labs/agent-skills", "web-design", installs=900),

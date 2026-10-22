@@ -10,15 +10,12 @@ from skills_app.mock_skill_index_searcher_test import RecordingSkillIndexSearche
 from skills_app.testing import indexed_skill
 from skills_catalog.testing import commit_all
 from skills_catalog.testing import write_skill
+from skills_catalog.testing import write_skills_lock
 
 pytestmark = [pytest.mark.browser, pytest.mark.timeout(60)]
 
 _DESKTOP = (1200, 800)
 _PHONE = (390, 800)
-_INSTALL_LOCK = (
-    '{"version": 1, "skills": {"web-design": {"source": "vercel-labs/agent-skills", "sourceType": "github",'
-    ' "skillPath": "skills/web-design/SKILL.md", "computedHash": "abc"}}}'
-)
 OpenPage = Callable[[str, int, int], Page]
 
 
@@ -26,7 +23,7 @@ def _add_one_skill_of_each_kind(workspace_root: Path) -> None:
     """A skill made here, one installed, one that comes with Studio, and one of Studio's behind the scenes."""
     write_skill(workspace_root, "news-digest", "Summarize the news.", author="user")
     write_skill(workspace_root, "web-design", "Design guidelines.", author="vercel")
-    (workspace_root / "skills-lock.json").write_text(_INSTALL_LOCK)
+    write_skills_lock(workspace_root, {"web-design": "vercel-labs/agent-skills"})
     write_skill(workspace_root, "build-app", "Build an app.", author="imbue")
     write_skill(workspace_root, "handoff-summary", "Hand a chat over.", author="imbue", audience="system")
     commit_all(workspace_root, "Add one skill of each kind")

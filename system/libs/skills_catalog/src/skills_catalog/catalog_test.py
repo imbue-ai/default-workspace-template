@@ -19,11 +19,7 @@ from skills_catalog.testing import commit_all
 from skills_catalog.testing import init_workspace_repo
 from skills_catalog.testing import run_git
 from skills_catalog.testing import write_skill
-
-_INSTALL_LOCK = (
-    '{"version": 1, "skills": {"web-design": {"source": "vercel-labs/agent-skills", "sourceType": "github",'
-    ' "skillPath": "skills/web-design/SKILL.md", "computedHash": "abc"}}}'
-)
+from skills_catalog.testing import write_skills_lock
 
 
 def test_who_a_skill_comes_from_follows_its_author_then_the_lock_files(
@@ -34,9 +30,7 @@ def test_who_a_skill_comes_from_follows_its_author_then_the_lock_files(
     write_skill(workspace_root, "web-design", "Design guidelines.", author="vercel")
     write_skill(workspace_root, "trivia-quiz", "Quiz the user.", author="user")
     write_skill(workspace_root, "news-digest", "Summarize the news.")
-    (workspace_root / "skills-lock.json").write_text(
-        _INSTALL_LOCK.replace('"web-design"', '"blueprint": {}, "web-design"', 1)
-    )
+    write_skills_lock(workspace_root, {"blueprint": "imbue-ai/skills", "web-design": "vercel-labs/agent-skills"})
     commit_all(workspace_root, "Workspace changes")
 
     by_name: dict[str, SkillSummary] = {summary.name: summary for summary in catalog.list_skills().skills}
@@ -94,7 +88,7 @@ def test_a_saved_skill_was_last_updated_by_its_newest_commit_and_an_edited_one_b
 
 def test_an_installed_skill_carries_its_lock_file_source(workspace_root: Path, catalog: SkillsCatalog) -> None:
     write_skill(workspace_root, "web-design", "Design guidelines.")
-    (workspace_root / "skills-lock.json").write_text(_INSTALL_LOCK)
+    write_skills_lock(workspace_root, {"web-design": "vercel-labs/agent-skills"})
     commit_all(workspace_root, "npx skills add vercel-labs/agent-skills")
 
     summary = catalog.describe_skill(SkillName("web-design")).summary

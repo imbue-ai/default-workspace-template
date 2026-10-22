@@ -1,4 +1,6 @@
+import json
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 
 from skills_catalog.primitives import SKILLS_DIR
@@ -21,6 +23,15 @@ def write_skill(
         f"---\nname: {name}\ndescription: {description}\n{metadata}---\n\n# {name}\n\nDo the thing.\n"
     )
     return skill_file
+
+
+def write_skills_lock(repo_root: Path, sources_by_skill_name: Mapping[str, str]) -> None:
+    """Write the skills lock `npx skills add` keeps at the checkout's root, recording each skill's GitHub source."""
+    skills = {
+        name: {"source": source, "sourceType": "github", "skillPath": f"skills/{name}/SKILL.md", "computedHash": "abc"}
+        for name, source in sources_by_skill_name.items()
+    }
+    (repo_root / "skills-lock.json").write_text(json.dumps({"version": 1, "skills": skills}))
 
 
 def commit_all(repo_root: Path, message: str) -> str:

@@ -12,8 +12,8 @@ from skills_app.testing import LocalSkillIndex
 from skills_app.testing import indexed_skill
 from skills_catalog.catalog import build_catalog
 from skills_catalog.testing import commit_all
-from skills_catalog.testing import init_workspace_repo
 from skills_catalog.testing import write_skill
+from skills_catalog.testing import write_skills_lock
 
 # The shape skills.sh answered for "pdf", fields the page does not read included.
 _ANSWER = {
@@ -64,17 +64,11 @@ def test_an_answer_without_a_skills_list_is_not_a_search_result() -> None:
         indexed_skills_from_answer({"error": "rate limited"})
 
 
-def test_a_match_is_installed_only_when_the_skill_of_its_name_came_from_its_source(tmp_path: Path) -> None:
-    root = tmp_path / "workspace"
-    root.mkdir()
-    init_workspace_repo(root, ("assist",))
-    write_skill(root, "pdf", "Work with PDFs.")
-    (root / "skills-lock.json").write_text(
-        '{"version": 1, "skills": {"pdf": {"source": "Anthropics/Skills", "sourceType": "github",'
-        ' "skillPath": "skills/pdf/SKILL.md", "computedHash": "abc"}}}'
-    )
-    commit_all(root, "npx skills add anthropics/skills")
-    installed = build_catalog(root).list_skills().skills
+def test_a_match_is_installed_only_when_the_skill_of_its_name_came_from_its_source(workspace_root: Path) -> None:
+    write_skill(workspace_root, "pdf", "Work with PDFs.")
+    write_skills_lock(workspace_root, {"pdf": "Anthropics/Skills"})
+    commit_all(workspace_root, "npx skills add anthropics/skills")
+    installed = build_catalog(workspace_root).list_skills().skills
 
     marked = online_skills(
         (
