@@ -592,7 +592,6 @@
     ]);
   }
 
-  // The results' last row: what was searched for, made by the agent instead, in the chat's green.
   // Only skills that are the workspace's own -- made here, or installed -- can be removed: Studio itself starts some of
   // the ones it ships (the chat sends /handoff-summary), and a removed one would clash with Studio's next update.
   // Removing goes through the chat, which the person confirms by sending: the agent removes an installed skill with
@@ -607,6 +606,7 @@
     return button;
   }
 
+  // The results' last row: what was searched for, made by the agent instead, in the chat's green.
   function makeRow(query) {
     const row = element("button", { type: "button", class: "make-row", title: "Put the request in the chat, to send when ready" }, [element("span", { text: `Make “${query}” with your agent` })]);
     row.insertAdjacentHTML("afterbegin", iconSvg("edit"));
