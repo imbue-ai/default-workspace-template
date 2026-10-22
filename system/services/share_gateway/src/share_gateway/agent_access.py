@@ -16,15 +16,12 @@ from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 
-from share_gateway.agent_audit import write_agent_access_event
 from share_grants.agent_grants import AGENT_GRANTS_FILE
 from share_grants.agent_grants import AGENT_INVITES_FILE
 from share_grants.agent_grants import AgentGrant
 from share_grants.agent_grants import AgentInvite
-from share_gateway.agent_keys import AgentKeyError
 from share_grants.agent_grants import INVITE_LIFETIME
 from share_grants.agent_grants import INVITE_MAX_FAILED_ATTEMPTS
-from share_gateway.agent_keys import canonical_public_key_line
 from share_grants.agent_grants import find_invite_by_code
 from share_grants.agent_grants import hash_admission_token
 from share_grants.agent_grants import hash_invite_code
@@ -42,6 +39,10 @@ from share_grants.agent_grants import render_agent_invites
 from share_grants.agent_grants import sanitize_agent_name
 from share_grants.agent_grants import write_text_atomic
 from share_grants.json_values import is_json_object
+
+from share_gateway.agent_audit import write_agent_access_event
+from share_gateway.agent_keys import AgentKeyError
+from share_gateway.agent_keys import canonical_public_key_line
 from share_gateway.log import log
 
 DEFAULT_AUTHORIZED_KEYS_PATH = Path.home() / ".ssh" / "authorized_keys"

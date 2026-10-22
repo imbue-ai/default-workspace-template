@@ -33,6 +33,13 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from share_grants.agent_grants import AGENT_LAST_SEEN_FILE
+from share_grants.agent_grants import AgentGrantsError
+from share_grants.agent_grants import AgentScopeError
+from share_grants.agent_grants import WORKSPACE_SCOPE
+from share_grants.agent_grants import utc_now
+from share_grants.agent_grants import validate_scope
+
 from share_gateway import materials as materials_module
 from share_gateway.agent_access import InvalidGrantLifetimeError
 from share_gateway.agent_access import LastSeenStore
@@ -45,12 +52,6 @@ from share_gateway.agent_access import mint_invite
 from share_gateway.agent_access import reconcile
 from share_gateway.agent_access import revoke
 from share_gateway.agent_audit import events_dir_from_environ
-from share_grants.agent_grants import AGENT_LAST_SEEN_FILE
-from share_grants.agent_grants import AgentGrantsError
-from share_grants.agent_grants import AgentScopeError
-from share_grants.agent_grants import WORKSPACE_SCOPE
-from share_grants.agent_grants import utc_now
-from share_grants.agent_grants import validate_scope
 from share_gateway.agent_orientation import HELPER_PATH
 from share_gateway.agent_orientation import SKILLS_INDEX_CACHE_PATH
 from share_gateway.agent_orientation import build_changes_feed

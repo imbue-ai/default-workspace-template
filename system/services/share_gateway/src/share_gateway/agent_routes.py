@@ -22,6 +22,16 @@ from pathlib import Path
 from flask import Flask
 from flask import Response
 from flask import request
+from share_grants.agent_grants import AgentGrant
+from share_grants.agent_grants import AgentGrantsError
+from share_grants.agent_grants import AgentScopeError
+from share_grants.agent_grants import find_grant_by_token
+from share_grants.agent_grants import is_agent_id
+from share_grants.agent_grants import load_active_agent_grants
+from share_grants.agent_grants import validate_scope
+from share_grants.grants import GrantsError
+from share_grants.grants import load_grants
+from share_grants.json_values import is_json_object
 
 from share_gateway.agent_access import AgentAccessPaths
 from share_gateway.agent_access import InvalidGrantLifetimeError
@@ -36,13 +46,6 @@ from share_gateway.agent_access import list_grants
 from share_gateway.agent_access import mint_invite
 from share_gateway.agent_access import revoke
 from share_gateway.agent_access import visible_grants
-from share_grants.agent_grants import AgentGrant
-from share_grants.agent_grants import AgentGrantsError
-from share_grants.agent_grants import AgentScopeError
-from share_grants.agent_grants import find_grant_by_token
-from share_grants.agent_grants import is_agent_id
-from share_grants.agent_grants import load_active_agent_grants
-from share_grants.agent_grants import validate_scope
 from share_gateway.agent_orientation import HELPER_PATH
 from share_gateway.agent_orientation import LatchkeySummaryCache
 from share_gateway.agent_orientation import build_changes_feed
@@ -59,11 +62,8 @@ from share_gateway.agent_workspace import app_origins_for
 from share_gateway.agent_workspace import exec_origin_for
 from share_gateway.caddyfile import RegisteredApp
 from share_gateway.caddyfile import build_grantable_service_names
-from share_grants.grants import GrantsError
-from share_grants.grants import load_grants
 from share_gateway.identity import RequesterIdentity
 from share_gateway.identity import bearer_token_from_headers
-from share_grants.json_values import is_json_object
 from share_gateway.log import log
 from share_gateway.server import forwarded_client_ip
 from share_gateway.session_cookie import verify_session_from_cookies
