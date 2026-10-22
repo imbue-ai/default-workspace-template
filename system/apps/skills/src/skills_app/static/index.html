@@ -412,8 +412,14 @@
     return body;
   }
 
+  // An address with a malformed escape (/50%) names the skill by its text as typed, which no skill has.
   function selectedName() {
-    return decodeURIComponent(location.pathname.replace(/^\/+|\/+$/g, ""));
+    const path = location.pathname.replace(/^\/+|\/+$/g, "");
+    try {
+      return decodeURIComponent(path);
+    } catch {
+      return path;
+    }
   }
 
   function reportLocation() {

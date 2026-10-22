@@ -206,6 +206,13 @@ def test_a_failed_reread_of_the_open_skill_keeps_it_showing(workspace_root: Path
     expect(page.locator("#reader .error")).to_have_count(0)
 
 
+def test_an_address_with_a_malformed_escape_names_no_skill(open_skills_page: OpenPage) -> None:
+    page = open_skills_page("/50%", *_DESKTOP)
+
+    expect(page.locator("#reader .error")).to_contain_text("There is no skill called '50%'")
+    expect(page.locator("a[data-skill]")).to_have_count(2)
+
+
 def test_a_narrow_window_shows_the_list_or_one_skill(open_skills_page: OpenPage) -> None:
     listing = open_skills_page("/", *_PHONE)
     expect(listing.locator("a[data-skill]")).to_have_count(2)
