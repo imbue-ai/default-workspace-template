@@ -457,6 +457,11 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["skills"].default_shortcut is not None
     assert by_name["skills"].default_shortcut.launch == "open"
     assert by_name["skills"].default_shortcut.mode == "focus"
+    # Files takes a file to show and a file to edit (the Skills app's pencil on a SKILL.md), each as its own page.
+    assert [(handler.type, handler.show, handler.showing) for handler in by_name["files"].message_handlers] == [
+        ("open:file", "{path}?view", ("{path}", "{path}/", "{path}/?view")),
+        ("edit:file", "{path}?edit", ("{path}?edit",)),
+    ]
     # One order for the built-ins: the desktop seeds its shortcuts in it and the launcher lists its apps in it.
     assert sorted(
         (manifest.launcher_rank, manifest.name) for manifest in by_name.values() if manifest.launcher_rank is not None
