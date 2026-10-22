@@ -46,9 +46,9 @@ class ChatImportSource(FrozenModel):
     model_config = ConfigDict(extra="ignore")
 
     state: ChatImportState = Field(description="Where the source's last import got to")
-    conversations: int = Field(default=0, ge=0, description="Pages imported so far, one per conversation")
+    conversations: int = Field(default=0, ge=0, description="Conversations downloaded so far")
     updated_at: str = Field(default="", description="When the record was last written, ISO 8601")
-    detail: str = Field(default="", description="Why the last import failed; empty otherwise")
+    detail: str = Field(default="", description="What went wrong, or what is still to come; empty when nothing is")
     pid: int | None = Field(default=None, description="The sync's process while it is importing")
     fetched: int | None = Field(
         default=None, ge=0, description="Conversations the running import has fetched; None when it reports no total"
@@ -123,7 +123,7 @@ class ChatImportSourceView(FrozenModel):
     state: ChatImportState = Field(description="Where the source's last import got to")
     conversations: int = Field(description="Conversations imported so far")
     updated_at: str = Field(description="When the record was last written, ISO 8601")
-    detail: str = Field(description="Why the last import did not finish; empty otherwise")
+    detail: str = Field(description="What went wrong, or what is still to come; empty when nothing is")
     fetched: int | None = Field(
         description="Conversations the running import has fetched; null when it reports no total"
     )
