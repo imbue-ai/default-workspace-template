@@ -15,6 +15,7 @@ from typing import Final
 
 from pydantic import Field
 from workspace_layout.primitives import ParticipantKey
+from workspace_layout.primitives import ParticipantKind
 from workspace_layout.roster import RosterParticipant
 from workspace_layout.roster import assign_handles
 
@@ -24,6 +25,8 @@ from imbue.imbue_common.pure import pure
 
 # The kind a chat's handle wears in the table, beside the roster's participant kinds.
 CHAT_HANDLE_KIND: Final[str] = "chat"
+# The kinds a mention is acted on for as a person's: the pending mark and, for the owner, the desktop app's feed.
+PERSON_KINDS: Final[frozenset[str]] = frozenset({ParticipantKind.PERSON.value, ParticipantKind.INVITED.value})
 
 # ``@`` then a handle, not inside a word or another mention (``foo@bar`` and ``@@x`` mention nobody). The handle
 # alphabet includes ``.`` and ``-``, so a sentence's trailing punctuation rides along and is tried off below.
@@ -43,6 +46,11 @@ class MentionTarget(FrozenModel):
     @property
     def is_chat(self) -> bool:
         return self.chat_id is not None
+
+    @property
+    def is_person(self) -> bool:
+        """Whether the handle names a person (with an account or invited), never an agent or a chat."""
+        return self.key is not None and self.kind in PERSON_KINDS
 
 
 class MentionTable(FrozenModel):

@@ -31,7 +31,6 @@ from pydantic import Field
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.identity import participant_key_of
 from workspace_layout.primitives import ParticipantKey
-from workspace_layout.primitives import ParticipantKind
 from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
 from workspace_layout.roster import RosterParticipant
 
@@ -72,9 +71,6 @@ MENTIONS_ROUTE: Final[str] = "/api/mentions"
 PENDING_MENTIONS_ROUTE: Final[str] = "/api/mentions/pending"
 
 _AGENT_FALLBACK_NAME: Final[str] = "Agent"
-
-# Who a mention is acted on for: a person gets the pending mark and, for the owner, the desktop app's feed.
-_PERSON_KINDS: Final[frozenset[ParticipantKind]] = frozenset({ParticipantKind.PERSON, ParticipantKind.INVITED})
 
 # The send a room's mention goes through: the app, the target, the text as delivered, and the message id; the
 # refusal's detail, or None once accepted.
@@ -178,7 +174,7 @@ class MentionHandler(MentionActions):
         for target in targets:
             if target.key is not None and target.key == sender:
                 continue
-            if target.key is not None and ParticipantKind(target.kind) in _PERSON_KINDS:
+            if target.is_person and target.key is not None:
                 self.state.mentions.record(target.key, chat_id, message_id, sender)
                 is_anyone_marked = True
                 if self._is_owner(target.key):
@@ -278,9 +274,7 @@ def append_room_message(
     handler = _handler(state)
     targets = handler.resolve(text)
     if is_from_agent:
-        targets = tuple(
-            target for target in targets if target.key is not None and ParticipantKind(target.kind) in _PERSON_KINDS
-        )
+        targets = tuple(target for target in targets if target.is_person)
     mention_ids = [str(target.key if target.key is not None else target.chat_id) for target in targets]
     message = new_room_message(message_id, author, prefix_safe_name(author_name, author), text, mention_ids)
     state.rooms.append(room.id, message)

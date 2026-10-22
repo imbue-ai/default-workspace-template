@@ -39,6 +39,7 @@ def test_the_table_keeps_the_rosters_handles_and_adds_each_chat_by_title_after_t
     ]
     assert table[3].chat_id == _MAIN and table[3].key is None and table[3].is_chat
     assert table[0].key == _JOSH and table[0].chat_id is None
+    assert [target.is_person for target in table] == [True, True, False, False, False, False]
 
 
 def test_mentions_resolve_case_insensitively_once_each_in_order_and_never_inside_a_word() -> None:
