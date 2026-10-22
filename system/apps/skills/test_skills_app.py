@@ -208,7 +208,7 @@ def test_a_skill_removed_while_its_page_is_open_closes_the_page(
     expect(page.locator("article .skill-head h1")).to_have_text("draft-skill")
 
     shutil.rmtree(workspace_root / ".agents/skills/draft-skill")
-    # The page rereads the skills whenever its window takes focus, as it does every ten seconds.
+    # The page rereads the skills whenever its window takes focus.
     page.evaluate("window.dispatchEvent(new Event('focus'))")
 
     expect(page.locator(".intro-lead")).to_be_visible()

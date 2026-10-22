@@ -98,9 +98,7 @@ class SkillsShSearcher(SkillIndexSearcherInterface):
 
 @pure
 def indexed_skills_from_answer(answer: object) -> tuple[IndexedSkill, ...]:
-    """The matches in a skills.sh search answer, most installed first; an entry that does not parse is left out.
-
-    Only the fields the page shows are read, so a field skills.sh adds later changes nothing."""
+    """The matches in a skills.sh search answer, most installed first; an entry that does not parse is left out."""
     entries = answer.get("skills") if isinstance(answer, dict) else None
     if not isinstance(entries, list):
         raise MalformedSkillIndexAnswerError("The search answer has no skills list")

@@ -36,9 +36,9 @@
     --dur-base: 120ms;
     --dur-slow: 240ms;
   }
-  /* Type: only the workspace's scale (heading 18, body 14, row 13, helper 12), one size per role. The sidebar is
-     navigation and sets its rows at 13; the reading pane is content and sets it at 14, as the chat does. Weight and
-     colour, not size, part the levels within each, and nothing in a skill's instructions outranks its title. */
+  /* Type: only the workspace's scale, one size per role. The sidebar is navigation and sets its rows at the row
+     size; the reading pane is content and sets it at the body size, as the chat does. Weight and colour, not size,
+     part the levels within each, and nothing in a skill's instructions outranks its title. */
   * { box-sizing: border-box; }
   html, body { height: 100%; }
   /* The reading pane's scrollbar is the chat's (apps/chat transcript-scrollbar): out of sight until the pane scrolls,
@@ -103,8 +103,8 @@
   .sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 16px var(--sidebar-right) 12px 16px; }
   h1 { font-size: var(--font-size-heading); font-weight: var(--weight-semibold); line-height: 1.3; margin: 0; overflow-wrap: anywhere; }
   /* The workspace's text field (workspace_ui components/Input.ts) with a glyph inside, as Getting Started's search. */
-  /* Compact, at the rows' size: 32px tall with 13px text, 12px clear above and below. Its box sits 8px in, on the
-     same line as the rows' highlight; its glyph 16px in, on the same line as the text. */
+  /* Compact, at the rows' size. Its box sits on the same line as the rows' highlight; its glyph on the same line as
+     the text. */
   .search { position: relative; }
   .sidebar .search { margin: 0 var(--sidebar-right) 12px 8px; }
   .search svg { position: absolute; top: 50%; left: 8px; width: 14px; height: 14px; transform: translateY(-50%); color: var(--c-text-faint); pointer-events: none; }
@@ -147,7 +147,7 @@
   .reader { overflow-y: auto; min-height: 0; }
   .reader:focus { outline: none; }
   /* The reading column's first two rows sit level with the sidebar's: its title and buttons with the sidebar's
-     header (16px down, a 28px row), its chips with the search field (12px below, as tall as the field). */
+     header, its chips with the search field. */
   article { max-width: 720px; margin: 0 auto; padding: 16px 32px 24px; }
   /* With no skill chosen, the pane holds one centred note. */
   .intro { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 100%; padding: 24px 32px; text-align: center; }
@@ -628,7 +628,7 @@
   }
 
   // Only skills that are the workspace's own -- made here, or installed -- can be removed: Studio itself starts some of
-  // the ones it ships (the chat sends /handoff-summary), and a removed one would clash with Studio's next update.
+  // the ones it ships, and a removed one would clash with Studio's next update.
   // Removing goes through the chat, which the person confirms by sending: the agent removes an installed skill with
   // the skills CLI, which also drops its lock entry, and can bring either kind back from the workspace's history.
   function removeButton(summary) {
@@ -841,8 +841,8 @@
     setSidebarWidth(width + (event.key === "ArrowRight" ? RESIZE_KEY_STEP_PX : -RESIZE_KEY_STEP_PX), true);
   });
 
-  // Each scrolling pane shows its scrollbar while it scrolls and for a moment after (the chat's 1.2s), and while the
-  // pointer is over the strip where the bar is drawn.
+  // Each scrolling pane shows its scrollbar while it scrolls and for a moment after (as long as the chat's), and while
+  // the pointer is over the strip where the bar is drawn.
   // A scrollbar that takes room in the list (classic scrollbars) moves the rows' right edge in; the sidebar's other
   // boxes follow it. An overlay scrollbar takes none.
   function measureSidebarScrollbar() {
@@ -874,7 +874,7 @@
   }
 
   // Answers whether the listing changed. A poll that fails keeps what is showing rather than replacing it with the
-  // error, the way Routines' does; the first load has nothing to keep, so it shows the error.
+  // error; the first load has nothing to keep, so it shows the error.
   let shownListing = "";
   async function loadListing({ isPoll = false } = {}) {
     let listing;
@@ -895,8 +895,8 @@
   }
 
   // A skill made, edited or removed elsewhere (a chat beside this window) shows up without a reload: the list is
-  // reread every few seconds and whenever the window takes focus or is shown again, as Routines and Files do, and the
-  // skill being read is reread only when its own entry changed (an edit in Files moves its last update).
+  // reread every few seconds and whenever the window takes focus or is shown again, and the skill being read is
+  // reread only when its own entry changed (an edit in Files moves its last update).
   async function pollListing() {
     const name = selectedName();
     const before = JSON.stringify(skills.find((skill) => skill.name === name) ?? null);
@@ -927,9 +927,9 @@
   withIcon(skillsFolderLink, "folder");
   withIcon(addButton, "plus");
 
-  // The page connects itself, as Routines and Getting Started do, rather than through a runner-injected page script:
-  // its buttons hand drafts and messages to the shell through the connection. Connected before the frame's load event,
-  // the only time the shell sends its handshake.
+  // The page connects itself rather than through a runner-injected page script: its buttons hand drafts and messages
+  // to the shell through the connection. Connected before the frame's load event, the only time the shell sends its
+  // handshake.
   let handshake = null;
   shell = connectToShell({
     onHandshake: (received) => {

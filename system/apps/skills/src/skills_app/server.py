@@ -1,15 +1,12 @@
-"""The Skills app: the page at ``/`` and ``/<name>`` (the skills beside the one being read, or ``/?find=<query>``,
-skills found online), and the API it reads.
+"""The Skills app: its page and the API the page reads.
 
 Services run from /home/user/workspace (the repo root). The app stores nothing and changes nothing: everything it
 shows is read from ``.agents/skills`` through the skills catalog (``system/libs/skills_catalog``) on every request,
 so a skill an agent made a moment ago is listed on the next load.
 
-- Listen address: bind ``HOST`` and ``PORT``, which default to the loopback address and this app's assigned port
-  but honor ``SKILLS_APP_HOST`` and ``SKILLS_APP_PORT``, so a preview can boot on a spare port beside the live one.
-
-This is a synchronous Flask app served by the threaded Werkzeug server. The app owns its own browser origin (the
-forwarder routes ``http://skills.<workspace-host>/`` straight to this port), so root-absolute URLs work unmodified.
+``SKILLS_APP_HOST`` and ``SKILLS_APP_PORT`` override the listen address, so a preview can boot on a spare port beside
+the live one. The app owns its own browser origin (the forwarder routes ``http://skills.<workspace-host>/`` straight
+to this port), so root-absolute URLs work unmodified.
 """
 
 import os
@@ -127,7 +124,7 @@ def create_app(
 
     @app.get("/_static/<basename>")
     def shell_module(basename: str) -> ResponseReturnValue:
-        """One of the two browser-side modules the workspace shell builds and every app serves from its own origin."""
+        """One of the browser-side modules the workspace shell builds and every app serves from its own origin."""
         module_path = SHELL_MODULES.get(basename)
         if module_path is None or not module_path.is_file():
             abort(HTTP_NOT_FOUND)
