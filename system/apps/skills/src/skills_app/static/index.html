@@ -37,6 +37,9 @@
     --radius-md: 6px;
     --dur-base: 120ms;
   }
+  /* Type: only the workspace's scale (heading 18, body 14, row 13, helper 12), one size per role. The sidebar is
+     navigation and sets its rows at 13; the reading pane is content and sets it at 14, as the chat does. Weight and
+     colour, not size, part the levels within each, and nothing in a skill's instructions outranks its title. */
   * { box-sizing: border-box; }
   html, body { height: 100%; }
   /* Thin scrollbars on a clear track: the browser's default draws a grey gutter with its own border. */
@@ -78,7 +81,7 @@
   .skill-list li a:hover { background: var(--c-fill-hover); }
   .skill-list li a:focus-visible { outline-offset: -2px; }
   .skill-list li a[aria-current="page"] { background: color-mix(in srgb, var(--c-accent) 11%, var(--c-surface)); }
-  .row-name { display: block; font-size: var(--font-size-body); font-weight: var(--weight-semibold); line-height: 1.35; color: var(--c-text-primary); overflow-wrap: anywhere; }
+  .row-name { display: block; font-size: var(--font-size-row); font-weight: var(--weight-semibold); line-height: 1.4; color: var(--c-text-primary); overflow-wrap: anywhere; }
   .row-description { display: block; margin-top: 1px; font-size: var(--font-size-helper); line-height: 1.4; color: var(--c-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .empty { color: var(--c-text-secondary); padding: 12px 8px; margin: 0; }
 
@@ -105,7 +108,7 @@
   .intro p { margin: 0; max-width: 46ch; }
   .intro-lead + p { margin-top: 4px; }
   .intro code { font-family: var(--font-mono); font-size: var(--font-size-helper); padding: 1px 4px; border-radius: var(--radius-sm); background: var(--c-surface-secondary); color: var(--c-text-primary); }
-  .intro-lead { font-size: 15px; font-weight: var(--weight-semibold); }
+  .intro-lead { font-weight: var(--weight-semibold); }
   .intro-hint { color: var(--c-text-secondary); }
   /* The sidebar's + button in miniature, so the note shows which button it means. */
   .inline-button { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin: 0 2px; border: 1px solid var(--c-border-strong); border-radius: var(--radius-sm); color: var(--c-text-secondary); vertical-align: middle; }
@@ -127,16 +130,16 @@
   .icon-button.small svg { width: 14px; height: 14px; }
   .section-heading { display: flex; align-items: baseline; gap: 6px; font-size: var(--font-size-helper); font-weight: var(--weight-semibold); color: var(--c-text-secondary); line-height: 1.3; margin: 0; }
   .section-source { font-weight: var(--weight-regular); color: var(--c-text-secondary); }
-  .skill-section { margin-top: 20px; max-width: 68ch; font-size: 15px; }
-  .skill-section > p { margin: 4px 0 0; }
+  .skill-section { margin-top: 20px; max-width: 68ch; font-size: var(--font-size-body); line-height: 1.55; }
+  .skill-section > p { margin: 6px 0 0; }
   /* The summary above, the document it summarizes below: one faint rule between them, the weight of the pane border. */
-  .skill-section.instructions-section { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--c-border-faint); }
-  .instructions { margin-top: 4px; line-height: 1.6; overflow-wrap: anywhere; }
+  .skill-section.instructions-section { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--c-border-faint); }
+  .instructions { margin-top: 8px; overflow-wrap: anywhere; }
   .instructions > :first-child { margin-top: 0; }
   .instructions h1, .instructions h2, .instructions h3, .instructions h4 { font-weight: var(--weight-semibold); line-height: 1.3; margin: 24px 0 8px; }
-  .instructions h1 { font-size: 17px; }
-  .instructions h2 { font-size: 16px; }
-  .instructions h3, .instructions h4 { font-size: 15px; }
+  .instructions h1 { font-size: 16px; }
+  .instructions h2 { font-size: 15px; }
+  .instructions h3, .instructions h4 { font-size: var(--font-size-body); }
   .instructions p, .instructions ul, .instructions ol, .instructions blockquote, .instructions table, .instructions pre { margin: 0 0 12px; }
   .instructions ul, .instructions ol { padding-left: 22px; }
   .instructions li + li { margin-top: 2px; }
