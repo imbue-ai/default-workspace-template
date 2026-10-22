@@ -176,8 +176,10 @@ def test_outside_the_shell_the_buttons_that_need_it_are_hidden(open_skills_page:
     page = open_skills_page("/assist", *_DESKTOP)
     expect(page.locator("article .skill-head h1")).to_have_text("assist")
 
+    # The folder link, and the trash button a skill made in the workspace has.
     expect(page.locator(".skill-head .icon-button")).to_have_count(2)
-    expect(page.locator(".skill-head .icon-button").first).to_be_hidden()
+    expect(page.locator(".skill-head .icon-button").nth(0)).to_be_hidden()
+    expect(page.locator(".skill-head .icon-button").nth(1)).to_be_hidden()
     expect(page.locator(".skill-head .text-button")).to_be_hidden()
     expect(page.locator("#new-skill")).to_be_visible()
 
