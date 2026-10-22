@@ -6,7 +6,7 @@
 import type { ChatImportSource, ChatImportSourceState } from "../models/ChatImport";
 import type { CatalogTemplate } from "../models/TemplateCatalog";
 
-/** A chat import source in ``state`` holding ``conversations`` pages, with no timestamp or detail. */
+/** A chat import source in ``state`` with ``conversations`` downloaded, and no timestamp or detail. */
 export function chatImportSourceRecord(
   state: ChatImportSourceState,
   conversations = 0,

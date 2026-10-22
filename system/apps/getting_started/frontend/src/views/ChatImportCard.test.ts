@@ -68,7 +68,7 @@ describe("the chat import card", () => {
     expect(root.querySelector('[data-chat-import-bar="claude"]')).toBeNull();
   });
 
-  it("counts pages instead when a source has nothing new to fetch", () => {
+  it("counts conversations downloaded instead when a source has nothing new to fetch", () => {
     const { root } = render({
       is_dismissed: false,
       sources: { chatgpt: source("importing", 312, { fetched: 0, to_fetch: 0 }) },
