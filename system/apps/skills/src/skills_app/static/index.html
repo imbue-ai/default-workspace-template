@@ -23,6 +23,7 @@
     --c-danger-hover: #b62d22;
     --c-warning: #b45309;
     --c-stop-button: #64748b;
+    --c-stop-button-hover: #475569;
     --c-fill-hover: rgb(0 0 0 / 0.07);
     --font-size-heading: 18px;
     --font-size-body: 14px;
@@ -104,12 +105,14 @@
   .back { display: none; color: var(--c-text-secondary); font-size: var(--font-size-row); margin-bottom: 12px; }
   .back:hover { color: var(--c-text-primary); }
   .skill-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 28px; }
-  /* The workspace's badge (workspace_ui components/Badge.ts): outline chips, one tone per source of a skill. */
+  /* The workspace's status badge (workspace_ui components/Badge.ts): a tinted fill and no visible outline, so a chip
+     reads as a label beside the outlined buttons. One tone per source of a skill; text darkened where the tint needs it
+     to stay above 4.5:1. */
   .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; min-height: 39px; }
-  .chip { display: inline-flex; align-items: center; padding: 2px 8px; border: 1px solid var(--c-border); border-radius: 8px; background: var(--c-surface); color: var(--c-text-secondary); font-size: var(--font-size-helper); line-height: 1.4; white-space: nowrap; }
-  .chip.workspace { border-color: var(--c-accent); color: var(--c-accent); }
-  .chip.installed { border-color: var(--c-warning); color: var(--c-warning); }
-  .chip.studio { border-color: var(--c-stop-button); color: var(--c-stop-button); }
+  .chip { display: inline-flex; align-items: center; padding: 2px 8px; border: 1px solid transparent; border-radius: 8px; background: var(--c-surface-secondary); color: var(--c-text-secondary); font-size: var(--font-size-helper); line-height: 1.4; white-space: nowrap; }
+  .chip.workspace { background: var(--c-accent-light); color: var(--c-accent); }
+  .chip.installed { background: color-mix(in srgb, var(--c-warning) 10%, var(--c-surface)); color: color-mix(in srgb, var(--c-warning) 80%, var(--c-text-primary)); }
+  .chip.studio { background: color-mix(in srgb, var(--c-stop-button) 10%, var(--c-surface)); color: var(--c-stop-button-hover); }
   /* A section heading with the button that acts on what the section shows, at its right end. */
   .section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .icon-button.small { width: 24px; height: 24px; }
