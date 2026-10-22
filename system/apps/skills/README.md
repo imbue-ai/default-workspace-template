@@ -25,11 +25,12 @@ page shows the list or one skill, with a way back.
 
 Square icon buttons ask the shell for the rest, so they stay hidden on a page
 no shell frames: a folder opens the skills folder (in the sidebar) or the
-skill's own folder in Files (a `file:` link the shell routes); a pencil sends
+skill's own folder in Files (a `file:` link the shell routes); a pencil beside
+the Instructions heading sends
 `edit:file` with the skill's `SKILL.md`, which Files answers with its edit
 page; the sidebar's + drafts "Help me make or find a new skill online that "
-into the chat on screen, and a skill's "Use in chat" drafts `/<name> ` (as the
-hint under its chips says to type), both unsent for the user to finish
+into the chat on screen, and a skill's "Try it" drafts `/<name> ` (the syntax
+the empty pane's note explains), both unsent for the user to finish
 (`shell:draft-text`: the chat on screen, else the most recent, else a new one). The page
 rereads the list every 10 seconds and whenever its window takes focus or is
 shown again, redrawing only what changed, so a skill made or edited elsewhere
