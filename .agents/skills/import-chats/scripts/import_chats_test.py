@@ -811,7 +811,7 @@ def test_a_later_sync_of_one_source_leaves_the_other_in_the_config(
 
 
 def test_a_sync_records_a_sign_in_problem_for_one_source_and_success_for_the_other(
-    workspace: _SyncWorkspace,
+    workspace: _SyncWorkspace, capsys: pytest.CaptureFixture[str]
 ) -> None:
     datalib = _FakeDatalib(
         stderr=_run_summary(
@@ -834,6 +834,9 @@ def test_a_sync_records_a_sign_in_problem_for_one_source_and_success_for_the_oth
         "chatgpt: HTTP 401 token_expired",
         0,
     )
+    assert import_chats.index_path_for(workspace.status_path, CLAUDE).exists()
+    assert not import_chats.index_path_for(workspace.status_path, CHATGPT).exists()
+    assert "import-chats:" not in capsys.readouterr().err
 
 
 def test_a_download_that_gave_up_partway_is_imported_with_what_it_got(

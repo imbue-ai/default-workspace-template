@@ -1065,7 +1065,8 @@ def record_outcomes(
     run: Callable[..., subprocess.CompletedProcess],
 ) -> bool:
     """Record each named source's outcome from a finished ``datalib-dag`` run and rewrite its index. True when every
-    named source imported; an index that cannot be rewritten is reported on stderr and leaves the outcome as it is."""
+    named source imported; an index that cannot be rewritten is reported on stderr and leaves the outcome as it is.
+    A source with no raw store yet (its first import failed before downloading anything) has no index to write."""
     steps = parse_run_summary(result.stderr)
     is_every_source_imported = True
     for source in named:
@@ -1080,6 +1081,8 @@ def record_outcomes(
             pid=None,
         )
     for source in named:
+        if not datalib.raw_store(source).is_file():
+            continue
         index_path = index_path_for(status_path, source)
         try:
             write_index(datalib, source, index_path, run)
