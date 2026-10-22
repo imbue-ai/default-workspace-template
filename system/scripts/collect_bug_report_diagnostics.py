@@ -1143,12 +1143,12 @@ def release_scanned_members(
         content_reason = verdicts.get(
             staged_member.content_path, NOTE_SCANNER_UNAVAILABLE
         )
-        if name_reason is None and content_reason is None:
-            released.append(member)
-        elif name_reason is None:
+        if name_reason is not None:
+            withheld.append((NOTE_FLAGGED_MEMBER_NAME, name_reason))
+        elif content_reason is not None:
             withheld.append((member[0], content_reason))
         else:
-            withheld.append((NOTE_FLAGGED_MEMBER_NAME, name_reason))
+            released.append(member)
     reasons = {reason for _, reason in withheld}
     if withheld and not released and len(reasons) == 1:
         return [], ["{}: {}".format(label, withheld[0][1])]
