@@ -100,15 +100,10 @@
   .section-source { font-weight: var(--weight-regular); color: var(--c-text-faint); }
   .skill-section { margin-top: 20px; max-width: 68ch; font-size: 15px; }
   .skill-section > p { margin: 4px 0 0; }
+  /* The summary above, the document it summarizes below: one faint rule between them, the weight of the pane border. */
+  .skill-section.instructions-section { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--c-border-faint); }
   .instructions { margin-top: 4px; line-height: 1.6; overflow-wrap: anywhere; }
   .instructions > :first-child { margin-top: 0; }
-  /* Collapsed to what fits the window, fading out above the control that shows the rest. */
-  .instructions.clamped { overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 56px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 56px), transparent); }
-  .expand { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; padding: 4px 8px 4px 4px; border: none; border-radius: var(--radius-sm); background: none; color: var(--c-text-secondary); font: inherit; font-size: var(--font-size-row); cursor: pointer; }
-  .expand:hover { background: var(--c-fill-hover); color: var(--c-text-primary); }
-  .expand svg { width: 16px; height: 16px; transition: transform var(--dur-base); }
-  .expand[aria-expanded="true"] svg { transform: rotate(180deg); }
-  .expand[hidden] { display: none; }
   .instructions h1, .instructions h2, .instructions h3, .instructions h4 { font-weight: var(--weight-semibold); line-height: 1.3; margin: 24px 0 8px; }
   .instructions h1 { font-size: 17px; }
   .instructions h2 { font-size: 16px; }
@@ -188,7 +183,6 @@
   let skills = [];
   let shell;
   let latestLoad = 0;
-  let isInstructionsExpanded = false;
 
   // Per-viewer conveniences kept in this browser: the sidebar's width and which groups are folded. Storage can be
   // missing or refuse (a private window), so every read and write is allowed to fail.
@@ -350,7 +344,7 @@
     reportLocation();
   }
 
-  // A refresh of the skill already showing keeps where the reader was: expanded or not, and scrolled to.
+  // A refresh of the skill already showing keeps where the reader was scrolled to.
   async function showSkill(name, { isRefresh = false } = {}) {
     const load = ++latestLoad;
     const scrolledTo = reader.scrollTop;
@@ -379,12 +373,6 @@
     const skillFile = `${detail.directory}/SKILL.md`;
     const editButton = withIcon(element("button", { type: "button", class: "icon-button", title: "Edit SKILL.md in Files", "aria-label": "Edit SKILL.md in Files" }), "edit");
     editButton.addEventListener("click", () => shell.sendMessage(EDIT_FILE_MESSAGE, { path: skillFile }));
-    const expand = withIcon(element("button", { type: "button", class: "expand", "aria-expanded": "false", hidden: "" }, [element("span", { text: "Show all" })]), "chevron-down");
-    expand.addEventListener("click", () => {
-      isInstructionsExpanded = !isInstructionsExpanded;
-      clampInstructions();
-    });
-    if (!isRefresh) isInstructionsExpanded = false;
     reader.replaceChildren(
       element("article", {}, [
         element("a", { class: "back", href: "/", text: "All skills" }),
@@ -400,42 +388,17 @@
           element("h2", { class: "section-heading", id: "description-heading", text: "Description" }),
           element("p", { text: summary.description || "No description." }),
         ]),
-        element("section", { class: "skill-section", "aria-labelledby": "instructions-heading" }, [
+        element("section", { class: "skill-section instructions-section", "aria-labelledby": "instructions-heading" }, [
           element("h2", { class: "section-heading", id: "instructions-heading" }, [
             "Instructions",
             element("span", { class: "section-source", text: "from SKILL.md" }),
           ]),
           body,
-          expand,
         ]),
       ]),
     );
-    clampInstructions();
     reader.scrollTop = isRefresh ? scrolledTo : 0;
     reportLocation();
-  }
-
-  // Collapsed, the instructions take what is left of the window under the header and description, so the page does not
-  // scroll until they are shown in full; the control only appears when they would not fit.
-  const MIN_CLAMPED_HEIGHT = 120;
-  function clampInstructions() {
-    const body = reader.querySelector(".instructions");
-    const expand = reader.querySelector(".expand");
-    if (!body || !expand) return;
-    body.classList.remove("clamped");
-    body.style.maxHeight = "";
-    const article = reader.querySelector("article");
-    const bodyTop = body.getBoundingClientRect().top - reader.getBoundingClientRect().top + reader.scrollTop;
-    const expandHeight = expand.offsetHeight || 32;
-    const bottomPadding = parseFloat(getComputedStyle(article).paddingBottom);
-    const room = Math.max(MIN_CLAMPED_HEIGHT, Math.floor(reader.clientHeight - bodyTop - expandHeight - bottomPadding - 4));
-    const fits = body.scrollHeight <= room;
-    expand.hidden = fits;
-    expand.setAttribute("aria-expanded", String(isInstructionsExpanded));
-    expand.querySelector("span").textContent = isInstructionsExpanded ? "Show less" : "Show all";
-    if (fits || isInstructionsExpanded) return;
-    body.classList.add("clamped");
-    body.style.maxHeight = `${room}px`;
   }
 
   function route() {
@@ -509,9 +472,6 @@
   });
   resizeHandle.addEventListener("dblclick", () => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH, true));
   window.addEventListener("popstate", route);
-  new ResizeObserver(() => {
-    if (!isInstructionsExpanded) clampInstructions();
-  }).observe(reader);
 
   // Coming back to the window after editing a skill in Files shows the edit.
   async function refresh() {

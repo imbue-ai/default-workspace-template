@@ -18,8 +18,8 @@ Studio") and one for when it was last updated (in Files' wording: "today at
 2:03 PM"), its description, and its instructions rendered from its
 `SKILL.md` under the same kind of heading as the description ("Instructions,
 from SKILL.md"; a first heading that only repeats the skill's name or
-"Instructions" is left out), collapsed to what fits the window behind a "Show
-all" control. Choosing a skill changes the address in place, so the shell
+"Instructions" is left out), below a faint rule that sets them apart from the
+description. Choosing a skill changes the address in place, so the shell
 reopens the window on it, and the arrow keys walk the list. Below 640px the
 page shows the list or one skill, with a way back.
 
