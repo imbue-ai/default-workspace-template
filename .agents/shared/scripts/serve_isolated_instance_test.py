@@ -1187,6 +1187,7 @@ def test_wrapper_page_derives_the_inner_origin_from_location_host() -> None:
     assert '"demo-app"' in html
     assert "location.host" in html
     assert "/service/" not in html
+    assert 'allow="microphone; autoplay"' in html
     # No static src pointing anywhere: the iframe src is assigned in JS only.
     assert 'src="' not in html
 

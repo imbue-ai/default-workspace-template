@@ -108,7 +108,7 @@ def build_wrapper_html(inner_service: str, title: str, inner_path: str = "/") ->
     <span class="hint">Approve or request changes in chat</span>
   </div>
   <div class="preview-stage">
-    <iframe class="preview-frame" id="preview-frame" title="Preview of {safe_title}"></iframe>
+    <iframe class="preview-frame" id="preview-frame" title="Preview of {safe_title}" allow="microphone; autoplay"></iframe>
   </div>
   <script>
     // Derive the inner service's sibling origin from this page's own host.
