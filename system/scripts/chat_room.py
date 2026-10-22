@@ -21,8 +21,6 @@ app refused or could not be reached.
 from __future__ import annotations
 
 import argparse
-import http.client
-import json
 import os
 import sys
 import urllib.parse
@@ -33,11 +31,10 @@ from typing import IO, Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from message_chat import (  # noqa: E402
-    CONNECT_TIMEOUT_SECONDS,
-    ChatAppAnswer,
     ChatAppUnreachableError,
     chat_app_url,
     post_json,
+    request_json,
 )
 
 LOUNGE_TITLE = "Lounge"
@@ -50,36 +47,9 @@ def _print_error(text: str) -> None:
     print(f"chat_room: {text}", file=sys.stderr)
 
 
-def get_json(base_url: str, path: str) -> ChatAppAnswer:
-    """GET ``path`` and parse the answer; raises ``ChatAppUnreachableError`` when the connection cannot be made."""
-    parsed = urllib.parse.urlsplit(base_url)
-    connection = http.client.HTTPConnection(
-        parsed.hostname or "127.0.0.1",
-        parsed.port or 80,
-        timeout=CONNECT_TIMEOUT_SECONDS,
-    )
-    try:
-        connection.connect()
-    except OSError as exc:
-        raise ChatAppUnreachableError(
-            f"could not connect to the chat app at {base_url}: {exc}"
-        ) from exc
-    try:
-        connection.request("GET", path)
-        response = connection.getresponse()
-        raw = response.read()
-    finally:
-        connection.close()
-    try:
-        body: object = json.loads(raw.decode("utf-8")) if raw else None
-    except ValueError:
-        body = None
-    return ChatAppAnswer(response.status, body)
-
-
 def resolve_room(base_url: str, room_ref: str) -> dict[str, Any] | None:
     """The room ``room_ref`` names, by id or by title (case-insensitively); the Lounge is made when asked for."""
-    answer = get_json(base_url, "/api/rooms")
+    answer = request_json(base_url, "GET", "/api/rooms")
     if answer.status != 200 or not isinstance(answer.body, dict):
         _print_error(f"the chat app answered {answer.status} to the room list")
         return None
@@ -115,8 +85,10 @@ def read_room(
     out: IO[str],
 ) -> int:
     query = f"?after={urllib.parse.quote(since)}" if since else ""
-    answer = get_json(
-        base_url, f"/api/rooms/{urllib.parse.quote(str(room['id']))}/messages{query}"
+    answer = request_json(
+        base_url,
+        "GET",
+        f"/api/rooms/{urllib.parse.quote(str(room['id']))}/messages{query}",
     )
     if answer.status != 200 or not isinstance(answer.body, dict):
         _print_error(f"the chat app answered {answer.status} to reading the room")
