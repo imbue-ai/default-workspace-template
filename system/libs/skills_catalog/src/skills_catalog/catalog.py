@@ -86,14 +86,15 @@ class SkillsCatalog(SkillsCatalogInterface):
         # The line-by-line frontmatter reader flattens the metadata map, so its author and audience are fields of their
         # own.
         author = document.fields.get("author", "")
+        source = classify_skill_source(author, install_source)
         last_changed_at = history.last_changed_at_by_skill_name.get(directory.name)
         return SkillSummary(
             name=SkillName(directory.name),
             title=document.fields.get("name") or directory.name,
             description=document.fields.get("description", ""),
             author=author,
-            source=classify_skill_source(author, install_source is not None),
-            audience=classify_skill_audience(document.fields.get("audience", "")),
+            source=source,
+            audience=classify_skill_audience(document.fields.get("audience", ""), source),
             install_source=install_source,
             # A skill no commit has saved, or with edits none has, was last updated when its files were.
             last_updated_at=(

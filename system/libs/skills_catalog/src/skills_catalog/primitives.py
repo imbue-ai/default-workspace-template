@@ -14,6 +14,8 @@ SKILL_FILENAME: Final[str] = "SKILL.md"
 LOCK_FILE_PATHS: Final[tuple[Path, ...]] = (Path(".agents/skills-lock.json"), Path("skills-lock.json"))
 # The frontmatter author every skill that ships with the template carries (``metadata.author``).
 STUDIO_AUTHOR: Final[str] = "imbue"
+# The owner of the repositories Studio's own skills are installed from (a lock entry's ``owner/repo`` source).
+STUDIO_REPOSITORY_OWNER: Final[str] = "imbue-ai"
 # The frontmatter audience (``metadata.audience``) that marks a skill as the agents' own procedure rather than one a
 # person would run or look for; a skill without one is for people.
 SYSTEM_AUDIENCE: Final[str] = "system"

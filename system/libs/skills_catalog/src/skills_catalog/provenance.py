@@ -12,6 +12,7 @@ from skills_catalog.data_types import InstallSource
 from skills_catalog.data_types import SkillsHistory
 from skills_catalog.primitives import SKILLS_DIR
 from skills_catalog.primitives import STUDIO_AUTHOR
+from skills_catalog.primitives import STUDIO_REPOSITORY_OWNER
 from skills_catalog.primitives import SYSTEM_AUDIENCE
 from skills_catalog.primitives import SkillAudience
 from skills_catalog.primitives import SkillSource
@@ -110,12 +111,19 @@ def merge_install_sources(
 
 
 @pure
-def classify_skill_source(author: str, is_recorded_in_lock_file: bool) -> SkillSource:
-    if author.strip().lower() == STUDIO_AUTHOR:
-        return SkillSource.STUDIO
-    return SkillSource.INSTALLED if is_recorded_in_lock_file else SkillSource.WORKSPACE
+def classify_skill_source(author: str, install_source: InstallSource | None) -> SkillSource:
+    """A skill's frontmatter is its own to write, so an installed one is Studio's only when it also came from one of
+    Studio's repositories: a skill from anywhere else that names imbue its author is still installed."""
+    is_by_studio = author.strip().lower() == STUDIO_AUTHOR
+    if install_source is None:
+        return SkillSource.STUDIO if is_by_studio else SkillSource.WORKSPACE
+    owner = install_source.source.partition("/")[0].strip().lower()
+    return SkillSource.STUDIO if is_by_studio and owner == STUDIO_REPOSITORY_OWNER else SkillSource.INSTALLED
 
 
 @pure
-def classify_skill_audience(audience: str) -> SkillAudience:
-    return SkillAudience.SYSTEM if audience.strip().lower() == SYSTEM_AUDIENCE else SkillAudience.PEOPLE
+def classify_skill_audience(audience: str, source: SkillSource) -> SkillAudience:
+    """Only Studio's own skills can be its procedures: one from anywhere else is listed for people, so it cannot fold
+    itself out of sight."""
+    is_system = source == SkillSource.STUDIO and audience.strip().lower() == SYSTEM_AUDIENCE
+    return SkillAudience.SYSTEM if is_system else SkillAudience.PEOPLE

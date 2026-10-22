@@ -16,9 +16,12 @@ lenient as the agents' loaders.
 Each skill's `source` says who it comes from, and is what the Skills app groups
 by: `STUDIO` when its frontmatter's `metadata.author` is `imbue` (every skill the
 template ships carries it), else `INSTALLED` when a skills lock file lists it,
-else `WORKSPACE`. Its `audience` is `SYSTEM` when its `metadata.audience` is
-`system` (the agents' own procedure, which the app keeps behind the scenes),
-else `PEOPLE`. Its `last_updated_at` is its newest commit's time, or, while its
+else `WORKSPACE`. A skill's frontmatter is its own to write, so a lock file
+outranks it: a skill installed from a repository outside `imbue-ai/` is
+`INSTALLED` whatever author it names. Its `audience` is `SYSTEM` when it is a
+`STUDIO` skill whose `metadata.audience` is `system` (the agents' own procedure,
+which the app keeps behind the scenes), else `PEOPLE`, so a skill from anywhere
+else cannot fold itself out of sight. Its `last_updated_at` is its newest commit's time, or, while its
 folder has changes no commit has saved (or no commit has saved it at all), its
 newest file's. The history is read with one `git log` and kept until HEAD
 moves; `git status` is read on every call.

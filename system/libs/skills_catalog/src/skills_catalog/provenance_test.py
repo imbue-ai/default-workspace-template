@@ -124,31 +124,45 @@ def test_the_first_lock_file_listing_a_skill_wins() -> None:
     assert merged["x"].lock_file == _ROOT_LOCK
 
 
+def _installed_from(source: str) -> InstallSource:
+    return InstallSource(source=source, source_type="github", skill_path="SKILL.md", lock_file=_ROOT_LOCK)
+
+
 @pytest.mark.parametrize(
-    ("author", "is_recorded_in_lock_file", "expected"),
+    ("author", "installed_from", "expected"),
     [
-        ("imbue", False, SkillSource.STUDIO),
-        (" Imbue ", True, SkillSource.STUDIO),
-        ("vercel", True, SkillSource.INSTALLED),
-        ("", True, SkillSource.INSTALLED),
-        ("user", False, SkillSource.WORKSPACE),
-        ("", False, SkillSource.WORKSPACE),
+        ("imbue", None, SkillSource.STUDIO),
+        (" Imbue ", "imbue-ai/blueprint", SkillSource.STUDIO),
+        ("imbue", "Imbue-AI/skills", SkillSource.STUDIO),
+        # Installed from elsewhere, its claim to be imbue's does not make it Studio's.
+        ("imbue", "someone/skills", SkillSource.INSTALLED),
+        ("imbue", "imbue-ai-fan/skills", SkillSource.INSTALLED),
+        ("imbue", "https://github.com/imbue-ai/skills", SkillSource.INSTALLED),
+        ("", "imbue-ai/skills", SkillSource.INSTALLED),
+        ("vercel", "vercel-labs/agent-skills", SkillSource.INSTALLED),
+        ("user", None, SkillSource.WORKSPACE),
+        ("", None, SkillSource.WORKSPACE),
     ],
 )
-def test_a_skill_comes_from_studio_by_its_author_else_from_a_lock_file_or_the_workspace(
-    author: str, is_recorded_in_lock_file: bool, expected: SkillSource
+def test_a_skill_is_studio_s_by_its_author_unless_a_lock_file_says_it_came_from_elsewhere(
+    author: str, installed_from: str | None, expected: SkillSource
 ) -> None:
-    assert classify_skill_source(author, is_recorded_in_lock_file) == expected
+    install_source = None if installed_from is None else _installed_from(installed_from)
+    assert classify_skill_source(author, install_source) == expected
 
 
 @pytest.mark.parametrize(
-    ("audience", "expected"),
+    ("audience", "source", "expected"),
     [
-        ("system", SkillAudience.SYSTEM),
-        (" System ", SkillAudience.SYSTEM),
-        ("people", SkillAudience.PEOPLE),
-        ("", SkillAudience.PEOPLE),
+        ("system", SkillSource.STUDIO, SkillAudience.SYSTEM),
+        (" System ", SkillSource.STUDIO, SkillAudience.SYSTEM),
+        ("people", SkillSource.STUDIO, SkillAudience.PEOPLE),
+        ("", SkillSource.STUDIO, SkillAudience.PEOPLE),
+        ("system", SkillSource.INSTALLED, SkillAudience.PEOPLE),
+        ("system", SkillSource.WORKSPACE, SkillAudience.PEOPLE),
     ],
 )
-def test_a_skill_is_for_people_unless_its_audience_is_system(audience: str, expected: SkillAudience) -> None:
-    assert classify_skill_audience(audience) == expected
+def test_only_a_studio_skill_marked_system_is_one_of_its_procedures(
+    audience: str, source: SkillSource, expected: SkillAudience
+) -> None:
+    assert classify_skill_audience(audience, source) == expected

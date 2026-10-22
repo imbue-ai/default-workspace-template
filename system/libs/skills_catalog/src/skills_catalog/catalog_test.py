@@ -25,15 +25,19 @@ def _skills_by_name(catalog: SkillsCatalog) -> dict[str, SkillSummary]:
     return {summary.name: summary for summary in catalog.list_skills().skills}
 
 
-def test_who_a_skill_comes_from_follows_its_author_then_the_lock_files(
+def test_who_a_skill_comes_from_follows_its_author_unless_a_lock_file_says_elsewhere(
     workspace_root: Path, catalog: SkillsCatalog
 ) -> None:
     write_skill(workspace_root, "blueprint", "Plan a change.", author="imbue")
     write_skill(workspace_root, "datalib", "Search your data.", author="Imbue")
     write_skill(workspace_root, "web-design", "Design guidelines.", author="vercel")
+    write_skill(workspace_root, "lookalike", "Claims to be Studio's.", author="imbue")
     write_skill(workspace_root, "trivia-quiz", "Quiz the user.", author="user")
     write_skill(workspace_root, "news-digest", "Summarize the news.")
-    write_skills_lock(workspace_root, {"blueprint": "imbue-ai/skills", "web-design": "vercel-labs/agent-skills"})
+    write_skills_lock(
+        workspace_root,
+        {"blueprint": "imbue-ai/skills", "web-design": "vercel-labs/agent-skills", "lookalike": "someone/skills"},
+    )
     commit_all(workspace_root, "Workspace changes")
 
     by_name = _skills_by_name(catalog)
@@ -42,6 +46,7 @@ def test_who_a_skill_comes_from_follows_its_author_then_the_lock_files(
         "assist": ("", SkillSource.WORKSPACE),
         "blueprint": ("imbue", SkillSource.STUDIO),
         "datalib": ("Imbue", SkillSource.STUDIO),
+        "lookalike": ("imbue", SkillSource.INSTALLED),
         "news-digest": ("", SkillSource.WORKSPACE),
         "notify-user": ("", SkillSource.WORKSPACE),
         "trivia-quiz": ("user", SkillSource.WORKSPACE),
@@ -49,12 +54,13 @@ def test_who_a_skill_comes_from_follows_its_author_then_the_lock_files(
     }
 
 
-def test_a_skill_is_for_people_unless_its_frontmatter_marks_it_as_the_system_s(
-    workspace_root: Path, catalog: SkillsCatalog
-) -> None:
+def test_only_studio_s_skills_marked_system_are_its_procedures(workspace_root: Path, catalog: SkillsCatalog) -> None:
     write_skill(workspace_root, "handoff-summary", "Hand a chat over.", author="imbue", audience="system")
     write_skill(workspace_root, "launch-task", "Start a worker.", author="imbue", audience="System")
     write_skill(workspace_root, "build-app", "Build an app.", author="imbue", audience="people")
+    write_skill(workspace_root, "quiet-helper", "Made here.", author="user", audience="system")
+    write_skill(workspace_root, "hidden-install", "Installed.", author="someone", audience="system")
+    write_skills_lock(workspace_root, {"hidden-install": "someone/skills"})
 
     by_name = _skills_by_name(catalog)
 
@@ -62,8 +68,10 @@ def test_a_skill_is_for_people_unless_its_frontmatter_marks_it_as_the_system_s(
         "assist": SkillAudience.PEOPLE,
         "build-app": SkillAudience.PEOPLE,
         "handoff-summary": SkillAudience.SYSTEM,
+        "hidden-install": SkillAudience.PEOPLE,
         "launch-task": SkillAudience.SYSTEM,
         "notify-user": SkillAudience.PEOPLE,
+        "quiet-helper": SkillAudience.PEOPLE,
     }
 
 
