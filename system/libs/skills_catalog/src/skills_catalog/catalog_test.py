@@ -13,6 +13,7 @@ from skills_catalog.catalog import repo_root_from_environment
 from skills_catalog.data_types import SkillSummary
 from skills_catalog.errors import SkillNotFoundError
 from skills_catalog.primitives import SKILLS_DIR
+from skills_catalog.primitives import SkillAudience
 from skills_catalog.primitives import SkillName
 from skills_catalog.primitives import SkillOrigin
 from skills_catalog.primitives import SkillSource
@@ -70,6 +71,24 @@ def test_who_a_skill_comes_from_follows_its_author_then_the_lock_files(
         "notify-user": ("", SkillSource.WORKSPACE),
         "trivia-quiz": ("user", SkillSource.WORKSPACE),
         "web-design": ("vercel", SkillSource.INSTALLED),
+    }
+
+
+def test_a_skill_is_for_people_unless_its_frontmatter_marks_it_as_the_system_s(
+    workspace_root: Path, catalog: SkillsCatalog
+) -> None:
+    write_skill(workspace_root, "handoff-summary", "Hand a chat over.", author="imbue", audience="system")
+    write_skill(workspace_root, "launch-task", "Start a worker.", author="imbue", audience="System")
+    write_skill(workspace_root, "build-app", "Build an app.", author="imbue", audience="people")
+
+    by_name: dict[str, SkillSummary] = {summary.name: summary for summary in catalog.list_skills().skills}
+
+    assert {name: summary.audience for name, summary in by_name.items()} == {
+        "assist": SkillAudience.PEOPLE,
+        "build-app": SkillAudience.PEOPLE,
+        "handoff-summary": SkillAudience.SYSTEM,
+        "launch-task": SkillAudience.SYSTEM,
+        "notify-user": SkillAudience.PEOPLE,
     }
 
 

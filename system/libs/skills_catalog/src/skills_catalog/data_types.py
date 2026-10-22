@@ -4,6 +4,7 @@ from pathlib import Path
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from skills_catalog.primitives import SkillAudience
 from skills_catalog.primitives import SkillName
 from skills_catalog.primitives import SkillOrigin
 from skills_catalog.primitives import SkillSource
@@ -42,6 +43,7 @@ class SkillSummary(FrozenModel):
     description: str = Field(description="The frontmatter's description; empty when it gives none")
     author: str = Field(description="The frontmatter's metadata author; empty when it names none")
     source: SkillSource = Field(description="Who it comes from")
+    audience: SkillAudience = Field(description="Who it is for: people, or the agents themselves")
     origin: SkillOrigin = Field(description="Where it came from")
     install_source: InstallSource | None = Field(description="What a skills lock file records for it, if anything")
     last_changed_at: datetime | None = Field(description="When a commit last changed it; null until one has")

@@ -14,6 +14,9 @@ SKILL_FILENAME: Final[str] = "SKILL.md"
 LOCK_FILE_PATHS: Final[tuple[Path, ...]] = (Path(".agents/skills-lock.json"), Path("skills-lock.json"))
 # The frontmatter author every skill that ships with the template carries (``metadata.author``).
 STUDIO_AUTHOR: Final[str] = "imbue"
+# The frontmatter audience (``metadata.audience``) that marks a skill as the agents' own procedure rather than one a
+# person would run or look for; a skill without one is for people.
+SYSTEM_AUDIENCE: Final[str] = "system"
 
 
 class SkillName(NonEmptyStr):
@@ -50,3 +53,12 @@ class SkillSource(UpperCaseStrEnum):
     INSTALLED = auto()
     # Anything else: made by someone in this workspace, whatever its author says.
     WORKSPACE = auto()
+
+
+class SkillAudience(UpperCaseStrEnum):
+    """Who a skill is for, from its frontmatter's ``metadata.audience``."""
+
+    # One a person would run by name or want to know of: every skill that does not say otherwise.
+    PEOPLE = auto()
+    # The agents' own procedure (``metadata.audience: system``), which the Skills app keeps behind the scenes.
+    SYSTEM = auto()

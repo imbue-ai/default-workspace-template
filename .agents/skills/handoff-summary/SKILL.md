@@ -3,6 +3,7 @@ name: handoff-summary
 description: Write the summary the next agent needs to continue this chat when the chat app moves it to another harness. Invoked by the chat app as a slash command naming the output path, never by the user.
 metadata:
   author: imbue
+  audience: system
 ---
 
 # Handoff summary

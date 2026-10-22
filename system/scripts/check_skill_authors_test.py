@@ -1,4 +1,4 @@
-"""Tests for the check that every skill the template ships is marked as Imbue's."""
+"""Tests for the check of the frontmatter the Skills app reads off every skill the template ships."""
 
 from __future__ import annotations
 
@@ -21,18 +21,25 @@ def _skill(author_lines: str) -> str:
 
 def test_the_author_is_read_from_the_metadata_map_or_the_top_level() -> None:
     assert (
-        check_skill_authors.frontmatter_author(_skill("metadata:\n  author: imbue\n"))
+        check_skill_authors.frontmatter_field(
+            _skill("metadata:\n  author: imbue\n"), "author"
+        )
         == "imbue"
     )
-    assert check_skill_authors.frontmatter_author(_skill('author: "user"\n')) == "user"
+    assert (
+        check_skill_authors.frontmatter_field(_skill('author: "user"\n'), "author")
+        == "user"
+    )
 
 
 def test_a_skill_without_frontmatter_or_an_author_names_none() -> None:
     assert (
-        check_skill_authors.frontmatter_author("# Just a body\n\nauthor: imbue\n")
+        check_skill_authors.frontmatter_field(
+            "# Just a body\n\nauthor: imbue\n", "author"
+        )
         is None
     )
-    assert check_skill_authors.frontmatter_author(_skill("")) is None
+    assert check_skill_authors.frontmatter_field(_skill(""), "author") is None
 
 
 def test_every_skill_not_marked_as_imbue_s_is_reported_except_the_vendored_one(
@@ -56,6 +63,28 @@ def test_every_skill_not_marked_as_imbue_s_is_reported_except_the_vendored_one(
         Path(".agents/shared/worker/SKILL.md"),
         Path(".agents/skills/by-a-user/SKILL.md"),
         Path(".agents/skills/unmarked/SKILL.md"),
+    ]
+
+
+def test_an_audience_other_than_system_is_reported(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        ".agents/skills/system/SKILL.md",
+        _skill("metadata:\n  author: imbue\n  audience: system\n"),
+    )
+    _write(
+        tmp_path,
+        ".agents/skills/misspelled/SKILL.md",
+        _skill("metadata:\n  author: imbue\n  audience: sytem\n"),
+    )
+    _write(
+        tmp_path,
+        ".agents/skills/for-people/SKILL.md",
+        _skill("metadata:\n  author: imbue\n"),
+    )
+
+    assert check_skill_authors.skills_with_an_unknown_audience(tmp_path) == [
+        Path(".agents/skills/misspelled/SKILL.md")
     ]
 
 

@@ -14,6 +14,8 @@ from skills_catalog.data_types import SkillCommitFacts
 from skills_catalog.data_types import SkillsHistory
 from skills_catalog.primitives import SKILLS_DIR
 from skills_catalog.primitives import STUDIO_AUTHOR
+from skills_catalog.primitives import SYSTEM_AUDIENCE
+from skills_catalog.primitives import SkillAudience
 from skills_catalog.primitives import SkillOrigin
 from skills_catalog.primitives import SkillSource
 
@@ -134,3 +136,8 @@ def classify_skill_source(author: str, is_recorded_in_lock_file: bool) -> SkillS
     if author.strip().lower() == STUDIO_AUTHOR:
         return SkillSource.STUDIO
     return SkillSource.INSTALLED if is_recorded_in_lock_file else SkillSource.WORKSPACE
+
+
+@pure
+def classify_skill_audience(audience: str) -> SkillAudience:
+    return SkillAudience.SYSTEM if audience.strip().lower() == SYSTEM_AUDIENCE else SkillAudience.PEOPLE

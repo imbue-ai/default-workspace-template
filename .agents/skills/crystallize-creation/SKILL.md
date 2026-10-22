@@ -3,6 +3,7 @@ name: crystallize-creation
 description: "Promote the just-finished work into a new, reusable, committed, tested skill. Use when that process would recur with new inputs -- especially something you figured out through research or debugging -- or when the user says 'crystallize this'."
 metadata:
   author: imbue
+  audience: system
 ---
 
 # Crystallizing a creation into existence

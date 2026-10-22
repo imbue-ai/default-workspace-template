@@ -16,7 +16,9 @@ and checked against the agentskills.io layout with its `skill_shape_problems`.
 Each skill's `source` says who it comes from, and is what the Skills app groups
 by: `STUDIO` when its frontmatter's `metadata.author` is `imbue` (every skill the
 template ships carries it), else `INSTALLED` when a skills lock file lists it,
-else `WORKSPACE`. Its `last_updated_at` is its newest commit's time, or, while
+else `WORKSPACE`. Its `audience` is `SYSTEM` when its `metadata.audience` is
+`system` (the agents' own procedure, which the app keeps behind the scenes),
+else `PEOPLE`. Its `last_updated_at` is its newest commit's time, or, while
 its folder has unsaved changes, its newest file's.
 
 Each skill's `origin` comes from the workspace's git history and the skills

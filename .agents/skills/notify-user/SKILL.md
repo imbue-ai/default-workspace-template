@@ -4,6 +4,7 @@ description: "Tell the user, through a notification in the Imbue Studio app, tha
 compatibility: Requires the latchkey gateway env mngr injects into every agent (LATCHKEY_GATEWAY, LATCHKEY_GATEWAY_PASSWORD); python3 only.
 metadata:
   author: imbue
+  audience: system
 ---
 
 # Notify the user

@@ -9,10 +9,11 @@ next load.
 
 One page, at `/` and at `/<name>`: a sidebar (drag its edge to resize it; a
 double-click restores the width) listing every skill (its name, and under it
-the first line of its description) under three collapsible headings by the catalog's
-`source` -- **Made in this workspace**, **Installed** (from another repository,
-as a skills lock file records) and **Comes with Studio** (its author is
-`imbue`) -- with a search field; and, beside it, the skill being read: a chip
+the first line of its description) under four collapsible headings -- **Made in this workspace**, **Installed**
+(from another repository, as a skills lock file records) and **Comes with
+Studio** (its author is `imbue`) by the catalog's `source`, then **Behind the
+scenes**, folded at first, for every skill whose `audience` is `SYSTEM` (the
+agents' own procedures, which have no "Try it") -- with a search field; and, beside it, the skill being read: a chip
 for who made it ("Made by <author>", "Installed from <repo>" or "Comes with
 Studio") and one for when it was last updated ("Updated 3 days ago", the date after a
 week, the full time on hover), its description, and its instructions rendered from its

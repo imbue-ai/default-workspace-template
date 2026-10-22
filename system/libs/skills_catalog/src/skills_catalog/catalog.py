@@ -26,6 +26,7 @@ from skills_catalog.primitives import LOCK_FILE_PATHS
 from skills_catalog.primitives import SKILLS_DIR
 from skills_catalog.primitives import SKILL_FILENAME
 from skills_catalog.primitives import SkillName
+from skills_catalog.provenance import classify_skill_audience
 from skills_catalog.provenance import classify_skill_origin
 from skills_catalog.provenance import classify_skill_source
 from skills_catalog.provenance import install_sources_from_lock_text
@@ -91,7 +92,8 @@ class SkillsCatalog(SkillsCatalogInterface):
         skill_file = directory / SKILL_FILENAME
         document = split_skill_frontmatter(skill_file.read_text(encoding="utf-8", errors="replace"))
         install_source = install_sources.get(directory.name)
-        # The line-by-line frontmatter reader flattens the metadata map, so its author is a field of its own.
+        # The line-by-line frontmatter reader flattens the metadata map, so its author and audience are fields of their
+        # own.
         author = document.fields.get("author", "")
         facts = history.facts_by_skill_name.get(directory.name)
         has_unsaved_changes = directory.name in unsaved_names
@@ -101,6 +103,7 @@ class SkillsCatalog(SkillsCatalogInterface):
             description=document.fields.get("description", ""),
             author=author,
             source=classify_skill_source(author, install_source is not None),
+            audience=classify_skill_audience(document.fields.get("audience", "")),
             origin=classify_skill_origin(facts, install_source is not None),
             install_source=install_source,
             last_changed_at=facts.last_changed_at if facts is not None else None,

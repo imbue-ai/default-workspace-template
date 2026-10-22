@@ -203,11 +203,17 @@
 
   // A skill's own text is shown through textContent, and its instructions arrive as HTML the server rendered with
   // raw HTML escaped: a skill installed from elsewhere is content this page does not trust.
+  // The sidebar's groups, each with the key its folded state is kept under: the skills for people by where they came
+  // from, then every skill marked as the agents' own procedure, whatever its source.
+  const isForPeople = (skill) => skill.audience !== "SYSTEM";
   const GROUPS = [
-    ["Made in this workspace", "WORKSPACE"],
-    ["Installed", "INSTALLED"],
-    ["Comes with Studio", "STUDIO"],
+    ["Made in this workspace", "WORKSPACE", (skill) => isForPeople(skill) && skill.source === "WORKSPACE"],
+    ["Installed", "INSTALLED", (skill) => isForPeople(skill) && skill.source === "INSTALLED"],
+    ["Comes with Studio", "STUDIO", (skill) => isForPeople(skill) && skill.source === "STUDIO"],
+    ["Behind the scenes", "SYSTEM", (skill) => !isForPeople(skill)],
   ];
+  // Folded until a viewer opens it: the agents' procedures are there to read, not to start from.
+  const GROUPS_FOLDED_AT_FIRST = ["SYSTEM"];
   // Glyphs from the workspace's icon set (system/libs/workspace_ui/src/components/icons.ts), on its 24x24 stroke frame.
   const ICON_PATHS = {
     folder: '<path d="M5.34 3.72C7.32 3.67 8.61 3.72 9.46 3.81C10.45 3.91 10.97 4.43 11.54 5.28C12.11 6.13 12.44 6.56 13.34 6.61C15.22 6.7 17.72 6.51 19.66 6.61C21.27 6.7 22.09 7.93 21.99 9.49C21.85 12.04 21.47 15.26 21.04 17.77C20.76 19.38 19.77 20.18 17.97 20.23C13.81 20.32 8.37 20.32 4.72 20.18C2.97 20.09 2.23 19.52 2.11 17.77C1.79 13.39 2.26 9.21 2.5 6.56C2.64 4.71 3.54 3.77 5.34 3.72Z"/>',
@@ -259,7 +265,7 @@
 
   function storedCollapsedGroups() {
     try {
-      const parsed = JSON.parse(readStored(COLLAPSED_GROUPS_KEY) ?? "[]");
+      const parsed = JSON.parse(readStored(COLLAPSED_GROUPS_KEY) ?? JSON.stringify(GROUPS_FOLDED_AT_FIRST));
       return new Set(Array.isArray(parsed) ? parsed : []);
     } catch {
       return new Set();
@@ -369,11 +375,11 @@
   function renderList() {
     const query = search.value.trim().toLowerCase();
     const shown = skills.filter((skill) => !query || `${skill.name} ${skill.title} ${skill.description}`.toLowerCase().includes(query));
-    const sections = GROUPS.map(([heading, source]) => [heading, source, shown.filter((skill) => skill.source === source)])
+    const sections = GROUPS.map(([heading, key, belongs]) => [heading, key, shown.filter(belongs)])
       .filter(([, , members]) => members.length)
-      .map(([heading, source, members]) => {
+      .map(([heading, key, members]) => {
         // A search shows its matches in every group, folded or not.
-        const isExpanded = Boolean(query) || !collapsedGroups.has(source);
+        const isExpanded = Boolean(query) || !collapsedGroups.has(key);
         // The heading's text starts where the skills' names do; its count and chevron sit at the right end.
         const toggle = element("button", { type: "button", class: "group-toggle", "aria-expanded": String(isExpanded) }, [
           element("span", { text: heading }),
@@ -381,8 +387,8 @@
         ]);
         toggle.insertAdjacentHTML("beforeend", iconSvg("chevron-down"));
         toggle.addEventListener("click", () => {
-          if (collapsedGroups.has(source)) collapsedGroups.delete(source);
-          else collapsedGroups.add(source);
+          if (collapsedGroups.has(key)) collapsedGroups.delete(key);
+          else collapsedGroups.add(key);
           writeStored(COLLAPSED_GROUPS_KEY, JSON.stringify([...collapsedGroups]));
           renderList();
         });
@@ -473,7 +479,8 @@
           // The green action last, as the sidebar's + after its folder.
           element("div", { class: "actions" }, [
             withIcon(element("a", { class: "icon-button", href: fileUrl(detail.directory), title: "Open this skill's folder in Files", "aria-label": "Open this skill's folder in Files" }), "folder"),
-            useButton,
+            // The agents' own procedures are read here, not started by hand.
+            ...(isForPeople(summary) ? [useButton] : []),
           ]),
         ]),
         element("div", { class: "chips" }, [authorChip(summary), updatedChip(summary.last_updated_at)]),
