@@ -53,8 +53,9 @@ does its search's last row while it holds two or more characters ("Search online
 for '…'", the only row when nothing matches), with that search filled in. The
 page has one field, "Search for a skill, or describe one to make": it searches
 skills.sh -- the index `npx skills find` searches -- as it is typed in (after a
-0.4s pause, or at once on Enter; typing replaces the address, a deliberate
-search adds a history entry), and before any search offers a few to start from.
+0.4s pause, or at once on Enter; each search replaces the page's address
+rather than adding a history entry), and before any search offers a few to
+start from.
 It lists ten results, most installed first, with the rest behind "Show more":
 each skill's name links to its page on skills.sh (which shows what it does and
 its instructions), with its source repository and an installs badge beneath,
