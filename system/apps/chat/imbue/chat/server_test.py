@@ -5088,6 +5088,9 @@ _VISITOR = RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@exam
 _VISITING_AGENT = RequestIdentity(
     owner=False, agent_id="va-0123456789abcdef0123456789abcdef", agent_name="Josh's Claude", granter="user:8c0f"
 )
+_BRACKETED_AGENT = RequestIdentity(
+    owner=False, agent_id="va-0123456789abcdef0123456789abcdef", agent_name="Josh's [Claude]", granter="user:8c0f"
+)
 _OWNER_ACCOUNT = RequestIdentity(owner=True, user_id="user-owner-9c21", email="owner@example.com")
 
 
@@ -5135,6 +5138,24 @@ def test_a_visitors_slash_command_is_delivered_as_typed_but_still_annotated(
         "agent:va-0123456789abcdef0123456789abcdef",
         "Josh's Claude",
     )
+
+
+def test_a_name_the_prefix_cannot_carry_is_made_safe_before_delivery_and_annotation(
+    app: Flask, messenger: RecordingMngrMessenger
+) -> None:
+    agent_id = "agent-00000000000000000000000000000034"
+    seed_agent_state(state_of(app).agent_manager, agent_id, name="Chat-34")
+    client = app.test_client()
+
+    client.post(
+        f"/api/chats/{agent_id}/message",
+        json={"message": "hello", "message_id": "m-3"},
+        headers=_identity_header(_BRACKETED_AGENT),
+    )
+
+    assert messenger.sent == [(agent_id, "[from: Josh's [Claude] hello")]
+    (annotation,) = state_of(app).authors.annotations(ChatId(agent_id))
+    assert annotation.display_name == "Josh's [Claude"
 
 
 def test_the_owners_messages_are_never_prefixed_nor_annotated_under_either_key(

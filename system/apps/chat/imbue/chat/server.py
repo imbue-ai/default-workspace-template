@@ -85,6 +85,7 @@ from imbue.chat.attachments import store_uploaded_file
 from imbue.chat.authors import author_prefix
 from imbue.chat.authors import is_unprefixable_input
 from imbue.chat.authors import new_author_annotation
+from imbue.chat.authors import prefix_safe_name
 from imbue.chat.background_tasks import unreported_runner_ends_notice
 from imbue.chat.chat_autocompact import ChatAutocompactState
 from imbue.chat.chat_fast_mode import ChatFastModeState
@@ -893,7 +894,7 @@ def _attributed_delivery(state: ChatAppState, chat_id: ChatId, message: str, mes
     if is_owner_participant(identity):
         return message
     sender = participant_key_of(identity)
-    display_name = state.roster.display_name_of(sender, identity)
+    display_name = prefix_safe_name(state.roster.display_name_of(sender, identity), sender)
     delivered = message if is_unprefixable_input(message) else author_prefix(display_name) + message
     state.authors.record(chat_id, new_author_annotation(message_id, sender, display_name, delivered))
     return delivered

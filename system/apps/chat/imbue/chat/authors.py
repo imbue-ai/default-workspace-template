@@ -59,6 +59,8 @@ AUTHOR_PREFIX_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^\[from: (?P<name>[^\]\n\s][^\]\n]*?)(?: in #(?P<room>[^\]\n]+?))?\] "
 )
 
+# A name inside the prefix may not hold the bracket that closes it, and the prefix is one line.
+_WHITESPACE_RUN: Final[re.Pattern[str]] = re.compile(r"\s+")
 # The key of an author known only from a prefix nobody annotated (typed by hand, or whose annotation was lost).
 NAME_KEY_PREFIX: Final[str] = "name:"
 # A name a prefix carries may hold anything but the bracket; the key form holds it to one line of at most this.
@@ -80,6 +82,14 @@ def author_prefix(display_name: str, room_title: str | None = None) -> str:
     if room_title is None:
         return f"[from: {display_name}] "
     return f"[from: {display_name} in #{room_title}] "
+
+
+@pure
+def prefix_safe_name(display_name: str, key: ParticipantKey) -> str:
+    """The name as the prefix can carry it (and as the annotation records it, so a prefix joins by name): the
+    closing bracket dropped, whitespace runs (line breaks included) as one space; the key when nothing is left."""
+    cleaned = _WHITESPACE_RUN.sub(" ", display_name.replace("]", "")).strip()
+    return cleaned if cleaned else str(key)
 
 
 @pure
