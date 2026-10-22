@@ -576,17 +576,19 @@ def test_a_query_that_matches_nothing_reads_as_no_rows(
     )
 
 
-def test_a_raw_store_that_cannot_be_read_has_no_count(
+def _store_is_locked(
+    command: Sequence[str], **_kwargs: object
+) -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess(command, 1, "", "Error: database is locked\n")
+
+
+def test_a_raw_store_that_cannot_be_read_is_an_error_saying_why(
     workspace: _SyncWorkspace,
 ) -> None:
     _raw_store(workspace.data_root, CHATGPT)
 
-    def run(command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess:
-        return subprocess.CompletedProcess(
-            command, 1, "", "Error: database is locked\n"
-        )
-
-    assert import_chats.count_conversations(workspace.datalib, CHATGPT, run) is None
+    with pytest.raises(import_chats.ImportChatsError, match="database is locked"):
+        import_chats.count_conversations(workspace.datalib, CHATGPT, _store_is_locked)
 
 
 @pytest.mark.parametrize(
@@ -713,12 +715,12 @@ def test_an_index_of_a_source_with_nothing_downloaded_says_so(
     )
 
 
-def test_an_index_whose_raw_store_cannot_be_read_is_left_as_it_was(
+def test_an_index_of_a_source_with_no_raw_store_is_not_written(
     workspace: _SyncWorkspace,
 ) -> None:
     index_path = import_chats.index_path_for(workspace.status_path, CHATGPT)
 
-    with pytest.raises(import_chats.ImportChatsError, match="could not be read"):
+    with pytest.raises(import_chats.ImportChatsError, match="no ChatGPT raw store"):
         import_chats.write_index(workspace.datalib, CHATGPT, index_path, _FakeDatalib())
 
     assert not index_path.exists()
@@ -1028,7 +1030,31 @@ def test_a_sync_whose_index_cannot_be_written_still_records_what_it_imported(
     assert not list(index_path.parent.glob("*.tmp-*"))
 
 
-def test_a_sync_keeps_the_last_count_when_the_raw_store_cannot_be_read(
+def test_a_sync_keeps_the_last_count_and_says_why_when_the_raw_store_cannot_be_read(
+    workspace: _SyncWorkspace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _raw_store(workspace.data_root, CLAUDE, [("a", "A", None)])
+    import_chats.record_source(
+        workspace.status_path, "claude", "imported", 7, "", pid=None
+    )
+    datalib = _FakeDatalib(
+        stderr=_run_summary({"step": "claude_chats/ingest", "status": "succeeded"})
+    )
+
+    def run(command: Sequence[str], **kwargs: object) -> subprocess.CompletedProcess:
+        if Path(command[0]).name == "datalib-doltlite":
+            return _store_is_locked(command)
+        return datalib(command, **kwargs)
+
+    assert workspace.sync([CLAUDE], run) is True
+
+    assert workspace.record("claude")["conversations"] == 7
+    said = capsys.readouterr().err
+    assert "the Claude conversations could not be counted" in said
+    assert "database is locked" in said
+
+
+def test_a_sync_keeps_the_last_count_when_there_is_no_raw_store(
     workspace: _SyncWorkspace,
 ) -> None:
     import_chats.record_source(

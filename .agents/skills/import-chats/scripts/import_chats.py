@@ -443,7 +443,8 @@ def query_raw_store(
     sql: str,
     run: Callable[..., subprocess.CompletedProcess],
 ) -> list[dict] | None:
-    """The rows ``sql`` reads from the source's raw store; None when there is no store yet or it cannot be read."""
+    """The rows ``sql`` reads from the source's raw store; None when there is no store yet. A store that cannot be
+    read raises ``ImportChatsError`` saying why."""
     store = datalib.raw_store(source)
     doltlite = datalib.binary("datalib-doltlite")
     # datalib-doltlite creates a database it is pointed at that does not exist.
@@ -457,22 +458,33 @@ def query_raw_store(
             errors="replace",
             timeout=_COUNT_TIMEOUT_SECONDS,
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
+    except subprocess.TimeoutExpired as e:
+        raise ImportChatsError(
+            f"reading {store} did not finish within {e.timeout:.0f}s"
+        ) from e
+    except OSError as e:
+        raise ImportChatsError(f"cannot run datalib-doltlite: {e}") from e
     if result.returncode != 0:
-        return None
+        said = (
+            result.stderr.strip()
+            or result.stdout.strip()
+            or f"datalib-doltlite exited {result.returncode}"
+        )
+        raise ImportChatsError(f"cannot read {store}: {said}")
     # A query that matches nothing prints nothing.
     if not result.stdout.strip():
         return []
     try:
         rows = json.loads(result.stdout)
-    except ValueError:
-        return None
-    return (
-        [row for row in rows if isinstance(row, dict)]
-        if isinstance(rows, list)
-        else None
-    )
+    except ValueError as e:
+        raise ImportChatsError(
+            f"datalib-doltlite's answer from {store} is not JSON: {e}"
+        ) from e
+    if not isinstance(rows, list):
+        raise ImportChatsError(
+            f"datalib-doltlite's answer from {store} is not a list of rows"
+        )
+    return [row for row in rows if isinstance(row, dict)]
 
 
 def count_conversations(
@@ -480,15 +492,19 @@ def count_conversations(
     source: ChatSource,
     run: Callable[..., subprocess.CompletedProcess],
 ) -> int | None:
-    """How many conversations the source's raw store holds; None when it cannot say."""
+    """How many conversations the source's raw store holds; None when there is no store yet."""
     rows = query_raw_store(
         datalib,
         source,
         f"SELECT count(*) AS n FROM ({source.conversations_query})",
         run,
     )
-    if not rows or not isinstance(rows[0].get("n"), int):
+    if rows is None:
         return None
+    if not rows or not isinstance(rows[0].get("n"), int):
+        raise ImportChatsError(
+            f"the {source.label} raw store did not answer its count: {rows!r}"
+        )
     return rows[0]["n"]
 
 
@@ -562,7 +578,7 @@ def read_index_entries(
     source: ChatSource,
     run: Callable[..., subprocess.CompletedProcess],
 ) -> list[IndexEntry] | None:
-    """Every conversation (and project) the source's raw store holds; None when it cannot be read."""
+    """Every conversation (and project) the source's raw store holds; None when there is no store yet."""
     pages = rendered_pages_by_id(datalib, source)
     queries = [(source.conversations_query, source.conversation_url, False)]
     if source.projects_query is not None and source.project_url is not None:
@@ -659,11 +675,12 @@ def write_index(
     index_path: Path,
     run: Callable[..., subprocess.CompletedProcess],
 ) -> None:
-    """Rewrite the source's index from its raw store; one that cannot be read leaves the index as it was."""
+    """Rewrite the source's index from its raw store; a store that is missing or cannot be read raises and leaves the
+    index as it was."""
     entries = read_index_entries(datalib, source, run)
     if entries is None:
         raise ImportChatsError(
-            f"the {source.label} raw store {datalib.raw_store(source)} could not be read"
+            f"there is no {source.label} raw store at {datalib.raw_store(source)} yet"
         )
     _write_text_atomic(index_path, render_index(source, entries, index_path.parent))
 
@@ -943,7 +960,16 @@ def _current_conversations(
     status_path: Path,
     run: Callable[..., subprocess.CompletedProcess],
 ) -> int:
-    counted = count_conversations(datalib, source, run)
+    """How many conversations the source's raw store holds, else (no store yet, or one that cannot be read, which is
+    reported on stderr) the count last recorded."""
+    try:
+        counted = count_conversations(datalib, source, run)
+    except ImportChatsError as e:
+        print(
+            f"import-chats: the {source.label} conversations could not be counted, so the last count stands: {e}",
+            file=sys.stderr,
+        )
+        counted = None
     return (
         counted
         if counted is not None
