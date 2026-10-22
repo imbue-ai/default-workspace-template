@@ -21,6 +21,8 @@ from imbue.chat.agent_manager import AgentManager
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.auto_open import LEDGER_FILENAME
+from imbue.chat.background_tasks import BACKGROUND_TASKS_DIRNAME
+from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_records import CHAT_RECORDS_DIRNAME
 from imbue.chat.chat_records import FileChatRecordStore
@@ -144,6 +146,7 @@ def build_production_state(
         is_secondary=is_secondary,
         # Reading a chat marks it read in the Imbue Studio app; a secondary's windows are a preview's, not the user's.
         imbue_studio_gateway=None if is_secondary else GatewayAccess.from_environ(os.environ),
+        background_tasks=BackgroundTaskReader(root=data_dir / BACKGROUND_TASKS_DIRNAME),
     )
     # The codex ledger owns live user-turns; route each committed user-turn it emits onto
     # the same per-chat event fan-out the session watchers use. Wired here (not at manager build)
@@ -172,8 +175,8 @@ def build_production_state(
             build_one_shot_completion=build_one_shot_completion,
         ),
         # One long-lived service per app: it holds the in-flight sign-in PTY between the
-        # start call and the polls that advance it. A successful re-auth restarts the agents
-        # bound to that account -- they do not pick up a swapped credential on their own.
+        # start call and the polls that advance it. A successful re-auth restarts the live agents
+        # bound to that account -- they do not pick up a swapped credential until they next start.
         auth_flows=AuthFlowService.create(restart_bound_agents=agent_manager.restart_agents_on_account_in_background),
         # Read-only: it reports claude's auth state and writes and restarts nothing, so it
         # needs no collaborators.
@@ -187,11 +190,16 @@ def build_production_state(
             requests_directory=data_dir / SECRET_REQUESTS_DIRNAME, secrets_directory=DEFAULT_SECRETS_DIRECTORY
         ),
     )
-    # Eviction wiring: when the manager sees an agent destroyed or its lifecycle
-    # transition into a dead state, the state drops that agent's watcher -- the
-    # resident transcript, watch thread, and inotify watches go with it.
+    # Eviction wiring: the state drops what an agent holds resident -- the transcript,
+    # watch thread, and inotify watches -- when the manager sees it destroyed (the whole
+    # chat's when it was the active agent) or an archived member die, and after every
+    # observe event (and every stream close, in server.py) releases each stopped chat
+    # nobody is streaming. Removing a chat's active agent also ends the chat's open
+    # streams, which nothing feeds once its watcher is gone.
     agent_manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)
     agent_manager.set_unviewed_transcript_release(state.release_unviewed_stopped_transcripts)
+    agent_manager.set_session_watcher_check(state.has_watcher)
+    agent_manager.set_chat_stream_ender(state.event_queues.end_streams)
     return state
 
 

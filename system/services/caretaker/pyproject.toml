@@ -7,13 +7,13 @@ requires-python = ">=3.11"
 dependencies = []
 
 # No build-system: this is a bash-script package (a virtual uv workspace
-# member). caretaker_check.sh is run by cron through the automations lib's
-# run_job.sh once the enable-caretaker skill has written the cron entry.
+# member). caretaker_check.sh is the command of the ``caretaker`` routine
+# (system/routines/caretaker.toml), which the routines runner runs.
 
 [dependency-groups]
 dev = [
     # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
-    "ty==0.0.24",
+    "ty==0.0.85",
 ]
 
 # Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.

@@ -35,14 +35,14 @@ class AgentEventQueues:
 
     def __init__(self) -> None:
         self._queues: dict[str, list[queue.Queue[dict[str, Any] | None]]] = defaultdict(list)
-        # Reentrant for two same-thread re-entries into unregister() while the
-        # lock is held. Deliberate: broadcast_batch evicts an overflowing
-        # consumer from inside its locked delivery loop (_evict_locked ->
-        # unregister). Indirect: a CPython GC cycle during an allocation inside
-        # a locked section can finalize an abandoned SSE event_generator (from
-        # an unrelated prior stream), whose `finally` block calls unregister()
-        # on the same thread. With a non-reentrant Lock either re-entrance
-        # self-deadlocks.
+        # Reentrant for two kinds of same-thread re-entry into unregister() while
+        # the lock is held. Deliberate: closing a consumer under the lock goes
+        # through _close_locked -> unregister, from broadcast_batch's eviction of
+        # an overflowing consumer and from end_streams. Indirect: a CPython GC
+        # cycle during an allocation inside a locked section can finalize an
+        # abandoned SSE event_generator (from an unrelated prior stream), whose
+        # `finally` block calls unregister() on the same thread. With a
+        # non-reentrant Lock either re-entrance self-deadlocks.
         self._lock: threading.RLock = threading.RLock()
         self._shutdown: bool = False
 
@@ -91,32 +91,40 @@ class AgentEventQueues:
                         self._evict_locked(chat_id, event_queue)
                         break
 
-    def _evict_locked(self, chat_id: str, event_queue: queue.Queue[dict[str, Any] | None]) -> None:
-        """Disconnect one overflowing consumer. Caller must hold ``self._lock``.
+    def end_streams(self, chat_id: str) -> None:
+        """Close every open stream of ``chat_id``, so a chat page reconnects and resyncs over REST."""
+        with self._lock:
+            for event_queue in list(self._queues.get(chat_id, [])):
+                self._close_locked(chat_id, event_queue)
 
-        Drains the queue and pushes the shutdown sentinel so the handler thread, blocked on
-        ``get``, wakes, sees ``None``, and closes its stream -- which triggers the client's
-        reconnect-with-snapshot resync.
-        """
-        self.unregister(chat_id, event_queue)
-        _drain_queue(event_queue)
-        try:
-            event_queue.put_nowait(None)
-        except queue.Full:
-            pass
+    def _evict_locked(self, chat_id: str, event_queue: queue.Queue[dict[str, Any] | None]) -> None:
+        """Disconnect one overflowing consumer. Caller must hold ``self._lock``."""
+        self._close_locked(chat_id, event_queue)
         logger.warning("Disconnected an SSE consumer for chat {}: its event queue overflowed", chat_id)
+
+    def _close_locked(self, chat_id: str, event_queue: queue.Queue[dict[str, Any] | None]) -> None:
+        """Unregister one consumer and end its stream. Caller must hold ``self._lock``."""
+        self.unregister(chat_id, event_queue)
+        _end_stream(event_queue)
 
     def shutdown(self) -> None:
         with self._lock:
             self._shutdown = True
             for chat_queues in self._queues.values():
                 for event_queue in chat_queues:
-                    _drain_queue(event_queue)
-                    try:
-                        event_queue.put_nowait(None)
-                    except queue.Full:
-                        pass
+                    _end_stream(event_queue)
             self._queues.clear()
+
+
+def _end_stream(event_queue: queue.Queue[dict[str, Any] | None]) -> None:
+    """Drain the queue and push the shutdown sentinel, so the handler thread, blocked on ``get``,
+    wakes, sees ``None``, and closes its stream -- which triggers the client's
+    reconnect-with-snapshot resync."""
+    _drain_queue(event_queue)
+    try:
+        event_queue.put_nowait(None)
+    except queue.Full:
+        pass
 
 
 def _drain_queue(event_queue: queue.Queue[dict[str, Any] | None]) -> None:

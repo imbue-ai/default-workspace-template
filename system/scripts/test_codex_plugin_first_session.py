@@ -1,7 +1,8 @@
 """Exercise native plugin discovery before the first turn, without model/API calls.
 
-Requires Codex 0.154.0+ and the released guardian marketplace. For development,
-CODE_GUARDIAN_TEST_REF can select an unreleased code-guardian branch.
+Requires Codex 0.154.0+. The test installs the pinned plugins into a temporary root
+with install_agent_plugins.sh; for development, CODE_GUARDIAN_COMMIT can select an
+unreleased code-guardian commit.
 """
 
 from __future__ import annotations
@@ -51,6 +52,13 @@ def test_first_session_and_reprovision_load_native_reviews(tmp_path: Path) -> No
     shared.mkdir()
     (shared / "config.toml").write_text("# account config\n")
     env = {**os.environ, "MNGR_AGENT_STATE_DIR": str(state), "CODEX_HOME": str(shared)}
+    plugins_root = tmp_path / "agent plugins"
+    subprocess.run(
+        ["bash", str(_ROOT / "system/scripts/install_agent_plugins.sh")],
+        env={**os.environ, "AGENT_PLUGINS_ROOT": str(plugins_root)},
+        check=True,
+        timeout=60,
+    )
     agent_config = tomllib.loads((_ROOT / ".mngr/settings.toml").read_text())[
         "agent_types"
     ]["codex"]
@@ -64,8 +72,9 @@ def test_first_session_and_reprovision_load_native_reviews(tmp_path: Path) -> No
         overrides = tomllib.loads((_ROOT / ".mngr/settings.toml").read_text())[
             "agent_types"
         ]["codex"]["config_overrides"]
-        if test_ref := os.environ.get("CODE_GUARDIAN_TEST_REF"):
-            overrides["marketplaces"]["imbue-code-guardian"]["ref"] = test_ref
+        overrides["marketplaces"]["imbue-code-guardian"]["source"] = str(
+            plugins_root / "imbue-code-guardian"
+        )
         (home / "config.toml").write_text(tomlkit.dumps(overrides))
         result = subprocess.run(
             [*shlex.split(installer), "--strict"],

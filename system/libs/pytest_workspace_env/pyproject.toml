@@ -1,7 +1,7 @@
 [project]
 name = "pytest-workspace-env"
 version = "0.1.0"
-description = "Test-only pytest plugin that fails, rather than skips, any test where the environment is meant to be complete"
+description = "Test-only pytest plugin that clears the mngr agent environment and fails, rather than skips, any test where the environment is meant to be complete"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -21,7 +21,7 @@ packages = ["src/pytest_workspace_env"]
 [dependency-groups]
 dev = [
     # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
-    "ty==0.0.24",
+    "ty==0.0.85",
 ]
 
 # Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.

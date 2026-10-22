@@ -13,7 +13,6 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
-from typing import Any
 from typing import Final
 from typing import Literal
 
@@ -118,6 +117,26 @@ def read_chat_import_sources(status_path: Path, now: datetime | None = None) -> 
     return sources
 
 
+class ChatImportSourceView(FrozenModel):
+    """One source as the card sees it: the skill's record without the sync's process id."""
+
+    state: ChatImportState = Field(description="Where the source's last import got to")
+    conversations: int = Field(description="Conversations imported so far")
+    updated_at: str = Field(description="When the record was last written, ISO 8601")
+    detail: str = Field(description="Why the last import did not finish; empty otherwise")
+    fetched: int | None = Field(
+        description="Conversations the running import has fetched; null when it reports no total"
+    )
+    to_fetch: int | None = Field(description="Conversations the running import set out to fetch; null when unknown")
+
+
+class ChatImportResponse(FrozenModel):
+    """What the chat import routes answer: each recorded source, and whether the user put the card away."""
+
+    is_dismissed: bool = Field(description="Whether the user put the card away")
+    sources: dict[str, ChatImportSourceView] = Field(description="Each source the import has recorded, by key")
+
+
 class ChatImportStore(FrozenModel):
     """Reads the skill's status file and keeps the card's dismissal."""
 
@@ -131,10 +150,12 @@ class ChatImportStore(FrozenModel):
     def dismiss(self) -> None:
         write_json_atomic(self.dismissal_path, {"is_dismissed": True})
 
-    def wire_json(self) -> dict[str, Any]:
+    def view(self) -> ChatImportResponse:
         """The card's state as ``GET /api/chat-import`` answers it."""
-        sources = read_chat_import_sources(self.status_path)
-        return {
-            "is_dismissed": self.is_dismissed(),
-            "sources": {key: source.model_dump(exclude={"pid"}) for key, source in sources.items()},
-        }
+        return ChatImportResponse(
+            is_dismissed=self.is_dismissed(),
+            sources={
+                key: ChatImportSourceView.model_validate(source.model_dump(exclude={"pid"}))
+                for key, source in read_chat_import_sources(self.status_path).items()
+            },
+        )

@@ -17,7 +17,6 @@ from workspace_layout.primitives import UserId
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
-from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.errors import LaunchUnavailableError
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
@@ -29,6 +28,7 @@ from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.testing import FakeLivenessProber
 from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import build_inventory
+from imbue.system_interface.shell.testing import client_report
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.shell.testing import message_handling_app
@@ -52,20 +52,24 @@ def _shell(app: Flask) -> ShellState:
     return state_of(app).shell
 
 
+def _heard_revision(app: Flask, client_id: str) -> int:
+    """The desktop revision a window of the client has heard once it read the client's record."""
+    record = _shell(app).clients.get_client(client_id)
+    return record.desktop_revision if record is not None else 0
+
+
 def _register_client(app: Flask, client_id: str, desktop_id: str = "home") -> "queue.Queue[str | None]":
     """A connected window of ``client_id`` on ``desktop_id``, recorded the way its ``client_state`` report records it."""
     client_queue = _shell(app).broadcaster.register()
     _shell(app).broadcaster.set_client_info(client_queue, client_id, desktop_id)
-    _shell(app).record_client_report(
-        ClientStateReport(client_id=ClientId(client_id), active_desktop=DesktopId(desktop_id))
-    )
+    _shell(app).record_client_report(client_report(client_id, desktop_id, _heard_revision(app, client_id)))
     return client_queue
 
 
 def _record_client(app: Flask, client_id: str, desktop_id: str = "home") -> None:
     """A client the shell has a record of but that is not connected."""
     _shell(app).clients.record_report(
-        ClientStateReport(client_id=ClientId(client_id), active_desktop=DesktopId(desktop_id)), TEST_NOW
+        client_report(client_id, desktop_id, _heard_revision(app, client_id)), TEST_NOW, is_redirected=False
     )
 
 
@@ -366,7 +370,16 @@ def test_a_client_records_what_its_phone_layout_shows_and_the_inventory_carries_
 
     assert answer.status_code == 200
     record = answer.get_json()
-    assert set(record) == {"id", "active_desktop", "last_seen", "is_connected", "user_id", "entries", "shown_history"}
+    assert set(record) == {
+        "id",
+        "active_desktop",
+        "last_seen",
+        "is_connected",
+        "user_id",
+        "entries",
+        "shown_history",
+        "desktop_revision",
+    }
     assert (record["id"], record["is_connected"], record["shown_history"]) == ("c1", True, [first, "home", second])
     document = client.get("/api/inventory").get_json()
     assert document["workspace_name"] == "Workspace"
@@ -603,7 +616,11 @@ def test_every_desktop_holds_one_pinned_window_per_pinned_app_and_a_new_desktop_
     assert born["app"] == "buddy" and born["is_pinned"] is True and born["id"] != pinned["id"]
     # An open at the home path with the default focus behaviour finds the pinned window.
     focused = _open_window(client, "buddy", "/")
-    assert focused.status_code == 200 and focused.get_json() == {"window": pinned, "is_new": False}
+    assert focused.status_code == 200 and focused.get_json() == {
+        "window": pinned,
+        "is_new": False,
+        "has_no_desktop_window": False,
+    }
 
 
 def test_a_pinned_window_is_refused_a_close_by_the_route_and_by_the_op(
@@ -1047,7 +1064,11 @@ def test_windows_open_focus_locate_and_close_across_clients(client: FlaskClient,
 
     # The same app at the same path is answered rather than opened, and raised in the requesting client's layout.
     focused = _open_window(client, "terminal", "/new?workdir=%2Ftmp", client_id="c2")
-    assert focused.status_code == 200 and focused.get_json() == {"window": window, "is_new": False}
+    assert focused.status_code == 200 and focused.get_json() == {
+        "window": window,
+        "is_new": False,
+        "has_no_desktop_window": False,
+    }
     (restored,) = _placements(client, "c2")
     assert restored["window_id"] == window["id"] and restored["is_minimized"] is False
     another = _open_window(client, "terminal", "/new?workdir=%2Ftmp", if_present="new")
@@ -1281,12 +1302,20 @@ def test_an_op_targets_the_named_desktop_and_load_switches_the_client(client: Fl
     requester = _TERMINAL_REQUESTER
     client.post("/api/desktops", json={"name": "Research", "color": "#12B5A5", "glyph": 4})
     drain_messages(client_queue)
+    registered = shell.clients.get_client("c1")
+    assert registered is not None
 
     on_research = _op(client, "open", {"app": "files", "desktop": "Research"}, requester)
     assert on_research.status_code == 200 and on_research.get_json()["desktop_id"] == "research"
     recorded = shell.clients.get_client("c1")
     assert recorded is not None and recorded.active_desktop == "research"
-    assert "active_desktop_changed" in [message["type"] for message in drain_messages(client_queue)]
+    # The op's move is announced at a newer revision, so the client's windows take it, and names no report.
+    assert recorded.desktop_revision == registered.desktop_revision + 1
+    assert [
+        (message["desktop_id"], message["revision"], message["report_id"])
+        for message in drain_messages(client_queue)
+        if message["type"] == "active_desktop_changed"
+    ] == [("research", recorded.desktop_revision, None)]
     loaded = _op(client, "load", {"desktop": "home"}, requester)
     assert loaded.status_code == 200 and loaded.get_json()["desktop_id"] == "home"
     assert _op(client, "load", {"desktop": "Nowhere"}, requester).status_code == 404
@@ -1562,7 +1591,10 @@ def test_every_app_record_the_browser_reads_carries_the_message_handlers_its_row
     registry_path = write_two_app_registry(
         tmp_path,
         registry_row_toml(
-            "buddy", "http://localhost:7002", message_handlers=[("minds:focus-chat", "/api/focus-chat")]
+            "buddy",
+            "http://localhost:7002",
+            message_handlers=[("minds:focus-chat", "/api/focus-chat")],
+            shown_message_handlers=[("open:file", "{path}?view", ("{path}/",))],
         ),
     )
     client_queue = broadcaster.register()
@@ -1572,7 +1604,10 @@ def test_every_app_record_the_browser_reads_carries_the_message_handlers_its_row
     expected = {
         "terminal": [],
         "files": [],
-        "buddy": [{"type": "minds:focus-chat", "path": "/api/focus-chat"}],
+        "buddy": [
+            {"type": "minds:focus-chat", "path": "/api/focus-chat", "show": None, "showing": []},
+            {"type": "open:file", "path": None, "show": "{path}?view", "showing": ["{path}/"]},
+        ],
     }
     listed = client.get("/api/inventory").get_json()["apps"]
     assert {app["name"]: app["message_handlers"] for app in listed} == expected
@@ -2156,6 +2191,24 @@ def test_an_op_that_shows_a_desktop_window_to_a_client_with_only_pop_outs_open_s
     assert focused.get_json()["has_no_desktop_window"] is False
 
 
+def test_a_page_open_for_a_client_with_only_pop_outs_open_says_the_window_waits_for_a_desktop_window(
+    client: FlaskClient, app: Flask
+) -> None:
+    """A link opened from a pop-out with the main window closed: the window is placed on the desktop, and the answer
+    says no desktop window shows it, so the page can tell the user; a minimized open is out of sight anyway."""
+    _record_client(app, "c1", "home")
+    _shell(app).broadcaster.set_pop_out_info(_shell(app).broadcaster.register(), "c1")
+
+    alone = _open_window(client, "files", "/notes/")
+    minimized = _open_window(client, "files", "/later/", minimized=True)
+    _register_client(app, "c1", "home")
+    with_desktop = _open_window(client, "files", "/notes/")
+
+    assert (alone.status_code, alone.get_json()["has_no_desktop_window"]) == (201, True)
+    assert minimized.get_json()["has_no_desktop_window"] is False
+    assert (with_desktop.status_code, with_desktop.get_json()["has_no_desktop_window"]) == (200, False)
+
+
 def test_the_inventory_lists_every_clients_popped_out_windows_with_their_ghosts(
     client: FlaskClient, app: Flask
 ) -> None:
@@ -2341,9 +2394,9 @@ def _repo_root(app: Flask) -> Path:
 
 
 def test_the_pending_update_is_the_kept_rollback_point_or_null(client: FlaskClient, app: Flask) -> None:
-    assert client.get("/api/updates/pending").get_json() is None
+    assert client.get("/api/updates/pending").get_json() == {"notice": None}
     write_rollback_point(_repo_root(app), apps=["terminal", "system_interface"], needs_system_services_restart=True)
-    notice = client.get("/api/updates/pending").get_json()
+    notice = client.get("/api/updates/pending").get_json()["notice"]
     assert notice["apps"] == ["terminal", "system_interface"]
     assert notice["needs_system_services_restart"] is True
     assert notice["progress"] is None and notice["outcome"] is None
@@ -2356,7 +2409,7 @@ def test_confirming_the_pending_update_closes_it_through_the_script(client: Flas
     assert client.post("/api/updates/pending/confirm").status_code == 204
 
     assert [call["argv"] for call in read_stub_update_self_calls(_repo_root(app))] == [["confirm-last"]]
-    assert client.get("/api/updates/pending").get_json() is None
+    assert client.get("/api/updates/pending").get_json() == {"notice": None}
     # Nothing left to confirm: a second click is told so rather than run the script again.
     refused = client.post("/api/updates/pending/confirm")
     assert refused.status_code == 409 and "no update notice" in refused.get_json()["detail"]
@@ -2368,7 +2421,7 @@ def test_a_failing_confirm_names_the_failure_and_keeps_the_notice(client: FlaskC
     failed = client.post("/api/updates/pending/confirm")
     assert failed.status_code == 500
     assert "told to fail" in failed.get_json()["detail"]
-    assert client.get("/api/updates/pending").get_json() is not None
+    assert client.get("/api/updates/pending").get_json()["notice"] is not None
 
 
 @pytest.mark.timeout(30)
@@ -2396,7 +2449,7 @@ def test_a_rollback_the_script_refuses_answers_conflict_with_the_scripts_reason(
 
     assert refused.status_code == 409
     assert "told to fail" in refused.get_json()["detail"]
-    assert client.get("/api/updates/pending").get_json()["progress"] is None
+    assert client.get("/api/updates/pending").get_json()["notice"]["progress"] is None
 
 
 def test_a_rollback_is_refused_while_one_runs_and_once_the_point_settled(client: FlaskClient, app: Flask) -> None:
@@ -2424,12 +2477,12 @@ def test_a_preview_shell_reads_the_notice_but_refuses_to_close_or_roll_it_back(
     write_rollback_point(_repo_root(application))
     client = application.test_client()
 
-    assert client.get("/api/updates/pending").get_json()["apps"] == ["terminal"]
+    assert client.get("/api/updates/pending").get_json()["notice"]["apps"] == ["terminal"]
     for verb in ("confirm", "rollback"):
         refusal = client.post(f"/api/updates/pending/{verb}")
         assert refusal.status_code == 403 and "preview" in refusal.get_json()["detail"]
     assert read_stub_update_self_calls(_repo_root(application)) == []
-    assert client.get("/api/updates/pending").get_json() is not None
+    assert client.get("/api/updates/pending").get_json()["notice"] is not None
 
 
 # The launch route (post-launch-paths plan section 5.3)

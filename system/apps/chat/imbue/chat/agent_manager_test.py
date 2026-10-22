@@ -4,6 +4,7 @@ import json
 import os
 import queue
 import signal
+import subprocess
 import threading
 import time
 import tomllib
@@ -27,12 +28,16 @@ from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import read_index
 from imbue.chat.accounts import set_mru
 from imbue.chat.activity_state import ActivityState
+from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import HandoffCapabilities
+from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
+from imbue.chat.agent_manager import UNWATCHED_PENDING_COMPACTION_TIMEOUT_SECONDS
+from imbue.chat.agent_manager import _FINISHED_TASK_TURN_GRACE_PASSES
 from imbue.chat.agent_manager import _SwitchTarget
 from imbue.chat.agent_manager import _build_chat_create_command
 from imbue.chat.agent_manager import _build_chat_display_label_command
@@ -45,6 +50,11 @@ from imbue.chat.agent_manager import launch_role_templates
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.autocompact import ChatAutoCompactor
+from imbue.chat.background_tasks import BackgroundTask
+from imbue.chat.background_tasks import BackgroundTaskReader
+from imbue.chat.chat_autocompact import ChatAutocompactState
+from imbue.chat.chat_autocompact import read_autocompact_state
+from imbue.chat.chat_autocompact import write_autocompact_state
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_fast_mode import read_fast_mode_state
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
@@ -60,6 +70,9 @@ from imbue.chat.chat_seed import seed_event_id
 from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.chat_settings import ChatSettingsStore
 from imbue.chat.chat_settings import FastModeMode
+from imbue.chat.compaction_status import COMPACTION_REQUEST_FILENAME
+from imbue.chat.compaction_status import read_compaction_request
+from imbue.chat.compaction_status import write_compaction_request
 from imbue.chat.create_defaults import create_defaults_path
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
 from imbue.chat.harnesses.codex.model import codex_models_to_options
@@ -101,20 +114,28 @@ from imbue.chat.presence import PresenceReport
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatStatus
+from imbue.chat.state import ChatAppState
 from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import drain_is_connecting_pushes
 from imbue.chat.testing import is_chat_connecting
+from imbue.chat.testing import make_agent_fixture
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
 from imbue.chat.testing import make_chat_rebind_record
 from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import observer_holding_the_lock
+from imbue.chat.testing import put_stand_in_cli_on_path
 from imbue.chat.testing import read_create_defaults_type
+from imbue.chat.testing import remove_background_task_marker
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import seed_failed_chat
+from imbue.chat.testing import utc_iso_seconds_ago
 from imbue.chat.testing import wait_until_true
+from imbue.chat.testing import write_background_task_marker
+from imbue.chat.testing import write_compacting_marker
+from imbue.chat.testing import write_last_compaction_record
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.testing import write_summary_for_request
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -137,13 +158,13 @@ from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.utils.polling import wait_for
+from imbue.mngr_claude.claude_config import COMPACTING_MARKER_FILENAME
 from imbue.mngr_codex.app_server_client import CodexModel
 
 # Several tests in this module spin up real watchdog FSEvents observers
 # (the activity and model-state watchers). On macOS the FSEvents emitter thread
 # occasionally stalls during shutdown, tripping pytest-timeout. Mark the
-# whole file as flaky so offload retries it automatically -- mirrors
-# ``ws_broadcaster_test.py``.
+# whole file as flaky so offload retries it automatically.
 pytestmark = pytest.mark.flaky
 
 
@@ -321,6 +342,27 @@ def test_create_chat_broadcasts_provisional_chat_created(
     assert proto_msg["phase"] == "creating"
 
 
+def test_a_change_to_the_account_index_tells_every_page_to_read_the_account_list_again(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    """Removing an account (from any page or process) is pushed at once, so a chat on it shows it before its next send."""
+    account_id, _ = mint_account_dir()
+    commit_account(account_id, "anthropic", "Anthropic")
+    agent_manager._accounts_index_poller.poll_once()
+    q = broadcaster.register()
+
+    agent_manager._accounts_index_poller.poll_once()
+    assert q.empty()
+
+    delete_account(account_id)
+    agent_manager._accounts_index_poller.poll_once()
+
+    raw = q.get_nowait()
+    assert raw is not None
+    assert json.loads(raw) == {"type": "accounts_updated"}
+    assert q.empty()
+
+
 def test_create_codex_chat_broadcasts_provisional_chat_created_with_its_account(
     agent_manager: AgentManager,
     broadcaster: WebSocketBroadcaster,
@@ -473,6 +515,40 @@ def test_a_new_chat_takes_the_workspaces_default_fast_mode_and_keeps_it_in_its_f
     assert manager.get_fast_mode_state(ChatId(created.chat_id)).mode is FastModeMode.OFF
 
 
+@pytest.mark.parametrize(("is_default_on", "expected_label"), [(True, "autocompact=on"), (False, "autocompact=off")])
+def test_a_new_chat_is_labeled_with_the_workspaces_default_idle_compaction_and_keeps_it_in_its_folder(
+    is_default_on: bool,
+    expected_label: str,
+    broadcaster: WebSocketBroadcaster,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    settings = ChatSettingsStore(path=None)
+    settings.write(ChatSettings(autocompact_default=is_default_on))
+    manager = AgentManager.build(
+        broadcaster, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats", chat_settings=settings
+    )
+    try:
+        created = manager.create_chat("", message="hello")
+        wait_until_true(
+            lambda: manager.get_provisional_chat(created.chat_id) is None, 10, "the provisional chat's completion"
+        )
+        # A later change of the default leaves this chat where it was.
+        settings.write(ChatSettings(autocompact_default=not is_default_on))
+        state = manager.get_autocompact_state(ChatId(created.chat_id))
+        agent = manager.get_agent_by_id(created.chat_id)
+    finally:
+        manager.stop()
+
+    (argv_line,) = argv_log.read_text().splitlines()
+    assert f"--label {expected_label}" in argv_line
+    assert state == ChatAutocompactState(is_enabled=is_default_on)
+    assert agent is not None and f"autocompact={agent.labels['autocompact']}" == expected_label
+
+
 def test_a_handoffs_successor_starts_fast_only_when_the_chats_mode_calls_for_it(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
@@ -496,6 +572,28 @@ def test_a_handoffs_successor_starts_fast_only_when_the_chats_mode_calls_for_it(
         assert "fast" in manager._build_successor_create_command(spec)
     finally:
         manager.stop()
+
+
+def test_a_handoffs_successor_is_created_and_tracked_with_the_chats_idle_compaction_setting(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    first = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
+    account = _openai_account()
+    try:
+        manager.set_autocompact_state(ChatId(first), ChatAutocompactState(is_enabled=False))
+        manager.begin_handoff(ChatId(first), account, "Carry on in Codex", "m-1", HeldSendOrigin.CLIENT)
+
+        record = _wait_until_settled(store, ChatId(first))
+        successor = manager.get_agent_by_id(record.agents[1].agent_id)
+    finally:
+        manager.stop()
+
+    (create_line,) = [line for line in argv_log.read_text().splitlines() if line.startswith("create ")]
+    assert "--label autocompact=off" in create_line
+    assert successor is not None and successor.labels["autocompact"] == "off"
 
 
 def _seed_turns() -> tuple[SeedTurn, ...]:
@@ -842,9 +940,10 @@ def test_a_seeded_chats_failed_create_destroys_the_agent_mngr_had_already_made(
         assert manager.get_agent_by_id(agent.agent_id) is not None
 
         go_path.touch()
-        wait_until_true(lambda: len(destroys()) == 1, 10, "the stale agent's destroy")
+        # Once before the create's retry, and once when the retry fails too.
+        wait_until_true(lambda: len(destroys()) == 2, 10, "the stale agent's destroys")
 
-        assert destroys() == [f"destroy {agent.agent_id} --force"]
+        assert destroys() == [f"destroy {agent.agent_id} --force"] * 2
         failed = manager.get_provisional_chat(seeded.chat_id)
         assert failed is not None and failed.phase is ProvisionalChatPhase.FAILED
         withdrawn = store.read(chat_id)
@@ -1002,6 +1101,12 @@ def test_create_chat_relaunches_a_failed_chat_on_the_terms_it_was_minted_with(
     assert pushed["message"] == "/update-self"
 
 
+def test_create_chat_refuses_a_callers_autocompact_label(agent_manager: AgentManager) -> None:
+    """The chat's idle compaction setting is the app's to label, from the chat's folder."""
+    with pytest.raises(AgentCreationError, match="autocompact"):
+        agent_manager.create_chat("", labels={"autocompact": "off"})
+
+
 def test_create_chat_refuses_a_label_the_app_sets_itself(agent_manager: AgentManager) -> None:
     """``display_name`` and ``account`` are what the app derives the chat's identity and binding
     from; a caller restating them would make the argv carry two answers."""
@@ -1017,6 +1122,65 @@ def test_create_chat_refuses_labels_and_the_waiver_beside_a_minted_id(agent_mana
         agent_manager.create_chat("", chat_id="failed-3", labels={"auto_open": "true"})
     with pytest.raises(AgentCreationError, match="relabel"):
         agent_manager.create_chat("", chat_id="failed-3", is_installation_check_skipped=True)
+
+
+def _write_flaky_create_mngr_binary(tmp_path: Path, failed_creates: int) -> tuple[str, Path]:
+    """A stand-in ``mngr`` whose first ``failed_creates`` creates exit 1 and the rest succeed;
+    every other command succeeds. Every argv is appended to the returned log."""
+    log_path = tmp_path / "mngr-argv.log"
+    count_path = tmp_path / "mngr-creates"
+    script = tmp_path / "fake-mngr"
+    script.write_text(
+        f'#!/bin/sh\nprintf "%s\\n" "$1 $3" >> "{log_path}"\n'
+        'if [ "$1" = "create" ]; then\n'
+        f'    echo x >> "{count_path}"\n'
+        f'    [ "$(wc -l < "{count_path}")" -gt {failed_creates} ] || exit 1\n'
+        "fi\n"
+        "exit 0\n"
+    )
+    script.chmod(0o755)
+    return str(script), log_path
+
+
+def test_a_failed_create_syncs_the_venv_and_is_retried_once(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale venv is the one cause of a failed create the workspace can fix itself, so the user
+    sees a failure only if the create fails again after a sync. What the first attempt left under
+    the chat's id is destroyed first, since mngr refuses an id still in use."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    uv_log = put_stand_in_cli_on_path(tmp_path, "uv", "exit 0", monkeypatch)
+    mngr_binary, argv_log = _write_flaky_create_mngr_binary(tmp_path, failed_creates=1)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
+    try:
+        created = manager.create_chat("Second try")
+        outcome = manager.wait_for_chat_creation(created.chat_id, timeout=30.0)
+    finally:
+        manager.stop()
+
+    assert outcome is not None and outcome.is_created
+    assert uv_log.read_text().splitlines() == ["sync --all-packages"]
+    assert argv_log.read_text().splitlines() == ["create --id", "destroy --force", "create --id"]
+
+
+def test_a_create_that_fails_again_after_the_sync_reports_the_failure(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    put_stand_in_cli_on_path(tmp_path, "uv", "exit 0", monkeypatch)
+    mngr_binary, argv_log = _write_flaky_create_mngr_binary(tmp_path, failed_creates=2)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
+    try:
+        created = manager.create_chat("Doomed chat")
+        outcome = manager.wait_for_chat_creation(created.chat_id, timeout=30.0)
+    finally:
+        manager.stop()
+
+    assert outcome is not None and not outcome.is_created
+    assert outcome.error.startswith("mngr create exited with code 1")
+    assert [line.split()[0] for line in argv_log.read_text().splitlines()] == ["create", "destroy", "create"]
 
 
 def test_a_waited_create_reports_the_failure_the_record_holds(
@@ -1594,7 +1758,6 @@ def test_full_snapshot_omitting_agent_drops_it(
     assert len(agent_manager.get_agents()) == 0
 
 
-# mngr CLI argv contract
 # These confront each builder's argv with the live ``imbue.mngr.main.cli`` tree,
 # so a subcommand/flag rename in a new mngr fails here at merge time rather than
 # only surfacing at runtime. See ``mngr_cli_contract`` for the validator.
@@ -1724,7 +1887,6 @@ def test_chat_create_argv_stacks_extra_role_templates_after_chat() -> None:
     assert templates == ["chat", "fast"]
 
 
-# the chat's originating project (the mngr ``project`` label)
 # A chat is an agent, so the project it was created inside rides the label mngr
 # already propagates to the agent's children rather than a parallel list. The
 # label is where a chat starts out filed, not an owner: membership is
@@ -2280,23 +2442,199 @@ def _events_status_detail(manager: AgentManager) -> str:
     return manager.get_agent_events_status().detail
 
 
-def test_get_running_chat_agent_names_excludes_dead_workers_and_primary(broadcaster: WebSocketBroadcaster) -> None:
-    """Only running chats are autocompacted: workers, primary, and dead chats are excluded."""
+def _seed_sweep_candidates(manager: AgentManager) -> None:
+    for agent_id, state, labels in (
+        ("chat-running", "RUNNING", {"user_created": "true"}),
+        ("chat-waiting", "WAITING", {"user_created": "true"}),
+        ("chat-dead", "DEAD", {"user_created": "true"}),
+        ("chat-stopped", "STOPPED", {"user_created": "true"}),
+        ("worker-running", "RUNNING", {"agent_created": "true"}),
+        ("primary-running", "RUNNING", {"is_primary": "true"}),
+    ):
+        seed_agent_state(manager, agent_id, name=f"{agent_id}-name", state=state, labels=labels)
+
+
+def test_opted_in_chat_agents_exclude_dead_workers_primary_and_opted_out_chats(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A chat with no setting reads the default (on)."""
+    manager = AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats")
+    try:
+        _seed_sweep_candidates(manager)
+        assert manager.get_opted_in_running_chat_agent_names() == ["chat-running-name", "chat-waiting-name"]
+
+        manager.set_autocompact_state(ChatId("chat-waiting"), ChatAutocompactState(is_enabled=False))
+
+        assert manager.get_opted_in_running_chat_agent_names() == ["chat-running-name"]
+    finally:
+        manager.stop()
+
+
+def test_chats_on_a_harness_mngr_cannot_compact_are_never_swept(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    manager = AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats")
+    try:
+        for agent_id, harness in (
+            ("chat-claude", HarnessType.CLAUDE),
+            ("chat-antigravity", HarnessType.ANTIGRAVITY),
+            ("chat-opencode", HarnessType.OPENCODE),
+        ):
+            seed_agent_state(
+                manager, agent_id, name=f"{agent_id}-name", labels={"user_created": "true"}, harness=harness
+            )
+
+        assert manager.get_opted_in_running_chat_agent_names() == ["chat-claude-name"]
+    finally:
+        manager.stop()
+
+
+def test_with_the_default_off_only_chats_that_turned_idle_compaction_on_are_swept(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    settings = ChatSettingsStore(path=None)
+    settings.write(ChatSettings(autocompact_default=False))
+    manager = AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats", chat_settings=settings)
+    try:
+        _seed_sweep_candidates(manager)
+        assert manager.get_opted_in_running_chat_agent_names() == []
+
+        write_autocompact_state(tmp_path / "chats" / "chat-running", ChatAutocompactState(is_enabled=True))
+
+        assert manager.get_opted_in_running_chat_agent_names() == ["chat-running-name"]
+    finally:
+        manager.stop()
+
+
+def test_a_successors_agent_is_swept_by_its_chats_setting(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    """A successor's setting is its chat's (the folder is the chat's), not one of its own id."""
+    manager = AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats")
+    try:
+        record = make_two_member_chat_record("agent-first", "agent-second")
+        with manager._lock:
+            manager._chat_record_by_id[record.chat_id] = record
+        seed_agent_state(manager, "agent-second", name="Chat-1-next", labels={"user_created": "true"})
+        write_autocompact_state(tmp_path / "chats" / record.chat_id, ChatAutocompactState(is_enabled=False))
+
+        assert manager.get_opted_in_running_chat_agent_names() == []
+    finally:
+        manager.stop()
+
+
+def test_the_harness_of_a_tracked_agent_is_found_by_its_name(broadcaster: WebSocketBroadcaster) -> None:
     manager = AgentManager.build(broadcaster)
     try:
-        with manager._lock:
-            for agent_id, state, labels in (
-                ("chat-running", "RUNNING", {"user_created": "true"}),
-                ("chat-waiting", "WAITING", {"user_created": "true"}),
-                ("chat-dead", "DEAD", {"user_created": "true"}),
-                ("chat-stopped", "STOPPED", {"user_created": "true"}),
-                ("worker-running", "RUNNING", {"agent_created": "true"}),
-                ("primary-running", "RUNNING", {"is_primary": "true"}),
-            ):
-                manager._agents[agent_id] = AgentStateItem(
-                    id=agent_id, name=f"{agent_id}-name", state=state, labels=labels, work_dir=None
-                )
-        assert manager.get_running_chat_agent_names() == ["chat-running-name", "chat-waiting-name"]
+        seed_agent_state(manager, "agent-named", name="Chat-named", labels={"user_created": "true"})
+
+        assert manager.get_harness_of_agent_named("Chat-named") == "claude"
+        assert manager.get_harness_of_agent_named("Chat-nobody") is None
+    finally:
+        manager.stop()
+
+
+def test_toggling_idle_compaction_relabels_the_chats_agent_whether_running_or_stopped(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    """A label is a metadata write, so a stopped agent is relabeled too; the file is the setting either way."""
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
+    try:
+        seed_agent_state(manager, "agent-alive", name="Chat-1", state="RUNNING")
+        seed_agent_state(manager, "agent-stopped", name="Chat-2", state="STOPPED")
+
+        manager.set_autocompact_state(ChatId("agent-alive"), ChatAutocompactState(is_enabled=False))
+        manager.set_autocompact_state(ChatId("agent-stopped"), ChatAutocompactState(is_enabled=True))
+
+        assert argv_log.read_text().splitlines() == [
+            "label agent-alive --label autocompact=off",
+            "label agent-stopped --label autocompact=on",
+        ]
+        assert manager.get_autocompact_state(ChatId("agent-alive")) == ChatAutocompactState(is_enabled=False)
+        alive = manager.get_agent_by_id("agent-alive")
+        assert alive is not None and alive.labels["autocompact"] == "off"
+        toggle_logs = [record for record in loguru_records if "autocompact: toggle" in record]
+        assert toggle_logs == [
+            "INFO autocompact: toggle chat=agent-alive enabled=False",
+            "INFO autocompact: toggle chat=agent-stopped enabled=True",
+        ]
+    finally:
+        manager.stop()
+
+
+def test_two_quick_toggles_leave_the_label_matching_the_last_setting_written(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A slow ``mngr label`` for the first toggle cannot finish after the second toggle's and overwrite it."""
+    log_path = tmp_path / "mngr-argv.log"
+    slow_mngr = tmp_path / "slow-fake-mngr"
+    slow_mngr.write_text(
+        "#!/bin/sh\n"
+        f'printf "start %s\\n" "$*" >> "{log_path}"\n'
+        'case "$*" in *autocompact=off*) sleep 0.5 ;; esac\n'
+        f'printf "end %s\\n" "$*" >> "{log_path}"\n'
+    )
+    slow_mngr.chmod(0o755)
+    manager = AgentManager.build(broadcaster, mngr_binary=str(slow_mngr), chat_files_root=tmp_path / "chats")
+    chat_id = ChatId("agent-alive")
+    try:
+        seed_agent_state(manager, "agent-alive", name="Chat-1", state="RUNNING")
+        turn_off = threading.Thread(
+            target=manager.set_autocompact_state, args=(chat_id, ChatAutocompactState(is_enabled=False))
+        )
+        turn_on = threading.Thread(
+            target=manager.set_autocompact_state, args=(chat_id, ChatAutocompactState(is_enabled=True))
+        )
+        turn_off.start()
+        wait_until_true(
+            lambda: log_path.exists() and "autocompact=off" in log_path.read_text(), 5, "the first relabel's start"
+        )
+        turn_on.start()
+        turn_off.join(timeout=10)
+        turn_on.join(timeout=10)
+
+        file_state = read_autocompact_state(tmp_path / "chats" / chat_id)
+        agent = manager.get_agent_by_id("agent-alive")
+    finally:
+        manager.stop()
+
+    assert log_path.read_text().splitlines() == [
+        "start label agent-alive --label autocompact=off",
+        "end label agent-alive --label autocompact=off",
+        "start label agent-alive --label autocompact=on",
+        "end label agent-alive --label autocompact=on",
+    ]
+    assert file_state == ChatAutocompactState(is_enabled=True)
+    assert agent is not None and agent.labels["autocompact"] == "on"
+
+
+def test_toggling_a_chat_with_no_tracked_agent_writes_the_setting_and_runs_no_label(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A destroyed (untracked) agent has nothing to relabel; its next create stamps the label."""
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
+    try:
+        manager.set_autocompact_state(ChatId("agent-destroyed"), ChatAutocompactState(is_enabled=False))
+
+        assert not argv_log.exists()
+        assert read_autocompact_state(tmp_path / "chats" / "agent-destroyed") == ChatAutocompactState(is_enabled=False)
+    finally:
+        manager.stop()
+
+
+def test_a_failed_relabel_is_logged_and_keeps_the_setting(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, false_binary: str, loguru_records: list[str]
+) -> None:
+    manager = AgentManager.build(broadcaster, mngr_binary=false_binary, chat_files_root=tmp_path / "chats")
+    try:
+        seed_agent_state(manager, "agent-alive", name="Chat-1", state="RUNNING")
+
+        manager.set_autocompact_state(ChatId("agent-alive"), ChatAutocompactState(is_enabled=False))
+
+        assert manager.get_autocompact_state(ChatId("agent-alive")) == ChatAutocompactState(is_enabled=False)
+        alive = manager.get_agent_by_id("agent-alive")
+        assert alive is not None and "autocompact" not in alive.labels
+        assert any(record.startswith("WARNING autocompact: could not relabel") for record in loguru_records)
     finally:
         manager.stop()
 
@@ -2304,12 +2642,7 @@ def test_get_running_chat_agent_names_excludes_dead_workers_and_primary(broadcas
 def test_agent_manager_autocompactor_custom_injection_and_lifecycle(
     broadcaster: WebSocketBroadcaster,
 ) -> None:
-    custom_compactor = ChatAutoCompactor.build(
-        list_running_chat_agent_names=lambda: [],
-        runner=lambda *args, **kwargs: FinishedProcess(
-            command=(), returncode=0, stdout="", stderr="", is_timed_out=False, is_output_already_logged=False
-        ),
-    )
+    custom_compactor = ChatAutoCompactor.build(list_opted_in_chat_agent_names=list, compact=lambda names: [])
     manager = AgentManager.build(broadcaster, autocompactor=custom_compactor)
     assert manager._autocompactor is custom_compactor
     assert manager._autocompactor._thread is None
@@ -2410,9 +2743,6 @@ def test_secondary_manager_never_writes_chat_memory_scores(broadcaster: WebSocke
     finally:
         secondary.stop()
         live.stop()
-
-
-# Activity-state integration
 
 
 def test_ensure_activity_tracking_skips_when_state_dir_missing(agent_manager: AgentManager) -> None:
@@ -3350,9 +3680,6 @@ def test_full_snapshot_rebuilds_agent_set_and_broadcasts(
     assert {chat["chat_id"] for chat in msg["chats"]} == {str(second.id)}
 
 
-# Offline codex model-chip resolution from the persisted raw model-list sidecar
-
-
 def _codex_model_entry(model: str, effort: str, *, priority: bool = False) -> CodexModel:
     """A ``model/list`` entry for the sidecar tests (id == model)."""
     return CodexModel.model_validate(
@@ -3431,11 +3758,7 @@ def test_model_state_poller_recomputes_and_broadcasts_when_the_state_file_change
     agent_manager: AgentManager,
     broadcaster: WebSocketBroadcaster,
 ) -> None:
-    """One poller pass after a ``model_state.json`` write lands the choice on the wire.
-
-    Regression guard for the per-agent-watcher replacement: the poller is now the only
-    thing that turns a harness's state-file write into a recompute + broadcast.
-    """
+    """One poller pass after a ``model_state.json`` write lands the choice on the wire."""
     agent_id = "agent-1"
     _seed_agent(agent_manager, agent_id, harness=HarnessType.CODEX)
     state_path = get_model_state_path(HarnessType.CODEX, agent_manager._get_agent_state_dir(agent_id))
@@ -3461,17 +3784,419 @@ def test_model_state_poller_recomputes_and_broadcasts_when_the_state_file_change
     assert _last_chats_updated(_drain(client_queue)) is None
 
 
+# Background tasks: the chat is busy while a live marker waits in its directory.
+
+
+def _manager_reading_tasks(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, store: InMemoryChatRecordStore | None = None
+) -> tuple[AgentManager, BackgroundTaskReader]:
+    reader = BackgroundTaskReader(root=tmp_path / "background_tasks")
+    manager = AgentManager.build(
+        broadcaster,
+        chat_files_root=tmp_path / "chats",
+        chat_record_store=store if store is not None else InMemoryChatRecordStore(),
+        background_tasks=reader,
+    )
+    return manager, reader
+
+
+def _let_unclaimed_finished_tasks_lapse(manager: AgentManager) -> None:
+    """Run the background-task poller passes after which a finished task's held removal goes with no turn to claim it."""
+    for _ in range(_FINISHED_TASK_TURN_GRACE_PASSES):
+        manager._background_tasks_poller.poll_once()
+
+
+def test_a_marker_makes_an_idle_chat_background_on_the_next_poll_and_its_removal_idle_again(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    manager, reader = _manager_reading_tasks(broadcaster, tmp_path)
+    try:
+        seed_agent_state(manager, "agent-1", name="Chat-1", state="WAITING", activity_state=ActivityState.IDLE)
+        manager._background_tasks_poller.poll_once()
+        client_queue = broadcaster.register()
+
+        write_background_task_marker(reader, "agent-1", "task-1", os.getpid())
+        manager._background_tasks_poller.poll_once()
+
+        (snapshot,) = manager.get_chat_snapshots()
+        assert snapshot.status is ChatStatus.BACKGROUND
+        assert snapshot.active_agent.is_busy
+        assert [(task.id, task.description) for task in snapshot.active_agent.background_tasks] == [
+            ("task-1", "Rebuild the worker image")
+        ]
+        pushed = _last_chats_updated(_drain(client_queue))
+        assert pushed is not None and pushed["chats"][0]["status"] == "background"
+
+        remove_background_task_marker(reader, "agent-1", "task-1")
+        manager._background_tasks_poller.poll_once()
+
+        (snapshot,) = manager.get_chat_snapshots()
+        assert snapshot.status is ChatStatus.IDLE
+        assert not snapshot.active_agent.is_busy
+        assert snapshot.active_agent.background_tasks == ()
+    finally:
+        manager.stop()
+
+
+def test_only_a_harness_task_keeps_a_waiting_chat_from_ageing_toward_the_memory_shed(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A shed kills the chat's agent process. A ``run_in_background`` command outlives it and its report revives the
+    chat, so its wait is no reason to protect the agent; one of the harness's own tasks dies with the process and
+    never reports, so it is."""
+    manager, reader = _manager_reading_tasks(broadcaster, tmp_path)
+    try:
+        seed_agent_state(manager, "agent-1", name="Chat-1", state="WAITING", activity_state=ActivityState.IDLE)
+        write_background_task_marker(reader, "agent-1", "runner-task", os.getpid())
+        manager._background_tasks_poller.poll_once()
+
+        assert [snapshot.status for snapshot in manager.get_chat_snapshots()] == [ChatStatus.BACKGROUND]
+        assert ChatId("agent-1") not in manager._oom_prioritizer._running
+
+        write_background_task_marker(reader, "agent-1", "claude-task", os.getpid(), harness="claude")
+        manager._background_tasks_poller.poll_once()
+
+        assert ChatId("agent-1") in manager._oom_prioritizer._running
+
+        manager.forget_finished_tasks("agent-1", HarnessType.CLAUDE, ("claude-task",))
+        _let_unclaimed_finished_tasks_lapse(manager)
+
+        assert ChatId("agent-1") not in manager._oom_prioritizer._running
+    finally:
+        manager.stop()
+
+
+def test_a_chat_whose_runner_is_killed_reads_idle_on_the_next_poll(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A killed runner leaves its marker behind and changes no file; the busy chat's pid recheck after every pass
+    is what notices."""
+    manager, reader = _manager_reading_tasks(broadcaster, tmp_path)
+    runner = subprocess.Popen(["sleep", "60"])
+    try:
+        seed_agent_state(manager, "agent-1", name="Chat-1", state="WAITING", activity_state=ActivityState.IDLE)
+        write_background_task_marker(reader, "agent-1", "task-1", runner.pid)
+        manager._background_tasks_poller.poll_once()
+        assert [snapshot.status for snapshot in manager.get_chat_snapshots()] == [ChatStatus.BACKGROUND]
+
+        runner.kill()
+        runner.wait()
+        client_queue = broadcaster.register()
+        manager._background_tasks_poller.poll_once()
+
+        assert [snapshot.status for snapshot in manager.get_chat_snapshots()] == [ChatStatus.IDLE]
+        pushed = _last_chats_updated(_drain(client_queue))
+        assert pushed is not None and pushed["chats"][0]["active_agent"]["is_busy"] is False
+        # The marker is the runner's to remove; the reader only stops counting it.
+        assert (reader.chat_dir(ChatId("agent-1")) / "run_in_background-task-1.json").exists()
+    finally:
+        runner.kill()
+        runner.wait()
+        manager.stop()
+
+
+def test_a_claude_task_its_transcript_reports_over_stops_counting_with_no_stop_hook(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A turn the user interrupts, or one that fails, runs no Stop hook, so the finished task's marker would stay
+    live until Claude's next Stop, or its exit. The transcript's notice of its end removes it."""
+    manager, reader = _manager_reading_tasks(broadcaster, tmp_path)
+    try:
+        seed_agent_state(manager, "agent-1", name="Chat-1", state="WAITING", activity_state=ActivityState.IDLE)
+        write_background_task_marker(reader, "agent-1", "bg-done", os.getpid(), harness="claude")
+        write_background_task_marker(reader, "agent-1", "bg-other", os.getpid(), harness="claude")
+        manager._background_tasks_poller.poll_once()
+
+        manager.forget_finished_tasks("agent-1", HarnessType.CLAUDE, ("bg-done",))
+        _let_unclaimed_finished_tasks_lapse(manager)
+
+        (snapshot,) = manager.get_chat_snapshots()
+        assert [task.id for task in snapshot.active_agent.background_tasks] == ["bg-other"]
+        assert not (reader.chat_dir(ChatId("agent-1")) / "harness-claude-bg-done.json").exists()
+
+        manager.forget_finished_tasks("agent-1", HarnessType.CLAUDE, ("bg-other",))
+        _let_unclaimed_finished_tasks_lapse(manager)
+
+        (snapshot,) = manager.get_chat_snapshots()
+        assert snapshot.status is ChatStatus.IDLE
+    finally:
+        manager.stop()
+
+
+def test_a_slow_marker_read_never_overwrites_a_newer_one(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    """Two recomputes of one chat (the poller's and a turn's end) each read the markers and store what they read.
+    The read that started first must not land last with what is by then a stale answer."""
+    _, files = _manager_reading_tasks(broadcaster, tmp_path)
+    write_background_task_marker(files, "agent-1", "task-1", os.getpid())
+    stale_answer = files.live_tasks(ChatId("agent-1"))
+    first_read_started = threading.Event()
+    release_first_read = threading.Event()
+    answers = iter([stale_answer, ()])
+
+    class _SequencedReader(BackgroundTaskReader):
+        """Answers the first read late, with the markers as they were, and the second at once, with them gone."""
+
+        def live_tasks(self, chat_id: ChatId) -> tuple[BackgroundTask, ...]:
+            answer = next(answers)
+            if answer:
+                first_read_started.set()
+                release_first_read.wait(timeout=10)
+            return answer
+
+    manager = AgentManager.build(
+        broadcaster,
+        chat_files_root=tmp_path / "chats",
+        chat_record_store=InMemoryChatRecordStore(),
+        background_tasks=_SequencedReader(root=files.root),
+    )
+    try:
+        seed_agent_state(manager, "agent-1", name="Chat-1", state="WAITING", activity_state=ActivityState.IDLE)
+        slow = threading.Thread(target=manager._recompute_background_tasks, args=(ChatId("agent-1"),))
+        slow.start()
+        assert first_read_started.wait(timeout=10)
+        fresh = threading.Thread(target=manager._recompute_background_tasks, args=(ChatId("agent-1"),))
+        fresh.start()
+        fresh.join(timeout=0.5)
+        release_first_read.set()
+        slow.join(timeout=10)
+        fresh.join(timeout=10)
+
+        (snapshot,) = manager.get_chat_snapshots()
+        assert snapshot.status is ChatStatus.IDLE
+    finally:
+        release_first_read.set()
+        manager.stop()
+
+
+def test_a_turn_that_ends_to_wait_is_published_with_its_wait_never_idle_in_between(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Claude's Stop hook writes the task markers before mngr clears the ``active`` marker. The recompute that reads
+    the turn's end reads the chat's markers too, so the end goes out as ``background`` without waiting for the
+    poller: an ``idle`` push in between would mark the chat done."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    manager, reader = _manager_reading_tasks(broadcaster, tmp_path)
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    try:
+        seed_agent_state(manager, "agent-1", name="Chat-1", state="WAITING")
+        manager._ensure_activity_tracking("agent-1")
+        manager.update_session_events(
+            "agent-1", [{"type": "user_message", "timestamp": "2026-07-28T00:00:00Z", "content": "go"}]
+        )
+        (state_dir / "active").touch()
+        manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+        manager._background_tasks_poller.poll_once()
+        assert [snapshot.status for snapshot in manager.get_chat_snapshots()] == [ChatStatus.WORKING]
+        client_queue = broadcaster.register()
+
+        write_background_task_marker(reader, "agent-1", "task-1", os.getpid())
+        (state_dir / "active").unlink()
+        manager._recompute_activity_state("agent-1", broadcast_on_change=True)
+
+        pushed = [message for message in _drain(client_queue) if message.get("type") == "chats_updated"]
+        assert [message["chats"][0]["status"] for message in pushed] == ["background"]
+    finally:
+        manager.stop()
+
+
+def test_a_finished_tasks_notice_goes_out_with_the_turn_it_starts_never_idle_in_between(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Claude writes a finished task's notice a moment before the turn it starts reads as in flight. Removing the
+    marker at the notice would publish the waiting chat as ``idle`` until that turn shows, marking it done; the
+    removal waits for the turn and goes out with it."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    manager, reader = _manager_reading_tasks(broadcaster, tmp_path)
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    try:
+        seed_agent_state(manager, "agent-1", name="Chat-1", state="WAITING")
+        manager._ensure_activity_tracking("agent-1")
+        write_background_task_marker(reader, "agent-1", "bg-1", os.getpid(), harness="claude")
+        manager._background_tasks_poller.poll_once()
+        assert [snapshot.status for snapshot in manager.get_chat_snapshots()] == [ChatStatus.BACKGROUND]
+        client_queue = broadcaster.register()
+
+        manager.forget_finished_tasks("agent-1", HarnessType.CLAUDE, ("bg-1",))
+        manager.update_session_events(
+            "agent-1",
+            [{"type": "user_message", "timestamp": "2026-07-28T00:00:00Z", "content": "<task-notification>"}],
+        )
+        (state_dir / "active").touch()
+        manager._recompute_activity_state("agent-1", broadcast_on_change=True)
+
+        pushed = [message for message in _drain(client_queue) if message.get("type") == "chats_updated"]
+        assert [message["chats"][0]["status"] for message in pushed] == ["working"]
+        assert pushed[0]["chats"][0]["active_agent"]["background_tasks"] == []
+        assert not (reader.chat_dir(ChatId("agent-1")) / "harness-claude-bg-1.json").exists()
+    finally:
+        manager.stop()
+
+
+def test_a_finished_tasks_notice_that_starts_no_turn_still_ends_the_wait(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A task the user stops from Claude's own task list writes its notice and starts no turn, so its held removal
+    goes a few poller passes later rather than leaving the chat waiting on it until the next turn."""
+    manager, reader = _manager_reading_tasks(broadcaster, tmp_path)
+    try:
+        seed_agent_state(manager, "agent-1", name="Chat-1", state="WAITING", activity_state=ActivityState.IDLE)
+        write_background_task_marker(reader, "agent-1", "bg-1", os.getpid(), harness="claude")
+        manager._background_tasks_poller.poll_once()
+
+        manager.forget_finished_tasks("agent-1", HarnessType.CLAUDE, ("bg-1",))
+        for _ in range(_FINISHED_TASK_TURN_GRACE_PASSES - 1):
+            manager._background_tasks_poller.poll_once()
+        assert [snapshot.status for snapshot in manager.get_chat_snapshots()] == [ChatStatus.BACKGROUND]
+        manager._background_tasks_poller.poll_once()
+
+        assert [snapshot.status for snapshot in manager.get_chat_snapshots()] == [ChatStatus.IDLE]
+        assert not (reader.chat_dir(ChatId("agent-1")) / "harness-claude-bg-1.json").exists()
+    finally:
+        manager.stop()
+
+
+def test_a_turn_the_transcript_ends_before_its_hooks_do_reads_working_until_they_close_it(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Claude writes its final message, then runs its Stop hooks: one records the background task the turn started,
+    and only after them is the ``active`` marker cleared. Read at the final message, the chat must not be idle (it
+    would be marked done); it stays working until the harness closes the turn, and nothing but the poller's pass
+    has to notice that close."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    manager, reader = _manager_reading_tasks(broadcaster, tmp_path)
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    try:
+        seed_agent_state(manager, "agent-1", name="Chat-1", state="WAITING")
+        manager._ensure_activity_tracking("agent-1")
+        manager.update_session_events(
+            "agent-1", [{"type": "user_message", "timestamp": "2026-07-28T00:00:00Z", "content": "go"}]
+        )
+        (state_dir / "active").touch()
+        manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+        manager._background_tasks_poller.poll_once()
+        client_queue = broadcaster.register()
+
+        manager.update_session_events(
+            "agent-1", [{"type": "assistant_message", "timestamp": "2026-07-28T00:00:05Z", "content": "started"}]
+        )
+        manager._recompute_activity_state("agent-1", broadcast_on_change=True)
+        write_background_task_marker(reader, "agent-1", "task-1", os.getpid(), harness="claude")
+        manager._background_tasks_poller.poll_once()
+        (state_dir / "active").unlink()
+        manager._background_tasks_poller.poll_once()
+
+        pushed = [message for message in _drain(client_queue) if message.get("type") == "chats_updated"]
+        statuses = [message["chats"][0]["status"] for message in pushed]
+        assert "idle" not in statuses
+        assert statuses[0] == "working"
+        assert statuses[-1] == "background"
+    finally:
+        manager.stop()
+
+
+def test_an_observe_event_during_a_closing_turn_keeps_it_closing(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every observe event rebuilds the tracked agents from the stream's payload, which carries no activity. A turn
+    still closing when one lands must not come out of it idle, or the chat is marked done before its wait is known."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    manager, _reader = _manager_reading_tasks(broadcaster, tmp_path)
+    agent = _agent_details("chat-1", labels={"user_created": "true"})
+    agent_id = str(agent.id)
+    state_dir = tmp_path / "agents" / agent_id
+    state_dir.mkdir(parents=True)
+    try:
+        manager._handle_observe_event(make_agent_state_event(agent))
+        manager.update_session_events(
+            agent_id, [{"type": "user_message", "timestamp": "2026-07-28T00:00:00Z", "content": "go"}]
+        )
+        (state_dir / "active").touch()
+        manager.update_session_events(
+            agent_id, [{"type": "assistant_message", "timestamp": "2026-07-28T00:00:05Z", "content": "started"}]
+        )
+        manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+        assert [snapshot.status for snapshot in manager.get_chat_snapshots()] == [ChatStatus.WORKING]
+        client_queue = broadcaster.register()
+
+        manager._handle_observe_event(make_agent_state_event(agent))
+
+        pushed = [message for message in _drain(client_queue) if message.get("type") == "chats_updated"]
+        assert [message["chats"][0]["status"] for message in pushed] == ["working"]
+        (snapshot,) = manager.get_chat_snapshots()
+        assert snapshot.active_agent.is_busy
+    finally:
+        manager.stop()
+
+
+def test_a_turn_in_flight_reads_working_with_its_pending_tasks_listed(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    manager, reader = _manager_reading_tasks(broadcaster, tmp_path)
+    try:
+        seed_agent_state(manager, "agent-1", name="Chat-1", activity_state=ActivityState.TOOL_RUNNING)
+        write_background_task_marker(reader, "agent-1", "task-1", os.getpid())
+        manager._background_tasks_poller.poll_once()
+
+        snapshot = manager.get_chat_snapshot("agent-1")
+        assert snapshot is not None
+        assert snapshot.status is ChatStatus.WORKING
+        assert snapshot.active_agent.is_busy
+        assert len(snapshot.active_agent.background_tasks) == 1
+    finally:
+        manager.stop()
+
+
+def test_a_chats_successor_carries_the_wait_its_predecessor_started(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The markers are the chat's, under its id: after a handoff nothing moves, and the successor reads them."""
+    store = InMemoryChatRecordStore()
+    manager, reader = _manager_reading_tasks(broadcaster, tmp_path, store)
+    first, second = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
+    try:
+        seed_agent_state(manager, first, name="archived-1-Chat-1", state="STOPPED")
+        seed_agent_state(
+            manager,
+            second,
+            name="Chat-1",
+            state="WAITING",
+            labels={"chat_id": first, "chat_seq": "2"},
+            activity_state=ActivityState.IDLE,
+        )
+        store.write(make_two_member_chat_record(first, second))
+        manager.refresh_chat_records()
+        write_background_task_marker(reader, first, "task-1", os.getpid())
+
+        watched = manager._list_background_task_dirs()
+        assert watched[second] == reader.chat_dir(ChatId(first))
+        assert first not in watched
+        manager._background_tasks_poller.poll_once()
+
+        (snapshot,) = manager.get_chat_snapshots()
+        assert (snapshot.chat_id, snapshot.active_agent.agent_id) == (first, second)
+        assert snapshot.status is ChatStatus.BACKGROUND
+        successor = manager.busy_state_of_agent(second, {"chat_id": first})
+        assert (successor.chat_id, successor.is_busy, len(successor.background_tasks)) == (first, True, 1)
+        archived = manager.busy_state_of_agent(first, {})
+        assert (archived.chat_id, archived.is_busy, archived.background_tasks) == (first, False, ())
+    finally:
+        manager.stop()
+
+
+def test_a_manager_without_a_reader_watches_no_marker_directory(agent_manager: AgentManager) -> None:
+    _seed_agent(agent_manager, "agent-1")
+    assert agent_manager._list_background_task_dirs() == {}
+    assert not agent_manager.busy_state_of_agent("agent-1", {}).is_busy
+
+
 def test_tracking_many_agents_spawns_no_per_agent_threads(
     agent_manager: AgentManager,
     tmp_path: Path,
 ) -> None:
-    """Folding a snapshot full of agents must not grow the thread count.
-
-    Regression guard for the long-run thread leak: every observed agent used to get its
-    own watchdog observer for model tracking (four OS threads per agent, held for the
-    agent's whole life), so a host accumulating agents grew the chat app to hundreds of
-    threads. Model tracking is now the one shared poller, started in ``start()``.
-    """
+    """Folding a snapshot full of agents must not grow the thread count."""
     agents = [_agent_details(f"threadless-{i}") for i in range(8)]
     for agent in agents:
         (tmp_path / "agents" / str(agent.id)).mkdir(parents=True)
@@ -3487,7 +4212,7 @@ def test_tracking_many_agents_spawns_no_per_agent_threads(
 def test_list_model_state_paths_follows_a_harness_heal(agent_manager: AgentManager) -> None:
     """The poller's path set is re-resolved from ground truth, so an agent first tracked
     under the default-harness guess is polled at its REAL state path once observe reports
-    the true harness -- the per-agent watcher used to bake the guessed path in forever."""
+    the true harness."""
     agent_id = "agent-1"
     _seed_agent(agent_manager, agent_id, harness=HarnessType.CLAUDE)
     state_dir = agent_manager._get_agent_state_dir(agent_id)
@@ -3536,7 +4261,7 @@ def test_a_pick_for_a_harness_whose_model_the_chat_cannot_switch_is_rejected_for
 def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> list[tuple[int, int]]:
     """Swap in an OOM prioritizer that captures its band writes, and return the log.
 
-    Wired to the manager's own ``get_chat_ids`` / ``_read_process_started_at``
+    Wired to the manager's own ``get_chat_ids`` / ``_read_active_process_started_at``
     (the collaborators under test) but to a fake pid resolver and a capturing
     ``set_adj``, so the manager's real seeding and lifecycle paths are exercised
     without touching ``/proc``.
@@ -3546,7 +4271,7 @@ def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> 
         list_chat_ids=manager.get_chat_ids,
         resolve_pid=lambda cid: pids.get(cid),
         set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
-        resolve_process_started_at=manager._read_agent_process_started_at,
+        resolve_process_started_at=manager._read_active_process_started_at,
     )
     return writes
 
@@ -3673,9 +4398,6 @@ def test_stop_activity_tracking_keeps_the_sending_records(agent_manager: AgentMa
     assert session.in_flight_block() == "caught mid-send"
 
 
-# Watcher eviction (the chat-memory lifecycle)
-
-
 def test_remove_agent_evicts_the_watcher(agent_manager: AgentManager) -> None:
     """A destroyed agent's watcher is evicted along with its tracking state."""
     evicted: list[str] = []
@@ -3687,38 +4409,98 @@ def test_remove_agent_evicts_the_watcher(agent_manager: AgentManager) -> None:
     assert evicted == [str(agent.id)]
 
 
-def test_lifecycle_transition_into_dead_evicts_the_watcher_once(agent_manager: AgentManager) -> None:
-    """Eviction is edge-triggered on the transition into a positively-dead lifecycle: a
-    stop (from the UI, mngr, an OOM shed, idle shutdown) drops the resident transcript,
-    while further observe ticks of the already-stopped agent do NOT re-evict -- a user
-    viewing a stopped chat's history rebuilds the watcher on read, and a level-triggered
-    evict would tear that rebuild down again every tick."""
-    evicted: list[str] = []
-    agent_manager.set_watcher_eviction_callback(evicted.append)
-    agent = _agent_details("stoppable-agent")
-    agent_manager._handle_observe_event(make_agent_state_event(agent))
-    assert evicted == []
+def _append_claude_user_message(session_file: Path, uuid: str, content: str) -> None:
+    line = {
+        "type": "user",
+        "uuid": uuid,
+        "timestamp": "2026-01-01T00:00:00Z",
+        "message": {"role": "user", "content": content},
+    }
+    with session_file.open("a") as f:
+        f.write(json.dumps(line) + "\n")
 
+
+def _wait_for_streamed_content(stream: "queue.Queue[dict[str, Any] | None]", content: str) -> bool:
+    """Whether an event carrying ``content`` reaches the stream within the timeout."""
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        try:
+            event = stream.get(timeout=max(0.0, deadline - time.monotonic()))
+        except queue.Empty:
+            return False
+        if event is not None and event.get("content") == content:
+            return True
+    return False
+
+
+def _watched_running_chat(
+    agent_manager: AgentManager, tmp_path: Path, name: str
+) -> tuple[ChatAppState, AgentDetails, AgentDetails, Path]:
+    """A running chat as the observer lists it, its transcript watched.
+
+    Returns the state holding the watcher, the agent's running and stopped details, and its session file.
+    """
+    state = build_test_state(agent_manager=agent_manager)
+    agent = _agent_details(name)
     stopped = agent.model_copy_update(to_update(agent.field_ref().state, AgentLifecycleState.STOPPED))
-    agent_manager._handle_observe_event(make_agent_state_event(stopped))
-    assert evicted == [str(agent.id)]
+    agent_manager._handle_observe_event(make_agent_state_event(agent))
+    agent_info, session_file = make_agent_fixture(tmp_path, agent_id=str(agent.id))
+    state.get_or_create_watcher(agent_info)
+    return state, agent, stopped, session_file
 
-    # Another tick of the same dead state: no edge, no eviction.
-    agent_manager._handle_observe_event(make_agent_state_event(stopped))
-    assert evicted == [str(agent.id)]
 
-    # A restart followed by another stop evicts again.
-    running = agent.model_copy_update(to_update(agent.field_ref().state, AgentLifecycleState.RUNNING))
-    agent_manager._handle_observe_event(make_agent_state_event(running))
-    agent_manager._handle_observe_event(make_agent_state_event(stopped))
-    assert evicted == [str(agent.id), str(agent.id)]
+def test_a_chat_nobody_streams_is_released_at_the_observe_event_reporting_its_stop(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    state, _agent, stopped, _session_file = _watched_running_chat(agent_manager, tmp_path, "stoppable-agent")
+    try:
+        agent_manager._handle_observe_event(make_agent_state_event(stopped))
+
+        assert state.watchers == {}
+    finally:
+        state.shutdown()
+
+
+def test_a_streamed_chat_keeps_streaming_through_a_momentary_stop(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """The observer can report a live agent dead for a moment, and the open stream is fed only by the
+    chat's watcher, so the watcher has to outlive the report or the page silently stops receiving events."""
+    state, agent, stopped, session_file = _watched_running_chat(agent_manager, tmp_path, "renamed-mid-turn")
+    try:
+        watcher = state.watchers[str(agent.id)]
+        stream = state.event_queues.register(str(agent.id))
+
+        agent_manager._handle_observe_event(make_agent_state_event(stopped))
+        agent_manager._handle_observe_event(make_agent_state_event(agent))
+
+        assert state.watchers == {str(agent.id): watcher}
+        _append_claude_user_message(session_file, "u2", "written after the stop")
+        assert _wait_for_streamed_content(stream, "written after the stop")
+    finally:
+        state.shutdown()
+
+
+def test_a_chat_that_stops_while_streamed_is_released_at_the_first_observe_event_after_its_stream_closes(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    state, agent, stopped, _session_file = _watched_running_chat(agent_manager, tmp_path, "stopped-while-viewed")
+    try:
+        stream = state.event_queues.register(str(agent.id))
+
+        agent_manager._handle_observe_event(make_agent_state_event(stopped))
+        assert set(state.watchers) == {str(agent.id)}
+
+        state.event_queues.unregister(str(agent.id), stream)
+        agent_manager._handle_observe_event(make_agent_state_event(stopped))
+        assert state.watchers == {}
+    finally:
+        state.shutdown()
 
 
 def test_a_stopped_chat_read_after_its_stop_is_released_at_the_next_observe_event(
     agent_manager: AgentManager, tmp_path: Path
 ) -> None:
-    """A read after the stop rebuilds the transcript the stop evicted, and no further
-    transition comes to evict it; the next observe event's release drops it."""
+    """A read after the stop rebuilds the stopped chat's transcript; with nobody streaming the
+    chat, the next observe event's release drops it again."""
     state = build_test_state(agent_manager=agent_manager)
     agent = _agent_details("read-after-stop")
     stopped = agent.model_copy_update(to_update(agent.field_ref().state, AgentLifecycleState.STOPPED))
@@ -3832,9 +4614,6 @@ def test_the_agent_list_is_known_after_the_first_full_snapshot(agent_manager: Ag
     assert agent_manager.is_agent_list_known()
 
 
-# The auto-open reactor, fed from the observe stream
-
-
 def test_observe_events_feed_the_auto_open_reactor(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -3865,9 +4644,6 @@ def test_observe_events_feed_the_auto_open_reactor(
     assert not reactor.ledger.is_delivered(ChatId(appeared.id))
 
 
-# Chats that have run on several agents (a hand-built record)
-
-
 class _UnremovableChatRecordStore(InMemoryChatRecordStore):
     """A store whose records cannot be deleted: what a read-only chat folder looks like to the file store."""
 
@@ -3879,8 +4655,9 @@ def _recorded_chat(
     broadcaster: WebSocketBroadcaster,
     mngr_binary: str | None = None,
     store: InMemoryChatRecordStore | None = None,
+    archived_state: str = "STOPPED",
 ) -> tuple[AgentManager, InMemoryChatRecordStore, str, str]:
-    """A manager tracking a chat that moved from ``first`` (archived, stopped) to ``second`` (running)."""
+    """A manager tracking a chat that moved from ``first`` (archived, ``archived_state``) to ``second`` (running)."""
     store = store if store is not None else InMemoryChatRecordStore()
     manager = AgentManager.build(
         broadcaster, chat_record_store=store, mngr_binary=mngr_binary if mngr_binary is not None else "mngr"
@@ -3890,7 +4667,7 @@ def _recorded_chat(
         manager,
         first,
         name=f"archived-1-Chat-1-{first}",
-        state="STOPPED",
+        state=archived_state,
         labels={
             "account": "acct-1",
             "archived_at": "2026-09-01T13:01:00+00:00",
@@ -3970,31 +4747,60 @@ def test_a_recorded_chats_segments_follow_the_record_and_skip_an_agent_mngr_no_l
         manager.stop()
 
 
+def test_a_sign_in_restarts_only_the_live_agents_on_the_account(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    # A stopped agent picks up the new credentials when it next starts, so only live ones restart;
+    # an unobserved one is not known to be stopped, so it counts as live.
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    account = f"acct-{uuid4().hex}"
+    agent_state_by_name = {
+        "Running-Chat": "RUNNING",
+        "Waiting-Chat": "WAITING",
+        "Stopped-Chat": "STOPPED",
+        "Done-Chat": "DONE",
+        "Unobserved-Chat": "UNKNOWN",
+    }
+    for name, state in agent_state_by_name.items():
+        seed_agent_state(manager, f"agent-{uuid4().hex}", name=name, state=state, labels={"account": account})
+    seed_agent_state(manager, f"agent-{uuid4().hex}", name="Other-Account-Chat", labels={"account": "acct-other"})
+    try:
+        assert manager.restart_agents_on_account(account) == 3
+        assert sorted(argv_log.read_text().splitlines()) == [
+            "start Running-Chat --restart --no-resume",
+            "start Unobserved-Chat --restart --no-resume",
+            "start Waiting-Chat --restart --no-resume",
+        ]
+    finally:
+        manager.stop()
+
+
 def test_the_verbs_of_a_recorded_chat_act_on_the_right_agents(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
-    manager, store, first, second = _recorded_chat(broadcaster, mngr_binary)
+    manager, store, first, second = _recorded_chat(broadcaster, mngr_binary, archived_state="WAITING")
     try:
-        manager.stop_chat(ChatId(first))
         manager.rename_chat(first, "New Name")
         with manager._lock:
             manager._pending_permission_ids_by_agent[second] = {"req-1"}
         assert manager.has_pending_permission(ChatId(first))
         assert not manager.has_pending_permission(ChatId(second))
         # A sign-in restarts the chat's active agent and never its archived member, though
-        # both carry an ``account`` label.
+        # both carry an ``account`` label and both are live.
         assert manager.restart_agents_on_account("acct-1") == 0
         assert manager.restart_agents_on_account("acct-2") == 1
+        manager.stop_chat(ChatId(first))
 
         manager.destroy_chat(ChatId(first))
 
         argv_lines = argv_log.read_text().splitlines()
-        # The rename is reflected in the tracked name at once, so the restart names the new one.
+        # The rename is reflected in the tracked name at once, so the restart and the stop name the new one.
         assert argv_lines == [
-            "stop Chat-1",
             f"rename {second} New-Name --label display_name=New Name",
             "start New-Name --restart --no-resume",
+            "stop New-Name",
             f"destroy {first} {second} --force",
         ]
         assert store.read(ChatId(first)) is None
@@ -4075,17 +4881,113 @@ def test_an_archived_members_removal_leaves_its_chats_records_and_transcripts_st
         assert [snapshot.chat_id for snapshot in manager.get_chat_snapshots()] == [first]
         # The member's own resident transcript goes; the chat's active segment stays.
         assert evicted == [first]
-
-        # The active agent stopping drops the whole chat's resident transcripts, archived
-        # segments included, and the observe stream's report of the death is what says so.
-        evicted.clear()
-        details = _agent_details("Chat-1", agent_id=MngrAgentId(second), state=AgentLifecycleState.RUNNING)
-        manager._handle_observe_event(make_agent_state_event(details))
-        stopped = details.model_copy_update(to_update(details.field_ref().state, AgentLifecycleState.STOPPED))
-        manager._handle_observe_event(make_agent_state_event(stopped))
-        assert set(evicted) == {first, second}
     finally:
         manager.stop()
+
+
+def _resident_recorded_chat(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> tuple[AgentManager, ChatAppState, AgentDetails, AgentDetails, str]:
+    """A recorded chat as the observer lists it, its archived segment loaded and its active agent watched.
+
+    Returns the manager, the state holding both resident, the active agent's running and stopped details,
+    and the chat id.
+    """
+    manager, _store, first, second = _recorded_chat(broadcaster)
+    state = build_test_state(agent_manager=manager)
+    archived = _agent_details(
+        f"archived-1-Chat-1-{first}", agent_id=MngrAgentId(first), state=AgentLifecycleState.STOPPED
+    )
+    active = _agent_details("Chat-1", agent_id=MngrAgentId(second), state=AgentLifecycleState.RUNNING)
+    stopped = active.model_copy_update(to_update(active.field_ref().state, AgentLifecycleState.STOPPED))
+    manager._handle_observe_event(make_agent_state_event(archived))
+    manager._handle_observe_event(make_agent_state_event(active))
+    state.get_or_create_loader(make_agent_fixture(tmp_path, agent_id=first)[0])
+    state.get_or_create_watcher(make_agent_fixture(tmp_path, agent_id=second)[0])
+    assert (set(state.loaders), set(state.watchers)) == ({first}, {second})
+    return manager, state, active, stopped, first
+
+
+def test_a_chat_whose_active_agent_stops_unstreamed_drops_its_archived_segments_too(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    manager, state, _active, stopped, _chat_id = _resident_recorded_chat(broadcaster, tmp_path)
+    try:
+        manager._handle_observe_event(make_agent_state_event(stopped))
+
+        assert (state.loaders, state.watchers) == ({}, {})
+    finally:
+        state.shutdown()
+
+
+@pytest.mark.parametrize("is_removed_by_the_observer", [True, False], ids=["observe-stream", "remove-agent"])
+def test_removing_a_chats_active_agent_drops_the_whole_chat_and_ends_its_streams(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, is_removed_by_the_observer: bool
+) -> None:
+    """A stop while streamed leaves the chat resident, and once the active agent is gone the release can no
+    longer tell the chat is stopped, so the removal has to drop the archived segments as well. Nothing feeds
+    the chat's open stream after that, so the removal ends it: the page reconnects and resyncs instead of
+    reading as connected with nothing arriving."""
+    manager, state, active, stopped, chat_id = _resident_recorded_chat(broadcaster, tmp_path)
+    try:
+        stream = state.event_queues.register(chat_id)
+        manager._handle_observe_event(make_agent_state_event(stopped))
+        assert (set(state.loaders), set(state.watchers)) == ({chat_id}, {str(active.id)})
+
+        if is_removed_by_the_observer:
+            manager._handle_observe_event(make_agent_removed_event(active.id, active.name, active.host.id))
+        else:
+            manager.remove_agent(str(active.id))
+
+        assert (state.loaders, state.watchers) == ({}, {})
+        assert stream.get(timeout=1) is None
+        assert not state.event_queues.has_consumers(chat_id)
+    finally:
+        state.shutdown()
+
+
+def test_removing_an_archived_member_leaves_its_chats_stream_open(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    manager, state, _active, _stopped, chat_id = _resident_recorded_chat(broadcaster, tmp_path)
+    try:
+        stream = state.event_queues.register(chat_id)
+        archived = _agent_details(
+            f"archived-1-Chat-1-{chat_id}", agent_id=MngrAgentId(chat_id), state=AgentLifecycleState.STOPPED
+        )
+
+        manager._handle_observe_event(make_agent_removed_event(archived.id, archived.name, archived.host.id))
+
+        assert state.event_queues.has_consumers(chat_id)
+        assert stream.empty()
+    finally:
+        state.shutdown()
+
+
+def test_letting_go_a_chats_never_reported_active_agent_drops_the_whole_chat(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A created active agent the observe stream never reports is let go, and the release cannot tell an
+    untracked active agent's chat is stopped, so the let-go has to drop the archived segments as well."""
+    manager, _store, first, second = _recorded_chat(broadcaster)
+    state = build_test_state(agent_manager=manager)
+    try:
+        created = manager.get_agent_by_id(second)
+        assert created is not None
+        manager._note_agent_created(created)
+        state.get_or_create_loader(make_agent_fixture(tmp_path, agent_id=first)[0])
+        state.get_or_create_watcher(make_agent_fixture(tmp_path, agent_id=second)[0])
+        archived = _agent_details(
+            f"archived-1-Chat-1-{first}", agent_id=MngrAgentId(first), state=AgentLifecycleState.STOPPED
+        )
+
+        for _ in range(FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO):
+            manager._handle_observe_event(make_full_agent_state_event([archived]))
+
+        assert manager.get_agent_by_id(second) is None
+        assert (state.loaders, state.watchers) == ({}, {})
+    finally:
+        state.shutdown()
 
 
 def test_an_archived_member_stopping_evicts_only_its_own_transcript(broadcaster: WebSocketBroadcaster) -> None:
@@ -4105,6 +5007,10 @@ def test_an_archived_member_stopping_evicts_only_its_own_transcript(broadcaster:
         stopped = first_details.model_copy_update(
             to_update(first_details.field_ref().state, AgentLifecycleState.STOPPED)
         )
+        manager._handle_observe_event(make_agent_state_event(stopped))
+        assert evicted == [first]
+
+        # Edge-triggered: a read of the archived segment rebuilds it, and a later tick must not drop it.
         manager._handle_observe_event(make_agent_state_event(stopped))
         assert evicted == [first]
     finally:
@@ -4257,6 +5163,31 @@ def test_a_handoff_moves_a_chat_to_a_new_agent_on_another_harness(
         assert "--message" not in argv_log.read_text()
     finally:
         manager.stop()
+
+
+def test_a_fresh_start_switch_is_pushed_as_one_so_the_page_shows_no_handoff(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """Every snapshot pushed while a chat with no user turn moves to another provider says it is a fresh start."""
+    sent: list[tuple[str, str, str]] = []
+    manager, store, _argv_log = _handoff_manager(broadcaster, tmp_path, sent, has_user_turn=False)
+    first = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
+    pushes = broadcaster.register()
+    try:
+        manager.begin_handoff(ChatId(first), _openai_account(), "", "m-1", HeldSendOrigin.CLIENT)
+        _wait_until_settled(store, ChatId(first))
+    finally:
+        manager.stop()
+    switching = []
+    while not pushes.empty():
+        raw = pushes.get_nowait()
+        assert raw is not None
+        message = json.loads(raw)
+        if message["type"] == "chats_updated":
+            switching.extend(chat["handoff"] for chat in message["chats"] if chat["handoff"] is not None)
+    assert switching
+    assert all(handoff["is_fresh_start"] for handoff in switching)
 
 
 def test_a_handoff_off_an_agent_with_no_user_turn_is_a_fresh_start(
@@ -4798,6 +5729,30 @@ def test_a_switch_to_an_account_on_the_chats_own_lane_rebinds_the_agent_in_place
         manager.stop()
 
 
+def test_a_rebind_made_with_nothing_to_say_sends_nothing_once_the_agent_is_back(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A switch picked from the provider menu carries no message: the restarted agent is sent nothing, rather than
+    an empty message whose delivery could never be confirmed."""
+    sent: list[tuple[str, str, str]] = []
+    manager, _store, _argv_log, agent_id, _first_account, second_account = _rebind_manager(
+        broadcaster, tmp_path, monkeypatch, sent
+    )
+    chat_id = ChatId(agent_id)
+    try:
+        kind, _phase, _block = manager.begin_switch(chat_id, second_account, "", "m-1", HeldSendOrigin.CLIENT)
+        assert kind is TransitionKind.REBIND
+        state = manager.get_handoff_state(chat_id)
+        assert state is None or state.held_sends == ()
+        wait_for(lambda: manager.get_handoff_state(chat_id) is None, timeout=15.0)
+
+        snapshot = manager.get_chat_snapshot(agent_id)
+        assert snapshot is not None and snapshot.active_agent.account_id == second_account
+        assert sent == []
+    finally:
+        manager.stop()
+
+
 def test_the_switch_target_rule_keeps_the_agent_only_for_its_own_harness_and_lane() -> None:
     claude = AgentStateItem(id="agent-1", name="c", state="RUNNING", labels={"account": "acct-a"}, work_dir=None)
     anthropic_2 = Account(id="acct-a2", lane="anthropic", seq=2, display="Anthropic")
@@ -4985,25 +5940,39 @@ def test_the_rebind_runners_record_callbacks_raise_its_own_cancelled_error(
 
 
 @pytest.mark.parametrize(
-    ("lifecycle", "activity", "is_permission_pending", "expected"),
+    ("lifecycle", "activity", "is_permission_pending", "is_busy", "is_turn_closing", "expected"),
     [
-        ("RUNNING", ActivityState.THINKING, False, ChatStatus.WORKING),
-        ("RUNNING", ActivityState.TOOL_RUNNING, False, ChatStatus.WORKING),
-        ("RUNNING", ActivityState.IDLE, False, ChatStatus.IDLE),
-        ("WAITING", None, False, ChatStatus.IDLE),
-        ("UNKNOWN", ActivityState.THINKING, False, ChatStatus.WORKING),
-        ("RUNNING", ActivityState.THINKING, True, ChatStatus.ATTENTION),
-        ("STOPPED", ActivityState.THINKING, True, ChatStatus.STOPPED),
-        ("DONE", None, False, ChatStatus.STOPPED),
+        ("RUNNING", ActivityState.THINKING, False, True, False, ChatStatus.WORKING),
+        ("RUNNING", ActivityState.TOOL_RUNNING, False, True, False, ChatStatus.WORKING),
+        ("WAITING", ActivityState.COMPACTING, False, False, False, ChatStatus.WORKING),
+        ("RUNNING", ActivityState.IDLE, False, False, False, ChatStatus.IDLE),
+        ("WAITING", None, False, False, False, ChatStatus.IDLE),
+        ("UNKNOWN", ActivityState.THINKING, False, True, False, ChatStatus.WORKING),
+        ("RUNNING", ActivityState.THINKING, True, True, False, ChatStatus.ATTENTION),
+        ("STOPPED", ActivityState.THINKING, True, True, False, ChatStatus.STOPPED),
+        ("DONE", None, False, False, False, ChatStatus.STOPPED),
+        # A pending background task: busy with no turn in flight.
+        ("WAITING", ActivityState.IDLE, False, True, False, ChatStatus.BACKGROUND),
+        ("WAITING", None, False, True, False, ChatStatus.BACKGROUND),
+        # A permission prompt outranks the wait, and a dead agent outranks everything.
+        ("WAITING", ActivityState.IDLE, True, True, False, ChatStatus.ATTENTION),
+        ("STOPPED", None, False, True, False, ChatStatus.STOPPED),
+        # A closing turn is still the turn: it outranks the wait it may be recording, and is
+        # outranked by a permission prompt and a dead agent.
+        ("RUNNING", ActivityState.IDLE, False, True, True, ChatStatus.WORKING),
+        ("RUNNING", ActivityState.IDLE, True, True, True, ChatStatus.ATTENTION),
+        ("STOPPED", ActivityState.IDLE, False, True, True, ChatStatus.STOPPED),
     ],
 )
 def test_status_mapping_follows_the_chat_row(
-    lifecycle: str, activity: ActivityState | None, is_permission_pending: bool, expected: ChatStatus
+    lifecycle: str,
+    activity: ActivityState | None,
+    is_permission_pending: bool,
+    is_busy: bool,
+    is_turn_closing: bool,
+    expected: ChatStatus,
 ) -> None:
-    assert chat_status_for_agent(lifecycle, activity, is_permission_pending) is expected
-
-
-# Unseeded chats awaiting their first send (post-launch-paths plan section 3.7)
+    assert chat_status_for_agent(lifecycle, activity, is_permission_pending, is_busy, is_turn_closing) is expected
 
 
 def test_mint_awaiting_chat_lists_a_provisional_chat_with_a_minted_name_and_no_seed(
@@ -5135,3 +6104,878 @@ def test_a_send_that_fails_while_connecting_still_clears_the_mark(agent_manager:
             raise SendFailedError("the agent is in shell mode")
 
     assert not is_chat_connecting(agent_manager, agent_id)
+
+
+def _tracked_compaction_agent(
+    manager: AgentManager, tmp_path: Path, harness: HarnessType = HarnessType.CLAUDE, state: str = "RUNNING"
+) -> tuple[str, Path]:
+    agent_id = f"agent-{uuid4().hex}"
+    state_dir = tmp_path / "agents" / agent_id
+    state_dir.mkdir(parents=True)
+    _seed_agent(manager, agent_id, harness=harness, state=state)
+    manager._ensure_activity_tracking(agent_id)
+    return agent_id, state_dir
+
+
+def _compacted_event(seconds_ago: float = 1.0) -> dict[str, Any]:
+    return {
+        "type": "user_message",
+        "event_id": f"evt-{uuid4().hex}",
+        "timestamp": utc_iso_seconds_ago(seconds_ago),
+        "role": "system",
+        "content": "Context was compacted",
+        "display": DisplayKind.STATUS,
+        "non_turn_tail": True,
+    }
+
+
+def _activity_of(manager: AgentManager, agent_id: str) -> ActivityState | None:
+    with manager._lock:
+        return manager._activity_state_by_agent.get(agent_id)
+
+
+def _compaction_agent_info(manager: AgentManager, agent_id: str) -> AgentInfo:
+    agent_info = manager.get_agent_info_by_id(agent_id)
+    assert agent_info is not None
+    return agent_info
+
+
+def _log_lines_starting(records: list[str], prefix: str) -> list[str]:
+    return [record for record in records if record.split(" ", 1)[1].startswith(prefix)]
+
+
+def test_a_fresh_compacting_marker_wins_over_thinking_and_tool_running(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    agent_manager.update_session_events(agent_id, [{"type": "user_message", "content": "go"}])
+    assert _activity_of(agent_manager, agent_id) == ActivityState.THINKING
+
+    marker = write_compacting_marker(state_dir, "auto")
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+    agent_manager.update_session_events(
+        agent_id, [{"type": "assistant_message", "tool_calls": [{"tool_call_id": "call_c", "tool_name": "Bash"}]}]
+    )
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+    marker.unlink()
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+    assert _activity_of(agent_manager, agent_id) == ActivityState.TOOL_RUNNING
+
+
+def test_a_pending_compaction_request_shows_compacting_and_broadcasts_it(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=HarnessType.CODEX)
+    listener = broadcaster.register()
+
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic())
+
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+    latest = _last_chats_updated(_drain(listener))
+    assert latest is not None
+    assert latest["chats"][0]["active_agent"]["activity_state"] == "COMPACTING"
+    assert latest["chats"][0]["status"] == ChatStatus.WORKING.value
+    assert _log_lines_starting(loguru_records, f"autocompact: compaction pending agent={agent_id} cause=manual")
+
+
+def test_a_repeated_compaction_request_refreshes_the_pending_entry_rather_than_adding_one(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path)
+    first_requested_at = time.monotonic() - 30.0
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, first_requested_at)
+
+    second_requested_at = time.monotonic()
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, second_requested_at)
+
+    assert agent_manager._compaction_pending_by_agent == {agent_id: (second_requested_at, CompactionCause.MANUAL)}
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+
+def test_an_expired_compaction_request_settles_to_the_previous_state(
+    agent_manager: AgentManager, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path)
+    agent_manager.update_session_events(agent_id, [{"type": "user_message", "content": "go"}])
+
+    agent_manager.note_compaction_requested(
+        agent_id, CompactionCause.IDLE, time.monotonic() - PENDING_COMPACTION_TIMEOUT_SECONDS - 1
+    )
+
+    assert _activity_of(agent_manager, agent_id) == ActivityState.THINKING
+    assert agent_id not in agent_manager._compaction_pending_by_agent
+    assert len(_log_lines_starting(loguru_records, f"autocompact: compaction pending expired agent={agent_id}")) == 1
+
+
+def test_the_session_sweep_recompute_expires_a_compaction_that_never_finished(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path)
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic())
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+    # Time passes with no file change and no event; only the sweep's recompute notices.
+    with agent_manager._lock:
+        agent_manager._compaction_pending_by_agent[agent_id] = (
+            time.monotonic() - PENDING_COMPACTION_TIMEOUT_SECONDS - 1,
+            CompactionCause.IDLE,
+        )
+    agent_manager._recompute_compacting_agents()
+
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+
+
+def test_a_stale_compacting_marker_is_ignored_and_logged_once(
+    agent_manager: AgentManager, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    agent_manager.update_session_events(agent_id, [{"type": "user_message", "content": "go"}])
+    write_compacting_marker(state_dir, "manual", started_seconds_ago=PENDING_COMPACTION_TIMEOUT_SECONDS + 60)
+
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+
+    assert _activity_of(agent_manager, agent_id) == ActivityState.THINKING
+    stale_lines = _log_lines_starting(loguru_records, f"autocompact: stale compacting marker ignored agent={agent_id}")
+    assert len(stale_lines) == 1
+
+
+def test_a_compacting_marker_without_a_readable_time_counts_by_its_mtime(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    (state_dir / COMPACTING_MARKER_FILENAME).write_text(json.dumps({"trigger": "auto"}))
+
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+
+def test_a_dead_lifecycle_wins_over_a_compacting_marker(agent_manager: AgentManager, tmp_path: Path) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path, state="STOPPED")
+    write_compacting_marker(state_dir, "auto")
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic())
+
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+
+
+def test_a_compacted_event_ends_the_pending_compaction_and_carries_its_cause(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=HarnessType.CODEX)
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic() - 5.0)
+    listener = broadcaster.register()
+    event = _compacted_event()
+    other_event = {"type": "assistant_message", "timestamp": utc_iso_seconds_ago(0.5), "tool_calls": []}
+
+    agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [event, other_event])
+
+    assert event["compaction_cause"] == "idle"
+    assert "compaction_cause" not in other_event
+    assert agent_id not in agent_manager._compaction_pending_by_agent
+    assert agent_id not in agent_manager._compaction_cause_by_agent
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+    latest = _last_chats_updated(_drain(listener))
+    assert latest is not None
+    assert latest["chats"][0]["active_agent"]["activity_state"] == "IDLE"
+    assert _log_lines_starting(loguru_records, f"autocompact: compaction finished agent={agent_id} cause=idle")
+
+
+def _snapshot_compaction_cause(manager: AgentManager, agent_id: str) -> CompactionCause | None:
+    snapshot = manager.get_chat_snapshot(agent_id)
+    assert snapshot is not None
+    return snapshot.active_agent.compaction_cause
+
+
+@pytest.mark.parametrize(
+    ("marker_trigger", "pending_cause", "expected_cause"),
+    [
+        pytest.param("auto", None, CompactionCause.NATIVE, id="claude_auto_compaction"),
+        pytest.param(None, CompactionCause.IDLE, CompactionCause.IDLE, id="sweep_request"),
+        pytest.param(None, CompactionCause.MANUAL, CompactionCause.MANUAL, id="composer_compact"),
+    ],
+)
+def test_the_chat_snapshot_names_the_cause_of_a_compaction_while_it_runs(
+    agent_manager: AgentManager,
+    broadcaster: WebSocketBroadcaster,
+    tmp_path: Path,
+    marker_trigger: str | None,
+    pending_cause: CompactionCause | None,
+    expected_cause: CompactionCause,
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    assert _snapshot_compaction_cause(agent_manager, agent_id) is None
+    listener = broadcaster.register()
+
+    if marker_trigger is not None:
+        write_compacting_marker(state_dir, marker_trigger)
+        agent_manager._recompute_activity_state(agent_id, broadcast_on_change=True)
+    if pending_cause is not None:
+        agent_manager.note_compaction_requested(agent_id, pending_cause, time.monotonic())
+
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+    assert _snapshot_compaction_cause(agent_manager, agent_id) is expected_cause
+    assert agent_manager.get_chat_snapshots()[0].active_agent.compaction_cause is expected_cause
+    latest = _last_chats_updated(_drain(listener))
+    assert latest is not None
+    assert latest["chats"][0]["active_agent"]["compaction_cause"] == expected_cause.value
+
+
+def test_the_chat_snapshot_names_no_cause_once_the_compaction_stops_showing(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    marker = write_compacting_marker(state_dir, "auto")
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+    assert _snapshot_compaction_cause(agent_manager, agent_id) is CompactionCause.NATIVE
+
+    # The cause is kept for the compacted event still to come, but the chat is no longer compacting.
+    marker.unlink()
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+
+    assert agent_manager._compaction_cause_by_agent[agent_id] is CompactionCause.NATIVE
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+    assert _snapshot_compaction_cause(agent_manager, agent_id) is None
+    assert agent_manager.get_chat_snapshots()[0].active_agent.compaction_cause is None
+
+
+def test_a_cause_that_changes_while_the_chat_compacts_is_broadcast(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic())
+    assert _snapshot_compaction_cause(agent_manager, agent_id) is CompactionCause.MANUAL
+    listener = broadcaster.register()
+
+    write_compacting_marker(state_dir, "auto")
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=True)
+
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+    latest = _last_chats_updated(_drain(listener))
+    assert latest is not None
+    assert latest["chats"][0]["active_agent"]["compaction_cause"] == CompactionCause.NATIVE.value
+
+
+@pytest.mark.parametrize(
+    ("marker_trigger", "pending_cause", "expected_cause"),
+    [
+        pytest.param("auto", None, "native", id="claude_auto_compaction"),
+        pytest.param("manual", CompactionCause.IDLE, "idle", id="manual_with_a_sweep_record"),
+        pytest.param("manual", None, "manual", id="manual_without_a_sweep_record"),
+        pytest.param(None, None, "manual", id="missing_trigger"),
+        pytest.param(None, CompactionCause.IDLE, "idle", id="missing_trigger_with_a_sweep_record"),
+    ],
+)
+def test_the_compacted_event_names_the_cause_the_marker_and_the_chats_request_give(
+    agent_manager: AgentManager,
+    tmp_path: Path,
+    marker_trigger: str | None,
+    pending_cause: CompactionCause | None,
+    expected_cause: str,
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    marker = write_compacting_marker(state_dir, marker_trigger, started_seconds_ago=3.0)
+    if pending_cause is not None:
+        agent_manager.note_compaction_requested(agent_id, pending_cause, time.monotonic() - 4.0)
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+    # PostCompact removes the marker before the transcript's compacted event is parsed.
+    marker.unlink()
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+    event = _compacted_event()
+    agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [event])
+
+    assert event["compaction_cause"] == expected_cause
+
+
+@pytest.mark.parametrize(
+    ("record_trigger", "record_seconds_ago", "expected_cause"),
+    [
+        pytest.param("auto", 2.0, "native", id="recent_auto"),
+        pytest.param("manual", 2.0, "manual", id="recent_manual"),
+        pytest.param("unknown", 2.0, None, id="recent_unknown"),
+        pytest.param("auto", 3600.0, None, id="an_hour_old"),
+    ],
+)
+def test_a_compacted_event_the_chat_holds_no_cause_for_reads_last_compaction_json(
+    agent_manager: AgentManager,
+    tmp_path: Path,
+    record_trigger: str,
+    record_seconds_ago: float,
+    expected_cause: str | None,
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    write_last_compaction_record(state_dir, record_trigger, ended_seconds_ago=record_seconds_ago)
+    event = _compacted_event()
+
+    agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [event])
+
+    assert "compaction_cause" in event
+    assert event["compaction_cause"] == expected_cause
+
+
+def test_a_compacted_event_older_than_the_request_does_not_end_it(agent_manager: AgentManager, tmp_path: Path) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=HarnessType.CODEX)
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic())
+    earlier_event = _compacted_event(seconds_ago=120.0)
+
+    agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [earlier_event])
+
+    assert "compaction_cause" not in earlier_event
+    assert agent_id in agent_manager._compaction_pending_by_agent
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+
+def test_last_compaction_json_written_after_the_request_ends_it_before_the_event_lands(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic() - 10.0)
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+    write_last_compaction_record(state_dir, "manual", ended_seconds_ago=0.0)
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+    assert agent_id not in agent_manager._compaction_pending_by_agent
+    # The cause survives until the compacted event arrives (in a chat nobody had open, later).
+    event = _compacted_event(seconds_ago=0.0)
+    agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [event])
+    assert event["compaction_cause"] == "idle"
+
+
+def test_the_compacting_marker_poller_recomputes_when_the_marker_appears_and_goes(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    codex_agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=HarnessType.CODEX)
+    # Only the harnesses whose tracker declares a marker are polled for one.
+    assert set(agent_manager._list_compacting_marker_paths()) == {agent_id}
+    assert codex_agent_id not in agent_manager._list_compacting_marker_paths()
+    agent_manager._compacting_marker_poller.poll_once()
+    listener = broadcaster.register()
+
+    marker = write_compacting_marker(state_dir, "manual")
+    agent_manager._compacting_marker_poller.poll_once()
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+    appeared = _last_chats_updated(_drain(listener))
+    assert appeared is not None
+    activity_by_agent = {
+        chat["active_agent"]["agent_id"]: chat["active_agent"]["activity_state"] for chat in appeared["chats"]
+    }
+    assert activity_by_agent[agent_id] == "COMPACTING"
+
+    marker.unlink()
+    agent_manager._compacting_marker_poller.poll_once()
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+    assert _last_chats_updated(_drain(listener)) is not None
+
+
+def test_an_interrupt_clears_the_compacting_marker_and_the_pending_request(
+    agent_manager: AgentManager, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    marker = write_compacting_marker(state_dir, "manual")
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic())
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+    agent_info = _compaction_agent_info(agent_manager, agent_id)
+
+    agent_manager.clear_compaction_after_interrupt(agent_info)
+
+    assert not marker.exists()
+    assert agent_id not in agent_manager._compaction_pending_by_agent
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+    agent_manager.clear_compaction_after_interrupt(agent_info)
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+    cleared_lines = _log_lines_starting(
+        loguru_records, f"autocompact: compaction cleared by interrupt agent={agent_id}"
+    )
+    assert cleared_lines == [f"INFO autocompact: compaction cleared by interrupt agent={agent_id}"]
+    # The cause survives: a compaction the interrupt came too late for still names it.
+    event = _compacted_event(seconds_ago=0.0)
+    agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [event])
+    assert event["compaction_cause"] == "manual"
+
+
+def test_an_interrupt_that_cannot_remove_the_marker_still_clears_the_request(
+    agent_manager: AgentManager, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path)
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic())
+    agent_info = _compaction_agent_info(agent_manager, agent_id)
+    # A directory where the marker file should be: unlinking it fails with an OSError.
+    blocked_state_dir = tmp_path / "blocked"
+    (blocked_state_dir / COMPACTING_MARKER_FILENAME).mkdir(parents=True)
+
+    agent_manager.clear_compaction_after_interrupt(
+        agent_info.model_copy_update(to_update(agent_info.field_ref().agent_state_dir, blocked_state_dir))
+    )
+
+    assert agent_id not in agent_manager._compaction_pending_by_agent
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+    assert any(record.startswith("WARNING Failed to remove the compacting marker") for record in loguru_records)
+
+
+def test_a_compact_queued_behind_a_running_turn_shows_the_turn_until_it_ends(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path)
+    agent_manager.update_session_events(agent_id, [{"type": "user_message", "content": "go"}])
+    assert _activity_of(agent_manager, agent_id) == ActivityState.THINKING
+
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic())
+    assert _activity_of(agent_manager, agent_id) == ActivityState.THINKING
+    agent_manager.update_session_events(
+        agent_id, [{"type": "assistant_message", "tool_calls": [{"tool_call_id": "call_q", "tool_name": "Bash"}]}]
+    )
+    assert _activity_of(agent_manager, agent_id) == ActivityState.TOOL_RUNNING
+
+    agent_manager.update_session_events(
+        agent_id,
+        [
+            {"type": "tool_result", "tool_call_id": "call_q", "output": "ok"},
+            {"type": "assistant_message", "text": "done", "tool_calls": []},
+        ],
+    )
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+
+def test_a_codex_sweep_compaction_shows_compacting_through_the_turn_it_runs_as(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=HarnessType.CODEX)
+    agent_manager.note_sweep_compaction_requested(f"agent-{agent_id}")
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+    agent_manager.update_session_events(
+        agent_id, [{"type": SPECIAL_EVENT_TYPE, "kind": SpecialEventKind.TURN_STARTED.value}]
+    )
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+    agent_manager.stamp_compaction_events(
+        _compaction_agent_info(agent_manager, agent_id), [_compacted_event(seconds_ago=0.0)]
+    )
+    agent_manager.update_session_events(
+        agent_id, [{"type": SPECIAL_EVENT_TYPE, "kind": SpecialEventKind.TURN_COMPLETED.value}]
+    )
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+
+
+@pytest.mark.parametrize("cause", [CompactionCause.IDLE, CompactionCause.MANUAL])
+def test_a_codex_compaction_request_shows_compacting_with_its_cause_through_its_turn(
+    agent_manager: AgentManager, tmp_path: Path, cause: CompactionCause
+) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=HarnessType.CODEX)
+    agent_manager.note_compaction_requested(agent_id, cause, time.monotonic())
+
+    agent_manager.update_session_events(
+        agent_id, [{"type": SPECIAL_EVENT_TYPE, "kind": SpecialEventKind.TURN_STARTED.value}]
+    )
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+    assert _snapshot_compaction_cause(agent_manager, agent_id) is cause
+
+    event = _compacted_event(seconds_ago=0.0)
+    agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [event])
+    agent_manager.update_session_events(
+        agent_id, [{"type": SPECIAL_EVENT_TYPE, "kind": SpecialEventKind.TURN_COMPLETED.value}]
+    )
+    assert event["compaction_cause"] == cause.value
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+
+
+def _user_turn(seconds_ago: float) -> dict[str, Any]:
+    return {
+        "type": "user_message",
+        "event_id": f"evt-{uuid4().hex}",
+        "timestamp": utc_iso_seconds_ago(seconds_ago),
+        "content": "go",
+    }
+
+
+@pytest.mark.parametrize("cause", [CompactionCause.IDLE, CompactionCause.MANUAL])
+def test_a_pi_compaction_request_does_not_show_over_a_turn_already_running(
+    agent_manager: AgentManager, tmp_path: Path, cause: CompactionCause
+) -> None:
+    """pi compacts outside any turn, so a running turn is never its compaction."""
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=HarnessType.PI_CODING)
+    agent_manager.update_session_events(agent_id, [_user_turn(seconds_ago=30.0)])
+    assert _activity_of(agent_manager, agent_id) == ActivityState.THINKING
+
+    agent_manager.note_compaction_requested(agent_id, cause, time.monotonic())
+
+    assert _activity_of(agent_manager, agent_id) == ActivityState.THINKING
+    assert agent_id in agent_manager._compaction_pending_by_agent
+
+
+@pytest.mark.parametrize(
+    ("harness", "is_ended"),
+    [
+        pytest.param(HarnessType.PI_CODING, True, id="pi"),
+        pytest.param(HarnessType.CODEX, False, id="codex_whose_compaction_is_a_turn"),
+        pytest.param(HarnessType.CLAUDE, False, id="claude_whose_marker_tracks_its_compaction"),
+    ],
+)
+def test_a_user_turn_after_a_compaction_request_ends_it_only_on_a_harness_compacting_outside_turns_unmarked(
+    agent_manager: AgentManager, tmp_path: Path, loguru_records: list[str], harness: HarnessType, is_ended: bool
+) -> None:
+    """pi runs no turn while it compacts, so a turn after the request means its compaction is over or was refused."""
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=harness)
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic() - 1.0)
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+    agent_manager.update_session_events(agent_id, [_user_turn(seconds_ago=0.0)])
+
+    assert (agent_id not in agent_manager._compaction_pending_by_agent) is is_ended
+    ended_lines = _log_lines_starting(
+        loguru_records, f"autocompact: compaction pending ended by a turn agent={agent_id}"
+    )
+    assert ended_lines == (
+        [f"INFO autocompact: compaction pending ended by a turn agent={agent_id} cause=manual"] if is_ended else []
+    )
+
+
+def test_a_pi_compaction_request_ended_by_a_turn_does_not_come_back_once_the_turn_ends(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=HarnessType.PI_CODING)
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic() - 1.0)
+    agent_manager.update_session_events(agent_id, [_user_turn(seconds_ago=0.0)])
+    assert _activity_of(agent_manager, agent_id) == ActivityState.THINKING
+
+    agent_manager.update_session_events(agent_id, [{"type": "assistant_message", "text": "done", "tool_calls": []}])
+
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+    assert _snapshot_compaction_cause(agent_manager, agent_id) is None
+
+
+def test_a_pi_compact_requested_from_the_composer_shows_compacting_as_requested_until_its_compacted_event(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """pi compacts outside a turn, and its compaction record is the only completion it reports."""
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=HarnessType.PI_CODING)
+
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic())
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+    assert _snapshot_compaction_cause(agent_manager, agent_id) is CompactionCause.MANUAL
+
+    event = _compacted_event(seconds_ago=0.0)
+    agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [event])
+    assert event["compaction_cause"] == "manual"
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+
+
+def test_a_compaction_request_is_recorded_beside_the_marker(agent_manager: AgentManager, tmp_path: Path) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    before = time.time()
+
+    agent_manager.note_sweep_compaction_requested(f"agent-{agent_id}")
+
+    request = read_compaction_request(state_dir / COMPACTION_REQUEST_FILENAME, time.time())
+    assert request is not None
+    assert request.cause == CompactionCause.IDLE
+    assert request.requested_at < before
+
+
+def test_a_compaction_request_for_an_agent_without_a_local_state_dir_is_pending_but_not_recorded(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """An agent on another host has no state dir here, and nothing local would read the record."""
+    agent_id = f"agent-{uuid4().hex}"
+    _seed_agent(agent_manager, agent_id)
+    agent_manager._ensure_activity_tracking(agent_id)
+    state_dir = tmp_path / "agents" / agent_id
+
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic())
+
+    assert agent_manager._compaction_pending_by_agent[agent_id][1] == CompactionCause.MANUAL
+    assert not state_dir.exists()
+
+
+def test_a_compaction_request_that_cannot_be_recorded_is_still_pending_and_warned_about(
+    agent_manager: AgentManager, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    # A directory where the record should be: replacing it with the file fails with an OSError.
+    (state_dir / COMPACTION_REQUEST_FILENAME).mkdir()
+
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic())
+
+    assert agent_manager._compaction_pending_by_agent[agent_id][1] == CompactionCause.IDLE
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+    assert any(
+        record.startswith("WARNING Failed to record the compaction request of agent") for record in loguru_records
+    )
+    assert [path for path in state_dir.iterdir() if path.name != COMPACTION_REQUEST_FILENAME] == []
+
+
+def test_a_sweep_compaction_stamped_after_the_managers_memory_is_gone_still_reads_idle(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    first_manager = AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats")
+    agent_id, state_dir = _tracked_compaction_agent(first_manager, tmp_path)
+    first_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic() - 20.0)
+    # The sweep sends /compact as a manual command, so mngr's record says manual.
+    write_last_compaction_record(state_dir, "manual", ended_seconds_ago=2.0)
+
+    # The chat app restarted: a new manager, which never saw the request, reads the event.
+    second_manager = AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats")
+    _seed_agent(second_manager, agent_id, harness=HarnessType.CLAUDE, state="RUNNING")
+    second_manager._ensure_activity_tracking(agent_id)
+    event = _compacted_event(seconds_ago=1.0)
+    second_manager.stamp_compaction_events(_compaction_agent_info(second_manager, agent_id), [event])
+
+    assert event["compaction_cause"] == "idle"
+
+
+def test_a_compaction_request_from_before_the_window_does_not_name_a_later_compaction(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    write_compaction_request(
+        state_dir / COMPACTION_REQUEST_FILENAME,
+        CompactionCause.IDLE,
+        time.time() - PENDING_COMPACTION_TIMEOUT_SECONDS - 60,
+    )
+    write_last_compaction_record(state_dir, "manual", ended_seconds_ago=2.0)
+    event = _compacted_event(seconds_ago=1.0)
+
+    agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [event])
+
+    assert event["compaction_cause"] == "manual"
+
+
+def test_a_compact_typed_in_the_terminal_reads_manual_and_logs_no_finish(
+    agent_manager: AgentManager, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    write_last_compaction_record(state_dir, "manual", ended_seconds_ago=2.0)
+    event = _compacted_event(seconds_ago=1.0)
+
+    agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [event])
+
+    assert not (state_dir / COMPACTION_REQUEST_FILENAME).exists()
+    assert event["compaction_cause"] == "manual"
+    # The chat held nothing to end, so there is no finish to log (a re-read of an old pill).
+    assert _log_lines_starting(loguru_records, "autocompact: compaction finished") == []
+
+
+def test_an_unwatched_agents_request_expires_after_the_shorter_timeout(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=HarnessType.CODEX)
+    requested_at = time.monotonic() - UNWATCHED_PENDING_COMPACTION_TIMEOUT_SECONDS - 1
+
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, requested_at)
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+
+    # The same request on an agent a session watcher reads keeps showing, until the longer timeout.
+    agent_manager.set_session_watcher_check(lambda watched_agent_id: watched_agent_id == agent_id)
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, requested_at)
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+
+def test_is_compaction_in_flight_reads_a_fresh_marker_or_a_live_request(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    agent_info = _compaction_agent_info(agent_manager, agent_id)
+    assert not agent_manager.is_compaction_in_flight(agent_info)
+
+    stale_marker = write_compacting_marker(
+        state_dir, "manual", started_seconds_ago=PENDING_COMPACTION_TIMEOUT_SECONDS + 5
+    )
+    assert not agent_manager.is_compaction_in_flight(agent_info)
+
+    stale_marker.unlink()
+    write_compacting_marker(state_dir, "manual")
+    assert agent_manager.is_compaction_in_flight(agent_info)
+
+    (state_dir / COMPACTING_MARKER_FILENAME).unlink()
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic())
+    assert agent_manager.is_compaction_in_flight(agent_info)
+
+
+def test_a_new_stale_marker_after_an_earlier_one_is_logged_again(
+    agent_manager: AgentManager, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    write_compacting_marker(state_dir, "manual", started_seconds_ago=PENDING_COMPACTION_TIMEOUT_SECONDS + 60)
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+
+    write_compacting_marker(state_dir, "manual", started_seconds_ago=PENDING_COMPACTION_TIMEOUT_SECONDS + 30)
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+
+    stale_lines = _log_lines_starting(loguru_records, f"autocompact: stale compacting marker ignored agent={agent_id}")
+    assert len(stale_lines) == 2
+
+
+def test_a_compacting_marker_dated_in_the_future_goes_stale_by_its_file_time(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    marker = write_compacting_marker(state_dir, "manual", started_seconds_ago=-3600.0)
+    # The file was written long ago; only the time recorded in it is skewed into the future.
+    written_at = time.time() - PENDING_COMPACTION_TIMEOUT_SECONDS - 60
+    os.utime(marker, (written_at, written_at))
+
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+
+
+class _SweepFailureError(Exception):
+    """The error a test session raises from its live-backend connect."""
+
+
+class _FailingConnectSession(FileHarnessSession):
+    def ensure_live(self) -> None:
+        raise _SweepFailureError("connect failed")
+
+
+def test_a_failing_session_sweep_pass_does_not_stop_later_passes(
+    agent_manager: AgentManager, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path)
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic())
+    real_session = agent_manager._session_by_agent[agent_id]
+
+    with agent_manager._lock:
+        agent_manager._session_by_agent[agent_id] = _FailingConnectSession.build(real_session._deps)
+    agent_manager._sweep_sessions_once()
+    assert any(record.startswith("ERROR The agent session sweep failed") for record in loguru_records)
+
+    # The next pass runs, and its recompute settles a compaction that outlived the timeout.
+    with agent_manager._lock:
+        agent_manager._session_by_agent[agent_id] = real_session
+        agent_manager._compaction_pending_by_agent[agent_id] = (
+            time.monotonic() - PENDING_COMPACTION_TIMEOUT_SECONDS - 1,
+            CompactionCause.IDLE,
+        )
+    agent_manager._sweep_sessions_once()
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+
+
+def test_a_request_past_its_timeout_keeps_its_cause_while_a_fresh_marker_shows_its_compaction_running(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    write_compacting_marker(state_dir, "manual", started_seconds_ago=10.0)
+
+    agent_manager.note_compaction_requested(
+        agent_id, CompactionCause.IDLE, time.monotonic() - PENDING_COMPACTION_TIMEOUT_SECONDS - 100
+    )
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+
+    assert _snapshot_compaction_cause(agent_manager, agent_id) is CompactionCause.IDLE
+    assert agent_id in agent_manager._compaction_pending_by_agent
+
+
+@pytest.mark.parametrize(
+    ("last_shown_seconds_ago", "expected_cause"),
+    [
+        pytest.param(5.0, "idle", id="shown_recently"),
+        pytest.param(PENDING_COMPACTION_TIMEOUT_SECONDS + 1, None, id="shown_long_ago"),
+    ],
+)
+def test_a_remembered_cause_labels_a_compaction_only_if_it_was_shown_recently(
+    agent_manager: AgentManager, tmp_path: Path, last_shown_seconds_ago: float, expected_cause: str | None
+) -> None:
+    """An interrupt that cancelled a compaction leaves its cause behind, with no compacted event to consume it."""
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=HarnessType.CODEX)
+    with agent_manager._lock:
+        agent_manager._compaction_cause_by_agent[agent_id] = CompactionCause.IDLE
+        agent_manager._compaction_cause_seen_at_by_agent[agent_id] = time.monotonic() - last_shown_seconds_ago
+
+    event = _compacted_event(seconds_ago=0.0)
+    agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [event])
+
+    assert event["compaction_cause"] == expected_cause
+
+
+def test_a_compaction_starting_before_the_sweep_reports_it_reads_idle_not_manual(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """The sweep's pasted /compact makes the marker say manual before the plugin call returns."""
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    agent_manager.note_sweep_started([f"agent-{agent_id}"])
+
+    marker = write_compacting_marker(state_dir, "manual")
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+    assert _snapshot_compaction_cause(agent_manager, agent_id) is CompactionCause.IDLE
+
+    agent_manager.note_sweep_compaction_requested(f"agent-{agent_id}")
+    agent_manager.note_sweep_finished()
+    assert _snapshot_compaction_cause(agent_manager, agent_id) is CompactionCause.IDLE
+
+    marker.unlink()
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+    event = _compacted_event(seconds_ago=0.0)
+    agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [event])
+    assert event["compaction_cause"] == "idle"
+
+
+def test_a_marker_of_a_sweep_candidate_the_sweep_did_not_compact_reads_manual_once_it_returns(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    agent_manager.note_sweep_started([f"agent-{agent_id}"])
+    write_compacting_marker(state_dir, "manual")
+
+    agent_manager.note_sweep_finished()
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+
+    assert _snapshot_compaction_cause(agent_manager, agent_id) is CompactionCause.MANUAL
+
+
+def test_a_sweep_request_is_dated_from_the_sweep_start(agent_manager: AgentManager, tmp_path: Path) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path)
+    before_sweep = time.monotonic()
+    agent_manager.note_sweep_started([f"agent-{agent_id}"])
+    after_sweep_start = time.monotonic()
+
+    agent_manager.note_sweep_compaction_requested(f"agent-{agent_id}")
+
+    requested_at, cause = agent_manager._compaction_pending_by_agent[agent_id]
+    assert before_sweep <= requested_at <= after_sweep_start
+    assert cause == CompactionCause.IDLE
+
+
+def test_a_sweep_compaction_that_finished_before_the_sweep_reported_it_is_not_shown_again(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """A Codex compaction can land while a slow send of another agent holds up the plugin call."""
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=HarnessType.CODEX)
+    agent_manager.note_sweep_started([f"agent-{agent_id}"])
+    event = _compacted_event(seconds_ago=0.0)
+    agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [event])
+
+    agent_manager.note_sweep_compaction_requested(f"agent-{agent_id}")
+    agent_manager.note_sweep_finished()
+
+    assert event["compaction_cause"] == "idle"
+    assert agent_id not in agent_manager._compaction_pending_by_agent
+    assert _activity_of(agent_manager, agent_id) != ActivityState.COMPACTING
+
+
+def test_the_sweep_callback_maps_the_agent_name_to_its_id_and_marks_the_compaction_idle(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path)
+    assert agent_manager._autocompactor._on_compaction_requested == agent_manager.note_sweep_compaction_requested
+    assert agent_manager._autocompactor._on_sweep_started == agent_manager.note_sweep_started
+    assert agent_manager._autocompactor._on_sweep_finished == agent_manager.note_sweep_finished
+
+    agent_manager.note_sweep_compaction_requested(f"agent-{agent_id}")
+    agent_manager.note_sweep_compaction_requested("a-chat-destroyed-since-the-sweep-listed-it")
+
+    assert set(agent_manager._compaction_pending_by_agent) == {agent_id}
+    requested_at, cause = agent_manager._compaction_pending_by_agent[agent_id]
+    assert cause == CompactionCause.IDLE
+    assert requested_at < time.monotonic()
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING

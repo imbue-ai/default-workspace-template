@@ -136,7 +136,8 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 restart and health-probe motion the update got. Two residues to mention when
 they matter: the apt snapshot advanced by `env-converge upgrade` stays
 advanced, and the version-history entry stays (the revert is its own history).
-The full-rewind fallback is the Step 1 backup, when one was captured.
+The full-rewind fallback is the backup service's restore point, when Step 1
+confirmed a recent one.
 
 ## Migration-required updates
 

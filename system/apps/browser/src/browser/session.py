@@ -58,12 +58,12 @@ import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from imbue.imbue_common.mutable_model import MutableModel
 from loguru import logger
 from pydantic import PrivateAttr
-from workspace_layout.windows import parse_window_closed_hint, read_app_window_paths, window_query_value
+from workspace_layout.windows import WindowClosedHint, read_app_window_paths, window_query_value
 
 from browser import chrome_launcher
 from browser import manifest as fleet_manifest
@@ -72,24 +72,12 @@ from browser.cdp_proxy import BrowserProxy, ProxyServer
 from browser.errors import BrowserNotDrivableError, UnknownBrowserError
 from browser.names import first_free_numbered_browser_name, is_valid_browser_name
 from browser.oom_retag import notify_chromium_processes_expected
-from browser.primitives import APP_NAME, SESSION_QUERY_KEY
+from browser.primitives import APP_NAME, SESSION_QUERY_KEY, ControlOwner, Lifecycle
 
 # Errors expected when a target/CDP session goes away underneath us (tab closed,
 # navigation, browser killed). The bounded CDP helpers additionally catch broadly
 # (best-effort, must never wedge the loop).
 _BROWSER_ERRORS = (RuntimeError, ConnectionError, OSError)
-
-ControlOwner = Literal["human", "agent"]
-
-# Explicit per-browser lifecycle. A browser is REGISTERED in the fleet the instant
-# create() is called (so the viewer/CLI can address it at once), but its Chromium is
-# launched asynchronously and serialized, so it starts in ``init`` and flips to
-# ``running`` only once Chromium is up and the active tab is foregrounded. ``crashed`` is
-# terminal (Chromium died -- OOM/segfault). Driving/ownership only applies once
-# ``running``; the viewer renders deterministically off this field.
-# ``stopped``: the user ended this browser's Chromium but kept the browser (its record, profile,
-# and last known tabs); a start relaunches it from those. Unlike ``crashed`` it is not terminal.
-Lifecycle = Literal["init", "running", "crashed", "stopped"]
 
 # Fortress's fixed install path (see the env.d unit
 # system/scripts/env.d/1000-playwright-fortress.sh). A stealth, C++-patched
@@ -216,6 +204,10 @@ def _stop_xvfb(xvfb: "subprocess.Popen[bytes]") -> None:
 # fixed path: root otherwise leaves the socket group-gated and our clients get
 # "Access denied"); the only fleet change is one sink per browser instead of one global.
 _PULSE_SERVER = "unix:/var/run/pulse/native"
+# Every browser daemon in the workspace shares that pulse daemon, so a preview booted beside the live one names
+# its sinks under a prefix of its own; sharing the live names would route its audio into the live browsers' sinks
+# and unload them when it closes.
+_PULSE_SINK_PREFIX = os.environ.get("BROWSER_PULSE_SINK_PREFIX", "browser")
 
 
 def _pulse_env() -> dict[str, str]:
@@ -225,7 +217,7 @@ def _pulse_env() -> dict[str, str]:
 def _pulse_sink_name(browser_id: str) -> str:
     """A PulseAudio-safe null-sink name giving a browser its own audio bus."""
     safe = "".join(c if c.isalnum() else "_" for c in browser_id)
-    return f"browser_{safe}"
+    return f"{_PULSE_SINK_PREFIX}_{safe}"
 
 
 def _ensure_pulse_daemon() -> bool:
@@ -236,17 +228,18 @@ def _ensure_pulse_daemon() -> bool:
         if subprocess.run(["pactl", "info"], env=env, capture_output=True, timeout=5).returncode == 0:
             return True
         os.makedirs("/var/run/pulse", exist_ok=True)
-        # Foreground daemon as a detached background process. A clean service stop signals
-        # the browser daemon alone (stopasgroup=false, so it can checkpoint first), so this
-        # one outlives it and the next daemon adopts it through the ``pactl info`` probe
-        # above; only a stop that overruns stopwaitsecs reaps it with the group.
+        # Foreground daemon as a detached background process, in a session of its own: every
+        # browser daemon in the workspace shares it, so it must outlive the one that started it,
+        # and the next daemon adopts it through the ``pactl info`` probe above. A preview's
+        # teardown signals the preview's whole process group, which would otherwise take the
+        # live browsers' audio down with it.
         # --daemonize=yes double-forks and trips over a stale PID file in this container; a
         # plain Popen does not.
         daemon = subprocess.Popen(
             ["pulseaudio", "--system", "--daemonize=no", "--disallow-exit",
              "--exit-idle-time=-1", "--log-target=stderr", "-n",
              "-L", "module-native-protocol-unix auth-anonymous=1 socket=/var/run/pulse/native"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
         )
         _reap_on_exit(daemon, "pulseaudio")
         deadline = time.monotonic() + 10
@@ -626,6 +619,12 @@ class LiveBrowser(MutableModel):
     # nobody connected -- outlives every sweep. Rides the manifest (``window_seen``) so a
     # daemon restart neither forgets nor invents it.
     _is_window_seen: bool = PrivateAttr(default=False)
+    # A page the human asked to open (a link clicked in the workspace, ``open:url``) that the browser could not open
+    # yet: Chromium was still launching, or an agent was driving. It opens as a tab in front once the launch
+    # finishes or control next passes to the human (the human takes control, or the agent lets go); the viewer
+    # shows it on the agent's overlay, where the human can also cancel it. A later page replaces an earlier one, and
+    # stopping the browser (a failed relaunch included) drops it.
+    _pending_url: str | None = PrivateAttr(default=None)
     # Set by the manager: a no-arg hook that checkpoints the fleet manifest. Fired on
     # crash so a browser that died is dropped from the manifest promptly (not only on
     # the next ~10s checkpoint tick), so an ungraceful kill right after a crash doesn't
@@ -774,6 +773,8 @@ class LiveBrowser(MutableModel):
         self._lifecycle = "running"
         self._broadcast(self._control_message())
         logger.info("LiveBrowser {} started (cdp={})", self.browser_id, self._chrome.http_endpoint)
+        if self.controller == "human":
+            await self._open_pending_url()
 
     # the proxy's callbacks into ownership
 
@@ -889,6 +890,29 @@ class LiveBrowser(MutableModel):
                 logger.debug("new tab for {} on {} ignored ({})", url, self.browser_id, e)
                 return
             await self._focus_and_foreground(target_id)
+
+    def hold_pending_url(self, url: str) -> None:
+        """Keep ``url`` to open once the browser can (see ``_pending_url``), replacing any page held before, and show
+        it to the viewers."""
+        self._pending_url = url
+        self._broadcast(self._control_message())
+
+    def cancel_pending_url(self) -> bool:
+        """Drop the held page, leaving whoever drives the browser as they were; answers whether one was held."""
+        if self._pending_url is None:
+            return False
+        self._pending_url = None
+        self._broadcast(self._control_message())
+        return True
+
+    async def _open_pending_url(self) -> None:
+        """Open the held page as a tab in front, if one is held and the browser runs."""
+        url = self._pending_url
+        if url is None or not self._is_running:
+            return
+        self._pending_url = None
+        self._broadcast(self._control_message())
+        await self.open_tab(url)
 
     async def close_active_tab(self) -> None:
         """Close the tab the pane is showing, keeping the Chromium window alive.
@@ -1183,6 +1207,9 @@ class LiveBrowser(MutableModel):
         if to == "human":
             self._input_enabled.set()
             self._input_gate.set()  # thread-safe mirror for the /stream input path
+            if self._pending_url is not None:
+                # Opened off the control lock: a tab is slow CDP work, taken under the browser's own lock.
+                self._spawn(self._open_pending_url())
         else:
             self._input_enabled.clear()
             self._input_gate.clear()
@@ -1212,6 +1239,8 @@ class LiveBrowser(MutableModel):
             "human_pinned": self.human_pinned,
             # Agents queued (monitor-and-wait) behind the current owner, in FIFO order.
             "waiting": self._waiting_names(),
+            # The page the human asked to open while an agent drives (or while launching), or None.
+            "pending_url": self._pending_url,
         }
         # While an agent holds a sticky lease, tell the viewer how long it has been idle
         # and when the idle-TTL will auto-release it, so a watching human knows the
@@ -1882,6 +1911,8 @@ class LiveBrowser(MutableModel):
         # Stopped before the teardown's awaits, so an acquire landing in them is answered
         # ``stopped`` rather than parked, and the control write below carries the new state.
         self._lifecycle = "stopped"
+        # The page was held for this Chromium; a later start must not open it long after it was asked for.
+        self._pending_url = None
         async with self._control_lock:
             await self._abandon_queues_locked("stopped")
             await self._write_control_locked("human", None, None, pinned=False)
@@ -1907,15 +1938,11 @@ class LiveBrowser(MutableModel):
             await asyncio.to_thread(_stop_xvfb, xvfb)
 
 
-def closed_window_browser(hint_body: object) -> str | None:
+def closed_window_browser(hint: WindowClosedHint) -> str | None:
     """The browser a closed window showed, from the ``path`` of the shell's close hint.
 
-    None for a path with no browser (the root, or one naming something that is not a browser name), or a body of
-    another shape than the shell posts.
+    None for a path with no browser (the root, or one naming something that is not a browser name).
     """
-    hint = parse_window_closed_hint(hint_body)
-    if hint is None:
-        return None
     return window_query_value(hint.path, SESSION_QUERY_KEY)
 
 
@@ -2203,8 +2230,8 @@ class BrowserSessionManager(MutableModel):
         """What ``/new`` and a nameless ``POST /browsers`` answer: the one browser, created when there is none,
         relaunched when it was stopped (or crashed), with ``start_url`` opened in it as a new tab when given.
 
-        A browser still launching is answered as it is; a start page asked for then is dropped with a debug
-        log, since its launch already carries the tabs it will open.
+        A browser still launching is answered as it is, with a start page asked for then held and opened in front
+        once the launch finishes.
         """
         browser = self.the_browser()
         if browser is None:
@@ -2215,7 +2242,7 @@ class BrowserSessionManager(MutableModel):
             return browser
         if browser._lifecycle == "init":
             if start_url is not None:
-                logger.debug("start page {} for launching browser {} dropped", start_url, browser.browser_id)
+                browser.hold_pending_url(start_url)
             return browser
         if start_url is not None:
             # Relaunched on its tabs plus the start page, which comes up in front.
@@ -2223,6 +2250,18 @@ class BrowserSessionManager(MutableModel):
             browser._last_known_active_tab = len(browser._last_known_tabs) - 1
         await self.start_browser(browser.browser_id)
         return browser
+
+    async def open_url_for_human(self, url: str) -> LiveBrowser:
+        """Open a page the human asked for (a link clicked in the workspace, ``open:url``) in the one browser, as
+        ``ensure_browser`` does a start page, except that while an agent drives the browser the page is held rather
+        than opened over the agent's work: the viewer offers the human to take control, which opens it, or to
+        cancel it."""
+        browser = self.the_browser()
+        if browser is not None and browser._is_running and browser.controller == "agent":
+            logger.info("Held {} for browser {} while an agent drives it", url, browser.browser_id)
+            browser.hold_pending_url(url)
+            return browser
+        return await self.ensure_browser(url)
 
     async def sweep_windows(self, window_paths: Sequence[str]) -> list[str]:
         """Mark every browser a window shows, and stop the ones a window showed once and none shows now.

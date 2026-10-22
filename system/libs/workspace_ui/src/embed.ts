@@ -82,12 +82,25 @@ export const PROVIDER_SIGN_IN_ACK: "minds:provider-sign-in-ack" =
 // Workspace -> embedder: that sign-in has ended, so the chrome can stop relaying it. Payload: { flowId }.
 export const PROVIDER_SIGN_IN_END: "minds:provider-sign-in-end" =
   "PROVIDER_SIGN_IN_END" in embedContract ? embedContract.PROVIDER_SIGN_IN_END : "minds:provider-sign-in-end";
+// Embedder -> workspace (contract v8, the workspace link routing plan): a popup (or an external page replacing a
+// frame) a page of this workspace asked for, which Imbue Studio turned away from a window of its own; the workspace
+// opens it where it belongs. Payload: { url }. Sent only to a workspace that announced ``opensLinks`` with
+// WORKSPACE_READY.
+export const OPEN_LINK: "minds:open-link" = "OPEN_LINK" in embedContract ? embedContract.OPEN_LINK : "minds:open-link";
+// Workspace -> embedder (contract v8): open an external web, mailto or tel link outside the workspace, which no app of
+// it takes. Payload: { url }. Sent only to an embedder that said ``opensExternalLinks`` with EMBEDDER_CAPABILITIES, or
+// for an external link that embedder handed over with OPEN_LINK.
+export const OPEN_EXTERNAL: "minds:open-external" =
+  "OPEN_EXTERNAL" in embedContract ? embedContract.OPEN_EXTERNAL : "minds:open-external";
 
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 
 // Every embedder->workspace type the contract defines: the endpoint dispatches
 // only the types it is handed a handler for, and each of these reaches its own
-// handler and then the observer.
+// handler and then the observer. A type outside this list the endpoint drops
+// (the contract's tolerant policy), so an app message the chrome posts beside
+// the contract's own (a notification's destination, `minds:show-routine`, say)
+// never reaches the observer: the shell's relay.ts hands those on itself.
 const EMBEDDER_TO_WORKSPACE_TYPES: readonly string[] = [
   CLOSE_ACTIVE_TAB,
   OPEN_AI_KEYS_ACK,
@@ -97,6 +110,7 @@ const EMBEDDER_TO_WORKSPACE_TYPES: readonly string[] = [
   REATTACH_WINDOW,
   TEAR_OUT,
   PROVIDER_SIGN_IN_ACK,
+  OPEN_LINK,
 ];
 
 // One replaceable handler per embedder->workspace type, registered by the
@@ -144,17 +158,30 @@ export function setEmbedderMessageHandler(type: string, handler: EmbedderMessage
   handlerByType[type] = handler;
 }
 
-/** Observe every embedder->workspace message, whatever its type, after its
- * type's own handler (replaces any prior observer). */
+/** Observe every embedder->workspace message of a type the contract defines,
+ * after its type's own handler (replaces any prior observer). */
 export function setEmbedderMessageObserver(observer: EmbedderMessageHandler): void {
   getEndpoint();
   messageObserver = observer;
 }
 
-/** Tell the embedder this page is listening, so it can send what it held.
+/** Whether `type` is an embedder->workspace type the contract defines, which the
+ * endpoint dispatches (and the observer sees); any other type from the chrome
+ * the endpoint drops. */
+export function isContractEmbedderMessageType(type: string): boolean {
+  return EMBEDDER_TO_WORKSPACE_TYPES.includes(type);
+}
+
+/** What a page says it handles when it announces itself ready. */
+export interface ReadyAnnouncement {
+  /** Whether it opens the links Imbue Studio hands it with OPEN_LINK. */
+  readonly opensLinks: boolean;
+}
+
+/** Tell the embedder this page is listening, so it can send what it held, and what it handles.
  * Called once per load, after the handlers that the held messages need. */
-export function announceReadyToEmbedder(): void {
-  sendToEmbedder(WORKSPACE_READY);
+export function announceReadyToEmbedder(announcement: ReadyAnnouncement): void {
+  sendToEmbedder(WORKSPACE_READY, { opensLinks: announcement.opensLinks });
 }
 
 /** Clear the handler for one embedder->workspace type. */

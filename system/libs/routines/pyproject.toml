@@ -1,0 +1,50 @@
+[project]
+name = "routines"
+version = "0.1.0"
+description = "Routines: everything in the workspace that runs on a schedule. The definitions, the scheduler, the runner for command runs and skill runs, the run ledger, and the routines command"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "app-manifest",
+    "chat-background-tasks",
+    "click>=8.1",
+    "httpx>=0.27",
+    "imbue-common",
+    "loguru>=0.7",
+    "pydantic>=2.0",
+    "tomlkit>=0.12",
+]
+
+[project.scripts]
+routines = "routines.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/routines"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "inline-snapshot>=0.13",
+    # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
+    "ty==0.0.85",
+]
+
+# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
+[tool.ty]
+
+[tool.ruff]
+line-length = 119
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I", "UP006", "UP007"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+case-sensitive = true
+order-by-type = false
+known-first-party = ["routines", "imbue", "app_manifest", "chat_background_tasks"]

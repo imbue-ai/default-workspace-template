@@ -19,7 +19,7 @@ packages = ["src/mngr_cli_contract"]
 [dependency-groups]
 dev = [
     # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
-    "ty==0.0.24",
+    "ty==0.0.85",
 ]
 
 # Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.

@@ -2,7 +2,8 @@
  * The chat root's inner frames: one iframe of ``/<chat-id>`` per chat the root has shown this
  * session, the selected one visible and the rest hidden, so switching back is instant.
  *
- * Bounded: past ``MAX_HELD_FRAMES`` the frame shown longest ago is destroyed. A hidden frame is
+ * Bounded: past ``MAX_HELD_FRAMES`` the frame shown longest ago is destroyed. Each page is handed
+ * the shell's handshake to the root through the relay, as it loads. A hidden frame is
  * told ``hidden`` and a shown one ``shown`` through the page's embed API (the two documents
  * share an origin), which is what the page keys its presence reports on, so a chat held here
  * but not on screen counts as open-but-hidden, like a minimized window's page.
@@ -11,6 +12,7 @@
 import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { getBasePath } from "@imbue/workspace-ui/src/base-path";
 import type { ChatPageEmbedApi } from "../embedApi";
+import { handHandshakeDown } from "./relay";
 
 export const MAX_HELD_FRAMES = 4;
 
@@ -137,8 +139,10 @@ export class InnerFramePool {
   }
 
   private introduce(chatId: string): void {
-    if (this.handshake === null) return;
-    this.api(chatId)?.handshake(this.handshake);
+    const held = this.held.get(chatId);
+    const inner = held?.frame.contentWindow;
+    if (this.handshake === null || held === undefined || !held.isLoaded || inner == null) return;
+    handHandshakeDown(inner, this.handshake);
   }
 
   private tell(chatId: string, what: "shown" | "hidden"): void {

@@ -10,6 +10,7 @@ import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { Modal } from "@imbue/workspace-ui/src/components/Modal";
+import { startDownload } from "@imbue/workspace-ui/src/download";
 import { avatarImageUrl, avatarSourceUrl } from "../model/api";
 import type { AvatarDesign } from "../model/records";
 
@@ -34,6 +35,8 @@ export interface AvatarChooserDialogAttrs {
   /** Null when no app declares a launch path that takes a message. */
   readonly onDesignOwn: (() => void) | null;
   readonly onClose: () => void;
+  /** Tell the user the chosen design's original did not download. */
+  readonly onDownloadFailed: (note: string) => void;
 }
 
 function designCell(design: AvatarDesign, attrs: AvatarChooserDialogAttrs): m.Vnode {
@@ -130,8 +133,10 @@ export const AvatarChooserDialog: m.Component<AvatarChooserDialogAttrs> = {
                 "data-avatar-source": "",
                 href: avatarSourceUrl(selected.id),
                 ...hoverTooltipAttrs(selected.source_path),
-                // Present and empty: the route's Content-Disposition names the file.
-                download: "",
+                onclick: (event: MouseEvent) => {
+                  event.preventDefault();
+                  startDownload(document, avatarSourceUrl(selected.id), `${selected.id}.svg`, attrs.onDownloadFailed);
+                },
               },
               "Original SVG",
             ),

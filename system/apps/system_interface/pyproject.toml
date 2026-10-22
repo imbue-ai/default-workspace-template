@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "app-manifest",
+    "app-schema",
+    "chat-background-tasks",
     # The staleness tracker runs git through concurrency_group's subprocess helper.
     "concurrency-group",
     # The avatar designs' validator parses registered SVG with DTDs and entities refused.
@@ -30,6 +32,7 @@ license-files = [
 
 [dependency-groups]
 dev = [
+    "app-schema[testing]",
     "playwright>=1.40",
     "pytest-playwright>=0.4",
     "pytest>=9.0",
@@ -54,11 +57,10 @@ dev = [
     # ratchet holds that).
     "chat",
     "ruff~=0.12.8",
-    # Used by check_no_type_errors in test_ratchets.py. Pinned to 0.0.24 because
-    # that is the version the source was last verified clean against (mngr's own
-    # uv.lock); newer versions surface stricter checks that don't
-    # match what this code was reviewed under.
-    "ty==0.0.24",
+    # Used by check_no_type_errors in test_ratchets.py. Pinned exactly because each
+    # ty release adds checks, so a new version is adopted together with the fixes it
+    # asks for.
+    "ty==0.0.85",
 ]
 
 [project.scripts]
@@ -77,7 +79,11 @@ artifacts = [
 packages = ["imbue"]
 
 [tool.pytest.ini_options]
+required_plugins = ["pytest-workspace-env"]
 timeout_func_only = true
+# Same tmp_path retention as the root config, which says why.
+tmp_path_retention_policy = "failed"
+tmp_path_retention_count = 1
 markers = [
     "acceptance: marks tests as requiring network access, Modal credentials, etc. These are required to pass in CI",
     "browser: marks tests that drive a browser",
@@ -122,12 +128,6 @@ format-command="uv run ruff format --force-exclude --config pyproject.toml --std
 # without one, a checkout nested in another project (e.g. a clone under mngr's
 # .external_worktrees/) would be checked as part of that project instead.
 [tool.ty]
-
-[tool.pyright]
-venvPath = "."
-venv = ".venv"
-pythonVersion = "3.12"
-strict = ["**/*.py"]
 
 # Ruff config mirrors mngr's pyproject.toml so that lint/isort behavior
 # matches what this code was previously checked under (it was a workspace

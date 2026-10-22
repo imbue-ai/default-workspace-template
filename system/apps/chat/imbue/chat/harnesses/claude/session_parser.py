@@ -474,11 +474,11 @@ def _parse_user_message(
                 existing_event_ids.add(event_id)
                 new_events.append((timestamp, event))
         else:
-            is_compaction = _is_compaction_command(raw_text, text) or _is_compaction_output(raw_text)
-            if not is_compaction and text and not is_interrupt_sentinel_text(text):
+            is_compaction_command = _is_compaction_command(raw_text, text)
+            if not _is_compaction_output(raw_text) and text and not is_interrupt_sentinel_text(text):
                 event_id = _make_event_id(uuid, "user")
                 if event_id not in existing_event_ids:
-                    event = {
+                    event: dict[str, Any] = {
                         "timestamp": timestamp,
                         "type": "user_message",
                         "event_id": event_id,
@@ -487,16 +487,28 @@ def _parse_user_message(
                         "content": text,
                         "message_uuid": uuid,
                     }
-                    # Claude Code's own markers (``isMeta`` for framework-injected,
-                    # model-only messages) are read HERE and become the shared render decision;
-                    # the raw flags never cross the wire. Explicit detectors win over
-                    # isMeta (Stop-hook feedback deliberately surfaces as a chip). (The
-                    # interrupt sentinel above is NOT isMeta, so it keeps its own guard.)
-                    stamp_user_message_display(
-                        event,
-                        text,
-                        is_meta=bool(raw.get("isMeta")),
-                    )
+                    if is_compaction_command:
+                        # Claude Code runs /compact itself and no reply follows, so it is not a turn
+                        # tail. It records the command twice: the typed "/compact" as it is
+                        # submitted, which renders as the user's bubble, and the command's expansion
+                        # once the compaction ends, which repeats it and renders nowhere. The typed
+                        # one is the transcript arrival that retires the page's "Sending..." bubble
+                        # for the /compact, which would otherwise take the arrival of the next
+                        # message and leave that message showing twice.
+                        event["non_turn_tail"] = True
+                        if _COMMAND_NAME_PATTERN.search(raw_text) is not None:
+                            event["display"] = DisplayKind.HIDDEN
+                    else:
+                        # Claude Code's own markers (``isMeta`` for framework-injected,
+                        # model-only messages) are read HERE and become the shared render decision;
+                        # the raw flags never cross the wire. Explicit detectors win over
+                        # isMeta (Stop-hook feedback deliberately surfaces as a chip). (The
+                        # interrupt sentinel above is NOT isMeta, so it keeps its own guard.)
+                        stamp_user_message_display(
+                            event,
+                            text,
+                            is_meta=bool(raw.get("isMeta")),
+                        )
                     if session_id is not None:
                         event["session_id"] = session_id
                     existing_event_ids.add(event_id)
@@ -726,6 +738,10 @@ _LEAVE_OPERATIONS = frozenset({"dequeue", "remove", "popAll"})
 # starts with this marker (or is blank) is added as a PHANTOM slot: it occupies a
 # FIFO position so leaves stay aligned, but it is filtered from the snapshot.
 TASK_NOTIFICATION_CONTENT_PREFIX = "<task-notification>"
+_TASK_NOTIFICATION_ID_RE = re.compile(r"<task-id>\s*([^<\s]+)\s*</task-id>")
+_TASK_NOTIFICATION_STATUS_RE = re.compile(r"<status>\s*([^<\s]+)\s*</status>")
+# The statuses Claude Code gives a task that is over; any other one leaves its marker standing.
+_FINISHED_TASK_STATUSES = frozenset({"completed", "failed", "killed"})
 
 
 class QueueSignalKind(UpperCaseStrEnum):
@@ -794,3 +810,18 @@ def parse_queue_signals(line: str) -> QueueSignal | None:
     if operation in _LEAVE_OPERATIONS:
         return QueueSignal(kind=QueueSignalKind.LEAVE, session_id=_record_session_id(raw))
     return None
+
+
+def finished_task_id(content: str) -> str | None:
+    """The background task a ``<task-notification>`` reports as over, or None for any other content.
+
+    Claude Code enqueues the notice the moment the task ends, whatever then happens to the turn it
+    wakes, so it is the one record of the end that an interrupted or failed turn cannot lose.
+    """
+    if not content.lstrip().startswith(TASK_NOTIFICATION_CONTENT_PREFIX):
+        return None
+    task_id = _TASK_NOTIFICATION_ID_RE.search(content)
+    status = _TASK_NOTIFICATION_STATUS_RE.search(content)
+    if task_id is None or status is None or status.group(1) not in _FINISHED_TASK_STATUSES:
+        return None
+    return task_id.group(1)

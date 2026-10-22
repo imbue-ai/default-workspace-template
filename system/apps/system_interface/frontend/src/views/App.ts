@@ -11,6 +11,7 @@
 import m from "mithril";
 import { createMenu } from "@imbue/workspace-ui/src/components/menu";
 import type { MenuRow } from "@imbue/workspace-ui/src/components/menu";
+import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
 import { anchorForEvent, anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
 import type { MenuAlign, MenuAnchor } from "@imbue/workspace-ui/src/menu-position";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
@@ -61,7 +62,6 @@ import { SNAP_PREVIEW_ATTRIBUTE, applySnapPreviewStyle } from "./SnapPreview";
 import { PhoneLayout, phoneMountPolicy } from "./phone/PhoneLayout";
 import { SoloView } from "./SoloView";
 import { Taskbar } from "./Taskbar";
-import { Toasts } from "./Toast";
 import type { WindowControl } from "./TitleBar";
 import { UpdateNoticeBanner } from "./UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "./UpdateStalenessBanner";
@@ -818,6 +818,7 @@ export function App(): m.Component<AppAttrs> {
       onClose: () => {
         avatarChooser = null;
       },
+      onDownloadFailed: (note) => current.toasts.show(note),
     });
   }
 
@@ -939,6 +940,8 @@ export function App(): m.Component<AppAttrs> {
     uninstallContextMenu = installElementContextMenu({
       draft: (text) => void current.draftText(text),
       isDraftAvailable: () => true,
+      // A link of the shell's own chrome opens where a forwarded popup would.
+      openLink: (anchor) => void current.openLink(anchor.href, window.location.host, SHELL_APP_NAME),
       scope: (target) => shellReferenceScope(current, target.element),
       open: (rows, point) => {
         openMenuAt({ kind: "element", rows }, anchorForPoint(point.x, point.y));

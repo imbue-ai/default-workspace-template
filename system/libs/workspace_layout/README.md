@@ -86,7 +86,8 @@ answer shapes live in one place the shell and its callers share.
   `read_app_window_paths(shell_url, app)` (every window path of the app, or
   None when the shell could not be read, never "no windows"),
   `window_query_value`, and the `WindowClosedHint` the
-  shell posts when a window closes, with `parse_window_closed_hint`.
+  shell posts when a window closes (an app reads it with
+  `app_schema.routes.parse_request_body`).
 - `workspace_layout.cli`: the `workspace-layout` console script (below).
 - `workspace_layout.testing`: `FakeShell`, an in-memory `ShellLayoutInterface`
   that records every request and answers or refuses as a test sets it;
@@ -117,17 +118,18 @@ costs every call tens of milliseconds, and when the lock and a `pyproject.toml` 
 relocks and syncs before the command runs. Every subcommand posts one op
 to the shell's op route under the calling agent's own chat as the requester
 (`MINDS_CHAT_ID`, else `MNGR_AGENT_ID`), except `desktops` and `list`, which
-read `GET /api/inventory`. Descriptions go to stderr; stdout carries only a
-window id (`open`, `show`), the JSON of the read commands, and a desktop's
-shortcuts after a `shortcut` write. Exit codes are `0` (done), `1` (refused or
-unreachable), `3` (the shell or an app cannot act right now: retry), and `4`
-(the window is popped out into its own window: pass `--force`, or leave it to
-the user). Every mutating subcommand takes `--force`, and only the ones whose
-arguments take it send it: `minimize`, `restore`, `maximize`, `place`, and
-`open`, which it lets move a popped-out window, and `focus` and `close`, which
-ignore it. A summary notes when an op raised a popped-out window in its own
-window, brought one back, left an `open --beside` unpaired, or landed for a
-client with no desktop window open.
+read `GET /api/inventory`; `list` gives each app the `link` to write for it, its
+`share_url` once the workspace has been shared, else its port-less `http://<label>.localhost/`.
+Descriptions go to stderr; stdout carries only a window id (`open`, `show`), the
+JSON of the read commands, and a desktop's shortcuts after a `shortcut` write.
+Exit codes are `0` (done), `1` (refused or unreachable), `3` (the shell or an
+app cannot act right now: retry), and `4` (the window is popped out into its own
+window: pass `--force`, or leave it to the user). Every mutating subcommand
+takes `--force`, and only the ones whose arguments take it send it: `minimize`,
+`restore`, `maximize`, `place`, and `open`, which it lets move a popped-out
+window, and `focus` and `close`, which ignore it. A summary notes when an op
+raised a popped-out window in its own window, brought one back, left an
+`open --beside` unpaired, or landed for a client with no desktop window open.
 
 `show <app> --path P [--showing P ...] [--repoint PAGE ...]` runs the shell's
 `show` op: it raises a window already at the path (or at a `--showing` path),

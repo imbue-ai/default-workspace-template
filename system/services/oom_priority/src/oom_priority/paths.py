@@ -5,7 +5,10 @@ The earlyoom kill hook (writer of the ledger), the agent-tagging SessionStart
 hook (writer of the registry), the revival-notice SessionStart hook (reader of
 the ledger), and the launch-task report poll (reader of the ledger) all resolve
 their paths through this module, so the layout can't drift between producer and
-consumers.
+consumers. The one exception is the revival-notice hook's shell front
+(``bin/claude_shed_notice_hook.sh``), which recomputes ``shed_ledger_path`` in bash
+to decide whether to start Python at all, so a change to the layout here must be
+made there too.
 
 Everything lives under ``runtime/`` so it rides the runtime-backup branch and
 survives container loss. The base resolves from ``OOM_PRIORITY_RUNTIME_DIR``

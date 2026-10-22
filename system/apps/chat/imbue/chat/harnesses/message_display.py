@@ -476,7 +476,7 @@ def classify_user_message(content: str, *, is_meta: bool = False) -> MessageDisp
     if decision.display is DisplayKind.CHIP and decision.display_body is None and visible != content:
         decision = decision.model_copy_update(to_update(decision.field_ref().display_body, visible))
     # A prompt's body, unlike a chip's, KEEPS that attachment block: it renders in the bubble as
-    # an inline image or a download link. Put back what ``_visible_text`` took off the end, and
+    # an inline image or a file link. Put back what ``_visible_text`` took off the end, and
     # only then judge whether any of the user's message is left; a context block with nothing
     # after it is not one this app built, and renders whole rather than as an empty bubble.
     if decision.display is DisplayKind.PROMPT_WITH_CONTEXT:

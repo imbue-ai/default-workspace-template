@@ -94,10 +94,8 @@ def test_the_card_stays_put_away_once_dismissed(tmp_path: Path) -> None:
     store.dismiss()
 
     assert store.is_dismissed() is True
-    assert ChatImportStore(status_path=store.status_path, dismissal_path=store.dismissal_path).wire_json() == {
-        "is_dismissed": True,
-        "sources": {},
-    }
+    view = ChatImportStore(status_path=store.status_path, dismissal_path=store.dismissal_path).view()
+    assert (view.is_dismissed, view.sources) == (True, {})
 
 
 def test_a_running_imports_fetch_progress_reaches_the_card(tmp_path: Path) -> None:
@@ -107,9 +105,9 @@ def test_a_running_imports_fetch_progress_reaches_the_card(tmp_path: Path) -> No
         {"chatgpt": {"state": "importing", "conversations": 40, "pid": os.getpid(), "fetched": 166, "to_fetch": 582}},
     )
 
-    wire = ChatImportStore(status_path=status_path, dismissal_path=tmp_path / "chat_import.json").wire_json()
+    view = ChatImportStore(status_path=status_path, dismissal_path=tmp_path / "chat_import.json").view()
 
-    assert (wire["sources"]["chatgpt"]["fetched"], wire["sources"]["chatgpt"]["to_fetch"]) == (166, 582)
+    assert (view.sources["chatgpt"].fetched, view.sources["chatgpt"].to_fetch) == (166, 582)
 
 
 def test_an_import_whose_record_stopped_being_rewritten_reads_as_failed_even_with_a_live_pid(tmp_path: Path) -> None:

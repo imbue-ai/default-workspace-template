@@ -21,6 +21,7 @@ than creating another.
 import shlex
 import string
 from collections.abc import Callable
+from collections.abc import Iterable
 from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +29,7 @@ from typing import Any
 from typing import Final
 from typing import assert_never
 
+from chat_background_tasks.markers import TaskSource
 from loguru import logger as _loguru_logger
 from pydantic import Field
 
@@ -35,10 +37,15 @@ from imbue.chat.accounts import Account
 from imbue.chat.accounts import AccountError
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import is_lifecycle_dead
+from imbue.chat.activity_state import is_working_activity_state
 from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_discovery import agent_state_dir
+from imbue.chat.background_tasks import BackgroundTask
+from imbue.chat.background_tasks import command_as_inline_code
+from imbue.chat.background_tasks import started_at_text
+from imbue.chat.chat_autocompact import ChatAutocompactState
 from imbue.chat.chat_records import ChatAgentEntry
 from imbue.chat.chat_records import ChatHandoffRecord
 from imbue.chat.chat_records import ChatRecord
@@ -204,6 +211,65 @@ def summary_section(path: Path, text: str) -> str:
 
 
 @pure
+def background_tasks_section(tasks: tuple[BackgroundTask, ...]) -> str:
+    """The prompt's table of the tasks the chat waited on as it moved, or '' when there were none.
+
+    Stopping the retiring agent ended all of them. A command it started through ``run_in_background.py`` still
+    reports to the chat, so to the successor, saying how it ended; any other (the harness's own) ends unreported.
+    """
+    if not tasks:
+        return ""
+    lines = [
+        "Background tasks your predecessor was waiting on when the chat moved to you. The switch stopped all of them:",
+        "",
+        "| Task | Started by | Command | Started | What happens now |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for task in tasks:
+        cells = (
+            task.description or task.id,
+            _task_starter(task),
+            command_as_inline_code(task.command) if task.command else "(not recorded)",
+            started_at_text(task.started_at),
+            _task_outcome(task),
+        )
+        lines.append("| " + " | ".join(_table_cell(cell) for cell in cells) + " |")
+    return "\n".join(lines) + "\n\n"
+
+
+@pure
+def _task_starter(task: BackgroundTask) -> str:
+    match task.source:
+        case TaskSource.RUN_IN_BACKGROUND:
+            return "run_in_background.py"
+        case TaskSource.HARNESS:
+            harness = next(
+                (label for harness_type, label in HARNESS_LABEL.items() if harness_type.value == task.harness),
+                task.harness,
+            )
+            return f"{harness}'s own background {task.kind}" if task.kind else f"{harness}'s own background task"
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+@pure
+def _task_outcome(task: BackgroundTask) -> str:
+    match task.source:
+        case TaskSource.RUN_IN_BACKGROUND:
+            return "Its report, saying how it ended, arrives in this chat as a message."
+        case TaskSource.HARNESS:
+            return "Ended with no report. Start it again if it is still needed."
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+@pure
+def _table_cell(text: str) -> str:
+    """``text`` as one markdown table cell: on one line, with its pipes escaped."""
+    return " ".join(text.split()).replace("|", "\\|")
+
+
+@pure
 def summary_request_message(path: Path) -> str:
     """The slash command that asks the retiring agent for its summary (the ``handoff-summary`` skill)."""
     return f"{HANDOFF_SUMMARY_COMMAND} {path}"
@@ -327,7 +393,9 @@ class SuccessorCreateSpec(FrozenModel):
     harness: HarnessType = Field(description="The harness the successor runs")
     project_id: str = Field(description="The project label to carry, '' for none")
     account_id: str = Field(description="The account the successor is bound to")
-    extra_labels: tuple[str, ...] = Field(description="Further ``KEY=VALUE`` labels: the chat membership")
+    extra_labels: tuple[str, ...] = Field(
+        description="Further ``KEY=VALUE`` labels: the chat membership and its idle compaction setting"
+    )
 
 
 class HandoffDeps(FrozenModel):
@@ -361,6 +429,8 @@ class HandoffDeps(FrozenModel):
     # Interrupt the agent's turn and return its queue as one block (the stop button's path).
     drain_to_composer: Callable[[AgentInfo], str]
     ensure_watcher: Callable[[AgentInfo], TranscriptReader]
+    # The chat's pending background tasks, as the chat app last read them.
+    get_background_tasks: Callable[[ChatId], tuple[BackgroundTask, ...]]
     # ``mngr stop`` plus the session's dead-lifecycle teardown, reflected in the tracked state.
     stop_agent: Callable[[AgentInfo], None]
     # ``mngr destroy --force`` of one agent by id; raises ``AgentDestroyError`` when mngr refuses or fails.
@@ -368,6 +438,7 @@ class HandoffDeps(FrozenModel):
     note_agent_renamed: Callable[[str, str, Mapping[str, str]], None]
     note_agent_created: Callable[[AgentStateItem], None]
     build_create_command: Callable[[SuccessorCreateSpec], list[str]]
+    get_autocompact_state: Callable[[ChatId], ChatAutocompactState]
     broadcast_transcript_events: Callable[[ChatId, list[dict[str, Any]]], None]
     now: Callable[[], datetime]
     monotonic: Callable[[], float]
@@ -451,8 +522,6 @@ class HandoffRunner:
                 case _ as unreachable:
                     assert_never(unreachable)
 
-    # -- draining ------------------------------------------------------------------------------
-
     def drain(self, chat_id: ChatId, handoff_id: str) -> str:
         """Return the retiring agent's queue to the composer and move on to summarizing.
 
@@ -494,8 +563,6 @@ class HandoffRunner:
                 e,
             )
         return joined_blocks(handoff.returned_block, block)
-
-    # -- summarizing ---------------------------------------------------------------------------
 
     def _summarize(self, chat_id: ChatId, handoff_id: str, record: ChatRecord, handoff: ChatHandoffRecord) -> None:
         outcome = self._summary_outcome(chat_id, handoff_id, record, handoff)
@@ -569,6 +636,7 @@ class HandoffRunner:
         accepted_at = self._deps.monotonic()
         deadline = accepted_at + self._deps.summary_timeout_seconds
         is_busy_seen = False
+        idle_grace_started_at = accepted_at
         outcome: SummaryOutcome | None = None
         while outcome is None:
             self._current(chat_id, handoff_id)
@@ -576,9 +644,15 @@ class HandoffRunner:
             activity = agent_state.activity_state if agent_state is not None else None
             is_dead = agent_state is None or is_lifecycle_dead(agent_state.state)
             now = self._deps.monotonic()
+            is_busy = activity is not None and is_working_activity_state(activity)
+            # Only a turn proves the summary request was taken up. A compaction queued ahead of it
+            # blocks the wait without counting, and the idle grace starts over once it ends, so
+            # the compaction's end is not mistaken for the summary turn's.
             is_busy_seen = is_busy_seen or activity in (ActivityState.THINKING, ActivityState.TOOL_RUNNING)
-            is_turn_over = activity not in (ActivityState.THINKING, ActivityState.TOOL_RUNNING) and (
-                is_dead or is_busy_seen or now - accepted_at >= self._deps.summary_idle_grace_seconds
+            if activity == ActivityState.COMPACTING:
+                idle_grace_started_at = now
+            is_turn_over = not is_busy and (
+                is_dead or is_busy_seen or now - idle_grace_started_at >= self._deps.summary_idle_grace_seconds
             )
             if is_summary_written(_non_empty_mtime(path), stale_mtime):
                 outcome = SummaryOutcome.WRITTEN
@@ -595,7 +669,8 @@ class HandoffRunner:
     def _render_prompt(
         self, record: ChatRecord, handoff: ChatHandoffRecord, outcome: SummaryOutcome, trigger_text: str
     ) -> str:
-        """Fill the ``continue-chat`` reference in: the summary, the predecessors, the lanes, the user's message.
+        """Fill the ``continue-chat`` reference in: the summary, the background tasks the chat was waiting on, the
+        predecessors, the lanes, the user's message.
 
         The summary travels inside the prompt when it is no larger than ``INLINE_SUMMARY_MAX_BYTES``,
         so the successor has its context before its first tool call; the path stays beside it for
@@ -628,6 +703,7 @@ class HandoffRunner:
                 predecessor_harness=HARNESS_LABEL[retiring.harness],
                 successor_harness=HARNESS_LABEL[handoff.target_harness],
                 summary=summary,
+                background_tasks=background_tasks_section(self._deps.get_background_tasks(record.chat_id)),
                 predecessors=predecessors,
                 source_lane=retiring.lane,
                 target_lane=handoff.target_lane,
@@ -639,8 +715,6 @@ class HandoffRunner:
             raise HandoffStepError(
                 f"the handoff prompt template at {self._deps.prompt_template_path} could not be filled in: {e!r}"
             ) from e
-
-    # -- switching -----------------------------------------------------------------------------
 
     def _switch(self, chat_id: ChatId, handoff_id: str, record: ChatRecord, handoff: ChatHandoffRecord) -> None:
         """Stop, archive, and measure the retiring agent, then create the successor, set its model, and hand it
@@ -747,7 +821,11 @@ class HandoffRunner:
             harness=handoff.target_harness,
             project_id=handoff.project_label,
             account_id=account.id,
-            extra_labels=(f"chat_id={chat_id}", f"chat_seq={handoff.next_seq}"),
+            extra_labels=(
+                f"chat_id={chat_id}",
+                f"chat_seq={handoff.next_seq}",
+                self._deps.get_autocompact_state(chat_id).label,
+            ),
         )
         command = self._deps.build_create_command(spec)
         first_error = self._run_create(chat_id, command)
@@ -759,7 +837,7 @@ class HandoffRunner:
         if error is not None:
             self._fail(chat_id, handoff_id, error, HandoffFailedStep.START)
             return None
-        return _successor_state(chat_id, handoff, account.id, self._deps.work_dir)
+        return _successor_state(handoff, spec, self._deps.work_dir)
 
     def _apply_model_pick(self, chat_id: ChatId, handoff_id: str, handoff: ChatHandoffRecord) -> bool:
         """Put the successor on the model the user picked, or fail the switch at that step. True when it is set.
@@ -978,21 +1056,27 @@ def deliver_held_send(
 
 
 @pure
-def _successor_state(chat_id: ChatId, handoff: ChatHandoffRecord, account_id: str, work_dir: Path) -> AgentStateItem:
+def created_chat_agent_labels(
+    display_name: str, account_id: str, project_label: str, extra_labels: Iterable[str]
+) -> dict[str, str]:
+    """The labels a chat agent's ``mngr create`` gives it, for its tracked state before the observe stream lists it."""
+    labels = {"user_created": "true", "display_name": display_name, "account": account_id}
+    if project_label:
+        labels["project"] = project_label
+    for label in extra_labels:
+        key, _separator, value = label.partition("=")
+        labels[key] = value
+    return labels
+
+
+@pure
+def _successor_state(handoff: ChatHandoffRecord, spec: SuccessorCreateSpec, work_dir: Path) -> AgentStateItem:
     """The tracked state a freshly created successor gets, with the labels its create gave it."""
-    labels = {
-        "user_created": "true",
-        "display_name": handoff.chat_title,
-        "account": account_id,
-        "chat_id": str(chat_id),
-        "chat_seq": str(handoff.next_seq),
-        **({"project": handoff.project_label} if handoff.project_label else {}),
-    }
     return AgentStateItem(
         id=handoff.next_agent_id,
         name=handoff.chat_name,
         state="RUNNING",
-        labels=labels,
+        labels=created_chat_agent_labels(spec.name, spec.account_id, spec.project_id, spec.extra_labels),
         work_dir=str(work_dir),
         harness=handoff.target_harness,
     )

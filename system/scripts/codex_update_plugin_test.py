@@ -54,7 +54,6 @@ def _run(
             "CODEX_HOME": str(shared),
             "SHIM_LOG": str(log),
             "SHIM_FAIL": fail,
-            "CODE_GUARDIAN_MARKETPLACE": "imbue-ai/code-guardian@main",
         },
         capture_output=True,
         text=True,
@@ -75,10 +74,9 @@ def test_install_and_reprovision_target_mngrs_home(tmp_path: Path) -> None:
         result, calls, home = _run(tmp_path)
         assert result.returncode == 0, result.stderr
         assert all(call[0] == str(home) for call in calls)
-        assert calls[-1][1] == [
-            "plugin",
-            "add",
-            "imbue-code-guardian@imbue-code-guardian",
+        # Only the add, from the local marketplace: nothing is fetched.
+        assert [call[1] for call in calls] == [
+            ["plugin", "add", "imbue-code-guardian@imbue-code-guardian"]
         ]
         assert "enabled = true" in (home / "config.toml").read_text()
         assert 'model = "example"' in (home / "config.toml").read_text()
@@ -91,13 +89,6 @@ def test_install_outage_warns_and_strict_fails(
     result, _, _ = _run(tmp_path, *args, fail="plugin add")
     assert result.returncode == expected
     assert "installation failed" in result.stderr
-
-
-def test_marketplace_outage_still_attempts_cached_install(tmp_path: Path) -> None:
-    result, calls, _ = _run(tmp_path, "--strict", fail="plugin marketplace")
-    assert result.returncode == 0, result.stderr
-    assert "cached marketplace" in result.stderr
-    assert calls[-1][1] == ["plugin", "add", "imbue-code-guardian@imbue-code-guardian"]
 
 
 def test_refuses_install_before_mngr_writes_config(tmp_path: Path) -> None:

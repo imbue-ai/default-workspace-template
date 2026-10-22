@@ -30,7 +30,7 @@ import os
 import shutil
 import threading
 import uuid
-from collections.abc import Iterator
+from collections.abc import Generator
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
@@ -66,7 +66,7 @@ _LOCK_FILENAME: Final = "index.lock"
 
 
 @contextlib.contextmanager
-def _index_lock(home: Path | None = None) -> Iterator[None]:
+def _index_lock(home: Path | None = None) -> Generator[None, None, None]:
     """Hold the index across the whole read-modify-write, against every writer.
 
     A thread lock alone is not enough: the server is not the only process that mints
@@ -89,6 +89,14 @@ def _index_lock(home: Path | None = None) -> Iterator[None]:
 
 class AccountError(RuntimeError):
     """An account could not be created, resolved, or removed."""
+
+
+class NoAccountsError(AccountError):
+    """No provider account is signed in, so there is nothing to bind an agent to."""
+
+
+class UnknownAccountError(AccountError):
+    """An id names no account in the index: it was signed out (deleted), or never existed."""
 
 
 class Account(FrozenModel):
@@ -553,7 +561,7 @@ def resolve_account(account_id: str, home: Path | None = None) -> Account:
     """
     index = read_index(home)
     if not index.accounts:
-        raise AccountError("no provider accounts exist yet")
+        raise NoAccountsError("no provider accounts exist yet")
     for account in index.accounts:
         if account.id == account_id:
             # A row whose folder is gone would bind an agent to a directory that is not
@@ -562,7 +570,7 @@ def resolve_account(account_id: str, home: Path | None = None) -> Account:
             if not account_dir(account.id, home).is_dir():
                 raise AccountError(f"account {account_id} has no folder on disk; sign in to it again")
             return account
-    raise AccountError(f"no such account: {account_id}")
+    raise UnknownAccountError(f"no such account: {account_id}")
 
 
 def reconcile(home: Path | None = None) -> tuple[tuple[str, ...], tuple[str, ...]]:

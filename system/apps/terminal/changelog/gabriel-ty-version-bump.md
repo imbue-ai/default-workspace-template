@@ -1,0 +1,1 @@
+The type-check ratchet runs `ty` 0.0.85 (was 0.0.24). `@contextmanager` functions are annotated as returning `Generator[X, None, None]` rather than `Iterator[X]`, which 0.0.85 reports as a deprecated overload of `contextmanager`.

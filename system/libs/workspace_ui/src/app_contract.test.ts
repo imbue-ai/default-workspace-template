@@ -4,7 +4,7 @@
 // window and a payload -- so these tests dispatch real MessageEvents at a real (jsdom)
 // window whose parent is stood in for.
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SHELL_CAPABILITIES,
   SHELL_CLOSE_REQUEST,
@@ -13,8 +13,10 @@ import {
   SHELL_HANDSHAKE,
   SHELL_HIDDEN,
   SHELL_LOCATION,
+  SHELL_MESSAGE,
   SHELL_NAVIGATE,
   SHELL_OPEN,
+  SHELL_OPEN_LINK,
   SHELL_SHOWN,
   ShellContractError,
   connectToShell,
@@ -43,6 +45,14 @@ function framed(): { postMessage: ReturnType<typeof vi.fn> } {
 
 function deliver(data: unknown, source: unknown): void {
   window.dispatchEvent(new MessageEvent("message", { data, source: source as Window }));
+}
+
+/** Connect this window under a spy parent that has handed it a shell's handshake. */
+function shellFramed(): { postMessage: ReturnType<typeof vi.fn> } {
+  const parent = framed();
+  connection = connectToShell({});
+  deliver(HANDSHAKE, parent);
+  return parent;
 }
 
 /** The messages a spy parent received after the capabilities announcement every connect sends first. */
@@ -164,7 +174,7 @@ describe("connectToShell", () => {
     expect(onNavigate.mock.calls).toEqual([["/?chat=agent-2"]]);
   });
 
-  it("posts focused, location, openPath, and draftText to the parent with the contract shapes", () => {
+  it("posts focused, location, openPath, draftText, sendMessage, and openLink to the parent with the contract shapes", () => {
     const parent = framed();
     connection = connectToShell({});
 
@@ -173,6 +183,8 @@ describe("connectToShell", () => {
     connection.openPath("/?chat=agent-3", "focus");
     connection.openPath("/new", "new");
     connection.draftText("Explain this element:");
+    connection.sendMessage("open:file", { path: "/home/user/plan.md", type: "ignored" });
+    connection.openLink("http://files-ab12cd34.host-0123.localhost:8421/");
 
     expect(sentAfterConnect(parent)).toEqual([
       [{ type: SHELL_FOCUSED }, "*"],
@@ -180,7 +192,25 @@ describe("connectToShell", () => {
       [{ type: SHELL_OPEN, path: "/?chat=agent-3", ifPresent: "focus" }, "*"],
       [{ type: SHELL_OPEN, path: "/new", ifPresent: "new" }, "*"],
       [{ type: SHELL_DRAFT_TEXT, text: "Explain this element:" }, "*"],
+      [{ type: SHELL_MESSAGE, message: { type: "open:file", path: "/home/user/plan.md" } }, "*"],
+      [{ type: SHELL_OPEN_LINK, url: "http://files-ab12cd34.host-0123.localhost:8421/" }, "*"],
     ]);
+  });
+
+  it("has a shell once a handshake with a client id arrives from the parent, and none on a top-level page", () => {
+    const parent = framed();
+    const live = connectToShell({});
+    expect(live.hasShell()).toBe(false);
+    deliver({ ...HANDSHAKE, clientId: "" }, parent);
+    deliver(HANDSHAKE, {});
+    expect(live.hasShell()).toBe(false);
+    deliver(HANDSHAKE, parent);
+    expect(live.hasShell()).toBe(true);
+    live.disconnect();
+    Object.defineProperty(window, "parent", { value: window, configurable: true });
+    connection = connectToShell({});
+    deliver(HANDSHAKE, window);
+    expect(connection.hasShell()).toBe(false);
   });
 
   it("is inert on a top-level page", () => {
@@ -200,5 +230,244 @@ describe("connectToShell", () => {
     live.disconnect();
     deliver({ type: SHELL_SHOWN }, parent);
     expect(onShown).not.toHaveBeenCalled();
+  });
+});
+
+describe("a framed page's link clicks", () => {
+  /** Whether each click was cancelled, as the last listener of its bubbling sees it; the click is then cancelled, so
+   *  the test document never navigates. */
+  let cancelled: boolean[] = [];
+  const observeClick = (event: Event): void => {
+    cancelled.push(event.defaultPrevented);
+    event.preventDefault();
+  };
+  let opened: ReturnType<typeof vi.spyOn>;
+
+  function connect(): { postMessage: ReturnType<typeof vi.fn> } {
+    const parent = shellFramed();
+    window.addEventListener("click", observeClick);
+    window.addEventListener("auxclick", observeClick);
+    return parent;
+  }
+
+  function click(html: string, init: MouseEventInit = {}, type: "click" | "auxclick" = "click"): void {
+    document.body.innerHTML = html;
+    const target = document.querySelector("[data-click]") ?? document.querySelector("a, area");
+    target?.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, composed: true, ...init }));
+  }
+
+  beforeEach(() => {
+    cancelled = [];
+    opened = vi.spyOn(window, "open").mockImplementation(() => null);
+  });
+
+  afterEach(() => {
+    window.removeEventListener("click", observeClick);
+    window.removeEventListener("auxclick", observeClick);
+    opened.mockRestore();
+    document.body.innerHTML = "";
+  });
+
+  it.each([
+    ["a local URL", "http://localhost:5173/preview?x=1"],
+    ["a file URL", "file:///home/user/workspace/plan.md"],
+    ["another app's address", "http://files-ab12cd34.host-0123.localhost:8421/home/user/?view"],
+    ["another app's share address", "https://files-ab12cd34.0123456789abcdef0123456789abcdef.us1.example.com/"],
+    ["a web link", "https://example.com/docs"],
+    ["mailto", "mailto:someone@example.com"],
+    ["tel", "tel:+15551234567"],
+  ])("hands %s to the shell and keeps the page where it is, whatever its target", (_what, href) => {
+    const parent = connect();
+    click(`<a href="${href}"><span data-click>open</span></a>`);
+    click(`<a href="${href}" target="_blank">open</a>`);
+    expect(sentAfterConnect(parent)).toEqual([
+      [{ type: SHELL_OPEN_LINK, url: new URL(href).href }, "*"],
+      [{ type: SHELL_OPEN_LINK, url: new URL(href).href }, "*"],
+    ]);
+    expect(cancelled).toEqual([true, true]);
+    expect(opened).not.toHaveBeenCalled();
+  });
+
+  it("hands a modified click on another origin's link to the shell like a plain one", () => {
+    const parent = connect();
+    click('<a href="https://example.com/docs">out</a>', { metaKey: true });
+    expect(sentAfterConnect(parent)).toEqual([[{ type: SHELL_OPEN_LINK, url: "https://example.com/docs" }, "*"]]);
+    expect(cancelled).toEqual([true]);
+    expect(opened).not.toHaveBeenCalled();
+  });
+
+  it("leaves a plain click on a link to the page's own origin to the page", () => {
+    const parent = connect();
+    click('<a href="/docs/intro?tab=2">intro</a>');
+    expect(sentAfterConnect(parent)).toEqual([]);
+    expect(cancelled).toEqual([false]);
+  });
+
+  it.each<[string, string, MouseEventInit, "click" | "auxclick"]>([
+    ["a link naming a new browsing context", ' target="_blank"', {}, "click"],
+    ["a link naming the top browsing context", ' target="_top"', {}, "click"],
+    ["a link naming a browsing context that is no frame of the page", ' target="docs"', {}, "click"],
+    ["a command-click", "", { metaKey: true }, "click"],
+    ["a control-click", "", { ctrlKey: true }, "click"],
+    ["a shift-click", "", { shiftKey: true }, "click"],
+    ["a middle click", "", { button: 1 }, "auxclick"],
+  ])("opens a page of its own app beside it for %s", (_what, attributes, init, type) => {
+    const parent = connect();
+    click(`<a href="/docs/intro?tab=2#part"${attributes}>intro</a>`, init, type);
+    expect(sentAfterConnect(parent)).toEqual([
+      [{ type: SHELL_OPEN, path: "/docs/intro?tab=2", ifPresent: "focus" }, "*"],
+    ]);
+    expect(cancelled).toEqual([true]);
+  });
+
+  it("leaves a click the page handled, a download, another scheme, and a right-button click to the page", () => {
+    const parent = connect();
+    document.body.innerHTML = '<a id="handled" href="http://localhost:5173/">handled</a>';
+    document.getElementById("handled")?.addEventListener("click", (event) => event.preventDefault());
+    document.getElementById("handled")?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    click('<a href="http://localhost:5173/report.csv" download>report</a>');
+    click('<a href="javascript:void(0)">run</a>');
+    click('<a href="http://localhost:5173/">menu</a>', { button: 2 }, "auxclick");
+    expect(sentAfterConnect(parent)).toEqual([]);
+    expect(opened).not.toHaveBeenCalled();
+    expect(cancelled).toEqual([true, false, false, false]);
+  });
+
+  it("leaves a plain click on a link into a frame of the page to the page, and opens a window for a modified one", () => {
+    const parent = connect();
+    const frameAndLink = (href: string): string =>
+      `<iframe name="preview"></iframe><a href="${href}" target="preview">x</a>`;
+    click(frameAndLink("http://localhost:5173/"));
+    click(frameAndLink("/docs/intro"));
+    click(frameAndLink("/docs/intro"), { metaKey: true });
+    expect(sentAfterConnect(parent)).toEqual([[{ type: SHELL_OPEN, path: "/docs/intro", ifPresent: "focus" }, "*"]]);
+    expect(cancelled).toEqual([false, false, true]);
+  });
+
+  it("leaves every link click to the browser until a shell's handshake arrives", () => {
+    const parent = framed();
+    connection = connectToShell({});
+    window.addEventListener("click", observeClick);
+    click('<a href="http://localhost:5173/">local</a>');
+    click('<a href="https://example.com/" target="_blank">out</a>');
+    click('<a href="/docs/intro" target="_blank">intro</a>');
+    expect(sentAfterConnect(parent)).toEqual([]);
+    expect(cancelled).toEqual([false, false, false]);
+    deliver(HANDSHAKE, parent);
+    click('<a href="https://example.com/" target="_blank">out</a>');
+    expect(sentAfterConnect(parent)).toEqual([[{ type: SHELL_OPEN_LINK, url: "https://example.com/" }, "*"]]);
+    expect(cancelled).toEqual([false, false, false, true]);
+  });
+
+  it("leaves every link click alone on a top-level page, and once disconnected", () => {
+    connection = connectToShell({});
+    window.addEventListener("click", observeClick);
+    click('<a href="http://localhost:5173/">local</a>');
+    click('<a href="https://example.com/">out</a>');
+    const parent = framed();
+    const live = connectToShell({});
+    live.disconnect();
+    click('<a href="http://localhost:5173/">local</a>');
+    expect(parent.postMessage.mock.calls).toEqual([
+      [{ type: SHELL_CAPABILITIES, navigation: false, closeChord: false }, "*"],
+    ]);
+    expect(opened).not.toHaveBeenCalled();
+    expect(cancelled).toEqual([false, false, false]);
+  });
+});
+
+describe("a framed page's scripted popups", () => {
+  let nativeOpen: ReturnType<typeof vi.fn>;
+  let savedOpen: typeof window.open;
+
+  beforeEach(() => {
+    savedOpen = window.open;
+    nativeOpen = vi.fn(() => ({ closed: false }) as unknown as Window);
+    window.open = nativeOpen as unknown as typeof window.open;
+  });
+
+  afterEach(() => {
+    connection?.disconnect();
+    connection = null;
+    window.open = savedOpen;
+  });
+
+  it.each([
+    ["a local URL", "http://localhost:5173/preview?x=1"],
+    ["another app's address", "http://files-ab12cd34.host-0123.localhost:8421/home/user/?view"],
+    ["a file URL", "file:///home/user/workspace/plan.md"],
+  ])("hands %s to the shell, opens no window, and answers null", (_what, url) => {
+    const parent = shellFramed();
+    expect(window.open(url, "_blank", "noopener")).toBeNull();
+    expect(sentAfterConnect(parent)).toEqual([[{ type: SHELL_OPEN_LINK, url: new URL(url).href }, "*"]]);
+    expect(nativeOpen).not.toHaveBeenCalled();
+  });
+
+  it("opens a page of its own app as a window of the app, its path and query kept", () => {
+    const parent = shellFramed();
+    expect(window.open("/docs/intro?tab=2#part")).toBeNull();
+    expect(sentAfterConnect(parent)).toEqual([
+      [{ type: SHELL_OPEN, path: "/docs/intro?tab=2", ifPresent: "focus" }, "*"],
+    ]);
+    expect(nativeOpen).not.toHaveBeenCalled();
+  });
+
+  it("leaves another site, a blank window, a call with no URL, and other schemes to the browser's own window.open", () => {
+    const parent = shellFramed();
+    const calls: unknown[][] = [
+      ["https://example.com/sign-in", "signin", "popup"],
+      ["mailto:someone@example.com"],
+      ["about:blank"],
+      [],
+      [""],
+      ["javascript:void(0)"],
+    ];
+    for (const args of calls) {
+      expect((window.open as (...a: unknown[]) => Window | null)(...args)).toEqual({ closed: false });
+    }
+    expect(nativeOpen.mock.calls).toEqual(calls);
+    expect(sentAfterConnect(parent)).toEqual([]);
+  });
+
+  it("follows a call naming _self as a plain click, and leaves one naming a frame of the page to the browser", () => {
+    const parent = shellFramed();
+    document.body.innerHTML = '<iframe name="preview"></iframe>';
+    const open = window.open as (...a: unknown[]) => Window | null;
+    expect(open("/docs/intro", "_self")).toEqual({ closed: false });
+    expect(open("http://localhost:5173/preview", "_SELF")).toBeNull();
+    expect(open("https://example.com/docs", "_self")).toBeNull();
+    expect(open("http://localhost:5173/preview", "preview")).toEqual({ closed: false });
+    expect(open("/docs/intro", "preview")).toEqual({ closed: false });
+    expect(nativeOpen.mock.calls).toEqual([
+      ["/docs/intro", "_self"],
+      ["http://localhost:5173/preview", "preview"],
+      ["/docs/intro", "preview"],
+    ]);
+    expect(sentAfterConnect(parent)).toEqual([
+      [{ type: SHELL_OPEN_LINK, url: "http://localhost:5173/preview" }, "*"],
+      [{ type: SHELL_OPEN_LINK, url: "https://example.com/docs" }, "*"],
+    ]);
+    document.body.innerHTML = "";
+  });
+
+  it("leaves every popup to the browser's own window.open until a shell's handshake arrives", () => {
+    const parent = framed();
+    connection = connectToShell({});
+    expect(window.open("http://localhost:5173/preview")).toEqual({ closed: false });
+    expect(window.open("/docs/intro")).toEqual({ closed: false });
+    expect(nativeOpen.mock.calls).toEqual([["http://localhost:5173/preview"], ["/docs/intro"]]);
+    expect(sentAfterConnect(parent)).toEqual([]);
+  });
+
+  it("leaves window.open alone on a top-level page, and puts it back once disconnected", () => {
+    connection = connectToShell({});
+    expect(window.open).toBe(nativeOpen);
+    connection.disconnect();
+    framed();
+    connection = connectToShell({});
+    expect(window.open).not.toBe(nativeOpen);
+    connection.disconnect();
+    connection = null;
+    expect(window.open).toBe(nativeOpen);
   });
 });

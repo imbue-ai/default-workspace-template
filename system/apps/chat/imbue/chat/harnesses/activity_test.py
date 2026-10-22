@@ -13,6 +13,8 @@ from imbue.chat.harnesses.harness_type import parse_harness
 from imbue.chat.harnesses.pi_coding.activity import PiActivityTracker
 from imbue.chat.harnesses.registry import build_tracker
 from imbue.chat.harnesses.registry import get_harness_spec
+from imbue.mngr_claude.claude_config import COMPACTING_MARKER_FILENAME
+from imbue.mngr_claude.claude_config import LAST_COMPACTION_FILENAME
 
 # Every parser here emits the same common event schema (tool calls nested in
 # ``assistant_message``, results keyed by ``tool_call_id`` -- see ``harnesses/events.py``), so
@@ -61,6 +63,20 @@ def test_codex_builds_a_turn_latch_activity_tracker() -> None:
     tracker = build_tracker(HarnessType.CODEX)
     assert isinstance(tracker, CodexActivityTracker)
     assert tracker.marker_filename == "codex_process_started"
+
+
+def test_only_claudes_tracker_declares_the_compaction_files_its_mngr_hooks_write() -> None:
+    """The ``compacting`` marker and the completion record come from mngr_claude's hooks alone."""
+    compaction_files_by_harness = {
+        harness: (spec.tracker_class.compacting_marker_filename, spec.tracker_class.last_compaction_filename)
+        for harness, spec in ((harness, get_harness_spec(harness)) for harness in HarnessType)
+    }
+    assert compaction_files_by_harness.pop(HarnessType.CLAUDE) == (
+        COMPACTING_MARKER_FILENAME,
+        LAST_COMPACTION_FILENAME,
+    )
+    assert compaction_files_by_harness
+    assert set(compaction_files_by_harness.values()) == {(None, None)}
 
 
 @pytest.mark.parametrize("agent_type", ["wait", "main", "", None], ids=["wait", "main", "empty", "none"])

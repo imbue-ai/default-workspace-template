@@ -35,6 +35,8 @@ const gestures: GestureSource = {
 let api: FakeDesktopApi;
 let socket: FakeDesktopSocket;
 let store: DesktopStore;
+/** Every link the store opened outside the workspace, by where it went. */
+let openedOutside: string[];
 
 function pressEscape(): void {
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
@@ -46,6 +48,7 @@ function pressEscape(): void {
 async function mountApp(options: { isDetached?: boolean; soloWindowId?: string } = {}): Promise<void> {
   api = new FakeDesktopApi();
   socket = new FakeDesktopSocket();
+  openedOutside = [];
   api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
   api.writeLayout("home", CLIENT, {
     updated_at: null,
@@ -60,6 +63,10 @@ async function mountApp(options: { isDetached?: boolean; soloWindowId?: string }
     redraw: () => m.redraw(),
     reloadInterface: () => undefined,
     soloWindowId: options.soloWindowId ?? null,
+    outsideLinks: {
+      openInEmbedder: (url) => openedOutside.push(`embedder:${url}`),
+      openInBrowser: (url) => openedOutside.push(`browser:${url}`),
+    },
   });
   await store.start(NO_LINK);
   socket.deliver().onAppsUpdated([appRecord("docs")]);
@@ -493,6 +500,32 @@ describe("the element menu", () => {
     expect(menuRowKeys()).toEqual(["copy-reference", "explain-element", "modify-element"]);
     pressEscape();
     expect(document.body.querySelector('[data-menu-part="menu"]')).toBeNull();
+  });
+
+  it("opens a chrome link to a local address inside the workspace, and an external one in the browser", async () => {
+    const area = document.querySelector("[data-backdrop-area]") as HTMLElement;
+    for (const href of ["http://localhost:3000/preview", "https://example.com/help"]) {
+      const anchor = document.createElement("a");
+      anchor.href = href;
+      anchor.textContent = href;
+      area.append(anchor);
+      anchor.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 40 }),
+      );
+      m.redraw.sync();
+      (document.querySelector('[data-menu-row="open-link"]') as HTMLElement).click();
+      await settle();
+      anchor.remove();
+    }
+    expect(api.relayedMessages).toEqual([
+      {
+        type: "open:url",
+        clientId: CLIENT,
+        payload: { url: "http://localhost:3000/preview" },
+        sender: "system_interface",
+      },
+    ]);
+    expect(openedOutside).toEqual(["browser:https://example.com/help"]);
   });
 
   it("stays closed for a right-click on a window's shield, which is the press that closes the launcher", () => {

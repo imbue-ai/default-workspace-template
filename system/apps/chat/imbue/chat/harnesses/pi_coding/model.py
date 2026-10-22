@@ -35,6 +35,7 @@ from loguru import logger
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import start_agent
 from imbue.chat.harnesses.interrupt import InterruptToComposer
+from imbue.chat.harnesses.interrupt import IsCompactionInFlight
 from imbue.chat.harnesses.interrupt import PressChord
 from imbue.chat.harnesses.interrupt import RestartProcess
 from imbue.chat.harnesses.interrupt import SettleActivity
@@ -360,6 +361,7 @@ class PiInterruptToComposer(InterruptToComposer):
         settle_activity: SettleActivity,
         press_chord: PressChord,
         get_in_flight_block: Callable[[], str],
+        is_compaction_in_flight: IsCompactionInFlight,
     ) -> str:
         with try_hold_message_lock(self._agent_state_dir) as held:
             if not held:

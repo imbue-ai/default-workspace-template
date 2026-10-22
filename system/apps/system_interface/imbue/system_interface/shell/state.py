@@ -44,6 +44,7 @@ from imbue.system_interface.avatar.catalog import DEFAULT_AVATAR_CATALOG_DIRECTO
 from imbue.system_interface.avatar.selection import AvatarSelectionStore
 from imbue.system_interface.avatar.status import AvatarStatusReader
 from imbue.system_interface.avatar.status import agent_events_path_from_environment
+from imbue.system_interface.avatar.status import background_tasks_root_from_environment
 from imbue.system_interface.profiles import DEFAULT_SHARE_ENV_PATH
 from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.profiles import UserProfile
@@ -103,6 +104,7 @@ from imbue.system_interface.shell.errors import WindowNotFoundError
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.identity import visiting_user_id
 from imbue.system_interface.shell.inventory import AppInventory
+from imbue.system_interface.shell.inventory import DEFAULT_SHARE_DOMAIN_PATH
 from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.launches import post_launch
 from imbue.system_interface.shell.launches import resolve_launch_destination
@@ -617,7 +619,9 @@ class ShellState(MutableModel):
         """Move a client onto a desktop and tell its windows; answers whether the stored desktop actually moved."""
         outcome = self.clients.set_active_desktop(client_id, desktop_id, datetime.now(timezone.utc))
         if outcome.is_active_desktop_changed:
-            self.broadcaster.broadcast_active_desktop_changed(str(client_id), str(desktop_id))
+            self.broadcaster.broadcast_active_desktop_changed(
+                str(client_id), str(desktop_id), outcome.record.desktop_revision, None
+            )
         return outcome.is_active_desktop_changed
 
     def arrive_client(self, client_id: ClientId, identity: RequestIdentity) -> ClientArrivalOutcome | None:
@@ -651,7 +655,9 @@ class ShellState(MutableModel):
             self.broadcast_desktops_updated()
         # A client that already had a record may have other windows open on the desktop it was moved off.
         if record is not None and recorded.is_active_desktop_changed:
-            self.broadcaster.broadcast_active_desktop_changed(str(client_id), str(outcome.desktop_id))
+            self.broadcaster.broadcast_active_desktop_changed(
+                str(client_id), str(outcome.desktop_id), recorded.record.desktop_revision, None
+            )
         return outcome
 
     def _land_visiting_user(
@@ -749,21 +755,29 @@ class ShellState(MutableModel):
         """The desktop a client is on by the rule of desktop contracts.md section 4.3; None with no desktops."""
         return resolve_active_desktop(self.clients.get_client(client_id), self.list_desktops())
 
+    def record_client_seen(self, client_id: ClientId) -> ClientRecord:
+        """Stamp a recorded client as seen without moving it (a following ``client_state`` report); raises
+        ClientNotFoundError."""
+        return self.clients.record_seen(client_id, datetime.now(timezone.utc))
+
     def record_client_report(self, report: ClientStateReport) -> ClientReportOutcome:
         """Record a ``client_state`` report and announce what moved; a report naming a desktop that no longer exists
-        lands the client on the first desktop instead (desktop plan section 3.5)."""
+        lands the client on the first desktop instead (desktop plan section 3.5), and a superseded report (made before
+        a move its page had not heard of) is neither recorded nor announced."""
         desktops = self.list_desktops()
         resolved = report
         if desktops and report.active_desktop not in {desktop.id for desktop in desktops}:
             resolved = report.model_copy_update(to_update(report.field_ref().active_desktop, desktops[0].id))
-        outcome = self.clients.record_report(resolved, datetime.now(timezone.utc))
-        # Only a report that moved the stored desktop, or that was redirected off a desktop that no longer exists,
-        # is broadcast: a window following a push reports what it was pushed to, which matches the record, so the
-        # chain ends after one hop.
         is_redirected = resolved is not report
-        if outcome.is_active_desktop_changed or is_redirected:
+        outcome = self.clients.record_report(resolved, datetime.now(timezone.utc), is_redirected=is_redirected)
+        # Only a report that moved the stored desktop, or that was redirected off a desktop that no longer exists,
+        # is broadcast; a superseded one is not, even when redirected.
+        if outcome.is_active_desktop_changed or (is_redirected and not outcome.is_superseded):
             self.broadcaster.broadcast_active_desktop_changed(
-                str(report.client_id), str(outcome.record.active_desktop)
+                str(report.client_id),
+                str(outcome.record.active_desktop),
+                outcome.record.desktop_revision,
+                report.report_id,
             )
         return outcome
 
@@ -793,6 +807,7 @@ def build_shell_state(
     wallpaper_files_directory: Path = DEFAULT_WALLPAPER_FILES_DIRECTORY,
     avatar_catalog_directory: Path = DEFAULT_AVATAR_CATALOG_DIRECTORY,
     agent_events_path: Path | None = None,
+    background_tasks_root: Path | None = None,
     repo_root: Path = WORKSPACE_ROOT_DIRECTORY,
     profiles: ProfileResolver | None = None,
     launch_poster: LaunchPoster | None = None,
@@ -804,7 +819,8 @@ def build_shell_state(
     """Wire the shell's collaborators over ``state_directory``; ``inventory`` is injectable for tests (and
     ``on_registry_read``, what the built inventory tells every registry read, is the production shell's services
     event writer), and either way the shell's desktop reconcile listens to its registry changes;
-    ``agent_events_path`` (the mngr observer's file the avatar's mood is read from) defaults to the one the
+    ``agent_events_path`` (the mngr observer's file the avatar's mood is read from) and ``background_tasks_root``
+    (the chats' background task markers, which keep the mood working while a chat is busy) default to the ones the
     environment names; ``repo_root`` (the workspace the update notice's record and script, and the
     share materials the lifecycle manager reads the per-app grants from, live under) is the served tree by
     default; ``profiles`` (the resolver the composition root shares with presence) defaults to one that can reach
@@ -816,7 +832,12 @@ def build_shell_state(
     resolved_inventory = (
         inventory
         if inventory is not None
-        else AppInventory(registry_path=registry_path, broadcaster=broadcaster, on_registry_read=on_registry_read)
+        else AppInventory(
+            registry_path=registry_path,
+            broadcaster=broadcaster,
+            on_registry_read=on_registry_read,
+            share_domain_path=_under_repo_root(DEFAULT_SHARE_DOMAIN_PATH, repo_root),
+        )
     )
     desktops = DesktopStore(state_directory=state_directory)
     share_grants = ShareGrantsReader(
@@ -851,6 +872,9 @@ def build_shell_state(
         avatar_selection=AvatarSelectionStore(state_directory=state_directory),
         avatar_status=AvatarStatusReader(
             events_path=agent_events_path if agent_events_path is not None else agent_events_path_from_environment(),
+            background_tasks_root=background_tasks_root
+            if background_tasks_root is not None
+            else background_tasks_root_from_environment(),
             broadcaster=broadcaster,
         ),
         update_notice=UpdateNoticeWatch(repo_root=repo_root, broadcaster=broadcaster),

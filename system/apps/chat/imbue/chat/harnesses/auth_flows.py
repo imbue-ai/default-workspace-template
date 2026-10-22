@@ -32,7 +32,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from collections.abc import Iterator
+from collections.abc import Generator
 from collections.abc import Mapping
 from collections.abc import Sequence
 from enum import StrEnum
@@ -43,6 +43,7 @@ from typing import assert_never
 
 import pexpect
 from loguru import logger as _loguru_logger
+from pydantic import Field
 
 from imbue.chat import accounts
 from imbue.chat.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
@@ -148,19 +149,27 @@ class FlowShape(StrEnum):
 
 
 class FlowStart(FrozenModel):
-    flow_id: str
-    shape: FlowShape
-    url: str | None = None
-    code: str | None = None
+    """What starting a sign-in answers: the flow's id and what it asks the user for next."""
+
+    flow_id: str = Field(description="The flow, for the polls and the submit that follow")
+    shape: FlowShape = Field(description="What the dialog renders: a link and a code, a code to type, or a paste")
+    url: str | None = Field(default=None, description="The sign-in page to open, when the shape has one")
+    code: str | None = Field(
+        default=None, description="The one-time code the user types on that page, when there is one"
+    )
     # The sign-in page the minds desktop app can open for this flow and relay the callback of.
     # None when the CLI named none, or one whose callback this workspace cannot serve.
-    relay_url: str | None = None
+    relay_url: str | None = Field(
+        default=None, description="The sign-in page the Imbue Studio app opens and relays the callback of, if any"
+    )
 
 
 class FlowStatus(FrozenModel):
-    state: FlowState
-    detail: str | None = None
-    account_id: str | None = None
+    """Where a sign-in flow stands."""
+
+    state: FlowState = Field(description="Pending, ok, or failed")
+    detail: str | None = Field(default=None, description="Why it failed, or what it is waiting on")
+    account_id: str | None = Field(default=None, description="The account it signed in, once it is ok")
 
 
 def flow_shape(method: SignInMethod) -> FlowShape:
@@ -1126,7 +1135,7 @@ def _restore_credentials(before: Mapping[Path, bytes | None]) -> None:
 
 
 @contextlib.contextmanager
-def _credentials_restored_on_error(paths: Sequence[Path]) -> Iterator[Mapping[Path, bytes | None]]:
+def _credentials_restored_on_error(paths: Sequence[Path]) -> Generator[Mapping[Path, bytes | None], None, None]:
     """Write inside this, and an exception leaves the previous credential in place.
 
     The probe cannot judge a file that is not there, so the write has to land first -- and on

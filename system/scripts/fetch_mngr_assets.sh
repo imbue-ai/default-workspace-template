@@ -7,6 +7,10 @@
 #   apps/minds/imbue/minds/desktop_client/static/   the embed contract and the
 #                                                   service icons the frontends
 #                                                   bundle at build time
+#   apps/minds/electron/link-externality-vectors.json
+#                                                   the URLs the desktop app calls
+#                                                   external, which workspace_ui's
+#                                                   link classifier is tested against
 #   style_guide.md                                  the base code style guide,
 #                                                   docs/system/style_guide.md
 #
@@ -24,6 +28,7 @@ ASSETS_DIR="$REPO_ROOT/system/vendor/mngr-assets"
 . "$REPO_ROOT/system/scripts/_mngr_git_auth.sh"
 ASSET_PATHS=(
     apps/minds/imbue/minds/desktop_client/static
+    apps/minds/electron/link-externality-vectors.json
     style_guide.md
 )
 

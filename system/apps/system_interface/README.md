@@ -50,6 +50,8 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   `imbue/system_interface/static/`; `/assets/<path>` for its bundle.
 - `/api/health`: `{"status", "is_frontend_built"}`, the probe the update
   apply and the preview flow poll.
+- `GET /api/schema`: the OpenAPI document of the shell's routes, built from its
+  url map (`system/libs/app_schema`); the manifest's `api_schema_path`.
 - `/_static/app_contract.js` and `/_static/context_menu.js`: the browser-side
   contract module and the element context menu module (sources in
   `system/libs/workspace_ui/src/app_contract.ts` and `context_menu.ts`), built
@@ -116,8 +118,10 @@ and the profile cache.
   avatar) is on its client record.
 - **The avatar** (`avatar/`): the bundled and registered designs, the
   workspace's selection, the rendered image routes, and the status reader,
-  which folds mngr's agents event file into a mood (working when any agent
-  but the services agent is running) and pushes `avatar_status` on change.
+  which folds mngr's agents event file and the chats' background task markers
+  into a mood (working when any agent but the services agent is running, or
+  any chat is busy on a background task that will wake its agent) and pushes
+  `avatar_status` on change.
 - **State files**: a fresh workspace gets one desktop, `Home`, seeded from
   every registered app's default shortcut (its `default_shortcut`, else, for
   an app a program runs, its first launch path taking no text, or its first
@@ -168,14 +172,39 @@ check. The frontend
 `system/package.json`; the design system, the base helpers, and the contract
 modules it shares with the app pages live in `system/libs/workspace_ui`, and
 `src/relay.ts` is the shell's side of the embedder relay (it forwards the
-framed pages' `minds:` messages to the minds chrome unchanged).
+framed pages' `minds:` messages to the minds chrome unchanged, and hands on
+the chrome's messages of types the embed contract does not define, which the
+contract's endpoint in `workspace_ui`'s `embed.ts` drops).
 
-A message the Imbue Studio chrome sends the shell's page reaches an app another way
-too: an app whose manifest registers its type (`[[message_handlers]]`) has it
-posted, by the shell's page once (never by a solo page, whose client is the
-main window's) and then by the shell's backend
-(`POST /api/embedder-messages`, `shell/embedder_messages.py`), to the route it
-named, with the client whose page received it. The shell reads no payload. An
+A message the shell's page receives, from the Imbue Studio chrome or from an
+app's page (`shell:message`),
+reaches every app whose manifest registers its type (`[[message_handlers]]`):
+the shell's page hands it once to the shell's backend (`POST
+/api/embedder-messages`, `shell/embedder_messages.py`), with the client whose
+page received it (a chrome message of one of the contract's own types through
+`embed.ts`'s observer, any other, such as a notification's `destination`,
+through `relay.ts`). A solo page hands on its apps' messages but never the
+chrome's, which the main window's page already relays. A `path` handler has the
+message posted to the route it named; a `show` handler has the shell build the
+page its template names from the message's fields and show it through the op
+route's `show` below, in-process. A message some app did not take becomes a
+notice carrying that app's reason, and a page shown while the client has only
+pop-outs open becomes a notice to reopen the main window. The shell's page
+also opens links itself: it announces `opensLinks` to the chrome and opens a
+`minds:open-link` (a popup Imbue Studio turned back into the workspace) or a
+page's `shell:open-link` by the shared link classifier (`workspace_ui`'s
+`links.ts`): a `file:` URL as `open:file`, a local URL on an openable app's
+`<label>.localhost` (or `<name>.localhost`) host, or else at its registered
+backend port, as that app's window (`windowAtLocalAppHost` and
+`windowAtBackendUrl` in `frontend/src/model/pageUrl.ts`), any other local URL
+as `open:url`, one of this workspace's app addresses (its addresses on the
+domain the workspace was last shared under included, read off the apps'
+`share_url`) as that app's window, and an external web, `mailto:`, or `tel:`
+link as `open:web`, `open:mailto`, or `open:tel` to the app registered for it,
+or else outside the workspace: back to a chrome that says it opens external
+links (`minds:open-external`), else in a new browser tab. An app's window already
+there that the client has popped out is raised in its own window, and one a
+link opens while the client has only pop-outs open gets the same notice. An
 app that wants a window for what it was told asks the op route's `show`, which
 takes the app, a path, the other paths that count as already showing it, and
 the pages whose windows it may point at the path, and picks the window itself:
@@ -210,9 +239,11 @@ reported (under gVisor and on lima, a change made outside the sandbox raises no
 inotify event in it).
 
 Every registry read is also announced to the minds desktop (`app_announcements.py`):
-one `service_registered` event per app whose URL, label, icon, or display name
-differs from the last announced, and one `service_deregistered` per app that left, appended
-to `$MNGR_AGENT_STATE_DIR/events/services/events.jsonl` in the `imbue_common`
+one `service_registered` event per app whose URL, label, icon, display name, or
+`system` or `internal` declaration (which tell the minds Share tab to list the
+app under its System group, or not at all) differs from the last announced, and
+one `service_deregistered` per app that left, appended to
+`$MNGR_AGENT_STATE_DIR/events/services/events.jsonl` in the `imbue_common`
 event envelope; the first read after the shell starts announces every app. The
 stream is what `mngr forward` and the desktop resolve app origins from, and
 they replay it whole each time they attach, so a stream over 5 MiB at that
@@ -225,14 +256,15 @@ rewrite. A preview shell announces nothing, since its registry is a copy.
 The shell also owns each stoppable app's process (`shell/app_lifecycle.py`,
 the stop-when-no-windows spec): an app whose manifest declares
 `stop_when_no_windows` is stopped once no window on any desktop has shown it
-for a minute (only once someone has visited the workspace, and never while a
-per-app share grant names it, since such a visitor reaches the app without the
-shell: `shell/share_grants.py` reads `data/.secrets/share_grants.toml`), and while any
-stoppable app is stopped the shell holds its port (`shell/port_parking.py`), so
-the first request for the app starts it again and is answered with a loading
-page that reloads into the app. "Quit <app>" on the window menu
-(`frontend/src/views/WindowMenu.ts`) closes every window of the app and stops
-it at once; critical apps offer nothing there and are never stopped or parked.
+for a minute (only once someone has visited the workspace, and never, unless it
+is internal, while a per-app share grant names it, since such a visitor reaches
+the app without the shell: `shell/share_grants.py` reads
+`data/.secrets/share_grants.toml`), and while any stoppable app is stopped the
+shell holds its port (`shell/port_parking.py`), so the first request for the
+app starts it again and is answered with a loading page that reloads into the
+app. "Quit <app>" on the window menu (`frontend/src/views/WindowMenu.ts`)
+closes every window of the app and stops it at once; critical apps offer
+nothing there and are never stopped or parked.
 The stop and start routes remain for agents. A framed page reaches the shell only
 through the contract module (`shell:open`, `shell:focused`, `shell:location`,
 `shell:capabilities`, `shell:start-with-text`); a page that reports the path it is showing gets it
@@ -349,7 +381,8 @@ fresh install lands on its `Home` desktop with the Getting Started window
 open, placed there once by that app for the first client that connects.
 
 A refused operation (an open, a close, a shortcut move) says so in a toast at
-the foot of the screen (`views/Toast.ts`) rather than a browser alert.
+the foot of the screen (the shared toasts of `system/libs/workspace_ui`) rather
+than a browser alert.
 
 ### The phone layout
 

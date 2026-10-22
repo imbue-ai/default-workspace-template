@@ -215,7 +215,24 @@ outcomes without parsing the event: `0` for `restic_backup_succeeded`, `3` for
 no restore point), `1` for any other tick outcome, and `2` when no outcome was
 observed at all -- either no terminal event arrived before the timeout, or the
 events log could not be located in the first place (see below), in which case
-nothing was triggered either.
+nothing was triggered either. Nothing is triggered when the in-flight backup is
+still running at the timeout, either.
+
+Only the newest tick to start counts as in flight: the service runs one tick at a
+time, so an earlier tick with no terminal event was killed mid-run (an OOM shed, a
+services restart) and will never finish. The service records such a tick as
+`tick_abandoned` when it starts again, and the wait for a triggered tick skips that
+record and reports the restarted service's first tick instead, which backs up again.
+
+`uv run host-backup-now --check` triggers nothing and waits for nothing: it reads
+the newest tick outcomes back from the log (from the last rotated file too, while
+the current one holds no success yet), prints them as JSON (`newest_outcome`,
+`newest_success_at`, `age_seconds`, `max_age_seconds`, `inflight_tick_id`), and
+exits `0` when a `restic_backup_succeeded` is within two backup intervals (a healthy
+service's newest success is at most one interval plus one run old), `3` when the
+newest tick ended for missing secrets, `1` otherwise (the service is down, or its
+ticks fail), and `2` when the events log cannot be located. The update-self skill
+runs it before an update, as the check that a restore point exists.
 
 The service writes its events under the *primary* agent's state dir (it
 inherits `MNGR_AGENT_STATE_DIR` from the bootstrap shell that started
@@ -242,6 +259,7 @@ Structured events at `$MNGR_AGENT_STATE_DIR/events/backup/events.jsonl`:
 - `forget_completed`, `prune_completed`, `prune_skipped`
 - `config_reloaded`
 - `tick_skipped_due_to_missing_secrets`, `tick_error`
+- `tick_abandoned` (at startup, for a tick the previous run was killed in)
 
 Each restic command's stdout / stderr is captured into the matching
 `*_succeeded` / `*_failed` event for forensic debugging, capped at 16 KB per

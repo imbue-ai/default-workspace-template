@@ -55,7 +55,7 @@ def test_a_seeded_chats_first_send_shows_the_words_and_hides_the_context_it_carr
 
 
 def test_a_seeded_chats_first_send_keeps_the_attachment_block_its_bubble_renders() -> None:
-    """The block the composer appends renders in the bubble (an inline image, a download link),
+    """The block the composer appends renders in the bubble (an inline image, a file link),
     so stripping the context block in front of the message must not take it off the end."""
     decision = classify_user_message(f"{_SEED_BLOCK}\nhere you go\n\nSee attachment here: ![a](/uploads/1/a.png)")
     assert decision is not None

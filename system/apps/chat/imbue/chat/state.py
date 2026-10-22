@@ -20,11 +20,14 @@ from imbue.chat.config import Config
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
+from imbue.chat.harnesses.interrupt import PressChord
+from imbue.chat.harnesses.interrupt import RestartProcess
 from imbue.chat.harnesses.registry import build_loader
 from imbue.chat.harnesses.registry import build_watcher
 from imbue.chat.harnesses.registry import get_harness_spec
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
+from imbue.chat.primitives import ChatId
 from imbue.chat.secret_requests import SecretRequestChatBridge
 from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -42,6 +45,24 @@ class ChatAppStateError(RuntimeError):
 
 # The frontend build's output, inside the package: what the chat routes serve in production.
 DEFAULT_STATIC_DIRECTORY = Path(__file__).parent / "static"
+
+
+class _SentInterrupts(MutableModel):
+    """Wraps a stop's restart and cancel-chord capabilities, noting whether either actually went out."""
+
+    restart: RestartProcess = Field(frozen=True, description="The restart the caller supplied")
+    press_chord: PressChord = Field(frozen=True, description="The native cancel chord, bound to the agent")
+    is_any_sent: bool = Field(default=False, description="Whether a restart or a chord actually went out")
+
+    def restart_process(self) -> tuple[bool, str]:
+        is_restarted, output = self.restart()
+        self.is_any_sent = self.is_any_sent or is_restarted
+        return is_restarted, output
+
+    def press_cancel_chord(self) -> bool:
+        is_pressed = self.press_chord()
+        self.is_any_sent = self.is_any_sent or is_pressed
+        return is_pressed
 
 
 class ChatAppState(MutableModel):
@@ -92,7 +113,8 @@ class ChatAppState(MutableModel):
     secret_request_bridge: SecretRequestChatBridge | None = None
     watchers: dict[str, AgentSessionWatcher] = {}
     # The archived segments read so far, by agent id: loaded on the first read that reaches
-    # one and dropped with the chat (``stop_and_remove_watcher``), so a chat that is not
+    # one and dropped with the chat (``stop_and_remove_watcher``, or
+    # ``release_unviewed_stopped_transcripts`` for a stopped one), so a chat that is not
     # being read holds none of its history resident.
     loaders: dict[str, TranscriptLoader] = {}
     latchkey_catalog_cache: dict[str, Any] = {}
@@ -135,6 +157,7 @@ class ChatAppState(MutableModel):
                 return existing
 
             def on_events(agent_id: str, events: list[dict[str, Any]]) -> None:
+                self.agent_manager.stamp_compaction_events(agent_info, events)
                 # Deliver-live-only: session events are persisted in JSONL and recoverable
                 # via the REST /events endpoint, so nothing is buffered for replay. The
                 # fan-out is keyed by chat, so a page's stream follows the chat across a
@@ -155,6 +178,9 @@ class ChatAppState(MutableModel):
             # each change is cheap.
             watcher.set_queue_snapshot_callback(
                 lambda snapshot: self.agent_manager.update_queued_messages(agent_info.id, snapshot)
+            )
+            watcher.set_finished_tasks_callback(
+                lambda task_ids: self.agent_manager.forget_finished_tasks(agent_info.id, agent_info.harness, task_ids)
             )
             self.agent_manager.register_queue_idle_handler(agent_info.id, watcher.notify_idle)
             self.agent_manager.register_queue_busy_handler(agent_info.id, watcher.notify_busy)
@@ -182,7 +208,10 @@ class ChatAppState(MutableModel):
         # connect. Done outside the watchers lock to avoid holding it across the
         # agent manager's own lock.
         try:
-            self.agent_manager.update_session_events(agent_info.id, watcher.get_all_events())
+            backlog = watcher.get_all_events()
+            # A compaction that finished while no watcher ran (a chat nobody had open) ends here.
+            self.agent_manager.stamp_compaction_events(agent_info, backlog)
+            self.agent_manager.update_session_events(agent_info.id, backlog)
             watcher.start()
         finally:
             with self._watchers_lock:
@@ -192,12 +221,21 @@ class ChatAppState(MutableModel):
                 watcher.stop()
         return watcher
 
+    def has_watcher(self, agent_id: str) -> bool:
+        """Whether a session watcher is resident for the agent.
+
+        Reads without the watchers lock (a dict membership test is atomic): the agent manager
+        asks this from recomputes that can run while ``get_or_create_watcher`` holds it.
+        """
+        return agent_id in self.watchers
+
     def get_or_create_loader(self, agent_info: AgentInfo) -> TranscriptLoader:
         """The loader over one archived agent's transcript, built on the first read that needs it.
 
         The read side of the agent's watcher with nothing live: an archived segment of a chat
         is read through this (``chat_transcript.py``). Cached beside the watchers, under the
-        same lock, and dropped with the chat by ``stop_and_remove_watcher``.
+        same lock, and dropped with the chat by ``stop_and_remove_watcher`` or, for a stopped
+        chat, ``release_unviewed_stopped_transcripts``.
         """
         with self._watchers_lock:
             existing = self.loaders.get(agent_info.id)
@@ -234,35 +272,68 @@ class ChatAppState(MutableModel):
         Dispatches through the agent's session to the harness's registered interrupt (the
         base restart-drain, or a native override), binding the watcher, the restart the caller
         supplies, the activity settle, and the native cancel chord. Shared by the route and
-        the handoff's draining step. Raises ``AgentRestartError`` when the restart fails.
+        the handoff's draining step. The agent's compaction status is cleared when a cancel chord
+        or a restart actually ran. Raises ``AgentRestartError`` when the restart fails.
         """
         watcher = self.get_or_create_watcher(agent_info)
-        return self.agent_manager.get_or_create_session(agent_info).interrupt_to_composer(
-            agent_info,
-            watcher,
-            restart_process,
-            lambda: self.agent_manager.reset_activity_state(agent_info.id),
-            lambda: self.agent_manager.press_key_chord_on_agent(
+        interrupts = _SentInterrupts(
+            restart=restart_process,
+            press_chord=lambda: self.agent_manager.press_key_chord_on_agent(
                 AgentId(agent_info.id), get_harness_spec(agent_info.harness).cancel_chord
             ),
         )
+        block = self.agent_manager.get_or_create_session(agent_info).interrupt_to_composer(
+            agent_info,
+            watcher,
+            interrupts.restart_process,
+            lambda: self.agent_manager.reset_activity_state(agent_info.id),
+            interrupts.press_cancel_chord,
+            lambda: self.agent_manager.is_compaction_in_flight(agent_info),
+        )
+        if interrupts.is_any_sent:
+            self.agent_manager.clear_compaction_after_interrupt(agent_info)
+        return block
 
     def stop_and_remove_watcher(self, agent_id: str) -> None:
         """Evict everything resident for one agent: its watcher (the resident transcript, thread,
         and filesystem watches) and, for an archived member of a chat, its loader.
 
-        The memory half of the chat lifecycle: called when an agent is destroyed or its
-        chat's lifecycle transitions to positively dead (stopped from the UI, `mngr stop`, an
-        OOM shed, idle shutdown), so a chat that is not running holds no chat-backend memory.
-        Cheap no-op when nothing is resident. Rebuild-on-demand is `get_or_create_watcher`
-        and `get_or_create_loader`: viewing a stopped chat re-reads its transcript from disk
-        transparently.
+        The memory half of the chat lifecycle, so a chat that is not running and not being
+        viewed holds no chat-backend memory. Cheap no-op when nothing is resident.
+        Rebuild-on-demand is `get_or_create_watcher` and `get_or_create_loader`: viewing a
+        stopped chat re-reads its transcript from disk transparently.
+        """
+        self._evict_resident(agent_id, spared_if_streamed=None)
+
+    def release_unviewed_stopped_transcripts(self) -> None:
+        """Evict what each stopped chat holds resident, unless a stream of it is open.
+
+        Level-triggered, so it also catches a stopped chat that a read rebuilt after its stop. A
+        chat with an open stream keeps its transcript while its viewer reads it, since the stream
+        is fed only by the watcher and a reported death can be momentary; the first call after
+        the stream closes drops it.
+        """
+        with self._watchers_lock:
+            resident_agent_ids = set(self.watchers) | set(self.loaders)
+        for agent_id in resident_agent_ids:
+            chat_id = self.agent_manager.chat_id_of_agent(agent_id)
+            if self.agent_manager.is_chat_stopped(chat_id):
+                self._evict_resident(agent_id, spared_if_streamed=chat_id)
+
+    def _evict_resident(self, agent_id: str, spared_if_streamed: ChatId | None) -> None:
+        """Evict one agent's watcher and loader, unless ``spared_if_streamed`` names a chat with an open stream.
+
+        The stream is checked under the lock a watcher build takes, and a stream registers before
+        building its watcher, so a stream opening now is either counted here or builds a fresh
+        watcher after this pops.
 
         The watcher is popped under the lock but stopped outside it -- `stop` joins the
         watch thread, and holding the lock across that join would stall every other
         watcher creation for the duration.
         """
         with self._watchers_lock:
+            if spared_if_streamed is not None and self.event_queues.has_consumers(str(spared_if_streamed)):
+                return
             watcher = self.watchers.pop(agent_id, None)
             loader = self.loaders.pop(agent_id, None)
             is_watcher_starting = id(watcher) in self._starting_watchers
@@ -273,20 +344,6 @@ class ChatAppState(MutableModel):
         if loader is not None:
             logger.debug("Evicting the loaded transcript of agent {}", agent_id)
             loader.close()
-
-    def release_unviewed_stopped_transcripts(self) -> None:
-        """Evict what each stopped chat holds resident, unless a stream of it is open.
-
-        Reading a stopped chat rebuilds its transcript, which the manager's eviction (on the
-        chat's transition into stopped) never sees. A chat with an open stream keeps its
-        transcript while its viewer reads it; the first call after the stream closes drops it.
-        """
-        with self._watchers_lock:
-            resident_agent_ids = set(self.watchers) | set(self.loaders)
-        for agent_id in resident_agent_ids:
-            chat_id = self.agent_manager.chat_id_of_agent(agent_id)
-            if self.agent_manager.is_chat_stopped(chat_id) and not self.event_queues.has_consumers(str(chat_id)):
-                self.stop_and_remove_watcher(agent_id)
 
     def stop_all_watchers(self) -> None:
         with self._watchers_lock:

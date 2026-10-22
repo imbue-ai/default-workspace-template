@@ -126,20 +126,7 @@ def test_prevent_builtin_exception_raises() -> None:
 
 
 def test_prevent_inline_imports() -> None:
-    # +2 (MISFIRE) for names.py's module-level `try: from imbue.mngr... except
-    # ImportError: <local fallback>` block. This is the canonical optional-dependency
-    # pattern (the mngr name generator is reused when importable, with a tiny local
-    # word-pair generator as the fallback so the browser lib stands alone). The two
-    # imports are at MODULE level, not "inline within functions" -- the rule's actual
-    # target -- but the regex matches them because a `try` body is indented. Done once
-    # at import time (a `_generate` callable is bound), so the importability check costs
-    # nothing per call. Making the regex distinguish module-level try/except ImportError
-    # from function-inline imports risks missing real violations, so this is bumped.
-    # +1 (same MISFIRE shape) for telemetry.py's `try: import psutil except ImportError`
-    # optional-dependency guard -- a module-level import the regex flags only because the
-    # try body is indented; the resource sampler degrades gracefully when psutil is absent.
-    # Down from 3: two of the flagged imports were browser-use's, and went with it.
-    rc.check_inline_imports(_DIR, snapshot(1))
+    rc.check_inline_imports(_DIR, snapshot(0))
 
 
 def test_prevent_relative_imports() -> None:

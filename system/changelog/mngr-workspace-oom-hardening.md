@@ -1,0 +1,5 @@
+Test runs in a workspace no longer leave their temporary files piling up in `/tmp`. The root pytest config now sets `tmp_path_retention_policy = "failed"` and `tmp_path_retention_count = 1`: a passing test's `tmp_path` is deleted as soon as it finishes, and only the latest session's leftovers are kept. pytest's default kept every test's directory for the last three sessions. `/tmp` is a tmpfs, and under gVisor each file or directory there also holds sandbox memory until it is deleted. After a couple of suite runs, the leftovers (73,000 entries in one measurement) held about 300 MB of the container's memory. Because this is ordinary pytest config in the checkout, existing workspaces pick it up with their next update.
+
+earlyoom's supervisord program (`system/supervisord.conf.d/earlyoom.conf`) runs it through a wrapper that timestamps every line of its log; see the oom_priority entry.
+
+`system/scripts/install_earlyoom.sh` no longer tells a version bump to move `minds-admin hotpatch-earlyoom`'s pin too; that command is removed in mngr.

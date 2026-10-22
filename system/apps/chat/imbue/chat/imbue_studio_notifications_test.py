@@ -1,6 +1,6 @@
 """The read call to the Imbue Studio app: its shape and headers, and that every failure is dropped quietly."""
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 
 from pydantic import SecretStr
@@ -29,7 +29,7 @@ def _client(base_url: str, override: str | None, agent_by_chat: dict[str, str]) 
 @contextmanager
 def _served_client(
     status: int, agent_by_chat: dict[str, str], override: str | None = None, base_url_suffix: str = ""
-) -> Iterator[tuple[RecordingGateway, ImbueStudioNotificationsClient]]:
+) -> Generator[tuple[RecordingGateway, ImbueStudioNotificationsClient], None, None]:
     """A client pointed at a served ``RecordingGateway`` answering ``status``; shut down on exit."""
     gateway = RecordingGateway(status=status)
     with serve_app(gateway.application) as served:

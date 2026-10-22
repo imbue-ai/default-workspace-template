@@ -7,6 +7,7 @@ requires-python = ">=3.11"
 dependencies = [
     # The manifest primitives the daemon names itself with.
     "app-manifest",
+    "app-schema",
     "flask>=3.0",
     "flask-sock>=0.7",
     "oom-priority",
@@ -51,8 +52,9 @@ packages = ["src/browser"]
 
 [dependency-groups]
 dev = [
+    "app-schema[testing]",
     # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
-    "ty==0.0.24",
+    "ty==0.0.85",
 ]
 
 # Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.

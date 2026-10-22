@@ -17,10 +17,10 @@ vi.mock("../models/Response", async (importOriginal) => ({
 import m from "mithril";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import { setBlockExpanded } from "./expansion-state";
-import { ToolChipGroup, formatToolInput, type ChipCall } from "./ToolChipGroup";
+import { ToolChipGroup, formatToolInput, type ChipCall, type ChipEntry, type StatusChip } from "./ToolChipGroup";
 
 function chip(call: ToolCall, eventId = "a-1"): ChipCall {
-  return { call, eventId };
+  return { kind: "tool", call, eventId };
 }
 
 function result(over: Partial<ToolResultEvent> & Pick<ToolResultEvent, "tool_call_id">): ToolResultEvent {
@@ -38,7 +38,7 @@ function result(over: Partial<ToolResultEvent> & Pick<ToolResultEvent, "tool_cal
 
 let root: HTMLElement;
 
-function mount(chips: ChipCall[], results: ToolResultEvent[] = []): void {
+function mount(chips: ChipEntry[], results: ToolResultEvent[] = []): void {
   const toolResults = new Map(results.map((r) => [r.tool_call_id, r]));
   m.render(root, m(ToolChipGroup, { chips, toolResults, chatId: "agent-x" }));
 }
@@ -56,7 +56,7 @@ function detailText(): string {
 }
 
 /** Click a chip and re-render, as a redraw would. */
-function click(index: number, chips: ChipCall[], results: ToolResultEvent[] = []): void {
+function click(index: number, chips: ChipEntry[], results: ToolResultEvent[] = []): void {
   chipButtons()[index].click();
   mount(chips, results);
 }
@@ -360,6 +360,87 @@ describe("the open chip's detail panel", () => {
     expect(root.querySelector(".tool-call-error-snippet")?.textContent).toContain("FileNotFoundError: no such file");
     // Still loading the real output, and the snippet did not wait for it.
     expect(detailText()).toContain("Loading");
+  });
+});
+
+describe("a status chip in the row", () => {
+  const read: ToolCall = { tool_call_id: "sc-read", tool_name: "Read", input_chars: 20, header_label: "Tool: Read" };
+
+  function statusChip(id: string, output: string): StatusChip {
+    return {
+      kind: "status",
+      id,
+      label: `Status ${id}`,
+      icon: "package",
+      chipClass: "status-marker",
+      detailClass: "status-detail-marker",
+      sections: [
+        { kind: "content", render: () => m("div", { class: "status-intro" }, "Why it happened") },
+        { kind: "output", marker: "status-output", text: output },
+      ],
+    };
+  }
+
+  beforeEach(() => {
+    for (const key of ["chip:sc-read", "chip:sc-1", "chip:sc-2", "chip-output:sc-1"]) setBlockExpanded(key, false);
+  });
+
+  it("wears the tool chip's chrome, with its own marker, glyph and label", () => {
+    mount([chip(read), statusChip("sc-1", "out")]);
+    const button = chipButtons()[1];
+    expect(button.className).toContain("tool-chip");
+    expect(button.className).toContain("status-marker");
+    expect(button.title).toBe("Status sc-1");
+    expect(labels()[1]).toBe("Status sc-1");
+    // lucide `package`: the polyline that draws its lid.
+    expect(button.querySelector("svg polyline")?.getAttribute("points")).toBe("3.29 7 12 12 20.71 7");
+  });
+
+  it("opens one at a time with the tool chips around it", () => {
+    mockDetailState.mockReturnValue(undefined);
+    const chips: ChipEntry[] = [chip(read), statusChip("sc-1", "out"), statusChip("sc-2", "out")];
+    mount(chips);
+    click(0, chips);
+    click(1, chips);
+    expect(chipButtons().map((b) => b.getAttribute("aria-pressed"))).toEqual(["false", "true", "false"]);
+    click(2, chips);
+    expect(chipButtons().map((b) => b.getAttribute("aria-pressed"))).toEqual(["false", "false", "true"]);
+    expect(root.querySelectorAll(".tool-chip-detail")).toHaveLength(1);
+  });
+
+  it("heads its panel with its own glyph and label, and lays its sections out with the dashed rule", () => {
+    setBlockExpanded("chip:sc-1", true);
+    mount([statusChip("sc-1", "the summary")]);
+    const panel = root.querySelector(".tool-chip-detail")!;
+    expect(panel.classList.contains("status-detail-marker")).toBe(true);
+    const header = panel.querySelector(".tool-chip-detail-header")!;
+    expect(header.querySelector(".tool-chip-detail-title")?.textContent).toBe("Status sc-1");
+    expect(header.querySelector("svg polyline")?.getAttribute("points")).toBe("3.29 7 12 12 20.71 7");
+    const [first, second, ...rest] = Array.from(panel.children).slice(1);
+    expect(first.classList.contains("status-intro")).toBe(true);
+    expect(second.className).toContain("border-dashed");
+    expect(second.querySelector(".status-output")?.textContent).toBe("the summary");
+    expect(rest).toEqual([]);
+    // Everything it shows is the page's own: nothing is fetched.
+    expect(mockRequestDetail).not.toHaveBeenCalled();
+  });
+
+  it("clamps a long output the way a tool's is, and forgets the unfold when closed", () => {
+    setBlockExpanded("chip:sc-1", true);
+    const long = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n");
+    const chips = [statusChip("sc-1", long)];
+    mount(chips);
+    expect(detailText()).not.toContain("line 21");
+    root.querySelector<HTMLButtonElement>(".tool-call-output-toggle")!.click();
+    mount(chips);
+    expect(detailText()).toContain("line 30");
+
+    root.querySelector<HTMLButtonElement>(".tool-chip-detail-close")!.click();
+    mount(chips);
+    expect(root.querySelector(".tool-chip-detail")).toBeNull();
+    setBlockExpanded("chip:sc-1", true);
+    mount(chips);
+    expect(detailText()).not.toContain("line 21");
   });
 });
 
