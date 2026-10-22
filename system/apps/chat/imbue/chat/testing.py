@@ -353,7 +353,7 @@ def private_tmux_server(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None
     The directory is short because tmux refuses a socket path over about 100 bytes. The server's sessions are
     killed by name at the end, never with ``kill-server``.
     """
-    tmux_dir = Path(tempfile.mkdtemp(prefix="cmp", dir="/tmp"))
+    tmux_dir = Path(tempfile.mkdtemp(prefix="tmx", dir="/tmp"))
     monkeypatch.delenv("TMUX", raising=False)
     monkeypatch.setenv("TMUX_TMPDIR", str(tmux_dir))
     socket_path = tmux_dir / f"tmux-{os.getuid()}" / "default"
