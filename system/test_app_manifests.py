@@ -286,6 +286,21 @@ def test_no_two_app_packages_declare_the_same_console_script() -> None:
     assert shared == [], f"console scripts declared by more than one app package: {shared}"
 
 
+def test_every_built_in_python_app_is_a_root_dependency() -> None:
+    # A `uv sync` without --all-packages prunes every workspace member the root project does not
+    # depend on, deleting the console scripts the apps' programs exec from .venv/bin.
+    root = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text())
+    dependencies = {re.split(r"[\s\[<>=!~;]", entry, maxsplit=1)[0] for entry in root["project"]["dependencies"]}
+    missing = sorted(
+        project_name
+        for package in _BUILT_IN_APP_PACKAGES
+        if (pyproject := _APPS_DIR / package / "pyproject.toml").is_file()
+        and (project_name := tomllib.loads(pyproject.read_text())["project"]["name"]) not in dependencies
+    )
+
+    assert missing == [], f"built-in apps the root pyproject.toml does not depend on: {missing}"
+
+
 def test_every_built_in_app_directory_ships_a_manifest() -> None:
     # Every built-in app describes itself, whatever runs it.
     missing = [

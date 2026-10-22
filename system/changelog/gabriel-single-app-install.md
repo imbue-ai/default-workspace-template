@@ -4,6 +4,8 @@ Every app now has one install: the workspace venv.
 
 - The build no longer installs each app as its own uv tool. Those tools were a second copy that only an agent's PATH and the update pre-flight ever reached, and a stale one rolled back a good update with `ModuleNotFoundError: No module named 'app_schema'`. The build now removes any such tool an older image still carries (`tool_env.py drop-app-tools`), from both `/root/.local` and the `$HOME` it runs under. It recognizes an app tool by its uv receipt: the tool's own package installed editable from under `system/apps/`.
 
+- The built-in apps are now root dependencies in `pyproject.toml`, like the services supervisord runs. With the venv their only install, a `uv sync` without `--all-packages` would otherwise delete every app's entry point. User-built apps stay off the list. Removing a built-in app now also means removing its root entry.
+
 - `system/config/mngr_plugins.toml` now assigns plugins only to the mngr tool. The chat app gets the harness plugins as dependencies in its own pyproject.
 
 - `contracts.md` section 14, the workspace-app-model plan, `workspace-internals.md`, the stop-when-no-windows spec and the app READMEs now describe the single venv install, and the critical-app-editing test plan's E20 expects the venv re-sync and copy rather than per-app tool reinstalls (E15 has its chat change also edit the chat's `pyproject.toml` and sabotages the kept venv copy rather than a chat tool, A8 boots `.venv/bin/chat-app --preflight` rather than a bare `chat-app`, and S0.1 checks the chat's mngr build in the venv rather than a chat tool).

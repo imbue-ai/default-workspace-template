@@ -4,9 +4,9 @@ version = "0.1.0"
 description = "Template repo for a persistent Claude agent"
 requires-python = ">=3.11"
 dependencies = [
-    # Built-in services that supervisord runs via `uv run <name>` must be listed
-    # here: a `uv sync` without --all-packages prunes members outside the root
-    # closure, deleting their console scripts, and the next spawn fails.
+    # Built-in services and apps whose console scripts supervisord runs must be
+    # listed here: a `uv sync` without --all-packages prunes members outside the
+    # root closure, deleting their console scripts, and the next spawn fails.
     # Scaffolded creations are deliberately absent so adding one touches no
     # shared file; they depend on mngr's restore and update scripts syncing
     # with --all-packages (pinned in backup_workspace_scripts_test.py).
@@ -15,6 +15,14 @@ dependencies = [
     "env-converge",
     "host-backup",
     "share-gateway",
+    "browser",
+    "chat",
+    "files-app",
+    "getting-started",
+    "routines-app",
+    "system-interface",
+    "system-monitor",
+    "terminal-app",
     "tk-command-parsing",
     # The scripts that read the chat's background task markers reach this library through
     # sys.path; the tests of those scripts, run from the root venv, import it directly.
@@ -117,9 +125,15 @@ app-manifest = { workspace = true }
 app-schema = { workspace = true }
 workspace-layout = { workspace = true }
 routines = { workspace = true }
-# Apps that other members depend on (their test suites boot each other).
-system-interface = { workspace = true }
+# The built-in apps, which the root dependencies name so a root-closure sync keeps them.
+browser = { workspace = true }
 chat = { workspace = true }
+files-app = { workspace = true }
+getting-started = { workspace = true }
+routines-app = { workspace = true }
+system-interface = { workspace = true }
+system-monitor = { workspace = true }
+terminal-app = { workspace = true }
 imbue-common = { git = "https://github.com/imbue-ai/mngr", rev = "0ac19c5589605e2a4eee11bf3fde71dce9296a5d", subdirectory = "libs/imbue_common" }
 imbue-mngr = { git = "https://github.com/imbue-ai/mngr", rev = "0ac19c5589605e2a4eee11bf3fde71dce9296a5d", subdirectory = "libs/mngr" }
 imbue-mngr-claude = { git = "https://github.com/imbue-ai/mngr", rev = "0ac19c5589605e2a4eee11bf3fde71dce9296a5d", subdirectory = "libs/mngr_claude" }
