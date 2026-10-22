@@ -43,7 +43,7 @@ rereads the list every 10 seconds and whenever its window takes focus or is
 shown again, redrawing only what changed, so a skill made or edited elsewhere
 (a chat beside it, Files) appears without a reload.
 
-**Adding a skill.** The sidebar's + opens **Add a skill** at `/?find=`, and so
+**Adding a skill.** The sidebar's "+ Add" button (and the empty pane's "Add a skill") opens **Add a skill** at `/?find=`, and so
 does its search's last row while it holds two or more characters ("Search online
 for '…'", the only row when nothing matches), with that search filled in. The
 page has one field, "Search for a skill, or describe one to make": it searches
