@@ -217,7 +217,7 @@
       <h1>Skills</h1>
       <div class="actions">
         <a class="icon-button" id="skills-folder" title="Open the skills folder in Files" aria-label="Open the skills folder in Files"></a>
-        <button type="button" class="add-button" id="new-skill" title="Add a skill: find one online, or have your agent make it">Add</button>
+        <a class="add-button" id="new-skill" href="/?find=" title="Add a skill: find one online, or have your agent make it">Add</a>
       </div>
     </div>
     <div class="search" id="search-field">
@@ -270,7 +270,8 @@
   // A chat message that is exactly /<name> runs that skill (the template's AGENTS.md).
   const skillCommand = (name) => `/${name}`;
   const LIST_REFRESH_MS = 10_000;
-  const WIDE = window.matchMedia("(min-width: 641px)");
+  // The sidebar's search survives the page loads moving between skills, in this tab only.
+  const SIDEBAR_SEARCH_KEY = "skills-sidebar-search";
   const root = document.documentElement;
   const listNode = document.getElementById("skill-list");
   const reader = document.getElementById("reader");
@@ -301,6 +302,22 @@
       localStorage.setItem(key, value);
     } catch {
       // Not kept: the page still works, it just forgets.
+    }
+  }
+
+  function readSessionStored(key) {
+    try {
+      return sessionStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  }
+
+  function writeSessionStored(key, value) {
+    try {
+      sessionStorage.setItem(key, value);
+    } catch {
+      // Not kept: the search starts empty on the next page.
     }
   }
 
@@ -408,21 +425,8 @@
     return location.pathname === "/" ? new URLSearchParams(location.search).get("find") : null;
   }
 
-  function navigate(path) {
-    if (path !== location.pathname + location.search) history.pushState(null, "", path);
-    route();
-  }
-
-  function go(name) {
-    navigate(name ? `/${encodeURIComponent(name)}` : "/");
-  }
-
-  function goFind(query) {
-    navigate(`/?find=${encodeURIComponent(query)}`);
-  }
-
-  function isPlainClick(event) {
-    return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
+  function findUrl(query) {
+    return `/?find=${encodeURIComponent(query)}`;
   }
 
   function renderList() {
@@ -447,7 +451,7 @@
         });
         const rows = members.map((skill) =>
           element("li", {}, [
-            element("a", { href: `/${encodeURIComponent(skill.name)}`, "data-skill": skill.name }, [
+            element("a", { href: skill.name === selectedName() ? "/" : `/${encodeURIComponent(skill.name)}`, "data-skill": skill.name }, [
               element("span", { class: "row-name", text: skill.title }),
               element("span", { class: "row-description", text: skill.description || "No description." }),
             ]),
@@ -463,10 +467,9 @@
   }
 
   function findOnlineButton(query) {
-    const button = element("button", { type: "button", class: "find-online", "data-find": query }, [element("span", { text: `Search online for “${query}”` })]);
-    button.insertAdjacentHTML("afterbegin", iconSvg("search"));
-    button.addEventListener("click", () => goFind(query));
-    return button;
+    const link = element("a", { class: "find-online", href: findUrl(query), "data-find": query }, [element("span", { text: `Search online for “${query}”` })]);
+    link.insertAdjacentHTML("afterbegin", iconSvg("search"));
+    return link;
   }
 
   function markSelected() {
@@ -479,7 +482,7 @@
     const addButton = document.getElementById("new-skill");
     if (found !== null) addButton.setAttribute("aria-current", "page");
     else addButton.removeAttribute("aria-current");
-    for (const button of listNode.querySelectorAll("button[data-find]")) {
+    for (const button of listNode.querySelectorAll("a[data-find]")) {
       if (button.dataset.find === found) button.setAttribute("aria-current", "page");
       else button.removeAttribute("aria-current");
     }
@@ -493,8 +496,7 @@
       " in a chat or press Try it.",
     ]);
     const pick = element("p", { class: "intro-hint", text: "Pick a skill on the left to read or edit it, or add a new one: find it online, or have your agent make it." });
-    const add = withIcon(element("button", { type: "button", class: "add-button", text: "Add a skill" }), "plus");
-    add.addEventListener("click", () => goFind(""));
+    const add = withIcon(element("a", { class: "add-button", href: findUrl(""), text: "Add a skill" }), "plus");
     reader.replaceChildren(element("div", { class: "intro" }, [element("p", { class: "intro-lead", text: "Skills are what your agents know how to do." }), usage, pick, add]));
     reportLocation();
   }
@@ -658,18 +660,17 @@
       const chip = element("button", { type: "button", class: "suggestion", text: suggestion });
       chip.addEventListener("click", () => {
         field.value = suggestion;
-        searchOnline(suggestion, resultsNode, { isTyping: false });
+        searchOnline(suggestion, resultsNode);
       });
       return chip;
     });
     resultsNode.replaceChildren(element("div", { class: "suggestions" }, ["Try", ...chips]));
   }
 
-  // A search from the page itself keeps the page (and the field's focus) and only moves the address: typing replaces
-  // the history entry, a deliberate search (Enter, a suggestion) adds one, so Back steps through searches, not keys.
-  function searchOnline(query, resultsNode, { isTyping }) {
-    const path = `/?find=${encodeURIComponent(query)}`;
-    if (path !== location.pathname + location.search) history[isTyping ? "replaceState" : "pushState"](null, "", path);
+  // A search from the page itself keeps the page (and the field's focus): its address follows the field, so the
+  // window reopens on the last search, without a history entry per search.
+  function searchOnline(query, resultsNode) {
+    history.replaceState(null, "", findUrl(query));
     reportLocation();
     markSelected();
     resultsNode.dataset.expanded = "false";
@@ -687,21 +688,21 @@
       const next = field.value.trim();
       if (!next) {
         ++latestLoad;
-        if (location.search !== "?find=") history.replaceState(null, "", "/?find=");
+        history.replaceState(null, "", findUrl(""));
         reportLocation();
         markSelected();
         showFindStart(results, field);
         return;
       }
       if (next.length < MIN_FIND_QUERY_LENGTH) return;
-      typingTimer = setTimeout(() => searchOnline(next, results, { isTyping: true }), FIND_DEBOUNCE_MS);
+      typingTimer = setTimeout(() => searchOnline(next, results), FIND_DEBOUNCE_MS);
     });
     field.addEventListener("keydown", (event) => {
       if (event.key !== "Enter") return;
       event.preventDefault();
       clearTimeout(typingTimer);
       const next = field.value.trim();
-      if (next.length >= MIN_FIND_QUERY_LENGTH) searchOnline(next, results, { isTyping: false });
+      if (next.length >= MIN_FIND_QUERY_LENGTH) searchOnline(next, results);
     });
     reader.replaceChildren(
       element("article", {}, [
@@ -728,20 +729,7 @@
     else showIntro();
   }
 
-  // A plain click on a page of this app stays in this window; any other click is the shell's to follow.
-  document.addEventListener("click", (event) => {
-    const link = event.target.closest("a[href]");
-    if (!link || !isPlainClick(event)) return;
-    const url = new URL(link.href);
-    if (url.origin !== location.origin || url.pathname.startsWith("/api/")) return;
-    if (url.pathname === location.pathname && url.hash) return;
-    event.preventDefault();
-    // Clicking the skill already open in the sidebar puts the pane back to its note.
-    if (link.dataset.skill && link.dataset.skill === selectedName()) go("");
-    else go(decodeURIComponent(url.pathname.replace(/^\/+|\/+$/g, "")));
-  });
-
-  // The arrow keys walk the list; with both panes showing, each step opens the skill it lands on.
+  // The arrow keys walk the list's links; Enter opens the one in focus.
   listNode.addEventListener("keydown", (event) => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     const links = [...listNode.querySelectorAll("a[data-skill]")];
@@ -749,7 +737,6 @@
     if (!next) return;
     event.preventDefault();
     next.focus();
-    if (WIDE.matches) go(next.dataset.skill);
   });
   search.addEventListener("keydown", (event) => {
     if (event.key !== "ArrowDown") return;
@@ -758,11 +745,16 @@
     event.preventDefault();
     first.focus();
   });
-  search.addEventListener("input", renderList);
+  search.value = readSessionStored(SIDEBAR_SEARCH_KEY) ?? "";
+  search.addEventListener("input", () => {
+    writeSessionStored(SIDEBAR_SEARCH_KEY, search.value);
+    renderList();
+  });
   search.addEventListener("keydown", (event) => {
     if (event.key !== "Escape" || !search.value) return;
     event.preventDefault();
     search.value = "";
+    writeSessionStored(SIDEBAR_SEARCH_KEY, "");
     renderList();
   });
   withIcon(document.getElementById("search-field"), "search");
@@ -804,7 +796,6 @@
     const width = document.querySelector(".sidebar").getBoundingClientRect().width;
     setSidebarWidth(width + (event.key === "ArrowRight" ? RESIZE_KEY_STEP_PX : -RESIZE_KEY_STEP_PX), true);
   });
-  window.addEventListener("popstate", route);
 
   // Each scrolling pane shows its scrollbar while it scrolls and for a moment after (the chat's 1.2s), and while the
   // pointer is over the strip where the bar is drawn.
@@ -875,8 +866,7 @@
     // The skill being read is gone (removed through the chat, or elsewhere): the pane goes back to its note, taking
     // the gone skill's address with it, so Back does not lead to a page about nothing.
     if (name && name === selectedName() && !skills.some((skill) => skill.name === name)) {
-      history.replaceState(null, "", "/");
-      route();
+      location.replace("/");
       return;
     }
     const found = findQuery();
@@ -897,10 +887,11 @@
   window.addEventListener("focus", () => void pollListing());
 
   withIcon(skillsFolderLink, "folder");
-  const newSkillButton = withIcon(document.getElementById("new-skill"), "plus");
-  newSkillButton.addEventListener("click", () => goFind(""));
+  withIcon(document.getElementById("new-skill"), "plus");
 
-  // Connected before the frame's load event, the only time the shell sends its handshake.
+  // The page connects itself, as Routines and Getting Started do, rather than through a runner-injected page script:
+  // its buttons hand drafts and messages to the shell through the connection. Connected before the frame's load event,
+  // the only time the shell sends its handshake.
   let handshake = null;
   shell = connectToShell({
     onHandshake: (received) => {

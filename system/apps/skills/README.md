@@ -20,8 +20,13 @@ week, the full time on hover), its description, and its instructions rendered fr
 `SKILL.md` under the same kind of heading as the description ("Instructions,
 from SKILL.md"; a first heading that only repeats the skill's name or
 "Instructions" is left out), below a faint rule that sets them apart from the
-description. Choosing a skill changes the address in place, so the shell
-reopens the window on it, and the arrow keys walk the list. Below 640px the
+description. Every link is a plain one, as the build-app guide asks: choosing a
+skill loads its page, and the open skill's row links back to the empty pane, so
+clicking it closes the skill. The sidebar's search text is kept for the tab
+across those loads (session storage) and its folded groups and width per viewer
+(local storage); the arrow keys move between the list's links. The page connects
+itself to the shell (as Routines and Getting Started do) rather than through the
+injected page script, since its buttons hand drafts and messages to the shell. Below 640px the
 page shows the list or one skill, with a way back.
 
 Square icon buttons ask the shell for the rest, so they stay hidden on a page
