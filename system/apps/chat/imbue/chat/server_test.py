@@ -20,6 +20,7 @@ from urllib.parse import quote
 from urllib.parse import urlparse
 from uuid import uuid4
 
+import httpx
 import pytest
 from app_manifest.testing import assert_document_policy_admits_page
 from app_schema.testing import assert_api_schema_describes_app
@@ -37,6 +38,7 @@ from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import ParticipantKind
 from workspace_layout.roster import RosterDocument
 from workspace_layout.roster import RosterParticipant
+from workspace_layout.shell_url import shell_base_url
 from workspace_layout.testing import FakeShell
 
 from imbue.chat.accounts import INDEX_VERSION
@@ -5205,17 +5207,18 @@ def test_me_answers_the_requesters_participant_key(app: Flask) -> None:
     }
 
 
-def test_participants_are_the_shells_roster_with_the_agents_picture_on_this_origin(
-    config: Config, signed_in_account: str, tmp_path: Path
-) -> None:
-    shell = FakeShell(
+_AGENT_PICTURE_PATH = "/api/avatars/imbue-character/icon.png?size=64"
+
+
+def _shell_with_workspace_agent(picture_url: str | None) -> FakeShell:
+    return FakeShell(
         roster_document=RosterDocument(
             participants=(
                 RosterParticipant(
                     key=ParticipantKey("workspace-agent"),
                     kind=ParticipantKind.WORKSPACE_AGENT,
                     display_name="Atlas",
-                    profile_picture_url="/api/avatars/imbue-character/icon.png?size=64",
+                    profile_picture_url=picture_url,
                     email=None,
                     handle="agent",
                     color="#2f6b4f",
@@ -5227,6 +5230,12 @@ def test_participants_are_the_shells_roster_with_the_agents_picture_on_this_orig
             )
         )
     )
+
+
+def test_participants_are_the_shells_roster_with_the_agents_picture_on_this_origin(
+    config: Config, signed_in_account: str, tmp_path: Path
+) -> None:
+    shell = _shell_with_workspace_agent(_AGENT_PICTURE_PATH)
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger(), chat_files_root=tmp_path)
     client = create_application(build_test_state(config=config, agent_manager=manager, shell=shell)).test_client()
 
@@ -5234,3 +5243,42 @@ def test_participants_are_the_shells_roster_with_the_agents_picture_on_this_orig
 
     assert (agent["key"], agent["display_name"], agent["handle"]) == ("workspace-agent", "Atlas", "agent")
     assert agent["profile_picture_url"] == "/api/participants/workspace-agent/picture"
+
+
+def test_the_workspace_agents_picture_is_fetched_from_the_shell_and_relayed_with_its_type(
+    config: Config, signed_in_account: str, tmp_path: Path
+) -> None:
+    asked: list[str] = []
+
+    def shell_answers(request: httpx.Request) -> httpx.Response:
+        asked.append(str(request.url))
+        if request.url.path.endswith("icon.png"):
+            return httpx.Response(200, content=b"\x89PNG...", headers={"Content-Type": "image/png"})
+        return httpx.Response(503, text="starting")
+
+    def app_over(shell: FakeShell) -> FlaskClient:
+        manager = AgentManager.build(
+            WebSocketBroadcaster(), messenger=RecordingMngrMessenger(), chat_files_root=tmp_path
+        )
+        state = build_test_state(
+            config=config,
+            agent_manager=manager,
+            shell=shell,
+            http_client=httpx.Client(transport=httpx.MockTransport(shell_answers)),
+        )
+        return create_application(state).test_client()
+
+    relayed = app_over(_shell_with_workspace_agent(_AGENT_PICTURE_PATH)).get(
+        "/api/participants/workspace-agent/picture"
+    )
+    assert (relayed.status_code, relayed.mimetype, relayed.data) == (200, "image/png", b"\x89PNG...")
+    assert asked == [f"{shell_base_url()}{_AGENT_PICTURE_PATH}"]
+
+    # A shell that does not answer the picture with a success is a bad gateway, not this app's failure.
+    refused = app_over(_shell_with_workspace_agent("/api/avatars/other/missing.svg")).get(
+        "/api/participants/workspace-agent/picture"
+    )
+    assert refused.status_code == 502
+    # A roster that names no picture has nothing to relay.
+    unpictured = app_over(_shell_with_workspace_agent(None)).get("/api/participants/workspace-agent/picture")
+    assert unpictured.status_code == 404
