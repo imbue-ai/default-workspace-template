@@ -281,6 +281,54 @@ def test_inside_the_shell_add_a_skill_stays_on_its_search(
     )
 
 
+def test_moving_between_skills_redraws_in_place_and_back_retraces_it(open_skills_page: OpenPage) -> None:
+    page = open_skills_page("/", *_DESKTOP)
+    origin = page.url.removesuffix("/")
+    # Survives only while the page is not reloaded.
+    page.evaluate("window.notReloaded = true")
+
+    page.locator('a[data-skill="assist"]').click()
+    expect(page.locator("article .skill-head h1")).to_have_text("assist")
+    page.locator('a[data-skill="notify-user"]').click()
+    expect(page.locator("article .skill-head h1")).to_have_text("notify-user")
+    expect(page).to_have_url(f"{origin}/notify-user")
+    expect(page.locator('a[data-skill="notify-user"]')).to_have_attribute("href", "/")
+
+    page.go_back()
+
+    expect(page).to_have_url(f"{origin}/assist")
+    expect(page.locator("article .skill-head h1")).to_have_text("assist")
+    expect(page.locator('a[data-skill="assist"]')).to_have_attribute("aria-current", "page")
+
+    page.go_back()
+
+    expect(page.locator(".intro-lead")).to_be_visible()
+    assert page.evaluate("window.notReloaded") is True
+
+
+def test_inside_the_shell_the_page_moves_in_place_and_reports_where_it_is(
+    open_framed_skills_page: Callable[[str], Page],
+) -> None:
+    shell = open_framed_skills_page("/")
+    frame = shell.frame_locator("#app")
+    expect(frame.locator('a[data-skill="assist"]')).to_be_visible()
+    shell.main_frame.child_frames[0].evaluate("window.notReloaded = true")
+
+    frame.locator('a[data-skill="assist"]').click()
+    expect(frame.locator("article .skill-head h1")).to_have_text("assist")
+    # The shell moves the window to another of the app's addresses.
+    shell.evaluate(
+        "document.getElementById('app').contentWindow.postMessage({ type: 'shell:navigate', path: '/notify-user' }, '*')"
+    )
+
+    expect(frame.locator("article .skill-head h1")).to_have_text("notify-user")
+    messages = shell.evaluate("window.messages")
+    assert {"type": "shell:location", "path": "/assist", "title": "assist - Skills"} in messages
+    assert {"type": "shell:location", "path": "/notify-user", "title": "notify-user - Skills"} in messages
+    assert not [message for message in messages if message["type"] in ("shell:open", "shell:open-link")]
+    assert shell.main_frame.child_frames[0].evaluate("window.notReloaded") is True
+
+
 def test_inside_the_shell_a_skill_s_buttons_hand_it_to_files_and_the_chat(
     workspace_root: Path, open_framed_skills_page: Callable[[str], Page]
 ) -> None:

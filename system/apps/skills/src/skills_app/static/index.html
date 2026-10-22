@@ -473,7 +473,7 @@
         });
         const rows = members.map((skill) =>
           element("li", {}, [
-            element("a", { href: skill.name === selectedName() ? "/" : `/${encodeURIComponent(skill.name)}`, "data-skill": skill.name }, [
+            element("a", { href: `/${encodeURIComponent(skill.name)}`, "data-skill": skill.name }, [
               element("span", { class: "row-name", text: skill.title }),
               element("span", { class: "row-description", text: skill.description || "No description." }),
             ]),
@@ -497,8 +497,11 @@
 
   function markSelected() {
     const name = selectedName();
+    // The open skill's row leads back to the empty pane, so clicking it closes the skill.
     for (const link of listNode.querySelectorAll("a[data-skill]")) {
-      if (link.dataset.skill === name) link.setAttribute("aria-current", "page");
+      const isSelected = link.dataset.skill === name;
+      link.setAttribute("href", isSelected ? "/" : `/${encodeURIComponent(link.dataset.skill)}`);
+      if (isSelected) link.setAttribute("aria-current", "page");
       else link.removeAttribute("aria-current");
     }
     const found = findQuery();
@@ -710,6 +713,8 @@
   // A search from the page itself keeps the page (and the field's focus): its address follows the field, so the
   // window reopens on the last search, without a history entry per search.
   function searchOnline(query, resultsNode) {
+    // A search typed just before moving to another pane must not take that pane's address.
+    if (!resultsNode.isConnected) return;
     writeSessionStored(ADD_SEARCH_KEY, query);
     history.replaceState(null, "", findUrl(query));
     reportLocation();
@@ -763,6 +768,7 @@
   }
 
   function route() {
+    ++latestLoad;
     const name = selectedName();
     const found = findQuery();
     root.dataset.view = name || found !== null ? "skill" : "list";
@@ -772,6 +778,26 @@
     else if (found !== null) showFind(found);
     else showIntro();
   }
+
+  function navigateTo(path, { replace = false } = {}) {
+    if (replace || path === location.pathname + location.search) history.replaceState(null, "", path);
+    else history.pushState(null, "", path);
+    route();
+  }
+
+  // A plain click on a link to one of the page's own addresses redraws in place rather than reloading the page. Other
+  // clicks -- for a new window, to anywhere else, or on a link inside a skill's instructions -- are left to the browser
+  // and the shell connection, which opens them where the workspace does.
+  document.addEventListener("click", (event) => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const link = event.target.closest("a[href]");
+    if (!link || link.target || link.hasAttribute("download") || link.closest(".instructions")) return;
+    const url = new URL(link.href);
+    if (url.origin !== location.origin) return;
+    event.preventDefault();
+    navigateTo(url.pathname + url.search);
+  });
+  window.addEventListener("popstate", route);
 
   // The arrow keys walk the list's links; Enter opens the one in focus.
   listNode.addEventListener("keydown", (event) => {
@@ -904,7 +930,7 @@
     // The skill being read is gone (removed through the chat, or elsewhere): the pane goes back to its note, taking
     // the gone skill's address with it, so Back does not lead to a page about nothing.
     if (name && name === selectedName() && !skills.some((skill) => skill.name === name)) {
-      location.replace("/");
+      navigateTo("/", { replace: true });
       return;
     }
     const found = findQuery();
@@ -938,6 +964,8 @@
       reportLocation();
     },
     onShown: () => void pollListing(),
+    capabilities: { navigation: true, closeChord: false },
+    onNavigate: (path) => navigateTo(path, { replace: true }),
   });
   installElementContextMenu({ connection: shell, handshake: () => handshake });
 

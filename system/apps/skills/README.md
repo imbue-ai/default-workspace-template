@@ -20,10 +20,16 @@ week, the full time on hover), its description, and its instructions rendered fr
 `SKILL.md` under the same kind of heading as the description ("Instructions,
 from SKILL.md"; a first heading that only repeats the skill's name or
 "Instructions" is left out), below a faint rule that sets them apart from the
-description. Every link is a plain one, as the build-app guide asks: choosing a
-skill loads its page, and the open skill's row links back to the empty pane, so
+description. Every link is a plain one, as the build-app guide asks, and each
+skill and Add a skill has its own address. A plain click on a link to one of
+those addresses redraws the page in place (`history.pushState`, with Back and
+Forward retracing it), as Files moves between folders; every other click -- a
+new-window click, a link elsewhere, a link inside a skill's instructions -- is
+left to the browser and the shell. The page also declares the shell's
+`navigation` capability, so the shell moving its window to another address
+redraws it in place too. The open skill's row links back to the empty pane, so
 clicking it closes the skill. The sidebar's search text is kept for the tab
-across those loads (session storage) and its folded groups and width per viewer
+across reloads (session storage) and its folded groups and width per viewer
 (local storage); the arrow keys move between the list's links. The page connects
 itself to the shell (as Routines and Getting Started do) rather than through the
 injected page script, since its buttons hand drafts and messages to the shell. Below 640px the
