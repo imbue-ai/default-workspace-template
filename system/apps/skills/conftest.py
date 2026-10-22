@@ -5,9 +5,9 @@ from pathlib import Path
 import pytest
 from flask.testing import FlaskClient
 
+from skills_app.mock_skill_index_searcher_test import RecordingSkillIndexSearcher
 from skills_app.server import STATIC_DIR
 from skills_app.server import create_app
-from skills_app.testing import FakeSkillIndexSearcher
 from skills_app.testing import LocalSkillIndex
 from skills_catalog.catalog import build_catalog
 from skills_catalog.testing import init_workspace_repo
@@ -20,13 +20,13 @@ def workspace_root(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def searcher() -> FakeSkillIndexSearcher:
+def searcher() -> RecordingSkillIndexSearcher:
     """An online index that answers nothing until a test gives it matches."""
-    return FakeSkillIndexSearcher()
+    return RecordingSkillIndexSearcher()
 
 
 @pytest.fixture
-def client(workspace_root: Path, searcher: FakeSkillIndexSearcher) -> FlaskClient:
+def client(workspace_root: Path, searcher: RecordingSkillIndexSearcher) -> FlaskClient:
     return create_app(build_catalog(workspace_root), STATIC_DIR, searcher).test_client()
 
 

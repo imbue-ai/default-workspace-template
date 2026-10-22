@@ -2,27 +2,12 @@ import json
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 
-from pydantic import Field
-
-from skills_app.online_search import IndexedSkill
-from skills_app.online_search import SkillIndexSearcherInterface
+from skills_app.data_types import IndexedSkill
 
 
-def indexed_skill(source: str, name: str, installs: int = 1000) -> IndexedSkill:
+def indexed_skill(source: str, name: str, installs: int) -> IndexedSkill:
     """A match as skills.sh answers it, its page at owner/repo/name."""
     return IndexedSkill(name=name, source=source, installs=installs, page_id=f"{source}/{name}")
-
-
-class FakeSkillIndexSearcher(SkillIndexSearcherInterface):
-    """Answers every search with the same matches, or as an unreachable index; remembers what it was asked."""
-
-    matches: tuple[IndexedSkill, ...] = Field(default=(), description="What every search answers")
-    is_unreachable: bool = Field(default=False, description="Whether every search fails as the network would")
-    queries: list[str] = Field(default_factory=list, description="Every query searched, in order")
-
-    def search(self, query: str) -> tuple[IndexedSkill, ...] | None:
-        self.queries.append(query)
-        return None if self.is_unreachable else self.matches
 
 
 class LocalSkillIndex:

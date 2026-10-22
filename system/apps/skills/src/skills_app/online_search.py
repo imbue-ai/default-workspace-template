@@ -10,8 +10,6 @@ to look online, since the query leaves the workspace.
 """
 
 import time
-from abc import ABC
-from abc import abstractmethod
 from collections.abc import Sequence
 from typing import Final
 
@@ -21,11 +19,13 @@ from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import ValidationError
 
-from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from skills_app.data_types import IndexedSkill
 from skills_app.data_types import OnlineSkill
 from skills_app.data_types import OnlineSkillState
+from skills_app.errors import MalformedSkillIndexAnswerError
+from skills_app.errors import SkillIndexUnavailableError
+from skills_app.interfaces import SkillIndexSearcherInterface
 from skills_catalog.data_types import SkillSummary
 
 SKILLS_SH_URL: Final[str] = "https://skills.sh"
@@ -39,40 +39,22 @@ _FETCH_SLOW_SECONDS: Final[float] = 3.0
 _ANSWER_KEPT_SECONDS: Final[float] = 300.0
 
 
-class IndexedSkill(FrozenModel):
-    """One match as skills.sh answers it."""
-
-    name: str = Field(description="The skill's name, which the CLI installs it by")
-    source: str = Field(description="Where it is published: a GitHub owner/repo, or a host")
-    installs: int = Field(description="How many times the CLI has installed it")
-    page_id: str = Field(description="Its page's path on skills.sh, e.g. owner/repo/name: the answer's id")
-
-
-class SkillIndexSearcherInterface(MutableModel, ABC):
-    """Searches the online skills index."""
-
-    @abstractmethod
-    def search(self, query: str) -> tuple[IndexedSkill, ...] | None:
-        """The matches for ``query``, most installed first, or None when the index could not be asked (logged)."""
-
-
 class SkillsShSearcher(SkillIndexSearcherInterface):
     """Asks skills.sh, one GET per query, keeping each answer for a few minutes."""
 
     base_url: str = Field(default=SKILLS_SH_URL, frozen=True, description="The index's origin")
     _answers: dict[str, tuple[float, tuple[IndexedSkill, ...]]] = PrivateAttr(default_factory=dict)
 
-    def search(self, query: str) -> tuple[IndexedSkill, ...] | None:
+    def search(self, query: str) -> tuple[IndexedSkill, ...]:
         key = query.strip().lower()
         kept = self._answers.get(key)
         if kept is not None and time.monotonic() - kept[0] < _ANSWER_KEPT_SECONDS:
             return kept[1]
         matches = self._fetch(key)
-        if matches is not None:
-            self._answers[key] = (time.monotonic(), matches)
+        self._answers[key] = (time.monotonic(), matches)
         return matches
 
-    def _fetch(self, query: str) -> tuple[IndexedSkill, ...] | None:
+    def _fetch(self, query: str) -> tuple[IndexedSkill, ...]:
         url = f"{self.base_url}{SEARCH_PATH}"
         started_at = time.monotonic()
         try:
@@ -83,34 +65,27 @@ class SkillsShSearcher(SkillIndexSearcherInterface):
                 follow_redirects=True,
             )
         except httpx.HTTPError as e:
-            logger.warning("Failed to search {} for {!r}: {}", url, query, e)
-            return None
+            raise SkillIndexUnavailableError(f"Could not search {url} for {query!r}: {e}") from e
         elapsed = time.monotonic() - started_at
         if elapsed > _FETCH_SLOW_SECONDS:
             logger.warning("Searched {} for {!r} slowly, in {:.1f}s", url, query, elapsed)
         if response.is_error:
-            logger.warning("Searching {} for {!r} answered {}", url, query, response.status_code)
-            return None
+            raise SkillIndexUnavailableError(f"Searching {url} for {query!r} answered {response.status_code}")
         try:
             answer = response.json()
         except ValueError as e:
-            logger.warning("Searching {} for {!r} answered something that is not JSON: {}", url, query, e)
-            return None
-        matches = indexed_skills_from_answer(answer)
-        if matches is None:
-            logger.warning("Searching {} for {!r} answered something that is not a search result", url, query)
-        return matches
+            raise MalformedSkillIndexAnswerError(f"Searching {url} for {query!r} answered something not JSON") from e
+        return indexed_skills_from_answer(answer)
 
 
 @pure
-def indexed_skills_from_answer(answer: object) -> tuple[IndexedSkill, ...] | None:
-    """The matches in a skills.sh search answer, most installed first, or None for an answer that is not one; an entry
-    that does not parse is left out.
+def indexed_skills_from_answer(answer: object) -> tuple[IndexedSkill, ...]:
+    """The matches in a skills.sh search answer, most installed first; an entry that does not parse is left out.
 
     Only the fields the page shows are read, so a field skills.sh adds later changes nothing."""
     entries = answer.get("skills") if isinstance(answer, dict) else None
     if not isinstance(entries, list):
-        return None
+        raise MalformedSkillIndexAnswerError("The search answer has no skills list")
     matches: list[IndexedSkill] = []
     for entry in entries:
         if not isinstance(entry, dict):
@@ -130,9 +105,7 @@ def indexed_skills_from_answer(answer: object) -> tuple[IndexedSkill, ...] | Non
 
 
 @pure
-def online_skills(
-    matches: Sequence[IndexedSkill], installed: Sequence[SkillSummary], base_url: str = SKILLS_SH_URL
-) -> tuple[OnlineSkill, ...]:
+def online_skills(matches: Sequence[IndexedSkill], installed: Sequence[SkillSummary]) -> tuple[OnlineSkill, ...]:
     """Each match as the page shows it, marked against the workspace's own skills.
 
     A skill installs into a folder named after it, so a match is installed when the workspace has a skill of that name
@@ -145,7 +118,7 @@ def online_skills(
             name=match.name,
             source=match.source,
             installs=match.installs,
-            page_url=f"{base_url}/{match.page_id}",
+            page_url=f"{SKILLS_SH_URL}/{match.page_id}",
             install_command=f"npx skills add {match.source}@{match.name}",
             state=_state_of(match, by_name.get(match.name.lower())),
         )

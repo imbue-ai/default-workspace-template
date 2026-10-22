@@ -38,9 +38,10 @@ from imbue.imbue_common.logging import setup_logging
 from skills_app.data_types import HealthResponse
 from skills_app.data_types import OnlineSkillResults
 from skills_app.data_types import RenderedInstructions
+from skills_app.errors import SkillIndexUnavailableError
 from skills_app.instructions import render_instructions
+from skills_app.interfaces import SkillIndexSearcherInterface
 from skills_app.online_search import MIN_QUERY_LENGTH
-from skills_app.online_search import SkillIndexSearcherInterface
 from skills_app.online_search import SkillsShSearcher
 from skills_app.online_search import online_skills
 from skills_catalog.catalog import build_catalog
@@ -175,8 +176,10 @@ def create_app(
         query = request.args.get("q", "").strip()
         if len(query) < MIN_QUERY_LENGTH:
             return error_response(f"Search for at least {MIN_QUERY_LENGTH} characters.", HTTP_BAD_REQUEST)
-        matches = searcher.search(query)
-        if matches is None:
+        try:
+            matches = searcher.search(query)
+        except SkillIndexUnavailableError as e:
+            logger.warning("Could not search skills.sh: {}", e)
             return error_response(
                 "Couldn't reach skills.sh. Check the workspace's internet connection and try again.", HTTP_BAD_GATEWAY
             )

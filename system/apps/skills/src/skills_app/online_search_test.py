@@ -1,6 +1,10 @@
 from pathlib import Path
 
+import pytest
+
 from skills_app.data_types import OnlineSkillState
+from skills_app.errors import MalformedSkillIndexAnswerError
+from skills_app.errors import SkillIndexUnavailableError
 from skills_app.online_search import SkillsShSearcher
 from skills_app.online_search import indexed_skills_from_answer
 from skills_app.online_search import online_skills
@@ -40,7 +44,6 @@ _ANSWER = {
 def test_an_answer_s_matches_are_read_most_installed_first_and_malformed_ones_left_out() -> None:
     matches = indexed_skills_from_answer(_ANSWER)
 
-    assert matches is not None
     assert [(match.name, match.source, match.installs, match.page_id) for match in matches] == [
         ("pdf", "anthropics/skills", 214612, "anthropics/skills/pdf"),
         ("docx", "anthropics/skills", 205002, "anthropics/skills/docx"),
@@ -48,7 +51,8 @@ def test_an_answer_s_matches_are_read_most_installed_first_and_malformed_ones_le
 
 
 def test_an_answer_without_a_skills_list_is_not_a_search_result() -> None:
-    assert indexed_skills_from_answer({"error": "rate limited"}) is None
+    with pytest.raises(MalformedSkillIndexAnswerError):
+        indexed_skills_from_answer({"error": "rate limited"})
 
 
 def test_a_match_is_installed_only_when_the_skill_of_its_name_came_from_its_source(tmp_path: Path) -> None:
@@ -65,9 +69,9 @@ def test_a_match_is_installed_only_when_the_skill_of_its_name_came_from_its_sour
 
     marked = online_skills(
         (
-            indexed_skill("anthropics/skills", "PDF"),
-            indexed_skill("someone/else", "assist"),
-            indexed_skill("anthropics/skills", "docx"),
+            indexed_skill("anthropics/skills", "PDF", installs=1000),
+            indexed_skill("someone/else", "assist", installs=1000),
+            indexed_skill("anthropics/skills", "docx", installs=1000),
         ),
         installed,
     )
@@ -90,19 +94,25 @@ def test_the_searcher_asks_the_index_once_per_query_while_its_answer_is_kept(
     first = searcher.search("PDF ")
     second = searcher.search("pdf")
 
-    assert first is not None and [match.name for match in first] == ["pdf", "docx"]
+    assert [match.name for match in first] == ["pdf", "docx"]
     assert second == first
     assert local_skill_index.requested_paths == ["/api/search?q=pdf&limit=20"]
 
 
-def test_the_searcher_answers_none_when_the_index_fails_or_answers_nonsense(
-    local_skill_index: LocalSkillIndex,
-) -> None:
-    searcher = SkillsShSearcher(base_url=local_skill_index.base_url)
-
+def test_the_searcher_raises_when_the_index_answers_an_error(local_skill_index: LocalSkillIndex) -> None:
     local_skill_index.status = 503
-    assert searcher.search("pdf") is None
-    local_skill_index.status = 200
+
+    with pytest.raises(SkillIndexUnavailableError, match="answered 503"):
+        SkillsShSearcher(base_url=local_skill_index.base_url).search("pdf")
+
+
+def test_the_searcher_raises_when_the_index_answers_something_else(local_skill_index: LocalSkillIndex) -> None:
     local_skill_index.answer = {"error": "rate limited"}
-    assert searcher.search("docx") is None
-    assert SkillsShSearcher(base_url="http://127.0.0.1:9").search("pdf") is None
+
+    with pytest.raises(MalformedSkillIndexAnswerError):
+        SkillsShSearcher(base_url=local_skill_index.base_url).search("docx")
+
+
+def test_the_searcher_raises_when_the_index_cannot_be_reached() -> None:
+    with pytest.raises(SkillIndexUnavailableError, match="Could not search"):
+        SkillsShSearcher(base_url="http://127.0.0.1:9").search("pdf")

@@ -3,9 +3,9 @@ from pathlib import Path
 from flask.testing import FlaskClient
 
 from app_schema.testing import assert_api_schema_describes_app
+from skills_app.mock_skill_index_searcher_test import RecordingSkillIndexSearcher
 from skills_app.server import STATIC_DIR
 from skills_app.server import create_app
-from skills_app.testing import FakeSkillIndexSearcher
 from skills_app.testing import indexed_skill
 from skills_catalog.catalog import build_catalog
 from skills_catalog.testing import commit_all
@@ -91,7 +91,7 @@ def test_a_missing_or_unnameable_skill_is_not_found(client: FlaskClient) -> None
 
 def test_a_checkout_whose_history_cannot_be_read_answers_the_reason(tmp_path: Path) -> None:
     write_skill(tmp_path, "assist", "Not in a git checkout.")
-    client = create_app(build_catalog(tmp_path), STATIC_DIR, FakeSkillIndexSearcher()).test_client()
+    client = create_app(build_catalog(tmp_path), STATIC_DIR, RecordingSkillIndexSearcher()).test_client()
 
     response = client.get("/api/skills")
 
@@ -100,7 +100,7 @@ def test_a_checkout_whose_history_cannot_be_read_answers_the_reason(tmp_path: Pa
 
 
 def test_find_marks_each_online_match_against_the_workspace_s_skills(
-    workspace_root: Path, client: FlaskClient, searcher: FakeSkillIndexSearcher
+    workspace_root: Path, client: FlaskClient, searcher: RecordingSkillIndexSearcher
 ) -> None:
     write_skill(workspace_root, "web-design", "Design guidelines.")
     (workspace_root / "skills-lock.json").write_text(
@@ -130,7 +130,7 @@ def test_find_marks_each_online_match_against_the_workspace_s_skills(
     assert results["skills"][2]["install_command"] == "npx skills add anthropics/skills@pdf"
 
 
-def test_find_refuses_a_query_too_short_to_search(client: FlaskClient, searcher: FakeSkillIndexSearcher) -> None:
+def test_find_refuses_a_query_too_short_to_search(client: FlaskClient, searcher: RecordingSkillIndexSearcher) -> None:
     response = client.get("/api/find?q=a")
 
     assert response.status_code == 400
@@ -139,7 +139,7 @@ def test_find_refuses_a_query_too_short_to_search(client: FlaskClient, searcher:
 
 
 def test_find_says_when_the_online_index_cannot_be_reached(
-    client: FlaskClient, searcher: FakeSkillIndexSearcher
+    client: FlaskClient, searcher: RecordingSkillIndexSearcher
 ) -> None:
     searcher.is_unreachable = True
 
