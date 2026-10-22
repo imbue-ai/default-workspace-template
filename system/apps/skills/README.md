@@ -29,15 +29,15 @@ itself to the shell (as Routines and Getting Started do) rather than through the
 injected page script, since its buttons hand drafts and messages to the shell. Below 640px the
 page shows the list or one skill, with a way back.
 
-Square icon buttons ask the shell for the rest, so they stay hidden on a page
-no shell frames: a folder opens the skills folder (in the sidebar) or the
-skill's own folder in Files (a `file:` link the shell routes); a pencil beside
-the Instructions heading sends
-`edit:file` with the skill's `SKILL.md`, which Files answers with its edit
-page; the sidebar's + drafts "Help me make or find a new skill online that "
-into the chat on screen, and a skill's "Try it" drafts `/<name> ` (the syntax
-the empty pane's note explains), both unsent for the user to finish
-(`shell:draft-text`: the chat on screen, else the most recent, else a new one). A skill that is
+The buttons that ask the shell for something stay hidden on a page no shell
+frames: a folder opens the skills folder (in the sidebar) or the skill's own
+folder in Files (a `file:` link the shell routes); a pencil beside the
+Instructions heading sends `edit:file` with the skill's `SKILL.md`, which Files
+answers with its edit page; and a skill's "Try it" drafts `/<name> ` (the
+syntax the empty pane's note explains) unsent for the user to finish
+(`shell:draft-text`: the chat on screen, else the most recent, else a new one).
+The sidebar's "+ Add" only moves within the page (see Adding a skill below), so
+it shows without a shell too. A skill that is
 the workspace's own (made here, or installed) also has a trash button, which
 drafts a request to remove it into the chat -- for an installed one, with its
 `npx skills remove <name> -y` command, which also drops its lock entry -- so
