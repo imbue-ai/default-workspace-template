@@ -13,14 +13,21 @@ what the agent does next: ``connected`` (sync), ``needs_permission`` (file the s
 permission request; a re-sent request also signs a lapsed account back in), or ``blocked`` (the
 site refused the request itself, which a sign-in does not fix).
 
-``sync`` installs datalib on first use (the pinned release, sha256-checked, plus the Node runtime
-its latchkey and search steps run on), writes datalib's config for every source a sync has ever been
-run for, and runs one ``datalib-dag`` sync of the named sources. It records each source's
-progress in the status file as it goes, prints the final status, and exits 0 only when every named
-source imported. A sync of a large account takes a while: run it through
-``system/scripts/run_in_background.py``.
+``sync`` installs datalib through the datalib skill's installer (without the Datalib app), adds
+each named source to the datalib store's config if it is not there yet, and runs one
+``datalib-dag`` sync of the named sources' downloads. It records each source's progress in the
+status file as it goes, prints the final status, and exits 0 only when every named source imported.
+A sync of a large account takes a while: run it through ``system/scripts/run_in_background.py``.
 
 ``status`` prints the status file.
+
+The store is the datalib skill's (``data/.skills/datalib/``), shared with anything else the user
+mirrors there. A source this script adds gets an ingest step (the download into the raw store
+``<group>/ingest/entities.doltlite_db``), a ``render_markdown`` step and a ``keyword_index`` step,
+and the last two are turned off as soon as they are added: a first import only downloads, which is
+what keeps it quick and light. Turning them on, which the skill does only when the user asks for
+search over their chats, is ``datalib-dag turn-on``. A source already in the config is never
+rewritten, so whatever was turned on or changed there stays.
 
 The status file (``data/.skills/import-chats/status.json``) is read by the Getting Started app's
 "Bring in your chats" card, so its shape is a contract with
@@ -33,18 +40,13 @@ The status file (``data/.skills/import-chats/status.json``) is read by the Getti
 ``state`` is one of ``importing``, ``imported``, ``needs_sign_in`` and ``failed``; ``pid`` is the
 sync's process while it is ``importing``, and a running sync rewrites its record (``updated_at``)
 every ``PROGRESS_INTERVAL_SECONDS``, so a reader can tell a sync that died (its pid gone, or its
-record gone stale) from one that is still running. ``fetched`` of ``to_fetch`` is how far a
-running ingest has got through the conversations it set out to fetch; both are null when it
-reports no total, and once the sync ends.
+record gone stale) from one that is still running. ``conversations`` is how many conversations
+the raw store holds. ``fetched`` of ``to_fetch`` is how far a running ingest has got through the
+conversations it set out to fetch; both are null when it reports no total, and once the sync ends.
 
 After each sync it also rewrites one index per source beside the status file
-(``data/.skills/import-chats/claude-chats.md``, ``chatgpt-chats.md``): every page by title, newest
-first, each linked to its page in the workspace and to the original. datalib names the pages by
-uuid, so this is the one place to browse them by name.
-
-The datalib store is ``data/.skills/datalib/`` (its ``config.toml`` and every tree datalib writes):
-the raw records each ingest kept, and one rendered markdown page per conversation under
-``<group>/render_markdown/``. Credentials never touch it; latchkey's gateway attaches them.
+(``data/.skills/import-chats/claude-chats.md``, ``chatgpt-chats.md``): every conversation by title,
+newest first, each linked to the original and, once search is on, to its rendered page.
 
 Standard library only, so it runs under bare ``python3`` like the other skill scripts.
 """
@@ -55,36 +57,23 @@ import argparse
 import contextlib
 import datetime
 import fcntl
-import hashlib
 import json
 import os
-import platform
 import re
-import shutil
 import subprocess
 import sys
-import tarfile
-import tempfile
 import threading
+import tomllib
 import urllib.parse
-import urllib.request
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-DATALIB_VERSION = "v0.41.0"
-# The fully static builds: they run on any Linux of the right arch, whatever its libc.
-_TARBALL_SHA256_BY_ARCH = {
-    "x86_64": "12120e655284ef17fd053682bf45617d000bd684150df55951b68bcb29a3806f",
-    "aarch64": "c53ff2d148465b218214c1b7b65e4aa5dc70b50386fd053f1a1bc096160899cc",
-}
-_RELEASE_URL = "https://github.com/imbue-ai/datalib/releases/download"
-_DOWNLOAD_TIMEOUT_SECONDS = 300.0
-# ``pull-runtime`` downloads the Node runtime with no deadline of its own.
-_PULL_RUNTIME_TIMEOUT_SECONDS = 600.0
-
 DATA_ROOT = Path("data") / ".skills" / "datalib"
 STATUS_PATH = Path("data") / ".skills" / "import-chats" / "status.json"
+INSTALL_SCRIPT = (
+    Path(".agents") / "skills" / "datalib" / "scripts" / "install_datalib.sh"
+)
 SYNC_REQUESTER = "import-chats"
 
 STATE_IMPORTING = "importing"
@@ -96,11 +85,20 @@ CHECK_CONNECTED = "connected"
 CHECK_NEEDS_PERMISSION = "needs_permission"
 CHECK_BLOCKED = "blocked"
 
+# Added with each source, and turned off at once: they render a page per conversation and build its keyword
+# index, which is most of a first sync's time and memory.
+SEARCH_FUNCTIONS = ("render_markdown", "keyword_index")
+
 # Marks a request for the gateway's Chrome-impersonating curl, which is what gets it past the
 # Cloudflare challenge both sites put in front of their APIs. datalib sends the same marker.
 _IMPERSONATE_HEADER = "X-Imbue-Impersonate: 1"
 _CHECK_TIMEOUT_SECONDS = 60.0
-# How often a running sync rewrites each source's count, so the Getting Started card counts up as pages arrive.
+# The first install downloads about 195 MB.
+_INSTALL_TIMEOUT_SECONDS = 900.0
+_DATALIB_COMMAND_TIMEOUT_SECONDS = 120.0
+# Short enough that a slow count never stalls the heartbeat past the Getting Started app's staleness limit.
+_COUNT_TIMEOUT_SECONDS = 20.0
+# How often a running sync rewrites each source's record, so the Getting Started card counts up as chats arrive.
 PROGRESS_INTERVAL_SECONDS = 10.0
 
 # latchkey's own refusals: no permission for the service yet, or no saved sign-in for it.
@@ -117,8 +115,10 @@ _SIGN_IN_MARKERS = (
     "HTTP 403",
     "token_expired",
 )
-# The run summary's ``failure`` for a step whose credential failed.
+# The run summary's ``failure`` kinds this script treats specially: a credential that failed, and a download that
+# gave up with work still owed after keeping what it got (the next sync resumes it).
 _AUTH_FAILURE_KIND = "auth"
+_INCOMPLETE_FAILURE_KIND = "incomplete"
 # The statuses datalib counts as a step finishing without failing: a sync skips a step with nothing new to do.
 _STEP_OK_STATUSES = ("succeeded", "skipped_up_to_date")
 
@@ -131,6 +131,12 @@ class ChatSource:
     group: str
     # A cheap authenticated read: it answers 200 once the account is connected.
     check_url: str
+    # The raw store's conversations as ``id, title, updated_at`` rows; a row whose detail has not been fetched yet
+    # has no payload.
+    conversations_query: str
+    conversation_url: str
+    projects_query: str | None = None
+    project_url: str | None = None
 
 
 SOURCES: dict[str, ChatSource] = {
@@ -140,6 +146,10 @@ SOURCES: dict[str, ChatSource] = {
         datalib_type="claude",
         group="claude_chats",
         check_url="https://claude.ai/api/organizations",
+        conversations_query="SELECT id, name AS title, updated_at FROM conversations WHERE payload IS NOT NULL",
+        conversation_url="https://claude.ai/chat/{id}",
+        projects_query="SELECT id, name AS title, updated_at FROM projects WHERE payload IS NOT NULL",
+        project_url="https://claude.ai/project/{id}",
     ),
     "chatgpt": ChatSource(
         key="chatgpt",
@@ -147,15 +157,13 @@ SOURCES: dict[str, ChatSource] = {
         datalib_type="chatgpt",
         group="chatgpt_chats",
         check_url="https://chatgpt.com/backend-api/me",
+        conversations_query="SELECT id, title, update_time AS updated_at FROM conversations WHERE payload IS NOT NULL",
+        conversation_url="https://chatgpt.com/c/{id}",
     ),
 }
 
 
-# What the index reads off each rendered page: its frontmatter, the header's link to the original, and every
-# message's timestamp (the frontmatter carries no dates).
 _FRONTMATTER_FIELD = re.compile(r"^(\w+): (.*)$")
-_SOURCE_LINK = re.compile(r'class="source-link" href="([^"]+)"')
-_MESSAGE_TIME = re.compile(r'<time class="msg-ts" datetime="([^"]+)"')
 _INDEX_TITLE_LIMIT = 120
 # What a title must escape to stay one link's text: a backslash would escape the character after it, a bracket
 # would end the text, and ``<`` would start raw HTML.
@@ -201,12 +209,25 @@ def write_status(path: Path, document: Mapping) -> None:
 
 
 @contextlib.contextmanager
-def status_lock(path: Path) -> Iterator[None]:
-    """Hold the status file's lock, so two syncs running at once never write back a record the other replaced."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.with_name(".status.lock").open("a") as lock_file:
+def _file_lock(lock_path: Path) -> Iterator[None]:
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a") as lock_file:
         fcntl.flock(lock_file, fcntl.LOCK_EX)
         yield
+
+
+def status_lock(path: Path) -> contextlib.AbstractContextManager[None]:
+    """Hold the status file's lock, so two syncs running at once never write back a record the other replaced."""
+    return _file_lock(path.with_name(".status.lock"))
+
+
+def config_lock(status_path: Path) -> contextlib.AbstractContextManager[None]:
+    """Hold the lock on adding sources, so two syncs never both append the same source to the config."""
+    return _file_lock(status_path.with_name(".config.lock"))
+
+
+def recorded_conversations(path: Path, key: str) -> int:
+    return int(read_status(path)["sources"].get(key, {}).get("conversations", 0))
 
 
 def record_source(
@@ -232,23 +253,81 @@ def record_source(
         write_status(path, document)
 
 
-def render_config(sources: Sequence[ChatSource]) -> str:
-    """datalib's ``config.toml`` for ``sources``: per source, its ingest, its rendered pages and its keyword
-    index; then the shared grid and search over all of them, and the applet that serves them.
+@dataclass(frozen=True)
+class Datalib:
+    """The datalib binaries the datalib skill's installer links into ``bin_dir``, and the data root they work on."""
 
-    Embeddings are left out: they download a model and keep a CPU busy for a long time, and keyword search plus
-    the rendered pages cover what an agent needs from past chats.
-    """
-    if not sources:
-        raise ImportChatsError("a config needs at least one source")
-    lines = [
-        "# Written by the import-chats skill (.agents/skills/import-chats/scripts/import_chats.py), which",
-        "# rewrites it on every import: a hand edit here does not survive the next one.",
-        "",
-    ]
-    for source in sources:
-        group = source.group
-        lines += [
+    bin_dir: Path
+    data_root: Path
+
+    def binary(self, name: str) -> Path:
+        return self.bin_dir / name
+
+    @property
+    def config_path(self) -> Path:
+        return self.data_root / "config.toml"
+
+    def raw_store(self, source: ChatSource) -> Path:
+        return self.data_root / source.group / "ingest" / "entities.doltlite_db"
+
+
+def install_datalib(
+    install_script: Path, run: Callable[..., subprocess.CompletedProcess]
+) -> None:
+    """Install datalib, or check that it is in place, with the datalib skill's installer, leaving out the Datalib
+    app's program: the import keeps datalib out of the user's launcher."""
+    try:
+        result = run(
+            ["bash", str(install_script), "--without-app"],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_INSTALL_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise ImportChatsError(
+            f"datalib did not install within {e.timeout:.0f}s"
+        ) from e
+    except OSError as e:
+        raise ImportChatsError(f"cannot run the datalib installer: {e}") from e
+    if result.returncode != 0:
+        said = (result.stderr.strip() or result.stdout.strip()).splitlines()[-5:]
+        raise ImportChatsError(
+            "datalib could not be installed: "
+            + (" / ".join(said) or f"the installer exited {result.returncode}")
+        )
+
+
+def _run_datalib(
+    datalib: Datalib,
+    run: Callable[..., subprocess.CompletedProcess],
+    name: str,
+    *arguments: str,
+) -> subprocess.CompletedProcess:
+    try:
+        return run(
+            [str(datalib.binary(name)), *arguments],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_DATALIB_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise ImportChatsError(
+            f"{name} {' '.join(arguments)} did not answer within {e.timeout:.0f}s"
+        ) from e
+    except OSError as e:
+        raise ImportChatsError(f"cannot run {name}: {e}") from e
+
+
+def source_stanza(source: ChatSource) -> str:
+    """The config entries for one source: its group, its download, and its two search steps."""
+    group = source.group
+    return "\n".join(
+        [
+            f"# {source.label} conversations, added by the chat import (.agents/skills/import-chats), which turned",
+            "# its render_markdown and keyword_index steps off when it added them: until they are turned on, a sync",
+            "# only downloads.",
             "[[groups]]",
             f'id = "{group}"',
             f'name = "{source.label}"',
@@ -270,60 +349,179 @@ def render_config(sources: Sequence[ChatSource]) -> str:
             f'inputs = ["{group}/render_markdown"]',
             "",
         ]
-    rendered = ", ".join(f'"{source.group}/render_markdown"' for source in sources)
-    indexed = ", ".join(f'"{source.group}/keyword_index"' for source in sources)
-    lines += [
-        "[[groups]]",
-        'id = "unified_index"',
-        "",
-        "[[steps]]",
-        'group = "unified_index"',
-        'function = "grid_index"',
-        f"inputs = [{rendered}]",
-        "",
-        "[[steps]]",
-        'group = "unified_index"',
-        'function = "qmd_aggregator"',
-        f"inputs = [{indexed}]",
-        "",
-        "[[applets]]",
-        'group = "unified_index"',
-        'id = "unified_index"',
-        'command = "datalib-applet unified_index"',
-        "",
-    ]
-    return "\n".join(lines)
+    )
 
 
-def configured_sources(
-    status: Mapping, named: Sequence[ChatSource]
+def _configured_groups(config_text: str, config_path: Path) -> dict[str, str]:
+    """Each group the config names, by id, with its type."""
+    try:
+        document = tomllib.loads(config_text)
+    except tomllib.TOMLDecodeError as e:
+        raise ImportChatsError(
+            f"{config_path} is not valid TOML ({e}); fix it before importing"
+        ) from e
+    groups = document.get("groups", [])
+    return {
+        str(group["id"]): str(group.get("type", ""))
+        for group in groups
+        if isinstance(group, dict) and "id" in group
+    }
+
+
+def ensure_sources(
+    datalib: Datalib,
+    named: Sequence[ChatSource],
+    run: Callable[..., subprocess.CompletedProcess],
 ) -> list[ChatSource]:
-    """Every source the status file records (a sync has been run for it) plus the ones named now, in a stable order:
-    a sync of one source must not drop another from the config (or from search)."""
-    keys = set(status["sources"]) | {source.key for source in named}
-    return [source for key, source in SOURCES.items() if key in keys]
+    """Add each of ``named`` that the config lacks, with its search steps turned off, and return the ones added.
+
+    The rest of the config, other sources' and anything already there for these, is left as it is. The new config
+    is checked with ``datalib-dag --check`` before it replaces the old one (a loop running on this root re-reads
+    it), and put back the way it was if a search step cannot be turned off, so a failed add never leaves a source
+    that would render on its first sync."""
+    config_path = datalib.config_path
+    try:
+        previous = config_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        previous = None
+    groups = _configured_groups(previous or "", config_path)
+    for source in named:
+        configured_type = groups.get(source.group)
+        if configured_type is not None and configured_type != source.datalib_type:
+            raise ImportChatsError(
+                f"{config_path} already has a group {source.group!r} of type {configured_type!r}, not "
+                f"{source.datalib_type!r}; the import will not change it"
+            )
+    added = [source for source in named if source.group not in groups]
+    if not added:
+        return []
+    stanzas = "\n".join(source_stanza(source) for source in added)
+    existing = (previous or "").rstrip("\n")
+    candidate_text = f"{existing}\n\n{stanzas}" if existing else stanzas
+    candidate = config_path.with_name(f"{config_path.name}.import-chats")
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    candidate.write_text(candidate_text, encoding="utf-8")
+    try:
+        checked = _run_datalib(datalib, run, "datalib-dag", "--check", str(candidate))
+        if checked.returncode != 0:
+            said = (checked.stdout + checked.stderr).strip()
+            raise ImportChatsError(
+                f"datalib refused the config with the chat sources added:\n{said}"
+            )
+        os.replace(candidate, config_path)
+    finally:
+        candidate.unlink(missing_ok=True)
+    try:
+        for source in added:
+            for function in SEARCH_FUNCTIONS:
+                step = f"{source.group}/{function}"
+                turned_off = _run_datalib(
+                    datalib,
+                    run,
+                    "datalib-dag",
+                    "turn-off",
+                    str(config_path),
+                    step,
+                    "--by",
+                    SYNC_REQUESTER,
+                )
+                if turned_off.returncode != 0:
+                    said = turned_off.stderr.strip() or turned_off.stdout.strip()
+                    raise ImportChatsError(f"could not turn off {step}: {said}")
+    except ImportChatsError:
+        if previous is None:
+            config_path.unlink(missing_ok=True)
+        else:
+            _write_text_atomic(config_path, previous)
+        raise
+    return added
 
 
-def rendered_pages(data_root: Path, source: ChatSource) -> list[Path]:
-    """Every page the source's render step wrote: one per conversation (and, for Claude, one per project)."""
-    rendered = data_root / source.group / "render_markdown"
-    return list(rendered.rglob("all.md")) if rendered.is_dir() else []
+def query_raw_store(
+    datalib: Datalib,
+    source: ChatSource,
+    sql: str,
+    run: Callable[..., subprocess.CompletedProcess],
+) -> list[dict] | None:
+    """The rows ``sql`` reads from the source's raw store; None when there is no store yet or it cannot be read."""
+    store = datalib.raw_store(source)
+    doltlite = datalib.binary("datalib-doltlite")
+    # datalib-doltlite creates a database it is pointed at that does not exist.
+    if not store.is_file() or not doltlite.is_file():
+        return None
+    try:
+        result = run(
+            [str(doltlite), "-readonly", "-json", str(store), sql],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_COUNT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    # A query that matches nothing prints nothing.
+    if not result.stdout.strip():
+        return []
+    try:
+        rows = json.loads(result.stdout)
+    except ValueError:
+        return None
+    return (
+        [row for row in rows if isinstance(row, dict)]
+        if isinstance(rows, list)
+        else None
+    )
 
 
-def count_conversations(data_root: Path, source: ChatSource) -> int:
-    return len(rendered_pages(data_root, source))
+def count_conversations(
+    datalib: Datalib,
+    source: ChatSource,
+    run: Callable[..., subprocess.CompletedProcess],
+) -> int | None:
+    """How many conversations the source's raw store holds; None when it cannot say."""
+    rows = query_raw_store(
+        datalib,
+        source,
+        f"SELECT count(*) AS n FROM ({source.conversations_query})",
+        run,
+    )
+    if not rows or not isinstance(rows[0].get("n"), int):
+        return None
+    return rows[0]["n"]
 
 
 @dataclass(frozen=True)
-class IndexedPage:
+class IndexEntry:
     title: str
-    path: Path
     original_url: str
-    last_message_at: datetime.datetime | None
+    updated_at: datetime.datetime | None
+    page: Path | None
+    is_project: bool
 
-    @property
-    def is_project(self) -> bool:
-        return "/project/" in self.original_url
+
+def parse_updated_at(raw: object) -> datetime.datetime | None:
+    """A raw store's timestamp: ISO 8601 text (Claude), or a JSON-encoded epoch in seconds (ChatGPT)."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        decoded = json.loads(raw)
+    except ValueError:
+        decoded = raw
+    try:
+        if isinstance(decoded, (int, float)) and not isinstance(decoded, bool):
+            return datetime.datetime.fromtimestamp(decoded, tz=datetime.timezone.utc)
+        if isinstance(decoded, str):
+            parsed = datetime.datetime.fromisoformat(decoded)
+            return (
+                parsed
+                if parsed.tzinfo is not None
+                else parsed.replace(tzinfo=datetime.timezone.utc)
+            )
+    except (ValueError, OverflowError, OSError):
+        return None
+    return None
 
 
 def _frontmatter_value(raw: str) -> str:
@@ -338,111 +536,136 @@ def _frontmatter_value(raw: str) -> str:
     return raw
 
 
-def _parse_time(raw: str) -> datetime.datetime | None:
-    try:
-        parsed = datetime.datetime.fromisoformat(raw)
-    except ValueError:
-        return None
-    return (
-        parsed
-        if parsed.tzinfo is not None
-        else parsed.replace(tzinfo=datetime.timezone.utc)
-    )
+def rendered_pages_by_id(datalib: Datalib, source: ChatSource) -> dict[str, Path]:
+    """Each page the source's render step wrote, by the ``external_id`` in its frontmatter (the conversation's or
+    project's id); empty while search is off."""
+    rendered = datalib.data_root / source.group / "render_markdown"
+    pages: dict[str, Path] = {}
+    if not rendered.is_dir():
+        return pages
+    for path in rendered.rglob("all.md"):
+        with path.open(encoding="utf-8", errors="replace") as page:
+            if page.readline() != "---\n":
+                continue
+            for line in page:
+                if line == "---\n":
+                    break
+                match = _FRONTMATTER_FIELD.match(line.rstrip("\n"))
+                if match is not None and match.group(1) == "external_id":
+                    pages[_frontmatter_value(match.group(2))] = path
+                    break
+    return pages
 
 
-def read_page(path: Path) -> IndexedPage:
-    """What the index shows for one rendered page; a page without frontmatter is listed by its directory name."""
-    text = path.read_text(encoding="utf-8", errors="replace")
-    fields: dict[str, str] = {}
-    if text.startswith("---\n"):
-        end = text.find("\n---", 4)
-        for line in text[4 : end if end != -1 else 4].splitlines():
-            match = _FRONTMATTER_FIELD.match(line)
-            if match is not None:
-                fields[match.group(1)] = _frontmatter_value(match.group(2))
-    link = _SOURCE_LINK.search(text)
-    times = [
-        parsed
-        for raw in _MESSAGE_TIME.findall(text)
-        if (parsed := _parse_time(raw)) is not None
-    ]
-    return IndexedPage(
-        title=fields.get("display") or fields.get("title") or path.parent.name,
-        path=path,
-        original_url=link.group(1) if link is not None else "",
-        last_message_at=max(times) if times else None,
-    )
+def read_index_entries(
+    datalib: Datalib,
+    source: ChatSource,
+    run: Callable[..., subprocess.CompletedProcess],
+) -> list[IndexEntry] | None:
+    """Every conversation (and project) the source's raw store holds; None when it cannot be read."""
+    pages = rendered_pages_by_id(datalib, source)
+    queries = [(source.conversations_query, source.conversation_url, False)]
+    if source.projects_query is not None and source.project_url is not None:
+        queries.append((source.projects_query, source.project_url, True))
+    entries: list[IndexEntry] = []
+    for sql, url, is_project in queries:
+        rows = query_raw_store(datalib, source, sql, run)
+        if rows is None:
+            return None
+        for row in rows:
+            row_id = str(row.get("id", ""))
+            entries.append(
+                IndexEntry(
+                    title=str(row.get("title") or "").strip() or "(untitled)",
+                    original_url=url.format(id=urllib.parse.quote(row_id)),
+                    updated_at=parse_updated_at(row.get("updated_at")),
+                    page=pages.get(row_id),
+                    is_project=is_project,
+                )
+            )
+    return entries
 
 
-def _index_line(page: IndexedPage, index_dir: Path) -> str:
+def _index_line(entry: IndexEntry, index_dir: Path) -> str:
     # A chat's name can hold tabs and runs of spaces; collapsed, the entry reads as one line.
-    title = " ".join(page.title.split())
+    title = " ".join(entry.title.split())
     if len(title) > _INDEX_TITLE_LIMIT:
         title = title[: _INDEX_TITLE_LIMIT - 1].rstrip() + "…"
     title = _LINK_TEXT_SPECIAL.sub(r"\\\1", title)
-    target = urllib.parse.quote(Path(os.path.relpath(page.path, index_dir)).as_posix())
-    line = f"- [{title}]({target})"
-    if page.last_message_at is not None:
-        line = f"- {page.last_message_at.date().isoformat()} · [{title}]({target})"
-    if page.original_url:
-        line += f" · [original]({page.original_url})"
-    return line
+    line = f"[{title}]({entry.original_url})"
+    if entry.updated_at is not None:
+        line = f"{entry.updated_at.date().isoformat()} · {line}"
+    if entry.page is not None:
+        target = urllib.parse.quote(
+            Path(os.path.relpath(entry.page, index_dir)).as_posix()
+        )
+        line += f" · [page]({target})"
+    return f"- {line}"
 
 
 def render_index(
-    source: ChatSource, pages: Sequence[IndexedPage], index_dir: Path
+    source: ChatSource, entries: Sequence[IndexEntry], index_dir: Path
 ) -> str:
     """The source's index: its conversations by month, newest first, then any without a date, then its projects."""
     chats = sorted(
         (
-            page
-            for page in pages
-            if not page.is_project and page.last_message_at is not None
+            entry
+            for entry in entries
+            if not entry.is_project and entry.updated_at is not None
         ),
-        key=lambda page: (page.last_message_at, page.title),
+        key=lambda entry: (entry.updated_at, entry.title),
         reverse=True,
     )
     undated = sorted(
         (
-            page
-            for page in pages
-            if not page.is_project and page.last_message_at is None
+            entry
+            for entry in entries
+            if not entry.is_project and entry.updated_at is None
         ),
-        key=lambda page: page.title,
+        key=lambda entry: entry.title,
     )
     projects = sorted(
-        (page for page in pages if page.is_project), key=lambda page: page.title
+        (entry for entry in entries if entry.is_project), key=lambda entry: entry.title
     )
     conversation_count = len(chats) + len(undated)
     lines = [
         f"# {source.label} chats",
         "",
-        f"{conversation_count:,} conversation{'' if conversation_count == 1 else 's'}, most recent first. Each title opens "
-        f'the copy in this workspace; "original" opens it in {source.label}.',
+        f"{conversation_count:,} conversation{'' if conversation_count == 1 else 's'}, most recently updated first. "
+        f'Each title opens it in {source.label}; "page" opens the copy in this workspace, once search is on.',
     ]
     month = None
-    for page in chats:
-        assert page.last_message_at is not None
-        page_month = page.last_message_at.strftime("%B %Y")
-        if page_month != month:
-            month = page_month
+    for entry in chats:
+        assert entry.updated_at is not None
+        entry_month = entry.updated_at.strftime("%B %Y")
+        if entry_month != month:
+            month = entry_month
             lines += ["", f"## {month}", ""]
-        lines.append(_index_line(page, index_dir))
+        lines.append(_index_line(entry, index_dir))
     for heading, group in (("Undated", undated), ("Projects", projects)):
         if group:
             lines += ["", f"## {heading}", ""]
-            lines += [_index_line(page, index_dir) for page in group]
+            lines += [_index_line(entry, index_dir) for entry in group]
     return "\n".join(lines) + "\n"
-
-
-def write_index(data_root: Path, source: ChatSource, index_path: Path) -> None:
-    """Rewrite the source's index from every page its render step wrote."""
-    pages = [read_page(path) for path in rendered_pages(data_root, source)]
-    _write_text_atomic(index_path, render_index(source, pages, index_path.parent))
 
 
 def index_path_for(status_path: Path, source: ChatSource) -> Path:
     return status_path.parent / f"{source.key}-chats.md"
+
+
+def write_index(
+    datalib: Datalib,
+    source: ChatSource,
+    index_path: Path,
+    run: Callable[..., subprocess.CompletedProcess],
+) -> None:
+    """Rewrite the source's index from its raw store; one that cannot be read leaves the index as it was."""
+    entries = read_index_entries(datalib, source, run)
+    if entries is None:
+        raise ImportChatsError(
+            f"the {source.label} raw store {datalib.raw_store(source)} could not be read"
+        )
+    _write_text_atomic(index_path, render_index(source, entries, index_path.parent))
 
 
 def _event(line: str) -> dict | None:
@@ -459,7 +682,7 @@ def _event(line: str) -> dict | None:
 
 def parse_run_summary(stderr: str) -> dict[str, dict]:
     """Each step's entry in the ``run_summary`` event ``datalib-dag`` writes last to stderr (its event stream), by
-    step id."""
+    step id. A step that is turned off has no entry."""
     for line in reversed(stderr.splitlines()):
         event = _event(line)
         if event is not None and event.get("event") == "run_summary":
@@ -505,110 +728,39 @@ def failure_detail(error: str) -> str:
     return lines[-1] if lines else "the import failed"
 
 
-@dataclass(frozen=True)
-class DatalibInstall:
-    """Where the pinned release lives in this home directory."""
+def source_outcome(
+    steps: Mapping[str, dict], source: ChatSource, result: subprocess.CompletedProcess
+) -> tuple[str, str]:
+    """``source``'s state after a finished ``datalib-dag`` run, and the detail that goes with it.
 
-    home: Path
-
-    @property
-    def release_dir(self) -> Path:
-        return self.home / ".local" / "lib" / "datalib" / DATALIB_VERSION
-
-    def binary(self, name: str) -> Path:
-        return self.release_dir / name
-
-    def is_installed(self) -> bool:
-        return os.access(self.binary("datalib-dag"), os.X_OK)
-
-
-def linux_arch(system: str, machine: str) -> str:
-    """The release's arch name for this machine, refusing one the pinned release has no build for."""
-    arch = {
-        "x86_64": "x86_64",
-        "amd64": "x86_64",
-        "aarch64": "aarch64",
-        "arm64": "aarch64",
-    }.get(machine.lower())
-    if system != "Linux" or arch is None:
-        raise ImportChatsError(
-            f"datalib is installed here only on Linux x86_64 or arm64, not {system} {machine}"
-        )
-    return arch
-
-
-def _download(url: str, destination: Path) -> None:
-    with (
-        urllib.request.urlopen(url, timeout=_DOWNLOAD_TIMEOUT_SECONDS) as response,
-        destination.open("wb") as out,
-    ):
-        shutil.copyfileobj(response, out)
-
-
-def verify_release(archive: Path, expected_sha256: str) -> None:
-    """Refuse a downloaded release whose sha256 is not the pinned one."""
-    with archive.open("rb") as downloaded:
-        digest = hashlib.file_digest(downloaded, "sha256").hexdigest()
-    if digest != expected_sha256:
-        raise ImportChatsError(
-            f"{archive.name} has sha256 {digest}, not the pinned {expected_sha256}"
-        )
-
-
-def unpack_release(archive: Path, destination: Path, triple: str) -> Path:
-    """Unpack the release tarball into ``destination`` and return the one release directory it holds."""
-    try:
-        with tarfile.open(archive) as opened:
-            opened.extractall(destination, filter="data")
-    except tarfile.TarError as e:
-        raise ImportChatsError(f"{archive.name} could not be unpacked: {e}") from e
-    staged = [path for path in destination.glob(f"datalib-*-{triple}") if path.is_dir()]
-    if len(staged) != 1:
-        raise ImportChatsError(
-            f"{archive.name} holds {len(staged)} datalib-*-{triple} directories, not one"
-        )
-    return staged[0]
-
-
-def install_datalib(
-    install: DatalibInstall, run: Callable[..., subprocess.CompletedProcess]
-) -> None:
-    """Install the pinned release into ``install.release_dir`` unless it is already there, then fetch the Node
-    runtime its latchkey and search steps use (a no-op once fetched).
-
-    The tarball is unpacked whole, because its binaries find their siblings and ``runtime.manifest`` beside their
-    own resolved path. Nothing is linked onto PATH: the tarball also carries a ``latchkey`` launcher, which must not
-    shadow the workspace's own.
-    """
-    if not install.is_installed():
-        arch = linux_arch(platform.system(), platform.machine())
-        triple = f"{arch}-unknown-linux-musl"
-        tarball = f"datalib-{triple}.tar.gz"
-        install.release_dir.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=install.release_dir.parent) as scratch:
-            scratch_path = Path(scratch)
-            archive = scratch_path / tarball
-            _download(f"{_RELEASE_URL}/{DATALIB_VERSION}/{tarball}", archive)
-            verify_release(archive, _TARBALL_SHA256_BY_ARCH[arch])
-            staged = unpack_release(archive, scratch_path, triple)
-            shutil.rmtree(install.release_dir, ignore_errors=True)
-            os.replace(staged, install.release_dir)
-    try:
-        result = run(
-            [str(install.binary("datalib-step")), "pull-runtime"],
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=_PULL_RUNTIME_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired as e:
-        raise ImportChatsError(
-            f"datalib could not fetch its runtime: no answer in {e.timeout:.0f}s"
-        ) from e
-    if result.returncode != 0:
-        raise ImportChatsError(
-            f"datalib could not fetch its runtime: {(result.stderr or result.stdout).strip()}"
-        )
+    The download is what decides it: a source whose ingest committed is imported, with a detail when the ingest
+    gave up partway (what it got is kept, and the next sync resumes) or when its search steps, if they are on,
+    failed. A run with no summary at all handed its request to a loop another process was already running on the
+    same data root, and exits with that request's outcome: 0 when it was done."""
+    if not steps:
+        if result.returncode == 0:
+            return STATE_IMPORTED, ""
+        error = runner_error(result)
+        return classify_failure(error, None), failure_detail(error)
+    ingest = steps.get(f"{source.group}/ingest")
+    if ingest is None:
+        return STATE_FAILED, failure_detail(runner_error(result))
+    error = str(ingest.get("error", ""))
+    if ingest.get("status") not in _STEP_OK_STATUSES:
+        if ingest.get("failure") == _INCOMPLETE_FAILURE_KIND:
+            return (
+                STATE_IMPORTED,
+                f"not every conversation came in ({failure_detail(error)}); an update fetches the rest",
+            )
+        return classify_failure(error, ingest.get("failure")), failure_detail(error)
+    for function in SEARCH_FUNCTIONS:
+        step = steps.get(f"{source.group}/{function}")
+        if step is not None and step.get("status") not in _STEP_OK_STATUSES:
+            return (
+                STATE_IMPORTED,
+                f"search could not be updated: {failure_detail(str(step.get('error', '')))}",
+            )
+    return STATE_IMPORTED, ""
 
 
 @dataclass(frozen=True)
@@ -664,19 +816,23 @@ class IngestProgress:
 def _record_progress_until(
     is_done: threading.Event,
     named: Sequence[ChatSource],
-    data_root: Path,
+    datalib: Datalib,
     status_path: Path,
     progress: IngestProgress,
+    run: Callable[..., subprocess.CompletedProcess],
     interval_seconds: float,
 ) -> None:
     while not is_done.wait(interval_seconds):
         for source in named:
             try:
+                conversations = count_conversations(datalib, source, run)
                 record_source(
                     status_path,
                     source.key,
                     STATE_IMPORTING,
-                    count_conversations(data_root, source),
+                    conversations
+                    if conversations is not None
+                    else recorded_conversations(status_path, source.key),
                     "",
                     pid=os.getpid(),
                     fetch_progress=progress.of(source),
@@ -733,9 +889,10 @@ def stream_process(
 @contextlib.contextmanager
 def _reporting_progress(
     named: Sequence[ChatSource],
-    data_root: Path,
+    datalib: Datalib,
     status_path: Path,
     progress: IngestProgress,
+    run: Callable[..., subprocess.CompletedProcess],
     interval_seconds: float,
 ) -> Iterator[None]:
     """Record each source's progress every ``interval_seconds`` for as long as the block runs.
@@ -747,7 +904,7 @@ def _reporting_progress(
     is_done = threading.Event()
     reporter = threading.Thread(
         target=_record_progress_until,
-        args=(is_done, named, data_root, status_path, progress, interval_seconds),
+        args=(is_done, named, datalib, status_path, progress, run, interval_seconds),
         name="import-chats-progress",
         daemon=True,
     )
@@ -761,19 +918,19 @@ def _reporting_progress(
 
 def _run_dag(
     named: Sequence[ChatSource],
-    install: DatalibInstall,
-    config_path: Path,
+    datalib: Datalib,
     stream: Callable[
         [Sequence[str], Callable[[str], None]], subprocess.CompletedProcess
     ],
     progress: IngestProgress,
 ) -> subprocess.CompletedProcess:
-    """Run one ``datalib-dag`` sync of ``named``'s ingests, feeding its event stream to ``progress``."""
+    """Run one ``datalib-dag`` sync of ``named``'s ingests, feeding its event stream to ``progress``. A sync runs
+    what is downstream of them too, which is nothing while their search steps are off."""
     roots = ",".join(f"{source.group}/ingest" for source in named)
     return stream(
         [
-            str(install.binary("datalib-dag")),
-            str(config_path),
+            str(datalib.binary("datalib-dag")),
+            str(datalib.config_path),
             "--sync",
             roots,
             "--by",
@@ -783,15 +940,33 @@ def _run_dag(
     )
 
 
+def _current_conversations(
+    datalib: Datalib,
+    source: ChatSource,
+    status_path: Path,
+    run: Callable[..., subprocess.CompletedProcess],
+) -> int:
+    counted = count_conversations(datalib, source, run)
+    return (
+        counted
+        if counted is not None
+        else recorded_conversations(status_path, source.key)
+    )
+
+
 def _record_failed(
-    named: Sequence[ChatSource], data_root: Path, status_path: Path, detail: str
+    named: Sequence[ChatSource],
+    datalib: Datalib,
+    status_path: Path,
+    detail: str,
+    run: Callable[..., subprocess.CompletedProcess],
 ) -> None:
     for source in named:
         record_source(
             status_path,
             source.key,
             STATE_FAILED,
-            count_conversations(data_root, source),
+            _current_conversations(datalib, source, status_path, run),
             detail,
             pid=None,
         )
@@ -799,8 +974,8 @@ def _record_failed(
 
 def sync(
     named: Sequence[ChatSource],
-    install: DatalibInstall,
-    data_root: Path,
+    datalib: Datalib,
+    install_script: Path,
     status_path: Path,
     run: Callable[..., subprocess.CompletedProcess],
     stream: Callable[
@@ -808,106 +983,71 @@ def sync(
     ] = stream_process,
     progress_interval_seconds: float = PROGRESS_INTERVAL_SECONDS,
 ) -> bool:
-    """Import ``named``: install datalib if needed, write the config, run one sync, and record each source's
-    outcome. True when every named source imported.
+    """Import ``named``: install datalib if needed, add any source the config lacks, run one sync, and record each
+    source's outcome. True when every named source imported.
 
-    datalib renders and indexes pages while the ingest is still fetching, so the sync's own page count grows as
-    it runs; from the install on, a thread records it, with how far each ingest has got, every
-    ``progress_interval_seconds`` until the sync returns."""
+    From the install on, a thread records how many conversations each raw store holds, and how far each ingest has
+    got, every ``progress_interval_seconds`` until the sync returns."""
     for source in named:
-        previous = read_status(status_path)["sources"].get(source.key, {})
         record_source(
             status_path,
             source.key,
             STATE_IMPORTING,
-            int(previous.get("conversations", 0)),
+            recorded_conversations(status_path, source.key),
             "",
             pid=os.getpid(),
         )
     progress = IngestProgress()
     try:
         with _reporting_progress(
-            named, data_root, status_path, progress, progress_interval_seconds
+            named, datalib, status_path, progress, run, progress_interval_seconds
         ):
-            install_datalib(install, run)
-            config_path = data_root / "config.toml"
-            # A loop another sync runs on this root re-reads the config, so it must never see a partial one.
-            _write_text_atomic(
-                config_path,
-                render_config(configured_sources(read_status(status_path), named)),
-            )
-            result = _run_dag(named, install, config_path, stream, progress)
+            install_datalib(install_script, run)
+            with config_lock(status_path):
+                ensure_sources(datalib, named, run)
+            result = _run_dag(named, datalib, stream, progress)
     except ImportChatsError as e:
-        _record_failed(named, data_root, status_path, str(e))
+        _record_failed(named, datalib, status_path, str(e), run)
         raise
     except OSError as e:
-        _record_failed(named, data_root, status_path, str(e))
+        _record_failed(named, datalib, status_path, str(e), run)
         raise ImportChatsError(str(e)) from e
-    return record_outcomes(named, result, data_root, status_path)
+    return record_outcomes(named, result, datalib, status_path, run)
 
 
 def record_outcomes(
     named: Sequence[ChatSource],
     result: subprocess.CompletedProcess,
-    data_root: Path,
+    datalib: Datalib,
     status_path: Path,
+    run: Callable[..., subprocess.CompletedProcess],
 ) -> bool:
     """Record each named source's outcome from a finished ``datalib-dag`` run and rewrite its index. True when every
     named source imported; an index that cannot be rewritten is reported on stderr and leaves the outcome as it is."""
     steps = parse_run_summary(result.stderr)
     is_every_source_imported = True
     for source in named:
-        conversations = count_conversations(data_root, source)
-        failure = source_failure(steps, source, result)
-        if failure is None:
-            record_source(
-                status_path, source.key, STATE_IMPORTED, conversations, "", pid=None
-            )
-            continue
-        is_every_source_imported = False
-        error, failure_kind = failure
+        state, detail = source_outcome(steps, source, result)
+        is_every_source_imported = is_every_source_imported and state == STATE_IMPORTED
         record_source(
             status_path,
             source.key,
-            classify_failure(error, failure_kind),
-            conversations,
-            failure_detail(error),
+            state,
+            _current_conversations(datalib, source, status_path, run),
+            detail,
             pid=None,
         )
     for source in named:
         index_path = index_path_for(status_path, source)
         try:
-            write_index(data_root, source, index_path)
-        except OSError as e:
+            write_index(datalib, source, index_path, run)
+        except (OSError, ImportChatsError) as e:
             print(
                 f"import-chats: the {source.label} chats are recorded, but their index {index_path} could not be "
                 f"rewritten: {e}",
                 file=sys.stderr,
             )
     return is_every_source_imported
-
-
-def source_failure(
-    steps: Mapping[str, dict],
-    source: ChatSource,
-    result: subprocess.CompletedProcess,
-) -> tuple[str, str | None] | None:
-    """Why ``source`` did not import in a finished ``datalib-dag`` run, as its error and datalib's failure kind; None
-    when it imported.
-
-    A run with no summary at all handed its request to a loop another process was already running on the same data
-    root, and exits with that request's outcome: 0 when it was done."""
-    if not steps:
-        return None if result.returncode == 0 else (runner_error(result), None)
-    ingest = steps.get(f"{source.group}/ingest")
-    if ingest is None:
-        return runner_error(result), None
-    if ingest.get("status") not in _STEP_OK_STATUSES:
-        return str(ingest.get("error", "")), ingest.get("failure")
-    render = steps.get(f"{source.group}/render_markdown")
-    if render is not None and render.get("status") not in _STEP_OK_STATUSES:
-        return str(render.get("error", "")), render.get("failure")
-    return None
 
 
 def classify_check(returncode: int, stdout: str, stderr: str) -> tuple[str, str]:
@@ -983,10 +1123,14 @@ def main(
             print(json.dumps({"source": source.key, "state": state, "detail": detail}))
             return 0
         if arguments.command == "sync":
+            # The datalib skill's installer links the binaries here (DATALIB_BIN_DIR moves them, as it does there).
+            bin_dir = Path(
+                os.environ.get("DATALIB_BIN_DIR", Path.home() / ".local" / "bin")
+            )
             is_imported = sync(
                 _sources(arguments.source),
-                DatalibInstall(home=Path.home()),
-                DATA_ROOT,
+                Datalib(bin_dir=bin_dir, data_root=DATA_ROOT),
+                INSTALL_SCRIPT,
                 STATUS_PATH,
                 run,
             )
