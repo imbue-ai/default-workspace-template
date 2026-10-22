@@ -79,7 +79,7 @@
   .icon-button svg { width: 16px; height: 16px; }
   .icon-button.primary { border-color: var(--c-accent); color: var(--c-accent); }
   .icon-button.primary:hover { background: var(--c-accent-light); color: var(--c-accent); }
-  /* Green is for what starts a chat: the sidebar's + and a skill's Use in chat. */
+  /* Green is for what goes to a chat: the sidebar's + and a skill's Use in chat. */
   .text-button { display: none; flex: none; align-items: center; height: 28px; padding: 0 10px; border: 1px solid var(--c-accent); border-radius: var(--radius-md); background: var(--c-surface); color: var(--c-accent); font: inherit; font-size: var(--font-size-row); font-weight: var(--weight-semibold); white-space: nowrap; cursor: pointer; transition: background-color var(--dur-base); }
   .text-button:hover { background: var(--c-accent-light); }
   :root[data-shell] .text-button { display: inline-flex; }
@@ -157,7 +157,7 @@
       <h1>Skills</h1>
       <div class="actions">
         <a class="icon-button" id="skills-folder" title="Open the skills folder in Files" aria-label="Open the skills folder in Files"></a>
-        <button type="button" class="icon-button primary" id="new-skill" title="Make a new skill" aria-label="Make a new skill"></button>
+        <button type="button" class="icon-button primary" id="new-skill" title="Make or find a new skill" aria-label="Make or find a new skill"></button>
       </div>
     </div>
     <div class="search" id="search-field">
@@ -189,7 +189,8 @@
   };
   // Files opens a file's ?edit page for this message (its app.toml); the shell routes it there without naming the app.
   const EDIT_FILE_MESSAGE = "edit:file";
-  const NEW_SKILL_TEXT = "Help me make a new skill.";
+  // Drafted into the chat on screen (else the most recent, else a new one), unsent, for the user to finish.
+  const NEW_SKILL_DRAFT = "Help me make or find a new skill online that ";
   // A chat message that is exactly /<name> runs that skill (the template's AGENTS.md).
   const skillCommand = (name) => `/${name}`;
   const LIST_REFRESH_MS = 10_000;
@@ -366,7 +367,7 @@
     ]);
     const pick = element("p", { class: "intro-hint" }, ["Pick a skill on the left to read and edit its instructions"]);
     // The + only works through the shell, so outside one the note does not point at it.
-    if (root.hasAttribute("data-shell")) pick.append(", or press ", withIcon(element("span", { class: "inline-button", "aria-label": "the + button" }), "plus"), " to make a new one");
+    if (root.hasAttribute("data-shell")) pick.append(", or press ", withIcon(element("span", { class: "inline-button", "aria-label": "the + button" }), "plus"), " to make or find a new one");
     pick.append(".");
     reader.replaceChildren(element("div", { class: "intro" }, [element("p", { class: "intro-lead", text: "Skills are what your agents know how to do." }), usage, pick]));
     reportLocation();
@@ -401,8 +402,8 @@
     const skillFile = `${detail.directory}/SKILL.md`;
     const editButton = withIcon(element("button", { type: "button", class: "icon-button", title: "Edit SKILL.md in Files", "aria-label": "Edit SKILL.md in Files" }), "edit");
     editButton.addEventListener("click", () => shell.sendMessage(EDIT_FILE_MESSAGE, { path: skillFile }));
-    const useButton = element("button", { type: "button", class: "text-button", title: `Start a chat that runs ${skillCommand(summary.name)}`, text: "Use in chat" });
-    useButton.addEventListener("click", () => shell.startWithText(skillCommand(summary.name)));
+    const useButton = element("button", { type: "button", class: "text-button", title: `Put ${skillCommand(summary.name)} in the chat on screen, to send when ready`, text: "Use in chat" });
+    useButton.addEventListener("click", () => shell.draftText(`${skillCommand(summary.name)} `));
     reader.replaceChildren(
       element("article", {}, [
         element("a", { class: "back", href: "/", text: "All skills" }),
@@ -556,7 +557,7 @@
 
   withIcon(skillsFolderLink, "folder");
   const newSkillButton = withIcon(document.getElementById("new-skill"), "plus");
-  newSkillButton.addEventListener("click", () => shell.startWithText(NEW_SKILL_TEXT));
+  newSkillButton.addEventListener("click", () => shell.draftText(NEW_SKILL_DRAFT));
 
   // Connected before the frame's load event, the only time the shell sends its handshake.
   let handshake = null;
