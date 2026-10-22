@@ -152,7 +152,7 @@ def create_app(
 
     @app.get("/api/skills/<name>")
     def detail(name: str) -> ResponseReturnValue:
-        """One skill with its SKILL.md as written and the files beside it."""
+        """One skill with its folder and its SKILL.md as written."""
         found = described(name)
         if not isinstance(found, SkillDetail):
             return found
