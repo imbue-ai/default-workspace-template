@@ -27,9 +27,12 @@ Square icon buttons ask the shell for the rest, so they stay hidden on a page
 no shell frames: a folder opens the skills folder (in the sidebar) or the
 skill's own folder in Files (a `file:` link the shell routes); a pencil sends
 `edit:file` with the skill's `SKILL.md`, which Files answers with its edit
-page; and the sidebar's + starts a chat asking the agent to help make a new
-skill (`shell:start-with-text`). The page rereads the skill when its window is
-shown again, so an edit made in Files appears.
+page; the sidebar's + starts a chat asking the agent to help make a new
+skill (`shell:start-with-text`); and a skill's "Use in chat" starts one that
+runs it, sending `/<name>`, as the hint under its chips says to type. The page
+rereads the list every 10 seconds and whenever its window takes focus or is
+shown again, redrawing only what changed, so a skill made or edited elsewhere
+(a chat beside it, Files) appears without a reload.
 
 The app is read-only and stores nothing. A skill installed from elsewhere is
 untrusted content, so everything the page shows from a skill is set as text,
