@@ -3,7 +3,6 @@ name: update-app
 description: "Use immediately whenever the user asks you to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service -- load this BEFORE touching its code. Applies to any change to an app's or service's backend or frontend logic, or how it runs. Covers both apps (a window the user can open) and background services (host-backup, share-gateway, and other supervisord programs with no window). This is the front door for app and service edits, the workspace's own critical apps (the shell, the chat, the terminal) included: it owns the live change loop (apply the change so it takes effect, refresh the user's view, verify) and hands the change to the turn-end hardening flow, and it routes a critical app to the careful flow in references/critical-app.md. For creating a brand-new app use build-app."
 metadata:
   author: imbue
-  audience: system
 ---
 
 # Changing an existing app or service
