@@ -60,7 +60,6 @@ AUTHOR_PREFIX_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^\[from: (?P<name>[^\]\n\s][^\]\n]*?)(?: in #(?P<room>[^\]\n]+?))?\] "
 )
 
-# A name inside the prefix may not hold the bracket that closes it, and the prefix is one line.
 _WHITESPACE_RUN: Final[re.Pattern[str]] = re.compile(r"\s+")
 # The key of an author known only from a prefix nobody annotated (typed by hand, or whose annotation was lost).
 NAME_KEY_PREFIX: Final[str] = "name:"
@@ -104,9 +103,6 @@ def is_unprefixable_input(text: str) -> bool:
 def split_author_prefix(text: str) -> tuple[str | None, str]:
     """The prefix at the start of ``text`` (or of any of its lines, for a turn a harness merged from several queued
     messages), and the text with that prefix taken off: ``(name, rest)``, or ``(None, text)`` without one."""
-    match = AUTHOR_PREFIX_PATTERN.match(text)
-    if match is not None:
-        return match.group("name"), text[match.end() :]
     lines = text.split("\n")
     for index, line in enumerate(lines):
         line_match = AUTHOR_PREFIX_PATTERN.match(line)
