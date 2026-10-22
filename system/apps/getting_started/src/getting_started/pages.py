@@ -17,6 +17,7 @@ from flask import Response
 from flask import send_file
 from flask import send_from_directory
 from flask.typing import ResponseReturnValue
+from loguru import logger
 from pydantic import Field
 from werkzeug.exceptions import NotFound
 
@@ -32,6 +33,7 @@ from app_schema.routes import error_response
 from app_schema.routes import model_response
 from getting_started.chat_import import ChatImportResponse
 from getting_started.chat_import import ChatImportStore
+from getting_started.errors import StateFileError
 from getting_started.template_catalog import CatalogDocument
 from getting_started.template_catalog import TemplateCatalogAvailability
 from getting_started.template_catalog import TemplateCatalogStore
@@ -48,6 +50,7 @@ CHAT_IMPORT_DISMISS_PATH: Final[str] = "/api/chat-import/dismiss"
 PAGE_DOCUMENT_FILENAME: Final[str] = "index.html"
 
 HTTP_NOT_FOUND: Final[int] = 404
+HTTP_INTERNAL_SERVER_ERROR: Final[int] = 500
 HTTP_SERVICE_UNAVAILABLE: Final[int] = 503
 
 _TEMPLATES_UNAVAILABLE_DETAIL: Final[str] = "failed to load templates"
@@ -160,7 +163,11 @@ def build_pages_blueprint(
     @blueprint.post(CHAT_IMPORT_DISMISS_PATH)
     def dismiss_chat_import() -> ResponseReturnValue:
         """Put the "Bring in your chats" card away for good, and answer its state."""
-        chat_import.dismiss()
+        try:
+            chat_import.dismiss()
+        except StateFileError as e:
+            logger.warning("Could not put the chat import card away: {}", e)
+            return error_response(str(e), HTTP_INTERNAL_SERVER_ERROR)
         return model_response(chat_import.view())
 
     @blueprint.get(APP_CONTRACT_ROUTE)
