@@ -3,6 +3,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from playwright.sync_api import Locator
 from playwright.sync_api import Page
 from playwright.sync_api import expect
 
@@ -29,7 +30,7 @@ def _add_one_skill_of_each_kind(workspace_root: Path) -> None:
     commit_all(workspace_root, "Add one skill of each kind")
 
 
-def _group(page: Page, heading: str):
+def _group(page: Page, heading: str) -> Locator:
     return page.locator(".skill-list section").filter(has=page.locator(".group-toggle", has_text=heading))
 
 
