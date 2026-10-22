@@ -411,9 +411,10 @@
         element("a", { class: "back", href: "/", text: "All skills" }),
         element("header", { class: "skill-head" }, [
           element("h1", { text: summary.title }),
+          // The green action last, as the sidebar's + after its folder.
           element("div", { class: "actions" }, [
-            useButton,
             withIcon(element("a", { class: "icon-button", href: fileUrl(detail.directory), title: "Open this skill's folder in Files", "aria-label": "Open this skill's folder in Files" }), "folder"),
+            useButton,
           ]),
         ]),
         element("div", { class: "chips" }, [authorChip(summary), element("span", { class: "chip", text: `Last updated ${formatWhen(summary.last_updated_at)}` })]),
