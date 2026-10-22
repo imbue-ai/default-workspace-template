@@ -825,14 +825,11 @@ def _record_progress_until(
     while not is_done.wait(interval_seconds):
         for source in named:
             try:
-                conversations = count_conversations(datalib, source, run)
                 record_source(
                     status_path,
                     source.key,
                     STATE_IMPORTING,
-                    conversations
-                    if conversations is not None
-                    else recorded_conversations(status_path, source.key),
+                    _current_conversations(datalib, source, status_path, run),
                     "",
                     pid=os.getpid(),
                     fetch_progress=progress.of(source),
