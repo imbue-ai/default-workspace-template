@@ -171,8 +171,8 @@ Only when the user asks for it: when they want their chats searchable, browsable
 searched in a way the queries above cannot do well. An import request that says the chats are
 for searching or building on, as the Getting Started card's does, is not such a request: the
 queries above serve it. Rendering takes a while and a good deal of memory on a large account,
-which is why an import leaves it off. For each source they want it
-for (`claude_chats` or `chatgpt_chats`):
+which is why an import leaves it off. For each source they want it for (`claude_chats` or
+`chatgpt_chats`):
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
