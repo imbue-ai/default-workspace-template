@@ -60,19 +60,30 @@ describe("ensureParticipants", () => {
     expect(participants.getWorkspaceAgent()?.display_name).toBe("Atlas");
   });
 
-  it("leaves the page as an owner's page would be after a failed load, and asks again only later", async () => {
-    const participants = await loadParticipants();
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    mockRequest.mockRejectedValue(new Error("offline"));
+  it("leaves the page as an owner's page would be after a failed load, and asks again by itself later", async () => {
+    vi.useFakeTimers();
+    try {
+      const participants = await loadParticipants();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      mockRequest.mockRejectedValue(new Error("offline"));
 
-    await participants.ensureParticipants();
-    await participants.ensureParticipants();
+      await participants.ensureParticipants();
 
-    expect(mockRequest).toHaveBeenCalledTimes(2);
-    expect(participants.getOwnParticipant()).toBeNull();
-    expect(participants.isViewerOwner()).toBe(false);
-    expect(warn).toHaveBeenCalledTimes(1);
-    warn.mockRestore();
+      expect(mockRequest).toHaveBeenCalledTimes(2);
+      expect(participants.getOwnParticipant()).toBeNull();
+      expect(participants.isViewerOwner()).toBe(false);
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      answerRequests("user:bob-2", ROSTER);
+      await vi.advanceTimersByTimeAsync(participants.RETRY_DELAY_MS - 1);
+      expect(mockRequest).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mockRequest).toHaveBeenCalledTimes(4);
+      expect(participants.getOwnParticipant()).toBe("user:bob-2");
+      warn.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -34,9 +34,6 @@ export const WORKSPACE_AGENT_KEY = "workspace-agent";
 let ownParticipant: string | null = null;
 let participants: Participant[] = [];
 let loading: Promise<void> | null = null;
-// After a failed load, when the backend may be asked again, so a render loop never turns an outage into a
-// request per frame.
-let retryNotBefore = 0;
 export const RETRY_DELAY_MS = 30_000;
 
 /** The page's own participant key, or null before ``/api/me`` has answered. */
@@ -77,13 +74,12 @@ export function participantName(key: string, fallbackName: string | null): strin
 
 /**
  * Load the page's own key and the roster once; later calls share the first load. A load that fails is warned
- * about and leaves the page as an owner's page would be (every unannotated turn its own), asking again only after
- * ``RETRY_DELAY_MS``.
+ * about and leaves the page as an owner's page would be (every unannotated turn its own) until the next attempt,
+ * which the failure itself schedules after ``RETRY_DELAY_MS``: nothing else asks again once the page has booted.
  */
 export function ensureParticipants(): Promise<void> {
   if (ownParticipant !== null) return Promise.resolve();
   if (loading !== null) return loading;
-  if (Date.now() < retryNotBefore) return Promise.resolve();
   loading = Promise.all([
     m.request<{ participant: string }>({ method: "GET", url: apiUrl("/api/me") }),
     m.request<{ participants: Participant[] }>({ method: "GET", url: apiUrl("/api/participants") }),
@@ -95,7 +91,7 @@ export function ensureParticipants(): Promise<void> {
     })
     .catch((error: unknown) => {
       console.warn("Failed to load the page's participant and the roster", error);
-      retryNotBefore = Date.now() + RETRY_DELAY_MS;
+      setTimeout(() => void ensureParticipants(), RETRY_DELAY_MS);
     })
     .finally(() => {
       loading = null;
@@ -108,5 +104,4 @@ export function setParticipantsForTesting(own: string | null, roster: Participan
   ownParticipant = own;
   participants = roster;
   loading = null;
-  retryNotBefore = 0;
 }
