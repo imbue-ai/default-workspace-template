@@ -95,11 +95,13 @@
   article { max-width: 720px; margin: 0 auto; padding: 16px 32px 24px; }
   /* With no skill chosen, the pane holds one centred note. */
   .intro { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 100%; padding: 24px 32px; text-align: center; }
-  .intro p { margin: 0; max-width: 44ch; }
+  .intro p { margin: 0; max-width: 46ch; }
+  .intro-lead + p { margin-top: 4px; }
+  .intro code { font-family: var(--font-mono); font-size: var(--font-size-helper); padding: 1px 4px; border-radius: var(--radius-sm); background: var(--c-surface-secondary); color: var(--c-text-primary); }
   .intro-lead { font-size: 15px; font-weight: var(--weight-semibold); }
   .intro-hint { color: var(--c-text-secondary); }
   /* The sidebar's + button in miniature, so the note shows which button it means. */
-  .inline-button { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin: 0 2px; border: 1px solid var(--c-border-strong); border-radius: var(--radius-sm); color: var(--c-text-secondary); vertical-align: -4px; }
+  .inline-button { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin: 0 2px; border: 1px solid var(--c-border-strong); border-radius: var(--radius-sm); color: var(--c-text-secondary); vertical-align: middle; }
   .inline-button svg { width: 12px; height: 12px; }
   .back { display: none; color: var(--c-text-secondary); font-size: var(--font-size-row); margin-bottom: 12px; }
   .back:hover { color: var(--c-text-primary); }
@@ -357,11 +359,16 @@
 
   function showIntro() {
     document.title = "Skills";
-    const hint = element("p", { class: "intro-hint" }, ["Pick one on the left to read and edit its instructions"]);
+    const usage = element("p", { class: "intro-hint" }, [
+      "Your agents reach for a skill on their own when a request calls for it. To run one yourself, type a slash and its name in a chat, like ",
+      element("code", { text: "/skill-name" }),
+      ", or open it here and press Use in chat.",
+    ]);
+    const pick = element("p", { class: "intro-hint" }, ["Pick a skill on the left to read and edit its instructions"]);
     // The + only works through the shell, so outside one the note does not point at it.
-    if (root.hasAttribute("data-shell")) hint.append(", or press ", withIcon(element("span", { class: "inline-button", "aria-label": "the + button" }), "plus"), " to make a new one");
-    hint.append(".");
-    reader.replaceChildren(element("div", { class: "intro" }, [element("p", { class: "intro-lead", text: "Skills are what your agents know how to do." }), hint]));
+    if (root.hasAttribute("data-shell")) pick.append(", or press ", withIcon(element("span", { class: "inline-button", "aria-label": "the + button" }), "plus"), " to make a new one");
+    pick.append(".");
+    reader.replaceChildren(element("div", { class: "intro" }, [element("p", { class: "intro-lead", text: "Skills are what your agents know how to do." }), usage, pick]));
     reportLocation();
   }
 
@@ -442,7 +449,9 @@
     if (url.origin !== location.origin || url.pathname.startsWith("/api/")) return;
     if (url.pathname === location.pathname && url.hash) return;
     event.preventDefault();
-    go(decodeURIComponent(url.pathname.replace(/^\/+|\/+$/g, "")));
+    // Clicking the skill already open in the sidebar puts the pane back to its note.
+    if (link.dataset.skill && link.dataset.skill === selectedName()) go("");
+    else go(decodeURIComponent(url.pathname.replace(/^\/+|\/+$/g, "")));
   });
 
   // The arrow keys walk the list; with both panes showing, each step opens the skill it lands on.
