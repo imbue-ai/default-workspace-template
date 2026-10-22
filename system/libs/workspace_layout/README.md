@@ -15,17 +15,22 @@ answer shapes live in one place the shell and its callers share.
   `POPPED_OUT_REFUSAL_STATUS` (`423`, the op route's refusal to move a window
   the target client popped out into its own window).
 - `workspace_layout.primitives`: the values the wire carries. The ids
-  (`ClientId`, `DesktopId`, `WindowId`, `UserId`, `WallpaperName`), a window's
-  `WindowPath`, `WindowPage`, and `WindowTitle`, and the enums: `LayoutOp` (every
-  op the op route knows), `WindowState`, `ShowOutcome`, `SpecialWindow` (`self`,
-  `pinned`), `IfPresent`, `WallpaperKind`, `ShortcutTargetKind`,
-  `ClientActivityKind`. A value off its rule raises `InvalidLayoutValueError`.
+  (`ClientId`, `DesktopId`, `WindowId`, `UserId`, `WallpaperName`, and
+  `ParticipantKey`: `owner`, `workspace-agent`, `user:<user_id>`,
+  `email:<address>`, `agent:<agent_id>`, or `name:<name>`, the multiplayer spec's
+  section 4.1, with `OWNER_PARTICIPANT_KEY` and `WORKSPACE_AGENT_PARTICIPANT_KEY`),
+  a window's `WindowPath`, `WindowPage`, and `WindowTitle`, and the enums:
+  `LayoutOp` (every op the op route knows), `WindowState`, `ShowOutcome`,
+  `SpecialWindow` (`self`, `pinned`), `IfPresent`, `WallpaperKind`,
+  `ShortcutTargetKind`, `ClientActivityKind`, `ParticipantKind` (what a roster
+  entry is). A value off its rule raises `InvalidLayoutValueError`.
 - `workspace_layout.records`: the desktop's records (contracts section 4), as
   the shell stores them and as its answers carry them: `Frame` and `GridCell`
   (with `parse_frame` and `parse_cell` for their `x,y,width,height` and
   `column,row` text forms), `Wallpaper`, `ShortcutTarget`, `DesktopShortcut`,
   `Window`, `Desktop`, `WindowPlacement`, `DesktopLayout`, `StoredWindowPath`,
-  `ClientRecord`, `EntryPresentation`, and the views an answer carries
+  `ClientRecord` (with the `participant` the client last arrived as),
+  `EntryPresentation`, and the views an answer carries
   (`WindowView`, `DesktopView`, `DesktopLayoutView`).
 - `workspace_layout.ops`: the op route's request side. One body model per op
   (or per group of ops that take the same arguments: `WindowOpBody` for
@@ -50,7 +55,9 @@ answer shapes live in one place the shell and its callers share.
   builds from these models and a caller parses with them: `DesktopOpAnswer`,
   `OpenAnswer`, `ShowAnswer`, `TransientOpAnswer`, `ContextAnswer`,
   `InventoryDocument` (and `InventoryOpAnswer`), `DesktopsListing`,
-  `ClientsListing`, and the `layout_op` WebSocket message (`LayoutOpMessage`).
+  `ClientsListing` (its entries the inventory's `InventoryClient` objects, with
+  the windows each client shows), and the `layout_op` WebSocket message
+  (`LayoutOpMessage`).
   `parse_answer` and `parse_listing` read an answer with unknown fields ignored
   (the shell's to add to); a listing skips one entry it cannot read, with a
   warning, and raises when none of a non-empty list reads. A caller reads an
@@ -58,6 +65,20 @@ answer shapes live in one place the shell and its callers share.
   strict as the shell's files are. The tolerance covers added fields only: a
   value outside an enum or a rule (a new `ShowOutcome`, say) makes the answer
   malformed.
+- `workspace_layout.identity`: the `X-Imbue-Identity` header every request into
+  the workspace carries, read the same way by the shell and the apps:
+  `RequestIdentity` (the owner flag, the account's `user_id` and `email`, a
+  visiting agent's `agent_id`, `agent_name`, and `granter`),
+  `parse_identity_header` (a missing or unreadable header is `ANONYMOUS_OWNER`),
+  `participant_key_of` (the account, else the agent, else `owner`),
+  `is_owner_participant` (the owner under either of their keys), and
+  `visiting_user_id` (a signed-in requester other than the owner).
+- `workspace_layout.roster`: the roster the shell answers at `GET /api/roster`
+  and pushes as `roster_updated` (the multiplayer spec, section 4.2):
+  `RosterParticipant` and `RosterDocument`, `handle_of_name` and
+  `assign_handles` (the handle each entry is mentioned by, a later collision
+  suffixed `-2`, `-3`, ...), and `participant_color` (one of
+  `PARTICIPANT_COLORS`, by the key's hash).
 - `workspace_layout.errors`: `WorkspaceLayoutError`; `InvalidLayoutValueError`;
   and `ShellOpError`, raised by every op that did not happen, as
   `ShellUnreachableError` (down, restarting, timed out), `ShellRefusedOpError`
@@ -67,7 +88,8 @@ answer shapes live in one place the shell and its callers share.
   `ShellAnswerMalformedError` (a success status with a body that is not the
   answer).
 - `workspace_layout.interfaces.ShellLayoutInterface`: `show`, `open`, `focus`,
-  `navigate`, `place`, `close`, `refresh`, `connected_clients`, `desktops`, and
+  `navigate`, `place`, `close`, `refresh`, `connected_clients`, `desktops`,
+  `roster` (everyone who may be in the workspace, in the shell's order), and
   `record_client_activity` (best-effort: an unreachable or failing shell is a
   debug log, one that refuses the report a warning, and it never raises).
 - `workspace_layout.client`: `ShellLayoutClient` (the shell over loopback, with
@@ -94,7 +116,9 @@ answer shapes live in one place the shell and its callers share.
   `LoopbackShell`, a stand-in for the shell's routes over loopback that reads
   every op body as the shell does (`describe_op_body_problem`) and refuses one
   it would refuse, serving inside a `with` block; and builders of the records and answers (`fake_window`,
-  `fake_desktop`, `fake_app`, `connected_client`, `desktop_answer`).
+  `fake_desktop`, `fake_app`, `connected_client`, `desktop_answer`, and
+  `roster_participant`, one entry of the roster a `FakeShell`'s `roster_document`
+  answers).
 
 ## Ops by kind
 
