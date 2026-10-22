@@ -222,6 +222,10 @@ class WebSocketBroadcaster(MutableModel):
         """Broadcast the connected users whenever someone joins or leaves (one entry per user)."""
         self.broadcast({"type": "presence_updated", "users": users})
 
+    def broadcast_roster_updated(self, roster: Mapping[str, Any]) -> None:
+        """Broadcast the whole roster (the multiplayer spec, section 4.2) whenever presence or a grants file changed."""
+        self.broadcast({"type": "roster_updated", **roster})
+
     def broadcast_placements_updated(self, desktop_id: str, client_id: str, save_id: str) -> None:
         """A client's layout of a desktop was written (a browser's save or the shell's own edit); the owning windows refetch."""
         self.broadcast(

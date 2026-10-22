@@ -9,6 +9,7 @@ from types import FrameType
 from app_manifest.registry_location import registry_path
 from flask import Flask
 from loguru import logger
+from share_grants.agent_grants import AGENT_LAST_SEEN_FILE
 
 from imbue.system_interface.app_announcements import AppAnnouncementWriter
 from imbue.system_interface.app_announcements import announcements_path_from_environment
@@ -19,12 +20,17 @@ from imbue.system_interface.config import load_config
 from imbue.system_interface.presence import DEFAULT_PRESENCE_DIRECTORY
 from imbue.system_interface.presence import PresenceStore
 from imbue.system_interface.presence import build_presence_sweep
+from imbue.system_interface.presence import utc_now
 from imbue.system_interface.profiles import DEFAULT_SHARE_ENV_PATH
 from imbue.system_interface.profiles import PROFILES_DIRECTORY_NAME
 from imbue.system_interface.profiles import ProfileResolver
+from imbue.system_interface.roster import RosterSource
+from imbue.system_interface.roster import RosterWatch
+from imbue.system_interface.roster import build_roster_announcer
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.state_files import DEFAULT_STATE_DIRECTORY
+from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.workspace_name import workspace_name_source
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
@@ -81,20 +87,42 @@ def build_production_state(
     )
     presence = PresenceStore(directory=presence_directory)
     app_announcement_writer = None if is_preview else build_app_announcement_writer()
+    shell = build_shell_state(
+        state_directory=state_directory,
+        registry_path=registry_path(),
+        broadcaster=broadcaster,
+        profiles=profiles,
+        on_registry_read=app_announcement_writer.announce if app_announcement_writer is not None else None,
+        is_lifecycle_enabled=not is_preview,
+    )
+    workspace_name = workspace_name_source(config.system_interface_workspace_name, os.environ)
+    roster = RosterSource(
+        presence=presence,
+        profiles=profiles,
+        users=shell.users,
+        share_grants=shell.share_grants,
+        agent_grants=shell.agent_grants,
+        agent_last_seen_path=WORKSPACE_ROOT_DIRECTORY / AGENT_LAST_SEEN_FILE,
+        workspace_name=workspace_name,
+        avatar_selection=shell.avatar_selection,
+    )
+    announce_roster = build_roster_announcer(roster, broadcaster, utc_now)
     return SystemInterfaceState(
         config=config,
-        shell=build_shell_state(
-            state_directory=state_directory,
-            registry_path=registry_path(),
-            broadcaster=broadcaster,
-            profiles=profiles,
-            on_registry_read=app_announcement_writer.announce if app_announcement_writer is not None else None,
-            is_lifecycle_enabled=not is_preview,
-        ),
+        shell=shell,
         presence=presence,
-        presence_sweep=build_presence_sweep(presence, profiles, broadcaster),
+        presence_sweep=build_presence_sweep(presence, profiles, broadcaster, announce_roster),
         profiles=profiles,
-        workspace_name=workspace_name_source(config.system_interface_workspace_name, os.environ),
+        roster=roster,
+        roster_watch=RosterWatch(
+            watched_paths=(
+                shell.share_grants.share_grants_path,
+                shell.agent_grants.agent_grants_path,
+                roster.agent_last_seen_path,
+            ),
+            announce=announce_roster,
+        ),
+        workspace_name=workspace_name,
         is_preview=is_preview,
     )
 
@@ -132,6 +160,7 @@ def main() -> None:
     # start them.
     state.shell.start()
     state.presence_sweep.start()
+    state.roster_watch.start()
 
     # Tear down the broadcaster, the inventory, and the lifecycle manager (which lets go of
     # every parked port) on exit. ``atexit`` covers a normal return; the signal handlers cover

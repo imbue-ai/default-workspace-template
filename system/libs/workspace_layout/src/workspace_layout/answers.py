@@ -101,7 +101,9 @@ class InventoryClient(ClientView):
     """A client of the inventory document: the client, the windows of its active desktop it shows, and the windows
     it popped out of any desktop."""
 
-    shown: tuple[WindowId, ...] = Field(description="The windows of its active desktop its layout does not minimize")
+    shown: tuple[WindowId, ...] = Field(
+        default=(), description="The windows of its active desktop its layout does not minimize; none from an older shell"
+    )
     popped_out: tuple[PoppedOutWindow, ...] = Field(
         default=(), description="The windows its layouts of every desktop say are popped out; none from an older shell"
     )
@@ -153,9 +155,10 @@ class DesktopsListing(FrozenModel):
 
 
 class ClientsListing(FrozenModel):
-    """``GET /api/clients``: every known client, its desktop settled."""
+    """``GET /api/clients``: every known client, its desktop settled, with the windows it shows (the same client
+    objects the inventory carries, so a reader of either route sees what each client is looking at)."""
 
-    clients: tuple[ClientView, ...] = Field(description="Every known client")
+    clients: tuple[InventoryClient, ...] = Field(description="Every known client")
 
 
 class RecentClientMessage(FrozenModel):

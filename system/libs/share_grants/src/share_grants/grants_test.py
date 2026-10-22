@@ -3,14 +3,16 @@ from pathlib import Path
 
 import pytest
 
-from share_gateway.grants import GrantsError
-from share_gateway.grants import grants_lock_path
-from share_gateway.grants import load_grants
-from share_gateway.grants import locked_grants_file
-from share_gateway.grants import parse_grants
-from share_gateway.grants import render_grants
-from share_gateway.grants import upgrade_invites
-from share_gateway.grants import upgrade_invites_in_file
+from share_grants.grants import (
+    GrantsError,
+    grants_lock_path,
+    load_grants,
+    locked_grants_file,
+    parse_grants,
+    render_grants,
+    upgrade_invites,
+    upgrade_invites_in_file,
+)
 
 _FULL_GRANTS = """
 [workspace]

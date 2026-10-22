@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 
 from share_gateway.agent_cli import run
-from share_gateway.agent_grants import AGENT_INVITES_FILE
-from share_gateway.agent_grants import load_agent_invites
+from share_grants.agent_grants import AGENT_INVITES_FILE
+from share_grants.agent_grants import load_agent_invites
 from share_gateway.testing import make_workspace_repo
 
 _PRIMER = "# {{workspace_name}}\n"

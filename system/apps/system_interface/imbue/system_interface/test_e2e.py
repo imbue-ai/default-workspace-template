@@ -40,6 +40,7 @@ from playwright.sync_api import WebSocket
 from playwright.sync_api import WebSocketRoute
 from playwright.sync_api import expect
 from pydantic import Field
+from workspace_layout.identity import RequestIdentity
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
@@ -47,7 +48,6 @@ from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.config import Config
 from imbue.system_interface.server import create_application
-from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.testing import files_registry_row
 from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.shell.testing import message_handling_app

@@ -16,7 +16,7 @@ from flask.testing import FlaskClient
 
 from share_gateway.caddyfile import RegisteredApp
 from share_gateway.caddyfile import build_label_to_name
-from share_gateway.grants import load_grants
+from share_grants.grants import load_grants
 from share_gateway.handoff import JwksCache
 from share_gateway.handoff import SingleUseJtiRegistry
 from share_gateway.identity import IDENTITY_HEADER

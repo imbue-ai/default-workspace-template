@@ -1,14 +1,14 @@
-"""Tests for the per-app share grants: the parser over the gateway's grants document, and the reader over the share
+"""Tests for the per-app share grants: which apps a document grants on their own, and the reader over the share
 materials the minds desktop writes."""
 
 import os
 from pathlib import Path
 
 import pytest
+from share_grants.grants import parse_grants
 
-from imbue.system_interface.shell.errors import ShareGrantsError
 from imbue.system_interface.shell.share_grants import ShareGrantsReader
-from imbue.system_interface.shell.share_grants import parse_granted_app_names
+from imbue.system_interface.shell.share_grants import granted_app_names_of
 
 # The document as the minds desktop renders it: every scope carries all three lists.
 _GRANTS_WITH_A_PER_APP_GRANT = """\
@@ -29,8 +29,8 @@ email_domains = []
 """
 
 
-def test_parse_granted_app_names_answers_the_apps_whose_table_names_anyone() -> None:
-    assert parse_granted_app_names(_GRANTS_WITH_A_PER_APP_GRANT) == {"docs"}
+def test_granted_app_names_are_the_apps_whose_table_names_anyone() -> None:
+    assert granted_app_names_of(parse_grants(_GRANTS_WITH_A_PER_APP_GRANT)) == {"docs"}
 
 
 @pytest.mark.parametrize(
@@ -42,35 +42,13 @@ def test_parse_granted_app_names_answers_the_apps_whose_table_names_anyone() -> 
         '[services."my-app"]\n',
     ],
 )
-def test_parse_granted_app_names_grants_no_app_for_a_workspace_grant_alone_or_an_empty_table(
-    grants_text: str,
-) -> None:
-    assert parse_granted_app_names(grants_text) == set()
+def test_no_app_is_granted_by_a_workspace_grant_alone_or_an_empty_table(grants_text: str) -> None:
+    assert granted_app_names_of(parse_grants(grants_text)) == set()
 
 
-def test_parse_granted_app_names_reads_a_quoted_table_key_and_each_of_the_three_lists() -> None:
+def test_a_quoted_table_key_and_each_of_the_three_lists_grant_their_app() -> None:
     text = '[services."my-app"]\nemail_domains = ["example.org"]\n\n[services.other]\nusers = ["3f1c"]\n'
-    assert parse_granted_app_names(text) == {"my-app", "other"}
-
-
-@pytest.mark.parametrize(
-    ("grants_text", "reason"),
-    [
-        ("[services\n", "not valid TOML"),
-        ("services = 1\n", "must be a table of per-app tables"),
-        ("[services]\ndocs = 1\n", "must be a table"),
-        ('[services.docs]\nusers = "3f1c"\n', "must be a list of strings"),
-        ("[services.docs]\nemails = [1]\n", "must be a list of strings"),
-        # Every list of a table is checked, not only the first that names someone.
-        ('[services.docs]\nusers = ["3f1c"]\nemails = 1\n', "scope 'services.docs': emails must be a list"),
-        # The workspace table is checked too: a malformed one makes the gateway admit nobody.
-        ('workspace = 1\n\n[services.docs]\nusers = ["3f1c"]\n', "scope 'workspace' must be a table"),
-        ('[workspace]\nusers = "3f1c"\n\n[services.docs]\nusers = ["3f1c"]\n', "scope 'workspace': users must be"),
-    ],
-)
-def test_parse_granted_app_names_refuses_what_the_gateway_refuses(grants_text: str, reason: str) -> None:
-    with pytest.raises(ShareGrantsError, match=reason):
-        parse_granted_app_names(grants_text)
+    assert granted_app_names_of(parse_grants(text)) == {"my-app", "other"}
 
 
 def _reader_over(tmp_path: Path) -> ShareGrantsReader:

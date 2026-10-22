@@ -12,7 +12,7 @@ from pathlib import Path
 
 import httpx
 
-from share_gateway.json_values import is_json_object
+from share_grants.json_values import is_json_object
 from share_gateway.log import log as _log
 
 _ASSIGNMENT_TIMEOUT_SECONDS = 30.0

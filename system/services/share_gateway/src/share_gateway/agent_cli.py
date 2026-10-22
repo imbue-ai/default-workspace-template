@@ -45,12 +45,12 @@ from share_gateway.agent_access import mint_invite
 from share_gateway.agent_access import reconcile
 from share_gateway.agent_access import revoke
 from share_gateway.agent_audit import events_dir_from_environ
-from share_gateway.agent_grants import AGENT_ACCESS_STATE_DIR
-from share_gateway.agent_grants import AgentGrantsError
-from share_gateway.agent_grants import AgentScopeError
-from share_gateway.agent_grants import WORKSPACE_SCOPE
-from share_gateway.agent_grants import utc_now
-from share_gateway.agent_grants import validate_scope
+from share_grants.agent_grants import AGENT_LAST_SEEN_FILE
+from share_grants.agent_grants import AgentGrantsError
+from share_grants.agent_grants import AgentScopeError
+from share_grants.agent_grants import WORKSPACE_SCOPE
+from share_grants.agent_grants import utc_now
+from share_grants.agent_grants import validate_scope
 from share_gateway.agent_orientation import HELPER_PATH
 from share_gateway.agent_orientation import SKILLS_INDEX_CACHE_PATH
 from share_gateway.agent_orientation import build_changes_feed
@@ -166,7 +166,7 @@ def _command_list(args: argparse.Namespace) -> int:
         grants = list_grants(paths, utc_now())
     except AgentGrantsError as exc:
         return _fail(args, f"the agent access files are misconfigured: {exc}", "misconfigured")
-    last_seen = LastSeenStore(AGENT_ACCESS_STATE_DIR / "last_seen.json").read_all()
+    last_seen = LastSeenStore(AGENT_LAST_SEEN_FILE).read_all()
     described = [describe_grant(grant, last_seen.get(grant.agent_id)) for grant in grants]
     lines = [
         f"{entry['agent_id']}  {entry['name']}  scope={entry['scope']}  granter={entry['granter']}  last_seen={entry['last_seen_at'] or 'never'}"

@@ -8,6 +8,8 @@ from app_manifest.manifest import PinStyle
 from app_manifest.primitives import AppName
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import OWNER_PARTICIPANT_KEY
+from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import UserId
 from workspace_layout.primitives import WindowId
 from workspace_layout.records import EntryPresentation
@@ -50,6 +52,7 @@ def test_reports_are_recorded_and_listed_newest_first(tmp_path: Path) -> None:
         "last_seen": "2026-09-04T00:02:00Z",
         "is_connected": True,
         "user_id": None,
+        "participant": None,
         "entries": {},
         "shown_history": [],
         "desktop_revision": 2,
@@ -169,6 +172,7 @@ def test_a_version_one_file_is_read_with_the_view_as_the_desktop_and_rewritten_a
         "active_desktop",
         "last_seen",
         "user_id",
+        "participant",
         "entries",
         "shown_history",
         "desktop_revision",
@@ -185,9 +189,12 @@ def test_a_file_of_an_unknown_version_or_shape_is_treated_as_empty(tmp_path: Pat
 
 def test_an_arrival_records_the_user_and_the_landing_desktop_and_a_report_keeps_the_user(tmp_path: Path) -> None:
     store = ClientStore(state_directory=tmp_path)
-    arrived = store.record_arrival(ClientId("c1"), UserId("user-alice"), DesktopId("alice"), TEST_NOW)
+    arrived = store.record_arrival(
+        ClientId("c1"), UserId("user-alice"), ParticipantKey("user:user-alice"), DesktopId("alice"), TEST_NOW
+    )
     assert arrived.is_active_desktop_changed is True
     assert arrived.record.user_id == "user-alice" and arrived.record.active_desktop == "alice"
+    assert arrived.record.participant == "user:user-alice"
     # The client_state report, made by a page that read the arrival's record, carries no user, so the recorded one
     # stays.
     reported = store.record_report(
@@ -196,10 +203,11 @@ def test_an_arrival_records_the_user_and_the_landing_desktop_and_a_report_keeps_
         is_redirected=False,
     ).record
     assert reported.user_id == "user-alice" and reported.active_desktop == "home"
+    assert reported.participant == "user:user-alice"
     # Arriving again on the desktop the client is on changes nothing about the desktop.
     assert (
         store.record_arrival(
-            ClientId("c1"), UserId("user-alice"), DesktopId("home"), TEST_NOW
+            ClientId("c1"), UserId("user-alice"), ParticipantKey("user:user-alice"), DesktopId("home"), TEST_NOW
         ).is_active_desktop_changed
         is False
     )
@@ -229,7 +237,7 @@ def test_the_shown_history_holds_the_newest_distinct_entries_most_recent_last(tm
     assert again.last_seen == TEST_NOW + timedelta(minutes=1)
     # A later report and arrival keep it, and it is what the store reads back.
     store.record_report(client_report("c1", "research"), TEST_NOW + timedelta(minutes=2), is_redirected=False)
-    store.record_arrival(ClientId("c1"), None, DesktopId("home"), TEST_NOW + timedelta(minutes=3))
+    store.record_arrival(ClientId("c1"), None, OWNER_PARTICIPANT_KEY, DesktopId("home"), TEST_NOW + timedelta(minutes=3))
     reread = ClientStore(state_directory=tmp_path).get_client("c1")
     assert reread is not None and reread.shown_history == expected
     assert client_view(reread, False).model_dump(mode="json")["shown_history"] == list(expected)

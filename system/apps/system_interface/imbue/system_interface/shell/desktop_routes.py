@@ -425,12 +425,10 @@ def _popped_out_windows(desktop: Desktop, layout: DesktopLayout) -> tuple[Popped
     )
 
 
-def inventory_document(shell: ShellState) -> InventoryDocument:
-    """The one document of desktop contracts.md section 5.5: whether a preview shell answered, the workspace's name,
-    every desktop, every app, and every known client with ``shown``, the windows of its active desktop that its layout
-    does not minimize, and ``popped_out``, the windows its layouts of every desktop say it popped out into their own
-    windows."""
-    desktops = shell.list_desktops()
+def inventory_clients(shell: ShellState, desktops: Sequence[Desktop]) -> list[InventoryClient]:
+    """Every known client with ``shown``, the windows of its active desktop that its layout does not minimize, and
+    ``popped_out``, the windows its layouts of every desktop say it popped out into their own windows: the client
+    objects of the inventory document and the clients listing alike."""
     connected = shell.broadcaster.connected_client_ids()
     clients: list[InventoryClient] = []
     for record in shell.clients.list_clients():
@@ -446,12 +444,19 @@ def inventory_document(shell: ShellState) -> InventoryDocument:
             popped_out.extend(_popped_out_windows(desktop, layout))
         view = client_view(_with_active_desktop(record, active), str(record.id) in connected)
         clients.append(InventoryClient.model_validate({**dict(view), "shown": shown, "popped_out": tuple(popped_out)}))
+    return clients
+
+
+def inventory_document(shell: ShellState) -> InventoryDocument:
+    """The one document of desktop contracts.md section 5.5: whether a preview shell answered, the workspace's name,
+    every desktop, every app, and every known client as ``inventory_clients`` answers them."""
+    desktops = shell.list_desktops()
     return InventoryDocument(
         is_preview=get_state().is_preview,
         workspace_name=get_state().workspace_name.resolve(),
         desktops=tuple(shell.desktop_views(desktops)),
         apps=tuple(shell.inventory.views()),
-        clients=tuple(clients),
+        clients=tuple(inventory_clients(shell, desktops)),
     )
 
 

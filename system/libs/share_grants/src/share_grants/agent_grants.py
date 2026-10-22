@@ -1,5 +1,9 @@
 """Agent grants: the records admitting visiting agents, and the invites they join with.
 
+Shared by the share gateway, which writes these files, and the workspace shell, which reads
+the grants for its roster; the one function that needs a key library (the Ed25519 check of a
+joining agent's key) stays in the gateway (``share_gateway.agent_keys``).
+
 A visiting agent is a coding agent running outside the workspace that holds an
 **agent grant**: a record bound to the Ed25519 key the agent generated itself,
 scoped to the whole workspace (exec authority through owner-exec, every origin
@@ -24,30 +28,26 @@ import base64
 import fcntl
 import hashlib
 import hmac
+import json
 import re
 import secrets
 import tomllib
 import unicodedata
-from collections.abc import Generator
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
 from contextlib import contextmanager
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-from cryptography.hazmat.primitives.serialization import load_ssh_public_key
-
-from share_gateway.grants import toml_string
-from share_gateway.grants import write_text_atomic
-from share_gateway.json_values import is_json_object
+from share_grants.grants import toml_string, write_text_atomic
+from share_grants.json_values import is_json_object
 
 AGENT_ACCESS_DIR = Path("data/.secrets/agent_access")
 AGENT_GRANTS_FILE = AGENT_ACCESS_DIR / "grants.toml"
 AGENT_INVITES_FILE = AGENT_ACCESS_DIR / "invites.toml"
 AGENT_ACCESS_STATE_DIR = Path("data/.state/agent_access")
+# When each visiting agent last made an admitted request, by agent id, as the gateway records it (ISO 8601).
+AGENT_LAST_SEEN_FILE = AGENT_ACCESS_STATE_DIR / "last_seen.json"
 
 WORKSPACE_SCOPE = "workspace"
 AGENT_ID_PREFIX = "va-"
@@ -64,10 +64,6 @@ _QUOTE_CHARACTERS = "\"'`\u2018\u2019\u201c\u201d"
 
 class AgentGrantsError(ValueError):
     """Raised when an agent-access file is malformed (admission then fails closed)."""
-
-
-class AgentKeyError(ValueError):
-    """Raised when a public key is not a usable Ed25519 OpenSSH key."""
 
 
 class AgentScopeError(ValueError):
@@ -214,24 +210,6 @@ def mint_agent_id() -> str:
 
 def is_agent_id(value: str) -> bool:
     return bool(_AGENT_ID_PATTERN.match(value))
-
-
-def canonical_public_key_line(raw_line: str) -> tuple[str, str]:
-    """``(key line, fingerprint)`` for an Ed25519 OpenSSH public key line; any comment is dropped.
-
-    Raises AgentKeyError for anything that is not exactly an Ed25519 key.
-    """
-    parts = raw_line.strip().split()
-    if len(parts) < 2 or parts[0] != "ssh-ed25519":
-        raise AgentKeyError("public key must be an ssh-ed25519 OpenSSH public key line")
-    line = f"{parts[0]} {parts[1]}"
-    try:
-        key = load_ssh_public_key(line.encode("ascii"))
-    except (ValueError, UnicodeEncodeError) as exc:
-        raise AgentKeyError(f"public key could not be parsed: {exc}") from exc
-    if not isinstance(key, Ed25519PublicKey):
-        raise AgentKeyError("public key must be an Ed25519 key")
-    return line, fingerprint_of_public_key_line(line)
 
 
 def fingerprint_of_public_key_line(line: str) -> str:
@@ -533,6 +511,29 @@ def reconcile_authorized_keys(authorized_keys_path: Path, grants: Sequence[Agent
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def read_agent_last_seen_times(path: Path) -> dict[str, datetime]:
+    """When each visiting agent was last seen, by agent id; an absent, unreadable, or malformed file is empty.
+
+    The gateway writes the file (``share_gateway.agent_access.LastSeenStore``); the shell reads it for presence, so
+    an entry whose time cannot be read is left out rather than failing the read.
+    """
+    try:
+        raw = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    if not is_json_object(raw):
+        return {}
+    times: dict[str, datetime] = {}
+    for agent_id, value in raw.items():
+        if not isinstance(value, str):
+            continue
+        try:
+            times[agent_id] = _parse_timestamp(value, "last_seen")
+        except AgentGrantsError:
+            continue
+    return times
 
 
 def prune_expired(grants: Sequence[AgentGrant], now: datetime) -> list[AgentGrant]:

@@ -6,15 +6,15 @@ from typing import Final
 from app_schema.routes import error_response
 from flask import request
 from flask.typing import ResponseReturnValue
+from workspace_layout.identity import IDENTITY_HEADER
+from workspace_layout.identity import RequestIdentity
+from workspace_layout.identity import parse_identity_header
 from workspace_layout.ops import OpRequester
 from workspace_layout.primitives import ClientId
 
 from imbue.system_interface.shell.client_activity import find_client_id_for_page
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import NoTargetClientError
-from imbue.system_interface.shell.identity import IDENTITY_HEADER
-from imbue.system_interface.shell.identity import RequestIdentity
-from imbue.system_interface.shell.identity import parse_identity_header
 from imbue.system_interface.shell.state import ShellState
 
 LOOPBACK_CLIENT_HOSTS: Final[frozenset[str]] = frozenset({"127.0.0.1", "::1", "localhost"})

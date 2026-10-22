@@ -25,12 +25,15 @@ from workspace_layout.records import DesktopLayoutView
 from workspace_layout.records import DesktopView
 from workspace_layout.records import EntryPresentation
 from workspace_layout.records import WindowView
+from workspace_layout.roster import RosterDocument
 from workspace_layout.shell_url import CLIENTS_ROUTE
 from workspace_layout.shell_url import CLIENT_ACTIVITY_ROUTE
 from workspace_layout.shell_url import DESKTOPS_ROUTE
 from workspace_layout.shell_url import INVENTORY_ROUTE
 from workspace_layout.shell_url import LAYOUT_OP_ROUTE
+from workspace_layout.shell_url import ROSTER_ROUTE
 
+from imbue.system_interface.api_models import HeartbeatRequest
 from imbue.system_interface.api_models import HeartbeatResponse
 from imbue.system_interface.api_models import PresenceListing
 from imbue.system_interface.api_models import ShellHealthResponse
@@ -98,9 +101,11 @@ SHELL_ROUTE_TABLE: RouteTable = {
     ("GET", "/api/health"): RouteModels(response_model=ShellHealthResponse),
     ("GET", PRESENCE_PATH): RouteModels(response_model=PresenceListing),
     ("POST", PRESENCE_HEARTBEAT_PATH): RouteModels(
+        request_model=HeartbeatRequest,
         response_model=HeartbeatResponse,
         alternate_responses=(AlternateResponse(status=HTTP_NO_CONTENT),),
     ),
+    ("GET", ROSTER_ROUTE): RouteModels(response_model=RosterDocument),
     # Section 5.1 and 5: the client-activity report, and an app's lifecycle
     ("POST", CLIENT_ACTIVITY_ROUTE): RouteModels(request_model=ClientActivityReport, success_status=HTTP_NO_CONTENT),
     ("POST", "/api/apps/{name}/stop"): RouteModels(response_model=AppRunningState),

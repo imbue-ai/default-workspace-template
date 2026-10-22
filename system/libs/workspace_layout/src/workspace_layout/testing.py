@@ -53,6 +53,7 @@ from workspace_layout.records import DesktopLayoutView
 from workspace_layout.records import DesktopShortcut
 from workspace_layout.records import DesktopView
 from workspace_layout.records import WindowView
+from workspace_layout.roster import RosterDocument
 from workspace_layout.shell_url import CLIENT_ACTIVITY_ROUTE
 from workspace_layout.shell_url import LAYOUT_OP_ROUTE
 
@@ -172,6 +173,9 @@ class FakeShell(ShellLayoutInterface):
     closes: list[WindowArgs] = Field(default_factory=list, description="Every close asked for")
     refreshes: list[RefreshArgs] = Field(default_factory=list, description="Every refresh asked for")
     activities: list[ClientActivityReport] = Field(default_factory=list, description="Every activity reported")
+    roster_document: RosterDocument = Field(
+        default_factory=lambda: RosterDocument(participants=()), description="The roster the shell answers"
+    )
 
     def _check(self, op: LayoutOp, client_id: ClientId | None) -> None:
         if self.error is not None:
@@ -245,6 +249,11 @@ class FakeShell(ShellLayoutInterface):
 
     def record_client_activity(self, report: ClientActivityReport) -> None:
         self.activities.append(report)
+
+    def roster(self) -> RosterDocument:
+        if self.listing_error is not None:
+            raise self.listing_error
+        return self.roster_document
 
 
 def describe_op_body_problem(body: Any) -> str | None:

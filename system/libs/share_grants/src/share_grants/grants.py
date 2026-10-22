@@ -35,7 +35,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
 
-from share_gateway.json_values import is_json_object
+from share_grants.json_values import is_json_object
 
 
 class GrantsError(ValueError):

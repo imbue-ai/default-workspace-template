@@ -1,0 +1,23 @@
+[project]
+name = "share-grants"
+version = "0.1.0"
+description = "The parsers and renderers of the workspace's two grants documents (who may visit, and which visiting agents may), shared by the share gateway that writes them and the shell that reads them. Stdlib-only."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/share_grants"]
+
+[dependency-groups]
+dev = [
+    # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
+    "ty==0.0.85",
+]
+
+# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
+[tool.ty]

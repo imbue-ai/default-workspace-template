@@ -16,6 +16,7 @@ from workspace_layout.ops import RefreshArgs
 from workspace_layout.ops import ShowArgs
 from workspace_layout.ops import WindowArgs
 from workspace_layout.records import DesktopView
+from workspace_layout.roster import RosterDocument
 
 
 class ShellLayoutInterface(MutableModel, ABC):
@@ -61,3 +62,7 @@ class ShellLayoutInterface(MutableModel, ABC):
     @abstractmethod
     def record_client_activity(self, report: ClientActivityReport) -> None:
         """Tell the shell a client sent a message to a page; best-effort, never raises."""
+
+    @abstractmethod
+    def roster(self) -> RosterDocument:
+        """Everyone who may be in the workspace, in the shell's order (the multiplayer spec, section 4.2)."""
