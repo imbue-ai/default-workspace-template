@@ -69,8 +69,6 @@ LOUNGE_ROUTE: Final[str] = "/api/rooms/lounge"
 MENTIONS_ROUTE: Final[str] = "/api/mentions"
 PENDING_MENTIONS_ROUTE: Final[str] = "/api/mentions/pending"
 
-# The author ``chat_room.py post`` names: the workspace's own agent.
-WORKSPACE_AGENT_AUTHOR: Final[str] = str(WORKSPACE_AGENT_PARTICIPANT_KEY)
 _AGENT_FALLBACK_NAME: Final[str] = "Agent"
 
 # Who a mention is acted on for: a person gets the pending mark and, for the owner, the desktop app's feed.
@@ -135,8 +133,8 @@ class RoomPostRequest(FrozenModel):
     """The body of ``POST /api/rooms/<id>/post`` (loopback only): what an agent says into a room."""
 
     message: str = Field(min_length=1, description="What the agent says")
-    author: str = Field(
-        default=WORKSPACE_AGENT_AUTHOR,
+    author: ParticipantKey = Field(
+        default=WORKSPACE_AGENT_PARTICIPANT_KEY,
         description="``workspace-agent`` for the workspace's own agent, or a visiting agent's ``agent:<id>``",
     )
 
@@ -392,8 +390,9 @@ def _agent_post_endpoint(room_id: str) -> Response:
         return _room_not_found(room_id)
     body = parse_request_body(RoomPostRequest)
     state = get_state()
-    author = ParticipantKey(body.author)
-    append_room_message(state, room, body.message, uuid4().hex, author, _author_name(state, author, None), True)
+    append_room_message(
+        state, room, body.message, uuid4().hex, body.author, _author_name(state, body.author, None), True
+    )
     return model_response(OkResponse())
 
 

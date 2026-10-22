@@ -5475,6 +5475,9 @@ def test_a_mention_of_the_agent_from_a_room_reaches_the_main_chat_prefixed_until
         [],
     )
     assert len(messenger.sent) == 1
+    # An author that is not a participant key is a bad body, like any other.
+    malformed = client.post(f"/api/rooms/{room_id}/post", json={"message": "hi", "author": "not a key"})
+    assert malformed.status_code == 400
 
 
 def test_a_mention_of_a_person_is_pending_until_a_page_of_theirs_watches_the_chat(
