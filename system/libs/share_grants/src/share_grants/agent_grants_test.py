@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from share_grants.agent_grants import (
     normalize_invite_code,
     parse_agent_grants,
     parse_agent_invites,
+    read_agent_last_seen_times,
     reconcile_authorized_keys,
     reconcile_authorized_keys_text,
     render_agent_grants,
@@ -76,6 +78,24 @@ def test_admission_token_is_random_and_hashes_stably() -> None:
     assert first != second and len(first) >= 40
     assert hash_admission_token(first) == hash_admission_token(first)
     assert hash_admission_token(first) != hash_admission_token(second)
+
+
+def test_last_seen_times_read_an_absent_file_quietly_and_warn_about_one_that_cannot_be_read(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = tmp_path / "last_seen.json"
+    assert read_agent_last_seen_times(path) == {}
+    assert caplog.records == []
+
+    path.write_text("not json")
+    assert read_agent_last_seen_times(path) == {}
+    path.write_text("[]")
+    assert read_agent_last_seen_times(path) == {}
+    assert [record.levelname for record in caplog.records] == ["WARNING", "WARNING"]
+
+    # An entry whose time cannot be read is left out rather than failing the read.
+    path.write_text(json.dumps({"va-1": "2026-10-15T18:00:00+00:00", "va-2": "yesterday", "va-3": 3}))
+    assert read_agent_last_seen_times(path) == {"va-1": _NOW}
 
 
 def test_fingerprint_of_public_key_line_matches_openssh() -> None:

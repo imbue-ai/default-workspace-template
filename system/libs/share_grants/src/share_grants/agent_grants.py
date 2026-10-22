@@ -29,6 +29,7 @@ import fcntl
 import hashlib
 import hmac
 import json
+import logging
 import re
 import secrets
 import tomllib
@@ -41,6 +42,8 @@ from uuid import uuid4
 
 from share_grants.grants import toml_string, write_text_atomic
 from share_grants.json_values import is_json_object
+
+_logger = logging.getLogger(__name__)
 
 AGENT_ACCESS_DIR = Path("data/.secrets/agent_access")
 AGENT_GRANTS_FILE = AGENT_ACCESS_DIR / "grants.toml"
@@ -521,9 +524,13 @@ def read_agent_last_seen_times(path: Path) -> dict[str, datetime]:
     """
     try:
         raw = json.loads(path.read_text())
-    except (OSError, ValueError):
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        _logger.warning("Could not read the agents' last-seen times at %s: %s", path, exc)
         return {}
     if not is_json_object(raw):
+        _logger.warning("The agents' last-seen times at %s are not a JSON object; reading them as empty", path)
         return {}
     times: dict[str, datetime] = {}
     for agent_id, value in raw.items():
