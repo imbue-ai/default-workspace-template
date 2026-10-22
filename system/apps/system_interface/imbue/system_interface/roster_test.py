@@ -10,11 +10,13 @@ from workspace_layout.primitives import UserId
 from workspace_layout.roster import PARTICIPANT_COLORS
 from workspace_layout.roster import RosterDocument
 
+from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.avatar.selection import AvatarSelectionStore
 from imbue.system_interface.presence import PRESENCE_CONNECTED_WINDOW
 from imbue.system_interface.presence import PresenceStore
 from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.roster import RosterSource
+from imbue.system_interface.roster import RosterWatch
 from imbue.system_interface.shell.data_types import UserRecord
 from imbue.system_interface.shell.share_grants import AgentGrantsReader
 from imbue.system_interface.shell.share_grants import ShareGrantsReader
@@ -165,3 +167,24 @@ def test_a_visiting_agent_is_offline_past_the_window_and_a_colliding_name_is_suf
     assert (person.display_name, person.handle) == ("agent", "agent-2")
     assert (claude.handle, claude.is_connected) == ("agent-3", False)
     assert document.participants[-1].handle == "agent"
+
+
+def test_the_watch_waits_for_a_files_directory_to_appear_then_announces_and_follows_it(tmp_path: Path) -> None:
+    grants_path = tmp_path / "agent_access" / "grants.toml"
+    announced: list[int] = []
+    watch = RosterWatch(
+        watched_paths=(grants_path,), announce=lambda: announced.append(1), retry_interval_seconds=0.01
+    )
+    watch.start()
+    try:
+        assert watch.pending_paths == (grants_path,)
+        grants_path.parent.mkdir()
+        grants_path.write_text("[[agents]]\n")
+        wait_for(lambda: watch.pending_paths == (), timeout=5.0, poll_interval=0.01, error_message="never watched")
+        # The late watch announces once, since the file was written before it began.
+        wait_for(lambda: len(announced) >= 1, timeout=5.0, poll_interval=0.01, error_message="never announced")
+        seen = len(announced)
+        grants_path.write_text("[[agents]]\n# changed\n")
+        wait_for(lambda: len(announced) > seen, timeout=5.0, poll_interval=0.01, error_message="the write was missed")
+    finally:
+        watch.stop()

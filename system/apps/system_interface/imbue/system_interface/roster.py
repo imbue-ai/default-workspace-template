@@ -12,13 +12,13 @@ collision suffixes the later entry; the workspace agent's ``agent`` is reserved 
 grants file changes (the desktop and the gateway both write them, so the shell watches them), and on connect.
 """
 
+import threading
 from collections.abc import Callable
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 from typing import Final
 
-from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
 from share_grants.agent_grants import AgentGrant
@@ -59,6 +59,8 @@ WORKSPACE_AGENT_HANDLE: Final[str] = "agent"
 ANONYMOUS_OWNER_NAME: Final[str] = "Owner"
 # The pixel size the roster asks the avatar's icon at: the biggest the cards draw it.
 _AVATAR_ICON_SIZE: Final[int] = 64
+# How often a watched file whose directory does not exist yet is tried again.
+ROSTER_WATCH_RETRY_SECONDS: Final[float] = 10.0
 
 
 class _Entry(FrozenModel):
@@ -282,25 +284,63 @@ def build_roster_announcer(
 
 class RosterWatch(MutableModel):
     """Announces the roster whenever one of the files it is computed from changes: the two grants documents and the
-    gateway's last-seen record, each watched when its directory exists."""
+    gateway's last-seen record. The gateway creates the agent-access directories when the workspace is first shared,
+    which is after the shell started on a fresh workspace, so a file whose directory does not exist yet is tried
+    again every ``retry_interval_seconds`` until it is watched, and a watch that starts late announces the roster
+    once, since the file may have been written before it began."""
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
     watched_paths: tuple[Path, ...] = Field(frozen=True, description="The files whose change re-announces the roster")
     announce: Callable[[], None] = Field(frozen=True, description="How the roster reaches the windows")
+    retry_interval_seconds: float = Field(
+        default=ROSTER_WATCH_RETRY_SECONDS, frozen=True, description="How often a not-yet-watchable file is tried"
+    )
 
     _observers: list[BaseObserver] = PrivateAttr(default_factory=list)
+    _pending: list[Path] = PrivateAttr(default_factory=list)
+    _stop: threading.Event = PrivateAttr(default_factory=threading.Event)
+    _thread: threading.Thread | None = PrivateAttr(default=None)
+
+    @property
+    def pending_paths(self) -> tuple[Path, ...]:
+        """The files not watched yet, their directories still missing."""
+        return tuple(self._pending)
 
     def start(self) -> None:
-        for path in self.watched_paths:
+        self._pending = list(self.watched_paths)
+        self._watch_pending()
+        if self._pending:
+            thread = threading.Thread(target=self._run, daemon=True, name="roster-watch")
+            self._thread = thread
+            thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+        for observer in self._observers:
+            stop_file_watch(observer)
+        self._observers = []
+
+    def _watch_pending(self) -> bool:
+        """Start the watch of every pending file whose directory now exists; whether any started."""
+        still_pending: list[Path] = []
+        is_any_started = False
+        for path in self._pending:
             if not path.parent.is_dir():
-                logger.debug("Not watching {} for the roster: its directory does not exist yet", path)
+                still_pending.append(path)
                 continue
             observer = start_file_watch(path, self.announce)
             if observer is not None:
                 self._observers.append(observer)
+                is_any_started = True
+        self._pending = still_pending
+        return is_any_started
 
-    def stop(self) -> None:
-        for observer in self._observers:
-            stop_file_watch(observer)
-        self._observers = []
+    def _run(self) -> None:
+        while not self._stop.wait(timeout=self.retry_interval_seconds):
+            if self._watch_pending():
+                self.announce()
+            if not self._pending:
+                return
