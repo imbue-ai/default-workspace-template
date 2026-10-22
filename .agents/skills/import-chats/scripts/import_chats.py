@@ -24,10 +24,10 @@ A sync of a large account takes a while: run it through ``system/scripts/run_in_
 The store is the datalib skill's (``data/.skills/datalib/``), shared with anything else the user
 mirrors there. A source this script adds gets an ingest step (the download into the raw store
 ``<group>/ingest/entities.doltlite_db``), a ``render_markdown`` step and a ``keyword_index`` step,
-and the last two are turned off before the config holding them is put in place: a first import only
-downloads, which is what keeps it quick and light. Turning them on, which the skill does only when the user asks for
-search over their chats, is ``datalib-dag turn-on``. A source already in the config is never
-rewritten, so whatever was turned on or changed there stays.
+and the last two are turned off before the config holding them is put in place: a first import
+only downloads, which is what keeps it quick and light. Turning them on, which the skill does only
+when the user asks for search over their chats, is ``datalib-dag turn-on``. A source already in
+the config is never rewritten, so whatever was turned on or changed there stays.
 
 The status file (``data/.skills/import-chats/status.json``) is read by the Getting Started app's
 "Bring in your chats" card, so its shape is a contract with
