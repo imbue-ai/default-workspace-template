@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from flask.testing import FlaskClient
 from playwright.sync_api import Browser
+from playwright.sync_api import BrowserContext
 from playwright.sync_api import Page
 
 from app_manifest.registry import SHELL_MODULE_PATHS
@@ -67,34 +68,41 @@ def shell_origin(skills_origin: str) -> Iterator[str]:
 
 
 @pytest.fixture
-def open_skills_page(module_browser: Browser, skills_origin: str) -> Iterator[Callable[[str, int, int], Page]]:
-    """Opens the Skills page at a path, alone in a browser tab, at a window size."""
-    contexts = []
+def new_browser_page(module_browser: Browser) -> Iterator[Callable[[int, int], Page]]:
+    """Opens a blank page in a browser context of its own at a window size; every context is closed after the test."""
+    contexts: list[BrowserContext] = []
 
-    def open_page(path: str, width: int, height: int) -> Page:
+    def new_page(width: int, height: int) -> Page:
         context = module_browser.new_context(viewport={"width": width, "height": height})
         contexts.append(context)
-        page = context.new_page()
-        page.goto(skills_origin + path)
-        return page
+        return context.new_page()
 
-    yield open_page
+    yield new_page
     for context in contexts:
         context.close()
 
 
 @pytest.fixture
-def open_framed_skills_page(module_browser: Browser, shell_origin: str) -> Iterator[Callable[[str], Page]]:
+def open_skills_page(
+    new_browser_page: Callable[[int, int], Page], skills_origin: str
+) -> Callable[[str, int, int], Page]:
+    """Opens the Skills page at a path, alone in a browser tab, at a window size."""
+
+    def open_page(path: str, width: int, height: int) -> Page:
+        page = new_browser_page(width, height)
+        page.goto(skills_origin + path)
+        return page
+
+    return open_page
+
+
+@pytest.fixture
+def open_framed_skills_page(new_browser_page: Callable[[int, int], Page], shell_origin: str) -> Callable[[str], Page]:
     """Opens the Skills page at a path framed by the shell stand-in; the shell's page is returned."""
-    contexts = []
 
     def open_page(path: str) -> Page:
-        context = module_browser.new_context(viewport={"width": 1200, "height": 800})
-        contexts.append(context)
-        page = context.new_page()
+        page = new_browser_page(1200, 800)
         page.goto(f"{shell_origin}/?path={path}")
         return page
 
-    yield open_page
-    for context in contexts:
-        context.close()
+    return open_page
