@@ -5635,3 +5635,16 @@ def test_an_awaiting_chat_becomes_a_room_under_its_own_id(app: Flask) -> None:
     assert state_of(app).agent_manager.get_provisional_chat(awaiting["chat_id"]) is None
     assert client.post(f"/api/chats/awaiting/{awaiting['chat_id']}/make-room").status_code == 404
     assert client.get(f"/api/chats/{awaiting['chat_id']}/events").get_json()["events"] == []
+
+
+def test_an_awaiting_chat_whose_create_raced_in_stays_an_agent_chat(app: Flask) -> None:
+    client = app.test_client()
+    awaiting = client.post("/api/chats/awaiting").get_json()
+    manager = state_of(app).agent_manager
+
+    with patch.object(manager, "discard_provisional_chat", return_value=False):
+        made = client.post(f"/api/chats/awaiting/{awaiting['chat_id']}/make-room")
+
+    assert made.status_code == 409, made.get_data(as_text=True)
+    assert client.get("/api/rooms").get_json()["rooms"] == []
+    assert manager.get_provisional_chat(awaiting["chat_id"]) is not None

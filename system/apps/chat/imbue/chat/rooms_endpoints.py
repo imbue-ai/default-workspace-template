@@ -441,7 +441,10 @@ def _make_room(chat_id: str) -> Response:
     record = state.rooms.create(title, request_participant(), room_id=provisional.chat_id)
     # Listed as a room before the awaiting chat is dropped, so the page on it never sees it vanish.
     broadcast_rooms(state)
-    manager.discard_provisional_chat(chat_id)
+    if not manager.discard_provisional_chat(chat_id):
+        # A first send raced in and the chat's create is under way: the id is an agent chat's after all.
+        delete_room(state, record.id)
+        return error_response(f"Chat '{chat_id}' cannot become a room: it is being created", 409)
     return model_response(state.rooms.snapshot(record), 201)
 
 
