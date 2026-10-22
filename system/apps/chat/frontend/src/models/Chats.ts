@@ -5,9 +5,8 @@
  */
 
 import m from "mithril";
-import { getChatKind } from "../document-meta";
 import { apiUrl, wsUrl } from "@imbue/workspace-ui/src/base-path";
-import { getTerminalOriginLabel } from "../document-meta";
+import { getChatKind, getTerminalOriginLabel } from "../document-meta";
 import { deriveAppOrigin } from "@imbue/workspace-ui/src/origin";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import type { ModelChoice, ModelIdentity } from "./ModelSettings";
