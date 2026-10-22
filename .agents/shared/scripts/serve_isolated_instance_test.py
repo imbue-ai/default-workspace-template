@@ -1182,9 +1182,9 @@ def test_wrapper_page_derives_the_inner_origin_from_location_host() -> None:
     # so the page must derive the inner iframe's origin from ``location.host``
     # in JavaScript rather than bake in any static URL. The old path-prefix
     # scheme (``/service/<name>/``) no longer exists.
-    html = wrapper_mod.build_wrapper_html(inner_service="demo-app", title="my change")
+    html = wrapper_mod.build_wrapper_html(inner_label="demo-app-a1b2c3d4", title="my change")
 
-    assert '"demo-app"' in html
+    assert '"demo-app-a1b2c3d4"' in html
     assert "location.host" in html
     assert "/service/" not in html
     # No static src pointing anywhere: the iframe src is assigned in JS only.
@@ -1193,7 +1193,7 @@ def test_wrapper_page_derives_the_inner_origin_from_location_host() -> None:
 
 def test_wrapper_page_opens_the_inner_service_at_the_given_path() -> None:
     page = wrapper_mod.build_wrapper_html(
-        "chat-preview-app", "t", inner_path="/agent-1"
+        "chat-preview-app-a1b2c3d4", "t", inner_path="/agent-1"
     )
 
     assert 'var previewPath = "/agent-1";' in page
@@ -1203,9 +1203,31 @@ def test_wrapper_page_opens_the_inner_service_at_the_given_path() -> None:
 
 
 def test_wrapper_page_escapes_the_title() -> None:
-    html = wrapper_mod.build_wrapper_html(inner_service="svc", title='<b>x</b> & "y"')
+    html = wrapper_mod.build_wrapper_html(inner_label="svc-a1b2c3d4", title='<b>x</b> & "y"')
     assert "<b>x</b>" not in html
     assert "&lt;b&gt;x&lt;/b&gt;" in html
+
+
+def test_wrapper_uses_registered_service_label(tmp_path: Path) -> None:
+    registry_path = tmp_path / "apps.toml"
+    registry_path.write_text(
+        '[[apps]]\nname = "chat-preview-app"\nlabel = "chat-preview-app-a1b2c3d4"\n'
+    )
+
+    label = wrapper_mod.registered_label("chat-preview-app", registry_path)
+    assert label == "chat-preview-app-a1b2c3d4"
+    assert f'var previewService = "{label}";' in wrapper_mod.build_wrapper_html(label, "Preview")
+    with pytest.raises(ValueError, match="no registered label"):
+        wrapper_mod.registered_label("missing", registry_path)
+
+
+def test_wrapper_uses_the_instance_registry_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    registry_path = tmp_path / "apps.toml"
+    registry_path.write_text(
+        '[[apps]]\nname = "chat-preview-app"\nlabel = "chat-preview-app-a1b2c3d4"\n'
+    )
+    monkeypatch.setenv("MINDS_APPS_FILE", str(registry_path))
+    assert wrapper_mod.registered_label("chat-preview-app") == "chat-preview-app-a1b2c3d4"
 
 
 def test_a_boot_whose_health_says_the_frontend_is_not_built_is_not_up(
