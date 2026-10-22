@@ -92,9 +92,9 @@ an app's program line execs its entry point from `.venv/bin` rather than
 through `uv run`.
 Python packages here are picked up by the workspace's `system/apps/*` uv member
 glob, so one lockfile covers the whole tree and nothing in the root
-`pyproject.toml` needs editing for a new app. The built-in apps are also
-root dependencies, so a sync without `--all-packages` keeps their entry
-points; removing a built-in app means removing its entry there too.
+`pyproject.toml` needs editing for a user-built app. The built-in apps are
+also root dependencies, so a sync without `--all-packages` keeps their entry
+points; adding or removing a built-in app means editing its entry there too.
 
 An app that needs a continuously running background component keeps that
 service's code in its own folder here, named `<app>-<role>` in supervisord;
