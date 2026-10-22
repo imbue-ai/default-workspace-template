@@ -5119,6 +5119,28 @@ def test_a_visitors_message_reaches_the_agent_prefixed_and_is_annotated(
     assert annotation.text_sha256 == text_sha256("[from: bob] please rebase")
 
 
+def test_a_visitors_intake_reaches_the_agent_prefixed_and_is_annotated(
+    app: Flask, messenger: RecordingMngrMessenger
+) -> None:
+    """The launcher's text enters through the intake route rather than the message route, and is attributed the
+    same way."""
+    agent_id = "agent-00000000000000000000000000000035"
+    seed_agent_state(state_of(app).agent_manager, agent_id, name="Chat-35")
+    client = app.test_client()
+
+    response = client.post(
+        "/api/chats/intake",
+        json={"message": "please deploy", "target": "chat", "chat_id": agent_id, "is_delivery_awaited": True},
+        headers=_identity_header(_VISITOR),
+    )
+
+    assert response.status_code == 200
+    assert messenger.sent == [(agent_id, "[from: bob] please deploy")]
+    (annotation,) = state_of(app).authors.annotations(ChatId(agent_id))
+    assert (str(annotation.author), annotation.display_name) == ("user:user-bob-4471", "bob")
+    assert annotation.text_sha256 == text_sha256("[from: bob] please deploy")
+
+
 def test_a_visitors_slash_command_is_delivered_as_typed_but_still_annotated(
     app: Flask, messenger: RecordingMngrMessenger
 ) -> None:

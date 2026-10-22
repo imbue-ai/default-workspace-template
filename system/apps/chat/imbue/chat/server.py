@@ -48,6 +48,7 @@ from pydantic import Field
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
 from workspace_layout.errors import InvalidLayoutValueError
+from workspace_layout.identity import RequestIdentity
 from workspace_layout.identity import is_owner_participant
 from workspace_layout.identity import participant_key_of
 from workspace_layout.interfaces import ShellLayoutInterface
@@ -886,11 +887,13 @@ def _deliver_unreported_runner_ends_notice(
         )
 
 
-def _attributed_delivery(state: ChatAppState, chat_id: ChatId, message: str, message_id: str) -> str:
-    """The text the agent is handed for the current request's sender (the multiplayer spec, sections 5.1 and 5.3):
-    the words as they are for the owner (under either key) and for a slash command or bash input, else prefixed
-    ``[from: <name>] ``; a sender other than the owner is recorded in the chat's annotations before delivery."""
-    identity = request_identity()
+def _attributed_delivery(
+    state: ChatAppState, chat_id: ChatId, message: str, message_id: str, identity: RequestIdentity
+) -> str:
+    """The text the agent is handed for the sender ``identity`` vouches for (the multiplayer spec, sections 5.1 and
+    5.3): the words as they are for the owner (under either key) and for a slash command or bash input, else prefixed
+    ``[from: <name>] ``; a sender other than the owner is recorded in the chat's annotations before delivery. The
+    identity is read from the request by the caller, since an intake's send may run off the request thread."""
     if is_owner_participant(identity):
         return message
     sender = participant_key_of(identity)
@@ -958,7 +961,9 @@ def _send_message_endpoint(chat_id: str) -> Response:
     # Alongside the delivery rather than after it, which can take seconds: the name should land
     # while the agent is still answering.
     _consider_naming_chat(state, ChatId(chat_id), send_message_request.message)
-    delivered_text = _attributed_delivery(state, ChatId(chat_id), send_message_request.message, message_id)
+    delivered_text = _attributed_delivery(
+        state, ChatId(chat_id), send_message_request.message, message_id, request_identity()
+    )
     accepted = _send_to_chat(
         state,
         ChatId(chat_id),
@@ -1866,32 +1871,36 @@ def _resolve_intake_account(intake: IntakeRequest) -> str | Response | None:
         return None
 
 
-def _deliver_intake_send(state: ChatAppState, chat_id: ChatId, intake: IntakeRequest) -> _SendRefused | None:
-    """Send an intake's text to a chat that is an agent through the ordinary send path; None when it landed (or was
-    held for a converging chat), else the refusal: what the message route would answer, and under which status."""
+def _deliver_intake_send(
+    state: ChatAppState, chat_id: ChatId, intake: IntakeRequest, identity: RequestIdentity
+) -> _SendRefused | None:
+    """Send an intake's text to a chat that is an agent through the ordinary send path, attributed to the sender
+    ``identity`` vouches for as a message-route send is; None when it landed (or was held for a converging chat),
+    else the refusal: what the message route would answer, and under which status."""
     message_id = uuid4().hex
     send_message_request = SendMessageRequest(
         message=intake.message, message_id=message_id, client_id=intake.client_id, desktop_id=intake.desktop_id
     )
     _consider_naming_chat(state, chat_id, intake.message)
+    delivered_text = _attributed_delivery(state, chat_id, intake.message, message_id, identity)
     accepted = _send_to_chat(
         state,
         chat_id,
         send_message_request,
         message_id,
         is_refused_on_signed_out_account=True,
-        delivered_text=intake.message,
+        delivered_text=delivered_text,
     )
     return accepted if isinstance(accepted, _SendRefused) else None
 
 
 def _log_undelivered_intake_send(
-    app_context: AppContext, state: ChatAppState, chat_id: ChatId, intake: IntakeRequest
+    app_context: AppContext, state: ChatAppState, chat_id: ChatId, intake: IntakeRequest, identity: RequestIdentity
 ) -> None:
     """The send of an intake nobody waits on, run under the app's context (the send path resolves the agent through
-    the current app): its failure is a warning in the log."""
+    the current app) with the identity the request thread read: its failure is a warning in the log."""
     with app_context:
-        failure = _deliver_intake_send(state, chat_id, intake)
+        failure = _deliver_intake_send(state, chat_id, intake, identity)
     if failure is not None:
         logger.warning(
             "An intake's send to chat {} was not delivered ({}): {}",
@@ -1901,10 +1910,12 @@ def _log_undelivered_intake_send(
         )
 
 
-def _deliver_intake_send_in_background(state: ChatAppState, chat_id: ChatId, intake: IntakeRequest) -> None:
+def _deliver_intake_send_in_background(
+    state: ChatAppState, chat_id: ChatId, intake: IntakeRequest, identity: RequestIdentity
+) -> None:
     threading.Thread(
         target=_log_undelivered_intake_send,
-        args=(current_app.app_context(), state, chat_id, intake),
+        args=(current_app.app_context(), state, chat_id, intake, identity),
         name=f"intake-send-{chat_id}",
         daemon=True,
     ).start()
@@ -1912,10 +1923,11 @@ def _deliver_intake_send_in_background(state: ChatAppState, chat_id: ChatId, int
 
 def _finish_intake_send(state: ChatAppState, chat_id: ChatId, intake: IntakeRequest) -> Response | None:
     """Deliver an intake's send to a chat that is an agent, awaited or not; None when nothing failed here."""
+    identity = request_identity()
     if intake.is_delivery_awaited:
-        refused = _deliver_intake_send(state, chat_id, intake)
+        refused = _deliver_intake_send(state, chat_id, intake, identity)
         return model_response(refused.answer, refused.status) if refused is not None else None
-    _deliver_intake_send_in_background(state, chat_id, intake)
+    _deliver_intake_send_in_background(state, chat_id, intake, identity)
     return None
 
 
@@ -2037,7 +2049,7 @@ def _apply_pending_intake(token: str) -> Response:
     elif is_awaiting:
         first_message = intake.message
     elif intake.message:
-        _deliver_intake_send_in_background(state, chat_id, intake)
+        _deliver_intake_send_in_background(state, chat_id, intake, request_identity())
     else:
         # A chat that became an agent since the intake was held, with nothing to send: it is selected alone.
         pass
