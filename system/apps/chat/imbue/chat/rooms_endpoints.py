@@ -262,8 +262,9 @@ def append_room_message(
     author_name: str,
     is_from_agent: bool,
 ) -> None:
-    """Append a message to the room, push it to the room's open streams and the list, and act on its mentions.
-    A message an agent posted mentions people only (section 11): never another agent or chat, so no loop forms."""
+    """Append a message to the room, push it to the room's open streams, act on its mentions, and push the list,
+    which then names the chat a mention asked. A message an agent posted mentions people only (section 11): never
+    another agent or chat, so no loop forms."""
     handler = _handler(state)
     targets = handler.resolve(text)
     if is_from_agent:
@@ -276,8 +277,8 @@ def append_room_message(
     if is_from_agent:
         state.rooms.note_agent_answered(room.id)
     state.event_queues.broadcast(str(room.id), room_message_as_page_event(message))
-    broadcast_rooms(state)
     handler.act(room.id, room.title, message_id, text, author, message.author_name, targets, room_id=room.id)
+    broadcast_rooms(state)
 
 
 def post_room_message(

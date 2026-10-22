@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import os
+import queue
 import threading
 import time
 from collections.abc import Callable
@@ -5446,12 +5447,25 @@ def test_the_chat_document_names_the_rooms_kind(app: Flask, tmp_path: Path) -> N
     assert client.get("/room-notahexid").status_code == 404
 
 
+def _rooms_pushes(pushes: queue.Queue[str | None]) -> list[list[dict[str, Any]]]:
+    """The rooms of every ``rooms_updated`` push queued so far, in order."""
+    messages: list[list[dict[str, Any]]] = []
+    while not pushes.empty():
+        raw = pushes.get_nowait()
+        assert raw is not None
+        message = json.loads(raw)
+        if message["type"] == "rooms_updated":
+            messages.append(message["rooms"])
+    return messages
+
+
 def test_a_mention_of_the_agent_from_a_room_reaches_the_main_chat_prefixed_until_it_answers(
     tmp_path: Path, messenger: RecordingMngrMessenger
 ) -> None:
     app = _peopled_app(tmp_path, messenger)
     client = app.test_client()
     room_id = client.post("/api/rooms", json={"title": "Lounge"}).get_json()["id"]
+    pushes = state_of(app).broadcaster.register()
 
     posted = client.post(
         f"/api/chats/{room_id}/message",
@@ -5460,6 +5474,8 @@ def test_a_mention_of_the_agent_from_a_room_reaches_the_main_chat_prefixed_until
     )
     assert posted.status_code == 200
 
+    # The list pushed by the send already names the chat the room is waiting on, so its row shows the working dot.
+    assert [room["awaiting_chat_ids"] for room in _rooms_pushes(pushes)[-1]] == [[_MAIN_ID]]
     wait_until_true(lambda: len(messenger.sent) == 1, 5.0, "the mention to reach the main chat")
     assert messenger.sent == [(_MAIN_ID, "[from: Bob in #Lounge] @agent what is the weather?")]
     (annotation,) = state_of(app).authors.annotations(ChatId(_MAIN_ID))
