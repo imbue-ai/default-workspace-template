@@ -328,8 +328,10 @@ def act_on_chat_mentions(
     handler.act(chat_id, chat_title, message_id, text, sender, _author_name(state, sender, identity), targets, None)
 
 
-def _room_of(room_id: str) -> RoomRecord | None:
-    parsed = parse_chat_ref(room_id)
+def room_of(chat_id: str) -> RoomRecord | None:
+    """The room an id names, or None: how every chat route tells a room from an agent chat (by the kind the room
+    store answers, never by the id's shape)."""
+    parsed = parse_chat_ref(chat_id)
     return None if parsed is None else get_state().rooms.read(parsed)
 
 
@@ -374,7 +376,7 @@ def _delete_room(room_id: str) -> Response:
 
 def _room_messages(room_id: str) -> Response:
     """``GET /api/rooms/<id>/messages``: the room's messages as page events, all of them or those after ``after``."""
-    room = _room_of(room_id)
+    room = room_of(room_id)
     if room is None:
         return _room_not_found(room_id)
     return room_events_response(get_state(), room, request.args.get("after"))
@@ -382,7 +384,7 @@ def _room_messages(room_id: str) -> Response:
 
 def _post_room_message_endpoint(room_id: str) -> Response:
     """``POST /api/rooms/<id>/messages``: a person's message into the room, as the chat page's send route takes it."""
-    room = _room_of(room_id)
+    room = room_of(room_id)
     if room is None:
         return _room_not_found(room_id)
     body = parse_request_body(SendMessageRequest)
@@ -395,7 +397,7 @@ def _agent_post_endpoint(room_id: str) -> Response:
     refusal = require_loopback()
     if refusal is not None:
         return refusal
-    room = _room_of(room_id)
+    room = room_of(room_id)
     if room is None:
         return _room_not_found(room_id)
     body = parse_request_body(RoomPostRequest)

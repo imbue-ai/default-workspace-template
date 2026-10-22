@@ -211,7 +211,6 @@ from imbue.chat.request_helpers import answer_chat_app_error
 from imbue.chat.request_helpers import handle_unhandled_exception
 from imbue.chat.request_helpers import json_response
 from imbue.chat.request_helpers import require_loopback
-from imbue.chat.rooms import RoomRecord
 from imbue.chat.rooms_endpoints import BackgroundMentionDeliverer
 from imbue.chat.rooms_endpoints import MentionHandler
 from imbue.chat.rooms_endpoints import act_on_chat_mentions
@@ -219,6 +218,7 @@ from imbue.chat.rooms_endpoints import broadcast_rooms
 from imbue.chat.rooms_endpoints import post_room_message
 from imbue.chat.rooms_endpoints import rename_room_response
 from imbue.chat.rooms_endpoints import room_events_response
+from imbue.chat.rooms_endpoints import room_of
 from imbue.chat.secret_requests import ChatLookup
 from imbue.chat.secret_requests import NoticeDeliveryError
 from imbue.chat.secret_requests import SecretRequestChatBridge
@@ -268,16 +268,9 @@ def _chat_not_found_error(chat_id: str) -> ErrorResponse:
 
 def _chat_not_found_response(chat_id: str) -> Response:
     """404 for an id that names no chat; 409 for one that names a room, which has no agent to answer with (S3)."""
-    if _room_of(chat_id) is not None:
+    if room_of(chat_id) is not None:
         return error_response(f"Chat '{chat_id}' is a room: it has no agent", 409)
     return model_response(_chat_not_found_error(chat_id), 404)
-
-
-def _room_of(chat_id: str) -> RoomRecord | None:
-    """The room an id names, or None: how every chat route tells a room from an agent chat (by the kind the room
-    store answers, never by the id's shape)."""
-    parsed = parse_chat_ref(chat_id)
-    return None if parsed is None else get_state().rooms.read(parsed)
 
 
 def _agent_list_not_known_response() -> Response:
@@ -377,7 +370,7 @@ def _chat_transcript(chat_id: str) -> ChatTranscript | None:
 
 def _get_events(chat_id: str) -> Response:
     """Get a chat's events. Supports tail-first loading and backfill. A room's are its messages, whole."""
-    room = _room_of(chat_id)
+    room = room_of(chat_id)
     if room is not None:
         return room_events_response(get_state(), room, request.args.get("after"))
     transcript = _chat_transcript(chat_id)
@@ -534,7 +527,7 @@ def _stream_events(chat_id: str) -> Response:
     and the switch chip arrive on the same connection as the retiring agent's did.
     """
     state = get_state()
-    if _room_of(chat_id) is not None:
+    if room_of(chat_id) is not None:
         # A room's messages are pushed onto the same per-chat fan-out as they are appended; nothing feeds it but that.
         return _sse_response(state, chat_id, _open_chat_stream(state, chat_id, lambda: None), lambda _event: True)
     agent_info = _find_active_agent(chat_id)
@@ -982,7 +975,7 @@ def _send_message_endpoint(chat_id: str) -> Response:
     # a chat-app boot would route messages around the app instead of waiting for it.
     if not agent_manager.is_agent_list_known():
         return _agent_list_not_known_response()
-    room = _room_of(chat_id)
+    room = room_of(chat_id)
     if room is not None:
         post_room_message(state, room, parse_request_body(SendMessageRequest), request_identity())
         return model_response(SendMessageResponse(status="ok"))
@@ -2184,7 +2177,7 @@ def _destroy_chat(chat_id: str) -> Response:
     """
     state = get_state()
     agent_manager: AgentManager = state.agent_manager
-    room = _room_of(chat_id)
+    room = room_of(chat_id)
     if room is not None:
         state.rooms.delete(room.id)
         state.event_queues.end_streams(str(room.id))
@@ -2216,7 +2209,7 @@ def _rename_chat(chat_id: str) -> Response:
     """
     state = get_state()
     agent_manager: AgentManager = state.agent_manager
-    room = _room_of(chat_id)
+    room = room_of(chat_id)
     if room is not None:
         title = parse_request_body(RenameChatRequest).title
         return rename_room_response(state, str(room.id), title, RenameChatResponse(status="ok"))
@@ -2241,7 +2234,7 @@ def _make_main_chat(chat_id: str) -> Response:
     """Star a chat as the workspace's main chat (``main_chat.py``); 409 for one that cannot be the main chat."""
     agent_manager: AgentManager = get_state().agent_manager
     parsed = parse_chat_ref(chat_id)
-    if _room_of(chat_id) is not None:
+    if room_of(chat_id) is not None:
         return error_response("A room cannot be the main chat", 409)
     if parsed is None or not agent_manager.knows_chat(parsed):
         return _chat_not_found_response(chat_id)
@@ -2383,7 +2376,7 @@ def _chat_document(key: str) -> Response:
     root_path = (request.script_root or "").rstrip("/")
     with_workspace_tags = _inject_workspace_meta_tags(document_path.read_text(), root_path)
     with_identity = inject_chat_identity_meta_tags(with_workspace_tags, chat_id, agent_id, session_id)
-    kind = ChatKind.ROOM if _room_of(chat_id) is not None else ChatKind.AGENT
+    kind = ChatKind.ROOM if room_of(chat_id) is not None else ChatKind.AGENT
     html_content = inject_chat_kind_meta_tag(with_identity, kind.value)
     if config.javascript_plugin_basenames:
         html_content = inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
