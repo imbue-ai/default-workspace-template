@@ -1,9 +1,13 @@
 from enum import auto
+from typing import Final
 
 from pydantic import Field
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
+
+_INDEX_NAME_PATTERN: Final[str] = r"^[A-Za-z0-9][A-Za-z0-9._:+-]*$"
+_INDEX_PATH_PATTERN: Final[str] = r"^[A-Za-z0-9][A-Za-z0-9._:+/-]*$"
 
 
 class HealthResponse(FrozenModel):
@@ -21,12 +25,20 @@ class RenderedInstructions(FrozenModel):
 
 
 class IndexedSkill(FrozenModel):
-    """One match as the online skills index answers it."""
+    """One match as the online skills index answers it.
 
-    name: str = Field(description="The skill's name, which the skills CLI installs it by")
-    source: str = Field(description="Where it is published: a GitHub owner/repo, or a host")
+    Anyone can publish to the index, and the name and source go into the install command the agent is asked to run,
+    so each is held to the characters a skill name, a repository or a host uses: no spaces and nothing a shell reads.
+    """
+
+    name: str = Field(pattern=_INDEX_NAME_PATTERN, description="The skill's name, which the skills CLI installs it by")
+    source: str = Field(
+        pattern=_INDEX_PATH_PATTERN, description="Where it is published: a GitHub owner/repo, or a host"
+    )
     installs: int = Field(description="How many times the skills CLI has installed it")
-    page_id: str = Field(description="Its page's path on skills.sh, e.g. owner/repo/name: the answer's id")
+    page_id: str = Field(
+        pattern=_INDEX_PATH_PATTERN, description="Its page's path on skills.sh, e.g. owner/repo/name: the answer's id"
+    )
 
 
 class OnlineSkillState(UpperCaseStrEnum):
