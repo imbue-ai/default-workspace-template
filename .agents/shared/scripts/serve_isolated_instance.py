@@ -756,6 +756,7 @@ def _register_service(
     *,
     internal: bool = False,
     display_name: str | None = None,
+    uses_microphone: bool = False,
 ) -> None:
     argv = [
         *FORWARD_PORT_CMD,
@@ -769,6 +770,8 @@ def _register_service(
         argv.append("--internal")
     if display_name is not None:
         argv.extend(["--display-name", display_name])
+    if uses_microphone:
+        argv.append("--uses-microphone")
     result = runner.run(
         argv,
         cwd=str(repo_root),
@@ -847,6 +850,7 @@ def up(
     service_name: str | None = None,
     preview_service_name: str | None = None,
     preview_title: str | None = None,
+    preview_uses_microphone: bool = False,
     inner_path: str = "/",
     runner: Runner,
     http: HttpClient,
@@ -1023,6 +1027,7 @@ def up(
                 wrapper_port,
                 "forward_port register (wrapper)",
                 display_name=preview_title,
+                uses_microphone=preview_uses_microphone,
             )
             services.append(preview_service_name)
 
@@ -1387,6 +1392,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Human-readable label shown in the preview frame banner.",
     )
     up_parser.add_argument(
+        "--preview-uses-microphone",
+        action="store_true",
+        help="Allow the preview window to pass microphone access to its inner app.",
+    )
+    up_parser.add_argument(
         "--inner-path",
         default="/",
         help="The path the preview frame opens the inner service on (default: /).",
@@ -1445,6 +1455,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             service_name=args.service_name,
             preview_service_name=args.preview_service_name,
             preview_title=args.preview_title,
+            preview_uses_microphone=args.preview_uses_microphone,
             inner_path=args.inner_path,
             runner=Runner(),
             http=HttpClient(),

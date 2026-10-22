@@ -784,6 +784,7 @@ def _upsert(
     program: str | None = None,
     display_name: str | None = None,
     manifest_fields: dict[str, object] | None = None,
+    uses_microphone: bool = False,
 ) -> None:
     """Register ``name`` at ``url``, optionally setting its icon markup.
 
@@ -812,7 +813,8 @@ def _upsert(
     """
     apps = _load_apps(path)
     manifest_owned = _manifest_owned_values(
-        manifest_fields, internal=internal, program=program, display_name=display_name
+        manifest_fields, internal=internal, program=program,
+        display_name=display_name, uses_microphone=uses_microphone,
     )
 
     # Update an existing entry's URL in place, minting a label only if one was
@@ -856,6 +858,7 @@ def _manifest_owned_values(
     internal: bool,
     program: str | None,
     display_name: str | None,
+    uses_microphone: bool = False,
 ) -> dict[str, object]:
     """The manifest-owned keys a registration sets, from the manifest or from the plain flags."""
     if manifest_fields is not None:
@@ -871,6 +874,8 @@ def _manifest_owned_values(
     values = {}
     if internal:
         values["internal"] = True
+    if uses_microphone:
+        values["uses_microphone"] = True
     if program is not None:
         values["program"] = program
     if display_name is not None:
@@ -955,6 +960,11 @@ def main() -> None:
             "behind it would otherwise open blank."
         ),
     )
+    parser.add_argument(
+        "--uses-microphone",
+        action="store_true",
+        help="Allow this app's window to request microphone access (for registrations without a manifest).",
+    )
     args = parser.parse_args()
 
     if args.manifest is None and args.name is None:
@@ -975,6 +985,9 @@ def main() -> None:
     if args.remove and args.display_name is not None:
         parser.error("--display-name cannot be combined with --remove")
 
+    if args.remove and args.uses_microphone:
+        parser.error("--uses-microphone cannot be combined with --remove")
+
     if args.manifest is not None and (
         args.remove
         or args.icon_file is not None
@@ -982,10 +995,11 @@ def main() -> None:
         or args.program is not None
         or args.internal
         or args.display_name is not None
+        or args.uses_microphone
     ):
         parser.error(
             "--manifest cannot be combined with --remove, --icon-file, --no-icon, --program, "
-            "--display-name, or --internal"
+            "--display-name, --internal, or --uses-microphone"
         )
 
     if args.program is not None and not args.program.strip():
@@ -1058,6 +1072,7 @@ def main() -> None:
                     program=args.program.strip() if args.program is not None else None,
                     display_name=args.display_name,
                     manifest_fields=manifest_fields,
+                    uses_microphone=args.uses_microphone,
                 )
         finally:
             fcntl.flock(lock_file, fcntl.LOCK_UN)

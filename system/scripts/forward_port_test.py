@@ -325,6 +325,22 @@ def test_register_internal_marks_the_entry(tmp_path: Path) -> None:
     assert rows[0]["internal"] is True
 
 
+def test_microphone_permission_is_authoritative_for_plain_registration(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    result = _run(
+        ["--name", "voice-preview", "--url", "http://localhost:8793", "--no-icon", "--uses-microphone"],
+        apps_file,
+    )
+    assert result.returncode == 0, result.stderr
+    assert _read_apps(apps_file)[0]["uses_microphone"] is True
+
+    result = _run(
+        ["--name", "voice-preview", "--url", "http://localhost:8793"], apps_file
+    )
+    assert result.returncode == 0, result.stderr
+    assert "uses_microphone" not in _read_apps(apps_file)[0]
+
+
 def test_reregistering_without_internal_clears_a_previously_internal_entry(
     tmp_path: Path,
 ) -> None:
