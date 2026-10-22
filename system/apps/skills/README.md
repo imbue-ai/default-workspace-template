@@ -37,21 +37,24 @@ rereads the list every 10 seconds and whenever its window takes focus or is
 shown again, redrawing only what changed, so a skill made or edited elsewhere
 (a chat beside it, Files) appears without a reload.
 
-**Finding skills online.** The sidebar's search filters the workspace's own
-skills; while it holds two or more characters, its last row (and its empty
-state) offers "Find '…' online", which opens **Find skills** at `/?find=<query>`.
-That page lists what skills.sh -- the index `npx skills find` searches -- has for
-the query, most installed first: each skill's name, source repository and
-install count, a link to its page on skills.sh (which shows what it does and its
-instructions), and "Install", which drafts the install request with its
-`npx skills add owner/repo@name` command into the chat, so the agent installs it
-and reads it first. A skill the workspace already has from that source shows
-"Installed" (a link to it here); one whose name a different skill of the
-workspace's already uses shows "Name in use", since installing it would land on
-that one. Nothing is searched until the person asks, since the query leaves the
-workspace; the server asks skills.sh on the page's behalf
-(`src/skills_app/online_search.py`, the page's own fetches being kept to its
-origin) and keeps each answer for five minutes.
+**Finding skills online.** The sidebar's + opens **Find skills** at
+`/?find=`, and so does its search's last row while it holds two or more
+characters ("Find '…' online", also offered when nothing matches), with that
+search filled in. The page searches skills.sh -- the index `npx skills find`
+searches -- as its field is typed in (after a 0.4s pause, or at once on Enter;
+typing replaces the address, a deliberate search adds a history entry), and
+before any search offers a few to start from and "Make it with your agent". It
+lists ten results, most installed first, with the rest behind "Show more": each
+skill's name links to its page on skills.sh (which shows what it does and its
+instructions), with its source repository and an installs badge beneath, and
+"Install" drafts the install request with its `npx skills add owner/repo@name`
+command into the chat, so the agent installs it and reads it first. A skill the
+workspace already has from that source shows "Installed" (a link to it here);
+one whose name a different skill of the workspace's already uses shows "Name in
+use", since installing it would land on that one. Nothing is searched until the
+person opens the page, since the query leaves the workspace; the server asks
+skills.sh on the page's behalf (`src/skills_app/online_search.py`, the page's
+own fetches being kept to its origin) and keeps each answer for five minutes.
 
 The app is read-only and stores nothing. A skill installed from elsewhere is
 untrusted content, so everything the page shows from a skill is set as text,

@@ -77,19 +77,22 @@
 
   /* Find skills: what skills.sh has for a search, most installed first, each against the workspace's own. */
   .find-intro { margin: 4px 0 0; color: var(--c-text-secondary); font-size: var(--font-size-row); }
-  .find-form { display: flex; gap: 8px; margin-top: 12px; }
-  .find-form .search { flex: 1; margin: 0; }
-  .find-form button { flex: none; height: 32px; padding: 0 12px; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); color: var(--c-text-primary); font: inherit; font-size: var(--font-size-row); cursor: pointer; }
-  .find-form button:hover { background: var(--c-fill-hover); }
+  .find-search { margin: 12px 0 0; }
+  .suggestions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 16px; color: var(--c-text-secondary); font-size: var(--font-size-row); }
+  .suggestion { padding: 3px 10px; border: 1px solid var(--c-border); border-radius: 999px; background: var(--c-surface); color: var(--c-text-primary); font: inherit; font-size: var(--font-size-row); cursor: pointer; }
+  .suggestion:hover { background: var(--c-fill-hover); }
+  .show-more { margin-top: 12px; padding: 4px 8px; border: none; border-radius: var(--radius-sm); background: none; color: var(--c-text-secondary); font: inherit; font-size: var(--font-size-row); cursor: pointer; }
+  .show-more:hover { background: var(--c-fill-hover); color: var(--c-text-primary); }
   .find-status { margin: 20px 0 0; color: var(--c-text-secondary); }
   .online-skills { list-style: none; margin: 16px 0 0; padding: 0; }
   .online-skills li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--c-border-faint); }
   .online-main { min-width: 0; }
-  .online-name { display: block; font-size: var(--font-size-body); font-weight: var(--weight-semibold); overflow-wrap: anywhere; }
-  .online-meta { display: flex; flex-wrap: wrap; gap: 0 10px; font-size: var(--font-size-helper); color: var(--c-text-secondary); }
+  /* The name is the way to the skill's page on skills.sh, marked as leaving the workspace. */
+  .online-name { display: inline-flex; align-items: center; gap: 4px; font-size: var(--font-size-body); font-weight: var(--weight-semibold); overflow-wrap: anywhere; }
+  .online-name:hover { text-decoration: underline; text-underline-offset: 2px; }
+  .online-name svg { flex: none; width: 12px; height: 12px; color: var(--c-text-secondary); }
+  .online-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 2px; font-size: var(--font-size-helper); color: var(--c-text-secondary); }
   .online-actions { display: flex; flex: none; align-items: center; gap: 8px; }
-  .view-link { font-size: var(--font-size-row); color: var(--c-text-secondary); text-decoration: underline; text-underline-offset: 2px; white-space: nowrap; }
-  .view-link:hover { color: var(--c-text-primary); }
   a.chip { cursor: pointer; }
   .find-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 20px 0 0; color: var(--c-text-secondary); font-size: var(--font-size-row); }
   /* The sidebar's right-hand line: 8px in, or the width of a scrollbar that takes room in the list (the page measures
@@ -133,7 +136,7 @@
   .text-button:hover { background: var(--c-accent-light); }
   :root[data-shell] .text-button { display: inline-flex; }
   /* Each button asks the shell for something (a Files window, a chat), so it only shows once a shell frames the page. */
-  :root[data-shell] .icon-button { display: inline-flex; }
+  :root[data-shell] .icon-button, .icon-button.in-page { display: inline-flex; }
 
   .reader { overflow-y: auto; min-height: 0; }
   .reader:focus { outline: none; }
@@ -210,7 +213,7 @@
       <h1>Skills</h1>
       <div class="actions">
         <a class="icon-button" id="skills-folder" title="Open the skills folder in Files" aria-label="Open the skills folder in Files"></a>
-        <button type="button" class="icon-button primary" id="new-skill" title="Make or find a new skill" aria-label="Make or find a new skill"></button>
+        <button type="button" class="icon-button primary in-page" id="new-skill" title="Find or make a skill" aria-label="Find or make a skill"></button>
       </div>
     </div>
     <div class="search" id="search-field">
@@ -243,13 +246,19 @@
     folder: '<path d="M5.34 3.72C7.32 3.67 8.61 3.72 9.46 3.81C10.45 3.91 10.97 4.43 11.54 5.28C12.11 6.13 12.44 6.56 13.34 6.61C15.22 6.7 17.72 6.51 19.66 6.61C21.27 6.7 22.09 7.93 21.99 9.49C21.85 12.04 21.47 15.26 21.04 17.77C20.76 19.38 19.77 20.18 17.97 20.23C13.81 20.32 8.37 20.32 4.72 20.18C2.97 20.09 2.23 19.52 2.11 17.77C1.79 13.39 2.26 9.21 2.5 6.56C2.64 4.71 3.54 3.77 5.34 3.72Z"/>',
     edit: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/>',
     plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+    "external-link": '<path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6"/>',
     "chevron-down": '<path d="m6 9 6 6 6-6"/>',
     search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
   };
   // Files opens a file's ?edit page for this message (its app.toml); the shell routes it there without naming the app.
   const EDIT_FILE_MESSAGE = "edit:file";
   // Drafted into the chat on screen (else the most recent, else a new one), unsent, for the user to finish.
-  const NEW_SKILL_DRAFT = "Help me make or find a new skill online that ";
+  // Searches to start from on an empty Find skills page.
+  const FIND_SUGGESTIONS = ["pdf", "design", "testing", "git", "slack", "docs"];
+  // Results shown before "Show more": the rest of the answer is mostly the long tail of rarely installed skills.
+  const FIND_RESULTS_SHOWN = 10;
+  // A pause this long in typing searches; Enter searches at once.
+  const FIND_DEBOUNCE_MS = 400;
   // skills.sh's search needs this much to go on (the server checks it too).
   const MIN_FIND_QUERY_LENGTH = 2;
   const installsFormat = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
@@ -482,14 +491,15 @@
   function showIntro() {
     document.title = "Skills";
     const usage = element("p", { class: "intro-hint" }, [
-      "Your agents reach for a skill on their own when a request calls for it. To run one yourself, type a slash and its name in a chat, like ",
+      "Your agents use one on their own when a request calls for it. To run one yourself, type a slash and its name in a chat, like ",
       element("code", { text: "/skill-name" }),
       ", or open it here and press Try it.",
     ]);
-    const pick = element("p", { class: "intro-hint" }, ["Pick a skill on the left to read and edit its instructions"]);
-    // The + only works through the shell, so outside one the note does not point at it.
-    if (root.hasAttribute("data-shell")) pick.append(", or press ", withIcon(element("span", { class: "inline-button", "aria-label": "the + button" }), "plus"), " to make or find a new one");
-    pick.append(".");
+    const pick = element("p", { class: "intro-hint" }, [
+      "Pick a skill on the left to read or edit it, or press ",
+      withIcon(element("span", { class: "inline-button", "aria-label": "the + button" }), "plus"),
+      " to find new ones online or make your own.",
+    ]);
     reader.replaceChildren(element("div", { class: "intro" }, [element("p", { class: "intro-lead", text: "Skills are what your agents know how to do." }), usage, pick]));
     reportLocation();
   }
@@ -559,34 +569,33 @@
   }
 
   function onlineSkillRow(skill) {
-    const actions = element("div", { class: "online-actions" }, [
-      element("a", { class: "view-link", href: skill.page_url, target: "_blank", rel: "noopener", title: "What it does and its instructions, on skills.sh", text: "View on skills.sh" }),
-    ]);
+    const name = element("a", { class: "online-name", href: skill.page_url, target: "_blank", rel: "noopener", title: "What it does and its instructions, on skills.sh" }, [skill.name]);
+    name.insertAdjacentHTML("beforeend", iconSvg("external-link"));
+    let action;
     if (skill.state === "INSTALLED") {
-      actions.append(element("a", { class: "chip workspace", href: `/${encodeURIComponent(skill.name)}`, title: "Open it here", text: "Installed" }));
+      action = element("a", { class: "chip workspace", href: `/${encodeURIComponent(skill.name)}`, title: "Open it here", text: "Installed" });
     } else if (skill.state === "NAME_TAKEN") {
-      actions.append(element("span", { class: "chip", title: `You have a different skill called ${skill.name}, which installing this one would land on.`, text: "Name in use" }));
+      action = element("span", { class: "chip", title: `You have a different skill called ${skill.name}, which installing this one would land on.`, text: "Name in use" });
     } else {
-      const install = element("button", { type: "button", class: "text-button", title: "Put the install request in the chat, to send when ready", text: "Install" });
+      action = element("button", { type: "button", class: "text-button", title: "Put the install request in the chat, to send when ready", text: "Install" });
       // The agent installs it, so it can read it first: a skill is instructions it will follow.
-      install.addEventListener("click", () => shell.draftText(`Install the ${skill.name} skill from ${skill.source} into this workspace: \`${skill.install_command}\``));
-      actions.append(install);
+      action.addEventListener("click", () => shell.draftText(`Install the ${skill.name} skill from ${skill.source} into this workspace: \`${skill.install_command}\``));
     }
     return element("li", {}, [
       element("div", { class: "online-main" }, [
-        element("span", { class: "online-name", text: skill.name }),
-        element("span", { class: "online-meta" }, [
+        name,
+        element("div", { class: "online-meta" }, [
           element("span", { text: skill.source }),
-          element("span", { text: `${installsFormat.format(skill.installs)} installs` }),
+          element("span", { class: "chip", text: `${installsFormat.format(skill.installs)} installs` }),
         ]),
       ]),
-      actions,
+      element("div", { class: "online-actions" }, [action]),
     ]);
   }
 
   function makeItButton(query) {
     const button = element("button", { type: "button", class: "text-button", text: "Make it with your agent" });
-    button.addEventListener("click", () => shell.draftText(`Help me make a new skill for “${query}” that `));
+    button.addEventListener("click", () => shell.draftText(query ? `Help me make a new skill for “${query}” that ` : "Help me make a new skill that "));
     return button;
   }
 
@@ -605,38 +614,88 @@
       return;
     }
     if (load !== latestLoad) return;
-    const footer = element("p", { class: "find-footer" }, [results.skills.length ? "Nothing fits?" : `Nothing on skills.sh matches “${query}”.`, makeItButton(query)]);
+    const wasExpanded = resultsNode.dataset.expanded === "true";
+    const list = element("ul", { class: "online-skills" });
+    const showRows = (count) => list.replaceChildren(...results.skills.slice(0, count).map(onlineSkillRow));
+    const parts = [];
+    if (results.skills.length) {
+      showRows(wasExpanded ? results.skills.length : FIND_RESULTS_SHOWN);
+      parts.push(list);
+      if (!wasExpanded && results.skills.length > FIND_RESULTS_SHOWN) {
+        const more = element("button", { type: "button", class: "show-more", text: `Show ${results.skills.length - FIND_RESULTS_SHOWN} more` });
+        more.addEventListener("click", () => {
+          resultsNode.dataset.expanded = "true";
+          showRows(results.skills.length);
+          more.remove();
+        });
+        parts.push(more);
+      }
+    }
+    parts.push(element("p", { class: "find-footer" }, [results.skills.length ? "Nothing fits?" : `Nothing on skills.sh matches “${query}”.`, makeItButton(query)]));
+    resultsNode.replaceChildren(...parts);
+  }
+
+  // Before a search: where to start, and the other way to a new skill.
+  function showFindStart(resultsNode, field) {
+    resultsNode.dataset.expanded = "false";
+    const chips = FIND_SUGGESTIONS.map((suggestion) => {
+      const chip = element("button", { type: "button", class: "suggestion", text: suggestion });
+      chip.addEventListener("click", () => {
+        field.value = suggestion;
+        searchOnline(suggestion, resultsNode, { isTyping: false });
+      });
+      return chip;
+    });
     resultsNode.replaceChildren(
-      ...(results.skills.length ? [element("ul", { class: "online-skills" }, results.skills.map(onlineSkillRow))] : []),
-      footer,
+      element("div", { class: "suggestions" }, ["Try", ...chips]),
+      element("p", { class: "find-footer" }, ["Or describe what you need:", makeItButton("")]),
     );
+  }
+
+  // A search from the page itself keeps the page (and the field's focus) and only moves the address: typing replaces
+  // the history entry, a deliberate search (Enter, a suggestion) adds one, so Back steps through searches, not keys.
+  function searchOnline(query, resultsNode, { isTyping }) {
+    const path = `/?find=${encodeURIComponent(query)}`;
+    if (path !== location.pathname + location.search) history[isTyping ? "replaceState" : "pushState"](null, "", path);
+    reportLocation();
+    markSelected();
+    resultsNode.dataset.expanded = "false";
+    loadFindResults(query, resultsNode);
   }
 
   function showFind(query) {
     document.title = "Find skills - Skills";
-    const field = element("input", { type: "text", role: "searchbox", "aria-label": "Search skills.sh", placeholder: "Search skills.sh", autocomplete: "off", spellcheck: "false" });
+    const field = element("input", { type: "text", role: "searchbox", "aria-label": "Search skills.sh", placeholder: "Search skills published online", autocomplete: "off", spellcheck: "false" });
     field.value = query;
-    const fieldWrap = withIcon(element("div", { class: "search" }, [field]), "search");
-    const form = element("form", { class: "find-form", role: "search" }, [fieldWrap, element("button", { type: "submit", text: "Search" })]);
-    form.addEventListener("submit", (event) => {
-      event.preventDefault();
-      const next = field.value.trim();
-      if (next.length >= MIN_FIND_QUERY_LENGTH) goFind(next);
-    });
     const results = element("div", { id: "find-results" });
+    let typingTimer = null;
+    field.addEventListener("input", () => {
+      clearTimeout(typingTimer);
+      const next = field.value.trim();
+      if (next.length < MIN_FIND_QUERY_LENGTH) return;
+      typingTimer = setTimeout(() => searchOnline(next, results, { isTyping: true }), FIND_DEBOUNCE_MS);
+    });
+    field.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      clearTimeout(typingTimer);
+      const next = field.value.trim();
+      if (next.length >= MIN_FIND_QUERY_LENGTH) searchOnline(next, results, { isTyping: false });
+    });
     reader.replaceChildren(
       element("article", {}, [
         element("a", { class: "back", href: "/", text: "All skills" }),
         element("header", { class: "skill-head" }, [element("h1", { text: "Find skills" })]),
         element("p", { class: "find-intro", text: "Skills published for any agent, from skills.sh, most installed first. Installing one asks your agent, who reads it first." }),
-        form,
+        withIcon(element("div", { class: "search find-search", role: "search" }, [field]), "search"),
         results,
       ]),
     );
     reader.scrollTop = 0;
     reportLocation();
     if (query.trim().length >= MIN_FIND_QUERY_LENGTH) loadFindResults(query.trim(), results);
-    else results.replaceChildren(element("p", { class: "find-status", text: "Search for at least two characters." }));
+    else showFindStart(results, field);
+    field.focus();
   }
 
   function route() {
@@ -812,7 +871,7 @@
 
   withIcon(skillsFolderLink, "folder");
   const newSkillButton = withIcon(document.getElementById("new-skill"), "plus");
-  newSkillButton.addEventListener("click", () => shell.draftText(NEW_SKILL_DRAFT));
+  newSkillButton.addEventListener("click", () => goFind(""));
 
   // Connected before the frame's load event, the only time the shell sends its handshake.
   let handshake = null;
