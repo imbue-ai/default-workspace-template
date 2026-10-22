@@ -80,7 +80,3 @@ class RosterClient(MutableModel):
         """The sender's name: the roster's, else what their header says."""
         entry = self.participant(key)
         return entry.display_name if entry is not None else fallback_display_name(key, identity)
-
-    def forget(self) -> None:
-        with self._lock:
-            self._fetched_at = None

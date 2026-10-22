@@ -64,7 +64,6 @@ def test_an_unreachable_shell_keeps_the_last_roster_and_names_a_sender_from_thei
         == "carol"
     )
 
-    client.forget()
     fresh = RosterClient(shell=FakeShell(listing_error=ShellUnreachableError("down")))
     assert fresh.document().participants == ()
 

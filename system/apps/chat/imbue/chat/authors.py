@@ -262,10 +262,6 @@ class AuthorStore(MutableModel):
         prefix with its synthetic key."""
         stamp_authors(events, self.annotations(chat_id))
 
-    def forget(self, chat_id: ChatId) -> None:
-        with self._lock:
-            self._cache_by_chat.pop(str(chat_id), None)
-
 
 def _read_annotations(path: Path) -> tuple[AuthorAnnotation, ...]:
     try:
