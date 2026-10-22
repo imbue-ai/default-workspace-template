@@ -54,6 +54,7 @@ data/.imbue/*
 !data/.imbue/plans/
 data/.imbue/plans/*
 !data/.imbue/plans/CLAUDE.md
+!data/.imbue/plans/AGENTS.md
 
 # Sculptor local config (per-checkout, not shared).
 **/.sculptor/
