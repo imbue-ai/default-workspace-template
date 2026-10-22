@@ -64,8 +64,6 @@
   .resize-handle::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: var(--c-accent); opacity: 0; transition: opacity var(--dur-base); }
   .resize-handle:hover::after, .resize-handle:focus-visible::after, .resize-handle.dragging::after { opacity: 1; }
   .resize-handle:focus-visible { outline: none; }
-  .empty-search { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 12px 8px; }
-  .empty-search p { margin: 0; color: var(--c-text-secondary); overflow-wrap: anywhere; }
   .clear-search { padding: 3px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); color: var(--c-text-primary); font: inherit; font-size: var(--font-size-row); cursor: pointer; }
   .clear-search:hover { background: var(--c-fill-hover); }
   /* The list's last row while searching: the way from what the workspace has to what is published online. */
@@ -73,10 +71,9 @@
   .find-online:hover { background: var(--c-fill-hover); color: var(--c-text-primary); }
   .find-online[aria-current="page"] { background: color-mix(in srgb, var(--c-accent) 11%, var(--c-surface)); color: var(--c-text-primary); }
   .find-online svg { flex: none; width: 14px; height: 14px; }
-  .empty-search .find-online { margin-top: 0; padding-left: 0; }
+  .skill-list > .find-online:first-child { margin-top: 0; }
 
   /* Find skills: what skills.sh has for a search, most installed first, each against the workspace's own. */
-  .find-intro { margin: 4px 0 0; color: var(--c-text-secondary); font-size: var(--font-size-row); }
   .find-search { margin: 12px 0 0; }
   .suggestions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 16px; color: var(--c-text-secondary); font-size: var(--font-size-row); }
   .suggestion { padding: 3px 10px; border: 1px solid var(--c-border); border-radius: 999px; background: var(--c-surface); color: var(--c-text-primary); font: inherit; font-size: var(--font-size-row); cursor: pointer; }
@@ -451,21 +448,10 @@
         return element("section", {}, [element("h2", {}, [toggle]), ...(isExpanded ? [element("ul", {}, rows)] : [])]);
       });
     const trimmed = search.value.trim();
-    if (!sections.length) listNode.replaceChildren(emptySearch(trimmed));
-    else listNode.replaceChildren(...sections, ...(trimmed.length >= MIN_FIND_QUERY_LENGTH ? [findOnlineButton(trimmed)] : []));
+    const findOnline = trimmed.length >= MIN_FIND_QUERY_LENGTH ? [findOnlineButton(trimmed)] : [];
+    // With nothing here matching, the way online is the list's first row.
+    listNode.replaceChildren(...sections, ...findOnline);
     markSelected();
-  }
-
-  // A search that finds nothing says what was searched for and offers the way back to the whole list.
-  function emptySearch(query) {
-    const clear = element("button", { type: "button", class: "clear-search", title: "Clear search (Esc)", text: "Clear search" });
-    clear.addEventListener("click", () => {
-      search.value = "";
-      renderList();
-      search.focus();
-    });
-    const found = query.length >= MIN_FIND_QUERY_LENGTH ? [findOnlineButton(query)] : [];
-    return element("div", { class: "empty-search" }, [element("p", { text: `No skills match “${query}”.` }), ...found, clear]);
   }
 
   function findOnlineButton(query) {
@@ -672,6 +658,14 @@
     field.addEventListener("input", () => {
       clearTimeout(typingTimer);
       const next = field.value.trim();
+      if (!next) {
+        ++latestLoad;
+        if (location.search !== "?find=") history.replaceState(null, "", "/?find=");
+        reportLocation();
+        markSelected();
+        showFindStart(results, field);
+        return;
+      }
       if (next.length < MIN_FIND_QUERY_LENGTH) return;
       typingTimer = setTimeout(() => searchOnline(next, results, { isTyping: true }), FIND_DEBOUNCE_MS);
     });
@@ -686,7 +680,6 @@
       element("article", {}, [
         element("a", { class: "back", href: "/", text: "All skills" }),
         element("header", { class: "skill-head" }, [element("h1", { text: "Find skills" })]),
-        element("p", { class: "find-intro", text: "Skills published for any agent, from skills.sh, most installed first. Installing one asks your agent, who reads it first." }),
         withIcon(element("div", { class: "search find-search", role: "search" }, [field]), "search"),
         results,
       ]),
