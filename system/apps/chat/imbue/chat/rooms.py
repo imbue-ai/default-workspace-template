@@ -191,9 +191,6 @@ class RoomStore(MutableModel):
         """The room, or None for an id that names none (an unreadable record is logged and reads as none)."""
         return _read_record(self._record_path(room_id))
 
-    def is_room(self, chat_id: ChatId) -> bool:
-        return self._record_path(chat_id).is_file()
-
     def read_all(self) -> list[RoomRecord]:
         """Every readable room, oldest first."""
         if not self.root.is_dir():

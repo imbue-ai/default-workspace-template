@@ -74,13 +74,6 @@ class ChatId(NonEmptyStr):
 
 
 @pure
-def is_room_id(chat_id: str) -> bool:
-    """Whether an id has the shape a room's is minted in: a convenience for logs and pages, never the kind itself
-    (a converted awaiting chat keeps its agent-shaped id); the kind is what the room store answers."""
-    return ROOM_ID_PATTERN.fullmatch(chat_id) is not None
-
-
-@pure
 def parse_chat_ref(chat_ref: str) -> ChatId | None:
     """The chat id a caller's string names, or None for a blank one.
 

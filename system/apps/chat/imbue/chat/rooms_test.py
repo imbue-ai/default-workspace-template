@@ -6,7 +6,6 @@ from workspace_layout.primitives import ParticipantKey
 
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ROOM_ID_PATTERN
-from imbue.chat.primitives import is_room_id
 from imbue.chat.rooms import BlankRoomTitleError
 from imbue.chat.rooms import LOUNGE_TITLE
 from imbue.chat.rooms import ROOM_MESSAGES_FILENAME
@@ -26,11 +25,11 @@ def test_a_room_is_minted_with_a_room_shaped_id_and_the_first_free_title(tmp_pat
     second = store.create("  ", _OWNER)
     named = store.create("Design", _BOB)
 
-    assert ROOM_ID_PATTERN.fullmatch(str(first.id)) and is_room_id(str(first.id))
+    assert ROOM_ID_PATTERN.fullmatch(str(first.id))
     assert (first.title, second.title, named.title) == ("Room 1", "Room 2", "Design")
     assert named.created_by == _BOB
     assert [record.id for record in store.read_all()] == [first.id, second.id, named.id]
-    assert store.is_room(named.id) and not store.is_room(ChatId("agent-00000000000000000000000000000001"))
+    assert store.read(named.id) == named and store.read(ChatId("agent-00000000000000000000000000000001")) is None
     assert json.loads((tmp_path / str(named.id) / ROOM_RECORD_FILENAME).read_text())["version"] == 1
 
 
@@ -40,7 +39,7 @@ def test_a_converted_awaiting_chat_keeps_its_agent_shaped_id(tmp_path: Path) -> 
 
     record = store.create("Chat 3", _OWNER, room_id=chat_id)
 
-    assert record.id == chat_id and store.is_room(chat_id)
+    assert record.id == chat_id and store.read(chat_id) == record
     assert store.snapshot(record).model_dump(mode="json") == {
         "id": chat_id,
         "kind": "room",
