@@ -119,7 +119,9 @@ def _script_entry_points(script_name: str) -> list[tuple[Path, str]]:
     ]
 
 
-def _package_running_program(program: str, command_by_program: dict[str, str]) -> Path | None:
+def _package_running_program(
+    program: str, command_by_program: dict[str, str]
+) -> Path | None:
     """The app package that runs a supervisord program: the sole declarer of the console script
     its command ends in, whose script is therefore the only one of the apps' on PATH.
 
@@ -184,7 +186,9 @@ def test_every_convention_doc_the_scope_file_names_exists(convention_path: str) 
 @pytest.mark.parametrize(
     "manifest_path", _built_in_manifest_paths(), ids=lambda path: path.parent.name
 )
-def test_built_in_app_footprint_carries_the_drop_ins_that_run_it(manifest_path: Path) -> None:
+def test_built_in_app_footprint_carries_the_drop_ins_that_run_it(
+    manifest_path: Path,
+) -> None:
     # The footprint's wiring is read off the real tree here, where every program block
     # is a drop-in: a finder that reads the daemon's config alone finds nothing for any
     # app, and the library's own tests write their own layout, so none of them sees that.
@@ -203,7 +207,9 @@ def test_built_in_app_footprint_carries_the_drop_ins_that_run_it(manifest_path: 
 def test_every_declared_wiring_program_has_a_supervisord_block() -> None:
     command_by_program = _command_by_program()
     for manifest_path in _every_manifest_path():
-        for program in load_manifest(manifest_path, repo_root=_REPO_ROOT).wiring.programs:
+        for program in load_manifest(
+            manifest_path, repo_root=_REPO_ROOT
+        ).wiring.programs:
             assert program in command_by_program, (
                 f"{manifest_path} declares wiring program {program!r}, which neither "
                 "system/supervisord.conf nor a drop-in beside it defines"
@@ -213,7 +219,10 @@ def test_every_declared_wiring_program_has_a_supervisord_block() -> None:
 def test_the_first_label_of_every_standalone_program_is_a_reserved_app_name() -> None:
     # An app named after a standalone program's first label would claim that program as
     # its <name>-<role> sidecar when its footprint is computed, so the label is reserved.
-    app_programs = {load_manifest(path, repo_root=_REPO_ROOT).program for path in _every_manifest_path()}
+    app_programs = {
+        load_manifest(path, repo_root=_REPO_ROOT).program
+        for path in _every_manifest_path()
+    }
     standalone_labels = {
         program.partition("-")[0]
         for program in _command_by_program()
@@ -221,7 +230,9 @@ def test_the_first_label_of_every_standalone_program_is_a_reserved_app_name() ->
     }
     unreserved = sorted(standalone_labels - RESERVED_APP_NAMES)
 
-    assert unreserved == [], f"add these to RESERVED_APP_NAMES (and forward_port.py's RESERVED_NAMES): {unreserved}"
+    assert unreserved == [], (
+        f"add these to RESERVED_APP_NAMES (and forward_port.py's RESERVED_NAMES): {unreserved}"
+    )
 
 
 def test_no_app_claims_another_apps_program_as_a_sidecar() -> None:
@@ -247,10 +258,13 @@ def test_no_app_claims_another_apps_program_as_a_sidecar() -> None:
         for claimed in manifest_by_package.values()
         if owner is not claimed
         and claimed.program.startswith(f"{owner.name}-")
-        and owner_package != _package_running_program(claimed.program, command_by_program)
+        and owner_package
+        != _package_running_program(claimed.program, command_by_program)
     )
 
-    assert collisions == [], f"apps whose names collide with another app's program: {collisions}"
+    assert collisions == [], (
+        f"apps whose names collide with another app's program: {collisions}"
+    )
 
 
 def test_no_two_app_packages_declare_the_same_console_script() -> None:
@@ -271,7 +285,9 @@ def test_no_two_app_packages_declare_the_same_console_script() -> None:
         if len(packages) > 1
     )
 
-    assert shared == [], f"console scripts declared by more than one app package: {shared}"
+    assert shared == [], (
+        f"console scripts declared by more than one app package: {shared}"
+    )
 
 
 def test_every_built_in_app_directory_ships_a_manifest() -> None:
@@ -384,7 +400,9 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     # The stop-when-no-windows spec, section 4.2: Files, Getting Started, Routines, and System Monitor stop
     # once no window shows them; the browser keeps running, since agents drive its browsers with no window; and the
     # critical ones (which the manifest refuses the field on) never stop.
-    assert {name: manifest.stop_when_no_windows for name, manifest in by_name.items()} == {
+    assert {
+        name: manifest.stop_when_no_windows for name, manifest in by_name.items()
+    } == {
         "system_interface": False,
         "chat": False,
         "terminal": False,
@@ -398,7 +416,11 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     # Where the minds Share tab lists each built-in: never for an internal one, under its System group for the
     # interfaces the workspace is built out of, and up front for the rest.
     assert {
-        name: "internal" if manifest.internal else "system" if manifest.system else "app"
+        name: "internal"
+        if manifest.internal
+        else "system"
+        if manifest.system
+        else "app"
         for name, manifest in by_name.items()
     } == {
         "system_interface": "internal",
@@ -423,7 +445,10 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["getting-started"].pin is None
     # Its preview (update-app's preview_app.py) boots unregistered, so it neither re-points the live row nor opens
     # the first-visit window.
-    assert by_name["getting-started"].preview.command[:2] == ("getting-started", "--no-register")
+    assert by_name["getting-started"].preview.command[:2] == (
+        "getting-started",
+        "--no-register",
+    )
     # System Monitor: one polling page (its views are paths of it, reached inside the app), focused like Getting
     # Started, with its own band so it is shed after every user service.
     assert by_name["system-monitor"].critical is False
@@ -442,57 +467,101 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["routines"].default_shortcut is not None
     assert by_name["routines"].default_shortcut.launch == "open"
     assert by_name["routines"].default_shortcut.mode == "focus"
-    assert [(handler.type, handler.show) for handler in by_name["routines"].message_handlers] == [
-        ("minds:show-routine", "/{routine_id}")
-    ]
+    assert [
+        (handler.type, handler.show) for handler in by_name["routines"].message_handlers
+    ] == [("minds:show-routine", "/{routine_id}")]
     assert by_name["routines"].preview.env["ROUTINES_APP_PREVIEW"] == "1"
     # One order for the built-ins: the desktop seeds its shortcuts in it and the launcher lists its apps in it.
     assert sorted(
-        (manifest.launcher_rank, manifest.name) for manifest in by_name.values() if manifest.launcher_rank is not None
-    ) == [(10, "chat"), (15, "getting-started"), (20, "files"), (30, "browser"), (40, "terminal"), (45, "routines"), (50, "system-monitor")]
+        (manifest.launcher_rank, manifest.name)
+        for manifest in by_name.values()
+        if manifest.launcher_rank is not None
+    ) == [
+        (10, "chat"),
+        (15, "getting-started"),
+        (20, "files"),
+        (30, "browser"),
+        (40, "terminal"),
+        (45, "routines"),
+        (50, "system-monitor"),
+    ]
     # Every seeded shortcut opens a new window of its app; the one browser is focused instead
     # (docs/system/specs/window-bound-resources.md section 3.1).
-    for name, mode in (("chat", "new"), ("terminal", "new"), ("files", "new"), ("browser", "focus")):
+    for name, mode in (
+        ("chat", "new"),
+        ("terminal", "new"),
+        ("files", "new"),
+        ("browser", "focus"),
+    ):
         assert by_name[name].default_shortcut is not None
         assert by_name[name].default_shortcut.mode == mode, name
     # The desktop interface's launch paths (desktop-interface contracts.md section 2; the POST ones are the
     # post-launch-paths plan's section 7 and 8).
     assert by_name["system_interface"].launch_paths == ()
-    assert [(entry.id, entry.path, entry.method.value) for entry in by_name["chat"].launch_paths] == [
+    assert [
+        (entry.id, entry.path, entry.method.value)
+        for entry in by_name["chat"].launch_paths
+    ] == [
         ("root", "/", "GET"),
+        ("main", "/api/chats/intake", "POST"),
         ("new", "/api/chats/intake", "POST"),
         ("send", "/api/chats/intake", "POST"),
         ("draft", "/api/chats/intake", "POST"),
     ]
     assert by_name["chat"].default_shortcut is not None
     assert by_name["chat"].default_shortcut.launch == "root"
-    for name, launch_path, method in (("terminal", "/new", "POST"), ("files", "/home/user/workspace/", "GET"), ("browser", "/new", "POST")):
-        assert [(entry.id, entry.path, entry.method.value) for entry in by_name[name].launch_paths] == [
-            ("new", launch_path, method)
-        ], name
+    for name, launch_path, method in (
+        ("terminal", "/new", "POST"),
+        ("files", "/home/user/workspace/", "GET"),
+        ("browser", "/new", "POST"),
+    ):
+        assert [
+            (entry.id, entry.path, entry.method.value)
+            for entry in by_name[name].launch_paths
+        ] == [("new", launch_path, method)], name
         assert by_name[name].default_shortcut is not None
         assert by_name[name].default_shortcut.launch == "new", name
     assert [param.name for param in by_name["chat"].launch_paths[0].params] == []
-    assert [param.name for param in by_name["chat"].launch_paths[1].params] == ["account_id", "message"]
-    assert [param.name for param in by_name["chat"].launch_paths[2].params] == ["message"]
-    assert [param.name for param in by_name["chat"].launch_paths[3].params] == ["message"]
+    assert [param.name for param in by_name["chat"].launch_paths[1].params] == [
+        "message"
+    ]
+    assert [param.name for param in by_name["chat"].launch_paths[2].params] == [
+        "account_id",
+        "message",
+    ]
+    assert [param.name for param in by_name["chat"].launch_paths[3].params] == [
+        "message"
+    ]
+    assert [param.name for param in by_name["chat"].launch_paths[4].params] == [
+        "message"
+    ]
     # The intake's presets (post-launch-paths plan section 3.5): how each launch path chooses the receiving chat.
     assert by_name["chat"].launch_paths[0].presets == {}
-    assert by_name["chat"].launch_paths[1].presets == {"target": "new_chat"}
-    assert by_name["chat"].launch_paths[2].presets == {"target": "chat_selector"}
-    assert by_name["chat"].launch_paths[3].presets == {"target": "current_chat", "is_draft": "true"}
-    # The launcher's free-text rows (launcher-and-getting-started plan section 3.1): the chat's ``new`` takes the
-    # typed text as its first message, its ``send`` as a message to an existing chat, and its ``draft`` as text
-    # for a composer; nothing else declares a text or draft param.
+    assert by_name["chat"].launch_paths[1].presets == {"target": "main_chat"}
+    assert by_name["chat"].launch_paths[2].presets == {"target": "new_chat"}
+    assert by_name["chat"].launch_paths[3].presets == {"target": "chat_selector"}
+    assert by_name["chat"].launch_paths[4].presets == {
+        "target": "current_chat",
+        "is_draft": "true",
+    }
+    # The launcher's free-text rows (launcher-and-getting-started plan section 3.1): the chat's ``main`` (the
+    # launcher's Enter) sends the typed text to the main chat, its ``new`` takes it as a new chat's first message,
+    # its ``send`` as a message to an existing chat, and its ``draft`` as text for a composer; nothing else declares a
+    # text or draft param.
     assert by_name["chat"].launch_paths[0].text_param is None
     assert by_name["chat"].launch_paths[1].text_param == "message"
     assert by_name["chat"].launch_paths[2].text_param == "message"
-    assert by_name["chat"].launch_paths[3].text_param is None
-    assert by_name["chat"].launch_paths[3].draft_param == "message"
+    assert by_name["chat"].launch_paths[3].text_param == "message"
+    assert by_name["chat"].launch_paths[4].text_param is None
+    assert by_name["chat"].launch_paths[4].draft_param == "message"
     for name in ("terminal", "files", "browser"):
         assert by_name[name].launch_paths[0].text_param is None, name
         assert by_name[name].launch_paths[0].draft_param is None, name
         assert by_name[name].launch_paths[0].presets == {}, name
-    assert [param.name for param in by_name["terminal"].launch_paths[0].params] == ["workdir"]
+    assert [param.name for param in by_name["terminal"].launch_paths[0].params] == [
+        "workdir"
+    ]
     assert [param.name for param in by_name["files"].launch_paths[0].params] == ["path"]
-    assert [param.name for param in by_name["browser"].launch_paths[0].params] == ["url"]
+    assert [param.name for param in by_name["browser"].launch_paths[0].params] == [
+        "url"
+    ]

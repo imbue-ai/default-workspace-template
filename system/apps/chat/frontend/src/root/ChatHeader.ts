@@ -12,6 +12,7 @@ import { createMenu, type MenuRow } from "@imbue/workspace-ui/src/components/men
 import { kebabGlyph, listGlyph } from "../glyphs";
 import { BAR_ICON_BUTTON_CLASS, isDeleting, isRenaming, referenceRowsFor, renameField, rowMenuRows } from "./ChatRail";
 import type { RowMenuContext, RowReferenceContext } from "./ChatRail";
+import { isBeingCreated } from "./rows";
 import type { ChatRow } from "./rows";
 
 export interface ChatHeaderAttrs {
@@ -49,7 +50,7 @@ export function ChatHeader(): m.Component<ChatHeaderAttrs> {
       const { row } = attrs;
       // A chat being deleted offers nothing more, as its row in the list does not.
       const isRowDeleting = row !== null && isDeleting(row.chatId);
-      const hasVerbs = row !== null && !row.isProvisional && !isRowDeleting;
+      const hasVerbs = row !== null && !isBeingCreated(row) && !isRowDeleting;
       const triggerAttrs = menu.triggerAttrs();
       const buttonClass = attrs.isTouch ? BAR_ICON_BUTTON_CLASS : DENSE_BAR_ICON_BUTTON_CLASS;
       return m(
