@@ -118,4 +118,19 @@ describe("ChatRail main chat", () => {
     expect(keysOf(stoppedMain)).not.toContain("start");
     expect(keysOf(other)).toContain("stop");
   });
+
+  it("gives a chat waiting for its first send its verbs, and a chat being created none", () => {
+    const waiting = chatRowFixture("agent-waiting", { isProvisional: true, status: "idle" });
+    const creating = chatRowFixture("agent-creating", { isProvisional: true, status: "working" });
+    const context = chatRailAttrsFixture({ rows: [waiting, creating] });
+    const rail = mount([waiting, creating]);
+
+    expect(
+      rowMenuRows(context, waiting).flatMap((menuRow) =>
+        menuRow.kind === "action" && menuRow.key !== undefined ? [menuRow.key] : [],
+      ),
+    ).toEqual(["rename", "make-main", "delete"]);
+    expect(rail.querySelector('[data-chat-id="agent-waiting"] .chat-rail-rename')).not.toBeNull();
+    expect(rail.querySelector('[data-chat-id="agent-creating"] .chat-rail-rename')).toBeNull();
+  });
 });

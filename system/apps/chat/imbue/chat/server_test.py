@@ -3053,6 +3053,23 @@ def test_seeding_a_chat_lists_it_awaiting_its_first_send_with_the_turns_as_its_t
     assert events["events"][0]["content"] == "Wait.. what is honest software?"
 
 
+def test_a_seeded_chat_waiting_for_its_first_send_can_be_renamed_and_deleted_through_its_routes(
+    app: Flask, client: FlaskClient
+) -> None:
+    agent_manager = state_of(app).agent_manager
+    chat_id = client.post("/api/chats/seed", json=_seed_body()).get_json()["chat_id"]
+
+    renamed = client.post(f"/api/chats/{chat_id}/rename", json={"title": "Planning"})
+    provisional = agent_manager.get_provisional_chat(chat_id)
+    deleted = client.post(f"/api/chats/{chat_id}/destroy")
+
+    assert renamed.status_code == 200
+    assert provisional is not None and provisional.name == "Planning"
+    assert deleted.status_code == 200
+    assert agent_manager.get_provisional_chat(chat_id) is None
+    assert client.post(f"/api/chats/{chat_id}/destroy").status_code == 404
+
+
 def test_seeding_a_chat_refuses_a_body_without_turns(client: FlaskClient) -> None:
     response = client.post("/api/chats/seed", json={"title": "Empty", "turns": []})
     assert response.status_code == 400

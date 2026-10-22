@@ -417,7 +417,7 @@ The workspace has one **main chat**, where a text with no chat of its own goes
 (`main_chat.py`). It is a pointer, like a star on one chat, kept in
 `data/.apps/chat/main_chat.json`; no chat is special in itself, so a handoff, a
 crash, or a relaunch leaves it where it is. The seeded chat takes it first, named
-"Main chat" (`MAIN_CHAT_NAME`) whatever title the Mind app sent, and a chat's "Make main chat" menu row (`POST
+"Main" (`MAIN_CHAT_NAME`) whatever title the Mind app sent, and a chat's "Make main chat" menu row (`POST
 /api/chats/<chat-id>/make-main`, 409 for a helper another agent started) moves it there.
 When the chat it names is deleted, another takes it at once: the chat
 messaged most recently, never a helper another agent started; with no chat left, the
@@ -427,7 +427,10 @@ above a rule and in a medium weight, its helpers right under the rule; the root
 shows it when nothing is selected, including after the chat on screen is deleted; a text
 sent from the desktop launcher with Enter (the `main` launch path, a `main_chat` intake) lands in it;
 and a `current_chat` intake from a window showing no chat lands in it. It can be renamed and
-deleted like any chat, but never sleeps: whenever a chat-list push finds its agent stopped (a stop
+deleted like any chat, even before its first message: a chat that is not an agent yet takes a
+rename as the name its first agent will be created with (a seeded one keeps it on its record as
+`chosen_name`, so a restart keeps it) and a delete discards it, seed and all, refusing either only
+while its create runs. It never sleeps: whenever a chat-list push finds its agent stopped (a stop
 from elsewhere, a routine, the memory guard shedding it), the app starts it again with
 `mngr start --no-resume`, trying again no sooner than a minute after a start that did not
 take, and its menu offers no stop or restart.
@@ -490,7 +493,7 @@ opening with no clear subject ("hi") leaves "Chat N" and the next message is
 tried, up to three messages. A title another chat already has gets the first
 free number after it ("Simple map app 2"), up to 9. Only a chat still wearing a
 name nobody chose is renamed: exactly "Chat N", or a seed title other than
-"Main chat" (an older Mind app's "Welcome"), named from the first message the
+"Main" (an older Mind app's "Welcome"), named from the first message the
 user sends in it. A
 name the user or an agent chose is left alone. What has been tried is kept in
 `naming.json` in the chat's folder, so a restart neither renames a named chat

@@ -1111,7 +1111,7 @@ def test_a_stopped_main_chat_is_started_again_once_and_another_stopped_chat_is_l
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
     manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary, keeps_main_chat_awake=True)
     try:
-        seed_agent_state(manager, "agent-main", name="Main-chat", state="STOPPED")
+        seed_agent_state(manager, "agent-main", name="Main", state="STOPPED")
         seed_agent_state(manager, "agent-other", name="Chat-2", state="STOPPED")
         manager.note_agent_list_known()
         assert manager.make_main_chat(ChatId("agent-main")) is True
@@ -1124,7 +1124,7 @@ def test_a_stopped_main_chat_is_started_again_once_and_another_stopped_chat_is_l
     finally:
         manager.stop()
 
-    assert argv_log.read_text().splitlines() == ["start Main-chat --no-resume"]
+    assert argv_log.read_text().splitlines() == ["start Main --no-resume"]
     assert _agent_state(manager, "agent-other") == "STOPPED"
 
 
@@ -1137,7 +1137,7 @@ def test_a_main_chat_that_does_not_start_is_not_tried_again_on_every_push(
     failing_mngr.chmod(0o755)
     manager = AgentManager.build(broadcaster, mngr_binary=str(failing_mngr), keeps_main_chat_awake=True)
     try:
-        seed_agent_state(manager, "agent-main", name="Main-chat", state="STOPPED")
+        seed_agent_state(manager, "agent-main", name="Main", state="STOPPED")
         manager.note_agent_list_known()
         manager.make_main_chat(ChatId("agent-main"))
         wait_until_true(lambda: argv_log.exists(), 10, "the first start of the main chat's agent")
@@ -1147,7 +1147,7 @@ def test_a_main_chat_that_does_not_start_is_not_tried_again_on_every_push(
     finally:
         manager.stop()
 
-    assert argv_log.read_text().splitlines() == ["start Main-chat --no-resume"]
+    assert argv_log.read_text().splitlines() == ["start Main --no-resume"]
     assert _agent_state(manager, "agent-main") == "STOPPED"
 
 
@@ -1163,7 +1163,7 @@ def test_a_manager_not_asked_to_keep_the_main_chat_awake_starts_nothing(
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
     manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
     try:
-        seed_agent_state(manager, "agent-main", name="Main-chat", state="STOPPED")
+        seed_agent_state(manager, "agent-main", name="Main", state="STOPPED")
         manager.note_agent_list_known()
         assert manager.make_main_chat(ChatId("agent-main")) is True
     finally:
@@ -1183,6 +1183,49 @@ def test_with_no_chat_left_the_chat_the_list_opens_becomes_the_main_chat(broadca
 
         assert _next_chat_listing(q)["main_chat_id"] == opened.chat_id
         assert manager.get_main_chat_id() == opened.chat_id
+    finally:
+        manager.stop()
+
+
+def test_a_seeded_chat_waiting_for_its_first_send_takes_a_new_name_and_keeps_it_across_a_restart(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """Renaming the main chat before its first message renames the chat its first agent will be created as; the
+    name is on its record, so a restart keeps it, and it is the user's name, so the first message does not replace it."""
+    first, store = _seed_manager(broadcaster, tmp_path)
+    try:
+        seeded = first.seed_chat("Main", _seed_turns())
+        first.rename_chat(seeded.chat_id, "Planning")
+        renamed = first.get_provisional_chat(seeded.chat_id)
+        assert renamed is not None and renamed.name == "Planning"
+        assert not first.has_placeholder_name(ChatId(seeded.chat_id))
+    finally:
+        first.stop()
+
+    second, _ = _seed_manager(broadcaster, tmp_path, store=store)
+    try:
+        restored = second.get_provisional_chat(seeded.chat_id)
+        assert restored is not None and restored.name == "Planning"
+    finally:
+        second.stop()
+
+
+def test_a_chat_that_is_not_an_agent_yet_refuses_a_rename_while_it_is_created_or_onto_a_taken_name(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    manager, _store = _seed_manager(broadcaster, tmp_path)
+    try:
+        seeded = manager.seed_chat("Main", _seed_turns())
+        seed_agent_state(manager, "agent-other", name="Taken")
+        with pytest.raises(AgentNameConflictError):
+            manager.rename_chat(seeded.chat_id, "Taken")
+        with manager._lock:
+            waiting = manager._provisional_chats[ChatId(seeded.chat_id)]
+            manager._provisional_chats[ChatId(seeded.chat_id)] = waiting.model_copy_update(
+                to_update(waiting.field_ref().phase, ProvisionalChatPhase.CREATING)
+            )
+        with pytest.raises(AgentRenameError):
+            manager.rename_chat(seeded.chat_id, "Planning")
     finally:
         manager.stop()
 
@@ -2337,7 +2380,7 @@ def test_a_seeded_chat_named_the_main_chat_keeps_its_name(broadcaster: WebSocket
         )
         with manager._lock:
             manager._chat_record_by_id[chat_id] = record
-        _tracked_chat(manager, agent_id, "Main-chat", display_name=MAIN_CHAT_NAME)
+        _tracked_chat(manager, agent_id, "Main", display_name=MAIN_CHAT_NAME)
 
         assert not manager.has_placeholder_name(chat_id)
     finally:

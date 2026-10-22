@@ -30,7 +30,7 @@ from imbue.imbue_common.pure import pure
 
 MAIN_CHAT_FILENAME: Final[str] = "main_chat.json"
 # What the seeded chat is called: a name the app chose, so the first message never renames it.
-MAIN_CHAT_NAME: Final[str] = "Main chat"
+MAIN_CHAT_NAME: Final[str] = "Main"
 _CHAT_ID_KEY: Final[str] = "chat_id"
 
 

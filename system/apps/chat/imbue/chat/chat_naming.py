@@ -7,7 +7,7 @@ follows the chat as its topic drifts, so it stays where the user learned it. A c
 opening message has no clear subject ("hi") keeps its minted name and is tried again on its
 next message, up to ``MAX_NAMING_ATTEMPTS`` messages. A seeded chat wearing an older Mind app's
 "Welcome" is named the same way from the first message the user sends in it; the main chat's
-"Main chat", and a chat named any other way (by the user, by an agent), is never touched. A title another chat already has gets the
+"Main", and a chat named any other way (by the user, by an agent), is never touched. A title another chat already has gets the
 first free number after it ("Simple map app 2"), as minted names do.
 
 What has been tried is kept in the chat's own folder, so a restart of the app neither renames a

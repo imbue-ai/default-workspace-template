@@ -2122,11 +2122,19 @@ def _refuse_primary_agent(agent_state_name: str, labels: dict[str, str], verb: s
 
 
 def _destroy_chat(chat_id: str) -> Response:
-    """Destroy a chat by running ``mngr destroy --force`` on every agent of it."""
+    """Destroy a chat by running ``mngr destroy --force`` on every agent of it.
+
+    A chat that is not an agent yet (one waiting for its first send, or whose create failed) is discarded, its
+    seed with it; 409 while its create runs.
+    """
     agent_manager: AgentManager = get_state().agent_manager
     agent_info = _find_active_agent(chat_id)
     if agent_info is None:
-        return _chat_not_found_response(chat_id)
+        if agent_manager.get_provisional_chat(chat_id) is None:
+            return _chat_not_found_response(chat_id)
+        if not agent_manager.discard_provisional_chat(chat_id):
+            return error_response(f"Chat '{chat_id}' is still being created; delete it once it is up", 409)
+        return model_response(DestroyAgentResponse(status="ok"))
     refusal = _refuse_primary_agent(agent_info.name, agent_info.labels, "destroy")
     if refusal is not None:
         return refusal
@@ -2141,15 +2149,17 @@ def _rename_chat(chat_id: str) -> Response:
     """Rename a chat: the ``display_name`` label and the matching canonical name.
 
     409 while the chat converges or when the name collides with another agent's, 400 for a
-    name mngr cannot take.
+    name mngr cannot take. A chat that is not an agent yet takes the name its first agent will be
+    created with; 400 while its create runs.
     """
     agent_manager: AgentManager = get_state().agent_manager
     agent_info = _find_active_agent(chat_id)
-    if agent_info is None:
+    if agent_info is None and agent_manager.get_provisional_chat(chat_id) is None:
         return _chat_not_found_response(chat_id)
-    refusal = _refuse_primary_agent(agent_info.name, agent_info.labels, "rename")
-    if refusal is not None:
-        return refusal
+    if agent_info is not None:
+        refusal = _refuse_primary_agent(agent_info.name, agent_info.labels, "rename")
+        if refusal is not None:
+            return refusal
     rename_request = parse_request_body(RenameChatRequest)
     try:
         agent_manager.rename_chat(chat_id, rename_request.title)

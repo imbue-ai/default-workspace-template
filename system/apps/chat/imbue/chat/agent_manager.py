@@ -320,7 +320,7 @@ def seeded_provisional_chats(record_by_chat_id: Mapping[ChatId, ChatRecord]) -> 
     return {
         chat_id: ProvisionalChat(
             chat_id=chat_id,
-            name=record.seed_title or "",
+            name=record.chosen_name or record.seed_title or "",
             phase=ProvisionalChatPhase.AWAITING_FIRST_SEND,
             is_seeded=True,
         )
@@ -3059,11 +3059,9 @@ class AgentManager:
         if chat is not None and chat.transition is not None:
             raise ChatConvergingError(_converging_detail_of(chat.transition))
         if agent_state is None:
-            if provisional is not None and provisional.name != display_name:
-                raise AgentRenameError(
-                    f"Chat '{chat_ref}' is still being created; it cannot be renamed to '{display_name}' yet"
-                )
-            if provisional is None:
+            if provisional is not None:
+                self._rename_provisional_chat(provisional.chat_id, display_name)
+            else:
                 _loguru_logger.warning("No tracked agent for chat ref {}; leaving mngr alone", chat_ref)
             return
 
@@ -3270,6 +3268,31 @@ class AgentManager:
     def get_own_agent_id(self) -> str:
         """Return this server's own agent ID from the environment."""
         return self._own_agent_id
+
+    def _rename_provisional_chat(self, chat_id: ChatId, display_name: str) -> None:
+        """Rename a chat that is not an agent yet: the name its first agent will be created with.
+
+        Refused while its create runs, since a rename then would race it. A seeded chat keeps the
+        name on its record (``chosen_name``), so a restart of this app before its first send keeps it.
+        """
+        with self._lock:
+            provisional = self._provisional_chats.get(chat_id)
+            if provisional is None or provisional.name == display_name:
+                return
+            if provisional.phase is ProvisionalChatPhase.CREATING:
+                raise AgentRenameError(
+                    f"Chat '{chat_id}' is still being created; it cannot be renamed to '{display_name}' yet"
+                )
+            if is_name_conflict(display_name, self._taken_names_locked(exclude_agent_id=str(chat_id))):
+                raise AgentNameConflictError(f"A chat named '{display_name}' already exists; pick another name")
+            renamed = provisional.model_copy_update(to_update(provisional.field_ref().name, display_name))
+            self._provisional_chats[chat_id] = renamed
+            record = self._chat_record_by_id.get(chat_id)
+            if record is not None and record.is_seed_only:
+                self._write_record_locked(
+                    record.model_copy_update(to_update(record.field_ref().chosen_name, display_name))
+                )
+        self._broadcast_provisional(renamed)
 
     def _taken_names_locked(self, exclude_agent_id: str | None = None) -> list[str]:
         """Every name in use on the machine's agents. Must be called with lock held.

@@ -68,6 +68,11 @@ export function rowsFromSnapshots(
   return rows;
 }
 
+/** A chat whose first agent is being created: it takes no rename, delete, or other verb until it is up. */
+export function isBeingCreated(row: ChatRow): boolean {
+  return row.isProvisional && row.status === STATUS_BY_PROVISIONAL_PHASE.creating;
+}
+
 export function isAgentStarted(row: ChatRow): boolean {
   return row.labels.agent_created === "true";
 }

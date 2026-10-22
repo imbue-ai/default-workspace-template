@@ -29,7 +29,7 @@ import { anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
 import { kebabGlyph, plusGlyph } from "../glyphs";
 import { isUnread } from "./chatUnread";
 import { destroyChat, makeMainChat, renameChat, startChat, stopChat } from "./verbs";
-import { isAgentStarted, startsWithMainChat } from "./rows";
+import { isAgentStarted, isBeingCreated, startsWithMainChat } from "./rows";
 import {
   DEFAULT_RAIL_WIDTH_PX,
   MAX_RAIL_WIDTH_PX,
@@ -209,8 +209,9 @@ export function rowMenuRows(attrs: RowMenuContext, row: ChatRow, referenceRows: 
             onSelect: () => makeMainFromMenu(row),
           } as MenuRow,
         ]),
-    // The main chat is kept running (the chat app wakes it whenever it is found stopped), so it offers neither.
-    ...(row.isMain
+    // The main chat is kept running (the chat app wakes it whenever it is found stopped), and a chat that is not an
+    // agent yet has nothing to stop, so neither offers these.
+    ...(row.isMain || row.isProvisional
       ? []
       : [
           {
@@ -483,10 +484,10 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
       onclick: () => {
         if (!isSelected || attrs.isInDrawer) attrs.onPick(row.chatId);
       },
-      ondblclick: row.isProvisional ? undefined : () => beginRename(row),
+      ondblclick: isBeingCreated(row) ? undefined : () => beginRename(row),
       oncontextmenu: (event: MouseEvent) => {
         event.preventDefault();
-        if (isDeleting || row.isProvisional) return;
+        if (isDeleting || isBeingCreated(row)) return;
         menuChatId = row.chatId;
         menuReferenceRows = referenceRowsForEvent(attrs, event);
         railMenu.open(anchorForPoint(event.clientX, event.clientY));
@@ -495,7 +496,7 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
     [
       statusDot(row, "flex-none"),
       m("span", { class: "chat-rail-title min-w-0 flex-1 truncate text-(length:--font-size-row)" }, row.title),
-      row.isProvisional || (attrs.isTouch && isDeleting)
+      isBeingCreated(row) || (attrs.isTouch && isDeleting)
         ? null
         : attrs.isTouch
           ? rowKebab(row)
