@@ -547,9 +547,9 @@ function hoverKebab(row: ChatRow): m.Vnode {
     "span",
     {
       class:
-        "chat-rail-row-menu w-0 flex-none overflow-hidden rounded p-0 text-faint opacity-0 " +
-        "hover:bg-fill-hover hover:text-primary group-hover:w-auto group-hover:p-0.5 group-hover:opacity-100 " +
-        "focus-visible:w-auto focus-visible:p-0.5 focus-visible:opacity-100",
+        "chat-rail-row-menu -ml-2 w-0 flex-none overflow-hidden rounded p-0 text-faint opacity-0 " +
+        "hover:bg-fill-hover hover:text-primary group-hover:ml-0 group-hover:w-auto group-hover:p-0.5 " +
+        "group-hover:opacity-100 focus-visible:ml-0 focus-visible:w-auto focus-visible:p-0.5 focus-visible:opacity-100",
       "data-chat-row-menu": row.chatId,
       ...innerButtonAttrs("Chat actions", (kebab) => openRowMenu(row, kebab)),
     },
