@@ -1198,7 +1198,7 @@ def running_workspace(
 
     registry_path = tmp_path / "registry" / "apps.toml"
     # The chat's row as ``forward_port.py`` writes it from ``system/apps/chat/app.toml``: the chat list at ``/`` and
-    # the three POST launch paths onto the intake route (post-launch-paths plan section 7.1).
+    # the four POST launch paths onto the intake route (post-launch-paths plan section 7.1).
     write_registry(
         registry_path,
         registry_row_toml(
@@ -1209,15 +1209,22 @@ def running_workspace(
             display_name="Chat",
             launch_paths=(
                 ("root", "Chat", "/"),
+                ("main", "Send to main chat", "/api/chats/intake"),
                 ("new", "New Chat", "/api/chats/intake"),
                 ("send", "Send to chat...", "/api/chats/intake"),
                 ("draft", "Draft into chat", "/api/chats/intake"),
             ),
-            launch_params={"new": ("account_id", "message"), "send": ("message",), "draft": ("message",)},
-            launch_text_params={"new": "message", "send": "message"},
+            launch_params={
+                "main": ("message",),
+                "new": ("account_id", "message"),
+                "send": ("message",),
+                "draft": ("message",),
+            },
+            launch_text_params={"main": "message", "new": "message", "send": "message"},
             launch_draft_params={"draft": "message"},
-            launch_methods={"new": "POST", "send": "POST", "draft": "POST"},
+            launch_methods={"main": "POST", "new": "POST", "send": "POST", "draft": "POST"},
             launch_presets={
+                "main": {"target": "main_chat"},
                 "new": {"target": "new_chat"},
                 "send": {"target": "chat_selector"},
                 "draft": {"target": "current_chat", "is_draft": "true"},

@@ -21,7 +21,14 @@ function uniqueChatId(): string {
 }
 
 function provisionalChat(chatId: string, phase: ProvisionalChatPhase): ProvisionalChat {
-  return { chat_id: chatId, name: "Chat 1", account_id: "acct-1", phase, error: null, is_seeded: false };
+  return {
+    chat_id: chatId,
+    name: "Chat 1",
+    account_id: "acct-1",
+    phase,
+    error: null,
+    is_seeded: false,
+  };
 }
 
 function renderIndicator(chatId: string): HTMLElement {

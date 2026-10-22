@@ -38,6 +38,16 @@ path = "/"
 # in the composer unsent.
 
 # The launcher's primary free-text row: what is typed into the desktop's field becomes a new chat's first message.
+# The launcher's Enter: a text typed into the desktop goes to the main chat.
+[[launch_paths]]
+id = "main"
+label = "Send to main chat"
+path = "/api/chats/intake"
+method = "POST"
+params = [{name = "message", label = "Message to send", required = false}]
+presets = {target = "main_chat"}
+text_param = "message"
+
 [[launch_paths]]
 id = "new"
 label = "New Chat"
@@ -61,8 +71,9 @@ params = [{name = "message", label = "Message to send", required = false}]
 presets = {target = "chat_selector"}
 text_param = "message"
 
-# A draft lands in the composer of the chat on screen (else the most recent, else a new one), unsent: what the
-# desktop's "Design your own..." hands the pinned chat window.
+# A draft lands in the composer of the chat on screen (else the main chat, else the most recent, else a new one),
+# unsent: what the desktop hands the pinned chat window. Its "Design your own..." sends no page, so that draft goes
+# to the main chat.
 [[launch_paths]]
 id = "draft"
 label = "Draft into chat"
