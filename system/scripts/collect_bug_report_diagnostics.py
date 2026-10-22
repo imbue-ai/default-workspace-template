@@ -20,11 +20,11 @@ agent only until a chat is handed to another harness. With BOTH flags each
 running agent also contributes an ``agent-logs/<agent-name>/pane.txt``: a TUI
 harness renders the conversation into its pane, so its scrollback needs the
 chats consent as well as the logs one. The workspace logs, the harness logs,
-the log databases and the chats are each scanned and released or withheld on
-their own. Anything requested that is not in the archive whole -- a class
-withheld by the secret scan, or one the size budget could not fit -- is a
-plain-words line in the archive's own ``collection-notes.txt`` member, so the
-archive explains itself; a content type that was not requested appears in
+the log databases and the chats are each scanned, and every file in them is
+released or withheld on its own. Anything requested that is not in the archive
+-- a file withheld by the secret scan, or one the size budget could not fit --
+is a plain-words line in the archive's own ``collection-notes.txt`` member, so
+the archive explains itself; a content type that was not requested appears in
 neither the members nor the notes.
 
 Nothing leaves the container unscanned: every chat, the logs text, and each
@@ -240,10 +240,23 @@ NOTE_SCANNER_UNAVAILABLE = "withheld: the secret scanner could not run, so nothi
 NOTE_SECRETS_FOUND = "withheld: the secret scan reported findings"
 NOTE_NO_CHAT_TRANSCRIPT = "no chat transcripts exist in this workspace"
 NOTE_NO_AGENT_LOGS = "no agent wrote a harness log to collect"
+# What a note calls a withheld member whose own name the scan flagged.
+NOTE_FLAGGED_MEMBER_NAME = "an item whose name the scan flagged"
 # A class the byte budget could not fit whole. Said out loud because otherwise a
 # trimmed class reads exactly like a complete one, and "the harness that broke
 # wrote nothing" is the wrong conclusion to leave a reader holding.
 NOTE_TRIMMED_TO_BUDGET = "{} file(s) were left out to fit the collection's size budget"
+
+# URL query parameters whose value is a credential by its name alone: a
+# newsletter's sign-in link, a presigned download, an OAuth redirect. Matched
+# after ``?``, ``&`` or ``;`` (the last for ``&amp;`` in HTML), and the value
+# runs to the next delimiter, whitespace, quote, or backslash (a JSON escape).
+URL_CREDENTIAL_PARAMETER = re.compile(
+    r"([?&;](?:access_?token|id_?token|refresh_?token|auth_?token|token|api_?key|key"
+    r"|code|sig|signature|secret|password)=)[^&#;\s\"'<>\\]+",
+    re.IGNORECASE,
+)
+REDACTED_URL_CREDENTIAL = "REDACTED"
 
 FINDING_MARKER = "SECRET SCAN FINDING"
 # Every marker scan_secrets.sh prints for "one of my two mandatory scanners did
@@ -1079,25 +1092,74 @@ def parse_scan_timeout(flags: Sequence[str]) -> float:
     return DEFAULT_SCAN_TIMEOUT_SECONDS
 
 
+class StagedMember(NamedTuple):
+    """Where one member's name and content were staged for the scan."""
+
+    name_path: str
+    content_path: str
+
+
 def stage_members(
     staging_dir: str, key: str, members: Sequence[tuple[str, str, float]]
-) -> list[str] | None:
+) -> list[StagedMember] | None:
     """One class's members staged as plaintext, or None when one could not be written.
 
-    Every staged file leads with the zip member name it will be packed under:
-    the name is written into the archive's directory in plaintext, it is built
-    from a directory name inside the workspace, and the sanitizer that shapes it
-    keeps every character a credential is written with.
+    The zip member name each one will be packed under is staged too, as a file
+    of its own: the name is written into the archive's directory in plaintext,
+    it is built from a directory name inside the workspace, and the sanitizer
+    that shapes it keeps every character a credential is written with. Apart
+    from the content, a finding says which of the two it is in, and a note may
+    name a withheld member only when its name scanned clean.
     """
-    staged: list[str] = []
+    staged: list[StagedMember] = []
     for index, (name, content, _) in enumerate(members):
-        path = stage_for_scan(
-            staging_dir, "{}-{}".format(key, index), name + "\n" + content
-        )
-        if path is None:
+        name_path = stage_for_scan(staging_dir, "{}-{}-name".format(key, index), name)
+        content_path = stage_for_scan(staging_dir, "{}-{}".format(key, index), content)
+        if name_path is None or content_path is None:
             return None
-        staged.append(path)
+        staged.append(StagedMember(name_path=name_path, content_path=content_path))
     return staged
+
+
+def release_scanned_members(
+    label: str,
+    class_members: Sequence[tuple[str, str, float]],
+    staged: Sequence[StagedMember],
+    verdicts: dict[str, str | None],
+    dropped_count: int,
+) -> tuple[list[tuple[str, str, float]], list[str]]:
+    """The members of one class the scan cleared, and the notes on what it did not.
+
+    Each member is released or withheld on its own, so one chat carrying a secret
+    costs the report that chat and not its others. Every member withheld from a
+    class that still ships is named in the notes, so the part that arrived never
+    reads as the whole -- except one whose name the scan flagged, which is
+    counted without it. A class withheld whole, every member for the same
+    reason, says so in one line.
+    """
+    released: list[tuple[str, str, float]] = []
+    withheld: list[tuple[str, str]] = []
+    for member, staged_member in zip(class_members, staged, strict=True):
+        name_reason = verdicts.get(staged_member.name_path, NOTE_SCANNER_UNAVAILABLE)
+        content_reason = verdicts.get(staged_member.content_path, NOTE_SCANNER_UNAVAILABLE)
+        if name_reason is None and content_reason is None:
+            released.append(member)
+        elif name_reason is None:
+            withheld.append((member[0], content_reason))
+        else:
+            withheld.append((NOTE_FLAGGED_MEMBER_NAME, name_reason))
+    reasons = {reason for _, reason in withheld}
+    if withheld and not released and len(reasons) == 1:
+        return [], ["{}: {}".format(label, withheld[0][1])]
+    notes = ["{}: {}: {}".format(label, name, reason) for name, reason in withheld]
+    if dropped_count:
+        notes.append("{}: {}".format(label, NOTE_TRIMMED_TO_BUDGET.format(dropped_count)))
+    return released, notes
+
+
+def redact_url_credentials(text: str) -> str:
+    """``text`` with the value of every credential-named URL query parameter replaced."""
+    return URL_CREDENTIAL_PARAMETER.sub(r"\1" + REDACTED_URL_CREDENTIAL, text)
 
 
 def main(argv: Sequence[str]) -> None:
@@ -1162,54 +1224,64 @@ def main(argv: Sequence[str]) -> None:
             notes.append("recent chats: " + NOTE_NO_CHAT_TRANSCRIPT)
         collected.append((TRANSCRIPT_KEY, "recent chats", chat_members))
 
+    # A credential riding in a URL's query string is blanked before the scan, so
+    # a link pasted into a chat or logged by a service costs the report that
+    # value rather than the whole file the scan would otherwise withhold. The
+    # scan still reads the result, so a credential the blanking misses is
+    # withheld as before.
+    collected = [
+        (key, label, [(name, redact_url_credentials(content), mtime) for name, content, mtime in class_members])
+        for key, label, class_members in collected
+    ]
+
     # Nothing leaves the container unscanned, so a payload that cannot even be
     # staged for the scanner is dropped exactly as one the scanner could not
-    # read. Each member stages one plaintext file, because the scanner has to
-    # read the content itself -- it cannot see inside the archive it is packed
-    # into afterwards.
+    # read. Each member stages as plaintext, because the scanner has to read the
+    # content itself -- it cannot see inside the archive it is packed into
+    # afterwards.
     staging_dir = tempfile.mkdtemp(prefix="bug-report-scan-")
-    withheld: dict[str, str] = {}
+    unstaged_keys: set[str] = set()
+    staged_by_key: dict[str, list[StagedMember]] = {}
+    verdicts: dict[str, str | None] = {}
     try:
-        staged_by_key: dict[str, list[str]] = {}
         for key, _label, class_members in collected:
             if not class_members:
                 continue
             staged = stage_members(staging_dir, key, class_members)
             if staged is None:
-                withheld[key] = NOTE_SCANNER_UNAVAILABLE
+                unstaged_keys.add(key)
             else:
                 staged_by_key[key] = staged
 
         if staged_by_key:
-            targets = [path for paths in staged_by_key.values() for path in paths]
+            targets = [
+                path
+                for staged in staged_by_key.values()
+                for staged_member in staged
+                for path in (staged_member.name_path, staged_member.content_path)
+            ]
             verdicts = scan_targets(targets, scan_timeout_seconds)
-            for key, paths in staged_by_key.items():
-                # A class made of several files is released only when every one
-                # of them is clean: one chat carrying a secret withholds the
-                # whole class rather than quietly shipping a partial set of
-                # conversations, which a reader could not tell from the full set.
-                reasons = [
-                    verdicts.get(path, NOTE_SCANNER_UNAVAILABLE) for path in paths
-                ]
-                reason = next((r for r in reasons if r is not None), None)
-                if reason is not None:
-                    withheld[key] = reason
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
 
     members: list[tuple[str, str, float]] = []
     for key, label, class_members in collected:
-        if key in withheld:
-            notes.append("{}: {}".format(label, withheld[key]))
+        if key in unstaged_keys:
+            notes.append("{}: {}".format(label, NOTE_SCANNER_UNAVAILABLE))
             continue
-        dropped = dropped_by_key.get(key, 0)
-        if dropped:
-            notes.append("{}: {}".format(label, NOTE_TRIMMED_TO_BUDGET.format(dropped)))
-        members.extend(class_members)
+        released, class_notes = release_scanned_members(
+            label,
+            class_members,
+            staged_by_key.get(key, []),
+            verdicts,
+            dropped_by_key.get(key, 0),
+        )
+        notes.extend(class_notes)
+        members.extend(released)
 
     # The notes ride inside the archive itself, so a reader learns what was
     # withheld from the same file that holds what was not. Collector-authored
-    # text only -- no workspace content -- so it is not itself scanned.
+    # text, plus the names of withheld members, each of which scanned clean.
     if notes:
         members.append((NOTES_MEMBER_NAME, "\n".join(notes) + "\n", time.time()))
     # Base64 because stdout is text; the host decodes the one line and stages
