@@ -108,6 +108,24 @@ def test_the_searcher_asks_the_index_once_per_query_while_its_answer_is_kept(
     assert local_skill_index.requested_paths == ["/api/search?q=pdf&limit=20"]
 
 
+def test_the_searcher_asks_again_once_an_answer_expires_and_keeps_no_expired_answer(
+    local_skill_index: LocalSkillIndex,
+) -> None:
+    local_skill_index.answer = _ANSWER
+    searcher = SkillsShSearcher(base_url=local_skill_index.base_url, answer_kept_seconds=0.0)
+
+    searcher.search("pdf")
+    searcher.search("docx")
+    searcher.search("pdf")
+
+    assert local_skill_index.requested_paths == [
+        "/api/search?q=pdf&limit=20",
+        "/api/search?q=docx&limit=20",
+        "/api/search?q=pdf&limit=20",
+    ]
+    assert list(searcher._answers) == ["pdf"]
+
+
 def test_the_searcher_raises_when_the_index_answers_an_error(local_skill_index: LocalSkillIndex) -> None:
     local_skill_index.status = 503
 

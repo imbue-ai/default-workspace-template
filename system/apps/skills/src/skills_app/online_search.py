@@ -43,15 +43,27 @@ class SkillsShSearcher(SkillIndexSearcherInterface):
     """Asks skills.sh, one GET per query, keeping each answer for a few minutes."""
 
     base_url: str = Field(default=SKILLS_SH_URL, frozen=True, description="The index's origin")
+    answer_kept_seconds: float = Field(
+        default=_ANSWER_KEPT_SECONDS,
+        frozen=True,
+        description="How long an answer is reused before the index is asked again",
+    )
     _answers: dict[str, tuple[float, tuple[IndexedSkill, ...]]] = PrivateAttr(default_factory=dict)
 
     def search(self, query: str) -> tuple[IndexedSkill, ...]:
         key = query.strip().lower()
         kept = self._answers.get(key)
-        if kept is not None and time.monotonic() - kept[0] < _ANSWER_KEPT_SECONDS:
+        if kept is not None and time.monotonic() - kept[0] < self.answer_kept_seconds:
             return kept[1]
         matches = self._fetch(key)
-        self._answers[key] = (time.monotonic(), matches)
+        fetched_at = time.monotonic()
+        # Searching as the person types asks once per pause, so expired answers are dropped rather than kept for good.
+        self._answers = {
+            kept_key: answer
+            for kept_key, answer in self._answers.items()
+            if fetched_at - answer[0] < self.answer_kept_seconds
+        }
+        self._answers[key] = (fetched_at, matches)
         return matches
 
     def _fetch(self, query: str) -> tuple[IndexedSkill, ...]:
