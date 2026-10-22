@@ -117,6 +117,16 @@ def test_stamping_marks_only_user_messages_with_an_author_and_never_restamps() -
     assert bob["author"] == "kept"
 
 
+def test_a_chat_with_no_annotations_still_stamps_a_hand_typed_prefix(tmp_path: Path) -> None:
+    store = AuthorStore(root=tmp_path)
+    typed = _user_event("[from: Someone Else] typed by hand")
+    owner = _user_event("just me")
+    store.stamp_events(_CHAT, [typed, owner])
+
+    assert (typed["author"], typed["author_name"]) == ("name:Someone Else", "Someone Else")
+    assert "author" not in owner
+
+
 def test_the_store_appends_lines_and_rereads_them_only_when_the_file_changed(tmp_path: Path) -> None:
     store = AuthorStore(root=tmp_path)
     assert store.annotations(_CHAT) == ()

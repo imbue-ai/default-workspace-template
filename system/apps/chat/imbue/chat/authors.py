@@ -246,10 +246,9 @@ class AuthorStore(MutableModel):
             return annotations
 
     def stamp_events(self, chat_id: ChatId, events: Sequence[dict[str, Any]]) -> None:
-        """Stamp the authors of a chat's events, in place; a chat with no annotations is left as it is."""
-        annotations = self.annotations(chat_id)
-        if annotations:
-            stamp_authors(events, annotations)
+        """Stamp the authors of a chat's events, in place: a chat with no annotations still stamps a hand-typed
+        prefix with its synthetic key."""
+        stamp_authors(events, self.annotations(chat_id))
 
     def forget(self, chat_id: ChatId) -> None:
         with self._lock:
