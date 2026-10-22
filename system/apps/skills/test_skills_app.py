@@ -91,6 +91,12 @@ def test_a_search_filters_the_list_and_ends_with_a_way_to_search_online(open_ski
     expect(page.locator(".row-name")).to_have_text(["notify-user"])
     expect(page.locator("a.find-online")).to_have_attribute("href", "/?find=notify")
 
+    # Too short to search online, and matching nothing here.
+    page.locator("#search").fill("z")
+
+    expect(page.locator("a[data-skill]")).to_have_count(0)
+    expect(page.locator(".skill-list .empty")).to_have_text("No skills match.")
+
     page.locator("#search").fill("nothing like this")
 
     expect(page.locator("a[data-skill]")).to_have_count(0)

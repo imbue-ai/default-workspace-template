@@ -461,7 +461,8 @@
     const trimmed = search.value.trim();
     const findOnline = trimmed.length >= MIN_FIND_QUERY_LENGTH ? [findOnlineButton(trimmed)] : [];
     // With nothing here matching, the way online is the list's first row.
-    listNode.replaceChildren(...sections, ...findOnline);
+    const listChildren = [...sections, ...findOnline];
+    listNode.replaceChildren(...(listChildren.length ? listChildren : [element("p", { class: "empty", text: query ? "No skills match." : "No skills yet." })]));
     markSelected();
   }
 
