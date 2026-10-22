@@ -36,14 +36,19 @@
     --radius-sm: 4px;
     --radius-md: 6px;
     --dur-base: 120ms;
+    --dur-slow: 240ms;
   }
   /* Type: only the workspace's scale (heading 18, body 14, row 13, helper 12), one size per role. The sidebar is
      navigation and sets its rows at 13; the reading pane is content and sets it at 14, as the chat does. Weight and
      colour, not size, part the levels within each, and nothing in a skill's instructions outranks its title. */
   * { box-sizing: border-box; }
   html, body { height: 100%; }
-  /* Thin scrollbars on a clear track: the browser's default draws a grey gutter with its own border. */
-  .skill-list, .reader, .instructions pre, .instructions table { scrollbar-width: thin; scrollbar-color: var(--c-border) transparent; }
+  /* The chat's scrollbars (apps/chat transcript-scrollbar): out of sight until the pane scrolls, or the pointer
+     nears its right edge, then fading away again. The thumb's colour is a registered property so it can transition. */
+  @property --scrollbar-thumb { syntax: "<color>"; inherits: true; initial-value: transparent; }
+  .skill-list, .reader { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; transition: --scrollbar-thumb var(--dur-slow) ease; }
+  .skill-list.scrollbar-shown, .reader.scrollbar-shown { --scrollbar-thumb: color-mix(in srgb, var(--c-text-secondary) 55%, transparent); }
+  .instructions pre, .instructions table { scrollbar-width: thin; scrollbar-color: var(--c-border) transparent; }
   body { margin: 0; font-family: var(--font-sans); color: var(--c-text-primary); background: var(--c-surface); font-size: var(--font-size-body); line-height: 1.5; }
   a { color: inherit; text-decoration: none; }
   a:focus-visible, input:focus-visible, button:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; }
@@ -61,13 +66,14 @@
   .empty-search p { margin: 0; color: var(--c-text-secondary); overflow-wrap: anywhere; }
   .clear-search { padding: 3px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); color: var(--c-text-primary); font: inherit; font-size: var(--font-size-row); cursor: pointer; }
   .clear-search:hover { background: var(--c-fill-hover); }
-  .sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 16px 16px 12px; }
+  .sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 16px 8px 12px 16px; }
   h1 { font-size: var(--font-size-heading); font-weight: var(--weight-semibold); line-height: 1.3; margin: 0; overflow-wrap: anywhere; }
   /* The workspace's text field (workspace_ui components/Input.ts) with a glyph inside, as Getting Started's search. */
-  /* Compact, at the rows' size: 32px tall with 13px text, 12px clear above and below. */
-  .search { position: relative; margin: 0 16px 12px; }
-  .search svg { position: absolute; top: 50%; left: 10px; width: 14px; height: 14px; transform: translateY(-50%); color: var(--c-text-faint); pointer-events: none; }
-  .search input { display: block; width: 100%; -webkit-appearance: none; appearance: none; height: 32px; padding: 0 10px 0 32px; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); color: var(--c-text-primary); font: inherit; font-size: var(--font-size-row); transition: border-color var(--dur-base), box-shadow var(--dur-base); }
+  /* Compact, at the rows' size: 32px tall with 13px text, 12px clear above and below. Its box sits 8px in, on the
+     same line as the rows' highlight; its glyph 16px in, on the same line as the text. */
+  .search { position: relative; margin: 0 8px 12px; }
+  .search svg { position: absolute; top: 50%; left: 8px; width: 14px; height: 14px; transform: translateY(-50%); color: var(--c-text-faint); pointer-events: none; }
+  .search input { display: block; width: 100%; -webkit-appearance: none; appearance: none; height: 32px; padding: 0 10px 0 30px; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); color: var(--c-text-primary); font: inherit; font-size: var(--font-size-row); transition: border-color var(--dur-base), box-shadow var(--dur-base); }
   .search input::placeholder { color: var(--c-text-faint); }
   .search input:focus-visible { border-color: var(--c-accent); }
   .skill-list { flex: 1; overflow-y: auto; padding: 0 8px 16px; }
@@ -571,6 +577,32 @@
     setSidebarWidth(width + (event.key === "ArrowRight" ? RESIZE_KEY_STEP_PX : -RESIZE_KEY_STEP_PX), true);
   });
   window.addEventListener("popstate", route);
+
+  // Each scrolling pane shows its scrollbar while it scrolls and for a moment after (the chat's 1.2s), and while the
+  // pointer is over the strip where the bar is drawn.
+  const SCROLLBAR_SHOW_MS = 1200;
+  const SCROLLBAR_HOVER_PX = 16;
+  for (const pane of [listNode, reader]) {
+    let hideTimer = null;
+    let isPointerNearBar = false;
+    const update = () => pane.classList.toggle("scrollbar-shown", hideTimer !== null || isPointerNearBar);
+    pane.addEventListener("scroll", () => {
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => {
+        hideTimer = null;
+        update();
+      }, SCROLLBAR_SHOW_MS);
+      update();
+    }, { passive: true });
+    pane.addEventListener("pointermove", (event) => {
+      isPointerNearBar = pane.scrollHeight > pane.clientHeight && pane.getBoundingClientRect().right - event.clientX <= SCROLLBAR_HOVER_PX;
+      update();
+    });
+    pane.addEventListener("pointerleave", () => {
+      isPointerNearBar = false;
+      update();
+    });
+  }
 
   // Coming back to the window after editing a skill in Files shows the edit.
   async function refresh() {
