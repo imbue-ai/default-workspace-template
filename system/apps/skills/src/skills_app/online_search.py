@@ -9,6 +9,7 @@ and the page asks again whenever the workspace's skills change, to keep its "Ins
 searched until a person asks to look online, since the query leaves the workspace.
 """
 
+import threading
 import time
 from collections.abc import Sequence
 from typing import Final
@@ -49,21 +50,26 @@ class SkillsShSearcher(SkillIndexSearcherInterface):
         description="How long an answer is reused before the index is asked again",
     )
     _answers: dict[str, tuple[float, tuple[IndexedSkill, ...]]] = PrivateAttr(default_factory=dict)
+    # The server answers each request on its own thread; the fetch itself runs outside the lock.
+    _answers_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
     def search(self, query: str) -> tuple[IndexedSkill, ...]:
         key = query.strip().lower()
-        kept = self._answers.get(key)
+        with self._answers_lock:
+            kept = self._answers.get(key)
         if kept is not None and time.monotonic() - kept[0] < self.answer_kept_seconds:
             return kept[1]
         matches = self._fetch(key)
         fetched_at = time.monotonic()
-        # Searching as the person types asks once per pause, so expired answers are dropped rather than kept for good.
-        self._answers = {
-            kept_key: answer
-            for kept_key, answer in self._answers.items()
-            if fetched_at - answer[0] < self.answer_kept_seconds
-        }
-        self._answers[key] = (fetched_at, matches)
+        with self._answers_lock:
+            # Searching as the person types asks once per pause, so expired answers are dropped rather than kept for
+            # good.
+            self._answers = {
+                kept_key: answer
+                for kept_key, answer in self._answers.items()
+                if fetched_at - answer[0] < self.answer_kept_seconds
+            }
+            self._answers[key] = (fetched_at, matches)
         return matches
 
     def _fetch(self, query: str) -> tuple[IndexedSkill, ...]:
