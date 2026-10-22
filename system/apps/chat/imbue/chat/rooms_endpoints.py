@@ -237,6 +237,16 @@ def broadcast_rooms(state: ChatAppState) -> None:
     state.broadcaster.broadcast_rooms_updated(_snapshots(state))
 
 
+def delete_room(state: ChatAppState, room_id: ChatId) -> bool:
+    """Remove the room and its messages, end its open streams, and push the list; False for no such room. Shared by
+    the room route and the chat route."""
+    if not state.rooms.delete(room_id):
+        return False
+    state.event_queues.end_streams(str(room_id))
+    broadcast_rooms(state)
+    return True
+
+
 def _handler(state: ChatAppState) -> MentionActions:
     handler = state.mention_handler
     if handler is None:
@@ -365,12 +375,9 @@ def _rename_room(room_id: str) -> Response:
 
 def _delete_room(room_id: str) -> Response:
     """``DELETE /api/rooms/<id>``: remove the room and its messages, ending its open streams."""
-    state = get_state()
     parsed = parse_chat_ref(room_id)
-    if parsed is None or not state.rooms.delete(parsed):
+    if parsed is None or not delete_room(get_state(), parsed):
         return _room_not_found(room_id)
-    state.event_queues.end_streams(str(parsed))
-    broadcast_rooms(state)
     return Response(status=204)
 
 

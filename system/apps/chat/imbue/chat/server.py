@@ -214,7 +214,7 @@ from imbue.chat.request_helpers import require_loopback
 from imbue.chat.rooms_endpoints import BackgroundMentionDeliverer
 from imbue.chat.rooms_endpoints import MentionHandler
 from imbue.chat.rooms_endpoints import act_on_chat_mentions
-from imbue.chat.rooms_endpoints import broadcast_rooms
+from imbue.chat.rooms_endpoints import delete_room
 from imbue.chat.rooms_endpoints import post_room_message
 from imbue.chat.rooms_endpoints import rename_room_response
 from imbue.chat.rooms_endpoints import room_events_response
@@ -2179,9 +2179,7 @@ def _destroy_chat(chat_id: str) -> Response:
     agent_manager: AgentManager = state.agent_manager
     room = room_of(chat_id)
     if room is not None:
-        state.rooms.delete(room.id)
-        state.event_queues.end_streams(str(room.id))
-        broadcast_rooms(state)
+        delete_room(state, room.id)
         return model_response(DestroyAgentResponse(status="ok"))
     agent_info = _find_active_agent(chat_id)
     if agent_info is None:
