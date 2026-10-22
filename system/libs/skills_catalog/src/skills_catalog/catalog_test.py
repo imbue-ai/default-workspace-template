@@ -21,6 +21,10 @@ from skills_catalog.testing import write_skill
 from skills_catalog.testing import write_skills_lock
 
 
+def _skills_by_name(catalog: SkillsCatalog) -> dict[str, SkillSummary]:
+    return {summary.name: summary for summary in catalog.list_skills().skills}
+
+
 def test_who_a_skill_comes_from_follows_its_author_then_the_lock_files(
     workspace_root: Path, catalog: SkillsCatalog
 ) -> None:
@@ -32,7 +36,7 @@ def test_who_a_skill_comes_from_follows_its_author_then_the_lock_files(
     write_skills_lock(workspace_root, {"blueprint": "imbue-ai/skills", "web-design": "vercel-labs/agent-skills"})
     commit_all(workspace_root, "Workspace changes")
 
-    by_name: dict[str, SkillSummary] = {summary.name: summary for summary in catalog.list_skills().skills}
+    by_name = _skills_by_name(catalog)
 
     assert {name: (summary.author, summary.source) for name, summary in by_name.items()} == {
         "assist": ("", SkillSource.WORKSPACE),
@@ -52,7 +56,7 @@ def test_a_skill_is_for_people_unless_its_frontmatter_marks_it_as_the_system_s(
     write_skill(workspace_root, "launch-task", "Start a worker.", author="imbue", audience="System")
     write_skill(workspace_root, "build-app", "Build an app.", author="imbue", audience="people")
 
-    by_name: dict[str, SkillSummary] = {summary.name: summary for summary in catalog.list_skills().skills}
+    by_name = _skills_by_name(catalog)
 
     assert {name: summary.audience for name, summary in by_name.items()} == {
         "assist": SkillAudience.PEOPLE,
@@ -78,7 +82,7 @@ def test_a_saved_skill_was_last_updated_by_its_newest_commit_and_an_edited_one_b
     for path in (draft_file, draft_file.parent):
         os.utime(path, (1_700_000_000, 1_700_000_000))
 
-    by_name: dict[str, SkillSummary] = {summary.name: summary for summary in catalog.list_skills().skills}
+    by_name = _skills_by_name(catalog)
 
     assert by_name["notify-user"].last_updated_at == datetime.fromisoformat(saved_at)
     assert by_name["assist"].last_updated_at == datetime.fromtimestamp(1_800_000_000, tz=UTC)
@@ -104,7 +108,7 @@ def test_the_listing_reads_title_and_description_from_the_frontmatter(
     skill_file.parent.mkdir(parents=True)
     skill_file.write_text("# Just a body\n")
 
-    by_name: dict[str, SkillSummary] = {summary.name: summary for summary in catalog.list_skills().skills}
+    by_name = _skills_by_name(catalog)
 
     assert by_name["assist"].title == "assist"
     assert by_name["assist"].description == "The template's assist."
@@ -161,6 +165,6 @@ def test_a_broken_link_in_an_edited_skill_s_folder_does_not_stop_the_listing(
     for path in (skill_directory / "gone.md", skill_directory / "SKILL.md", skill_directory):
         os.utime(path, (1_800_000_000, 1_800_000_000), follow_symlinks=False)
 
-    by_name: dict[str, SkillSummary] = {summary.name: summary for summary in catalog.list_skills().skills}
+    by_name = _skills_by_name(catalog)
 
     assert by_name["assist"].last_updated_at == datetime.fromtimestamp(1_800_000_000, tz=UTC)
