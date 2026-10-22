@@ -32,7 +32,13 @@ the Instructions heading sends
 page; the sidebar's + drafts "Help me make or find a new skill online that "
 into the chat on screen, and a skill's "Try it" drafts `/<name> ` (the syntax
 the empty pane's note explains), both unsent for the user to finish
-(`shell:draft-text`: the chat on screen, else the most recent, else a new one). The page
+(`shell:draft-text`: the chat on screen, else the most recent, else a new one). A skill that is
+the workspace's own (made here, or installed) also has a trash button, which
+drafts a request to remove it into the chat -- for an installed one, with its
+`npx skills remove <name> -y` command, which also drops its lock entry -- so
+sending it is the confirmation; the skills that come with Studio have none,
+since Studio starts some of them itself and a removed one would clash with its
+next update. The page
 rereads the list every 10 seconds and whenever its window takes focus or is
 shown again, redrawing only what changed, so a skill made or edited elsewhere
 (a chat beside it, Files) appears without a reload.

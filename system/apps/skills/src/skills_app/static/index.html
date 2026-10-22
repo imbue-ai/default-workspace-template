@@ -249,6 +249,7 @@
     folder: '<path d="M5.34 3.72C7.32 3.67 8.61 3.72 9.46 3.81C10.45 3.91 10.97 4.43 11.54 5.28C12.11 6.13 12.44 6.56 13.34 6.61C15.22 6.7 17.72 6.51 19.66 6.61C21.27 6.7 22.09 7.93 21.99 9.49C21.85 12.04 21.47 15.26 21.04 17.77C20.76 19.38 19.77 20.18 17.97 20.23C13.81 20.32 8.37 20.32 4.72 20.18C2.97 20.09 2.23 19.52 2.11 17.77C1.79 13.39 2.26 9.21 2.5 6.56C2.64 4.71 3.54 3.77 5.34 3.72Z"/>',
     edit: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/>',
     plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+    trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
     "external-link": '<path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6"/>',
     "chevron-down": '<path d="m6 9 6 6 6-6"/>',
     search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
@@ -527,15 +528,18 @@
     editButton.addEventListener("click", () => shell.sendMessage(EDIT_FILE_MESSAGE, { path: skillFile }));
     const useButton = element("button", { type: "button", class: "text-button", title: `Put ${skillCommand(summary.name)} in the chat, to send when ready`, text: "Try it" });
     useButton.addEventListener("click", () => shell.draftText(`${skillCommand(summary.name)} `));
+    const remove = removeButton(summary);
     reader.replaceChildren(
       element("article", {}, [
         element("a", { class: "back", href: "/", text: "All skills" }),
         element("header", { class: "skill-head" }, [
           element("h1", { text: summary.title }),
-          // The green action last, as the sidebar's + after its folder.
+          // The green action last, as the sidebar's + after its folder; removing sits between, quiet, so it is not the
+          // button a hurried click lands on.
           element("div", { class: "actions" }, [
             withIcon(element("a", { class: "icon-button", href: fileUrl(detail.directory), title: "Open this skill's folder in Files", "aria-label": "Open this skill's folder in Files" }), "folder"),
             // The agents' own procedures are read here, not started by hand.
+            ...(remove ? [remove] : []),
             ...(isForPeople(summary) ? [useButton] : []),
           ]),
         ]),
@@ -586,6 +590,20 @@
   }
 
   // The results' last row: what was searched for, made by the agent instead, in the chat's green.
+  // Only skills that are the workspace's own -- made here, or installed -- can be removed: Studio itself starts some of
+  // the ones it ships (the chat sends /handoff-summary), and a removed one would clash with Studio's next update.
+  // Removing goes through the chat, which the person confirms by sending: the agent removes an installed skill with
+  // the skills CLI, which also drops its lock entry, and can bring either kind back from the workspace's history.
+  function removeButton(summary) {
+    if (summary.source !== "WORKSPACE" && summary.source !== "INSTALLED") return null;
+    const button = withIcon(element("button", { type: "button", class: "icon-button", title: "Remove this skill (asks your agent, to send when ready)", "aria-label": "Remove this skill" }), "trash");
+    const request = summary.source === "INSTALLED"
+      ? `Remove the ${summary.name} skill from this workspace (installed from ${summary.install_source?.source ?? "elsewhere"}): \`npx skills remove ${summary.name} -y\``
+      : `Remove the ${summary.name} skill from this workspace.`;
+    button.addEventListener("click", () => shell.draftText(request));
+    return button;
+  }
+
   function makeRow(query) {
     const row = element("button", { type: "button", class: "make-row", title: "Put the request in the chat, to send when ready" }, [element("span", { text: `Make “${query}” with your agent` })]);
     row.insertAdjacentHTML("afterbegin", iconSvg("edit"));
