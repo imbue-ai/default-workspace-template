@@ -19,7 +19,6 @@ from flask import send_file
 from flask.typing import ResponseReturnValue
 from loguru import logger
 from pydantic import Field
-from workspace_layout.answers import ClientView
 from workspace_layout.answers import ContextAnswer
 from workspace_layout.answers import DesktopOpAnswer
 from workspace_layout.answers import DesktopsListing
@@ -403,14 +402,6 @@ def _shown_window_ids(desktop: Desktop, layout: DesktopLayout) -> tuple[WindowId
 @pure
 def _with_active_desktop(record: ClientRecord, active: DesktopId | None) -> ClientRecord:
     return record.model_copy_update(to_update(record.field_ref().active_desktop, active))
-
-
-@pure
-def resolved_client_view(record: ClientRecord, is_connected: bool, desktops: Sequence[Desktop]) -> ClientView:
-    """The ``client`` object of desktop contracts.md section 5.5 with its desktop settled by the rule of section 4.3:
-    the stored one when a desktop of that id exists, else the first desktop (a stored id nothing holds any more,
-    or a view a version-1 clients file recorded, never reaches a reader)."""
-    return client_view(_with_active_desktop(record, resolve_active_desktop(record, desktops)), is_connected)
 
 
 @pure
