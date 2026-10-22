@@ -6,6 +6,13 @@ from pathlib import Path
 
 import pytest
 
+from share_grants.agent_grants import AUTHORIZED_KEYS_MARKER
+from share_grants.agent_grants import AgentGrantsError
+from share_grants.agent_grants import INVITE_MAX_FAILED_ATTEMPTS
+from share_grants.agent_grants import find_grant_by_token
+from share_grants.agent_grants import load_agent_grants
+from share_grants.agent_grants import load_agent_invites
+
 from share_gateway.agent_access import AgentAccessPaths
 from share_gateway.agent_access import JoinRefusedError
 from share_gateway.agent_access import LastSeenStore
@@ -18,12 +25,6 @@ from share_gateway.agent_access import mint_invite
 from share_gateway.agent_access import reconcile
 from share_gateway.agent_access import revoke
 from share_gateway.agent_access import visible_grants
-from share_grants.agent_grants import AUTHORIZED_KEYS_MARKER
-from share_grants.agent_grants import AgentGrantsError
-from share_grants.agent_grants import INVITE_MAX_FAILED_ATTEMPTS
-from share_grants.agent_grants import find_grant_by_token
-from share_grants.agent_grants import load_agent_grants
-from share_grants.agent_grants import load_agent_invites
 from share_gateway.testing import new_ed25519_public_key_line
 
 _NOW = datetime(2026, 10, 15, 18, 0, tzinfo=timezone.utc)

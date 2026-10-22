@@ -12,10 +12,11 @@ from flask import Flask
 from flask.testing import FlaskClient
 from werkzeug.test import TestResponse
 
+from share_grants.agent_grants import load_agent_grants
+
 from share_gateway.agent_access import AgentAccessPaths
 from share_gateway.agent_access import LastSeenStore
 from share_gateway.agent_access import mint_invite
-from share_grants.agent_grants import load_agent_grants
 from share_gateway.agent_orientation import HELPER_PATH
 from share_gateway.agent_orientation import helper_source_url
 from share_gateway.agent_orientation import template_ref
