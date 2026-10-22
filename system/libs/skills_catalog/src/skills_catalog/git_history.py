@@ -6,6 +6,7 @@ from typing import Final
 
 from loguru import logger
 from pydantic import Field
+from pydantic import PrivateAttr
 
 from skills_catalog.data_types import SkillsHistory
 from skills_catalog.errors import GitHistoryError
@@ -24,17 +25,17 @@ class GitSkillHistoryReader(SkillHistoryReaderInterface):
     """Reads the skills directory's history with the git command, once per HEAD."""
 
     repo_root: Path = Field(frozen=True, description="The workspace checkout")
-    cached_head: str | None = Field(default=None, description="The HEAD the cached history was read at")
-    cached_history: SkillsHistory | None = Field(default=None, description="The history read at cached_head")
+    # The HEAD the history was read at, with that history: one pair, replaced whole, since requests run on threads.
+    _cached: tuple[str, SkillsHistory] | None = PrivateAttr(default=None)
 
     def read_history(self) -> SkillsHistory:
         head = self._run_git(("rev-parse", "HEAD")).strip()
-        if self.cached_history is not None and self.cached_head == head:
-            return self.cached_history
+        cached = self._cached
+        if cached is not None and cached[0] == head:
+            return cached[1]
         log_output = self._run_git(("log", f"--format={LOG_FORMAT}", "--name-only", head, "--", SKILLS_DIR.as_posix()))
         history = history_from_git_log(log_output)
-        self.cached_head = head
-        self.cached_history = history
+        self._cached = (head, history)
         return history
 
     def read_names_with_unsaved_changes(self) -> frozenset[str]:
