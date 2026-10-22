@@ -34,7 +34,7 @@ ChatImportState = Literal["importing", "imported", "needs_sign_in", "failed"]
 
 _INTERRUPTED_DETAIL: Final[str] = "The import stopped before it finished."
 
-# A running sync rewrites its record every ten seconds (the script's PROGRESS_INTERVAL_SECONDS), from its install on.
+# A running sync rewrites its record every PROGRESS_INTERVAL_SECONDS (the script's), from its install on.
 # A record that says importing but is older than this belongs to a sync that died, even if its pid now names some
 # other process, as it can after the container restarts.
 HEARTBEAT_STALE_AFTER: Final[timedelta] = timedelta(minutes=2)

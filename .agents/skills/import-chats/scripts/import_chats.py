@@ -93,7 +93,7 @@ SEARCH_FUNCTIONS = ("render_markdown", "keyword_index")
 # Cloudflare challenge both sites put in front of their APIs. datalib sends the same marker.
 _IMPERSONATE_HEADER = "X-Imbue-Impersonate: 1"
 _CHECK_TIMEOUT_SECONDS = 60.0
-# The first install downloads about 195 MB.
+# The first install downloads the whole release and its runtime.
 _INSTALL_TIMEOUT_SECONDS = 900.0
 _DATALIB_COMMAND_TIMEOUT_SECONDS = 120.0
 # Short enough that a slow count never stalls the heartbeat past the Getting Started app's staleness limit.
