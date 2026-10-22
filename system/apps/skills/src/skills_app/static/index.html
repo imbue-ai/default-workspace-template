@@ -62,8 +62,8 @@
   .resize-handle::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: var(--c-accent); opacity: 0; transition: opacity var(--dur-base); }
   .resize-handle:hover::after, .resize-handle:focus-visible::after, .resize-handle.dragging::after { opacity: 1; }
   .resize-handle:focus-visible { outline: none; }
-  .clear-search { padding: 3px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); color: var(--c-text-primary); font: inherit; font-size: var(--font-size-row); cursor: pointer; }
-  .clear-search:hover { background: var(--c-fill-hover); }
+  .retry-button { padding: 3px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); color: var(--c-text-primary); font: inherit; font-size: var(--font-size-row); cursor: pointer; }
+  .retry-button:hover { background: var(--c-fill-hover); }
   /* The list's last row while searching: the way from what the workspace has to what is published online. */
   .find-online { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 8px; padding: 7px 8px; border: none; border-radius: var(--radius-sm); background: none; color: var(--c-text-secondary); font: inherit; font-size: var(--font-size-row); text-align: left; cursor: pointer; overflow-wrap: anywhere; }
   .find-online:hover { background: var(--c-fill-hover); color: var(--c-text-primary); }
@@ -623,7 +623,7 @@
       results = await fetchJson(`/api/find?q=${encodeURIComponent(query)}`);
     } catch (error) {
       if (load !== latestLoad || isRefresh) return;
-      const retry = element("button", { type: "button", class: "clear-search", text: "Try again" });
+      const retry = element("button", { type: "button", class: "retry-button", text: "Try again" });
       retry.addEventListener("click", () => loadFindResults(query, resultsNode));
       resultsNode.replaceChildren(element("p", { class: "find-status error", text: error.message }), retry, makeRow(query));
       return;
