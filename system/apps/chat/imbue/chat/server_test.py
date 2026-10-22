@@ -4121,6 +4121,32 @@ def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cance
     assert not log_path.exists()
 
 
+def test_a_visitors_send_to_a_converging_chat_is_held_prefixed_and_listed_without_the_prefix(
+    tmp_path: Path,
+) -> None:
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first, _successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING)
+
+    held = client.post(
+        f"/api/chats/{first}/message",
+        json={"message": "and this", "message_id": "m-2"},
+        headers={IDENTITY_HEADER: _VISITOR.model_dump_json(exclude_none=True)},
+    )
+    assert held.status_code == 202
+
+    # The successor is handed the prefix; the page, which draws the held send as the sender's own bubble, is not.
+    manager: AgentManager = state_of(app).agent_manager
+    record = manager._chat_record_store.read(ChatId(first))
+    assert record is not None and record.handoff is not None
+    assert [held_send.text for held_send in record.handoff.held_sends] == ["Carry on in Codex", "[from: bob] and this"]
+    listed = client.get("/api/chats").get_json()["chats"]
+    assert listed[0]["handoff"]["held_sends"] == [
+        {"message_id": "trigger-1", "text": "Carry on in Codex"},
+        {"message_id": "m-2", "text": "and this"},
+    ]
+
+
 def test_a_secret_request_notice_to_a_converging_chat_is_held_as_a_script_send(tmp_path: Path) -> None:
     app, _log_path = _recording_app(tmp_path)
     client = app.test_client()

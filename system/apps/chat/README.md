@@ -888,8 +888,9 @@ read (the backlog, the live stream, `GET /api/chats/<chat-id>/events`), each is
 stamped `author` and `author_name` from the nearest annotation whose hash matches
 its text, else from a `[from: <name>]` prefix the harness kept (a turn merged from
 several queued messages), else not at all: an unstamped turn is the owner's. The
-prefix is stripped into `display_body` so the page never shows it; the terminal
-view shows the pane as it is.
+prefix is stripped into `display_body` so the page never shows it, and a send held
+while the chat converges is listed in the snapshot's `held_sends` without it too; the
+terminal view shows the pane as it is.
 
 The page draws its own turns on the right and another person's on the left under
 their name and picture, from two routes: `GET /api/me` answers the page's own
