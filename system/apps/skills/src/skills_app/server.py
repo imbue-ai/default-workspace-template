@@ -102,7 +102,7 @@ def create_app(
         )
 
     def unreadable_history(error: GitHistoryError) -> ResponseReturnValue:
-        logger.warning("Could not read the skills' history: {}", error)
+        logger.warning("Failed to read the skills' history: {}", error)
         return error_response(f"Couldn't read where the skills came from: {error}", HTTP_INTERNAL_SERVER_ERROR)
 
     @app.get("/")
@@ -179,7 +179,7 @@ def create_app(
         try:
             matches = searcher.search(query)
         except SkillIndexUnavailableError as e:
-            logger.warning("Could not search skills.sh: {}", e)
+            logger.warning("Failed to search skills.sh: {}", e)
             return error_response(
                 "Couldn't reach skills.sh. Check the workspace's internet connection and try again.", HTTP_BAD_GATEWAY
             )

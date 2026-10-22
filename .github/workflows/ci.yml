@@ -72,9 +72,9 @@ jobs:
       - name: The vendored imbue-studio skill matches the pinned mngr commit
         run: python3 system/scripts/vendor_mngr_skill.py --check
 
-  # Every skill the template ships says it is Imbue's (metadata.author: imbue), which is how the Skills app tells it
-  # from a skill made in the workspace, and gives no audience but system, the one the app reads. The template repository's alone: a workspace repo made from it holds skills
-  # by other authors, and inherits this workflow.
+  # Every skill the template ships says it is Imbue's (metadata.author: imbue), which is how the Skills app tells
+  # it from a skill made in the workspace, and gives no audience but system, the one the app reads. The template
+  # repository's alone: a workspace repo made from it holds skills by other authors, and inherits this workflow.
   skill-authors:
     if: github.repository == 'imbue-ai/default-workspace-template'
     runs-on: ubuntu-latest

@@ -9,7 +9,6 @@
      system/libs/workspace_ui/src/base.css (this page is plain HTML with no build step, so it
      cannot import that file). Keep the two in step; everything below references only these. */
   :root {
-    --c-bg: #fafaf8;
     --c-surface: #ffffff;
     --c-surface-secondary: #f3f2ef;
     --c-text-primary: #202020;
@@ -17,7 +16,6 @@
     --c-text-faint: #8c8c8c;
     --c-border: #e4e3df;
     --c-border-faint: #efeeeb;
-    --c-border-strong: #cfcdc7;
     --c-accent: #2f6b4f;
     --c-accent-light: #e9f2ee;
     --c-danger-hover: #b62d22;
@@ -144,7 +142,7 @@
   .text-button:hover { background: var(--c-accent-light); }
   :root[data-shell] .text-button { display: inline-flex; }
   /* Each button asks the shell for something (a Files window, a chat), so it only shows once a shell frames the page. */
-  :root[data-shell] .icon-button, .icon-button.in-page { display: inline-flex; }
+  :root[data-shell] .icon-button { display: inline-flex; }
 
   .reader { overflow-y: auto; min-height: 0; }
   .reader:focus { outline: none; }

@@ -73,16 +73,16 @@ def install_sources_from_lock_text(lock_text: str, lock_file: Path) -> dict[str,
     try:
         parsed = json.loads(lock_text)
     except ValueError as e:
-        logger.warning("Ignoring the skills lock file {}, which is not JSON: {}", lock_file, e)
+        logger.warning("Ignored the skills lock file {}, which is not JSON: {}", lock_file, e)
         return {}
     skills = parsed.get("skills") if isinstance(parsed, dict) else None
     if not isinstance(skills, dict):
-        logger.warning("Ignoring the skills lock file {}, which has no skills table", lock_file)
+        logger.warning("Ignored the skills lock file {}, which has no skills table", lock_file)
         return {}
     sources: dict[str, InstallSource] = {}
     for name, entry in skills.items():
         if not isinstance(entry, dict):
-            logger.warning("Ignoring the entry for {} in {}, which is not a table", name, lock_file)
+            logger.warning("Ignored the entry for {} in {}, which is not a table", name, lock_file)
             continue
         try:
             sources[name] = InstallSource(
@@ -92,7 +92,7 @@ def install_sources_from_lock_text(lock_text: str, lock_file: Path) -> dict[str,
                 lock_file=lock_file,
             )
         except ValidationError as e:
-            logger.warning("Ignoring the entry for {} in {}: {}", name, lock_file, e)
+            logger.warning("Ignored the entry for {} in {}: {}", name, lock_file, e)
     return sources
 
 

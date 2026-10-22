@@ -110,7 +110,7 @@ class SkillsCatalog(SkillsCatalogInterface):
             try:
                 lock_text = (self.repo_root / lock_file).read_text(encoding="utf-8")
             except FileNotFoundError:
-                logger.trace("No skills lock file at {}", lock_file)
+                logger.trace("Found no skills lock file at {}", lock_file)
                 continue
             sources_by_lock_file[lock_file] = install_sources_from_lock_text(lock_text, lock_file)
         return merge_install_sources(sources_by_lock_file)

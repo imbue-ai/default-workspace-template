@@ -58,7 +58,7 @@ class GitSkillHistoryReader(SkillHistoryReaderInterface):
             raise GitHistoryError(f"git {arguments[0]} did not run in {self.repo_root}: {e}") from e
         elapsed = time.monotonic() - started_at
         if elapsed > GIT_SLOW_WARNING_SECONDS:
-            logger.warning("git {} in {} took {:.1f}s", arguments[0], self.repo_root, elapsed)
+            logger.warning("Ran git {} in {} slowly, in {:.1f}s", arguments[0], self.repo_root, elapsed)
         if completed.returncode != 0:
             detail = completed.stderr.strip()[-300:]
             raise GitHistoryError(f"git {arguments[0]} in {self.repo_root} exited {completed.returncode}: {detail}")
