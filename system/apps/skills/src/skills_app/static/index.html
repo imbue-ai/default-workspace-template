@@ -61,16 +61,18 @@
   .empty-search p { margin: 0; color: var(--c-text-secondary); overflow-wrap: anywhere; }
   .clear-search { padding: 3px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); color: var(--c-text-primary); font: inherit; font-size: var(--font-size-row); cursor: pointer; }
   .clear-search:hover { background: var(--c-fill-hover); }
-  .sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 16px 16px 10px; }
+  .sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 16px 16px 12px; }
   h1 { font-size: var(--font-size-heading); font-weight: var(--weight-semibold); line-height: 1.3; margin: 0; overflow-wrap: anywhere; }
   /* The workspace's text field (workspace_ui components/Input.ts) with a glyph inside, as Getting Started's search. */
-  .search { position: relative; margin: 0 16px 8px; }
-  .search svg { position: absolute; top: 50%; left: 12px; width: 14px; height: 14px; transform: translateY(-50%); color: var(--c-text-faint); pointer-events: none; }
-  .search input { display: block; width: 100%; -webkit-appearance: none; appearance: none; padding: 8px 12px 8px 36px; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); color: var(--c-text-primary); font: inherit; font-size: var(--font-size-body); transition: border-color var(--dur-base), box-shadow var(--dur-base); }
+  /* Compact, at the rows' size: 32px tall with 13px text, 12px clear above and below. */
+  .search { position: relative; margin: 0 16px 12px; }
+  .search svg { position: absolute; top: 50%; left: 10px; width: 14px; height: 14px; transform: translateY(-50%); color: var(--c-text-faint); pointer-events: none; }
+  .search input { display: block; width: 100%; -webkit-appearance: none; appearance: none; height: 32px; padding: 0 10px 0 32px; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); color: var(--c-text-primary); font: inherit; font-size: var(--font-size-row); transition: border-color var(--dur-base), box-shadow var(--dur-base); }
   .search input::placeholder { color: var(--c-text-faint); }
   .search input:focus-visible { border-color: var(--c-accent); }
   .skill-list { flex: 1; overflow-y: auto; padding: 0 8px 16px; }
   .skill-list h2 { margin: 8px 0 2px; font-size: inherit; }
+  .skill-list section:first-child h2 { margin-top: 0; }
   .group-toggle { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 8px; border: none; border-radius: var(--radius-sm); background: none; color: var(--c-text-secondary); font: inherit; font-size: var(--font-size-helper); font-weight: var(--weight-semibold); text-align: left; cursor: pointer; }
   .group-toggle:hover { background: var(--c-fill-hover); color: var(--c-text-primary); }
   .group-toggle svg { flex: none; width: 14px; height: 14px; margin-right: -2px; transition: transform var(--dur-base); }
@@ -101,7 +103,7 @@
   .reader { overflow-y: auto; min-height: 0; }
   .reader:focus { outline: none; }
   /* The reading column's first two rows sit level with the sidebar's: its title and buttons with the sidebar's
-     header (16px down, a 28px row), its chips with the search field (10px below, as tall as the field). */
+     header (16px down, a 28px row), its chips with the search field (12px below, as tall as the field). */
   article { max-width: 720px; margin: 0 auto; padding: 16px 32px 24px; }
   /* With no skill chosen, the pane holds one centred note. */
   .intro { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 100%; padding: 24px 32px; text-align: center; }
@@ -119,7 +121,7 @@
   /* The workspace's status badge (workspace_ui components/Badge.ts): a tinted fill and no visible outline, so a chip
      reads as a label beside the outlined buttons. One tone per source of a skill; text darkened where the tint needs it
      to stay above 4.5:1. */
-  .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; min-height: 39px; }
+  .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px; min-height: 32px; }
   .chip { display: inline-flex; align-items: center; padding: 2px 8px; border: 1px solid transparent; border-radius: 8px; background: var(--c-surface-secondary); color: var(--c-text-secondary); font-size: var(--font-size-helper); line-height: 1.4; white-space: nowrap; }
   .chip.workspace { background: var(--c-accent-light); color: var(--c-accent); }
   .chip.installed { background: color-mix(in srgb, var(--c-warning) 10%, var(--c-surface)); color: color-mix(in srgb, var(--c-warning) 80%, var(--c-text-primary)); }
