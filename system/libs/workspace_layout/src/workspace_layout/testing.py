@@ -45,6 +45,8 @@ from workspace_layout.ops import parse_op_body
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import LayoutOp
+from workspace_layout.primitives import ParticipantKey
+from workspace_layout.primitives import ParticipantKind
 from workspace_layout.primitives import ShowOutcome
 from workspace_layout.primitives import WindowId
 from workspace_layout.primitives import WindowPath
@@ -54,6 +56,8 @@ from workspace_layout.records import DesktopShortcut
 from workspace_layout.records import DesktopView
 from workspace_layout.records import WindowView
 from workspace_layout.roster import RosterDocument
+from workspace_layout.roster import RosterParticipant
+from workspace_layout.roster import participant_color
 from workspace_layout.shell_url import CLIENT_ACTIVITY_ROUTE
 from workspace_layout.shell_url import LAYOUT_OP_ROUTE
 
@@ -139,6 +143,35 @@ def fake_app(
 def empty_layout() -> DesktopLayoutView:
     """A client's layout of a desktop it never placed anything on."""
     return DesktopLayoutView(version=1, updated_at=None, placements=(), window_paths={})
+
+
+def roster_participant(
+    key: ParticipantKey,
+    *,
+    kind: ParticipantKind = ParticipantKind.PERSON,
+    display_name: str | None = None,
+    profile_picture_url: str | None = None,
+    email: str | None = None,
+    handle: str | None = None,
+    is_owner: bool = False,
+    is_connected: bool = True,
+) -> RosterParticipant:
+    """One entry of the roster a ``FakeShell`` answers: named and mentioned after the key's id part unless told
+    otherwise, coloured as the shell colours it, never seen."""
+    name = display_name if display_name is not None else str(key).split(":", 1)[-1]
+    return RosterParticipant(
+        key=key,
+        kind=kind,
+        display_name=name,
+        profile_picture_url=profile_picture_url,
+        email=email,
+        handle=handle if handle is not None else name,
+        color=participant_color(key),
+        is_owner=is_owner,
+        is_connected=is_connected,
+        last_seen=None,
+        last_input_at=None,
+    )
 
 
 class FakeShell(ShellLayoutInterface):

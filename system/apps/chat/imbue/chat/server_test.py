@@ -37,9 +37,9 @@ from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import ParticipantKind
 from workspace_layout.roster import RosterDocument
-from workspace_layout.roster import RosterParticipant
 from workspace_layout.shell_url import shell_base_url
 from workspace_layout.testing import FakeShell
+from workspace_layout.testing import roster_participant
 
 from imbue.chat.accounts import INDEX_VERSION
 from imbue.chat.accounts import account_dir
@@ -5211,25 +5211,14 @@ _AGENT_PICTURE_PATH = "/api/avatars/imbue-character/icon.png?size=64"
 
 
 def _shell_with_workspace_agent(picture_url: str | None) -> FakeShell:
-    return FakeShell(
-        roster_document=RosterDocument(
-            participants=(
-                RosterParticipant(
-                    key=ParticipantKey("workspace-agent"),
-                    kind=ParticipantKind.WORKSPACE_AGENT,
-                    display_name="Atlas",
-                    profile_picture_url=picture_url,
-                    email=None,
-                    handle="agent",
-                    color="#2f6b4f",
-                    is_owner=False,
-                    is_connected=True,
-                    last_seen=None,
-                    last_input_at=None,
-                ),
-            )
-        )
+    agent = roster_participant(
+        ParticipantKey("workspace-agent"),
+        kind=ParticipantKind.WORKSPACE_AGENT,
+        display_name="Atlas",
+        handle="agent",
+        profile_picture_url=picture_url,
     )
+    return FakeShell(roster_document=RosterDocument(participants=(agent,)))
 
 
 def test_participants_are_the_shells_roster_with_the_agents_picture_on_this_origin(

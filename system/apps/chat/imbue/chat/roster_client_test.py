@@ -1,10 +1,9 @@
 from workspace_layout.errors import ShellUnreachableError
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ParticipantKey
-from workspace_layout.primitives import ParticipantKind
 from workspace_layout.roster import RosterDocument
-from workspace_layout.roster import RosterParticipant
 from workspace_layout.testing import FakeShell
+from workspace_layout.testing import roster_participant
 
 from imbue.chat.roster_client import RosterClient
 from imbue.chat.roster_client import fallback_display_name
@@ -15,18 +14,8 @@ _BOB = ParticipantKey("user:user-bob-4471")
 def _roster(*names: str) -> RosterDocument:
     return RosterDocument(
         participants=tuple(
-            RosterParticipant(
-                key=_BOB if name == "Bob" else ParticipantKey(f"user:user-{name.lower()}"),
-                kind=ParticipantKind.PERSON,
-                display_name=name,
-                profile_picture_url=None,
-                email=None,
-                handle=name,
-                color="#2f6b4f",
-                is_owner=False,
-                is_connected=True,
-                last_seen=None,
-                last_input_at=None,
+            roster_participant(
+                _BOB if name == "Bob" else ParticipantKey(f"user:user-{name.lower()}"), display_name=name
             )
             for name in names
         )
