@@ -828,12 +828,6 @@
     });
   }
 
-  // Coming back to the window after editing a skill in Files shows the edit.
-  async function refresh() {
-    await loadListing();
-    if (selectedName()) showSkill(selectedName(), { isRefresh: true });
-  }
-
   // Answers whether the listing changed. A poll that fails keeps what is showing rather than replacing it with the
   // error, the way Routines' does; the first load has nothing to keep, so it shows the error.
   let shownListing = "";
@@ -856,8 +850,8 @@
   }
 
   // A skill made, edited or removed elsewhere (a chat beside this window) shows up without a reload: the list is
-  // reread every few seconds and whenever the window takes focus, as Routines and Files do, and the skill being read
-  // is reread only when its own entry changed.
+  // reread every few seconds and whenever the window takes focus or is shown again, as Routines and Files do, and the
+  // skill being read is reread only when its own entry changed (an edit in Files moves its last update).
   async function pollListing() {
     const name = selectedName();
     const before = JSON.stringify(skills.find((skill) => skill.name === name) ?? null);
@@ -898,7 +892,7 @@
       root.dataset.shell = "";
       reportLocation();
     },
-    onShown: () => void refresh(),
+    onShown: () => void pollListing(),
   });
   installElementContextMenu({ connection: shell, handshake: () => handshake });
 
