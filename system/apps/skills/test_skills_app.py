@@ -152,6 +152,25 @@ def test_add_a_skill_says_when_skills_sh_cannot_be_reached(
     expect(page.locator("#find-results button", has_text="Try again")).to_be_visible()
 
 
+def test_a_search_still_waiting_on_skills_sh_draws_its_answer_when_the_skills_change(
+    workspace_root: Path, searcher: RecordingSkillIndexSearcher, open_skills_page: OpenPage
+) -> None:
+    searcher.is_unreachable = True
+    searcher.hold_answers()
+    page = open_skills_page("/?find=pdf", *_DESKTOP)
+    expect(page.locator("a[data-skill]")).to_have_count(2)
+    expect(page.locator(".find-status")).to_have_text("Searching skills.sh…")
+
+    # The skills change while the search waits, and the page rereads them, as it does on focus.
+    write_skill(workspace_root, "news-digest", "Summarize the news.")
+    page.evaluate("window.dispatchEvent(new Event('focus'))")
+    expect(page.locator('a[data-skill="news-digest"]')).to_have_count(1)
+    searcher.release_answers()
+
+    expect(page.locator(".find-status.error")).to_contain_text("Couldn't reach skills.sh")
+    expect(page.locator("#find-results button", has_text="Try again")).to_be_visible()
+
+
 def test_a_skill_removed_while_its_page_is_open_closes_the_page(
     workspace_root: Path, open_skills_page: OpenPage
 ) -> None:
