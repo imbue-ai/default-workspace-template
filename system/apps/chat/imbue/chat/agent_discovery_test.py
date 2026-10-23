@@ -11,6 +11,7 @@ from imbue.chat.agent_discovery import COMPACT_UNAVAILABLE_SEND_FAILURE_KIND
 from imbue.chat.agent_discovery import COMPACT_WHILE_BUSY_DETAIL
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.agent_discovery import SendFailedError
+from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_discovery import _first_failure
 from imbue.chat.agent_discovery import compact_stale_agents_if_enabled
 from imbue.chat.agent_discovery import discover_agents
@@ -256,6 +257,36 @@ def test_a_send_that_may_have_typed_at_the_known_location_is_not_sent_again(is_b
     assert (len(send_calls), discover_calls) == (1, [])
 
 
+class _KnownLocationDeliveries:
+    """A discovery that finds the agent on host-b, and a send or press that reaches it only there.
+
+    At the known location the delivery fails with ``failure_kind``, or matches nothing when it is None.
+    """
+
+    def __init__(self, failure_kind: SendFailureKind | None) -> None:
+        self.failure_kind = failure_kind
+        self.discover_calls: list[AgentId] = []
+        self.delivery_calls: list[tuple[AgentMatch, ...]] = []
+
+    def discover(self, agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
+        self.discover_calls.append(agent_id)
+        return (_make_match(host="host-b"),)
+
+    def deliver(self, matches: Sequence[AgentMatch], payload: str, ctx: MngrContext) -> MessageResult:
+        self.delivery_calls.append(tuple(matches))
+        if str(matches[0].host_name) == "host-b":
+            return MessageResult(successful_agents=[str(match.agent_id) for match in matches])
+        failures = (
+            []
+            if self.failure_kind is None
+            else [AgentSendFailure(agent_name="alpha", reason="no", kind=self.failure_kind)]
+        )
+        return MessageResult(failures=failures)
+
+    def call_counts(self) -> tuple[int, int]:
+        return len(self.delivery_calls), len(self.discover_calls)
+
+
 @pytest.mark.usefixtures("isolated_mngr_env")
 @pytest.mark.parametrize(
     ("failure_kind", "is_pressed_after_discovery"),
@@ -269,27 +300,38 @@ def test_a_press_falls_back_to_discovery_only_when_the_known_location_reached_no
     failure_kind: SendFailureKind | None, is_pressed_after_discovery: bool
 ) -> None:
     """A grok Ctrl+C mngr refused, pressed again after discovery, can cancel a turn grok started meanwhile."""
-    discover_calls: list[AgentId] = []
-    press_calls: list[tuple[AgentMatch, ...]] = []
+    deliveries = _KnownLocationDeliveries(failure_kind)
+    messenger = MngrMessenger(discover=deliveries.discover, press=deliveries.deliver)
 
-    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
-        discover_calls.append(agent_id)
-        return (_make_match(host="host-b"),)
-
-    def _press(matches: Sequence[AgentMatch], key: str, ctx: MngrContext) -> MessageResult:
-        press_calls.append(tuple(matches))
-        if str(matches[0].host_name) == "host-b":
-            return MessageResult(successful_agents=[str(match.agent_id) for match in matches])
-        failures = (
-            [] if failure_kind is None else [AgentSendFailure(agent_name="alpha", reason="no", kind=failure_kind)]
-        )
-        return MessageResult(failures=failures)
-
-    messenger = MngrMessenger(discover=_discover, press=_press)
     is_pressed = messenger.press_key_chord_to_agent(_AGENT_ID, "C-c", (_make_match(),))
 
     assert is_pressed is is_pressed_after_discovery
-    assert (len(press_calls), len(discover_calls)) == ((2, 1) if is_pressed_after_discovery else (1, 0))
+    assert deliveries.call_counts() == ((2, 1) if is_pressed_after_discovery else (1, 0))
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+@pytest.mark.parametrize(
+    ("failure_kind", "is_sent_after_discovery"),
+    [
+        pytest.param(SendFailureKind.AGENT_BUSY, False, id="busy"),
+        pytest.param(SendFailureKind.INPUT_BLOCKED, False, id="blocked"),
+        pytest.param(SendFailureKind.NOT_READY, False, id="not_ready"),
+        pytest.param(SendFailureKind.UNKNOWN, False, id="unclassified"),
+        pytest.param(SendFailureKind.AGENT_NOT_FOUND, True, id="agent_moved"),
+        pytest.param(None, True, id="nothing_matched"),
+    ],
+)
+def test_a_send_falls_back_to_discovery_only_when_the_known_location_reached_no_agent(
+    failure_kind: SendFailureKind | None, is_sent_after_discovery: bool
+) -> None:
+    """A grok send refused as busy, sent again after discovery, cost each REFUSE race a discovery and a second send."""
+    deliveries = _KnownLocationDeliveries(failure_kind)
+    messenger = MngrMessenger(discover=deliveries.discover, send=deliveries.deliver)
+
+    failure = messenger.send_to_agent(_AGENT_ID, "hi", (_make_match(),))
+
+    assert failure == (None if is_sent_after_discovery else SendFailure(reason="no", kind=str(failure_kind)))
+    assert deliveries.call_counts() == ((2, 1) if is_sent_after_discovery else (1, 0))
 
 
 @pytest.mark.usefixtures("isolated_mngr_env")
