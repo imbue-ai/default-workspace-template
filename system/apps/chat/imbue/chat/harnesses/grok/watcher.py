@@ -42,7 +42,6 @@ from imbue.chat.harnesses.grok.session_parser import THINKING_SOURCE_MARKER_TYPE
 from imbue.chat.harnesses.grok.session_parser import detail_for
 from imbue.chat.harnesses.grok.session_parser import parse_record
 from imbue.chat.harnesses.grok.session_parser import record_timestamp
-from imbue.chat.harnesses.grok.turn_state import drop_turn_state
 from imbue.chat.harnesses.grok.turn_state import is_hold_required
 from imbue.chat.harnesses.model import ModelIdentity
 from imbue.chat.harnesses.model import read_model_identity
@@ -401,7 +400,6 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
             self._flush_thread = None
         self._queue.detach(self._publish_snapshot)
         super().stop()
-        drop_turn_state(self._agent_id)
 
     def _watch_paths(self) -> tuple[Path, ...]:
         return (get_grok_home(self._agent_state_dir) / SESSIONS_DIRNAME,)

@@ -13,7 +13,6 @@ from imbue.chat.harnesses.grok.tap import GrokInterruptToComposer
 from imbue.chat.harnesses.grok.testing import make_grok_agent_info
 from imbue.chat.harnesses.grok.testing import remove_root_turn
 from imbue.chat.harnesses.grok.testing import write_root_turn
-from imbue.chat.harnesses.grok.turn_state import drop_turn_state
 from imbue.chat.harnesses.grok.watcher import GrokSessionWatcher
 from imbue.mngr.errors import AgentNotFoundError
 
@@ -91,7 +90,6 @@ def _setup(tmp_path: Path) -> tuple[AgentInfo, GrokSessionWatcher, _Grok]:
     agent_state_dir = tmp_path / "agent-grok-tap"
     agent_state_dir.mkdir()
     drop_tracker(agent_state_dir.name)
-    drop_turn_state(agent_state_dir.name)
     agent_info = make_grok_agent_info(agent_state_dir, agent_state_dir.name, "grok-tap")
     watcher = GrokSessionWatcher.build(agent_info, lambda _agent_id, _events: None)
     return agent_info, watcher, _Grok(agent_state_dir)
@@ -215,20 +213,16 @@ def test_a_restart_returns_every_message_it_took_and_one_sent_while_it_ran(
     assert watcher.get_queued_messages() == []
 
 
-def test_a_second_stop_inside_the_press_interval_does_not_press_again(tmp_path: Path) -> None:
+def test_a_second_stop_right_after_a_landed_press_presses_again_and_restarts_nothing(tmp_path: Path) -> None:
+    """mngr spaces two presses itself, so the chat never holds the second one off and leaves the stop a restart."""
     agent_info, watcher, grok = _setup(tmp_path)
     grok.begin_turn()
     _stop(agent_info, watcher, grok, grok.cancelling_press)
     grok.begin_turn()
 
-    def second_press() -> bool:
-        raise AssertionError("pressed twice inside the interval")
+    _stop(agent_info, watcher, grok, grok.cancelling_press)
 
-    stop = GrokInterruptToComposer.build(agent_info)
-    stop.turn_end_deadline_seconds = 0.0
-    stop.drain_to_composer(watcher, grok.restart, grok.settle, second_press, lambda: "", lambda: False)
-
-    assert (grok.press_count, grok.restart_count) == (1, 1)
+    assert (grok.press_count, grok.restart_count) == (2, 0)
 
 
 # The shoulder tap
@@ -245,7 +239,7 @@ def _tap(agent_info: AgentInfo, watcher: GrokSessionWatcher, press: Callable[[],
 
 
 def test_a_stop_right_after_a_refused_tap_still_has_mngr_press(tmp_path: Path) -> None:
-    """A press mngr refused reached nothing, so it does not hold the next one off and leave the stop a restart."""
+    """A press mngr refused reached nothing, so the stop's own press still cancels the turn."""
     agent_info, watcher, grok = _setup(tmp_path)
     grok.begin_turn()
     _hold(watcher, "held")

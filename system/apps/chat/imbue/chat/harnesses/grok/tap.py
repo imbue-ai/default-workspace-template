@@ -1,7 +1,7 @@
 """grok's stop and shoulder tap: one Ctrl+C through mngr, then the held queue, which the chat owns.
 
 Neither types: the flush worker is the only typist. mngr presses Ctrl+C only into a cancellable top-level turn
-whose footer shows the cancel hint and whose composer is empty, and refuses otherwise.
+whose footer shows the cancel hint and whose composer is empty, spacing two presses itself, and refuses otherwise.
 """
 
 from collections.abc import Callable
@@ -13,7 +13,6 @@ from loguru import logger
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.grok.queue_tracker import get_tracker
 from imbue.chat.harnesses.grok.turn_state import get_cancellable_turns
-from imbue.chat.harnesses.grok.turn_state import get_turn_state
 from imbue.chat.harnesses.interrupt import InterruptToComposer
 from imbue.chat.harnesses.interrupt import IsCompactionInFlight
 from imbue.chat.harnesses.interrupt import PressChord
@@ -38,22 +37,6 @@ _SEND_IN_FLIGHT: Final[str] = "send_in_flight"
 _FLUSHED: Final[str] = "flushed"
 _PRESS_REFUSED: Final[str] = "press_refused"
 _NOT_FLUSHED: Final[str] = "not_flushed"
-
-
-def _press_once(agent_info: AgentInfo, press_chord: PressChord) -> bool:
-    """One Ctrl+C through mngr, at most once per the agent's press interval; False when refused.
-
-    A press mngr refused gives its interval back.
-    """
-    turn_state = get_turn_state(agent_info.agent_state_dir.name)
-    claimed_at = turn_state.try_claim_press()
-    if claimed_at is None:
-        logger.info("grok: not pressing Ctrl+C into {} again so soon after the last press", agent_info.name)
-        return False
-    is_pressed = press_chord()
-    if not is_pressed:
-        turn_state.release_press(claimed_at)
-    return is_pressed
 
 
 def _wait_for_turns_to_end(agent_state_dir: Path, turns: frozenset[GrokRootTurn], deadline_seconds: float) -> bool:
@@ -105,7 +88,7 @@ class GrokInterruptToComposer(InterruptToComposer):
         try:
             turns = get_cancellable_turns(agent_state_dir)
             if turns:
-                is_pressed = _press_once(self._agent_info, press_chord)
+                is_pressed = press_chord()
                 if not is_pressed:
                     logger.info("grok: Ctrl+C refused for {}; waiting for its turn to end", self._agent_info.name)
                 if not _wait_for_turns_to_end(agent_state_dir, turns, self.turn_end_deadline_seconds):
@@ -172,7 +155,7 @@ class GrokAtomicShoulderTap(AtomicShoulderTap):
         if not claimed:
             return ShoulderTapOutcome(status=_SEND_IN_FLIGHT)
         try:
-            is_pressed = _press_once(self._agent_info, press_chord)
+            is_pressed = press_chord()
             deadline_seconds = (
                 self.turn_end_deadline_seconds
                 if is_pressed

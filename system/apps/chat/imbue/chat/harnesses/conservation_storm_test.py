@@ -81,8 +81,6 @@ from imbue.chat.harnesses.grok.testing import grok_update_line
 from imbue.chat.harnesses.grok.testing import make_grok_agent_info
 from imbue.chat.harnesses.grok.testing import write_live_grok_pid
 from imbue.chat.harnesses.grok.testing import write_root_turn
-from imbue.chat.harnesses.grok.turn_state import drop_turn_state as drop_grok_turn_state
-from imbue.chat.harnesses.grok.turn_state import get_turn_state as get_grok_turn_state
 from imbue.chat.harnesses.grok.watcher import GrokSessionWatcher
 from imbue.chat.harnesses.grok.watcher import GrokTranscriptLoader
 from imbue.chat.harnesses.harness_type import HarnessType
@@ -2192,9 +2190,6 @@ class _GrokChat:
         agent_id = world.dir.name
         self.agent_info = make_grok_agent_info(world.dir, agent_id, agent_id)
         drop_grok_tracker(agent_id)
-        drop_grok_turn_state(agent_id)
-        # mngr spaces two presses itself, and the world keeps that spacing on its logical clock.
-        get_grok_turn_state(agent_id).min_press_interval_seconds = 0.0
         self.turn_end_deadline_seconds = _GROK_TURN_END_DEADLINE_SECONDS
         self.tap_statuses: Counter[str] = Counter()
         self._published: list[str] = []
@@ -2238,7 +2233,6 @@ class _GrokChat:
         self.session.close()
         self.tracker.detach(self._on_published)
         drop_grok_tracker(self.agent_info.id)
-        drop_grok_turn_state(self.agent_info.id)
 
     def _build_interrupter(self, agent_info: AgentInfo) -> InterruptToComposer:
         interrupter = GrokInterruptToComposer.build(agent_info)
