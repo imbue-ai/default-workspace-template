@@ -44,8 +44,9 @@ than no entry, because the next person plans around it.
   own queue, so a grok chat holds every message itself and one flush worker on the grok watcher
   types the block only when mngr_grok's root-turn files show no top-level turn in flight (a
   pending-wake placeholder included), waking on those files as well as on the idle edge. mngr's
-  `busy_send_policy = "REFUSE"` refuses a send that races a turn start, so nothing is parked
-  inside grok, and its Ctrl+C rule presses only into a cancellable turn. delivered = grok's
+  `busy_send_policy = "REFUSE"` refuses a send that finds a turn already started, so grok parks
+  only a paste a turn starting inside mngr's send overtakes (E17), and its Ctrl+C rule presses
+  only into a cancellable turn. delivered = grok's
   session log gaining a user turn that ends with our block, or mngr confirming the submission.
   stop = one ctrl+c through mngr, then waiting for the turns it pressed into and handing back
   what we hold, also when the restart fails. tap = the same press, then the worker delivers.

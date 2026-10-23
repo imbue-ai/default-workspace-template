@@ -6,8 +6,9 @@ record time, because ``/new`` and ``--resume`` interleave them; each subagent's 
 named by its parent's ``subagent_spawned`` record and found with ``get_session_dir``, is a lane
 of its own, kept out of the main stream. :class:`GrokTranscriptLoader` is the read half, which an
 archived chat segment is read through; :class:`GrokSessionWatcher` adds the live half, reports
-the background work the transcript says has finished, and runs the flush worker: the only code that
-types into grok, sending the messages the chat holds for it once no top-level turn is in flight.
+the background work the transcript says has finished, and runs the flush worker: the only chat code
+that types into grok (mngr types a requested ``/compact`` itself), sending the messages the chat holds
+for it once no top-level turn is in flight.
 """
 
 import heapq
