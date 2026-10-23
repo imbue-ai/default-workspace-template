@@ -329,6 +329,17 @@ fi
 # a missing agy is a 127 and `set -e` fires.
 agy --version >/dev/null
 
+# Grok Build CLI (grok). install_grok.sh holds its version pin and per-arch
+# sha256s and installs it to /usr/local/bin/grok; it is reachable by both names,
+# like agy's installer above, and the smoke test is bare for the same reason.
+grok_installer_dir="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$grok_installer_dir/install_grok.sh" ]; then
+    bash "$grok_installer_dir/install_grok.sh"
+else
+    bash "$grok_installer_dir/default-workspace-template-install-grok"
+fi
+grok --version >/dev/null
+
 # Bake the pi extension packages (subagents, web access) into the image at a
 # NON-home path: the runtime volume shadows the build-time HOME, so ~/.pi cannot
 # be baked directly. `pi install` materialises npm/node_modules plus a
