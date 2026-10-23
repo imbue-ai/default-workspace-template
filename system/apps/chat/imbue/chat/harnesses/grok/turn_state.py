@@ -40,14 +40,20 @@ class GrokTurnState:
         self.min_press_interval_seconds = MIN_PRESS_INTERVAL_SECONDS
         return self
 
-    def try_claim_press(self, *, now: float | None = None) -> bool:
-        """Reserve one Ctrl+C; False when the previous one was too recent."""
+    def try_claim_press(self, *, now: float | None = None) -> float | None:
+        """Reserve one Ctrl+C and return when it was reserved; None when the previous one was too recent."""
         moment = time.monotonic() if now is None else now
         with self._lock:
             if self._last_press_at is not None and moment - self._last_press_at < self.min_press_interval_seconds:
-                return False
+                return None
             self._last_press_at = moment
-            return True
+            return moment
+
+    def release_press(self, claimed_at: float) -> None:
+        """Give back a reserved Ctrl+C that mngr refused, unless a later one was reserved since."""
+        with self._lock:
+            if self._last_press_at == claimed_at:
+                self._last_press_at = None
 
 
 _STATES: Final[dict[str, GrokTurnState]] = {}

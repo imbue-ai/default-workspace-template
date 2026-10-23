@@ -244,6 +244,17 @@ def _tap(agent_info: AgentInfo, watcher: GrokSessionWatcher, press: Callable[[],
     return outcome.status, outcome.error_detail
 
 
+def test_a_stop_right_after_a_refused_tap_still_has_mngr_press(tmp_path: Path) -> None:
+    """A press mngr refused reached nothing, so it does not hold the next one off and leave the stop a restart."""
+    agent_info, watcher, grok = _setup(tmp_path)
+    grok.begin_turn()
+    _hold(watcher, "held")
+    _tap(agent_info, watcher, grok.refused_press)
+
+    assert _stop(agent_info, watcher, grok, grok.cancelling_press) == "held"
+    assert (grok.press_count, grok.restart_count) == (2, 0)
+
+
 def test_a_tap_with_nothing_queued_presses_nothing(tmp_path: Path) -> None:
     agent_info, watcher, grok = _setup(tmp_path)
     grok.begin_turn()

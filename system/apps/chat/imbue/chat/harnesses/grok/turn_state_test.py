@@ -51,9 +51,22 @@ def test_a_pending_wake_placeholder_holds_messages_but_is_no_turn_to_cancel(tmp_
 def test_a_second_press_inside_the_interval_is_refused_and_one_after_it_allowed() -> None:
     state = GrokTurnState.build()
 
-    assert state.try_claim_press(now=100.0) is True
-    assert state.try_claim_press(now=100.0 + MIN_PRESS_INTERVAL_SECONDS / 2) is False
-    assert state.try_claim_press(now=100.0 + MIN_PRESS_INTERVAL_SECONDS) is True
+    assert state.try_claim_press(now=100.0) == 100.0
+    assert state.try_claim_press(now=100.0 + MIN_PRESS_INTERVAL_SECONDS / 2) is None
+    assert state.try_claim_press(now=100.0 + MIN_PRESS_INTERVAL_SECONDS) == 100.0 + MIN_PRESS_INTERVAL_SECONDS
+
+
+def test_a_released_press_frees_the_interval_unless_a_later_press_took_it() -> None:
+    state = GrokTurnState.build()
+    first = state.try_claim_press(now=100.0)
+    assert first is not None
+
+    state.release_press(first)
+    second = state.try_claim_press(now=100.1)
+    state.release_press(first)
+
+    assert second == 100.1
+    assert state.try_claim_press(now=100.2) is None
 
 
 def test_the_interlock_is_one_per_agent_and_shared_by_its_callers() -> None:
@@ -61,7 +74,7 @@ def test_the_interlock_is_one_per_agent_and_shared_by_its_callers() -> None:
     state = get_turn_state("agent-grok-interlock")
 
     assert get_turn_state("agent-grok-interlock") is state
-    assert state.try_claim_press(now=10.0) is True
-    assert get_turn_state("agent-grok-interlock").try_claim_press(now=10.5) is False
+    assert state.try_claim_press(now=10.0) is not None
+    assert get_turn_state("agent-grok-interlock").try_claim_press(now=10.5) is None
     drop_turn_state("agent-grok-interlock")
-    assert get_turn_state("agent-grok-interlock").try_claim_press(now=10.5) is True
+    assert get_turn_state("agent-grok-interlock").try_claim_press(now=10.5) is not None

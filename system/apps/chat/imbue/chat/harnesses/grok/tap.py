@@ -41,11 +41,19 @@ _NOT_FLUSHED: Final[str] = "not_flushed"
 
 
 def _press_once(agent_info: AgentInfo, press_chord: PressChord) -> bool:
-    """One Ctrl+C through mngr, at most once per the agent's press interval; False when refused."""
-    if not get_turn_state(agent_info.agent_state_dir.name).try_claim_press():
+    """One Ctrl+C through mngr, at most once per the agent's press interval; False when refused.
+
+    A press mngr refused gives its interval back.
+    """
+    turn_state = get_turn_state(agent_info.agent_state_dir.name)
+    claimed_at = turn_state.try_claim_press()
+    if claimed_at is None:
         logger.info("grok: not pressing Ctrl+C into {} again so soon after the last press", agent_info.name)
         return False
-    return press_chord()
+    is_pressed = press_chord()
+    if not is_pressed:
+        turn_state.release_press(claimed_at)
+    return is_pressed
 
 
 def _wait_for_turns_to_end(agent_state_dir: Path, turns: frozenset[GrokRootTurn], deadline_seconds: float) -> bool:
