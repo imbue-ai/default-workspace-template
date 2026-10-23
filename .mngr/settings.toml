@@ -470,8 +470,7 @@ append_system_prompt__extend = ["""Do not use any built-in tools related to memo
 # base type (registered by the imbue-mngr-grok plugin, installed with the mngr tool by
 # system/scripts/build_workspace.sh), so no parent_type. The grok binary is baked into the image by
 # system/scripts/install_grok.sh, the only grok version authority, so check_installation is off and
-# no `version` is set: mngr would check one by running `command`, which is the OOM band wrapper.
-# update_policy = NEVER keeps grok's own updater off. auto_allow_permissions and
+# no `version` is set. update_policy = NEVER keeps grok's own updater off. auto_allow_permissions and
 # auto_dismiss_dialogs_at_startup run the container agent unattended (the second records grok's
 # folder trust for the work dir).
 #
