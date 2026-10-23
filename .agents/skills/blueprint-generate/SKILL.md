@@ -3,6 +3,7 @@ name: blueprint-generate
 description: End the Q&A phase and generate the plan. Use after the blueprint skill has gathered enough context.
 metadata:
   author: imbue
+  audience: system
 ---
 
 ## Blueprint — Generate plan

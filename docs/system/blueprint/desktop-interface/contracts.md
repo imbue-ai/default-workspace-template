@@ -58,11 +58,12 @@ Built-in manifests:
 | `terminal-pty` | true | false | `terminal` | | none | none; `internal = true`, `program = "terminal-pty"` |
 | `files` | false | true | `files` | 20 | `{launch = "new", mode = "new"}` | `new` ("File Viewer", `/home/user/workspace/`, params `path` optional) |
 | `browser` | false | false | `browser` | 30 | `{launch = "new", mode = "focus"}` | `new` ("Browser", POST `/new`, params `url` optional) |
+| `skills` | false | true | `skills` | 48 | `{launch = "open", mode = "focus"}` | none; the shell synthesizes `open` ("Open Skills", `/`) |
 | `system-monitor` | false | true | `system-monitor` | 50 | `{launch = "open", mode = "focus"}` | none; the shell synthesizes `open` ("Open System Monitor", `/`) |
 
-The chat, terminal, browser, Getting Started, and System Monitor manifests declare `system = true`.
+The chat, terminal, browser, Getting Started, Skills, and System Monitor manifests declare `system = true`.
 The chat manifest also declares `[pin] path = "/", style = "avatar", scope = "independent", default_mode = "floating"` and `[[message_handlers]] type = "minds:focus-chat", path = "/api/focus-chat"`.
-The files manifest declares `[[message_handlers]] type = "open:file", show = "{path}?view", showing = ["{path}", "{path}/", "{path}/?view"]`, and the browser's `[[message_handlers]] type = "open:url", path = "/api/open-url"`.
+The files manifest declares `[[message_handlers]] type = "open:file", show = "{path}?view", showing = ["{path}", "{path}/", "{path}/?view"]` and `type = "edit:file", show = "{path}?edit", showing = ["{path}?edit"]`, and the browser's `[[message_handlers]] type = "open:url", path = "/api/open-url"`.
 The critical built-ins declare their `[preview]` tables (the workspace app model's contracts section 2 tabulates them): the shell boots `system-interface --preview --state-dir {copy:state}` over a copy of `data/.state/system_interface` with `MINDS_APPS_FILE = "{registry}"`; the chat `chat-app --secondary` over a copy of `data/.apps/chat` (`CHAT_DATA_DIR`), opening on `/?chat={key}`; the terminal `terminal-app --no-register` over a copy of `data/.apps/terminal` and a `{scratch}` state dir with `MINDS_APPS_FILE = "{registry}"`, booted `--with terminal-pty`; and the pty `terminal-pty --no-register` over a `{scratch}` state dir, probed at `/`. Getting Started, though not critical, declares one too, since its entry point registers itself: `getting-started --no-register --state-dir {scratch}/state`, which registers nothing and opens no first-visit window.
 
 ## 3. The registry (`data/.state/apps.toml`)

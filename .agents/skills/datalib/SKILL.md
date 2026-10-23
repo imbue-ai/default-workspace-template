@@ -2,6 +2,9 @@
 name: datalib
 description: Search and mirror the user's own personal data (chat history, Slack, email, GitHub, Notion, contacts, messages) with datalib, an UNANNOUNCED feature that is off by default. Use ONLY when the user explicitly says "datalib" -- never suggest, mention, or start it proactively, and never reach for it just because a request is about their past messages or mail.
 compatibility: Nothing of datalib is installed until this skill is first used; scripts/install_datalib.sh then downloads the binaries and datalib's own Node runtime (about 195 MB together). Needs curl and the latchkey gateway (present in a default-workspace-template agent).
+metadata:
+  author: imbue
+  audience: system
 ---
 
 # datalib

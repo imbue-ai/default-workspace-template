@@ -60,6 +60,8 @@ Provisioning and utility scripts:
   interface changes), `migrate_claude_auth.py` (one-time auth migration).
 - Boot recovery: `minds_start_services_agent.sh`, `minds_lima_autostart.sh`.
 - The changelog gate: `check_changelog_entries.py`.
+- The skill-author check: `check_skill_authors.py` (CI's `skill-authors` job, the
+  template repository only: every skill the template ships is marked as Imbue's).
 
 Cohesive machinery lives in packages instead: the routines runner and its
 cron env wrapper in `system/libs/routines/`, the Caretaker check in

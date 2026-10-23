@@ -33,6 +33,7 @@ _BUILT_IN_APP_PACKAGES = (
     "files",
     "getting_started",
     "routines",
+    "skills",
     "system_interface",
     "system_monitor",
     "terminal",
@@ -397,9 +398,8 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["terminal"].critical is True
     assert by_name["files"].critical is False
     assert by_name["browser"].critical is False
-    # The stop-when-no-windows spec, section 4.2: Files, Getting Started, Routines, and System Monitor stop
-    # once no window shows them; the browser keeps running, since agents drive its browsers with no window; and the
-    # critical ones (which the manifest refuses the field on) never stop.
+    # The stop-when-no-windows spec, section 4.2: the browser keeps running, since agents drive its browsers with no
+    # window, and the critical ones (which the manifest refuses the field on) never stop.
     assert {
         name: manifest.stop_when_no_windows for name, manifest in by_name.items()
     } == {
@@ -411,6 +411,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "browser": False,
         "getting-started": True,
         "routines": True,
+        "skills": True,
         "system-monitor": True,
     }
     # Where the minds Share tab lists each built-in: never for an internal one, under its System group for the
@@ -431,6 +432,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "browser": "system",
         "getting-started": "system",
         "routines": "app",
+        "skills": "system",
         "system-monitor": "system",
     }
     # Getting Started (launcher-and-getting-started plan section 3.6): one window is what it is for, so its shortcut
@@ -471,6 +473,22 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         (handler.type, handler.show) for handler in by_name["routines"].message_handlers
     ] == [("minds:show-routine", "/{routine_id}")]
     assert by_name["routines"].preview.env["ROUTINES_APP_PREVIEW"] == "1"
+    # Skills: one read-only window over .agents/skills, so its shortcut focuses it.
+    assert by_name["skills"].critical is False
+    assert by_name["skills"].program == "skills"
+    assert by_name["skills"].priority == "skills"
+    assert by_name["skills"].launch_paths == ()
+    assert by_name["skills"].default_shortcut is not None
+    assert by_name["skills"].default_shortcut.launch == "open"
+    assert by_name["skills"].default_shortcut.mode == "focus"
+    # Files takes a file to show and a file to edit, each as its own page.
+    assert [
+        (handler.type, handler.show, handler.showing)
+        for handler in by_name["files"].message_handlers
+    ] == [
+        ("open:file", "{path}?view", ("{path}", "{path}/", "{path}/?view")),
+        ("edit:file", "{path}?edit", ("{path}?edit",)),
+    ]
     # One order for the built-ins: the desktop seeds its shortcuts in it and the launcher lists its apps in it.
     assert sorted(
         (manifest.launcher_rank, manifest.name)
@@ -483,6 +501,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         (30, "browser"),
         (40, "terminal"),
         (45, "routines"),
+        (48, "skills"),
         (50, "system-monitor"),
     ]
     # Every seeded shortcut opens a new window of its app; the one browser is focused instead

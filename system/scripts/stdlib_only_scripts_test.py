@@ -21,6 +21,7 @@ _SCRIPTS_DIR = Path(__file__).parent
 
 _SCRIPTS_RUN_WITH_SYSTEM_PYTHON = (
     "background_tasks.py",
+    "check_skill_authors.py",
     "claude_background_task_hooks.py",
     "collect_bug_report_diagnostics.py",
     "forward_port.py",

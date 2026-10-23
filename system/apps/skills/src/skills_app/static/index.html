@@ -1,0 +1,978 @@
+<!doctype html>
+<html lang="en" data-view="list">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skills</title>
+<style>
+  /* The workspace's design tokens, copied by name and value from
+     system/libs/workspace_ui/src/base.css (this page is plain HTML with no build step, so it
+     cannot import that file). Keep the two in step; everything below references only these. */
+  :root {
+    --c-surface: #ffffff;
+    --c-surface-secondary: #f3f2ef;
+    --c-text-primary: #202020;
+    --c-text-secondary: #666666;
+    --c-text-faint: #8c8c8c;
+    --c-border: #e4e3df;
+    --c-border-faint: #efeeeb;
+    --c-accent: #2f6b4f;
+    --c-accent-light: #e9f2ee;
+    --c-danger-hover: #b62d22;
+    --c-warning: #b45309;
+    --c-stop-button: #64748b;
+    --c-stop-button-hover: #475569;
+    --c-fill-hover: rgb(0 0 0 / 0.07);
+    --font-size-heading: 18px;
+    --font-size-body: 14px;
+    --font-size-row: 13px;
+    --font-size-helper: 12px;
+    --weight-regular: 400;
+    --weight-semibold: 600;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --font-mono: "SF Mono", "Cascadia Code", ui-monospace, monospace;
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --dur-base: 120ms;
+    --dur-slow: 240ms;
+  }
+  /* Type: only the workspace's scale, one size per role. The sidebar is navigation and sets its rows at the row
+     size; the reading pane is content and sets it at the body size, as the chat does. Weight and colour, not size,
+     part the levels within each, and nothing in a skill's instructions outranks its title. */
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  /* The reading pane's scrollbar is the chat's (apps/chat transcript-scrollbar): out of sight until the pane scrolls,
+     or the pointer nears its right edge, then fading away again. The sidebar's stays in sight, quietly, since in a
+     list where you are matters; it darkens the same way. The thumb's colour is a registered property so it can fade. */
+  @property --scrollbar-thumb { syntax: "<color>"; inherits: true; initial-value: transparent; }
+  .skill-list, .reader { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; transition: --scrollbar-thumb var(--dur-slow) ease; }
+  .skill-list { --scrollbar-thumb: var(--c-border); }
+  .skill-list.scrollbar-shown, .reader.scrollbar-shown { --scrollbar-thumb: color-mix(in srgb, var(--c-text-secondary) 55%, transparent); }
+  .instructions pre, .instructions table { scrollbar-width: thin; scrollbar-color: var(--c-border) transparent; }
+  body { margin: 0; font-family: var(--font-sans); color: var(--c-text-primary); background: var(--c-surface); font-size: var(--font-size-body); line-height: 1.5; }
+  a { color: inherit; text-decoration: none; }
+  a:focus-visible, input:focus-visible, button:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; }
+  .error { color: var(--c-danger-hover); }
+
+  .layout { display: grid; grid-template-columns: var(--sidebar-width, 300px) minmax(0, 1fr); height: 100%; }
+  .sidebar { position: relative; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--c-border); background: var(--c-surface); }
+  /* Files' sidebar edge: an invisible strip astride the border that drags the width, a double-click restoring it. */
+  .resize-handle { position: absolute; top: 0; bottom: 0; right: -4px; z-index: 1; width: 8px; cursor: col-resize; touch-action: none; }
+  /* The chat list's edge (apps/chat ChatRail.ts): an accent line shows where to drag on hover, focus and mid-drag. */
+  .resize-handle::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: var(--c-accent); opacity: 0; transition: opacity var(--dur-base); }
+  .resize-handle:hover::after, .resize-handle:focus-visible::after, .resize-handle.dragging::after { opacity: 1; }
+  .resize-handle:focus-visible { outline: none; }
+  .retry-button { padding: 3px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); color: var(--c-text-primary); font: inherit; font-size: var(--font-size-row); cursor: pointer; }
+  .retry-button:hover { background: var(--c-fill-hover); }
+  /* The list's last row while searching: the way from what the workspace has to what is published online. */
+  .find-online { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 8px; padding: 7px 8px; border: none; border-radius: var(--radius-sm); background: none; color: var(--c-text-secondary); font: inherit; font-size: var(--font-size-row); text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+  .find-online:hover { background: var(--c-fill-hover); color: var(--c-text-primary); }
+  .find-online[aria-current="page"] { background: color-mix(in srgb, var(--c-accent) 11%, var(--c-surface)); color: var(--c-text-primary); }
+  .find-online svg { flex: none; width: 14px; height: 14px; }
+  .skill-list > .find-online:first-child { margin-top: 0; }
+
+  /* Add a skill: one field, which searches skills.sh (most installed first, each against the workspace's own) and,
+     as the results' last row, offers to make what was described instead. */
+  .find-search { margin: 12px 0 0; }
+  .suggestions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 16px; color: var(--c-text-secondary); font-size: var(--font-size-row); }
+  .suggestion { padding: 3px 10px; border: 1px solid var(--c-border); border-radius: 999px; background: var(--c-surface); color: var(--c-text-primary); font: inherit; font-size: var(--font-size-row); cursor: pointer; }
+  .suggestion:hover { background: var(--c-fill-hover); }
+  .show-more { margin-top: 12px; padding: 4px 8px; border: none; border-radius: var(--radius-sm); background: none; color: var(--c-text-secondary); font: inherit; font-size: var(--font-size-row); cursor: pointer; }
+  .show-more:hover { background: var(--c-fill-hover); color: var(--c-text-primary); }
+  .find-status { margin: 20px 0 0; color: var(--c-text-secondary); }
+  .online-skills { list-style: none; margin: 16px 0 0; padding: 0; }
+  .online-skills li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--c-border-faint); }
+  .online-main { min-width: 0; }
+  /* The name is the way to the skill's page on skills.sh, marked as leaving the workspace. */
+  .online-name { display: inline-flex; align-items: center; gap: 4px; font-size: var(--font-size-body); font-weight: var(--weight-semibold); overflow-wrap: anywhere; }
+  .online-name:hover { text-decoration: underline; text-underline-offset: 2px; }
+  .online-name svg { flex: none; width: 12px; height: 12px; color: var(--c-text-secondary); }
+  .find-source { margin: 16px 0 0; font-size: var(--font-size-helper); color: var(--c-text-secondary); }
+  .find-source + .online-skills { margin-top: 4px; }
+  .online-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 2px; font-size: var(--font-size-helper); color: var(--c-text-secondary); }
+  .online-actions { display: flex; flex: none; align-items: center; gap: 8px; }
+  a.chip { cursor: pointer; }
+  .make-row { display: none; align-items: center; gap: 8px; width: 100%; margin-top: 4px; padding: 10px 0; border: none; background: none; color: var(--c-accent); font: inherit; font-size: var(--font-size-body); text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+  .make-row:hover span { text-decoration: underline; text-underline-offset: 2px; }
+  .make-row svg { flex: none; width: 14px; height: 14px; }
+  /* Making goes through the chat, so it is only offered where a shell can hand it there. */
+  :root[data-shell] .make-row { display: flex; }
+  /* The sidebar's right-hand line: 8px in, or the width of a scrollbar that takes room in the list (the page measures
+     it into --sidebar-scrollbar), so the header's buttons, the search field and the rows' highlight all end on it. */
+  .sidebar { --sidebar-right: max(8px, var(--sidebar-scrollbar, 0px)); }
+  .sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 16px var(--sidebar-right) 12px 16px; }
+  h1 { font-size: var(--font-size-heading); font-weight: var(--weight-semibold); line-height: 1.3; margin: 0; overflow-wrap: anywhere; }
+  /* The workspace's text field (workspace_ui components/Input.ts) with a glyph inside, as Getting Started's search. */
+  /* Compact, at the rows' size. Its box sits on the same line as the rows' highlight; its glyph on the same line as
+     the text. */
+  .search { position: relative; }
+  .sidebar .search { margin: 0 var(--sidebar-right) 12px 8px; }
+  .search svg { position: absolute; top: 50%; left: 8px; width: 14px; height: 14px; transform: translateY(-50%); color: var(--c-text-faint); pointer-events: none; }
+  .search input { display: block; width: 100%; -webkit-appearance: none; appearance: none; height: 32px; padding: 0 10px 0 30px; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); color: var(--c-text-primary); font: inherit; font-size: var(--font-size-row); transition: border-color var(--dur-base), box-shadow var(--dur-base); }
+  .search input::placeholder { color: var(--c-text-faint); }
+  .search input:focus-visible { border-color: var(--c-accent); }
+  .skill-list { flex: 1; overflow-y: auto; padding: 0 calc(var(--sidebar-right) - var(--sidebar-scrollbar, 0px)) 16px 8px; }
+  .skill-list h2 { margin: 8px 0 2px; font-size: inherit; }
+  .skill-list section:first-child h2 { margin-top: 0; }
+  .group-toggle { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 8px; border: none; border-radius: var(--radius-sm); background: none; color: var(--c-text-secondary); font: inherit; font-size: var(--font-size-helper); font-weight: var(--weight-semibold); text-align: left; cursor: pointer; }
+  .group-toggle:hover { background: var(--c-fill-hover); color: var(--c-text-primary); }
+  .group-toggle svg { flex: none; width: 14px; height: 14px; margin-right: -2px; transition: transform var(--dur-base); }
+  .group-toggle[aria-expanded="false"] svg { transform: rotate(-90deg); }
+  .group-count { margin-left: auto; font-weight: var(--weight-regular); color: var(--c-text-secondary); }
+  .skill-list ul { list-style: none; margin: 0; padding: 0; }
+  .skill-list li a { display: block; padding: 7px 8px; border-radius: var(--radius-sm); transition: background-color var(--dur-base); }
+  .skill-list li a:hover { background: var(--c-fill-hover); }
+  .skill-list li a:focus-visible { outline-offset: -2px; }
+  .skill-list li a[aria-current="page"] { background: color-mix(in srgb, var(--c-accent) 11%, var(--c-surface)); }
+  .row-name { display: block; font-size: var(--font-size-row); font-weight: var(--weight-semibold); line-height: 1.4; color: var(--c-text-primary); overflow-wrap: anywhere; }
+  .row-description { display: block; margin-top: 1px; font-size: var(--font-size-helper); line-height: 1.4; color: var(--c-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .empty { color: var(--c-text-secondary); padding: 12px 8px; margin: 0; }
+
+  .actions { display: flex; flex: none; gap: 6px; }
+  .icon-button { display: none; flex: none; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); color: var(--c-text-secondary); cursor: pointer; transition: background-color var(--dur-base); }
+  .icon-button:hover { background: var(--c-fill-hover); color: var(--c-text-primary); }
+  .icon-button svg { width: 16px; height: 16px; }
+  /* Adding a skill: the header's "+ Add" and the empty pane's "Add a skill". Both only move within the page, so they
+     show without a shell. */
+  .add-button { display: inline-flex; flex: none; align-items: center; gap: 4px; height: 28px; padding: 0 10px 0 8px; border: 1px solid var(--c-accent); border-radius: var(--radius-md); background: var(--c-surface); color: var(--c-accent); font: inherit; font-size: var(--font-size-row); font-weight: var(--weight-semibold); white-space: nowrap; cursor: pointer; transition: background-color var(--dur-base); }
+  .add-button:hover, .add-button[aria-current="page"] { background: var(--c-accent-light); }
+  .add-button svg { width: 14px; height: 14px; }
+  /* Green is for what goes to a chat: a skill's Try it and a found skill's Install. */
+  .text-button { display: none; flex: none; align-items: center; height: 28px; padding: 0 10px; border: 1px solid var(--c-accent); border-radius: var(--radius-md); background: var(--c-surface); color: var(--c-accent); font: inherit; font-size: var(--font-size-row); font-weight: var(--weight-semibold); white-space: nowrap; cursor: pointer; transition: background-color var(--dur-base); }
+  .text-button:hover { background: var(--c-accent-light); }
+  :root[data-shell] .text-button { display: inline-flex; }
+  /* Each button asks the shell for something (a Files window, a chat), so it only shows once a shell frames the page. */
+  :root[data-shell] .icon-button { display: inline-flex; }
+
+  .reader { overflow-y: auto; min-height: 0; }
+  .reader:focus { outline: none; }
+  /* The reading column's first two rows sit level with the sidebar's: its title and buttons with the sidebar's
+     header, its chips with the search field. */
+  article { max-width: 720px; margin: 0 auto; padding: 16px 32px 24px; }
+  /* With no skill chosen, the pane holds one centred note. */
+  .intro { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 100%; padding: 24px 32px; text-align: center; }
+  .intro p { margin: 0; max-width: 46ch; }
+  .intro-lead + p { margin-top: 4px; }
+  .intro code { font-family: var(--font-mono); font-size: var(--font-size-helper); padding: 1px 4px; border-radius: var(--radius-sm); background: var(--c-surface-secondary); color: var(--c-text-primary); }
+  .intro-lead { font-weight: var(--weight-semibold); }
+  .intro-hint { color: var(--c-text-secondary); }
+  .intro .add-button { margin-top: 10px; }
+  .back { display: none; color: var(--c-text-secondary); font-size: var(--font-size-row); margin-bottom: 12px; }
+  .back:hover { color: var(--c-text-primary); }
+  .skill-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 28px; }
+  /* The workspace's status badge (workspace_ui components/Badge.ts): a tinted fill and no visible outline, so a chip
+     reads as a label beside the outlined buttons. One tone per source of a skill; text darkened where the tint needs it
+     to stay above 4.5:1. */
+  .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px; min-height: 32px; }
+  .chip { display: inline-flex; align-items: center; padding: 2px 8px; border: 1px solid transparent; border-radius: 8px; background: var(--c-surface-secondary); color: var(--c-text-secondary); font-size: var(--font-size-helper); line-height: 1.4; white-space: nowrap; }
+  .chip.workspace { background: var(--c-accent-light); color: var(--c-accent); }
+  .chip.installed { background: color-mix(in srgb, var(--c-warning) 10%, var(--c-surface)); color: color-mix(in srgb, var(--c-warning) 80%, var(--c-text-primary)); }
+  .chip.studio { background: color-mix(in srgb, var(--c-stop-button) 10%, var(--c-surface)); color: var(--c-stop-button-hover); }
+  /* A section heading with the button that acts on what the section shows, at its right end. */
+  .section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .icon-button.small { width: 24px; height: 24px; }
+  .icon-button.small svg { width: 14px; height: 14px; }
+  .section-heading { display: flex; align-items: baseline; gap: 6px; font-size: var(--font-size-helper); font-weight: var(--weight-semibold); color: var(--c-text-secondary); line-height: 1.3; margin: 0; }
+  .section-source { font-weight: var(--weight-regular); color: var(--c-text-secondary); }
+  .skill-section { margin-top: 20px; max-width: 68ch; font-size: var(--font-size-body); line-height: 1.55; }
+  .skill-section > p { margin: 6px 0 0; }
+  /* The summary above, the document it summarizes below: one faint rule between them, the weight of the pane border. */
+  .skill-section.instructions-section { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--c-border-faint); }
+  .instructions { margin-top: 8px; overflow-wrap: anywhere; }
+  .instructions > :first-child { margin-top: 0; }
+  .instructions h1, .instructions h2, .instructions h3, .instructions h4 { font-weight: var(--weight-semibold); line-height: 1.3; margin: 24px 0 8px; }
+  .instructions h1 { font-size: 16px; }
+  .instructions h2 { font-size: 15px; }
+  .instructions h3, .instructions h4 { font-size: var(--font-size-body); }
+  .instructions p, .instructions ul, .instructions ol, .instructions blockquote, .instructions table, .instructions pre { margin: 0 0 12px; }
+  .instructions ul, .instructions ol { padding-left: 22px; }
+  .instructions li + li { margin-top: 2px; }
+  .instructions a { color: var(--c-accent); text-decoration: underline; text-underline-offset: 2px; }
+  .instructions code { font-family: var(--font-mono); font-size: 0.88em; padding: 1px 4px; border-radius: var(--radius-sm); background: var(--c-surface-secondary); }
+  .instructions pre { padding: 10px 12px; border-radius: var(--radius-md); background: var(--c-surface-secondary); overflow-x: auto; line-height: 1.5; }
+  .instructions pre code { padding: 0; background: none; font-size: var(--font-size-helper); overflow-wrap: normal; }
+  .instructions blockquote { padding-left: 12px; border-left: 3px solid var(--c-border); color: var(--c-text-secondary); }
+  .instructions table { border-collapse: collapse; font-size: var(--font-size-row); display: block; overflow-x: auto; }
+  .instructions th, .instructions td { padding: 4px 10px 4px 0; border-bottom: 1px solid var(--c-border-faint); text-align: left; vertical-align: top; }
+  .instructions th { font-weight: var(--weight-semibold); border-bottom-color: var(--c-border); }
+  .instructions hr { border: none; border-top: 1px solid var(--c-border); margin: 20px 0; }
+
+
+  /* Too narrow for both panes: the list, or one skill with a way back to it. */
+  @media (max-width: 640px) {
+    .layout { grid-template-columns: minmax(0, 1fr); }
+    .sidebar { border-right: none; }
+    .resize-handle { display: none; }
+    :root[data-view="skill"] .sidebar, :root[data-view="list"] .reader { display: none; }
+    .back { display: inline-block; }
+    .chips { min-height: 0; }
+    article { padding: 16px; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav class="sidebar" aria-label="Skills">
+    <div class="sidebar-head">
+      <h1>Skills</h1>
+      <div class="actions">
+        <a class="icon-button" id="skills-folder" title="Open the skills folder in Files" aria-label="Open the skills folder in Files"></a>
+        <a class="add-button" id="new-skill" href="/?find=" title="Add a skill: find one online, or have your agent make it">Add</a>
+      </div>
+    </div>
+    <div class="search" id="search-field">
+      <input type="text" id="search" role="searchbox" placeholder="Search skills" aria-label="Search skills" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="skill-list" id="skill-list"><p class="empty">Loading...</p></div>
+    <div class="resize-handle" id="resize-handle" role="separator" tabindex="0" aria-orientation="vertical" aria-label="Resize sidebar" aria-valuemin="220" aria-valuemax="480"></div>
+  </nav>
+  <main class="reader" id="reader" tabindex="-1"></main>
+</div>
+<script type="module">
+  import { connectToShell } from "/_static/app_contract.js";
+  import { installElementContextMenu } from "/_static/context_menu.js";
+
+  // A skill's own text is shown through textContent, and its instructions arrive as HTML the server rendered with
+  // raw HTML escaped: a skill installed from elsewhere is content this page does not trust.
+
+  // The sidebar's groups, each with the key its folded state is kept under: the skills for people by where they came
+  // from, then the agents' own procedures (which the catalog lets only Studio's skills be).
+  const isForPeople = (skill) => skill.audience !== "SYSTEM";
+  const GROUPS = [
+    ["Made in this workspace", "WORKSPACE", (skill) => isForPeople(skill) && skill.source === "WORKSPACE"],
+    ["Installed", "INSTALLED", (skill) => isForPeople(skill) && skill.source === "INSTALLED"],
+    ["Comes with Studio", "STUDIO", (skill) => isForPeople(skill) && skill.source === "STUDIO"],
+    ["Behind the scenes", "SYSTEM", (skill) => !isForPeople(skill)],
+  ];
+  // Folded until a viewer opens it: the agents' procedures are there to read, not to start from.
+  const GROUPS_FOLDED_AT_FIRST = ["SYSTEM"];
+  // Glyphs from the workspace's icon set (system/libs/workspace_ui/src/components/icons.ts), on its 24x24 stroke frame.
+  const ICON_PATHS = {
+    folder: '<path d="M5.34 3.72C7.32 3.67 8.61 3.72 9.46 3.81C10.45 3.91 10.97 4.43 11.54 5.28C12.11 6.13 12.44 6.56 13.34 6.61C15.22 6.7 17.72 6.51 19.66 6.61C21.27 6.7 22.09 7.93 21.99 9.49C21.85 12.04 21.47 15.26 21.04 17.77C20.76 19.38 19.77 20.18 17.97 20.23C13.81 20.32 8.37 20.32 4.72 20.18C2.97 20.09 2.23 19.52 2.11 17.77C1.79 13.39 2.26 9.21 2.5 6.56C2.64 4.71 3.54 3.77 5.34 3.72Z"/>',
+    edit: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/>',
+    plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+    trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+    "external-link": '<path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6"/>',
+    "chevron-down": '<path d="m6 9 6 6 6-6"/>',
+    search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
+  };
+  // Files opens a file's ?edit page for this message (its app.toml); the shell routes it there without naming the app.
+  const EDIT_FILE_MESSAGE = "edit:file";
+  // Searches to start from on an empty Add a skill page.
+  const FIND_SUGGESTIONS = ["pdf", "design", "testing", "git", "slack", "docs"];
+  // Results shown before "Show more": the rest of the answer is mostly the long tail of rarely installed skills.
+  const FIND_RESULTS_SHOWN = 10;
+  // A pause this long in typing searches; Enter searches at once.
+  const FIND_DEBOUNCE_MS = 400;
+  // skills.sh's search needs this much to go on (the server checks it too).
+  const MIN_FIND_QUERY_LENGTH = 2;
+  const installsFormat = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
+  // A chat message that is exactly /<name> runs that skill (the template's AGENTS.md).
+  const skillCommand = (name) => `/${name}`;
+  const LIST_REFRESH_MS = 10_000;
+  // The sidebar's search survives the page loads moving between skills, in this tab only.
+  const SIDEBAR_SEARCH_KEY = "skills-sidebar-search";
+  // "+ Add" toggles Add a skill: open, it leads back to the skill (or empty pane) that was showing before; closed, it
+  // reopens Add a skill on the search last typed there. Both are kept for the tab, as the sidebar's search is.
+  const LAST_PANE_KEY = "skills-last-pane";
+  const ADD_SEARCH_KEY = "skills-add-search";
+  const root = document.documentElement;
+  const listNode = document.getElementById("skill-list");
+  const reader = document.getElementById("reader");
+  const search = document.getElementById("search");
+  const skillsFolderLink = document.getElementById("skills-folder");
+  const addButton = document.getElementById("new-skill");
+  const ADD_BUTTON_TITLE = addButton.title;
+  let skills = [];
+  let shell;
+  let latestLoad = 0;
+
+  // Per-viewer conveniences kept in this browser: the sidebar's width and which groups are folded. Storage can be
+  // missing or refuse (a private window), so every read and write is allowed to fail.
+  const SIDEBAR_WIDTH_KEY = "skills-sidebar-width";
+  const COLLAPSED_GROUPS_KEY = "skills-collapsed-groups";
+  const DEFAULT_SIDEBAR_WIDTH = 300;
+  const MIN_SIDEBAR_WIDTH = 220;
+  const MAX_SIDEBAR_WIDTH = 480;
+
+  function readStored(key) {
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  }
+
+  function writeStored(key, value) {
+    try {
+      localStorage.setItem(key, value);
+    } catch {
+      // Not kept: the page still works, it just forgets.
+    }
+  }
+
+  function readSessionStored(key) {
+    try {
+      return sessionStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  }
+
+  function writeSessionStored(key, value) {
+    try {
+      sessionStorage.setItem(key, value);
+    } catch {
+      // Not kept: the search starts empty on the next page.
+    }
+  }
+
+  function storedCollapsedGroups() {
+    try {
+      const parsed = JSON.parse(readStored(COLLAPSED_GROUPS_KEY) ?? JSON.stringify(GROUPS_FOLDED_AT_FIRST));
+      return new Set(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      return new Set();
+    }
+  }
+
+  const collapsedGroups = storedCollapsedGroups();
+
+  function element(tag, attributes = {}, children = []) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(attributes)) {
+      if (key === "text") node.textContent = value;
+      else node.setAttribute(key, value);
+    }
+    for (const child of children) node.append(child);
+    return node;
+  }
+
+  // "Build an app", "build-app" and "Build_App" all name the same skill.
+  function isSameName(heading, name) {
+    const words = (text) => text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    return words(heading) === words(name);
+  }
+
+  function iconSvg(name) {
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name]}</svg>`;
+  }
+
+  function withIcon(node, name) {
+    node.insertAdjacentHTML("afterbegin", iconSvg(name));
+    return node;
+  }
+
+  function fileUrl(path) {
+    return `file://${path.split("/").map(encodeURIComponent).join("/")}`;
+  }
+
+  function authorChip(summary) {
+    switch (summary.source) {
+      case "STUDIO":
+        return element("span", { class: "chip studio", text: "Comes with Studio" });
+      case "INSTALLED":
+        return element("span", { class: "chip installed", text: summary.install_source ? `Installed from ${summary.install_source.source}` : "Installed" });
+      default:
+        return element("span", { class: "chip workspace", text: summary.author ? `Made by ${summary.author}` : "Made in this workspace" });
+    }
+  }
+
+  function startOfDay(time) {
+    return new Date(time.getFullYear(), time.getMonth(), time.getDate()).getTime();
+  }
+
+  // How long ago, as Routines says it ("10 minutes ago"), for a week; then the date, its year only when not this one.
+  function formatAgo(iso, now = new Date()) {
+    const when = new Date(iso);
+    const minutes = Math.floor((now - when) / 60_000);
+    if (minutes < 1) return "just now";
+    if (minutes < 60) return `${minutes} min ago`;
+    const hours = Math.floor(minutes / 60);
+    const dayDelta = Math.round((startOfDay(now) - startOfDay(when)) / 86_400_000);
+    if (dayDelta === 0) return hours === 1 ? "1 hour ago" : `${hours} hours ago`;
+    if (dayDelta === 1) return "yesterday";
+    if (dayDelta < 7) return `${dayDelta} days ago`;
+    const sameYear = when.getFullYear() === now.getFullYear();
+    return when.toLocaleDateString(undefined, sameYear ? { day: "numeric", month: "short" } : { day: "numeric", month: "short", year: "numeric" });
+  }
+
+  function updatedChip(iso) {
+    return element("span", { class: "chip", "data-updated": iso, title: `Last updated ${formatWhen(iso)}`, text: `Updated ${formatAgo(iso)}` });
+  }
+
+  // Files' wording for when something changed (apps/files/frontend/src/models/format.ts), for the chip's tooltip.
+  function formatWhen(iso) {
+    const when = new Date(iso);
+    const clock = when.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    const dayDelta = Math.round((startOfDay(new Date()) - startOfDay(when)) / 86_400_000);
+    if (dayDelta === 0) return `today at ${clock}`;
+    if (dayDelta === 1) return `yesterday at ${clock}`;
+    return `${when.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })} at ${clock}`;
+  }
+
+  async function fetchJson(path) {
+    const response = await fetch(path, { cache: "no-store" });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.detail ?? body.error ?? `The workspace answered ${response.status}.`);
+    return body;
+  }
+
+  // An address with a malformed escape (/50%) names the skill by its text as typed, which no skill has.
+  function selectedName() {
+    const path = location.pathname.replace(/^\/+|\/+$/g, "");
+    try {
+      return decodeURIComponent(path);
+    } catch {
+      return path;
+    }
+  }
+
+  function reportLocation() {
+    shell?.location(location.pathname + location.search, document.title);
+  }
+
+  // The Add a skill page lives at /?find=<query>, which no skill's name can collide with.
+  function findQuery() {
+    return location.pathname === "/" ? new URLSearchParams(location.search).get("find") : null;
+  }
+
+  function findUrl(query) {
+    return `/?find=${encodeURIComponent(query)}`;
+  }
+
+  function addPageUrl() {
+    return findUrl(readSessionStored(ADD_SEARCH_KEY) ?? "");
+  }
+
+  // A skill removed since it was showing leaves nothing to go back to but the empty pane.
+  function lastPaneUrl() {
+    const name = readSessionStored(LAST_PANE_KEY) ?? "";
+    return name && skills.some((skill) => skill.name === name) ? `/${encodeURIComponent(name)}` : "/";
+  }
+
+  function renderList() {
+    const query = search.value.trim().toLowerCase();
+    const shown = skills.filter((skill) => !query || `${skill.name} ${skill.title} ${skill.description}`.toLowerCase().includes(query));
+    const sections = GROUPS.map(([heading, key, belongs]) => [heading, key, shown.filter(belongs)])
+      .filter(([, , members]) => members.length)
+      .map(([heading, key, members]) => {
+        // A search shows its matches in every group, folded or not.
+        const isExpanded = Boolean(query) || !collapsedGroups.has(key);
+        // The heading's text starts where the skills' names do; its count and chevron sit at the right end.
+        const toggle = element("button", { type: "button", class: "group-toggle", "aria-expanded": String(isExpanded) }, [
+          element("span", { text: heading }),
+          element("span", { class: "group-count", text: String(members.length) }),
+        ]);
+        toggle.insertAdjacentHTML("beforeend", iconSvg("chevron-down"));
+        toggle.addEventListener("click", () => {
+          if (collapsedGroups.has(key)) collapsedGroups.delete(key);
+          else collapsedGroups.add(key);
+          writeStored(COLLAPSED_GROUPS_KEY, JSON.stringify([...collapsedGroups]));
+          renderList();
+        });
+        const rows = members.map((skill) =>
+          element("li", {}, [
+            element("a", { href: `/${encodeURIComponent(skill.name)}`, "data-skill": skill.name }, [
+              element("span", { class: "row-name", text: skill.title }),
+              element("span", { class: "row-description", text: skill.description || "No description." }),
+            ]),
+          ]),
+        );
+        return element("section", {}, [element("h2", {}, [toggle]), ...(isExpanded ? [element("ul", {}, rows)] : [])]);
+      });
+    const trimmed = search.value.trim();
+    const findOnline = trimmed.length >= MIN_FIND_QUERY_LENGTH ? [findOnlineButton(trimmed)] : [];
+    // With nothing here matching, the way online is the list's first row.
+    const listChildren = [...sections, ...findOnline];
+    listNode.replaceChildren(...(listChildren.length ? listChildren : [element("p", { class: "empty", text: query ? "No skills match." : "No skills yet." })]));
+    markSelected();
+  }
+
+  function findOnlineButton(query) {
+    const link = element("a", { class: "find-online", href: findUrl(query), "data-find": query }, [element("span", { text: `Search online for “${query}”` })]);
+    link.insertAdjacentHTML("afterbegin", iconSvg("search"));
+    return link;
+  }
+
+  function markSelected() {
+    const name = selectedName();
+    // The open skill's row leads back to the empty pane, so clicking it closes the skill.
+    for (const link of listNode.querySelectorAll("a[data-skill]")) {
+      const isSelected = link.dataset.skill === name;
+      link.setAttribute("href", isSelected ? "/" : `/${encodeURIComponent(link.dataset.skill)}`);
+      if (isSelected) link.setAttribute("aria-current", "page");
+      else link.removeAttribute("aria-current");
+    }
+    const found = findQuery();
+    if (found !== null) {
+      addButton.setAttribute("aria-current", "page");
+      addButton.href = lastPaneUrl();
+      addButton.title = "Close Add a skill and go back";
+    } else {
+      addButton.removeAttribute("aria-current");
+      addButton.href = addPageUrl();
+      addButton.title = ADD_BUTTON_TITLE;
+    }
+    for (const button of listNode.querySelectorAll("a[data-find]")) {
+      if (button.dataset.find === found) button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
+    }
+  }
+
+  function showIntro() {
+    document.title = "Skills";
+    const usage = element("p", { class: "intro-hint" }, [
+      "Agents use them on their own. To run one yourself, type ",
+      element("code", { text: "/skill-name" }),
+      " in a chat or press Try it.",
+    ]);
+    const pick = element("p", { class: "intro-hint", text: "Pick a skill on the left to read or edit it, or add a new one: find it online, or have your agent make it." });
+    const add = withIcon(element("a", { class: "add-button", href: addPageUrl(), text: "Add a skill" }), "plus");
+    reader.replaceChildren(element("div", { class: "intro" }, [element("p", { class: "intro-lead", text: "Skills are what your agents know how to do." }), usage, pick, add]));
+    reportLocation();
+  }
+
+  // A refresh of the skill already showing keeps where the reader was scrolled to, and keeps the skill showing when it
+  // fails, as a failed poll of the list does.
+  async function showSkill(name, { isRefresh = false } = {}) {
+    const load = ++latestLoad;
+    const scrolledTo = reader.scrollTop;
+    let detail;
+    let instructions;
+    try {
+      [detail, instructions] = await Promise.all([
+        fetchJson(`/api/skills/${encodeURIComponent(name)}`),
+        fetchJson(`/api/skills/${encodeURIComponent(name)}/instructions`),
+      ]);
+    } catch (error) {
+      if (load !== latestLoad) return;
+      if (isRefresh) {
+        console.warn("[skills] could not reread the skill", error);
+        return;
+      }
+      reader.replaceChildren(element("article", {}, [element("a", { class: "back", href: "/" , text: "All skills" }), element("p", { class: "error", text: error.message })]));
+      return;
+    }
+    if (load !== latestLoad) return;
+    const summary = detail.summary;
+    document.title = `${summary.title} - Skills`;
+    const body = element("div", { class: "instructions" });
+    body.innerHTML = instructions.html;
+    // Headings that only repeat what the page already says above them: the skill's name, or the section's own label.
+    const repeated = [summary.name, summary.title, "Instructions"];
+    while (body.firstElementChild?.matches("h1, h2") && repeated.some((name) => isSameName(body.firstElementChild.textContent, name))) {
+      body.firstElementChild.remove();
+    }
+    const skillFile = `${detail.directory}/SKILL.md`;
+    const editButton = withIcon(element("button", { type: "button", class: "icon-button small", title: "Edit SKILL.md (description and instructions) in Files", "aria-label": "Edit SKILL.md in Files" }), "edit");
+    editButton.addEventListener("click", () => shell.sendMessage(EDIT_FILE_MESSAGE, { path: skillFile }));
+    const useButton = element("button", { type: "button", class: "text-button", title: `Put ${skillCommand(summary.name)} in the chat, to send when ready`, text: "Try it" });
+    useButton.addEventListener("click", () => shell.draftText(`${skillCommand(summary.name)} `));
+    const remove = removeButton(summary);
+    reader.replaceChildren(
+      element("article", {}, [
+        element("a", { class: "back", href: "/", text: "All skills" }),
+        element("header", { class: "skill-head" }, [
+          element("h1", { text: summary.title }),
+          // The green action last, as the sidebar's + after its folder; removing sits between, quiet, so it is not the
+          // button a hurried click lands on.
+          element("div", { class: "actions" }, [
+            withIcon(element("a", { class: "icon-button", href: fileUrl(detail.directory), title: "Open this skill's folder in Files", "aria-label": "Open this skill's folder in Files" }), "folder"),
+            ...(remove ? [remove] : []),
+            // The agents' own procedures are read here, not started by hand.
+            ...(isForPeople(summary) ? [useButton] : []),
+          ]),
+        ]),
+        element("div", { class: "chips" }, [authorChip(summary), updatedChip(summary.last_updated_at)]),
+        element("section", { class: "skill-section", "aria-labelledby": "description-heading" }, [
+          element("h2", { class: "section-heading", id: "description-heading", text: "Description" }),
+          element("p", { text: summary.description || "No description." }),
+        ]),
+        element("section", { class: "skill-section instructions-section", "aria-labelledby": "instructions-heading" }, [
+          element("div", { class: "section-head" }, [
+            element("h2", { class: "section-heading", id: "instructions-heading" }, [
+              "Instructions",
+              element("span", { class: "section-source", text: "from SKILL.md" }),
+            ]),
+            editButton,
+          ]),
+          body,
+        ]),
+      ]),
+    );
+    reader.scrollTop = isRefresh ? scrolledTo : 0;
+    reportLocation();
+  }
+
+  function onlineSkillRow(skill) {
+    const name = element("a", { class: "online-name", href: skill.page_url, target: "_blank", rel: "noopener", title: "What it does and its instructions, on skills.sh" }, [skill.name]);
+    name.insertAdjacentHTML("beforeend", iconSvg("external-link"));
+    let action;
+    if (skill.state === "INSTALLED") {
+      action = element("a", { class: "chip workspace", href: `/${encodeURIComponent(skill.name)}`, title: "Open it here", text: "Installed" });
+    } else if (skill.state === "NAME_TAKEN") {
+      action = element("span", { class: "chip", title: `You have a different skill called ${skill.name}, which installing this one would land on.`, text: "Name in use" });
+    } else {
+      action = element("button", { type: "button", class: "text-button", title: "Put the install request in the chat, to send when ready", text: "Install" });
+      // The agent installs it, so it can read it first: a skill is instructions it will follow.
+      action.addEventListener("click", () => shell.draftText(`Install the ${skill.name} skill from ${skill.source} into this workspace: \`${skill.install_command}\``));
+    }
+    return element("li", {}, [
+      element("div", { class: "online-main" }, [
+        name,
+        element("div", { class: "online-meta" }, [
+          element("span", { text: skill.source }),
+          element("span", { class: "chip", text: `${installsFormat.format(skill.installs)} installs` }),
+        ]),
+      ]),
+      element("div", { class: "online-actions" }, [action]),
+    ]);
+  }
+
+  // Only skills that are the workspace's own -- made here, or installed -- can be removed: Studio itself starts some of
+  // the ones it ships, and a removed one would clash with Studio's next update.
+  // Removing goes through the chat, which the person confirms by sending: the agent removes an installed skill with
+  // the skills CLI, which also drops its lock entry, and can bring either kind back from the workspace's history.
+  function removeButton(summary) {
+    if (summary.source !== "WORKSPACE" && summary.source !== "INSTALLED") return null;
+    const button = withIcon(element("button", { type: "button", class: "icon-button", title: "Remove this skill (asks your agent, to send when ready)", "aria-label": "Remove this skill" }), "trash");
+    const request = summary.source === "INSTALLED"
+      ? `Remove the ${summary.name} skill from this workspace (installed from ${summary.install_source?.source ?? "elsewhere"}): \`npx skills remove ${summary.name} -y\``
+      : `Remove the ${summary.name} skill from this workspace.`;
+    button.addEventListener("click", () => shell.draftText(request));
+    return button;
+  }
+
+  // The results' last row: what was searched for, made by the agent instead, in the chat's green.
+  function makeRow(query) {
+    const row = element("button", { type: "button", class: "make-row", title: "Put the request in the chat, to send when ready" }, [element("span", { text: `Make “${query}” with your agent` })]);
+    row.insertAdjacentHTML("afterbegin", iconSvg("edit"));
+    row.addEventListener("click", () => shell.draftText(`Help me make a new skill for: ${query}`));
+    return row;
+  }
+
+  // Fills the results under the page's search field; a poll redraws them in place, without the "Searching" note.
+  // data-answered says whether the search showing has its answer yet: a poll leaves a pending search to draw its own.
+  async function loadFindResults(query, resultsNode, { isRefresh = false } = {}) {
+    const load = ++latestLoad;
+    if (!isRefresh) {
+      resultsNode.dataset.answered = "false";
+      resultsNode.replaceChildren(element("p", { class: "find-status", text: "Searching skills.sh…" }));
+    }
+    let results;
+    try {
+      results = await fetchJson(`/api/find?q=${encodeURIComponent(query)}`);
+    } catch (error) {
+      if (load !== latestLoad || isRefresh) return;
+      const retry = element("button", { type: "button", class: "retry-button", text: "Try again" });
+      retry.addEventListener("click", () => loadFindResults(query, resultsNode));
+      resultsNode.replaceChildren(element("p", { class: "find-status error", text: error.message }), retry, makeRow(query));
+      resultsNode.dataset.answered = "true";
+      return;
+    }
+    if (load !== latestLoad) return;
+    resultsNode.dataset.answered = "true";
+    const wasExpanded = resultsNode.dataset.expanded === "true";
+    const list = element("ul", { class: "online-skills" });
+    const showRows = (count) => list.replaceChildren(...results.skills.slice(0, count).map(onlineSkillRow));
+    const parts = results.skills.length
+      ? [element("p", { class: "find-source", text: "From skills.sh, most installed first" })]
+      : [element("p", { class: "find-status", text: `Nothing on skills.sh matches “${query}”.` })];
+    if (results.skills.length) {
+      showRows(wasExpanded ? results.skills.length : FIND_RESULTS_SHOWN);
+      parts.push(list);
+      if (!wasExpanded && results.skills.length > FIND_RESULTS_SHOWN) {
+        const more = element("button", { type: "button", class: "show-more", text: `Show ${results.skills.length - FIND_RESULTS_SHOWN} more` });
+        more.addEventListener("click", () => {
+          resultsNode.dataset.expanded = "true";
+          showRows(results.skills.length);
+          more.remove();
+        });
+        parts.push(more);
+      }
+    }
+    parts.push(makeRow(query));
+    resultsNode.replaceChildren(...parts);
+  }
+
+  // Before a search: where to start. Making one is offered once there is something to make.
+  function showFindStart(resultsNode, field) {
+    resultsNode.dataset.expanded = "false";
+    const chips = FIND_SUGGESTIONS.map((suggestion) => {
+      const chip = element("button", { type: "button", class: "suggestion", text: suggestion });
+      chip.addEventListener("click", () => {
+        field.value = suggestion;
+        searchOnline(suggestion, resultsNode);
+      });
+      return chip;
+    });
+    resultsNode.replaceChildren(element("div", { class: "suggestions" }, ["Try", ...chips]));
+  }
+
+  // A search from the page itself keeps the page (and the field's focus): its address follows the field, so the
+  // window reopens on the last search, without a history entry per search.
+  function searchOnline(query, resultsNode) {
+    // A search typed just before moving to another pane must not take that pane's address.
+    if (!resultsNode.isConnected) return;
+    writeSessionStored(ADD_SEARCH_KEY, query);
+    history.replaceState(null, "", findUrl(query));
+    reportLocation();
+    markSelected();
+    resultsNode.dataset.expanded = "false";
+    loadFindResults(query, resultsNode);
+  }
+
+  function showFind(query) {
+    document.title = "Add a skill - Skills";
+    const field = element("input", { type: "text", role: "searchbox", "aria-label": "Search for a skill, or describe one to make", placeholder: "Search for a skill, or describe one to make", autocomplete: "off", spellcheck: "false" });
+    field.value = query;
+    writeSessionStored(ADD_SEARCH_KEY, query);
+    const results = element("div", { id: "find-results" });
+    let typingTimer = null;
+    field.addEventListener("input", () => {
+      clearTimeout(typingTimer);
+      writeSessionStored(ADD_SEARCH_KEY, field.value);
+      const next = field.value.trim();
+      if (!next) {
+        ++latestLoad;
+        history.replaceState(null, "", findUrl(""));
+        reportLocation();
+        markSelected();
+        showFindStart(results, field);
+        return;
+      }
+      if (next.length < MIN_FIND_QUERY_LENGTH) return;
+      typingTimer = setTimeout(() => searchOnline(next, results), FIND_DEBOUNCE_MS);
+    });
+    field.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      clearTimeout(typingTimer);
+      const next = field.value.trim();
+      if (next.length >= MIN_FIND_QUERY_LENGTH) searchOnline(next, results);
+    });
+    reader.replaceChildren(
+      element("article", {}, [
+        element("a", { class: "back", href: "/", text: "All skills" }),
+        element("header", { class: "skill-head" }, [element("h1", { text: "Add a skill" })]),
+        withIcon(element("div", { class: "search find-search", role: "search" }, [field]), "search"),
+        results,
+      ]),
+    );
+    reader.scrollTop = 0;
+    reportLocation();
+    if (query.trim().length >= MIN_FIND_QUERY_LENGTH) loadFindResults(query.trim(), results);
+    else showFindStart(results, field);
+    field.focus();
+  }
+
+  function route() {
+    ++latestLoad;
+    const name = selectedName();
+    const found = findQuery();
+    root.dataset.view = name || found !== null ? "skill" : "list";
+    if (found === null) writeSessionStored(LAST_PANE_KEY, name);
+    markSelected();
+    if (name) showSkill(name);
+    else if (found !== null) showFind(found);
+    else showIntro();
+  }
+
+  function navigateTo(path, { replace = false } = {}) {
+    if (replace || path === location.pathname + location.search) history.replaceState(null, "", path);
+    else history.pushState(null, "", path);
+    route();
+  }
+
+  // A plain click on a link to one of the page's own addresses redraws in place rather than reloading the page. Other
+  // clicks -- for a new window, to anywhere else, or on a link inside a skill's instructions -- are left to the browser
+  // and the shell connection, which opens them where the workspace does.
+  document.addEventListener("click", (event) => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const link = event.target.closest("a[href]");
+    if (!link || link.target || link.hasAttribute("download") || link.closest(".instructions")) return;
+    const url = new URL(link.href);
+    if (url.origin !== location.origin) return;
+    event.preventDefault();
+    navigateTo(url.pathname + url.search);
+  });
+  window.addEventListener("popstate", route);
+
+  // The arrow keys walk the list's links; Enter opens the one in focus.
+  listNode.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    const links = [...listNode.querySelectorAll("a[data-skill]")];
+    const next = links[links.indexOf(document.activeElement) + (event.key === "ArrowDown" ? 1 : -1)];
+    if (!next) return;
+    event.preventDefault();
+    next.focus();
+  });
+  search.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowDown") return;
+    const first = listNode.querySelector("a[data-skill]");
+    if (!first) return;
+    event.preventDefault();
+    first.focus();
+  });
+  search.value = readSessionStored(SIDEBAR_SEARCH_KEY) ?? "";
+  search.addEventListener("input", () => {
+    writeSessionStored(SIDEBAR_SEARCH_KEY, search.value);
+    renderList();
+  });
+  search.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !search.value) return;
+    event.preventDefault();
+    search.value = "";
+    writeSessionStored(SIDEBAR_SEARCH_KEY, "");
+    renderList();
+  });
+  withIcon(document.getElementById("search-field"), "search");
+
+  function setSidebarWidth(width, persist) {
+    const clamped = Math.round(Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width)));
+    root.style.setProperty("--sidebar-width", `${clamped}px`);
+    document.getElementById("resize-handle").setAttribute("aria-valuenow", String(clamped));
+    if (persist) writeStored(SIDEBAR_WIDTH_KEY, String(clamped));
+  }
+
+  const storedWidth = Number.parseFloat(readStored(SIDEBAR_WIDTH_KEY) ?? "");
+  setSidebarWidth(Number.isFinite(storedWidth) ? storedWidth : DEFAULT_SIDEBAR_WIDTH, false);
+  const resizeHandle = document.getElementById("resize-handle");
+  resizeHandle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    resizeHandle.setPointerCapture(event.pointerId);
+    resizeHandle.classList.add("dragging");
+    const startX = event.clientX;
+    const startWidth = document.querySelector(".sidebar").getBoundingClientRect().width;
+    const widthAt = (moveEvent) => startWidth + moveEvent.clientX - startX;
+    const onMove = (moveEvent) => setSidebarWidth(widthAt(moveEvent), false);
+    const onUp = (upEvent) => {
+      resizeHandle.removeEventListener("pointermove", onMove);
+      resizeHandle.removeEventListener("pointerup", onUp);
+      resizeHandle.classList.remove("dragging");
+      setSidebarWidth(widthAt(upEvent), true);
+    };
+    resizeHandle.addEventListener("pointermove", onMove);
+    resizeHandle.addEventListener("pointerup", onUp);
+  });
+  resizeHandle.addEventListener("dblclick", () => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH, true));
+  // Focused, the arrow keys move the edge, as the chat list's do.
+  const RESIZE_KEY_STEP_PX = 16;
+  resizeHandle.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const width = document.querySelector(".sidebar").getBoundingClientRect().width;
+    setSidebarWidth(width + (event.key === "ArrowRight" ? RESIZE_KEY_STEP_PX : -RESIZE_KEY_STEP_PX), true);
+  });
+
+  // Each scrolling pane shows its scrollbar while it scrolls and for a moment after (as long as the chat's), and while
+  // the pointer is over the strip where the bar is drawn.
+  // A scrollbar that takes room in the list (classic scrollbars) moves the rows' right edge in; the sidebar's other
+  // boxes follow it. An overlay scrollbar takes none.
+  function measureSidebarScrollbar() {
+    root.style.setProperty("--sidebar-scrollbar", `${listNode.offsetWidth - listNode.clientWidth}px`);
+  }
+  new ResizeObserver(measureSidebarScrollbar).observe(listNode);
+  const SCROLLBAR_SHOW_MS = 1200;
+  const SCROLLBAR_HOVER_PX = 16;
+  for (const pane of [listNode, reader]) {
+    let hideTimer = null;
+    let isPointerNearBar = false;
+    const update = () => pane.classList.toggle("scrollbar-shown", hideTimer !== null || isPointerNearBar);
+    pane.addEventListener("scroll", () => {
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => {
+        hideTimer = null;
+        update();
+      }, SCROLLBAR_SHOW_MS);
+      update();
+    }, { passive: true });
+    pane.addEventListener("pointermove", (event) => {
+      isPointerNearBar = pane.scrollHeight > pane.clientHeight && pane.getBoundingClientRect().right - event.clientX <= SCROLLBAR_HOVER_PX;
+      update();
+    });
+    pane.addEventListener("pointerleave", () => {
+      isPointerNearBar = false;
+      update();
+    });
+  }
+
+  // Answers whether the listing changed. A poll that fails keeps what is showing rather than replacing it with the
+  // error; the first load has nothing to keep, so it shows the error.
+  let shownListing = "";
+  async function loadListing({ isPoll = false } = {}) {
+    let listing;
+    try {
+      listing = await fetchJson("/api/skills");
+    } catch (error) {
+      if (isPoll && skills.length) console.warn("[skills] could not reread the skills", error);
+      else listNode.replaceChildren(element("p", { class: "empty error", text: error.message }));
+      return false;
+    }
+    const signature = JSON.stringify(listing);
+    if (signature === shownListing) return false;
+    shownListing = signature;
+    skills = listing.skills;
+    skillsFolderLink.href = fileUrl(listing.skills_directory);
+    renderList();
+    return true;
+  }
+
+  // A skill made, edited or removed elsewhere (a chat beside this window) shows up without a reload: the list is
+  // reread every few seconds and whenever the window takes focus or is shown again, and the skill being read is
+  // reread only when its own entry changed (an edit in Files moves its last update).
+  async function pollListing() {
+    const name = selectedName();
+    const before = JSON.stringify(skills.find((skill) => skill.name === name) ?? null);
+    if (!(await loadListing({ isPoll: true }))) return;
+    // The skill being read is gone (removed through the chat, or elsewhere): the pane goes back to its note, taking
+    // the gone skill's address with it, so Back does not lead to a page about nothing.
+    if (name && name === selectedName() && !skills.some((skill) => skill.name === name)) {
+      navigateTo("/", { replace: true });
+      return;
+    }
+    const found = findQuery();
+    const results = document.getElementById("find-results");
+    if (found !== null && results?.dataset.answered === "true" && found.trim().length >= MIN_FIND_QUERY_LENGTH) loadFindResults(found.trim(), results, { isRefresh: true });
+    if (name && name === selectedName() && JSON.stringify(skills.find((skill) => skill.name === name) ?? null) !== before) {
+      showSkill(name, { isRefresh: true });
+    }
+  }
+
+  function schedulePoll() {
+    setTimeout(async () => {
+      await pollListing();
+      for (const chip of reader.querySelectorAll("[data-updated]")) chip.textContent = `Updated ${formatAgo(chip.dataset.updated)}`;
+      schedulePoll();
+    }, LIST_REFRESH_MS);
+  }
+  window.addEventListener("focus", () => void pollListing());
+
+  withIcon(skillsFolderLink, "folder");
+  withIcon(addButton, "plus");
+
+  // The page connects itself rather than through a runner-injected page script: its buttons hand drafts and messages
+  // to the shell through the connection. Connected before the frame's load event, the only time the shell sends its
+  // handshake.
+  let handshake = null;
+  shell = connectToShell({
+    onHandshake: (received) => {
+      handshake = received;
+      root.dataset.shell = "";
+      reportLocation();
+    },
+    onShown: () => void pollListing(),
+    capabilities: { navigation: true, closeChord: false },
+    onNavigate: (path) => navigateTo(path, { replace: true }),
+  });
+  installElementContextMenu({ connection: shell, handshake: () => handshake });
+
+  route();
+  await loadListing();
+  listNode.querySelector('a[aria-current="page"]')?.scrollIntoView({ block: "center" });
+  schedulePoll();
+</script>
+</body>
+</html>

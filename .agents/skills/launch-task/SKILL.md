@@ -3,6 +3,7 @@ name: launch-task
 description: Create a sub-agent to perform a larger task. Use when work is large enough to warrant a separate context, involves multi-file changes, or benefits from isolation.
 metadata:
   author: imbue
+  audience: system
 ---
 
 # Launching a task
