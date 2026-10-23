@@ -2282,6 +2282,8 @@ def test_read_app_tools_skips_an_app_it_cannot_describe(tmp_path: Path, capsys) 
         ("system/apps/files/frontend/src/index.ts", set()),
         ("system/apps/routines/src/routines_app/server.py", {"routines-app"}),
         ("system/apps/routines/frontend/src/index.ts", set()),
+        ("system/apps/style_guide/src/style_guide_app/server.py", {"style-guide-app"}),
+        ("system/apps/style_guide/frontend/src/index.ts", set()),
         # A shared backend manifest is part of every app tool's closure: the
         # pinned mngr packages an app depends on, and the plugin table that
         # assigns plugins to its tool.
@@ -2386,6 +2388,7 @@ def test_plan_apply_does_not_mistake_nested_paths_for_manifests(path: str) -> No
         "system/apps/files/frontend/vite.config.ts",
         "system/apps/routines/frontend/src/views/App.ts",
         "system/apps/routines/frontend/index.html",
+        "system/apps/style_guide/frontend/src/views/StyleGuidePage.ts",
         "system/libs/workspace_ui/src/base.css",
         "system/tsconfig.base.json",
     ],
@@ -2404,6 +2407,7 @@ def test_plan_apply_counts_every_frontend_file_not_just_src(path: str) -> None:
         "system/apps/getting_started/frontend/package.json",
         "system/apps/files/frontend/package.json",
         "system/apps/routines/frontend/package.json",
+        "system/apps/style_guide/frontend/package.json",
         "system/libs/workspace_ui/package.json",
     ],
 )

@@ -1,0 +1,1 @@
+The Style Guide app's frontend joins the npm workspace (`system/package.json`, its lockfile, and the Dockerfile's manifest copies), its built bundle is ignored like the other frontends', and its program runs on port 8060 (`system/supervisord.conf.d/style-guide.conf`).

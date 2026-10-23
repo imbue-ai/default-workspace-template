@@ -43,6 +43,10 @@ Built-in apps:
   library, `system/libs/routines/`), each with its health, next run and history,
   and run-now, on/off, reschedule and fix controls. Served on port 8050 by the
   `routines-app` package; it stores nothing of its own.
+- `style_guide/` - Style Guide: the design system on one page, every colour
+  token, type role and scale and every shared control of
+  `system/libs/workspace_ui` in its variants, drawn by the library itself.
+  Served on port 8060 by the `style-guide-app` package; it stores nothing.
 - `system_monitor/` - System Monitor: how much CPU, memory and disk the
   workspace is using, on an overview and a view per resource: which chats,
   code checkers, and apps use them, the busy stretches, which programs the

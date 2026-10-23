@@ -1,0 +1,89 @@
+// @vitest-environment jsdom
+import "@imbue/workspace-ui/src/testing/dom";
+import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
+import m from "mithril";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { ICON_NAMES } from "@imbue/workspace-ui/src/components/icons";
+
+import { readDesignTokens } from "../models/tokens";
+import { BASE_CSS as baseCss } from "../testing/baseCss";
+import { BADGE_TONES, BUTTON_VARIANTS } from "./components";
+import { StyleGuidePage } from "./StyleGuidePage";
+
+afterEach(() => unmountViews());
+
+const tokens = readDesignTokens(baseCss);
+
+function mountPage(): HTMLElement {
+  return mountView(() => m(StyleGuidePage, { tokens }));
+}
+
+function click(element: Element | null): void {
+  if (element === null) throw new Error("nothing to click");
+  element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  m.redraw.sync();
+}
+
+describe("StyleGuidePage", () => {
+  it("lists every section in the contents, each linking to a section that exists", () => {
+    const root = mountPage();
+    const targets = Array.from(
+      root.querySelectorAll<HTMLElement>("[data-toc-target]"),
+      (link) => link.dataset.tocTarget,
+    );
+    expect(targets).toContain("colours");
+    expect(targets).toContain("buttons");
+    for (const target of targets) expect(root.querySelector(`#${target}`), target).not.toBeNull();
+  });
+
+  it("draws a swatch for every colour token, painted with its own value", () => {
+    const root = mountPage();
+    const colours = tokens.colourGroups.flatMap((group) => group.colours);
+    expect(root.querySelectorAll(".colour-swatch")).toHaveLength(colours.length);
+    const accent = root.querySelector<HTMLElement>("#colour-accent > div");
+    expect(accent?.style.backgroundColor).toBe("var(--c-accent)");
+    expect(root.querySelector("#colour-accent")?.textContent).toContain("bg-accent");
+  });
+
+  it("draws every icon of the shared set and every button variant and badge tone", () => {
+    const root = mountPage();
+    for (const name of ICON_NAMES) expect(root.querySelector(`#icon-${name} svg`), name).not.toBeNull();
+    for (const variant of BUTTON_VARIANTS)
+      expect(root.querySelector(`#button-${variant}.btn--${variant}`)).not.toBeNull();
+    for (const tone of BADGE_TONES) expect(root.querySelector(`#badge-${tone}.badge`)).not.toBeNull();
+  });
+
+  it("opens the menu from its trigger, with a submenu row stating its value", () => {
+    const root = mountPage();
+    click(root.querySelector("#demo-menu-trigger"));
+    const menu = document.querySelector('[data-menu-part="menu"]');
+    expect(menu).not.toBeNull();
+    expect(menu?.querySelector('[data-menu-row="model"]')?.textContent).toContain("claude-sonnet");
+    expect(menu?.querySelector('[data-menu-row="delete"]')).not.toBeNull();
+  });
+
+  it("opens each dialog and closes it again from its own button", () => {
+    const root = mountPage();
+    click(root.querySelector("#open-destroy"));
+    expect(document.querySelector(".modal-card")?.textContent).toContain("Quarterly report");
+    click(document.querySelector(".destroy-dialog-btn-cancel"));
+    expect(document.querySelector(".modal-card")).toBeNull();
+
+    click(root.querySelector("#open-modal"));
+    expect(document.querySelector(".modal-title")?.textContent).toBe("Rename project");
+  });
+
+  it("shows a toast on request", () => {
+    const root = mountPage();
+    click(root.querySelector("#show-toast"));
+    expect(document.querySelector("[data-toast]")?.textContent).toContain("the disk is full");
+  });
+
+  it("moves the segmented control's choice on a click", () => {
+    const root = mountPage();
+    click(root.querySelector('[data-segment="list"]'));
+    expect(root.querySelector('[data-segment="list"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(root.querySelector('[data-segment="grid"]')?.getAttribute("aria-checked")).toBe("false");
+  });
+});
