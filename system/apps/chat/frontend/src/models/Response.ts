@@ -206,8 +206,8 @@ export interface ToolResultEvent extends BaseTranscriptEvent {
  * `SpecialEventKind` (harnesses/events.py); the two must be kept in step, which is what
  * turns an undeclared kind into a type error here rather than an event silently dropped.
  *
- * Turn boundaries come from codex, which records them in its rollout in real time.
- * Claude's transcript has no equivalent and emits none.
+ * Turn boundaries come from the harnesses whose logs record them as they happen, such as
+ * codex's rollout. Claude's transcript has no equivalent and emits none.
  */
 export type SpecialEventKind = "turn_started" | "turn_completed" | "turn_aborted";
 
