@@ -33,7 +33,7 @@ Do NOT use it:
   the user through the chat that launched it;
 - as a progress ticker. It goes out as the turn ends, never partway
   through, and never more than once per turn;
-- for a reply posted into a chat room (`mngr message <room>`): the reply in the
+- for a reply posted into a chat room (`mngr message --start <room>`): the reply in the
   room is the notification.
 
 No hook reminds you at the end of the turn: the decision is yours as you finish, and
