@@ -105,6 +105,7 @@ from imbue.chat.server import _DEFAULT_TAIL_COUNT
 from imbue.chat.server import _agent_switch_options
 from imbue.chat.server import _open_chat_stream
 from imbue.chat.server import _revive_and_retry_send
+from imbue.chat.server import _send_room_mention
 from imbue.chat.server import _stream_events
 from imbue.chat.server import _stream_filtered_events
 from imbue.chat.server import create_application
@@ -1008,6 +1009,21 @@ def test_a_secret_request_notice_still_reaches_a_chat_whose_account_was_signed_o
         bridge.deliver_notice(agent_id, "The secret you asked for is ready.")
 
     assert messenger.sent == [(agent_id, "The secret you asked for is ready.")]
+
+
+def test_a_rooms_mention_is_refused_by_a_chat_whose_account_was_signed_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id = "agent-00000000000000000000000000000736"
+    client, messenger = _client_with_account_labeled_chat(tmp_path, monkeypatch, agent_id, "signed-out-account-8814")
+
+    with client.application.app_context():
+        refusal = _send_room_mention(
+            state_of(client.application), ChatId(agent_id), "[from: Bob in #Lounge] @agent hi", "m-1"
+        )
+
+    assert refusal is not None and "signed out" in refusal
+    assert messenger.sent == []
 
 
 def test_an_unreadable_account_index_does_not_refuse_a_chats_messages(

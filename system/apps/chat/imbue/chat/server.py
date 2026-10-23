@@ -2665,13 +2665,14 @@ ROUTE_TABLE: Final[RouteTable] = merge_route_tables(
 
 
 def _send_room_mention(state: ChatAppState, chat_id: ChatId, delivered: str, message_id: str) -> str | None:
-    """Deliver a room's mention to an agent chat through the ordinary send path; the refusal's detail, or None."""
+    """Deliver a room's mention to an agent chat through the ordinary send path; the refusal's detail, or None. A
+    person's message, so a chat whose account was signed out refuses it as it does the message route's."""
     accepted = _send_to_chat(
         state,
         chat_id,
         SendMessageRequest(message=delivered, message_id=message_id),
         message_id,
-        is_refused_on_signed_out_account=False,
+        is_refused_on_signed_out_account=True,
         delivered_text=delivered,
     )
     return accepted.answer.detail if isinstance(accepted, _SendRefused) else None
