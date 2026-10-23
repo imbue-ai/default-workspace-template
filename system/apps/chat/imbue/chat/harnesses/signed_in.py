@@ -88,8 +88,8 @@ def is_signed_in(
 ) -> SignedIn:
     """Ask the harness's own CLI whether this account folder is authenticated; a grok API key is asked of xAI.
 
-    `runner` and `fetcher` are injectable so the decision table can be exercised without five
-    CLIs on PATH and without a network round trip -- every arm below is a judgement about a
+    `runner` and `fetcher` are injectable so the decision table can be exercised without the
+    harnesses' CLIs on PATH and without a network round trip -- every arm below is a judgement about a
     command's output or a response, not about the command.
     """
     if harness is HarnessType.GROK:
