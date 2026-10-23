@@ -33,6 +33,8 @@ from imbue.chat.harnesses.auth_flows import FlowShape
 from imbue.chat.harnesses.auth_flows import FlowState
 from imbue.chat.harnesses.auth_flows import _auth_command_signatures
 from imbue.chat.harnesses.auth_flows import flow_shape
+from imbue.chat.harnesses.grok.testing import GROK_SESSION_SCOPE
+from imbue.chat.harnesses.grok.testing import write_grok_auth
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import get_method
 from imbue.chat.harnesses.registry import build_account_binding
@@ -956,8 +958,6 @@ _GROK_DEVICE_SCREEN_TO_TYPE = (
     "Waiting for authorization...\r\n"
 )
 _GROK_SIGNED_IN = "\r\x1b[K\u2713 Signed in as someone@example.test\r\n\r\n"
-# A login scope as grok writes one: keyed `<issuer>::<client id>`.
-_GROK_LOGIN_SCOPE = "https://auth.x.ai::grok-client"
 _GROK_LOGIN = {"key": "access-token", "auth_mode": "oidc", "refresh_token": "refresh-token"}
 
 
@@ -968,13 +968,14 @@ def _grok_service(
     probe: Callable[[HarnessType, Path], SignedIn] = lambda *_a: SignedIn.YES,
     xai_key_probe: Callable[[SecretStr], SignedIn] = lambda _key: SignedIn.YES,
     grok_auth_lock_wait_seconds: float | None = None,
+    spawner: Callable[..., FakePexpectProcess] | None = None,
 ) -> AuthFlowService:
     work_dir = tmp_path / "work"
     work_dir.mkdir(exist_ok=True)
     return AuthFlowService.create(
         home=tmp_path,
         work_dir=work_dir,
-        spawner=lambda *_a, **_k: process,
+        spawner=spawner or (lambda *_a, **_k: process),
         probe=probe,
         restart_bound_agents=restart_bound_agents,
         xai_key_probe=xai_key_probe,
@@ -995,25 +996,28 @@ def _start_device_reauth_over_a_pasted_key(service: AuthFlowService, tmp_path: P
     (account,) = read_index(tmp_path).accounts
     auth_path = _grok_auth_path(tmp_path, account.id)
     again = service.start("xai", "device", account_id=account.id)
-    scopes = json.loads(auth_path.read_text())
-    scopes[_GROK_LOGIN_SCOPE] = _GROK_LOGIN
-    auth_path.write_text(json.dumps(scopes))
+    write_grok_auth(auth_path.parent, {**json.loads(auth_path.read_text()), GROK_SESSION_SCOPE: _GROK_LOGIN})
     return again.flow_id, account.id, auth_path
 
 
 def _grok_session_account(tmp_path: Path) -> tuple[str, Path]:
     """A committed xAI account whose auth.json holds a session login alone, as `grok login` leaves one."""
     account_id, folder = mint_account_dir(tmp_path)
-    path = folder / "auth.json"
-    path.write_text(json.dumps({_GROK_LOGIN_SCOPE: _GROK_LOGIN}))
+    write_grok_auth(folder, {GROK_SESSION_SCOPE: _GROK_LOGIN})
     commit_account(account_id, "xai", "xAI", tmp_path)
-    return account_id, path
+    return account_id, folder / "auth.json"
+
+
+def _take_grok_lock(auth_path: Path) -> int:
+    """Take the lock grok holds while it rewrites ``auth_path``; closing the returned fd releases it."""
+    lock_fd = os.open(auth_path.with_name("auth.json.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(lock_fd, fcntl.LOCK_EX)
+    return lock_fd
 
 
 @contextlib.contextmanager
 def _grok_holds_its_lock(auth_path: Path) -> Generator[None, None, None]:
-    lock_fd = os.open(auth_path.with_name("auth.json.lock"), os.O_RDWR | os.O_CREAT, 0o600)
-    fcntl.flock(lock_fd, fcntl.LOCK_EX)
+    lock_fd = _take_grok_lock(auth_path)
     try:
         yield
     finally:
@@ -1058,13 +1062,11 @@ def test_a_grok_device_sign_in_gives_its_cli_the_browser_shim_and_relays_nothing
         Path(env["MINDS_SIGNIN_URL_FILE"]).write_text(_GROK_PAGE + "\n")
         return FakePexpectProcess([(0, _GROK_DEVICE_SCREEN)])
 
-    work_dir = tmp_path / "work"
-    work_dir.mkdir()
-    service = AuthFlowService.create(home=tmp_path, work_dir=work_dir, spawner=spawner, probe=lambda *_a: SignedIn.YES)
+    service = _grok_service(tmp_path, spawner=spawner)
 
     started = service.start("xai", "device")
 
-    assert browsers == [str(work_dir / "system" / "scripts" / "minds_browser_shim")]
+    assert browsers == [str(tmp_path / "work" / "system" / "scripts" / "minds_browser_shim")]
     assert started.relay_url is None
 
 
@@ -1141,7 +1143,7 @@ def test_a_grok_device_sign_in_takes_away_a_pasted_key_and_keeps_the_login(tmp_p
     process.exit(0)
 
     assert service.poll(flow_id).state is FlowState.OK
-    assert json.loads(auth_path.read_text()) == {_GROK_LOGIN_SCOPE: _GROK_LOGIN}
+    assert json.loads(auth_path.read_text()) == {GROK_SESSION_SCOPE: _GROK_LOGIN}
     assert restarted == [account_id]
 
 
@@ -1152,8 +1154,8 @@ def test_a_first_grok_device_sign_in_leaves_the_file_as_grok_wrote_it(tmp_path: 
     session = service._session
     assert session is not None
     auth_path = _grok_auth_path(tmp_path, session.account_id)
-    written = json.dumps({_GROK_LOGIN_SCOPE: _GROK_LOGIN})
-    auth_path.write_text(written)
+    write_grok_auth(auth_path.parent, {GROK_SESSION_SCOPE: _GROK_LOGIN})
+    written = auth_path.read_text()
     inode = auth_path.stat().st_ino
     process.print_output(_GROK_SIGNED_IN)
     process.exit(0)
@@ -1274,13 +1276,11 @@ def test_a_grok_key_waits_out_grok_s_own_write_to_the_file(service: AuthFlowServ
     service.submit_key(first.flow_id, "xai-old-key")
     (account,) = read_index(tmp_path).accounts
     path = _grok_auth_path(tmp_path, account.id)
-    lock_fd = os.open(path.with_name("auth.json.lock"), os.O_RDWR | os.O_CREAT, 0o600)
-    fcntl.flock(lock_fd, fcntl.LOCK_EX)
+    lock_fd = _take_grok_lock(path)
     read_by_grok = json.loads(path.read_text())
 
     def grok_writes_back_and_unlocks() -> None:
-        read_by_grok[_GROK_LOGIN_SCOPE] = _GROK_LOGIN
-        path.write_text(json.dumps(read_by_grok))
+        write_grok_auth(path.parent, {**read_by_grok, GROK_SESSION_SCOPE: _GROK_LOGIN})
         os.close(lock_fd)
 
     again = service.start("xai", "api_key", account_id=account.id)
