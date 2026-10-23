@@ -9,7 +9,6 @@ from pydantic import PrivateAttr
 from imbue.chat.models import ChatSnapshot
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.primitives import ChatId
-from imbue.chat.rooms import RoomSnapshot
 from imbue.imbue_common.mutable_model import MutableModel
 
 # Per-client buffer depth. Holds at most this many state-change broadcasts before
@@ -38,11 +37,6 @@ def chats_updated_message(snapshots: list[ChatSnapshot], main_chat_id: ChatId | 
         "chats": [snapshot.model_dump(mode="json") for snapshot in snapshots],
         "main_chat_id": main_chat_id,
     }
-
-
-def rooms_updated_message(rooms: list[RoomSnapshot]) -> dict[str, Any]:
-    """The ``rooms_updated`` message: every room's snapshot (``rooms.py``)."""
-    return {"type": "rooms_updated", "rooms": [snapshot.model_dump(mode="json") for snapshot in rooms]}
 
 
 def mentions_updated_message() -> dict[str, Any]:
@@ -144,10 +138,6 @@ class WebSocketBroadcaster(MutableModel):
     def broadcast_provisional_chat_created(self, provisional: ProvisionalChat) -> None:
         """Broadcast a provisional_chat_created event: a provisional chat, minted or moved to a new phase."""
         self.broadcast(provisional_chat_created_message(provisional))
-
-    def broadcast_rooms_updated(self, rooms: list[RoomSnapshot]) -> None:
-        """Broadcast a rooms_updated event: every room's snapshot."""
-        self.broadcast(rooms_updated_message(rooms))
 
     def broadcast_mentions_updated(self) -> None:
         """Broadcast a mentions_updated event: a person's pending mentions changed."""

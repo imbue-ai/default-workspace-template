@@ -32,6 +32,7 @@ from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.agent_manager import CREATE_WITHOUT_ACCOUNT_ENV
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
@@ -45,6 +46,7 @@ from imbue.chat.agent_manager import _build_chat_rename_command
 from imbue.chat.agent_manager import _chat_project_label
 from imbue.chat.agent_manager import _rename_failure_detail
 from imbue.chat.agent_manager import chat_status_for_agent
+from imbue.chat.agent_manager import create_command_env
 from imbue.chat.agent_manager import is_rebind_target
 from imbue.chat.agent_manager import launch_role_templates
 from imbue.chat.auto_open import AutoOpenLedger
@@ -116,6 +118,7 @@ from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceReport
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
+from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.state import ChatAppState
 from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
@@ -7229,3 +7232,85 @@ def test_the_sweep_callback_maps_the_agent_name_to_its_id_and_marks_the_compacti
     assert cause == CompactionCause.IDLE
     assert requested_at < time.monotonic()
     assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+
+# Rooms (the multiplayer spec, section 7.3): a chat whose agent is the room's reader.
+
+
+def test_a_rooms_create_argv_names_the_room_type_starts_it_on_boot_and_stacks_no_role_template() -> None:
+    argv = _chat_create_argv(harness=HarnessType.ROOM)
+    assert argv[argv.index("--type") + 1] == HarnessType.ROOM
+    assert "--start-on-boot" in argv and "--template" not in argv
+    assert_mngr_argv_valid(argv)
+
+
+def test_only_a_rooms_create_carries_the_no_account_mark_in_its_environment() -> None:
+    assert create_command_env(HarnessType.ROOM, {"PATH": "/bin"}) == {"PATH": "/bin", CREATE_WITHOUT_ACCOUNT_ENV: "1"}
+    assert create_command_env(HarnessType.CLAUDE, {"PATH": "/bin"}) == {"PATH": "/bin"}
+
+
+def test_a_switch_to_a_room_is_a_fresh_start_handoff_to_the_room_harness_on_no_account(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    first = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
+    try:
+        kind, phase, _block = manager.begin_switch(
+            ChatId(first), "", "", "m-1", HeldSendOrigin.CLIENT, kind=ChatKind.ROOM
+        )
+        assert (kind, phase) == (TransitionKind.HANDOFF, HandoffPhase.SUMMARIZING)
+
+        record = _wait_until_settled(store, ChatId(first))
+        assert [entry.harness for entry in record.agents] == [HarnessType.CLAUDE, HarnessType.ROOM]
+        assert (record.agents[1].account_id, record.agents[1].lane, record.agents[1].is_fresh_start) == ("", "", True)
+        (snapshot,) = manager.get_chat_snapshots()
+        assert snapshot.kind is ChatKind.ROOM and snapshot.active_agent.account_id is None
+        # The room is created on no account and asked for no summary: the chat keeps its history as segments.
+        create_line = next(line for line in argv_log.read_text().splitlines() if line.startswith("create "))
+        assert "--type room" in create_line and "--start-on-boot" in create_line and "account=" not in create_line
+        assert sent == []
+    finally:
+        manager.stop()
+
+
+def test_a_chat_that_is_a_room_already_is_not_switched_to_a_room_again(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    manager, _store, _argv_log = _handoff_manager(broadcaster, tmp_path, [])
+    room = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, room, name="Lounge", harness=HarnessType.ROOM, labels={"display_name": "Lounge"})
+    try:
+        with pytest.raises(HandoffError, match="is a room already"):
+            manager.begin_switch(ChatId(room), "", "", "m-1", HeldSendOrigin.CLIENT, kind=ChatKind.ROOM)
+        with pytest.raises(HandoffError, match="names no account"):
+            manager.begin_switch(ChatId(room), _openai_account(), "", "m-1", HeldSendOrigin.CLIENT, kind=ChatKind.ROOM)
+    finally:
+        manager.stop()
+
+
+def test_a_switch_off_a_room_takes_the_rooms_transcript_as_its_summary(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    room = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, room, name="Lounge", harness=HarnessType.ROOM, labels={"display_name": "Lounge"})
+    account = _openai_account()
+    try:
+        kind, _phase, _block = manager.begin_switch(ChatId(room), account, "Carry on", "m-1", HeldSendOrigin.CLIENT)
+        assert kind is TransitionKind.HANDOFF
+
+        record = _wait_until_settled(store, ChatId(room))
+        assert [entry.harness for entry in record.agents] == [HarnessType.ROOM, HarnessType.CODEX]
+        # Nobody was asked for a summary: the room's transcript, as the fake reader holds it, was written as one
+        # and rides the successor's prompt.
+        assert [text for _agent, text, _id in sent if text.startswith("/handoff-summary")] == []
+        summary = (tmp_path / "chats" / room / "summaries" / "1.md").read_text()
+        assert summary.startswith("[") and "the owner:" in summary
+        (prompt,) = [text for _agent, text, message_id in sent if message_id.startswith("handoff-prompt-")]
+        assert "<predecessor-summary>" in prompt and "Carry on" in prompt
+        assert "--type codex" in argv_log.read_text()
+    finally:
+        manager.stop()

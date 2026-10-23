@@ -43,8 +43,6 @@ from imbue.chat.mentions import MENTIONS_DIRNAME
 from imbue.chat.mentions import MentionStore
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.message_stamps import STAMPS_FILENAME
-from imbue.chat.rooms import ROOMS_DIRNAME
-from imbue.chat.rooms import RoomStore
 from imbue.chat.roster_client import RosterClient
 from imbue.chat.secret_requests import DEFAULT_SECRETS_DIRECTORY
 from imbue.chat.secret_requests import SECRET_REQUESTS_DIRNAME
@@ -202,7 +200,6 @@ def build_production_state(
         ),
         authors=AuthorStore(root=chat_records_root),
         roster=RosterClient(shell=shell),
-        rooms=RoomStore(root=data_dir / ROOMS_DIRNAME),
         mentions=MentionStore(root=data_dir / MENTIONS_DIRNAME),
     )
     # Eviction wiring: the state drops what an agent holds resident -- the transcript,

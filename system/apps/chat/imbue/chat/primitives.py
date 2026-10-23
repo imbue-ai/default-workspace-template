@@ -21,15 +21,9 @@ from imbue.imbue_common.pure import pure
 # report, the manifest, the desktop's open op).
 CHAT_APP_NAME: Final[AppName] = AppName("chat")
 
-# An agent id: ``agent-<32 hex>`` as mngr mints it, loosened so a test fixture's id counts too. An agent chat's
-# id has the same shape (it is its first agent's id).
+# An agent id: ``agent-<32 hex>`` as mngr mints it, loosened so a test fixture's id counts too. A chat's id has
+# the same shape (it is its first agent's id), whatever the chat's kind.
 AGENT_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^agent-[A-Za-z0-9_-]{1,120}$")
-# A room's id, as ``rooms.py`` mints it: the prefix is for people and logs, not a type (the multiplayer spec, S3).
-ROOM_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^room-[0-9a-f]{16}$")
-# Any chat's id, whatever its kind: what the places that check an id's shape before resolving it check.
-CHAT_ID_PATTERN: Final[re.Pattern[str]] = re.compile(
-    f"(?:{AGENT_ID_PATTERN.pattern.strip('^$')})|(?:{ROOM_ID_PATTERN.pattern.strip('^$')})"
-)
 
 # A subagent view's key is the chat id, the agent id, and the session id joined by dots, which
 # no agent id carries; the chat serves the view at ``/<key>``.
@@ -55,20 +49,20 @@ class ChatStatus(LowerCaseStrEnum):
 
 class ChatKind(LowerCaseStrEnum):
     """What a chat is (a wire value on its snapshot): a conversation with an agent, or a room, which is a message
-    log among the workspace's people with no agent of its own (the multiplayer spec, S3). A later kind adds a
-    value here, never a second id type."""
+    log among the workspace's people whose agent is the room's reader rather than an AI (the multiplayer spec,
+    S3). The kind follows the harness the chat's active agent runs; a later kind adds a value here, never a
+    second id type."""
 
     AGENT = auto()
     ROOM = auto()
 
 
 class ChatId(NonEmptyStr):
-    """A chat's id, whatever its kind: an agent chat's is the id of its first agent, distinct from an agent id in
-    code; a room's is minted by the room store.
+    """A chat's id: the id of its first agent, distinct from an agent id in code.
 
-    Its shape is ``CHAT_ID_PATTERN``'s. The presence route and the chat document check that
+    Its shape is ``AGENT_ID_PATTERN``'s. The presence route and the chat document check that
     shape (they accept a chat the app does not list yet); every other route resolves the id
-    through the manager or the room store and answers 404 otherwise, so an id minted by mngr or by a test
+    through the manager and answers 404 otherwise, so an id minted by mngr or by a test
     passes through unchecked.
     """
 

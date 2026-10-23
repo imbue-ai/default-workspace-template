@@ -5,8 +5,6 @@ import type { SlotState } from "./selection";
 describe("selection", () => {
   it("reads the selected chat off the query and refuses an id that cannot be a chat's", () => {
     expect(selectionFromSearch("?chat=agent-0123abc")).toBe("agent-0123abc");
-    expect(selectionFromSearch("?chat=room-0123456789abcdef")).toBe("room-0123456789abcdef");
-    expect(selectionFromSearch("?chat=room-nothex")).toBeNull();
     expect(selectionFromSearch("?chat=not%20an%20id")).toBeNull();
     expect(selectionFromSearch("")).toBeNull();
   });

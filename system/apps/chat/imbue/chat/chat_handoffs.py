@@ -58,6 +58,7 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.message_display import HANDOFF_PROMPT_LABEL
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
+from imbue.chat.harnesses.room.transcript import render_transcript
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session_watcher import TranscriptReader
 from imbue.chat.models import AgentDestroyError
@@ -603,7 +604,8 @@ class HandoffRunner:
         if handoff.is_fresh_start:
             logger.info("Handoff of chat {}: the retiring agent had no user turn, so no summary is asked for", chat_id)
             return SummaryOutcome.SKIPPED
-        retiring_id = record.agents[-1].agent_id
+        retiring = record.agents[-1]
+        retiring_id = retiring.agent_id
         agent_info = self._deps.get_agent_info(retiring_id)
         if agent_info is None:
             logger.warning(
@@ -612,6 +614,12 @@ class HandoffRunner:
             return SummaryOutcome.MISSING
         path = summary_path(self._deps.chat_files_root, chat_id, handoff.retiring_seq)
         watcher = self._deps.ensure_watcher(agent_info)
+        # A room has nobody to ask: its summary is its transcript, written here (the multiplayer spec, section 7.6).
+        if retiring.harness is HarnessType.ROOM:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(render_transcript(watcher.get_all_events()), encoding="utf-8")
+            logger.info("Handoff of chat {}: the room's transcript is its summary, at {}", chat_id, path)
+            return SummaryOutcome.WRITTEN
         # A summary already at the path is either fresh (reused) or stale; a stale one stays
         # where it is, so the wait below has to tell the file the agent writes from it.
         stale_mtime = _non_empty_mtime(path)
@@ -805,13 +813,16 @@ class HandoffRunner:
                 "Handoff of chat {}: adopting agent {} from an earlier attempt", chat_id, handoff.next_agent_id
             )
             return existing
-        try:
-            account = self._deps.resolve_account(handoff.target_account_id)
-        except AccountError as e:
-            self._fail(
-                chat_id, handoff_id, f"The account the chat was moving to is gone: {e}", HandoffFailedStep.START
-            )
-            return None
+        # A room runs on no account (the multiplayer spec, section 7.6).
+        account_id = ""
+        if handoff.target_harness is not HarnessType.ROOM:
+            try:
+                account_id = self._deps.resolve_account(handoff.target_account_id).id
+            except AccountError as e:
+                self._fail(
+                    chat_id, handoff_id, f"The account the chat was moving to is gone: {e}", HandoffFailedStep.START
+                )
+                return None
         if handoff.prompt is None and not handoff.is_fresh_start:
             raise HandoffStepError(f"the handoff of chat {chat_id} reached switching with no prompt for the successor")
         spec = SuccessorCreateSpec(
@@ -820,7 +831,7 @@ class HandoffRunner:
             agent_id=handoff.next_agent_id,
             harness=handoff.target_harness,
             project_id=handoff.project_label,
-            account_id=account.id,
+            account_id=account_id,
             extra_labels=(
                 f"chat_id={chat_id}",
                 f"chat_seq={handoff.next_seq}",
@@ -1059,8 +1070,11 @@ def deliver_held_send(
 def created_chat_agent_labels(
     display_name: str, account_id: str, project_label: str, extra_labels: Iterable[str]
 ) -> dict[str, str]:
-    """The labels a chat agent's ``mngr create`` gives it, for its tracked state before the observe stream lists it."""
-    labels = {"user_created": "true", "display_name": display_name, "account": account_id}
+    """The labels a chat agent's ``mngr create`` gives it, for its tracked state before the observe stream lists it;
+    a room, which runs on no account, carries no account label."""
+    labels = {"user_created": "true", "display_name": display_name}
+    if account_id:
+        labels["account"] = account_id
     if project_label:
         labels["project"] = project_label
     for label in extra_labels:

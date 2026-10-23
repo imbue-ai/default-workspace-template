@@ -30,7 +30,6 @@ claude_background_task_hooks = load_script_module(
     "claude_background_task_hooks_for_fixtures", "claude_background_task_hooks.py"
 )
 message_chat = load_script_module("message_chat_for_fixtures", "message_chat.py")
-chat_room = load_script_module("chat_room_for_fixtures", "chat_room.py")
 run_in_background = load_script_module(
     "run_in_background_for_fixtures", "run_in_background.py"
 )

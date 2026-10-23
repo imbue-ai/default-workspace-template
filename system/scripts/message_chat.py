@@ -242,17 +242,13 @@ def chat_app_url(environ: Mapping[str, str], cwd: Path) -> str:
     return CHAT_APP_FALLBACK_URL
 
 
-def request_json(
-    base_url: str, method: str, path: str, body: Mapping[str, object] | None = None
-) -> ChatAppAnswer:
-    """Send ``method`` ``path``, with ``body`` as JSON when given, and parse the answer.
+def post_json(base_url: str, path: str, body: Mapping[str, object]) -> ChatAppAnswer:
+    """POST ``body`` and wait for the answer, however long it takes.
 
     Raises ``ChatAppUnreachableError`` only when the connection itself cannot be made;
     anything after the connect is either an answer or an ``OSError`` /
     ``http.client.HTTPException``, which the caller treats as a failure rather than a
-    reason to back off, because the request may have been acted on. A request with a
-    body waits for its answer however long it takes; one without keeps the connect
-    timeout as its read timeout.
+    reason to back off, because the request may have been acted on.
     """
     parsed = urllib.parse.urlsplit(base_url)
     connection = http.client.HTTPConnection(
@@ -267,19 +263,20 @@ def request_json(
             f"could not connect to the chat app at {base_url}: {exc}"
         ) from exc
     try:
-        payload: bytes | None = None
-        headers: dict[str, str] = {}
-        if body is not None:
-            # The connect timeout has done its job; the send itself blocks for as long as
-            # the harness takes to accept the text.
-            if connection.sock is not None:
-                connection.sock.settimeout(None)
-            payload = json.dumps(body).encode("utf-8")
-            headers = {
+        # The connect timeout has done its job; the send itself blocks for as long as the
+        # harness takes to accept the text.
+        if connection.sock is not None:
+            connection.sock.settimeout(None)
+        payload = json.dumps(body).encode("utf-8")
+        connection.request(
+            "POST",
+            path,
+            body=payload,
+            headers={
                 "Content-Type": "application/json",
                 "Content-Length": str(len(payload)),
-            }
-        connection.request(method, path, body=payload, headers=headers)
+            },
+        )
         response = connection.getresponse()
         raw = response.read()
     finally:
@@ -289,11 +286,6 @@ def request_json(
     except ValueError:
         parsed_body = None
     return ChatAppAnswer(response.status, parsed_body)
-
-
-def post_json(base_url: str, path: str, body: Mapping[str, object]) -> ChatAppAnswer:
-    """POST ``body`` and wait for the answer, however long it takes (``request_json``)."""
-    return request_json(base_url, "POST", path, body)
 
 
 def _post_until_answered(

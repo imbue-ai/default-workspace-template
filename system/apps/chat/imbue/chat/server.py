@@ -56,7 +56,7 @@ from workspace_layout.shell_url import shell_base_url
 from imbue.chat import accounts_endpoints
 from imbue.chat import focus_chat
 from imbue.chat import latchkey_endpoints
-from imbue.chat import rooms_endpoints
+from imbue.chat import mentions_endpoints
 from imbue.chat import secret_requests_endpoints
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import account_exists
@@ -132,6 +132,8 @@ from imbue.chat.harnesses.session_watcher import TranscriptReader
 from imbue.chat.identity import request_identity
 from imbue.chat.identity import request_participant
 from imbue.chat.main_chat import MAIN_CHAT_NAME
+from imbue.chat.mentions import BackgroundMentionDeliverer
+from imbue.chat.mentions import MentionHandler
 from imbue.chat.models import AgentCreationError
 from imbue.chat.models import AgentDestroyError
 from imbue.chat.models import AgentListItem
@@ -198,7 +200,7 @@ from imbue.chat.models import parse_subagent_key
 from imbue.chat.naming import canonical_agent_name
 from imbue.chat.presence import PresenceReport
 from imbue.chat.presence import PresenceState
-from imbue.chat.primitives import CHAT_ID_PATTERN
+from imbue.chat.primitives import AGENT_ID_PATTERN
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import parse_chat_ref
@@ -206,14 +208,6 @@ from imbue.chat.request_helpers import answer_chat_app_error
 from imbue.chat.request_helpers import handle_unhandled_exception
 from imbue.chat.request_helpers import json_response
 from imbue.chat.request_helpers import require_loopback
-from imbue.chat.rooms_endpoints import BackgroundMentionDeliverer
-from imbue.chat.rooms_endpoints import MentionHandler
-from imbue.chat.rooms_endpoints import act_on_chat_mentions
-from imbue.chat.rooms_endpoints import delete_room
-from imbue.chat.rooms_endpoints import post_room_message
-from imbue.chat.rooms_endpoints import rename_room_response
-from imbue.chat.rooms_endpoints import room_events_response
-from imbue.chat.rooms_endpoints import room_of
 from imbue.chat.secret_requests import ChatLookup
 from imbue.chat.secret_requests import NoticeDeliveryError
 from imbue.chat.secret_requests import SecretRequestChatBridge
@@ -222,7 +216,6 @@ from imbue.chat.state import attach_state
 from imbue.chat.state import get_state
 from imbue.chat.ws_broadcaster import chats_updated_message
 from imbue.chat.ws_broadcaster import provisional_chat_created_message
-from imbue.chat.ws_broadcaster import rooms_updated_message
 from imbue.chat.wsgi import build_sock
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -262,9 +255,6 @@ def _chat_not_found_error(chat_id: str) -> ErrorResponse:
 
 
 def _chat_not_found_response(chat_id: str) -> Response:
-    """404 for an id that names no chat; 409 for one that names a room, which has no agent to answer with (S3)."""
-    if room_of(chat_id) is not None:
-        return error_response(f"Chat '{chat_id}' is a room: it has no agent", 409)
     return model_response(_chat_not_found_error(chat_id), 404)
 
 
@@ -364,10 +354,7 @@ def _chat_transcript(chat_id: str) -> ChatTranscript | None:
 
 
 def _get_events(chat_id: str) -> Response:
-    """Get a chat's events. Supports tail-first loading and backfill. A room's are its messages, whole."""
-    room = room_of(chat_id)
-    if room is not None:
-        return room_events_response(get_state(), room, request.args.get("after"))
+    """Get a chat's events. Supports tail-first loading and backfill."""
     transcript = _chat_transcript(chat_id)
     if transcript is None:
         return _chat_not_found_response(chat_id)
@@ -521,14 +508,11 @@ def _stream_events(chat_id: str) -> Response:
     Keyed by chat, so the stream follows the chat through a handoff: the successor's events
     and the switch chip arrive on the same connection as the retiring agent's did.
     """
-    state = get_state()
-    if room_of(chat_id) is not None:
-        # A room's messages are pushed onto the same per-chat fan-out as they are appended; nothing feeds it but that.
-        return _sse_response(state, chat_id, _open_chat_stream(state, chat_id, lambda: None), lambda _event: True)
     agent_info = _find_active_agent(chat_id)
     if agent_info is None:
         return _chat_not_found_response(chat_id)
 
+    state = get_state()
     event_queue = _open_chat_stream(state, chat_id, lambda: state.get_or_create_watcher(agent_info))
 
     return _sse_response(state, chat_id, event_queue, state.is_main_session_event)
@@ -915,9 +899,33 @@ def _attributed_delivery(
         return message
     sender = participant_key_of(identity)
     display_name = prefix_safe_name(state.roster.display_name_of(sender, identity), sender)
-    delivered = message if is_unprefixable_input(message) else author_prefix(display_name) + message
+    is_prefixed = _is_author_prefixed(chat_id) and not is_unprefixable_input(message)
+    delivered = author_prefix(display_name) + message if is_prefixed else message
     state.authors.record(chat_id, new_author_annotation(message_id, sender, display_name, delivered))
     return delivered
+
+
+def _is_author_prefixed(chat_id: ChatId) -> bool:
+    """Whether the chat's harness learns a non-owner's author from the delivered text's prefix; a room records the
+    author from the annotation instead. A chat with no agent yet reads as prefixed, like the agent it will get."""
+    agent_info = _find_active_agent(str(chat_id))
+    return agent_info is None or get_harness_spec(agent_info.harness).is_author_prefixed
+
+
+def _act_on_room_mentions(
+    state: ChatAppState, chat_id: ChatId, message_id: str, text: str, identity: RequestIdentity
+) -> None:
+    """What a send's mentions do once it was accepted (the multiplayer spec, section 7.4): in a room, people are
+    marked and the agent or a chat is sent the message; in an agent chat nothing, a handle being a word the agent
+    reads like any other. Takes the sender's ``identity`` rather than reading the request's, since an intake nobody
+    waits on is delivered on a thread of its own."""
+    handler = state.mention_handler
+    snapshot = state.agent_manager.get_chat_snapshot(str(chat_id))
+    if handler is None or snapshot is None or snapshot.kind is not ChatKind.ROOM or "@" not in text:
+        return
+    sender = participant_key_of(identity)
+    sender_name = prefix_safe_name(state.roster.display_name_of(sender, identity), sender)
+    handler.act(chat_id, snapshot.title, message_id, text, sender, sender_name)
 
 
 def _me_endpoint() -> Response:
@@ -970,10 +978,6 @@ def _send_message_endpoint(chat_id: str) -> Response:
     # a chat-app boot would route messages around the app instead of waiting for it.
     if not agent_manager.is_agent_list_known():
         return _agent_list_not_known_response()
-    room = room_of(chat_id)
-    if room is not None:
-        post_room_message(state, room, parse_request_body(SendMessageRequest), request_identity())
-        return model_response(SendMessageResponse(status="ok"))
     if _find_active_agent(chat_id) is None:
         return _chat_not_found_response(chat_id)
 
@@ -995,7 +999,7 @@ def _send_message_endpoint(chat_id: str) -> Response:
     )
     if isinstance(accepted, _SendRefused):
         return model_response(accepted.answer, accepted.status)
-    act_on_chat_mentions(state, ChatId(chat_id), message_id, send_message_request.message, request_identity())
+    _act_on_room_mentions(state, ChatId(chat_id), message_id, send_message_request.message, request_identity())
     # A 202 tells the page to keep its "Sending" placeholder and the script that nothing needs
     # backing off.
     if accepted.held_phase is not None:
@@ -1534,6 +1538,7 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
             message_id,
             _held_send_origin(switch_request),
             model_pick=switch_request.model,
+            kind=switch_request.kind,
         )
     except ChatConvergingError as e:
         return error_response(str(e), 409)
@@ -1574,7 +1579,7 @@ def _retry_handoff_endpoint(chat_id: str) -> Response:
         return _chat_not_found_response(chat_id)
     retry_request = parse_request_body(HandoffRetryRequest)
     try:
-        phase = get_state().agent_manager.retry_handoff(parsed, retry_request.account_id)
+        phase = get_state().agent_manager.retry_handoff(parsed, retry_request.account_id, retry_request.kind)
     except HandoffError as e:
         return error_response(str(e), 400)
     return model_response(HandoffRetryResponse(status="converging", phase=phase), 202)
@@ -1721,11 +1726,15 @@ def _run_create_chat() -> CreatedChat | Response:
             labels=create_request.labels,
             is_installation_check_skipped=create_request.is_installation_check_skipped,
             model_pick=create_request.model,
+            kind=create_request.kind,
         )
     )
     if isinstance(created, Response):
         return created
-    _consider_naming_chat(get_state(), created.chat_id, create_request.message)
+    if create_request.kind is ChatKind.ROOM:
+        _record_room_first_message_author(get_state(), created.chat_id, create_request.message, request_identity())
+    else:
+        _consider_naming_chat(get_state(), created.chat_id, create_request.message)
     if not create_request.should_wait:
         return created
     outcome = agent_manager.wait_for_chat_creation(created.chat_id, CHAT_CREATION_WAIT_TIMEOUT_SECONDS)
@@ -1736,6 +1745,18 @@ def _run_create_chat() -> CreatedChat | Response:
         detail = outcome.error or f"Creating chat {created.display_name!r} failed"
         return error_response(detail, 500)
     return created
+
+
+def _record_room_first_message_author(
+    state: ChatAppState, chat_id: ChatId, message: str, identity: RequestIdentity
+) -> None:
+    """Record who a new room's first message is from (the multiplayer spec, section 5.1): the message is appended
+    once the room's agent is up, with no identity of its own, so a sender other than the owner is annotated here."""
+    if not message or is_owner_participant(identity):
+        return
+    sender = participant_key_of(identity)
+    display_name = prefix_safe_name(state.roster.display_name_of(sender, identity), sender)
+    state.authors.record(chat_id, new_author_annotation(uuid4().hex, sender, display_name, message))
 
 
 def _create_chat() -> Response:
@@ -1876,7 +1897,7 @@ def _deliver_intake_send(
     )
     if isinstance(accepted, _SendRefused):
         return accepted
-    act_on_chat_mentions(state, chat_id, message_id, intake.message, identity)
+    _act_on_room_mentions(state, chat_id, message_id, intake.message, identity)
     return None
 
 
@@ -2126,12 +2147,7 @@ def _destroy_chat(chat_id: str) -> Response:
     A chat that is not an agent yet (one waiting for its first send, or whose create failed) is discarded, its
     seed with it; 409 while its create runs.
     """
-    state = get_state()
-    agent_manager: AgentManager = state.agent_manager
-    room = room_of(chat_id)
-    if room is not None:
-        delete_room(state, room.id)
-        return model_response(DestroyAgentResponse(status="ok"))
+    agent_manager: AgentManager = get_state().agent_manager
     agent_info = _find_active_agent(chat_id)
     if agent_info is None:
         if agent_manager.get_provisional_chat(chat_id) is None:
@@ -2156,12 +2172,7 @@ def _rename_chat(chat_id: str) -> Response:
     name mngr cannot take. A chat that is not an agent yet takes the name its first agent will be
     created with; 400 while its create runs.
     """
-    state = get_state()
-    agent_manager: AgentManager = state.agent_manager
-    room = room_of(chat_id)
-    if room is not None:
-        title = parse_request_body(RenameChatRequest).title
-        return rename_room_response(state, str(room.id), title, RenameChatResponse(status="ok"))
+    agent_manager: AgentManager = get_state().agent_manager
     agent_info = _find_active_agent(chat_id)
     if agent_info is None and agent_manager.get_provisional_chat(chat_id) is None:
         return _chat_not_found_response(chat_id)
@@ -2183,8 +2194,6 @@ def _make_main_chat(chat_id: str) -> Response:
     """Star a chat as the workspace's main chat (``main_chat.py``); 409 for one that cannot be the main chat."""
     agent_manager: AgentManager = get_state().agent_manager
     parsed = parse_chat_ref(chat_id)
-    if room_of(chat_id) is not None:
-        return error_response("A room cannot be the main chat", 409)
     if parsed is None or not agent_manager.knows_chat(parsed):
         return _chat_not_found_response(chat_id)
     if not agent_manager.make_main_chat(parsed):
@@ -2242,7 +2251,7 @@ def _presence_endpoint(chat_id: str) -> Response:
     prioritizer ignores ids it does not manage, and a page that reports before its agent
     exists must not be told it is wrong.
     """
-    if not CHAT_ID_PATTERN.fullmatch(chat_id):
+    if not AGENT_ID_PATTERN.fullmatch(chat_id):
         return _chat_not_found_response(chat_id)
     report = parse_request_body(PresenceReport)
     state = get_state()
@@ -2259,7 +2268,7 @@ def _watchers_endpoint(chat_id: str) -> Response:
     refusal = require_loopback()
     if refusal is not None:
         return refusal
-    if not CHAT_ID_PATTERN.fullmatch(chat_id):
+    if not AGENT_ID_PATTERN.fullmatch(chat_id):
         return _chat_not_found_response(chat_id)
     agent_manager: AgentManager = get_state().agent_manager
     return model_response(ChatWatchersResponse(watched_by=tuple(agent_manager.chat_watchers(ChatId(chat_id)))))
@@ -2313,7 +2322,7 @@ def _chat_document(key: str) -> Response:
     subagent = parse_subagent_key(key)
     if subagent is not None:
         chat_id, agent_id, session_id = subagent.chat_id, subagent.agent_id, subagent.session_id
-    elif CHAT_ID_PATTERN.fullmatch(key):
+    elif AGENT_ID_PATTERN.fullmatch(key):
         chat_id, agent_id, session_id = key, "", ""
     else:
         return _chat_not_found_response(key)
@@ -2325,7 +2334,10 @@ def _chat_document(key: str) -> Response:
     root_path = (request.script_root or "").rstrip("/")
     with_workspace_tags = _inject_workspace_meta_tags(document_path.read_text(), root_path)
     with_identity = inject_chat_identity_meta_tags(with_workspace_tags, chat_id, agent_id, session_id)
-    kind = ChatKind.ROOM if room_of(chat_id) is not None else ChatKind.AGENT
+    # The kind as the chat app lists the chat now; a chat it does not list yet (one still being created) is an
+    # agent's until the list says otherwise.
+    snapshot = get_state().agent_manager.get_chat_snapshot(chat_id)
+    kind = snapshot.kind if snapshot is not None else ChatKind.AGENT
     html_content = inject_chat_kind_meta_tag(with_identity, kind.value)
     if config.javascript_plugin_basenames:
         html_content = inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
@@ -2427,8 +2439,6 @@ def _run_ws_broadcast_loop(websocket: Any, agent_manager: AgentManager) -> None:
         websocket.send(
             json.dumps(chats_updated_message(agent_manager.get_chat_snapshots(), agent_manager.get_main_chat_id()))
         )
-        # The rooms follow the list, which pages from before rooms read first and alone.
-        websocket.send(json.dumps(rooms_updated_message(get_state().rooms.snapshots())))
         shutdown = False
         while not shutdown:
             # The pages send nothing; anything that arrives is drained and ignored.
@@ -2616,15 +2626,15 @@ ROUTE_TABLE: Final[RouteTable] = merge_route_tables(
     latchkey_endpoints.ROUTE_TABLE,
     focus_chat.ROUTE_TABLE,
     secret_requests_endpoints.ROUTE_TABLE,
-    rooms_endpoints.ROUTE_TABLE,
+    mentions_endpoints.ROUTE_TABLE,
 )
 
 
-def _send_room_mention(state: ChatAppState, chat_id: ChatId, delivered: str, message_id: str) -> str | None:
+def _send_room_mention(chat_id: ChatId, delivered: str, message_id: str) -> str | None:
     """Deliver a room's mention to an agent chat through the ordinary send path; the refusal's detail, or None. A
     person's message, so a chat whose account was signed out refuses it as it does the message route's."""
     accepted = _send_to_chat(
-        state,
+        get_state(),
         chat_id,
         SendMessageRequest(message=delivered, message_id=message_id),
         message_id,
@@ -2731,9 +2741,14 @@ def create_application(state: ChatAppState) -> Flask:
     state.secret_request_bridge = _ServerSecretRequestBridge()
     secret_requests_endpoints.register_routes(application)
     state.mention_handler = MentionHandler(
-        state=state, deliverer=BackgroundMentionDeliverer(state=state, send=_send_room_mention)
+        agent_manager=state.agent_manager,
+        roster=state.roster,
+        mentions=state.mentions,
+        authors=state.authors,
+        deliverer=BackgroundMentionDeliverer(send=_send_room_mention),
+        on_pending_changed=state.broadcaster.broadcast_mentions_updated,
     )
-    rooms_endpoints.register_routes(application)
+    mentions_endpoints.register_routes(application)
 
     application.add_url_rule("/<path:path>", view_func=_serve_file_or_document, methods=["GET"])
 

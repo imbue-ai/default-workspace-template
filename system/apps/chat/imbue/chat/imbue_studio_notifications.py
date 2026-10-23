@@ -54,23 +54,23 @@ class ImbueStudioNotificationsClient(MutableModel):
         """Queue the read call for ``chat_id``; the future settles once it has been posted, or dropped."""
         return self._executor.submit(self._post_chat_read, chat_id)
 
-    def notify_mention(self, sender_chat_id: ChatId, mentioned_in: ChatId, title: str, message: str) -> Future[None]:
+    def notify_mention(self, mentioned_in: ChatId, title: str, message: str) -> Future[None]:
         """Queue a notification that the owner was mentioned in ``mentioned_in`` (the multiplayer spec, section
-        7.4), posted as the agent ``sender_chat_id`` runs on (the main chat's), opening that chat when clicked."""
-        return self._executor.submit(self._post_mention, sender_chat_id, mentioned_in, title, message)
+        7.4), posted as that chat's own agent, so a click opens that chat; a chat with no agent sends none."""
+        return self._executor.submit(self._post_mention, mentioned_in, title, message)
 
     def shutdown(self) -> None:
         """Drop the calls not yet started and let the one in flight finish on its own. Idempotent."""
         self._executor.shutdown(wait=False, cancel_futures=True)
 
-    def _post_mention(self, sender_chat_id: ChatId, mentioned_in: ChatId, title: str, message: str) -> None:
+    def _post_mention(self, mentioned_in: ChatId, title: str, message: str) -> None:
         payload = {
             "message": message,
             "title": title,
             "destination": {"type": "minds:focus-chat", "chatId": str(mentioned_in)},
         }
         response = self._post_as_chats_agent(
-            sender_chat_id, "/notifications", payload, f"notifying the owner of a mention in {mentioned_in}"
+            mentioned_in, "/notifications", payload, f"notifying the owner of a mention in {mentioned_in}"
         )
         if response is None:
             return

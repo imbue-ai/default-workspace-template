@@ -549,7 +549,14 @@ class SwitchChatRequest(SendMessageRequest):
     switch, with the sender's client fields; empty for a switch made with nothing to say yet) plus the
     account the chat moves to and the model it should run on there."""
 
-    account_id: str = Field(description="The signed-in account the chat moves to")
+    account_id: str = Field(
+        default="", description="The signed-in account the chat moves to; empty for a switch to a room"
+    )
+    kind: ChatKind = Field(
+        default=ChatKind.AGENT,
+        description="What the chat becomes: an agent chat on the account, or a room (the multiplayer spec, section "
+        "7.6), which runs on no account",
+    )
     model: ModelPick | None = Field(
         default=None,
         description=(
@@ -598,9 +605,12 @@ class HandoffCancelResponse(FrozenModel):
 
 class HandoffRetryRequest(FrozenModel):
     """Request body for POST /api/chats/{id}/handoff/retry: run a failed switch's last step again on an account
-    (a handoff's create, or a rebind's restart)."""
+    (a handoff's create, or a rebind's restart), or again as a room."""
 
-    account_id: str = Field(description="The signed-in account to try; may differ from the failed attempt's")
+    account_id: str = Field(
+        default="", description="The signed-in account to try; may differ from the failed attempt's; empty for a room"
+    )
+    kind: ChatKind = Field(default=ChatKind.AGENT, description="What to retry as: an agent chat, or a room")
 
 
 class HandoffRetryResponse(FrozenModel):
@@ -660,7 +670,7 @@ class ChatSnapshot(FrozenModel):
 
     chat_id: ChatId = Field(description="The chat's id")
     kind: ChatKind = Field(
-        default=ChatKind.AGENT, description="Always ``agent``: a room is listed by ``GET /api/rooms``"
+        description="What the chat is, from the harness its active agent runs: a room, or an agent chat"
     )
     title: str = Field(description="The name the user sees (the ``display_name`` label, else the mngr name)")
     name: str = Field(description="The chat's canonical mngr name")
@@ -674,6 +684,11 @@ class ChatSnapshot(FrozenModel):
     active_agent: ActiveAgentSnapshot = Field(description="The agent the chat currently runs on")
     last_messaged_at: float | None = Field(
         description="Epoch seconds of the chat's most recent message, or None when it has never been messaged; the chat list orders on it",
+    )
+    awaiting_chat_ids: tuple[ChatId, ...] = Field(
+        default=(),
+        description="The chats a mention from this room sent to and has not heard back from: the room's row shows "
+        "a working dot while one of them works (the multiplayer spec, section 7.4); empty for an agent chat",
     )
 
 
@@ -753,6 +768,11 @@ class CreateChatRequest(FrozenModel):
     project_id: str = Field(
         default="",
         description="The project the chat is started in, recorded as the agent's ``project`` label; empty for none",
+    )
+    kind: ChatKind = Field(
+        default=ChatKind.AGENT,
+        description="What to create: an agent chat on the account, or a room (the multiplayer spec, section 7.3), "
+        "which runs on no account and takes no model",
     )
 
 

@@ -93,8 +93,8 @@ from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.primitives import ChatId
+from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import ChatStatus
-from imbue.chat.rooms import RoomStore
 from imbue.chat.roster_client import RosterClient
 from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.server import create_application
@@ -708,7 +708,6 @@ def build_test_state(
     secret_requests: SecretRequestStore | None = None,
     chat_namer: ChatNamer | None = None,
     authors: AuthorStore | None = None,
-    rooms: RoomStore | None = None,
     mentions: MentionStore | None = None,
 ) -> ChatAppState:
     """Build a `ChatAppState` for tests, injecting fakes where provided.
@@ -750,7 +749,6 @@ def build_test_state(
         # Never this package's own data/: a test that reads the annotations back injects a store under its tmp_path.
         authors=authors if authors is not None else AuthorStore(root=Path(tempfile.mkdtemp(prefix="chat-authors-"))),
         roster=RosterClient(shell=shell if shell is not None else DisconnectedShell()),
-        rooms=rooms if rooms is not None else RoomStore(root=Path(tempfile.mkdtemp(prefix="chat-rooms-"))),
         mentions=mentions
         if mentions is not None
         else MentionStore(root=Path(tempfile.mkdtemp(prefix="chat-mentions-"))),
@@ -1070,6 +1068,7 @@ def make_chat_snapshot(chat_id: str, last_messaged_at: float | None = None, name
     """A listed chat as the pages see it: one idle claude agent, for tests that reason over snapshots alone."""
     return ChatSnapshot(
         chat_id=ChatId(chat_id),
+        kind=ChatKind.AGENT,
         title=name.replace("-", " "),
         name=name,
         project=None,
