@@ -492,7 +492,8 @@ def test_an_api_key_account_signs_in_again_with_a_key() -> None:
 
 
 def test_a_grok_account_holding_only_a_key_signs_in_again_with_a_key() -> None:
-    """A grok account with a session login beside a stored key signs in again the way it first did, by device."""
+    """A grok account holding only a stored key re-auths by key; one whose session login sits beside a key re-auths
+    with the lane's device sign-in."""
     key_id, key_dir = mint_account_dir()
     commit_account(key_id, "xai", "xAI")
     write_grok_auth(key_dir, {"xai::api_key": build_grok_key_scope()})
