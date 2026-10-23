@@ -136,9 +136,10 @@ describe("ChatRail main chat", () => {
 });
 
 describe("ChatRail rooms", () => {
-  it("draws a room with the people glyph, its mention mark, and a menu of rename and delete alone", () => {
+  it("draws a room with the people glyph and its mention mark, and offers it rename, stop or restart, and delete", () => {
     const lounge = chatRowFixture("room-0123456789abcdef", { kind: "room", title: "Lounge", hasMention: true });
     const busy = chatRowFixture("room-fedcba9876543210", { kind: "room", title: "Hall", status: "working" });
+    const stopped = chatRowFixture("room-0000000000000001", { kind: "room", title: "Attic", status: "stopped" });
     const rail = mount([lounge, busy]);
 
     expect(rail.querySelector('[data-chat-id="room-0123456789abcdef"] .chat-rail-room-glyph')).not.toBeNull();
@@ -147,14 +148,11 @@ describe("ChatRail rooms", () => {
     // While an agent the room asked works, the room wears the working dot, as any chat does.
     expect(dotClassOf("room-fedcba9876543210")).toContain("chat-rail-dot--pulse");
     expect(rail.querySelector('[data-chat-id="room-fedcba9876543210"] [data-chat-row-mention]')).toBeNull();
-    const context = chatRailAttrsFixture({ rows: [lounge, busy] });
-    expect(rowMenuRows(context, lounge).map((row) => (row.kind === "action" ? row.key : "-"))).toEqual([
-      "rename",
-      "-",
-      "delete",
-    ]);
-    expect(rowMenuRows(context, lounge).find((row) => row.kind === "action" && row.key === "delete")).toMatchObject({
-      label: "Delete room",
-    });
+    const context = chatRailAttrsFixture({ rows: [lounge, busy, stopped] });
+    const labelsOf = (row: ChatRow): string[] =>
+      rowMenuRows(context, row).map((menuRow) => (menuRow.kind === "action" ? menuRow.label : "-"));
+    // A room's reader is stopped and restarted from the menu like any chat's agent, and never made the main chat.
+    expect(labelsOf(lounge)).toEqual(["Rename", "Stop room", "-", "Delete room"]);
+    expect(labelsOf(stopped)).toEqual(["Rename", "Restart room", "-", "Delete room"]);
   });
 });

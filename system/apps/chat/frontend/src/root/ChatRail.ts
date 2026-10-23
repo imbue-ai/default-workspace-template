@@ -214,14 +214,15 @@ export function rowMenuRows(attrs: RowMenuContext, row: ChatRow, referenceRows: 
           } as MenuRow,
         ]),
     // The main chat is kept running (the chat app wakes it whenever it is found stopped), and a chat that is not an
-    // agent yet, or a room, has nothing to stop, so none of them offers these.
-    ...(row.isMain || row.kind !== "agent"
+    // agent yet has nothing to stop, so neither offers these. A room's reader is stopped and restarted like any
+    // chat's agent (the multiplayer spec, section 11).
+    ...(row.isMain || row.kind === "provisional"
       ? []
       : [
           {
             kind: "action",
             key: isStopped ? "start" : "stop",
-            label: isStopped ? "Restart chat" : "Stop chat",
+            label: `${isStopped ? "Restart" : "Stop"} ${isRoom(row) ? "room" : "chat"}`,
             onSelect: () => setRunningFromMenu(row, isStopped),
           } as MenuRow,
         ]),
