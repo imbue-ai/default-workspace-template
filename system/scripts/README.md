@@ -10,7 +10,8 @@ Provisioning and utility scripts:
   the apply runs as a self-contained unit), and the boot-convergence units in
   `env.d/`.
 - Cross-harness agent policy hooks (`agent_*.sh` / `agent_*.py`), wired in
-  `.claude/settings.json` for claude and `.codex/hooks.json` for codex; pi's
+  `.claude/settings.json` for claude, `.codex/hooks.json` for codex and
+  `.grok/hooks/policy.json` (through `agent_grok_policy_guards.py`) for grok; pi's
   `.pi/extensions/policy_guards.ts` and agy's `agy_shim/bash` feed the same
   scripts the payload they read on stdin. See `tool-call-policies.md` for what
   each one enforces.
