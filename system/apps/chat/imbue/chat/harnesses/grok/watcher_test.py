@@ -874,6 +874,10 @@ def test_a_root_turn_change_wakes_the_worker_only_while_something_is_held(tmp_pa
 
     watcher._queue.enqueue_control_command("/effort high")
     watcher._on_root_turns_changed()
+    assert not watcher._flush_wake.is_set()
+
+    write_root_turn(tmp_path, _PLAIN_ROOT, "prompt-9")
+    watcher._on_root_turns_changed()
     assert watcher._flush_wake.is_set()
 
 

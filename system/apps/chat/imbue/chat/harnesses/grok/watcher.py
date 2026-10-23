@@ -61,8 +61,10 @@ from imbue.imbue_common.pure import pure
 from imbue.mngr.agents.tui_utils import is_slash_command_message
 from imbue.mngr.errors import MngrError
 from imbue.mngr.errors import SendFailureKind
+from imbue.mngr_grok.api import GrokRootTurn
 from imbue.mngr_grok.api import get_grok_home
 from imbue.mngr_grok.api import get_model_state_path
+from imbue.mngr_grok.api import get_root_turns
 from imbue.mngr_grok.api import get_root_turns_dir
 from imbue.mngr_grok.api import get_session_dir
 from imbue.mngr_grok.api import list_root_session_dirs
@@ -336,6 +338,8 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
     _flush_stopping: threading.Event
     _flush_thread: threading.Thread | None
     _root_turns_watcher: PathWatcher | None
+    # The top-level turns in flight at the last root-turn check, or None before the first.
+    _last_root_turns: tuple[GrokRootTurn, ...] | None
     # Until when the live emit holds back, so a delivered message's chip leaves before its turn arrives.
     _emit_embargo_until: float
     delivery_witness_seconds: float
@@ -358,6 +362,7 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
         watcher._flush_stopping = threading.Event()
         watcher._flush_thread = None
         watcher._root_turns_watcher = None
+        watcher._last_root_turns = None
         watcher._emit_embargo_until = 0.0
         watcher.delivery_witness_seconds = _DELIVERY_WITNESS_SECONDS
         return watcher
@@ -505,6 +510,11 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
             callback(snapshot)
 
     def _on_root_turns_changed(self) -> None:
+        """Wake the worker when a top-level turn started or ended while anything is held."""
+        root_turns = tuple(get_root_turns(self._agent_state_dir))
+        if root_turns == self._last_root_turns:
+            return
+        self._last_root_turns = root_turns
         if self._queue.has_held_work():
             self._flush_wake.set()
 
