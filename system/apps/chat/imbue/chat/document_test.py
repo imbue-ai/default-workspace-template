@@ -3,6 +3,7 @@
 import json
 import re
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -69,7 +70,7 @@ def test_the_chat_page_carries_the_chats_identity(tmp_path: Path) -> None:
     assert "chat</body>" in response.text
 
 
-def _initial_state(page: str) -> dict | None:
+def _initial_state(page: str) -> dict[str, Any] | None:
     match = re.search(rf'<script type="application/json" id="{INITIAL_STATE_SCRIPT_ID}">(.*?)</script>', page)
     return None if match is None else json.loads(match.group(1))
 
