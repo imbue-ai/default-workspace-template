@@ -22,6 +22,7 @@ import pytest
 from pydantic import SecretStr
 
 from imbue.chat.accounts import AccountError
+from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import harness_for
 from imbue.chat.accounts import mint_account_dir
@@ -982,7 +983,22 @@ def _grok_service(
 
 
 def _grok_auth_path(tmp_path: Path, account_id: str) -> Path:
-    return tmp_path / ".minds" / "accounts" / account_id / "auth.json"
+    return account_dir(account_id, tmp_path) / "auth.json"
+
+
+def _start_device_reauth_over_a_pasted_key(service: AuthFlowService, tmp_path: Path) -> tuple[str, str, Path]:
+    """An xAI account holding a pasted key, mid device re-auth, once grok has added its login beside the key.
+
+    Returns the re-auth's flow id, the account id and the account's auth.json."""
+    pasted = service.start("xai", "api_key")
+    service.submit_key(pasted.flow_id, "xai-old-key")
+    (account,) = read_index(tmp_path).accounts
+    auth_path = _grok_auth_path(tmp_path, account.id)
+    again = service.start("xai", "device", account_id=account.id)
+    scopes = json.loads(auth_path.read_text())
+    scopes[_GROK_LOGIN_SCOPE] = _GROK_LOGIN
+    auth_path.write_text(json.dumps(scopes))
+    return again.flow_id, account.id, auth_path
 
 
 def _grok_session_account(tmp_path: Path) -> tuple[str, Path]:
@@ -1104,9 +1120,7 @@ def test_grok_decides_its_own_device_sign_in(
         return SignedIn.YES
 
     process = FakePexpectProcess([(0, _GROK_DEVICE_SCREEN)])
-    work_dir = tmp_path / "work"
-    work_dir.mkdir()
-    service = AuthFlowService.create(home=tmp_path, work_dir=work_dir, spawner=lambda *_a, **_k: process, probe=probe)
+    service = _grok_service(tmp_path, process, probe=probe)
     started = service.start("xai", "device")
     process.print_output(output)
     process.exit(exitstatus)
@@ -1122,21 +1136,13 @@ def test_a_grok_device_sign_in_takes_away_a_pasted_key_and_keeps_the_login(tmp_p
     restarted: list[str] = []
     process = FakePexpectProcess([(0, _GROK_DEVICE_SCREEN)])
     service = _grok_service(tmp_path, process, restart_bound_agents=restarted.append)
-    pasted = service.start("xai", "api_key")
-    service.submit_key(pasted.flow_id, "xai-old-key")
-    (account,) = read_index(tmp_path).accounts
-    auth_path = _grok_auth_path(tmp_path, account.id)
-
-    again = service.start("xai", "device", account_id=account.id)
-    scopes = json.loads(auth_path.read_text())
-    scopes[_GROK_LOGIN_SCOPE] = _GROK_LOGIN
-    auth_path.write_text(json.dumps(scopes))
+    flow_id, account_id, auth_path = _start_device_reauth_over_a_pasted_key(service, tmp_path)
     process.print_output(_GROK_SIGNED_IN)
     process.exit(0)
 
-    assert service.poll(again.flow_id).state is FlowState.OK
+    assert service.poll(flow_id).state is FlowState.OK
     assert json.loads(auth_path.read_text()) == {_GROK_LOGIN_SCOPE: _GROK_LOGIN}
-    assert restarted == [account.id]
+    assert restarted == [account_id]
 
 
 def test_a_first_grok_device_sign_in_leaves_the_file_as_grok_wrote_it(tmp_path: Path) -> None:
@@ -1250,20 +1256,13 @@ def test_a_grok_device_sign_in_leaves_the_key_while_grok_holds_its_file(tmp_path
     """As grok's own scope removal does: the login just landed outranks the key anyway."""
     process = FakePexpectProcess([(0, _GROK_DEVICE_SCREEN)])
     service = _grok_service(tmp_path, process, grok_auth_lock_wait_seconds=0.2)
-    pasted = service.start("xai", "api_key")
-    service.submit_key(pasted.flow_id, "xai-old-key")
-    (account,) = read_index(tmp_path).accounts
-    auth_path = _grok_auth_path(tmp_path, account.id)
-    again = service.start("xai", "device", account_id=account.id)
-    scopes = json.loads(auth_path.read_text())
-    scopes[_GROK_LOGIN_SCOPE] = _GROK_LOGIN
-    auth_path.write_text(json.dumps(scopes))
+    flow_id, _account_id, auth_path = _start_device_reauth_over_a_pasted_key(service, tmp_path)
     written = auth_path.read_bytes()
     process.print_output(_GROK_SIGNED_IN)
     process.exit(0)
 
     with _grok_holds_its_lock(auth_path):
-        assert service.poll(again.flow_id).state is FlowState.OK
+        assert service.poll(flow_id).state is FlowState.OK
 
     assert auth_path.read_bytes() == written
 
