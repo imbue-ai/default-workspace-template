@@ -756,6 +756,29 @@ def test_the_held_messages_chip_departs_before_its_turn_arrives_even_when_the_li
     assert [event["content"] for event in broadcast if event["type"] == "user_message"] == ["deliver me"]
 
 
+def test_a_live_emit_that_wakes_while_a_flush_broadcasts_its_held_events_cannot_go_first(tmp_path: Path) -> None:
+    watcher, _grok, _broadcast = _flushing_watcher(tmp_path)
+    user_turns: list[str] = []
+    broadcast_count = [0]
+
+    def record_transcript(_agent_id: str, events: list[dict[str, Any]]) -> None:
+        broadcast_count[0] += 1
+        if broadcast_count[0] == 1:
+            append_grok_updates(
+                tmp_path, _PLAIN_ROOT, _committed_turn_lines(_PLAIN_ROOT, "typed later", 7, 1792600000000)
+            )
+            watcher._emit_cycle()
+        user_turns.extend(str(event["content"]) for event in events if event["type"] == "user_message")
+
+    watcher._on_events = record_transcript
+    watcher._queue.enqueue("deliver me", "t0", is_turn_open=False)
+
+    watcher._attempt_flush()
+    watcher._emit_cycle()
+
+    assert user_turns == ["deliver me", "typed later"]
+
+
 def test_a_control_command_goes_out_alone_ahead_of_the_held_block_and_is_never_a_chip(tmp_path: Path) -> None:
     watcher, grok, _broadcast = _flushing_watcher(tmp_path)
     grok.is_committing = False

@@ -462,11 +462,15 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
         self._broadcast(to_send)
 
     def _emit_held_events(self) -> None:
-        with self._lock:
-            self._emit_embargo_until = 0.0
-            self._refresh_locked()
-            to_send = self._filter_broadcast(self._store.take_unemitted())
-        self._broadcast(to_send)
+        """Broadcast what the logs gained during a flush, then lift its embargo, so the live emit cannot go first."""
+        try:
+            with self._lock:
+                self._refresh_locked()
+                to_send = self._filter_broadcast(self._store.take_unemitted())
+            self._broadcast(to_send)
+        finally:
+            with self._lock:
+                self._emit_embargo_until = 0.0
 
     def _broadcast(self, to_send: list[dict[str, Any]]) -> None:
         self._before_broadcast()
