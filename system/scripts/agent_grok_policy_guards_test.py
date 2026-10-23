@@ -266,6 +266,27 @@ def _recorded(record: Path) -> list[dict[str, Any]]:
     )
 
 
+def _run_beside_recording_guards(
+    tmp_path: Path, payload: dict[str, Any]
+) -> tuple[HookRun, list[dict[str, Any]]]:
+    """Run a PreToolUse through a copy of the hook whose every guard records the payload it was given."""
+    guards = {
+        name: _RECORDING_GUARD
+        for name in hook.PRETOOLUSE_SCRIPTS
+        if name.endswith(".sh")
+    }
+    copied = _hook_beside_stand_ins(tmp_path, guards)
+    record = tmp_path / "record.jsonl"
+    run = _run_hook(
+        tmp_path,
+        hook.PRE_TOOL_USE_COMMAND,
+        payload,
+        env={"GUARD_RECORD": str(record)},
+        hook_path=copied,
+    )
+    return run, _recorded(record)
+
+
 @pytest.mark.parametrize("tool_name", ["run_terminal_command", "monitor"])
 @pytest.mark.parametrize(
     ("command", "expected_in_reason"),
@@ -497,23 +518,12 @@ def test_a_file_tool_whose_content_looks_like_a_refused_command_is_allowed_unrew
 def test_a_non_shell_tool_reaches_only_the_guards_for_every_tool_under_its_grok_name(
     tmp_path: Path, tool_name: str, tool_input: dict[str, Any]
 ) -> None:
-    guards = {
-        name: _RECORDING_GUARD
-        for name in hook.PRETOOLUSE_SCRIPTS
-        if name.endswith(".sh")
-    }
-    copied = _hook_beside_stand_ins(tmp_path, guards)
-    record = tmp_path / "record.jsonl"
-    run = _run_hook(
-        tmp_path,
-        hook.PRE_TOOL_USE_COMMAND,
-        _pre_tool_use(tool_name, tool_input),
-        env={"GUARD_RECORD": str(record)},
-        hook_path=copied,
+    run, recorded = _run_beside_recording_guards(
+        tmp_path, _pre_tool_use(tool_name, tool_input)
     )
     assert run.exit_code == 0
     expected_payload = {"tool_name": tool_name, "tool_input": tool_input}
-    assert _recorded(record) == [
+    assert recorded == [
         {"script": "agent_secrets_guard.sh", "payload": expected_payload},
         {"script": hook.STEP_NUDGE_SCRIPT, "payload": expected_payload},
     ]
@@ -522,27 +532,16 @@ def test_a_non_shell_tool_reaches_only_the_guards_for_every_tool_under_its_grok_
 def test_a_shell_call_reaches_the_guards_as_claudes_bash_and_only_those_its_text_could_trip(
     tmp_path: Path,
 ) -> None:
-    guards = {
-        name: _RECORDING_GUARD
-        for name in hook.PRETOOLUSE_SCRIPTS
-        if name.endswith(".sh")
-    }
-    copied = _hook_beside_stand_ins(tmp_path, guards)
-    record = tmp_path / "record.jsonl"
     command = "git status | " + "tail -3"
-    run = _run_hook(
-        tmp_path,
-        hook.PRE_TOOL_USE_COMMAND,
-        _shell(command, block_until_ms=0),
-        env={"GUARD_RECORD": str(record)},
-        hook_path=copied,
+    run, recorded = _run_beside_recording_guards(
+        tmp_path, _shell(command, block_until_ms=0)
     )
     assert run.exit_code == 0
     expected_payload = {
         "tool_name": "Bash",
         "tool_input": {"command": command, "run_in_background": True},
     }
-    assert _recorded(record) == [
+    assert recorded == [
         {"script": "agent_prevent_commit_rewrite.sh", "payload": expected_payload},
         {"script": "agent_block_pipe_tail_head.sh", "payload": expected_payload},
         {"script": hook.STEP_NUDGE_SCRIPT, "payload": expected_payload},
@@ -679,27 +678,17 @@ def test_a_workflow_is_refused(tmp_path: Path, payload: dict[str, Any]) -> None:
 def test_a_truncated_shell_call_is_refused_without_running_any_guard(
     tmp_path: Path,
 ) -> None:
-    guards = {
-        name: _RECORDING_GUARD
-        for name in hook.PRETOOLUSE_SCRIPTS
-        if name.endswith(".sh")
-    }
-    copied = _hook_beside_stand_ins(tmp_path, guards)
-    record = tmp_path / "record.jsonl"
     cut_command = "echo " + "x" * 4096 + " #f1862b7fed82f129 [truncated]"
-    run = _run_hook(
+    run, recorded = _run_beside_recording_guards(
         tmp_path,
-        hook.PRE_TOOL_USE_COMMAND,
         _pre_tool_use(
             "run_terminal_command",
             {"command": cut_command, "description": "x"},
             is_truncated=True,
         ),
-        env={"GUARD_RECORD": str(record)},
-        hook_path=copied,
     )
     _assert_denied(run, "too long for the workspace's policy checks")
-    assert _recorded(record) == []
+    assert recorded == []
 
 
 def test_a_truncated_file_write_is_judged_on_its_path_which_grok_never_cuts(
