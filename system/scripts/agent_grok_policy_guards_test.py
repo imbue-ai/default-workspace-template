@@ -614,7 +614,10 @@ def test_a_use_tool_wrapper_is_judged_by_the_call_inside_it(tmp_path: Path) -> N
 def test_a_call_carrying_a_decoy_wrapper_beside_its_own_fields_is_judged_as_itself(
     tmp_path: Path, tool_name: str, decoy_call: dict[str, Any], refusal_fragment: str
 ) -> None:
-    decoy = {"tool_name": tool_name, "tool_input": {"command": "true", "description": "x"}}
+    decoy = {
+        "tool_name": tool_name,
+        "tool_input": {"command": "true", "description": "x"},
+    }
 
     _assert_denied(
         _pre(tmp_path, _pre_tool_use(tool_name, {**decoy_call, **decoy})),
