@@ -117,11 +117,11 @@ export function isHandoffCancellable(handoff: HandoffState): boolean {
   return handoff.kind === "handoff" && (handoff.phase === "draining" || handoff.phase === "summarizing");
 }
 
-/** One chat as the pages see it (the backend's ``ChatSnapshot``, one entry of ``chats_updated``). */
 /** What a chat is (the backend's ``ChatKind``): a conversation with an agent, or a room, a message log among the
  *  workspace's people whose agent is the room's reader (the multiplayer spec, section 7.3). */
 export type ChatKind = "agent" | "room";
 
+/** One chat as the pages see it (the backend's ``ChatSnapshot``, one entry of ``chats_updated``). */
 export interface ChatSnapshot {
   chat_id: string;
   kind: ChatKind;
