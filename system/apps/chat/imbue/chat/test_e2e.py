@@ -43,6 +43,7 @@ from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.registry import get_model_state_path
+from imbue.chat.main_chat import MAIN_CHAT_NAME
 from imbue.chat.models import ChatSnapshot
 from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import ChatId
@@ -1168,12 +1169,12 @@ def test_the_chat_list_opened_with_nothing_selected_shows_the_most_recent_chat(t
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_the_chat_list_leads_with_the_main_chat_and_lands_on_the_next_main_chat_when_it_goes(
+def test_the_chat_list_leads_with_the_main_chat_and_lands_on_a_new_main_chat_when_it_goes(
     tmp_path: Path, page: Page
 ) -> None:
     """The seeded welcome chat is the main chat: it heads the list, set apart from the rest and marked, ahead of
-    a chat messaged since, and it is the chat the list shows with nothing selected. When it goes, the chat messaged
-    most recently becomes the main chat at once, takes its place at the head, and is the chat the list lands on.
+    a chat messaged since, and it is the chat the list shows with nothing selected. When it goes, a new chat named
+    Main takes its place at the head at once and is the chat the list lands on; the chat messaged since stays below.
 
     The root is opened at the chat app's own URL, with no shell client connected: seeding also owes the welcome chat
     an auto-opened window, which would move a shell's chat window onto it whatever the root itself selected."""
@@ -1196,21 +1197,26 @@ def test_the_chat_list_leads_with_the_main_chat_and_lands_on_the_next_main_chat_
 
         assert agent_manager.discard_provisional_chat(welcome.chat_id)
 
-        expect(page).to_have_url(f"{server.chat_url}{_FIXTURE_ROOT_PATH}", timeout=15000)
-        expect(rows).to_have_count(1)
-        expect(rows.nth(0)).to_have_attribute("data-chat-id", FIXTURE_AGENT_ID)
+        new_main_id = agent_manager.get_main_chat_id()
+        assert new_main_id not in (None, ChatId(welcome.chat_id), ChatId(FIXTURE_AGENT_ID))
+        assert new_main_id is not None
+        expect(page).to_have_url(f"{server.chat_url}{chat_root_path(new_main_id)}", timeout=15000)
+        expect(rows).to_have_count(2)
+        expect(rows.nth(0)).to_have_attribute("data-chat-id", new_main_id)
         expect(rows.nth(0)).to_have_attribute("data-main", "true")
+        expect(rows.nth(0).locator(".chat-rail-title")).to_have_text(MAIN_CHAT_NAME)
+        expect(rows.nth(1)).to_have_attribute("data-chat-id", FIXTURE_AGENT_ID)
 
 
 def test_making_a_chat_the_main_chat_from_its_menu_moves_it_to_the_head_of_the_list(
     tmp_path: Path, page: Page
 ) -> None:
     """A chat's right-click menu stars it as the main chat: it takes the welcome chat's place at the head of the list,
-    marked, and the welcome chat drops back among the rest."""
+    marked, keeping its own name, and the welcome chat drops back among the rest, no longer called Main."""
     with _running_e2e_server(tmp_path) as server:
         agent_manager = server.chat_state.agent_manager
         welcome = agent_manager.seed_chat(
-            "Welcome",
+            MAIN_CHAT_NAME,
             (SeedTurn(role=SeedRole.ASSISTANT, text="Your workspace is ready! How would you like to start?"),),
         )
         page.goto(f"{server.chat_url}/")
@@ -1225,6 +1231,8 @@ def test_making_a_chat_the_main_chat_from_its_menu_moves_it_to_the_head_of_the_l
         expect(rows.nth(0)).to_have_attribute("data-main", "true")
         expect(page.locator(".chat-rail-row[data-main]")).to_have_count(1)
         assert agent_manager.get_main_chat_id() == ChatId(FIXTURE_AGENT_ID)
+        former_main_title = page.locator(f'.chat-rail-row[data-chat-id="{welcome.chat_id}"] .chat-rail-title')
+        expect(former_main_title).to_have_text(re.compile(r"^Chat \d+ \(fka Main\)$"))
 
 
 @pytest.mark.timeout(120, func_only=False)

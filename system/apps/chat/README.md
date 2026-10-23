@@ -418,10 +418,15 @@ The workspace has one **main chat**, where a text with no chat of its own goes
 `data/.apps/chat/main_chat.json`; no chat is special in itself, so a handoff, a
 crash, or a relaunch leaves it where it is. The seeded chat takes it first, named
 "Main" (`MAIN_CHAT_NAME`) whatever title the Mind app sent, and a chat's "Make main chat" menu row (`POST
-/api/chats/<chat-id>/make-main`, 409 for a helper another agent started) moves it there.
-When the chat it names is deleted, another takes it at once: the chat
-messaged most recently, never a helper another agent started; with no chat left, the
-chat the list opens (one awaiting its first send) takes it. Every `chats_updated` push
+/api/chats/<chat-id>/make-main`, 409 for a helper another agent started) moves it there. The chat
+made main keeps its own name; the one it replaces, when still named "Main", is renamed to the
+first free "Chat N" marked as the former main chat ("Chat 7 (fka Main)"), shown at once and kept
+named as it was if mngr refuses the rename; a name anyone chose stays. When the chat it names is
+deleted (or a chat awaiting its first send is dropped by a restart of this app), a new chat named
+"Main" (else the first free "Chat N", when another chat is already called Main), awaiting its
+first send, takes it at once; no other chat is promoted. A workspace with no main chat yet gives
+it to the seeded chat, else the chat messaged most recently, never a helper another agent
+started; with no chat at all, the chat the list opens (one awaiting its first send) takes it. Every `chats_updated` push
 and `GET /api/chats` carry its id as `main_chat_id`. The chat list leads with it, alone
 above a rule and in a medium weight, its helpers right under the rule; the root
 shows it when nothing is selected, including after the chat on screen is deleted; a text

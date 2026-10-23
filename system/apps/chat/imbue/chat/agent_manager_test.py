@@ -1006,7 +1006,7 @@ def test_discarding_a_seeded_chat_drops_its_record_with_it(broadcaster: WebSocke
         assert manager.get_provisional_chat(seeded.chat_id) is None
         assert store.read(ChatId(seeded.chat_id)) is None
         assert manager.get_chat_segments(ChatId(seeded.chat_id)) is None
-        assert manager.get_main_chat_id() is None
+        assert manager.get_main_chat_id() != ChatId(seeded.chat_id)
     finally:
         manager.stop()
 
@@ -1022,18 +1022,16 @@ def _next_chat_listing(q: queue.Queue[str | None]) -> dict[str, Any]:
     pytest.fail("no chats_updated message was broadcast")
 
 
-def test_deleting_the_main_chat_moves_it_to_the_chat_messaged_most_recently(
+def test_deleting_the_main_chat_gives_its_place_to_a_new_main_chat_rather_than_another_chat(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    """The main chat is a pointer that another chat takes at once when its chat is deleted: the one
-    messaged most recently, never a helper another agent started; the move is kept on disk and
-    reaches the pages with the chat list."""
+    """No chat the user has is promoted when the main chat is deleted: a new chat named Main, awaiting its first send,
+    takes its place at once; the move is kept on disk and reaches the pages with the chat list."""
     mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
     main_chat_path = tmp_path / MAIN_CHAT_FILENAME
     stamps = MessageStampStore(path=None)
     stamps.record(ChatId("agent-older"), at=100.0)
     stamps.record(ChatId("agent-newer"), at=200.0)
-    stamps.record(ChatId("agent-helper"), at=300.0)
     manager = AgentManager.build(
         broadcaster,
         mngr_binary=mngr_binary,
@@ -1043,16 +1041,65 @@ def test_deleting_the_main_chat_moves_it_to_the_chat_messaged_most_recently(
     )
     try:
         seed_agent_state(manager, "agent-older", name="Chat-1")
-        seed_agent_state(manager, "agent-newer", name="Chat-2")
-        seed_agent_state(manager, "agent-helper", name="Chat-3", labels={"agent_created": "true"})
+        seed_agent_state(manager, "agent-newer", name="Main", labels={"display_name": MAIN_CHAT_NAME})
         manager.note_agent_list_known()
         assert manager.get_main_chat_id() == ChatId("agent-newer")
 
         q = broadcaster.register()
         manager.destroy_chat(ChatId("agent-newer"))
 
-        assert _next_chat_listing(q)["main_chat_id"] == "agent-older"
-        assert MainChatStore(path=main_chat_path).read() == ChatId("agent-older")
+        new_main_id = manager.get_main_chat_id()
+        assert new_main_id not in (None, ChatId("agent-newer"), ChatId("agent-older"))
+        assert new_main_id is not None
+        new_main = manager.get_provisional_chat(new_main_id)
+        assert new_main is not None
+        assert new_main.name == MAIN_CHAT_NAME
+        assert new_main.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+        assert _next_chat_listing(q)["main_chat_id"] == new_main_id
+        assert MainChatStore(path=main_chat_path).read() == new_main_id
+    finally:
+        manager.stop()
+
+
+def test_a_new_main_chat_is_numbered_when_another_chat_is_already_named_main(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    main_chat_path = tmp_path / MAIN_CHAT_FILENAME
+    MainChatStore(path=main_chat_path).write(ChatId("agent-" + "9" * 32))
+    manager = AgentManager.build(broadcaster, main_chat=MainChatStore(path=main_chat_path))
+    try:
+        seed_agent_state(manager, "agent-other", name="Main", labels={"display_name": MAIN_CHAT_NAME})
+        manager.note_agent_list_known()
+
+        new_main_id = manager.get_main_chat_id()
+
+        assert new_main_id is not None
+        new_main = manager.get_provisional_chat(new_main_id)
+        assert new_main is not None
+        assert new_main.name == "Chat 1"
+    finally:
+        manager.stop()
+
+
+def test_a_main_chat_that_was_never_messaged_is_replaced_by_a_new_one_after_a_restart(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A chat awaiting its first send has no record, so a restart drops it; the main chat it was comes back as a new
+    one rather than moving to another chat."""
+    main_chat_path = tmp_path / MAIN_CHAT_FILENAME
+    MainChatStore(path=main_chat_path).write(ChatId("agent-" + "9" * 32))
+    manager = AgentManager.build(broadcaster, main_chat=MainChatStore(path=main_chat_path))
+    try:
+        seed_agent_state(manager, "agent-other", name="Chat-1")
+        manager.record_message_sent(ChatId("agent-other"))
+        manager.note_agent_list_known()
+
+        new_main_id = manager.get_main_chat_id()
+
+        assert new_main_id not in (None, ChatId("agent-other"))
+        assert new_main_id is not None
+        assert manager.get_provisional_chat(new_main_id) is not None
+        assert manager.get_main_chat_id() == new_main_id
     finally:
         manager.stop()
 
@@ -1101,6 +1148,96 @@ def test_making_a_chat_the_main_chat_moves_the_star_to_it_and_keeps_it_there(
         assert MainChatStore(path=main_chat_path).read() == ChatId("agent-quiet")
     finally:
         manager.stop()
+
+
+def test_making_another_chat_the_main_chat_renames_the_old_one_still_named_main_and_keeps_the_new_ones_name(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A chat called Main is never left below the main chat: it is shown under its new name at once and renamed
+    in mngr; the chat made main keeps the name it had."""
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    try:
+        seed_agent_state(manager, "agent-main", name="Main", labels={"display_name": MAIN_CHAT_NAME})
+        seed_agent_state(manager, "agent-trip", name="Trip-plan", labels={"display_name": "Trip plan"})
+        seed_agent_state(manager, "agent-two", name="Chat-1", labels={"display_name": "Chat 1"})
+        manager.note_agent_list_known()
+        assert manager.make_main_chat(ChatId("agent-main"))
+        q = broadcaster.register()
+
+        assert manager.make_main_chat(ChatId("agent-trip"))
+
+        listing = _next_chat_listing(q)
+        assert listing["main_chat_id"] == "agent-trip"
+        titles = {chat["chat_id"]: chat["title"] for chat in listing["chats"]}
+        assert titles["agent-main"] == "Chat 2 (fka Main)"
+        assert titles["agent-trip"] == "Trip plan"
+        wait_until_true(lambda: argv_log.exists(), 10, "the former main chat's rename")
+        wait_until_true(
+            lambda: _display_name(manager, "agent-main") == "Chat 2 (fka Main)",
+            10,
+            "the former main chat to carry its new name",
+        )
+    finally:
+        manager.stop()
+
+    (rename_argv,) = argv_log.read_text().splitlines()
+    assert rename_argv.startswith("rename agent-main ")
+    assert "display_name=Chat 2 (fka Main)" in rename_argv
+
+
+def test_making_another_chat_the_main_chat_leaves_a_name_the_user_chose_on_the_old_one(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    try:
+        seed_agent_state(manager, "agent-main", name="Inbox", labels={"display_name": "Inbox"})
+        seed_agent_state(manager, "agent-trip", name="Trip-plan", labels={"display_name": "Trip plan"})
+        manager.note_agent_list_known()
+        assert manager.make_main_chat(ChatId("agent-main"))
+
+        assert manager.make_main_chat(ChatId("agent-trip"))
+
+        assert _display_name(manager, "agent-main") == "Inbox"
+    finally:
+        manager.stop()
+
+    assert not argv_log.exists()
+
+
+def test_a_former_main_chat_that_cannot_be_renamed_keeps_its_name(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    failing_mngr = tmp_path / "failing-mngr"
+    failing_mngr.write_text("#!/bin/sh\nexit 1\n")
+    failing_mngr.chmod(0o755)
+    manager = AgentManager.build(broadcaster, mngr_binary=str(failing_mngr))
+    try:
+        seed_agent_state(manager, "agent-main", name="Main", labels={"display_name": MAIN_CHAT_NAME})
+        seed_agent_state(manager, "agent-trip", name="Trip-plan", labels={"display_name": "Trip plan"})
+        manager.note_agent_list_known()
+        assert manager.make_main_chat(ChatId("agent-main"))
+
+        assert manager.make_main_chat(ChatId("agent-trip"))
+
+        wait_until_true(
+            lambda: _shown_title(manager, "agent-main") == MAIN_CHAT_NAME,
+            10,
+            "the former main chat to be shown under its own name again",
+        )
+    finally:
+        manager.stop()
+
+
+def _display_name(manager: AgentManager, agent_id: str) -> str | None:
+    agent = manager.get_agent_by_id(agent_id)
+    assert agent is not None
+    return agent.labels.get("display_name")
+
+
+def _shown_title(manager: AgentManager, chat_id: str) -> str:
+    return next(snapshot.title for snapshot in manager.get_chat_snapshots() if snapshot.chat_id == chat_id)
 
 
 def test_a_stopped_main_chat_is_started_again_once_and_another_stopped_chat_is_left_alone(
@@ -1966,10 +2103,7 @@ def test_full_snapshot_dropping_agents_removes_them(
     assert len(agent_manager.get_agents()) == 0
     assert agent_manager.get_agent_matches_by_id(str(agent_id_1)) == []
     assert agent_manager.get_agent_matches_by_id(str(agent_id_2)) == []
-    raw = q.get_nowait()
-    assert raw is not None
-    msg = json.loads(raw)
-    assert msg["type"] == "chats_updated"
+    _next_chat_listing(q)
 
 
 def test_full_snapshot_omitting_agent_drops_it(
@@ -3921,10 +4055,7 @@ def test_full_snapshot_rebuilds_agent_set_and_broadcasts(
     assert tracked_ids == {str(second.id)}
     assert str(first.id) not in tracked_ids
 
-    raw = q.get_nowait()
-    assert raw is not None
-    msg = json.loads(raw)
-    assert msg["type"] == "chats_updated"
+    msg = _next_chat_listing(q)
     assert {chat["chat_id"] for chat in msg["chats"]} == {str(second.id)}
 
 

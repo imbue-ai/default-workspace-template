@@ -142,7 +142,9 @@ from imbue.chat.latchkey_gateway import GatewayAccess
 from imbue.chat.main_chat import MAIN_CHAT_NAME
 from imbue.chat.main_chat import MainChatCandidate
 from imbue.chat.main_chat import MainChatStore
-from imbue.chat.main_chat import resolved_main_chat_id
+from imbue.chat.main_chat import adopted_main_chat_id
+from imbue.chat.main_chat import former_main_chat_name
+from imbue.chat.main_chat import is_main_chat_name
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.models import ActiveAgentSnapshot
 from imbue.chat.models import AgentCreationError
@@ -848,6 +850,14 @@ def _converging_status(phase: HandoffPhase) -> ChatStatus:
 
 
 @pure
+@pure
+def _chat_title(agent: AgentStateItem, chat: _ResolvedChat) -> str:
+    """The name a chat is listed under: the one the user typed, else its agent's name; its handoff's while it converges."""
+    if chat.handoff is not None:
+        return chat.handoff.chat_title
+    return agent.labels.get("display_name") or agent.name
+
+
 def chat_snapshot_for_active_agent(
     agent: AgentStateItem,
     chat: _ResolvedChat,
@@ -872,7 +882,7 @@ def chat_snapshot_for_active_agent(
     is_busy = is_turn_in_flight(agent.activity_state) or agent.is_turn_closing or bool(background_tasks)
     return ChatSnapshot(
         chat_id=chat.chat_id,
-        title=handoff.chat_title if handoff is not None else (agent.labels.get("display_name") or agent.name),
+        title=_chat_title(agent, chat),
         name=handoff.chat_name if handoff is not None else agent.name,
         project=agent.labels.get("project"),
         status=_converging_status(transition.phase)
@@ -1522,27 +1532,84 @@ class AgentManager:
     def get_main_chat_id(self) -> ChatId | None:
         """The workspace's main chat (``main_chat.py``), or None while it has no chat to take it.
 
-        The chat it names is kept while it is listed; when it is gone another takes it at once and
-        is kept from then on. Until the agent list is read nothing is chosen, so a restart never
-        moves the main chat off a chat that simply has not been listed yet.
+        The chat it names is kept while it is listed. When it is gone, a new chat named ``MAIN_CHAT_NAME``
+        and awaiting its first send takes its place at once, pushed to the pages; no other chat is promoted.
+        A workspace with no main chat yet adopts one (``adopted_main_chat_id``). Until the agent list is read
+        nothing is chosen, so a restart never moves the main chat off a chat that simply has not been listed yet.
         """
+        replacement: ProvisionalChat | None = None
         with self._lock:
             stored = self._main_chat.read()
             if not self._is_agent_list_known:
                 return stored
-            resolved = resolved_main_chat_id(stored, self._main_chat_candidates_locked())
+            candidates = self._main_chat_candidates_locked()
+            if stored is None:
+                resolved = adopted_main_chat_id(candidates)
+            elif any(candidate.chat_id == stored for candidate in candidates):
+                resolved = stored
+            else:
+                replacement = self._mint_main_chat_locked()
+                resolved = replacement.chat_id
             self._main_chat.write(resolved)
+        if replacement is not None:
+            self._broadcast_provisional(replacement)
         return resolved
 
+    def _mint_main_chat_locked(self) -> ProvisionalChat:
+        """A new chat awaiting its first send to stand in for a main chat that is gone: named ``MAIN_CHAT_NAME``
+        while no other chat is, else the first free "Chat N". Lock held."""
+        is_name_free = not is_name_conflict(MAIN_CHAT_NAME, self._taken_names_locked())
+        return self._mint_awaiting_chat_locked("", MAIN_CHAT_NAME if is_name_free else "")
+
     def make_main_chat(self, chat_id: ChatId) -> bool:
-        """Star ``chat_id`` as the workspace's main chat, and push the list that shows it; False when the chat
-        cannot be the main chat (a helper another agent started, or no chat this app lists)."""
+        """Star ``chat_id`` as the workspace's main chat, keeping its name, and push the list that shows it; False
+        when the chat cannot be the main chat (a helper another agent started, or no chat this app lists).
+
+        The chat it replaces, when still named ``MAIN_CHAT_NAME``, is shown under ``former_main_chat_name`` at
+        once and renamed to it on a thread of its own; a rename that fails leaves it named as it was.
+        """
         with self._lock:
             if not any(candidate.chat_id == chat_id for candidate in self._main_chat_candidates_locked()):
                 return False
+            previous = self._main_chat.read()
             self._main_chat.write(chat_id)
-        self._broadcast_chats_updated()
+            previous_title = None if previous is None or previous == chat_id else self._chat_title_locked(previous)
+            former_name = (
+                former_main_chat_name(self._taken_names_locked())
+                if previous_title is not None and is_main_chat_name(previous_title)
+                else None
+            )
+        if previous is None or former_name is None:
+            self._broadcast_chats_updated()
+            return True
+        self.show_automatic_title(previous, former_name)
+        self._creation_cg.start_new_thread(
+            target=self._rename_former_main_chat,
+            args=(previous, former_name),
+            name=f"rename-former-main-chat-{previous[-8:]}",
+            is_checked=False,
+        )
         return True
+
+    def _rename_former_main_chat(self, chat_id: ChatId, name: str) -> None:
+        """Rename the chat that was the main chat; one that cannot be renamed now keeps the name it had."""
+        try:
+            self.rename_chat(chat_id, name)
+        except (AgentRenameError, ChatConvergingError) as e:
+            _loguru_logger.warning("Could not rename the former main chat {} to {!r}: {}", chat_id, name, e)
+            self.clear_automatic_title(chat_id)
+
+    def _chat_title_locked(self, chat_id: ChatId) -> str | None:
+        """The name a chat is listed under, ignoring a title shown ahead of its rename; None for a chat this app
+        does not list. Lock held."""
+        provisional = self._provisional_chats.get(chat_id)
+        if provisional is not None:
+            return provisional.name
+        chat = self._resolve_chat_locked(chat_id)
+        agent = self._agents.get(chat.active_agent_id) if chat is not None and chat.active_agent_id else None
+        if chat is None or agent is None:
+            return None
+        return _chat_title(agent, chat)
 
     def _main_chat_candidates_locked(self) -> list[MainChatCandidate]:
         """The chats that can be the main chat: every listed chat a user started, and every chat still provisional.
@@ -3413,11 +3480,11 @@ class AgentManager:
         self._broadcast_chats_updated()
         return minted
 
-    def _mint_awaiting_chat_locked(self, account_id: str) -> ProvisionalChat:
+    def _mint_awaiting_chat_locked(self, account_id: str, explicit_name: str = "") -> ProvisionalChat:
         chat_id = ChatId(str(AgentId()))
         provisional = ProvisionalChat(
             chat_id=chat_id,
-            name=self._mint_display_name_locked(""),
+            name=self._mint_display_name_locked(explicit_name),
             account_id=account_id,
             phase=ProvisionalChatPhase.AWAITING_FIRST_SEND,
         )

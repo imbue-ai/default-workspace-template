@@ -6,7 +6,9 @@ from pathlib import Path
 
 from imbue.chat.main_chat import MainChatCandidate
 from imbue.chat.main_chat import MainChatStore
-from imbue.chat.main_chat import resolved_main_chat_id
+from imbue.chat.main_chat import adopted_main_chat_id
+from imbue.chat.main_chat import former_main_chat_name
+from imbue.chat.main_chat import is_main_chat_name
 from imbue.chat.primitives import ChatId
 
 
@@ -20,12 +22,6 @@ def _candidate(
     )
 
 
-def test_the_main_chat_stays_on_its_chat_while_that_chat_is_listed() -> None:
-    candidates = [_candidate("agent-welcome", seeded_minute=1), _candidate("agent-busy", last_messaged_at=500.0)]
-
-    assert resolved_main_chat_id(ChatId("agent-busy"), candidates) == ChatId("agent-busy")
-
-
 def test_with_no_main_chat_the_earliest_welcome_chat_takes_it_over_a_more_recent_chat() -> None:
     candidates = [
         _candidate("agent-busy", last_messaged_at=500.0),
@@ -33,21 +29,34 @@ def test_with_no_main_chat_the_earliest_welcome_chat_takes_it_over_a_more_recent
         _candidate("agent-welcome", seeded_minute=1),
     ]
 
-    assert resolved_main_chat_id(None, candidates) == ChatId("agent-welcome")
+    assert adopted_main_chat_id(candidates) == ChatId("agent-welcome")
 
 
-def test_a_main_chat_pointer_whose_chat_is_gone_moves_to_the_chat_messaged_most_recently() -> None:
+def test_with_no_main_chat_and_no_welcome_chat_the_chat_messaged_most_recently_takes_it() -> None:
     candidates = [
         _candidate("agent-never"),
         _candidate("agent-older", last_messaged_at=100.0),
         _candidate("agent-newer", last_messaged_at=200.0),
     ]
 
-    assert resolved_main_chat_id(ChatId("agent-deleted"), candidates) == ChatId("agent-newer")
+    assert adopted_main_chat_id(candidates) == ChatId("agent-newer")
 
 
 def test_with_no_chat_there_is_no_main_chat() -> None:
-    assert resolved_main_chat_id(ChatId("agent-deleted"), []) is None
+    assert adopted_main_chat_id([]) is None
+
+
+def test_the_former_main_chat_takes_the_first_chat_number_free_both_bare_and_marked() -> None:
+    assert former_main_chat_name(["Main", "Chat 1", "Chat 3"]) == "Chat 2 (fka Main)"
+    assert former_main_chat_name(["Chat 1", "Chat 2 (fka Main)"]) == "Chat 3 (fka Main)"
+    assert former_main_chat_name([]) == "Chat 1 (fka Main)"
+
+
+def test_a_chat_is_named_main_however_it_is_capitalized_but_not_when_main_is_only_part_of_its_name() -> None:
+    assert is_main_chat_name("Main")
+    assert is_main_chat_name("main ")
+    assert not is_main_chat_name("Main notes")
+    assert not is_main_chat_name("Chat 2 (fka Main)")
 
 
 def test_the_store_keeps_the_main_chat_across_a_reload_and_forgets_it_when_cleared(tmp_path: Path) -> None:
