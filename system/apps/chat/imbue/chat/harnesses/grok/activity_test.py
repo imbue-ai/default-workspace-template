@@ -11,17 +11,16 @@ from pathlib import Path
 from typing import Any
 
 from imbue.chat.activity_state import ActivityState
-from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.grok.activity import GrokActivityTracker
 from imbue.chat.harnesses.grok.session_parser import record_timestamp
 from imbue.chat.harnesses.grok.testing import add_grok_session
 from imbue.chat.harnesses.grok.testing import append_grok_updates
 from imbue.chat.harnesses.grok.testing import find_fixture_scenario
+from imbue.chat.harnesses.grok.testing import make_grok_agent_info
 from imbue.chat.harnesses.grok.testing import read_fixture_root_ids
 from imbue.chat.harnesses.grok.testing import read_fixture_session_ids
 from imbue.chat.harnesses.grok.testing import read_fixture_updates
 from imbue.chat.harnesses.grok.watcher import GrokSessionWatcher
-from imbue.chat.harnesses.harness_type import HarnessType
 
 _ROOT = "root"
 _CHILD = "child"
@@ -46,14 +45,7 @@ def _replay(agent_state_dir: Path, scenario: str) -> list[tuple[str, str, Activi
         lines = read_fixture_updates(scenario_dir, session_id).splitlines(keepends=True)
         lines_by_session.append([(record_timestamp(json.loads(line)), session_id, line) for line in lines])
     broadcast: list[dict[str, Any]] = []
-    agent_info = AgentInfo(
-        id="agent-grok-activity",
-        name="grok-activity",
-        state="RUNNING",
-        agent_state_dir=agent_state_dir,
-        claude_config_dir=agent_state_dir / "unused",
-        harness=HarnessType.GROK,
-    )
+    agent_info = make_grok_agent_info(agent_state_dir, "agent-grok-activity", "grok-activity")
     watcher = GrokSessionWatcher.build(agent_info, lambda _agent_id, events: broadcast.extend(events))
     tracker = GrokActivityTracker.build()
     steps: list[tuple[str, str, ActivityState]] = []

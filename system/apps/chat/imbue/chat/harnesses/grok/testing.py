@@ -9,8 +9,10 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
+from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.grok.watcher import SESSIONS_DIRNAME
 from imbue.chat.harnesses.grok.watcher import UPDATES_FILENAME
+from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.mngr_grok.api import get_grok_home
 
 GROK_FIXTURES_DIR: Final[Path] = Path(__file__).parent / "fixtures"
@@ -124,3 +126,15 @@ def write_grok_auth(account_dir: Path, scopes: Mapping[str, object]) -> None:
     """Write a grok account's ``auth.json`` holding ``scopes``."""
     account_dir.mkdir(parents=True, exist_ok=True)
     (account_dir / "auth.json").write_text(json.dumps(scopes))
+
+
+def make_grok_agent_info(agent_state_dir: Path, agent_id: str, name: str) -> AgentInfo:
+    """A running grok agent whose state dir is ``agent_state_dir``; grok reads no claude config dir."""
+    return AgentInfo(
+        id=agent_id,
+        name=name,
+        state="RUNNING",
+        agent_state_dir=agent_state_dir,
+        claude_config_dir=agent_state_dir / "unused",
+        harness=HarnessType.GROK,
+    )

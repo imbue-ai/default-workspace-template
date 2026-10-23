@@ -15,6 +15,7 @@ from imbue.chat.harnesses.grok.testing import add_grok_session
 from imbue.chat.harnesses.grok.testing import append_grok_updates
 from imbue.chat.harnesses.grok.testing import find_fixture_scenario
 from imbue.chat.harnesses.grok.testing import get_fake_session_dir
+from imbue.chat.harnesses.grok.testing import make_grok_agent_info
 from imbue.chat.harnesses.grok.testing import read_fixture_root_ids
 from imbue.chat.harnesses.grok.testing import read_fixture_updates
 from imbue.chat.harnesses.grok.testing import remove_root_turn
@@ -43,14 +44,7 @@ _SUBAGENT_SPAWNED_OFFSET = 3737
 
 
 def _agent_info(agent_state_dir: Path) -> AgentInfo:
-    return AgentInfo(
-        id="agent-grok-test",
-        name="grok-test",
-        state="RUNNING",
-        agent_state_dir=agent_state_dir,
-        claude_config_dir=agent_state_dir / "unused",
-        harness=HarnessType.GROK,
-    )
+    return make_grok_agent_info(agent_state_dir, "agent-grok-test", "grok-test")
 
 
 _FINISHED = "finished"

@@ -10,11 +10,11 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.grok.queue_tracker import drop_tracker
 from imbue.chat.harnesses.grok.tap import GrokAtomicShoulderTap
 from imbue.chat.harnesses.grok.tap import GrokInterruptToComposer
+from imbue.chat.harnesses.grok.testing import make_grok_agent_info
 from imbue.chat.harnesses.grok.testing import remove_root_turn
 from imbue.chat.harnesses.grok.testing import write_root_turn
 from imbue.chat.harnesses.grok.turn_state import drop_turn_state
 from imbue.chat.harnesses.grok.watcher import GrokSessionWatcher
-from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.mngr.errors import AgentNotFoundError
 
 _SESSION = "01a156d6-f927-7091-91a4-f6692a5800da"
@@ -92,14 +92,7 @@ def _setup(tmp_path: Path) -> tuple[AgentInfo, GrokSessionWatcher, _Grok]:
     agent_state_dir.mkdir()
     drop_tracker(agent_state_dir.name)
     drop_turn_state(agent_state_dir.name)
-    agent_info = AgentInfo(
-        id=agent_state_dir.name,
-        name="grok-tap",
-        state="RUNNING",
-        agent_state_dir=agent_state_dir,
-        claude_config_dir=agent_state_dir / "unused",
-        harness=HarnessType.GROK,
-    )
+    agent_info = make_grok_agent_info(agent_state_dir, agent_state_dir.name, "grok-tap")
     watcher = GrokSessionWatcher.build(agent_info, lambda _agent_id, _events: None)
     return agent_info, watcher, _Grok(agent_state_dir)
 

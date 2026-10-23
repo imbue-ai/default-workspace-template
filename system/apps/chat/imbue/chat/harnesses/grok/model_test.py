@@ -16,6 +16,7 @@ from imbue.chat.harnesses.grok.model import parse_grok_models_output
 from imbue.chat.harnesses.grok.model import read_agent_account_dir
 from imbue.chat.harnesses.grok.queue_tracker import drop_tracker
 from imbue.chat.harnesses.grok.queue_tracker import get_tracker
+from imbue.chat.harnesses.grok.testing import make_grok_agent_info
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelIdentity
@@ -71,14 +72,7 @@ def _no_runner(**_kwargs: Any) -> _Finished:
 
 
 def _agent_info(state_dir: Path) -> AgentInfo:
-    return AgentInfo(
-        id=state_dir.name,
-        name="grok-chat",
-        state="RUNNING",
-        agent_state_dir=state_dir,
-        claude_config_dir=state_dir / "claude",
-        harness=HarnessType.GROK,
-    )
+    return make_grok_agent_info(state_dir, state_dir.name, "grok-chat")
 
 
 def _write_api_key_account(account_dir: Path, key: str = "xai-key-5c1e") -> Path:
