@@ -284,7 +284,10 @@ All on `127.0.0.1:8090`, identity from `X-Imbue-Identity`:
 | `POST /api/session` | a neko session token for this identity (section 6.3) |
 | `GET /api/connect-info` | section 5.2 |
 | `POST /api/screen-size` | section 7.2 |
+| `GET /health` | `{"status", "lifecycle"}`, the service's liveness |
 | `GET /api/state` | lifecycle, lease, profile, frontmost window title, Chromium state |
+| `POST /api/start` | start the stack (the stopped overlay's Start button) |
+| `POST /api/input-seen` | the controller's viewer reporting input activity, the profile chooser's clock (section 8.1) |
 | `GET /api/ws` | the service's own events to viewers (section 10.2) |
 | `POST /api/control/take`, `/return` | the human verbs for this identity's session |
 | `POST /api/control/acquire`, `/release`, `/handoff` | the agent verbs, with `X-Mngr-Agent-Id` as the fleet API has them |
@@ -297,6 +300,7 @@ All on `127.0.0.1:8090`, identity from `X-Imbue-Identity`:
 | `POST /api/open-url` | the `open:url` handler: a tab in Chromium, raised, with the held-URL rule while an agent drives |
 | `/browsers/...`, `GET /json/version` and the CDP proxy | the migrated fleet API (section 16); `POST /browsers/<name>/pending-url/cancel` takes `session_id` in its body or query and answers the session in control or the owner, with or without a session |
 | `/neko/...` | the reverse proxy to neko, HTTP and WebSocket, with the service's own rate limit on `/neko/api/login` |
+| `POST /api/internal/stopped` | the `screen-watch` listener telling the service a member left the group, with the reason it broadcasts (section 9.3) |
 | `GET /api/schema` | the OpenAPI document of this API (the manifest's `api_schema_path`, the workspace app model's contracts section 2), built from the routes and the route table of `api_models.py` |
 
 A visitor (an identity whose `owner` is false, section 4.6) may call only the viewer's routes, where the lease arbitrates: the page, `/api/schema`, `/api/state`, `/api/start`, `/api/connect-info`, `/api/ws`, `/api/session`, the human verbs, `/api/input-seen`, `/api/screen-size`, `/api/clipboard/image`, `/api/drop` and `/browsers/<name>/pending-url/cancel` with a visitor's session id (the owner's session, whose id the state document carries while it controls, answers a visitor 403; a paste and a drop need the session in control, and a cancel the session in control or the owner), and `/neko/...`.
