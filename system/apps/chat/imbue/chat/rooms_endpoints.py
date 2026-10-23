@@ -32,7 +32,6 @@ from workspace_layout.identity import RequestIdentity
 from workspace_layout.identity import participant_key_of
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
-from workspace_layout.roster import RosterParticipant
 
 from imbue.chat.authors import author_prefix
 from imbue.chat.authors import new_author_annotation
@@ -251,11 +250,13 @@ def _handler(state: ChatAppState) -> MentionActions:
 
 
 def _author_name(state: ChatAppState, key: ParticipantKey, identity: RequestIdentity | None) -> str:
-    entry: RosterParticipant | None = state.roster.participant(key)
-    if entry is not None:
-        return entry.display_name
+    """The name a message is said under: the roster's, else the identity's; a loopback post (no identity) by an
+    unlisted key is named after the key, the workspace agent as "Agent"."""
     if identity is not None:
         return state.roster.display_name_of(key, identity)
+    entry = state.roster.participant(key)
+    if entry is not None:
+        return entry.display_name
     return _AGENT_FALLBACK_NAME if key == WORKSPACE_AGENT_PARTICIPANT_KEY else str(key)
 
 
