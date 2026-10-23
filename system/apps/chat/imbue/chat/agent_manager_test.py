@@ -87,6 +87,7 @@ from imbue.chat.harnesses.grok.session_parser import record_timestamp
 from imbue.chat.harnesses.grok.testing import add_grok_session
 from imbue.chat.harnesses.grok.testing import append_grok_updates
 from imbue.chat.harnesses.grok.testing import find_fixture_scenario
+from imbue.chat.harnesses.grok.testing import make_grok_agent_info
 from imbue.chat.harnesses.grok.testing import read_fixture_root_ids
 from imbue.chat.harnesses.grok.testing import read_fixture_session_ids
 from imbue.chat.harnesses.grok.testing import read_fixture_updates
@@ -4342,23 +4343,7 @@ def test_a_grok_subagent_that_ends_during_a_later_turn_keeps_the_chat_waiting_un
         add_grok_session(state_dir, session_id, b"", is_root=session_id in root_ids)
         lines = read_fixture_updates(scenario_dir, session_id).splitlines(keepends=True)
         lines_by_session.append([(record_timestamp(json.loads(line)), session_id, line) for line in lines])
-    agent_info = AgentInfo(
-        id="agent-1",
-        name="Chat-1",
-        state="RUNNING",
-        agent_state_dir=state_dir,
-        claude_config_dir=state_dir / "unused",
-        harness=HarnessType.GROK,
-    )
-    watcher = GrokSessionWatcher.build(agent_info, manager.update_session_events)
-    watcher.set_finished_tasks_callback(
-        lambda task_ids: manager.forget_finished_tasks("agent-1", HarnessType.GROK, task_ids)
-    )
-    watcher.set_wake_pending_tasks_callback(
-        lambda task_ids: manager.forget_finished_tasks(
-            "agent-1", HarnessType.GROK, task_ids, is_wake_turn_pending=True
-        )
-    )
+    watcher = _grok_watcher_wired_to(manager, state_dir)
     marker_path = reader.chat_dir(ChatId("agent-1")) / f"harness-grok-{child_id}.json"
     try:
         seed_agent_state(manager, "agent-1", name="Chat-1", state="RUNNING", harness=HarnessType.GROK)
@@ -4404,23 +4389,7 @@ def test_a_grok_chat_whose_history_ended_its_background_work_reads_idle_when_the
     manager, _reader = _manager_reading_tasks(broadcaster, tmp_path)
     state_dir = tmp_path / "agents" / "agent-1"
     write_grok_agent_state(state_dir, find_fixture_scenario(scenario))
-    agent_info = AgentInfo(
-        id="agent-1",
-        name="Chat-1",
-        state="RUNNING",
-        agent_state_dir=state_dir,
-        claude_config_dir=state_dir / "unused",
-        harness=HarnessType.GROK,
-    )
-    watcher = GrokSessionWatcher.build(agent_info, manager.update_session_events)
-    watcher.set_finished_tasks_callback(
-        lambda task_ids: manager.forget_finished_tasks("agent-1", HarnessType.GROK, task_ids)
-    )
-    watcher.set_wake_pending_tasks_callback(
-        lambda task_ids: manager.forget_finished_tasks(
-            "agent-1", HarnessType.GROK, task_ids, is_wake_turn_pending=True
-        )
-    )
+    watcher = _grok_watcher_wired_to(manager, state_dir)
     try:
         seed_agent_state(manager, "agent-1", name="Chat-1", state="RUNNING", harness=HarnessType.GROK)
         manager._ensure_activity_tracking("agent-1")
@@ -4432,6 +4401,22 @@ def test_a_grok_chat_whose_history_ended_its_background_work_reads_idle_when_the
         assert not manager.busy_state_of_agent("agent-1", {}).is_busy
     finally:
         manager.stop()
+
+
+def _grok_watcher_wired_to(manager: AgentManager, state_dir: Path) -> GrokSessionWatcher:
+    """agent-1's grok watcher, its finished and wake-pending task callbacks wired to ``manager`` as the app wires them."""
+    watcher = GrokSessionWatcher.build(
+        make_grok_agent_info(state_dir, "agent-1", "Chat-1"), manager.update_session_events
+    )
+    watcher.set_finished_tasks_callback(
+        lambda task_ids: manager.forget_finished_tasks("agent-1", HarnessType.GROK, task_ids)
+    )
+    watcher.set_wake_pending_tasks_callback(
+        lambda task_ids: manager.forget_finished_tasks(
+            "agent-1", HarnessType.GROK, task_ids, is_wake_turn_pending=True
+        )
+    )
+    return watcher
 
 
 def _observe_grok_turn_marker(manager: AgentManager, kind: SpecialEventKind, timestamp: str) -> None:
