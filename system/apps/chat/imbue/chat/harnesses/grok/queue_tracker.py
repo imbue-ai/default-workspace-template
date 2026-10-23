@@ -40,7 +40,8 @@ MODEL_COMMAND_VERB: Final[str] = "/model"
 CONTROL_COMMAND_VERBS: Final[frozenset[str]] = frozenset({MODEL_COMMAND_VERB, "/effort"})
 
 PublishCallback = Callable[[list[dict[str, Any]]], None]
-# mngr's send through the agent's session: True once grok took the text, else SendFailedError with mngr's kind.
+# mngr's send through the agent's session: True when grok took the text, False when mngr says it did not, or
+# SendFailedError with mngr's kind.
 SessionSendCallback = Callable[[str], bool]
 
 
