@@ -308,11 +308,11 @@ def tk_stamp(content: str) -> str:
     return joined[:MAX_TK_STAMP_LENGTH]
 
 
-# How Claude Code reports a call that one of the workspace's hooks refused: the call's own
-# error text, opening ``<Event>:<Tool> hook error:`` (``PreToolUse:Bash hook error: [...]``).
-# The tool half admits hyphens: MCP tools arrive as ``mcp__<server>__<tool>`` and their names may
-# carry them.
-_HOOK_BLOCK_ERROR_RE: Final[re.Pattern[str]] = re.compile(r"^\w+(?::[\w-]+)? hook error:")
+# How a harness reports a call that one of the workspace's hooks refused, as the call's own error
+# text: Claude Code's opens ``<Event>:<Tool> hook error:`` (``PreToolUse:Bash hook error: [...]``),
+# grok's ``Hook denied:`` (``Hook denied: Blocked: git rebase commands are not allowed``). The tool
+# half admits hyphens: MCP tools arrive as ``mcp__<server>__<tool>`` and their names may carry them.
+_HOOK_BLOCK_ERROR_RE: Final[re.Pattern[str]] = re.compile(r"^(?:\w+(?::[\w-]+)? hook error|Hook denied):")
 
 
 def error_snippet(content: str) -> str:

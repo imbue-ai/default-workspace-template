@@ -14,14 +14,16 @@ ITS detectors here; a detector only some harnesses emit simply never fires for t
 
 Order of decision (:func:`classify_user_message`):
 
-1. An explicit detector matches (stop hook, fleet, task-notification, background-task report,
-   skill, /welcome, a seeded chat's context block, model-bar traffic, a latchkey resolution,
-   a secret-card resolution, reports merged into a turn with the user's words)
+1. An explicit detector matches (stop hook, grok's stop-hook note, grok's interrupted-turn note,
+   fleet, task-notification, background-task report, grok's wake report, skill, /welcome, a
+   seeded chat's context block, model-bar traffic, a latchkey resolution, a secret-card
+   resolution, reports merged into a turn with the user's words)
    -> that decision. Explicit detectors WIN over ``is_meta`` -- Stop-hook feedback is
    ``is_meta`` yet deliberately surfaces as a chip.
-2. else ``is_meta`` (a framework-injected, model-only message) -> hidden. One rule hides the
+2. else ``is_wake`` (a turn the harness started itself to report background work) -> a notice.
+3. else ``is_meta`` (a framework-injected, model-only message) -> hidden. One rule hides the
    whole family, present and future.
-3. else -> no decision (a genuine human turn; the parser emits no ``display`` field).
+4. else -> no decision (a genuine human turn; the parser emits no ``display`` field).
 
 """
 
@@ -82,6 +84,32 @@ _SEED_CONTEXT_RE = re.compile(rf"^\s*<{SEED_CONTEXT_TAG}>[\s\S]*?</{SEED_CONTEXT
 # commands; the harness records the command plus a <local-command-stdout> confirmation,
 # and never a model reply -- neither is a conversational turn.
 _COMPOSER_COMMAND_RE = re.compile(r"^/(model|fast|effort)\b")
+
+# Grok's note when a Stop hook sends it back to work, after a return arrow (U+21A9): "Stop blocked
+# by <hook>, continuing: <feedback>", or "Stop hook feedback, continuing: <feedback>".
+_GROK_STOP_NOTE_RE = re.compile(r"\A\s*\u21a9\s*Stop (?:blocked by [^\n]+?|hook feedback), continuing: ([\s\S]*)\Z")
+
+# Grok's account of a turn its process exited or restarted during, written when it resumes the session.
+_GROK_INTERRUPTED_TURN_RE = re.compile(r"\AGrok stopped before this turn finished \(")
+
+# The prompts grok writes itself when background work it started reports in, each its own turn.
+_GROK_REMINDER_OPEN = r"\A\s*<system-reminder>\s*"
+_GROK_TASK_COMPLETED_RE = re.compile(
+    _GROK_REMINDER_OPEN + r'Background task "([^"\n]*)" completed \(([^\n]*)\)\.$', re.MULTILINE
+)
+_GROK_MONITOR_ENDED_RE = re.compile(
+    _GROK_REMINDER_OPEN + r'Monitor "([^"\n]*)" ended: \[monitor ended: ([^\n]*)\]\.$', re.MULTILINE
+)
+_GROK_WAKE_DESCRIPTION_RE = re.compile(r"^Description: (.*?)(?: \| Duration: [^\n]*)?$", re.MULTILINE)
+_GROK_SUBAGENTS_COMPLETED_RE = re.compile(
+    _GROK_REMINDER_OPEN + r"While you were idle, (\d+) background subagents? completed:\n"
+)
+_GROK_SUBAGENT_LINE_RE = re.compile(r'- \[[^\]\n]*\] "([^"\n]*)" \u2014 ([^\n]+?)(?: \([^()\n]*\))?\n')
+_GROK_MONITOR_EVENT_RE = re.compile(r"\A\s*<monitor-event\b[^>]*>([\s\S]*?)</monitor-event>")
+_GROK_TASK_ORDINARY_END = "exit code: 0"
+_GROK_MONITOR_ORDINARY_END = "exited (code 0)"
+_MARKUP_TAG_RE = re.compile(r"<[^>\n]*>")
+_WAKE_NOTICE_LABEL = "Background update"
 
 # The slash command the chat app sends a retiring agent for its handoff summary (the
 # ``handoff-summary`` skill), followed by the output path. Shown as a chip rather than hidden:
@@ -270,6 +298,23 @@ def _match_stop_hook(content: str) -> MessageDisplay | None:
     return MessageDisplay(display=DisplayKind.CHIP, display_label="Stop hook feedback")
 
 
+def _match_grok_stop_note(content: str) -> MessageDisplay | None:
+    """Grok's note that a Stop hook sent it back to work; the chip shows the hook's feedback."""
+    match = _GROK_STOP_NOTE_RE.match(content)
+    if match is None:
+        return None
+    return MessageDisplay(
+        display=DisplayKind.CHIP, display_label="Stop hook feedback", display_body=match.group(1).strip() or None
+    )
+
+
+def _match_grok_interrupted_turn(content: str) -> MessageDisplay | None:
+    """Grok's note on a turn its process exited or restarted during; the chip shows the note."""
+    if _GROK_INTERRUPTED_TURN_RE.match(content) is None:
+        return None
+    return MessageDisplay(display=DisplayKind.CHIP, display_label="Turn interrupted")
+
+
 def _match_task_notification(content: str) -> MessageDisplay | None:
     """A background-task completion notice, bare or behind a [SYSTEM NOTIFICATION] preamble.
 
@@ -319,6 +364,53 @@ def _match_background_task_report(content: str) -> MessageDisplay | None:
     return MessageDisplay(
         display=DisplayKind.NOTICE, display_label="Background task", display_body=summaries or match.group(1).strip()
     )
+
+
+def _grok_wake_summary(content: str, fallback: str, end: str, ordinary_end: str) -> str:
+    """A grok wake report's ``Description``, else ``fallback``, with how the work ended unless it ended ordinarily."""
+    description = _GROK_WAKE_DESCRIPTION_RE.search(content)
+    summary = description.group(1).strip() if description is not None and description.group(1).strip() else fallback
+    return summary if end == ordinary_end else f"{summary} ({end})"
+
+
+def _match_grok_wake(content: str) -> MessageDisplay | None:
+    """A report grok sends itself when a background shell, monitor or subagent it started reports in."""
+    task = _GROK_TASK_COMPLETED_RE.match(content)
+    if task is not None:
+        body = _grok_wake_summary(content, task.group(1), task.group(2), _GROK_TASK_ORDINARY_END)
+        return MessageDisplay(display=DisplayKind.NOTICE, display_label="Background task completed", display_body=body)
+    monitor = _GROK_MONITOR_ENDED_RE.match(content)
+    if monitor is not None:
+        body = _grok_wake_summary(content, monitor.group(1), monitor.group(2), _GROK_MONITOR_ORDINARY_END)
+        return MessageDisplay(display=DisplayKind.NOTICE, display_label="Monitor ended", display_body=body)
+    subagents = _GROK_SUBAGENTS_COMPLETED_RE.match(content)
+    if subagents is not None:
+        return _grok_subagents_notice(content, subagents.end(), int(subagents.group(1)))
+    event = _GROK_MONITOR_EVENT_RE.match(content)
+    if event is not None:
+        lines = [line.strip() for line in event.group(1).splitlines() if line.strip()]
+        return MessageDisplay(display=DisplayKind.NOTICE, display_label="Monitor event", display_body="; ".join(lines))
+    return None
+
+
+def _grok_subagents_notice(content: str, lines_start: int, count: int) -> MessageDisplay:
+    """One notice naming each subagent a grok idle-completion report lists right after its header."""
+    outcomes: list[str] = []
+    line = _GROK_SUBAGENT_LINE_RE.match(content, lines_start)
+    while line is not None:
+        outcomes.append(f'"{line.group(1)}" {line.group(2).strip()}')
+        line = _GROK_SUBAGENT_LINE_RE.match(content, line.end())
+    label = "Background subagent completed" if count == 1 else "Background subagents completed"
+    return MessageDisplay(display=DisplayKind.NOTICE, display_label=label, display_body="; ".join(outcomes) or None)
+
+
+def _wake_notice(content: str) -> MessageDisplay:
+    """The notice for a harness's own wake turn no detector names: its first line of prose."""
+    for line in content.splitlines():
+        prose = _MARKUP_TAG_RE.sub("", line).strip()
+        if prose:
+            return MessageDisplay(display=DisplayKind.NOTICE, display_label=_WAKE_NOTICE_LABEL, display_body=prose)
+    return MessageDisplay(display=DisplayKind.NOTICE, display_label=_WAKE_NOTICE_LABEL)
 
 
 def _match_merged_background_task_reports(content: str) -> MessageDisplay | None:
@@ -439,8 +531,11 @@ _DETECTORS = (
     _match_welcome,
     _match_skill_expansion,
     _match_stop_hook,
+    _match_grok_stop_note,
+    _match_grok_interrupted_turn,
     _match_task_notification,
     _match_background_task_report,
+    _match_grok_wake,
     _match_browser_fleet,
     _match_composer_command,
     _match_handoff_summary_request,
@@ -454,12 +549,14 @@ _DETECTORS = (
 
 
 @pure
-def classify_user_message(content: str, *, is_meta: bool = False) -> MessageDisplay | None:
+def classify_user_message(content: str, *, is_meta: bool = False, is_wake: bool = False) -> MessageDisplay | None:
     """The render decision for one user message, or ``None`` for a genuine human turn shown as it arrived.
 
     ``None`` means the parser emits no ``display`` field and the frontend renders the
     baseline user bubble. Detectors run on the attachment-stripped text (see
-    ``_visible_text``); see the module docstring for the precedence rules.
+    ``_visible_text``); see the module docstring for the precedence rules. ``is_wake`` marks
+    a turn the harness started itself (grok's synthetic prompts), which is a notice even when
+    no detector names it.
     """
     visible = _visible_text(content)
     decision: MessageDisplay | None = None
@@ -467,6 +564,8 @@ def classify_user_message(content: str, *, is_meta: bool = False) -> MessageDisp
         decision = detect(visible)
         if decision is not None:
             break
+    if decision is None and is_wake:
+        decision = _wake_notice(visible)
     if decision is None and is_meta:
         decision = MessageDisplay(display=DisplayKind.HIDDEN)
     if decision is None:
@@ -487,14 +586,16 @@ def classify_user_message(content: str, *, is_meta: bool = False) -> MessageDisp
     return decision
 
 
-def stamp_user_message_display(event: dict[str, Any], content: str, *, is_meta: bool = False) -> None:
+def stamp_user_message_display(
+    event: dict[str, Any], content: str, *, is_meta: bool = False, is_wake: bool = False
+) -> None:
     """Stamp the wire's render-decision fields onto one ``user_message`` event.
 
     The ONE call every user-message emit site makes (each harness's normal path AND
     claude's queued-command attachment path), so a new wire field or a precedence change
     lands everywhere at once instead of in per-parser copies.
     """
-    decision = classify_user_message(content, is_meta=is_meta)
+    decision = classify_user_message(content, is_meta=is_meta, is_wake=is_wake)
     if decision is not None:
         decision.apply_to(event)
     if is_non_turn_tail(content, is_meta=is_meta):
