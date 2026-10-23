@@ -276,23 +276,16 @@ def _post_op(server: RunningWorkspace, body: dict[str, Any]) -> int:
         return 0
 
 
-def _post_chat_json(
-    server: RunningWorkspace,
-    path: str,
-    body: dict[str, Any],
-    headers: dict[str, str] | None = None,
-    expected_status: int = 200,
-) -> dict[str, Any]:
-    """POST ``body`` as JSON to the chat app's ``path`` (with ``headers`` beside the content type); the parsed
-    answer, which must come under ``expected_status``."""
+def _post_chat_json(server: RunningWorkspace, path: str, body: dict[str, Any]) -> dict[str, Any]:
+    """POST ``body`` as JSON to the chat app's ``path``; the parsed answer, which must come under 200."""
     request = urllib.request.Request(
         f"{server.chat_url}{path}",
         data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json", **(headers or {})},
+        headers={"Content-Type": "application/json"},
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=10) as response:
-        assert response.status == expected_status, f"{path} answered {response.status}"
+        assert response.status == 200, f"{path} answered {response.status}"
         answer = json.loads(response.read())
     assert isinstance(answer, dict)
     return answer
