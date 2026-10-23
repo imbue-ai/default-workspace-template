@@ -491,6 +491,38 @@ describe("renderAssistantRun", () => {
     );
     expect(chipRows(children)).toEqual([["t1"], ["t3"]]);
   });
+
+  it("renders grok's spawn_subagent as a sub-agent card linked to its child session", () => {
+    const spawnCall: ToolCall = {
+      tool_call_id: "grok-root-1217-call",
+      tool_name: "spawn_subagent",
+      input_chars: 120,
+      description: "stub subagent bg",
+      subagent_metadata: {
+        agent_type: "general-purpose",
+        description: "stub subagent bg",
+        session_id: "01a156db-10ae-70c2-9a0f-a0dff6d5f376",
+      },
+    };
+    const children = renderAssistantRun(
+      [assistantEvent("a1", "", [call("t1", "run_terminal_command"), spawnCall])],
+      new Map(),
+      "agent-x",
+    );
+    expect(chipRows(children)).toEqual([["t1"]]);
+    expect(allText(children)).toContain("stub subagent bg");
+    expect(allText(children)).toContain("general-purpose");
+    expect(collectClasses(children)).not.toContain("subagent-card-link--pending");
+  });
+
+  it("keeps a spawn_subagent call with nothing to show on a card among the chips", () => {
+    const children = renderAssistantRun(
+      [assistantEvent("a1", "", [call("t1"), call("t2", "spawn_subagent")])],
+      new Map(),
+      "agent-x",
+    );
+    expect(chipRows(children)).toEqual([["t1", "t2"]]);
+  });
 });
 
 // Walk a mithril vnode tree and collect every element's class string, so tests can assert

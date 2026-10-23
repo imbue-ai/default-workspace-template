@@ -617,10 +617,13 @@ class AgentBusyState(FrozenModel):
 
 
 class _FinishedTasksAwaitingTurn(FrozenModel):
-    """Harness tasks the transcript reported over while no turn was in flight, held for the turn their notice starts."""
+    """Harness tasks the transcript reported over before the turn their end starts, held for that turn."""
 
     harness: HarnessType = Field(description="The harness whose markers they are")
     task_ids: tuple[str, ...] = Field(description="The finished tasks, in the order the transcript reported them")
+    wake_pending_task_ids: tuple[str, ...] = Field(
+        description="Those whose end starts a turn of their own still to come, which keeps the chat busy until then"
+    )
     passes_left: int = Field(
         description="Background-task poller passes still to wait for that turn before removing them anyway"
     )
@@ -857,6 +860,8 @@ def chat_snapshot_for_active_agent(
     last_messaged_at: float | None,
     background_tasks: tuple[BackgroundTask, ...],
     compaction_cause: CompactionCause | None,
+    # A harness task ended whose own turn has not started yet, its marker gone or not.
+    is_wake_turn_pending: bool = False,
 ) -> ChatSnapshot:
     """The snapshot of a chat from the agent it runs on.
 
@@ -869,7 +874,12 @@ def chat_snapshot_for_active_agent(
     """
     handoff = chat.handoff
     transition = chat.transition
-    is_busy = is_turn_in_flight(agent.activity_state) or agent.is_turn_closing or bool(background_tasks)
+    is_busy = (
+        is_turn_in_flight(agent.activity_state)
+        or agent.is_turn_closing
+        or bool(background_tasks)
+        or is_wake_turn_pending
+    )
     return ChatSnapshot(
         chat_id=chat.chat_id,
         title=handoff.chat_title if handoff is not None else (agent.labels.get("display_name") or agent.name),
@@ -1703,6 +1713,7 @@ class AgentManager:
             compaction_cause_by_agent = {
                 agent.id: self._compaction_cause_by_agent.get(agent.id) for agent, _chat in listed
             }
+            wake_pending_agent_ids = self._wake_pending_agent_ids_locked()
         last_messaged = self._message_stamps.read()
         return [
             self._snapshot_as_shown(
@@ -1715,6 +1726,7 @@ class AgentManager:
                     last_messaged.get(chat.chat_id),
                     tasks_by_chat.get(chat.chat_id, ()),
                     compaction_cause_by_agent[agent.id],
+                    is_wake_turn_pending=agent.id in wake_pending_agent_ids,
                 )
             )
             for agent, chat in listed
@@ -1737,6 +1749,7 @@ class AgentManager:
             is_connecting = agent is not None and bool(self._connecting_message_ids_by_agent.get(agent.id))
             background_tasks = () if chat is None else self._background_tasks_by_chat.get(chat.chat_id, ())
             compaction_cause = None if agent is None else self._compaction_cause_by_agent.get(agent.id)
+            is_wake_turn_pending = agent is not None and agent.id in self._wake_pending_agent_ids_locked()
         if chat is None or agent is None or is_primary_agent(agent):
             return None
         return chat_snapshot_for_active_agent(
@@ -1748,6 +1761,7 @@ class AgentManager:
             self._message_stamps.read().get(chat.chat_id),
             background_tasks,
             compaction_cause,
+            is_wake_turn_pending=is_wake_turn_pending,
         )
 
     def get_active_agent_info(self, chat_id: ChatId) -> AgentInfo | None:
@@ -4749,17 +4763,30 @@ class AgentManager:
             closing_agent_ids = [agent_id for agent_id, agent in self._agents.items() if agent.is_turn_closing]
             unclaimed = self._age_finished_tasks_awaiting_turn_locked()
         for agent_id, held in unclaimed:
-            self._remove_finished_tasks(agent_id, held.harness, held.task_ids, broadcast_on_change=True)
+            self._remove_finished_tasks(agent_id, held.harness, held.task_ids, broadcast_on_change=False)
+        if unclaimed:
+            self._broadcast_chats_updated()
         for chat_id in busy_chat_ids:
             self._recompute_background_tasks(chat_id)
         # A turn's harness closes it by removing a marker, which nothing else re-reads unless an event follows.
         for agent_id in closing_agent_ids:
             self._recompute_activity_state(agent_id, broadcast_on_change=True)
 
+    def _wake_pending_agent_ids_locked(self) -> set[str]:
+        """The agents holding a task whose end starts a turn of its own still to come."""
+        return {
+            agent_id
+            for agent_id, held in self._finished_tasks_awaiting_turn_by_agent.items()
+            if held.wake_pending_task_ids
+        }
+
     def _age_finished_tasks_awaiting_turn_locked(self) -> list[tuple[str, _FinishedTasksAwaitingTurn]]:
-        """Count one pass against every held removal, and take out the ones no turn claimed in time."""
+        """Count one pass against every held removal of an agent with no turn in flight, and take out the ones no
+        turn claimed in time."""
         unclaimed: list[tuple[str, _FinishedTasksAwaitingTurn]] = []
         for agent_id, held in list(self._finished_tasks_awaiting_turn_by_agent.items()):
+            if is_turn_in_flight(self._activity_state_by_agent.get(agent_id)):
+                continue
             if held.passes_left <= 1:
                 del self._finished_tasks_awaiting_turn_by_agent[agent_id]
                 unclaimed.append((agent_id, held))
@@ -4787,7 +4814,9 @@ class AgentManager:
             self._broadcast_chats_updated()
         self._report_mid_turn_chats()
 
-    def forget_finished_tasks(self, agent_id: str, harness: HarnessType, task_ids: tuple[str, ...]) -> None:
+    def forget_finished_tasks(
+        self, agent_id: str, harness: HarnessType, task_ids: tuple[str, ...], *, is_wake_turn_pending: bool = False
+    ) -> None:
         """Drop the markers of an agent's harness-native tasks its transcript reports as over.
 
         A harness's turn-end hook only copies the tasks still listed when a turn ends normally, so
@@ -4798,20 +4827,45 @@ class AgentManager:
         The notice lands a moment before the turn it starts reads as in flight, so with no turn in
         flight the removal waits for that turn's start and goes out with it: the chat goes from
         background to working, never through idle (which would flash the chat list's done check).
+        A task whose end starts a turn of its own still to come (``is_wake_turn_pending``, grok's
+        ``will_wake``) waits for that turn even with another turn in flight, and keeps the chat
+        busy until it starts, its marker or not.
         """
         if self._background_tasks is None:
             return
         with self._lock:
-            if not is_turn_in_flight(self._activity_state_by_agent.get(agent_id)):
-                earlier = self._finished_tasks_awaiting_turn_by_agent.get(agent_id)
+            earlier = self._finished_tasks_awaiting_turn_by_agent.get(agent_id)
+            if is_wake_turn_pending or not is_turn_in_flight(self._activity_state_by_agent.get(agent_id)):
                 earlier_ids = earlier.task_ids if earlier is not None else ()
+                earlier_wake_pending_ids = earlier.wake_pending_task_ids if earlier is not None else ()
                 self._finished_tasks_awaiting_turn_by_agent[agent_id] = _FinishedTasksAwaitingTurn(
                     harness=harness,
                     task_ids=tuple(dict.fromkeys(earlier_ids + task_ids)),
+                    wake_pending_task_ids=tuple(
+                        dict.fromkeys(earlier_wake_pending_ids + (task_ids if is_wake_turn_pending else ()))
+                    ),
                     passes_left=_FINISHED_TASK_TURN_GRACE_PASSES,
                 )
                 return
+            if earlier is not None:
+                self._release_finished_tasks_awaiting_turn_locked(agent_id, earlier, task_ids)
         self._remove_finished_tasks(agent_id, harness, task_ids, broadcast_on_change=True)
+
+    def _release_finished_tasks_awaiting_turn_locked(
+        self, agent_id: str, held: _FinishedTasksAwaitingTurn, task_ids: tuple[str, ...]
+    ) -> None:
+        """Stop holding ``task_ids`` for a turn: their markers go now."""
+        remaining_ids = tuple(task_id for task_id in held.task_ids if task_id not in task_ids)
+        if not remaining_ids:
+            del self._finished_tasks_awaiting_turn_by_agent[agent_id]
+            return
+        self._finished_tasks_awaiting_turn_by_agent[agent_id] = held.model_copy_update(
+            to_update(held.field_ref().task_ids, remaining_ids),
+            to_update(
+                held.field_ref().wake_pending_task_ids,
+                tuple(task_id for task_id in held.wake_pending_task_ids if task_id not in task_ids),
+            ),
+        )
 
     def _remove_finished_tasks(
         self, agent_id: str, harness: HarnessType, task_ids: tuple[str, ...], *, broadcast_on_change: bool
@@ -4859,8 +4913,11 @@ class AgentManager:
             chat_id = record.chat_id if record is not None else ChatId(labels.get("chat_id") or agent_id)
             active_chat_id = self._chat_id_of_agent_if_active_locked(agent_id)
             tasks = () if active_chat_id is None else self._background_tasks_by_chat.get(active_chat_id, ())
+            is_wake_turn_pending = agent_id in self._wake_pending_agent_ids_locked()
         is_turn_running = agent is not None and (is_turn_in_flight(agent.activity_state) or agent.is_turn_closing)
-        return AgentBusyState(chat_id=chat_id, is_busy=is_turn_running or bool(tasks), background_tasks=tasks)
+        return AgentBusyState(
+            chat_id=chat_id, is_busy=is_turn_running or bool(tasks) or is_wake_turn_pending, background_tasks=tasks
+        )
 
     def _list_compacting_marker_paths(self) -> dict[str, Path]:
         with self._lock:

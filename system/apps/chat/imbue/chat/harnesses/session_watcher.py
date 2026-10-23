@@ -154,6 +154,13 @@ class AgentSessionWatcher(TranscriptReader, ABC):
         tasks (Claude's ``<task-notification>``) calls it.
         """
 
+    def set_wake_pending_tasks_callback(self, callback: FinishedTasksCallback) -> None:
+        """Register the sink that receives the ids of harness-native background tasks that ended and
+        will start a turn of their own that has not started yet, a turn in flight or not.
+
+        No-op by default: only a harness whose transcript says so (grok's ``will_wake``) calls it.
+        """
+
     def get_queued_messages(self) -> list[dict[str, Any]]:
         """The current queued-message snapshot; empty for a harness with no populator."""
         return []

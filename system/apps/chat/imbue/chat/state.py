@@ -182,6 +182,11 @@ class ChatAppState(MutableModel):
             watcher.set_finished_tasks_callback(
                 lambda task_ids: self.agent_manager.forget_finished_tasks(agent_info.id, agent_info.harness, task_ids)
             )
+            watcher.set_wake_pending_tasks_callback(
+                lambda task_ids: self.agent_manager.forget_finished_tasks(
+                    agent_info.id, agent_info.harness, task_ids, is_wake_turn_pending=True
+                )
+            )
             self.agent_manager.register_queue_idle_handler(agent_info.id, watcher.notify_idle)
             self.agent_manager.register_queue_busy_handler(agent_info.id, watcher.notify_busy)
             # A harness that holds the queue on its agent's behalf (antigravity) also needs to

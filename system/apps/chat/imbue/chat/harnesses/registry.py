@@ -57,7 +57,9 @@ from imbue.chat.harnesses.codex.session import CodexHarnessSession
 from imbue.chat.harnesses.codex.watcher import CodexSessionWatcher
 from imbue.chat.harnesses.codex.watcher import CodexTranscriptLoader
 from imbue.chat.harnesses.events import SpecialEventKind
-from imbue.chat.harnesses.grok.placeholder import GrokPlaceholderActivityTracker
+from imbue.chat.harnesses.grok.activity import GrokActivityTracker
+from imbue.chat.harnesses.grok.watcher import GrokSessionWatcher
+from imbue.chat.harnesses.grok.watcher import GrokTranscriptLoader
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import InterruptToComposer
 from imbue.chat.harnesses.interrupt import RestartDrainInterruptToComposer
@@ -538,24 +540,33 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # No `/login` popup, unlike codex and pi: agy has no such command. Signing in is what
         # a bare `agy` does on first launch, which is what the instructions below say.
     ),
-    # grok is LAUNCH-ONLY, like opencode: it names the shared placeholders until its own
-    # watcher, tracker, resolver and catalog land.
     HarnessType.GROK: HarnessSpec(
         name=HarnessType.GROK,
-        watcher_class=PlaceholderSessionWatcher,
-        loader_class=PlaceholderSessionWatcher,
-        tracker_class=GrokPlaceholderActivityTracker,
-        process_started_marker_filename=GrokPlaceholderActivityTracker.marker_filename,
+        # Tails the updates.jsonl of each top-level session mngr_grok records and of each subagent's
+        # child session. The dot is a latch per top-level session on the turn markers grok writes for
+        # every turn; mngr_grok's ``active`` also covers background subagents, which read as
+        # ``background`` instead.
+        watcher_class=GrokSessionWatcher,
+        loader_class=GrokTranscriptLoader,
+        tracker_class=GrokActivityTracker,
+        process_started_marker_filename=GrokActivityTracker.marker_filename,
         # Written by mngr_grok's hook at grok's SessionStart and deleted by its launch script. It can
         # appear before grok's paywall paints, so a send relies on mngr_grok's gate check, not on it.
         startup_ready_marker=StartupReadyMarker(
             filename=GROK_SESSION_STARTED_MARKER_FILENAME, is_deleted_at_launch=True
         ),
+        # The shared placeholders: the model bar switches nothing and its catalog is empty.
         resolver_class=PlaceholderModelResolver,
         catalog_factory=lambda: EMPTY_CATALOG,
         # mngr_grok's status line writes model_state.json at the state-dir root.
         model_state_relative_path=Path("."),
-        special_kinds=frozenset(),
+        special_kinds=frozenset(
+            {
+                SpecialEventKind.TURN_STARTED,
+                SpecialEventKind.TURN_COMPLETED,
+                SpecialEventKind.TURN_ABORTED,
+            }
+        ),
         popups=(_MODEL_BAR_POPUP,),
     ),
     # The seed segment of a chat the Imbue Studio app opened (``chat_seed.py``): turns the app wrote

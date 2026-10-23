@@ -158,7 +158,7 @@ switching agents is working, or error once the switch failed.
 A chat is busy when its agent will resume on its own: a turn is in flight, or a
 background task is pending whose completion starts one. The pending tasks are
 one marker file each under `data/.apps/chat/background_tasks/<chat-id>/`,
-written by `system/scripts/run_in_background.py` and by Claude's Stop hook, and
+written by `system/scripts/run_in_background.py` and by Claude's and grok's hooks, and
 read through the `system/libs/chat_background_tasks` library (`background_tasks.py`
 here wraps it, and creates the directory's root at startup so the shell's avatar
 can watch it). A poller of its own reads each chat's directory, keyed by the
@@ -170,7 +170,13 @@ the Claude watcher removes a Claude task's marker once the transcript's
 `<task-notification>` reports the task completed, failed or killed: a turn the
 user interrupts, or one that fails, runs no Stop hook, and the finished task
 would otherwise read as pending until the next Stop or Claude's exit, as it
-still does in a chat the app is not tailing. With no turn in flight the removal
+still does in a chat the app is not tailing. The grok watcher does the same for a
+grok task (a background shell, monitor or subagent of a top-level session) once
+the session's `task_completed` or `subagent_finished` record reports it over.
+One the record marks `will_wake` starts a turn of its own: its removal waits for
+that turn even when the task ended during another turn, whose Stop hook removes
+its marker before the turn ends, and the chat stays busy until it starts.
+With no turn in flight the removal
 waits for the turn the notice starts and goes out with it, so the chat goes from
 `background` to `working` without reading idle in between; a notice that starts
 no turn (a task stopped from Claude's `/tasks`) ends the wait three poller passes
@@ -498,7 +504,7 @@ user sends in it. A
 name the user or an agent chose is left alone. What has been tried is kept in
 `naming.json` in the chat's folder, so a restart neither renames a named chat
 nor retries past the limit. A harness with no `OneShotCompletion` (Pi,
-Antigravity, OpenCode) keeps the minted name, and a secondary chat names
+Antigravity, Grok, OpenCode) keeps the minted name, and a secondary chat names
 nothing.
 
 ## Compaction
@@ -529,7 +535,7 @@ describes is not used here, since the sweep is the timer.
 
 Idle compaction applies to the harnesses mngr can compact: Claude, Codex and Pi
 (`supports_compaction` in `harnesses/registry.py`, shipped on `/api/harnesses`).
-Antigravity and OpenCode chats are never compacted or passed to the plugin, and
+Antigravity, Grok and OpenCode chats are never compacted or passed to the plugin, and
 their model menu has no Auto-compact row.
 
 **The Auto-compact setting.** Each chat is On or Off, chosen in the model menu's

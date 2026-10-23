@@ -5,6 +5,8 @@ import type {
   AgentSwitchEvent,
   AssistantMessageEvent,
   CompactionCause,
+  SpecialEventKind,
+  SpecialTranscriptEvent,
   UserMessageEvent,
 } from "../models/Response";
 import {
@@ -473,5 +475,21 @@ describe("isSubagentRunning", () => {
 
   it("is not running with no assistant turns", () => {
     expect(isSubagentRunning([userMsg("t1", "hi")])).toBe(false);
+  });
+
+  it("is settled by a turn-end marker after a reply that carries no stop_reason", () => {
+    const reply = assistantText("t2", "STUB_CHILD: done", null);
+    const ended = (kind: SpecialEventKind): SpecialTranscriptEvent => ({
+      timestamp: "t3",
+      type: "special",
+      event_id: `s-${kind}`,
+      source: "grok/common_transcript",
+      kind,
+    });
+
+    expect(isSubagentRunning([userMsg("t1", "say hi"), reply])).toBe(true);
+    expect(isSubagentRunning([userMsg("t1", "say hi"), reply, ended("turn_completed")])).toBe(false);
+    expect(isSubagentRunning([userMsg("t1", "say hi"), reply, ended("turn_aborted")])).toBe(false);
+    expect(isSubagentRunning([userMsg("t1", "say hi"), reply, ended("turn_started")])).toBe(true);
   });
 });
