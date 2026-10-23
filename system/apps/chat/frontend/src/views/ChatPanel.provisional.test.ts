@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => {
     // Whether the transcript load 404'd, and whether the chat app has sent its chat list yet.
     isConversationNotFound: false,
     isChatListReceived: true,
+    // Whether the room list names the page's chat.
+    isRoom: false,
     // The ids the account list holds, and the one a new chat would start on.
     accountIds: ["acct-1"] as string[],
     selectedAccountId: "acct-1" as string | null,
@@ -49,7 +51,7 @@ vi.mock("../models/Chats", () => ({
   removeChatsUpdatedListener: () => undefined,
   buildAgentTerminalUrl: () => "",
   getTerminalUrl: () => "",
-  isRoomChat: () => false,
+  isRoomChat: () => mocks.isRoom,
   getRoomById: () => undefined,
 }));
 vi.mock("../models/Response", () => ({
@@ -89,7 +91,7 @@ vi.mock("./transcript-scroll-engine", () => ({
 // (a factory is hoisted, so it cannot share one constant).
 vi.mock("./TranscriptScrollbar", () => ({ TranscriptScrollbar: { view: () => null } }));
 vi.mock("./MessageInput", () => ({ MessageInput: { view: () => null } }));
-vi.mock("./ModelProviderMenu", () => ({ ModelProviderMenu: { view: () => null } }));
+vi.mock("./ModelProviderMenu", () => ({ ModelProviderMenu: { view: () => null }, roomChip: () => null }));
 vi.mock("./AgentTerminalPanel", () => ({ AgentTerminalPanel: { view: () => null } }));
 vi.mock("./ActivityIndicator", () => ({ ActivityIndicator: { view: () => null } }));
 vi.mock("./TerminalViewToggle", () => ({ TerminalViewToggle: { view: () => null } }));
@@ -454,5 +456,53 @@ describe("ChatPanel over a seeded chat", () => {
     expect(findByClass(tree, "message-list-create-failed")).toBeTruthy();
     expect(renderedText(tree)).toContain("mngr create exited with code 3");
     expect(mocks.fetchEvents).not.toHaveBeenCalled();
+  });
+});
+
+describe("ChatPanel over an awaiting chat its first send turns into a room", () => {
+  beforeEach(() => {
+    mocks.isConversationNotFound = false;
+    mocks.isChatListReceived = true;
+    mocks.loadSnapshotWithStream.mockClear();
+    mocks.noteLoadedArrivals.mockClear();
+    mocks.chat = undefined;
+    mocks.isRoom = false;
+  });
+
+  afterEach(() => {
+    mocks.isRoom = false;
+  });
+
+  it("stands the send's bubble down by the placed snapshot, as the room held the message before the stream", async () => {
+    awaiting("");
+    const render = mountPanel();
+    render();
+    expect(mocks.loadSnapshotWithStream).not.toHaveBeenCalled();
+
+    // The send made the chat a room: its record is gone, and the room list names the id.
+    mocks.proto = undefined;
+    mocks.isRoom = true;
+    render();
+    await flushAsync();
+
+    expect(mocks.loadSnapshotWithStream).toHaveBeenCalledWith(AGENT_ID);
+    expect(mocks.noteLoadedArrivals).toHaveBeenCalledWith(AGENT_ID);
+    expect(mocks.loadSnapshotWithStream.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.noteLoadedArrivals.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("leaves a chat the send launched an agent for to the stream, which carries the send's turn", async () => {
+    awaiting("");
+    const render = mountPanel();
+    render();
+
+    mocks.proto = undefined;
+    mocks.chat = chatSnapshotFixture(AGENT_ID);
+    render();
+    await flushAsync();
+
+    expect(mocks.loadSnapshotWithStream).toHaveBeenCalledWith(AGENT_ID);
+    expect(mocks.noteLoadedArrivals).not.toHaveBeenCalled();
   });
 });
