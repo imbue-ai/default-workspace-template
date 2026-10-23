@@ -68,6 +68,7 @@ PRE_TOOL_USE_BUDGET_SECONDS = 45.0
 SHELL_TOOL_NAMES = frozenset({"run_terminal_command", "monitor"})
 ALWAYS_BACKGROUNDED_TOOL_NAME = "monitor"
 USE_TOOL_NAME = "use_tool"
+USE_TOOL_INLINE_KEYS = frozenset({"tool_name", "tool_input"})
 WORKFLOW_TOOL_NAME = "workflow"
 MAX_USE_TOOL_NESTING = 8
 CLAUDE_SHELL_TOOL_NAME = "Bash"
@@ -177,10 +178,13 @@ def session_id_of(payload: Mapping[str, object]) -> str | None:
 
 def is_use_tool_wrapper(tool_name: str, tool_input: Mapping[str, object]) -> bool:
     """Whether a call's input is ``use_tool``'s inline form, which grok reports under the inner
-    tool's name: ``{"tool_name": <inner>, "tool_input": {...}}``."""
+    tool's name: exactly ``{"tool_name": <inner>, "tool_input": {...}}``. A call whose input carries
+    fields of its own beside those is judged as itself."""
     inner_name = tool_input.get("tool_name")
-    if not isinstance(inner_name, str) or not isinstance(
-        tool_input.get("tool_input"), dict
+    if (
+        set(tool_input) != USE_TOOL_INLINE_KEYS
+        or not isinstance(inner_name, str)
+        or not isinstance(tool_input.get("tool_input"), dict)
     ):
         return False
     return tool_name in (USE_TOOL_NAME, inner_name)

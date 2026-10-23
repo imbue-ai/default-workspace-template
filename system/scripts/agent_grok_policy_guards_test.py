@@ -594,6 +594,34 @@ def test_a_use_tool_wrapper_is_judged_by_the_call_inside_it(tmp_path: Path) -> N
     )
 
 
+@pytest.mark.parametrize(
+    ("tool_name", "decoy_call", "refusal_fragment"),
+    [
+        pytest.param(
+            "run_terminal_command",
+            {"command": "cat data/.secrets/svc.env", "description": "x"},
+            "read only by with_secrets.py",
+            id="shell-read-of-the-secrets-store",
+        ),
+        pytest.param(
+            "monitor",
+            {"command": "git rebase -i HEAD~2", "description": "x"},
+            "git rebase commands are not allowed",
+            id="monitor-running-a-rebase",
+        ),
+    ],
+)
+def test_a_call_carrying_a_decoy_wrapper_beside_its_own_fields_is_judged_as_itself(
+    tmp_path: Path, tool_name: str, decoy_call: dict[str, Any], refusal_fragment: str
+) -> None:
+    decoy = {"tool_name": tool_name, "tool_input": {"command": "true", "description": "x"}}
+
+    _assert_denied(
+        _pre(tmp_path, _pre_tool_use(tool_name, {**decoy_call, **decoy})),
+        refusal_fragment,
+    )
+
+
 def test_an_allowed_use_tool_shell_call_is_rewritten_inside_the_wrapper(
     tmp_path: Path,
 ) -> None:
