@@ -41,9 +41,10 @@ with its own directory, named by its parent's `subagent_spawned` record.
 | `subagent_spawned` | `child_session_id`, `description`, `subagent_type` | links the child session to its `spawn_subagent` call |
 | `task_completed`, `subagent_finished` | `task_snapshot.task_id`, `subagent_id`, `will_wake` | background work reported over |
 | `hook_annotation` | `message` | a Stop hook's continuation |
+| `compaction_checkpoint` | none | a top-level session's compaction, as the "Context was compacted" status; a child session's is dropped |
 
 Ignored: `hook_execution`, `retry_state`, `task_backgrounded`, `background_tasks`, `plan`,
-`available_commands_update`, `session_info_update`, and the compaction and rewind kinds.
+`available_commands_update`, `session_info_update`, the other compaction kinds and the rewind kinds.
 
 ## Assistant text
 
