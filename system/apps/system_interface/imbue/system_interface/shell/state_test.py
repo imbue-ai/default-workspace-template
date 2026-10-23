@@ -16,6 +16,7 @@ import pytest
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from pydantic import ValidationError
+from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import UserId
@@ -39,7 +40,6 @@ from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILENAME
 from imbue.system_interface.shell.desktops import default_desktop
 from imbue.system_interface.shell.errors import LaunchUnavailableError
-from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPost
 from imbue.system_interface.shell.launches import LaunchPostOutcome

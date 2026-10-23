@@ -6,6 +6,8 @@ from app_schema.api_schema import ErrorResponse
 from chat_background_tasks.markers import TaskSource
 from pydantic import Field
 from pydantic import SecretStr
+from workspace_layout.primitives import ParticipantKey
+from workspace_layout.roster import RosterParticipant
 
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import CompactionCause
@@ -145,6 +147,20 @@ class SendMessageRequest(FrozenModel):
     desktop_id: str = Field(
         default="", description="The id of the desktop the sender was on at send time ('' for legacy callers)"
     )
+
+
+class MeResponse(FrozenModel):
+    """What ``GET /api/me`` answers: the participant key of the requester (the multiplayer spec, section 5.4)."""
+
+    participant: ParticipantKey = Field(
+        description="The requester's participant key; ``owner`` on an unshared workspace"
+    )
+
+
+class ParticipantsResponse(FrozenModel):
+    """What ``GET /api/participants`` answers: the roster as the shell holds it, pictures reachable from this origin."""
+
+    participants: tuple[RosterParticipant, ...] = Field(description="Everyone who may be here, in roster order")
 
 
 class SendMessageResponse(FrozenModel):
@@ -479,7 +495,7 @@ class HeldSendSnapshot(FrozenModel):
     """One message the chat app is holding for the successor, as the chat pages render it while converging."""
 
     message_id: str = Field(description="The sender's stable send-time id, which the page's own bubble carries too")
-    text: str = Field(description="The message, verbatim")
+    text: str = Field(description="The message's words, without the author prefix a non-owner's send carries")
 
 
 class HandoffState(FrozenModel):

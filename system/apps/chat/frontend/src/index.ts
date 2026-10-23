@@ -9,6 +9,7 @@ import { getChatAgentId, getChatId, getChatSessionId } from "./document-meta";
 import { addActiveAgentChangedListener, initChats } from "./models/Chats";
 import { forgetPendingChoice } from "./models/ModelSettings";
 import { trackPendingLaneSettlement } from "./models/PendingLane";
+import { ensureParticipants } from "./models/Participants";
 import { closeProviderChooser, isProviderChooserOpen, loadAccountsWithRetry } from "./models/Providers";
 import { ProviderChooserModal } from "./views/ProviderChooserModal";
 import { llmApi } from "./llm-api";
@@ -85,6 +86,8 @@ async function bootstrap(): Promise<void> {
   // The pointer hides while text is typed into the composer.
   installCursorHidingWhileTyping(document);
   void loadAccountsWithRetry();
+  // Who this page is and who everyone else is, so a turn is drawn as the viewer's own or as another person's.
+  void ensureParticipants();
   // A page visited directly follows its own width into and out of the phone layout; a framed one is told.
   window.matchMedia(COMPACT_MEDIA_QUERY).addEventListener("change", () => m.redraw());
   const rootElement = document.getElementById("app");

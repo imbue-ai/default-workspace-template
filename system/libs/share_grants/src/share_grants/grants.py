@@ -35,7 +35,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
 
-from share_gateway.json_values import is_json_object
+from share_grants.json_values import is_json_object
 
 
 class GrantsError(ValueError):
@@ -105,6 +105,15 @@ class Grants:
         if normalized in self.workspace.emails:
             return True
         return any(normalized in service_grants.emails for service_grants in self.services.values())
+
+    def granted_app_names(self) -> set[str]:
+        """The services (the shell's apps) the document admits someone to on their own origin: each
+        ``[services.<name>]`` table naming anyone (a workspace-level grant exempts none)."""
+        return {
+            name
+            for name, grant_list in self.services.items()
+            if grant_list.users or grant_list.emails or grant_list.email_domains
+        }
 
 
 def _parse_string_list(raw: object, scope: str, key: str) -> list[str]:

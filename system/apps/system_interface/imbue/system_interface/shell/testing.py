@@ -27,6 +27,8 @@ from app_manifest.registry import read_registry
 from flask import Flask
 from flask import request
 from loguru import logger
+from workspace_layout.identity import IDENTITY_HEADER
+from workspace_layout.identity import RequestIdentity
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.primitives import ClientActivityKind
 from workspace_layout.primitives import ClientId
@@ -47,8 +49,6 @@ from imbue.system_interface.shell.desktop_document import DESKTOPS_FILE_VERSION
 from imbue.system_interface.shell.desktop_document import cascade_frame
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILENAME
 from imbue.system_interface.shell.desktops import DESKTOPS_FILENAME
-from imbue.system_interface.shell.identity import IDENTITY_HEADER
-from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.primitives import PageId

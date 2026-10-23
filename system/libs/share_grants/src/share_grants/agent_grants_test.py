@@ -1,43 +1,40 @@
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
+import json
+import logging
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-from cryptography.hazmat.primitives.asymmetric.rsa import generate_private_key
-from cryptography.hazmat.primitives.serialization import Encoding
-from cryptography.hazmat.primitives.serialization import PublicFormat
 
-from share_gateway.agent_grants import AUTHORIZED_KEYS_MARKER
-from share_gateway.agent_grants import AgentGrant
-from share_gateway.agent_grants import AgentGrantsError
-from share_gateway.agent_grants import AgentInvite
-from share_gateway.agent_grants import AgentKeyError
-from share_gateway.agent_grants import AgentScopeError
-from share_gateway.agent_grants import WORKSPACE_SCOPE
-from share_gateway.agent_grants import canonical_public_key_line
-from share_gateway.agent_grants import find_grant_by_token
-from share_gateway.agent_grants import find_invite_by_code
-from share_gateway.agent_grants import fingerprint_of_public_key_line
-from share_gateway.agent_grants import hash_admission_token
-from share_gateway.agent_grants import hash_invite_code
-from share_gateway.agent_grants import is_agent_id
-from share_gateway.agent_grants import mint_admission_token
-from share_gateway.agent_grants import mint_agent_id
-from share_gateway.agent_grants import mint_invite_code
-from share_gateway.agent_grants import normalize_invite_code
-from share_gateway.agent_grants import parse_agent_grants
-from share_gateway.agent_grants import parse_agent_invites
-from share_gateway.agent_grants import reconcile_authorized_keys
-from share_gateway.agent_grants import reconcile_authorized_keys_text
-from share_gateway.agent_grants import render_agent_grants
-from share_gateway.agent_grants import render_agent_invites
-from share_gateway.agent_grants import sanitize_agent_name
-from share_gateway.agent_grants import validate_scope
-from share_gateway.testing import new_ed25519_public_key_line
+from share_grants.agent_grants import (
+    AUTHORIZED_KEYS_MARKER,
+    WORKSPACE_SCOPE,
+    AgentGrant,
+    AgentGrantsError,
+    AgentInvite,
+    AgentScopeError,
+    find_grant_by_token,
+    find_invite_by_code,
+    fingerprint_of_public_key_line,
+    hash_admission_token,
+    hash_invite_code,
+    is_agent_id,
+    mint_admission_token,
+    mint_agent_id,
+    mint_invite_code,
+    normalize_invite_code,
+    parse_agent_grants,
+    parse_agent_invites,
+    read_agent_last_seen_times,
+    reconcile_authorized_keys,
+    reconcile_authorized_keys_text,
+    render_agent_grants,
+    render_agent_invites,
+    sanitize_agent_name,
+    validate_scope,
+)
 
 # The public key and fingerprint of the owner-exec profile's shared test vectors, so the fingerprint rule here is
-# checked against the one the daemon uses as keyid.
+# checked against the one the daemon uses as keyid; every grant these tests make carries this key.
 _VECTOR_PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIqI4910CfGV/VLbLTy6XXLKZwm/HZQSG/N0iAG0D29c"
 _VECTOR_FINGERPRINT = "SHA256:fe85JkIjo8VPe+XqXJGH5Mau1EMFdK1OdKvJUFicyA8"
 
@@ -47,7 +44,7 @@ _NOW = datetime(2026, 10, 15, 18, 0, tzinfo=timezone.utc)
 def make_grant(
     agent_id: str = "", scope: "str | list[str]" = WORKSPACE_SCOPE, expires_at: datetime | None = None
 ) -> AgentGrant:
-    public_key, fingerprint = canonical_public_key_line(new_ed25519_public_key_line())
+    public_key, fingerprint = _VECTOR_PUBLIC_KEY, fingerprint_of_public_key_line(_VECTOR_PUBLIC_KEY)
     return AgentGrant(
         agent_id=agent_id or mint_agent_id(),
         name="Josh's Claude",
@@ -84,29 +81,40 @@ def test_admission_token_is_random_and_hashes_stably() -> None:
     assert hash_admission_token(first) != hash_admission_token(second)
 
 
+def test_last_seen_times_read_an_absent_file_quietly_and_warn_about_one_that_cannot_be_read(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = tmp_path / "last_seen.json"
+    assert read_agent_last_seen_times(path) == {}
+    assert caplog.records == []
+
+    path.write_text("not json")
+    assert read_agent_last_seen_times(path) == {}
+    path.write_text("[]")
+    assert read_agent_last_seen_times(path) == {}
+    assert [record.levelname for record in caplog.records] == ["WARNING", "WARNING"]
+
+    # An entry whose time cannot be read is left out rather than failing the read, each noted at debug level.
+    caplog.clear()
+    caplog.set_level(logging.DEBUG, logger="share_grants.agent_grants")
+    path.write_text(json.dumps({"va-1": "2026-10-15T18:00:00+00:00", "va-2": "yesterday", "va-3": 3}))
+    assert read_agent_last_seen_times(path) == {"va-1": _NOW}
+    assert [record.levelname for record in caplog.records] == ["DEBUG", "DEBUG"]
+    assert [record.getMessage().split(" at ")[0] for record in caplog.records] == [
+        "Skipped the last-seen time of va-2",
+        "Skipped the last-seen time of va-3",
+    ]
+
+
+def test_fingerprint_of_public_key_line_matches_openssh() -> None:
+    assert fingerprint_of_public_key_line(_VECTOR_PUBLIC_KEY) == _VECTOR_FINGERPRINT
+
+
 def test_agent_ids_have_the_prefix_and_shape() -> None:
     agent_id = mint_agent_id()
     assert is_agent_id(agent_id)
     assert not is_agent_id("agent-" + "a" * 32)
     assert not is_agent_id("va-short")
-
-
-def test_canonical_public_key_line_drops_the_comment_and_fingerprints_like_openssh() -> None:
-    line, fingerprint = canonical_public_key_line(_VECTOR_PUBLIC_KEY + " agent@laptop")
-    assert line == _VECTOR_PUBLIC_KEY
-    assert fingerprint == _VECTOR_FINGERPRINT
-    assert fingerprint_of_public_key_line(line) == _VECTOR_FINGERPRINT
-
-
-def test_canonical_public_key_line_refuses_other_key_types_and_garbage() -> None:
-    rsa_public = generate_private_key(public_exponent=65537, key_size=2048).public_key()
-    rsa_line = rsa_public.public_bytes(Encoding.OpenSSH, PublicFormat.OpenSSH).decode("ascii")
-    with pytest.raises(AgentKeyError):
-        canonical_public_key_line(rsa_line)
-    with pytest.raises(AgentKeyError):
-        canonical_public_key_line("ssh-ed25519 not-base64!!")
-    with pytest.raises(AgentKeyError):
-        canonical_public_key_line("")
 
 
 def test_validate_scope_accepts_workspace_and_grantable_apps_only() -> None:

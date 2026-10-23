@@ -18,6 +18,7 @@ from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import reconcile
 from imbue.chat.accounts import regenerate_create_defaults
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.authors import AuthorStore
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.auto_open import LEDGER_FILENAME
@@ -40,6 +41,7 @@ from imbue.chat.main_chat import MAIN_CHAT_FILENAME
 from imbue.chat.main_chat import MainChatStore
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.message_stamps import STAMPS_FILENAME
+from imbue.chat.roster_client import RosterClient
 from imbue.chat.secret_requests import DEFAULT_SECRETS_DIRECTORY
 from imbue.chat.secret_requests import SECRET_REQUESTS_DIRNAME
 from imbue.chat.secret_requests import SecretRequestStore
@@ -194,6 +196,8 @@ def build_production_state(
         secret_requests=SecretRequestStore(
             requests_directory=data_dir / SECRET_REQUESTS_DIRNAME, secrets_directory=DEFAULT_SECRETS_DIRECTORY
         ),
+        authors=AuthorStore(root=chat_records_root),
+        roster=RosterClient(shell=shell),
     )
     # Eviction wiring: the state drops what an agent holds resident -- the transcript,
     # watch thread, and inotify watches -- when the manager sees it destroyed (the whole

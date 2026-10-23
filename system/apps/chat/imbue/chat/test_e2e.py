@@ -33,11 +33,13 @@ from playwright.sync_api import Locator
 from playwright.sync_api import Page
 from playwright.sync_api import ViewportSize
 from playwright.sync_api import expect
+from workspace_layout.primitives import ParticipantKey
 
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import delete_account
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import MngrMessenger
+from imbue.chat.authors import new_author_annotation
 from imbue.chat.auto_open import chat_root_path
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
@@ -573,6 +575,38 @@ def test_live_stream_delivers_new_events(e2e_server: RunningWorkspace, page: Pag
     expect(_chat(page).locator(".message-user", has_text="This is a new streamed message!")).to_be_visible(
         timeout=10000
     )
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_another_persons_turn_is_drawn_under_their_name_without_the_prefix(
+    e2e_server: RunningWorkspace, page: Page
+) -> None:
+    """A turn a visitor sent (delivered prefixed, and annotated as theirs) is drawn on the owner's page as another
+    person's: their name over the bubble, their monogram beside it, and never the prefix."""
+    _open_fixture_chat(page, e2e_server)
+    expect(_chat(page).locator(".message-user").first).to_be_visible(timeout=15000)
+
+    delivered = "[from: Bob] Could you check the deploy?"
+    e2e_server.chat_state.authors.record(
+        ChatId(FIXTURE_AGENT_ID),
+        new_author_annotation("msg-bob-1", ParticipantKey("user:user-bob-4471"), "Bob", delivered),
+    )
+    new_event = {
+        "type": "user",
+        "uuid": "uuid-bob-1",
+        "timestamp": "2026-01-01T00:01:00Z",
+        "message": {"role": "user", "content": delivered},
+    }
+    with open(e2e_server.session_file, "a") as f:
+        f.write(json.dumps(new_event) + "\n")
+
+    row = _chat(page).locator(".message-other", has_text="Could you check the deploy?")
+    expect(row).to_be_visible(timeout=10000)
+    expect(row.locator(".message-author")).to_have_text("Bob")
+    expect(row.locator("[data-participant-picture]")).to_have_text("B")
+    expect(row).not_to_contain_text("[from:")
+    # The owner's own turns keep their side.
+    expect(_chat(page).locator(".message-user").first).not_to_have_class(re.compile(r"message-other"))
 
 
 # A conversation whose transcript ends with an unresolved enqueue, so the Claude queue

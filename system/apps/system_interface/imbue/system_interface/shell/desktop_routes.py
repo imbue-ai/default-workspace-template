@@ -19,7 +19,6 @@ from flask import send_file
 from flask.typing import ResponseReturnValue
 from loguru import logger
 from pydantic import Field
-from workspace_layout.answers import ClientView
 from workspace_layout.answers import ContextAnswer
 from workspace_layout.answers import DesktopOpAnswer
 from workspace_layout.answers import DesktopsListing
@@ -364,9 +363,7 @@ def arrival_answer(shell: ShellState, outcome: ClientArrivalOutcome | None) -> C
         return ClientArrivalResponse(desktop_id=None, created_desktop=None, replaced_desktop_name=None)
     return ClientArrivalResponse(
         desktop_id=str(outcome.desktop_id),
-        created_desktop=(
-            shell.desktop_view(outcome.created_desktop) if outcome.created_desktop is not None else None
-        ),
+        created_desktop=(shell.desktop_view(outcome.created_desktop) if outcome.created_desktop is not None else None),
         replaced_desktop_name=outcome.replaced_desktop_name,
     )
 
@@ -408,14 +405,6 @@ def _with_active_desktop(record: ClientRecord, active: DesktopId | None) -> Clie
 
 
 @pure
-def resolved_client_view(record: ClientRecord, is_connected: bool, desktops: Sequence[Desktop]) -> ClientView:
-    """The ``client`` object of desktop contracts.md section 5.5 with its desktop settled by the rule of section 4.3:
-    the stored one when a desktop of that id exists, else the first desktop (a stored id nothing holds any more,
-    or a view a version-1 clients file recorded, never reaches a reader)."""
-    return client_view(_with_active_desktop(record, resolve_active_desktop(record, desktops)), is_connected)
-
-
-@pure
 def _popped_out_windows(desktop: Desktop, layout: DesktopLayout) -> tuple[PoppedOutWindow, ...]:
     """The client's popped-out windows of one desktop, each with whether the user hid its ghost."""
     return tuple(
@@ -425,12 +414,10 @@ def _popped_out_windows(desktop: Desktop, layout: DesktopLayout) -> tuple[Popped
     )
 
 
-def inventory_document(shell: ShellState) -> InventoryDocument:
-    """The one document of desktop contracts.md section 5.5: whether a preview shell answered, the workspace's name,
-    every desktop, every app, and every known client with ``shown``, the windows of its active desktop that its layout
-    does not minimize, and ``popped_out``, the windows its layouts of every desktop say it popped out into their own
-    windows."""
-    desktops = shell.list_desktops()
+def inventory_clients(shell: ShellState, desktops: Sequence[Desktop]) -> list[InventoryClient]:
+    """Every known client with ``shown``, the windows of its active desktop that its layout does not minimize, and
+    ``popped_out``, the windows its layouts of every desktop say it popped out into their own windows: the client
+    objects of the inventory document and the clients listing alike."""
     connected = shell.broadcaster.connected_client_ids()
     clients: list[InventoryClient] = []
     for record in shell.clients.list_clients():
@@ -446,12 +433,19 @@ def inventory_document(shell: ShellState) -> InventoryDocument:
             popped_out.extend(_popped_out_windows(desktop, layout))
         view = client_view(_with_active_desktop(record, active), str(record.id) in connected)
         clients.append(InventoryClient.model_validate({**dict(view), "shown": shown, "popped_out": tuple(popped_out)}))
+    return clients
+
+
+def inventory_document(shell: ShellState) -> InventoryDocument:
+    """The one document of desktop contracts.md section 5.5: whether a preview shell answered, the workspace's name,
+    every desktop, every app, and every known client as ``inventory_clients`` answers them."""
+    desktops = shell.list_desktops()
     return InventoryDocument(
         is_preview=get_state().is_preview,
         workspace_name=get_state().workspace_name.resolve(),
         desktops=tuple(shell.desktop_views(desktops)),
         apps=tuple(shell.inventory.views()),
-        clients=tuple(clients),
+        clients=tuple(inventory_clients(shell, desktops)),
     )
 
 

@@ -496,7 +496,11 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
     [
       statusDot(row, "flex-none"),
       m("span", { class: "chat-rail-title min-w-0 flex-1 truncate text-(length:--font-size-row)" }, row.title),
-      isBeingCreated(row) || (attrs.isTouch && isDeleting) ? null : attrs.isTouch ? rowKebab(row) : renamePencil(row),
+      isBeingCreated(row) || (attrs.isTouch && isDeleting)
+        ? null
+        : attrs.isTouch
+          ? rowKebab(row)
+          : [renamePencil(row), hoverKebab(row)],
     ],
   );
 }
@@ -534,6 +538,22 @@ function renamePencil(row: ChatRow): m.Vnode {
       ...innerButtonAttrs("Rename chat", () => beginRename(row)),
     },
     m.trust(icon("edit", { size: 13 })),
+  );
+}
+
+/** The row's menu under a pointer: shown beside the pencil while the row is under the pointer, as the pencil is. */
+function hoverKebab(row: ChatRow): m.Vnode {
+  return m(
+    "span",
+    {
+      class:
+        "chat-rail-row-menu -ml-2 w-0 flex-none overflow-hidden rounded p-0 text-faint opacity-0 " +
+        "hover:bg-fill-hover hover:text-primary group-hover:ml-0 group-hover:w-auto group-hover:p-0.5 " +
+        "group-hover:opacity-100 focus-visible:ml-0 focus-visible:w-auto focus-visible:p-0.5 focus-visible:opacity-100",
+      "data-chat-row-menu": row.chatId,
+      ...innerButtonAttrs("Chat actions", (kebab) => openRowMenu(row, kebab)),
+    },
+    kebabGlyph(13),
   );
 }
 

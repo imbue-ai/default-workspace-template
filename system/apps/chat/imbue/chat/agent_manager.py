@@ -46,6 +46,7 @@ from imbue.chat.agent_discovery import delivered_or_raise
 from imbue.chat.agent_discovery import discover_agents
 from imbue.chat.agent_discovery import get_host_dir
 from imbue.chat.agent_discovery import read_claude_config_dir_from_env_file
+from imbue.chat.authors import split_author_prefix
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.autocompact import ChatAutoCompactor
@@ -792,7 +793,12 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
         target_account_id=transition.target_account_id,
         target_harness=transition.target_harness,
         target_label=_target_label_of(transition),
-        held_sends=(*trigger, *(HeldSendSnapshot(message_id=held.message_id, text=held.text) for held in others)),
+        # The page draws a held send as the sender's own bubble, so it gets the words behind the author prefix a
+        # non-owner's send carries; the record keeps the delivered text for the successor.
+        held_sends=(
+            *trigger,
+            *(HeldSendSnapshot(message_id=held.message_id, text=split_author_prefix(held.text)[1]) for held in others),
+        ),
         model_pick=transition.model_pick,
         error=transition.error,
         failed_step=transition.failed_step,

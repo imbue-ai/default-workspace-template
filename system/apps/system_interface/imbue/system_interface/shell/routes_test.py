@@ -8,6 +8,7 @@ import pytest
 from app_manifest.primitives import AppName
 from flask import Flask
 from flask.testing import FlaskClient
+from workspace_layout.identity import RequestIdentity
 from workspace_layout.ops import OpRequester
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
@@ -18,7 +19,6 @@ from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
 from imbue.system_interface.shell.errors import LaunchUnavailableError
-from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPost
 from imbue.system_interface.shell.launches import LaunchPostOutcome
@@ -376,6 +376,7 @@ def test_a_client_records_what_its_phone_layout_shows_and_the_inventory_carries_
         "last_seen",
         "is_connected",
         "user_id",
+        "participant",
         "entries",
         "shown_history",
         "desktop_revision",

@@ -37,9 +37,9 @@ from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import ClientShownRequest
 from imbue.system_interface.shell.data_types import stoppable_program_of
 from imbue.system_interface.shell.desktop_routes import dispatch_desktop_op
+from imbue.system_interface.shell.desktop_routes import inventory_clients
 from imbue.system_interface.shell.desktop_routes import inventory_document
 from imbue.system_interface.shell.desktop_routes import register_desktop_routes
-from imbue.system_interface.shell.desktop_routes import resolved_client_view
 from imbue.system_interface.shell.desktop_routes import show_page_for_client
 from imbue.system_interface.shell.embedder_messages import EmbedderMessageRelayRequest
 from imbue.system_interface.shell.embedder_messages import MessageDelivery
@@ -254,17 +254,10 @@ def start_app(name: str) -> ResponseReturnValue:
 
 
 def list_clients() -> ResponseReturnValue:
-    """Every client known to the workspace (a browser or desktop that opened it), with whether it is connected now."""
+    """Every client known to the workspace (a browser or desktop that opened it), with whether it is connected now,
+    who it arrived as, and the windows it shows: the inventory's client objects."""
     shell = _shell()
-    desktops = shell.list_desktops()
-    connected = shell.broadcaster.connected_client_ids()
-    listing = ClientsListing(
-        clients=tuple(
-            resolved_client_view(record, str(record.id) in connected, desktops)
-            for record in shell.clients.list_clients()
-        )
-    )
-    return model_response(listing)
+    return model_response(ClientsListing(clients=tuple(inventory_clients(shell, shell.list_desktops()))))
 
 
 def inventory_route() -> ResponseReturnValue:

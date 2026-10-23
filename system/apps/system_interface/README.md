@@ -79,10 +79,11 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
 - The home-screen tile: `/apple-touch-icon.png` and `/manifest.webmanifest`,
   from the selected avatar design and the workspace's name, which also titles
   the page.
-- Presence (`/api/presence`, `/api/presence/heartbeat`): who is connected
-  right now, with their identity and profile (see "Who is here").
+- Presence (`/api/presence`, `/api/presence/heartbeat`) and the roster
+  (`/api/roster`): who is connected right now, with their identity and
+  profile, and everyone who may be here (see "Who is here").
 - The WebSocket (`/api/ws`): `apps_updated`, `desktops_updated`,
-  `presence_updated`, `placements_updated`, `active_desktop_changed`,
+  `presence_updated`, `roster_updated`, `placements_updated`, `active_desktop_changed`,
   `client_entries_changed`, `avatar_status`, `avatar_selection_changed`, and
   `layout_op` (contracts section 6); it accepts each client's `client_state`
   report.
@@ -278,35 +279,58 @@ that declared `closeChord` keeps its window on the close chord (it is only sent
 Every request that reaches the shell carries the requester's identity in the
 `X-Imbue-Identity` header, stamped by whichever proxy admitted it -- the local
 `mngr forward` or the share gateway (the header contract is in
-`system/services/share_gateway/README.md`): `owner`, and on a shared
-workspace the account's `user_id` and `email`. Nothing more: what to call an
+`system/services/share_gateway/README.md`): `owner`, on a shared
+workspace the account's `user_id` and `email`, and for a visiting agent its
+`agent_id`, `agent_name`, and `granter`. Nothing more: what to call an
 account and what it looks like is its profile, which the shell fetches from
-imbue_cloud (below). The shell page posts `/api/presence/heartbeat` (no body)
-every 30 seconds while the tab is visible, once immediately when it becomes
-visible, and nothing when it goes away. The page sends nothing about who it
-is; the heartbeat's answer is the requester's own identity record, which is
-what the account affordances render. A heartbeat whose identity carries no
-user id -- the owner of an unshared workspace, or a request that came through
-no current proxy -- answers 204 and records nothing: there is nobody to name.
+imbue_cloud (below). The shell page posts `/api/presence/heartbeat` every 30
+seconds while the tab is visible, once immediately when it becomes visible,
+and nothing when it goes away, carrying when the page last saw keyboard or
+pointer input. The page sends nothing about who it is; the heartbeat's answer
+is the requester's own identity record and the participant key its entries
+carry (the multiplayer spec's section 4.1: `user:<user_id>`, or `owner` for
+the owner of a workspace that has not shared, who reveals no account until
+they share), which is what the account affordances render. A visiting agent
+never heartbeats (its presence is the gateway's last-seen record); its
+request answers 204.
 
-Each user has one file, `data/.state/presence/users/<user_id>.json`, holding
-their identity snapshot (`user_id`, `email`, `owner`, `first_seen`), written
-on first sight and rewritten only when the email or owner flag changes; a
-heartbeat just touches the file's mtime. A user is connected while that mtime
-is within 70 seconds (two missed heartbeats plus slack), and the mtime is
-their last seen. Files are never removed: whoever is not connected is still
-the record of who was last here, and when. Apps read the directory the same
-way. The shell sends the connected set on every WebSocket connect and pushes
-`presence_updated` -- one entry per user, however many tabs -- when a
-heartbeat brings someone in and, from a sweep every 10 seconds, when
+Each person has one file, `data/.state/presence/users/<id>.json` (`<id>`
+their user id, or `owner`), holding their identity snapshot (`user_id`,
+`email`, `owner`, `first_seen`) and the newest input time a page of theirs
+reported (`last_input_at`), written on first sight and rewritten when any of
+those change; a heartbeat just touches the file's mtime. A person is
+connected while that mtime is within 70 seconds (two missed heartbeats plus
+slack), and the mtime is their last seen; they are active while their newest
+input is within 60 seconds and idle otherwise. Files are never removed:
+whoever is not connected is still the record of who was last here, and when.
+Apps read the directory the same way. The shell sends the connected set on
+every WebSocket connect and pushes `presence_updated` -- one entry per
+account, however many tabs; the `owner` record names none and is left out --
+when a heartbeat brings someone in and, from a sweep every 10 seconds, when
 someone's heartbeats have stopped. The taskbar's Presence tray widget draws
-one profile picture per connected user once two or more are connected (one is
-just you): everyone else first, the requester's own entry last with an accent
-ring and "(you)" on its hover text, the own entry being the one whose
+one profile picture per connected account once two or more are connected (one
+is just you): everyone else first, the requester's own entry last with an
+accent ring and "(you)" on its hover text, the own entry being the one whose
 `user_id` the heartbeat's answer names. A changed name or profile picture
 reaches the tray through the profile cache (below) within five minutes. A
 visitor granted a single app never loads the shell and so never appears: they
 are in one app, not in the workspace.
+
+**The roster.** Everyone who may be here, whether or not they are, is the
+roster (`roster.py`; `GET /api/roster`, and `roster_updated` on the socket on
+connect, with every `presence_updated`, and whenever one of its files
+changes): the owner first, then every account the workspace-level grants of
+`data/.secrets/share_grants.toml` name, then every invited email still in
+them, then every visiting agent of `data/.secrets/agent_access/grants.toml`
+(both parsed by the `share_grants` library the gateway parses them with), and
+the workspace's own agent last, named after the workspace and pictured by the
+selected avatar. Each entry carries its key, kind, name, picture, email, the
+handle it is mentioned by (`@agent` for the workspace agent, reserved first;
+a later collision gets `-2`, `-3`, ...), its colour (one of eight, by the
+key's hash), and whether it is here: a person by their heartbeats, a visiting
+agent by the gateway's `data/.state/agent_access/last_seen.json`, under the
+same 70-second window. The apps read the roster from here rather than from
+its files: it is the one place names, keys, and handles are decided.
 
 **Profiles.** A user's display name and profile picture come from imbue_cloud,
 not the header: the shell (`profiles.py`) fetches `GET {broker_url}/users/<user_id>/profile`

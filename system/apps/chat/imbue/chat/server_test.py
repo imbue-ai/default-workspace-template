@@ -20,9 +20,10 @@ from urllib.parse import quote
 from urllib.parse import urlparse
 from uuid import uuid4
 
+import httpx
 import pytest
-from app_schema.testing import assert_api_schema_describes_app
 from app_manifest.testing import assert_document_policy_admits_page
+from app_schema.testing import assert_api_schema_describes_app
 from chat_background_tasks.listing import chats_from_agents_payload
 from flask import Flask
 from flask.testing import FlaskClient
@@ -31,6 +32,14 @@ from oom_priority import bands
 from pydantic import Field
 from pydantic import SecretStr
 from werkzeug.test import TestResponse
+from workspace_layout.identity import IDENTITY_HEADER
+from workspace_layout.identity import RequestIdentity
+from workspace_layout.primitives import ParticipantKey
+from workspace_layout.primitives import ParticipantKind
+from workspace_layout.roster import RosterDocument
+from workspace_layout.shell_url import shell_base_url
+from workspace_layout.testing import FakeShell
+from workspace_layout.testing import roster_participant
 
 from imbue.chat.accounts import INDEX_VERSION
 from imbue.chat.accounts import account_dir
@@ -50,6 +59,7 @@ from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
+from imbue.chat.authors import text_sha256
 from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_naming import chat_naming_prompt
@@ -4111,6 +4121,32 @@ def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cance
     assert not log_path.exists()
 
 
+def test_a_visitors_send_to_a_converging_chat_is_held_prefixed_and_listed_without_the_prefix(
+    tmp_path: Path,
+) -> None:
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first, _successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING)
+
+    held = client.post(
+        f"/api/chats/{first}/message",
+        json={"message": "and this", "message_id": "m-2"},
+        headers={IDENTITY_HEADER: _VISITOR.model_dump_json(exclude_none=True)},
+    )
+    assert held.status_code == 202
+
+    # The successor is handed the prefix; the page, which draws the held send as the sender's own bubble, is not.
+    manager: AgentManager = state_of(app).agent_manager
+    record = manager._chat_record_store.read(ChatId(first))
+    assert record is not None and record.handoff is not None
+    assert [held_send.text for held_send in record.handoff.held_sends] == ["Carry on in Codex", "[from: bob] and this"]
+    listed = client.get("/api/chats").get_json()["chats"]
+    assert listed[0]["handoff"]["held_sends"] == [
+        {"message_id": "trigger-1", "text": "Carry on in Codex"},
+        {"message_id": "m-2", "text": "and this"},
+    ]
+
+
 def test_a_secret_request_notice_to_a_converging_chat_is_held_as_a_script_send(tmp_path: Path) -> None:
     app, _log_path = _recording_app(tmp_path)
     client = app.test_client()
@@ -5070,3 +5106,194 @@ def test_a_compaction_that_finished_while_no_watcher_ran_ends_when_the_chat_is_o
 
 def test_the_chat_describes_its_api_the_way_its_manifest_says(client: FlaskClient) -> None:
     assert_api_schema_describes_app(client, Path(__file__).resolve().parents[2] / "app.toml")
+
+
+def _identity_header(identity: RequestIdentity) -> dict[str, str]:
+    return {IDENTITY_HEADER: identity.model_dump_json(exclude_none=True)}
+
+
+_VISITOR = RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@example.com")
+_VISITING_AGENT = RequestIdentity(
+    owner=False, agent_id="va-0123456789abcdef0123456789abcdef", agent_name="Josh's Claude", granter="user:8c0f"
+)
+_BRACKETED_AGENT = RequestIdentity(
+    owner=False, agent_id="va-0123456789abcdef0123456789abcdef", agent_name="Josh's [Claude]", granter="user:8c0f"
+)
+_OWNER_ACCOUNT = RequestIdentity(owner=True, user_id="user-owner-9c21", email="owner@example.com")
+
+
+def test_a_visitors_message_reaches_the_agent_prefixed_and_is_annotated(
+    app: Flask, messenger: RecordingMngrMessenger
+) -> None:
+    agent_id = "agent-00000000000000000000000000000031"
+    seed_agent_state(state_of(app).agent_manager, agent_id, name="Chat-31")
+    client = app.test_client()
+
+    response = client.post(
+        f"/api/chats/{agent_id}/message",
+        json={"message": "please rebase", "message_id": "m-1"},
+        headers=_identity_header(_VISITOR),
+    )
+
+    assert response.status_code == 200
+    # No shell to ask for a name, so the visitor is named after their email.
+    assert messenger.sent == [(agent_id, "[from: bob] please rebase")]
+    (annotation,) = state_of(app).authors.annotations(ChatId(agent_id))
+    assert (annotation.message_id, str(annotation.author), annotation.display_name) == (
+        "m-1",
+        "user:user-bob-4471",
+        "bob",
+    )
+    assert annotation.text_sha256 == text_sha256("[from: bob] please rebase")
+
+
+def test_a_visitors_intake_reaches_the_agent_prefixed_and_is_annotated(
+    app: Flask, messenger: RecordingMngrMessenger
+) -> None:
+    """The launcher's text enters through the intake route rather than the message route, and is attributed the
+    same way."""
+    agent_id = "agent-00000000000000000000000000000035"
+    seed_agent_state(state_of(app).agent_manager, agent_id, name="Chat-35")
+    client = app.test_client()
+
+    response = client.post(
+        "/api/chats/intake",
+        json={"message": "please deploy", "target": "chat", "chat_id": agent_id, "is_delivery_awaited": True},
+        headers=_identity_header(_VISITOR),
+    )
+
+    assert response.status_code == 200
+    assert messenger.sent == [(agent_id, "[from: bob] please deploy")]
+    (annotation,) = state_of(app).authors.annotations(ChatId(agent_id))
+    assert (str(annotation.author), annotation.display_name) == ("user:user-bob-4471", "bob")
+    assert annotation.text_sha256 == text_sha256("[from: bob] please deploy")
+
+
+def test_a_visitors_slash_command_is_delivered_as_typed_but_still_annotated(
+    app: Flask, messenger: RecordingMngrMessenger
+) -> None:
+    agent_id = "agent-00000000000000000000000000000032"
+    seed_agent_state(state_of(app).agent_manager, agent_id, name="Chat-32")
+    client = app.test_client()
+
+    client.post(
+        f"/api/chats/{agent_id}/message",
+        json={"message": "/clear", "message_id": "m-2"},
+        headers=_identity_header(_VISITING_AGENT),
+    )
+
+    assert messenger.sent == [(agent_id, "/clear")]
+    (annotation,) = state_of(app).authors.annotations(ChatId(agent_id))
+    assert (str(annotation.author), annotation.display_name) == (
+        "agent:va-0123456789abcdef0123456789abcdef",
+        "Josh's Claude",
+    )
+
+
+def test_a_name_the_prefix_cannot_carry_is_made_safe_before_delivery_and_annotation(
+    app: Flask, messenger: RecordingMngrMessenger
+) -> None:
+    agent_id = "agent-00000000000000000000000000000034"
+    seed_agent_state(state_of(app).agent_manager, agent_id, name="Chat-34")
+    client = app.test_client()
+
+    client.post(
+        f"/api/chats/{agent_id}/message",
+        json={"message": "hello", "message_id": "m-3"},
+        headers=_identity_header(_BRACKETED_AGENT),
+    )
+
+    assert messenger.sent == [(agent_id, "[from: Josh's [Claude] hello")]
+    (annotation,) = state_of(app).authors.annotations(ChatId(agent_id))
+    assert annotation.display_name == "Josh's [Claude"
+
+
+def test_the_owners_messages_are_never_prefixed_nor_annotated_under_either_key(
+    app: Flask, messenger: RecordingMngrMessenger
+) -> None:
+    agent_id = "agent-00000000000000000000000000000033"
+    seed_agent_state(state_of(app).agent_manager, agent_id, name="Chat-33")
+    client = app.test_client()
+
+    client.post(f"/api/chats/{agent_id}/message", json={"message": "one"})
+    client.post(f"/api/chats/{agent_id}/message", json={"message": "two"}, headers=_identity_header(_OWNER_ACCOUNT))
+
+    assert messenger.sent == [(agent_id, "one"), (agent_id, "two")]
+    assert state_of(app).authors.annotations(ChatId(agent_id)) == ()
+
+
+def test_me_answers_the_requesters_participant_key(app: Flask) -> None:
+    client = app.test_client()
+    assert client.get("/api/me").get_json() == {"participant": "owner"}
+    assert client.get("/api/me", headers=_identity_header(_VISITOR)).get_json() == {
+        "participant": "user:user-bob-4471"
+    }
+    assert client.get("/api/me", headers=_identity_header(_OWNER_ACCOUNT)).get_json() == {
+        "participant": "user:user-owner-9c21"
+    }
+
+
+_AGENT_PICTURE_PATH = "/api/avatars/imbue-character/icon.png?size=64"
+
+
+def _shell_with_workspace_agent(picture_url: str | None) -> FakeShell:
+    agent = roster_participant(
+        ParticipantKey("workspace-agent"),
+        kind=ParticipantKind.WORKSPACE_AGENT,
+        display_name="Atlas",
+        handle="agent",
+        profile_picture_url=picture_url,
+    )
+    return FakeShell(roster_document=RosterDocument(participants=(agent,)))
+
+
+def test_participants_are_the_shells_roster_with_the_agents_picture_on_this_origin(
+    config: Config, signed_in_account: str, tmp_path: Path
+) -> None:
+    shell = _shell_with_workspace_agent(_AGENT_PICTURE_PATH)
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger(), chat_files_root=tmp_path)
+    client = create_application(build_test_state(config=config, agent_manager=manager, shell=shell)).test_client()
+
+    (agent,) = client.get("/api/participants").get_json()["participants"]
+
+    assert (agent["key"], agent["display_name"], agent["handle"]) == ("workspace-agent", "Atlas", "agent")
+    assert agent["profile_picture_url"] == "/api/participants/workspace-agent/picture"
+
+
+def test_the_workspace_agents_picture_is_fetched_from_the_shell_and_relayed_with_its_type(
+    config: Config, signed_in_account: str, tmp_path: Path
+) -> None:
+    asked: list[str] = []
+
+    def shell_answers(request: httpx.Request) -> httpx.Response:
+        asked.append(str(request.url))
+        if request.url.path.endswith("icon.png"):
+            return httpx.Response(200, content=b"\x89PNG...", headers={"Content-Type": "image/png"})
+        return httpx.Response(503, text="starting")
+
+    def app_over(shell: FakeShell) -> FlaskClient:
+        manager = AgentManager.build(
+            WebSocketBroadcaster(), messenger=RecordingMngrMessenger(), chat_files_root=tmp_path
+        )
+        state = build_test_state(
+            config=config,
+            agent_manager=manager,
+            shell=shell,
+            http_client=httpx.Client(transport=httpx.MockTransport(shell_answers)),
+        )
+        return create_application(state).test_client()
+
+    relayed = app_over(_shell_with_workspace_agent(_AGENT_PICTURE_PATH)).get(
+        "/api/participants/workspace-agent/picture"
+    )
+    assert (relayed.status_code, relayed.mimetype, relayed.data) == (200, "image/png", b"\x89PNG...")
+    assert asked == [f"{shell_base_url()}{_AGENT_PICTURE_PATH}"]
+
+    # A shell that does not answer the picture with a success is a bad gateway, not this app's failure.
+    refused = app_over(_shell_with_workspace_agent("/api/avatars/other/missing.svg")).get(
+        "/api/participants/workspace-agent/picture"
+    )
+    assert refused.status_code == 502
+    # A roster that names no picture has nothing to relay.
+    unpictured = app_over(_shell_with_workspace_agent(None)).get("/api/participants/workspace-agent/picture")
+    assert unpictured.status_code == 404

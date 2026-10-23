@@ -3,14 +3,16 @@ from pathlib import Path
 
 import pytest
 
-from share_gateway.grants import GrantsError
-from share_gateway.grants import grants_lock_path
-from share_gateway.grants import load_grants
-from share_gateway.grants import locked_grants_file
-from share_gateway.grants import parse_grants
-from share_gateway.grants import render_grants
-from share_gateway.grants import upgrade_invites
-from share_gateway.grants import upgrade_invites_in_file
+from share_grants.grants import (
+    GrantsError,
+    grants_lock_path,
+    load_grants,
+    locked_grants_file,
+    parse_grants,
+    render_grants,
+    upgrade_invites,
+    upgrade_invites_in_file,
+)
 
 _FULL_GRANTS = """
 [workspace]
@@ -107,6 +109,48 @@ def test_has_email_invite_is_exact_and_ignores_domain_grants() -> None:
     assert grants.has_email_invite("CAROL@example.com") is True
     assert grants.has_email_invite("anyone@imbue.com") is False
     assert grants.has_email_invite("erin@example.com") is False
+
+
+# The document as the minds desktop renders it: every scope carries all three lists.
+_GRANTS_WITH_A_PER_APP_GRANT = """\
+[workspace]
+users = ["3f1c"]
+emails = []
+email_domains = []
+
+[services.docs]
+users = []
+emails = ["reviewer@example.com"]
+email_domains = []
+
+[services.notes]
+users = []
+emails = []
+email_domains = []
+"""
+
+
+def test_granted_app_names_are_the_apps_whose_table_names_anyone() -> None:
+    assert parse_grants(_GRANTS_WITH_A_PER_APP_GRANT).granted_app_names() == {"docs"}
+
+
+@pytest.mark.parametrize(
+    "grants_text",
+    [
+        "",
+        '[workspace]\nusers = ["3f1c"]\nemails = ["friend@example.com"]\nemail_domains = ["example.org"]\n',
+        '[services.docs]\nusers = ["  ", ""]\n',
+        '[services."my-app"]\n',
+    ],
+)
+def test_no_app_is_granted_by_a_workspace_grant_alone_or_an_empty_table(grants_text: str) -> None:
+    assert parse_grants(grants_text).granted_app_names() == set()
+
+
+def test_a_quoted_table_key_and_each_of_the_three_lists_grant_their_app() -> None:
+    text = '[services."my-app"]\nemail_domains = ["example.org"]\n\n[services.other]\nusers = ["3f1c"]\n'
+    assert parse_grants(text).granted_app_names() == {"my-app", "other"}
+
 
 
 def test_render_grants_roundtrips_through_parse() -> None:

@@ -21,6 +21,9 @@ from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import field_validator
+from workspace_layout.identity import RequestIdentity
+from workspace_layout.identity import participant_key_of
+from workspace_layout.identity import visiting_user_id
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import IfPresent
@@ -101,8 +104,6 @@ from imbue.system_interface.shell.errors import LaunchUnavailableError
 from imbue.system_interface.shell.errors import PinnedWindowError
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.errors import WindowNotFoundError
-from imbue.system_interface.shell.identity import RequestIdentity
-from imbue.system_interface.shell.identity import visiting_user_id
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.inventory import DEFAULT_SHARE_DOMAIN_PATH
 from imbue.system_interface.shell.launches import LaunchPoster
@@ -113,6 +114,8 @@ from imbue.system_interface.shell.placements import StoredDesktopLayout
 from imbue.system_interface.shell.primitives import LaunchTargetKind
 from imbue.system_interface.shell.primitives import mint_save_id
 from imbue.system_interface.shell.primitives import mint_window_id
+from imbue.system_interface.shell.share_grants import AgentGrantsReader
+from imbue.system_interface.shell.share_grants import DEFAULT_AGENT_GRANTS_PATH
 from imbue.system_interface.shell.share_grants import DEFAULT_SHARE_GRANTS_PATH
 from imbue.system_interface.shell.share_grants import ShareGrantsReader
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
@@ -155,6 +158,8 @@ class ShellState(MutableModel):
         frozen=True, description="Each account's display name and avatar, from imbue_cloud through the on-disk cache"
     )
     activity: ClientActivityLog = Field(frozen=True, description="The client-activity event log")
+    share_grants: ShareGrantsReader = Field(frozen=True, description="The people's grants the desktop writes")
+    agent_grants: AgentGrantsReader = Field(frozen=True, description="The visiting agents' grants the gateway writes")
     broadcaster: WebSocketBroadcaster = Field(frozen=True, description="The WebSocket fan-out to the shell's windows")
     avatar_catalog: AvatarCatalogStore = Field(
         frozen=True, description="The avatar designs registered in the workspace"
@@ -650,7 +655,9 @@ class ShellState(MutableModel):
             )
             # Every arrival stamps the user it came as (None for the owner), so the returning-client rule never
             # reads a user the browser has since stopped being.
-            recorded = self.clients.record_arrival(client_id, user_id, outcome.desktop_id, now)
+            recorded = self.clients.record_arrival(
+                client_id, user_id, participant_key_of(identity), outcome.desktop_id, now
+            )
         self.lifecycle.mark_visited()
         if outcome.created_desktop is not None:
             self.broadcast_desktops_updated()
@@ -845,6 +852,7 @@ def build_shell_state(
         share_env_path=_under_repo_root(DEFAULT_SHARE_ENV_PATH, repo_root),
         share_grants_path=_under_repo_root(DEFAULT_SHARE_GRANTS_PATH, repo_root),
     )
+    agent_grants = AgentGrantsReader(agent_grants_path=_under_repo_root(DEFAULT_AGENT_GRANTS_PATH, repo_root))
     shell = ShellState(
         state_directory=state_directory,
         inventory=resolved_inventory,
@@ -868,6 +876,8 @@ def build_shell_state(
             cache_directory=state_directory / "profiles", share_env_path=state_directory / "share.env"
         ),
         activity=ClientActivityLog(events_path=state_directory / CLIENT_ACTIVITY_EVENTS_PATH),
+        share_grants=share_grants,
+        agent_grants=agent_grants,
         broadcaster=broadcaster,
         avatar_catalog=AvatarCatalogStore(directory=_under_repo_root(avatar_catalog_directory, repo_root)),
         avatar_selection=AvatarSelectionStore(state_directory=state_directory),

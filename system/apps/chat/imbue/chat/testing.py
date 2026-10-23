@@ -66,6 +66,7 @@ from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.authors import AuthorStore
 from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_records import ChatAgentEntry
@@ -92,6 +93,7 @@ from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatStatus
+from imbue.chat.roster_client import RosterClient
 from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.server import create_application
 from imbue.chat.shell_client import build_chat_shell_client
@@ -698,10 +700,12 @@ def build_test_state(
     claude_auth_service: ClaudeAuthService | None = None,
     auth_flows: AuthFlowService | None = None,
     latchkey_http_client: httpx.Client | None = None,
+    http_client: httpx.Client | None = None,
     is_secondary: bool = False,
     shell: ShellLayoutInterface | None = None,
     secret_requests: SecretRequestStore | None = None,
     chat_namer: ChatNamer | None = None,
+    authors: AuthorStore | None = None,
 ) -> ChatAppState:
     """Build a `ChatAppState` for tests, injecting fakes where provided.
 
@@ -730,7 +734,7 @@ def build_test_state(
         agent_manager=manager,
         event_queues=event_queues,
         claude_auth_service=claude_auth_service if claude_auth_service is not None else ClaudeAuthService(),
-        http_client=httpx.Client(follow_redirects=False, timeout=30.0),
+        http_client=http_client if http_client is not None else httpx.Client(follow_redirects=False, timeout=30.0),
         latchkey_http_client=latchkey_http_client if latchkey_http_client is not None else httpx.Client(timeout=30.0),
         is_secondary=is_secondary,
         shell=shell if shell is not None else DisconnectedShell(),
@@ -739,6 +743,9 @@ def build_test_state(
         # rooted in its tmp_path.
         secret_requests=secret_requests if secret_requests is not None else build_temporary_secret_request_store(),
         chat_namer=chat_namer,
+        # Never this package's own data/: a test that reads the annotations back injects a store under its tmp_path.
+        authors=authors if authors is not None else AuthorStore(root=Path(tempfile.mkdtemp(prefix="chat-authors-"))),
+        roster=RosterClient(shell=shell if shell is not None else DisconnectedShell()),
     )
     # Match production: eviction drops a destroyed agent's transcripts, the release a stopped chat's
     # that nobody is streaming, and removing a chat's active agent ends the chat's streams.
