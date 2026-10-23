@@ -330,7 +330,8 @@ retyped, up to `MAX_DELIVERY_ATTEMPTS`.
 A person typing at grok's pane leaves text mngr appends the next message to. grok runs both as one
 turn, which the witness accepts, but mngr's submission probe looks for the message's own tail, so
 the send holds mngr's message lock for its whole confirmation window (about 90 s) before failing
-as unconfirmed, and a `/model` typed after a draft becomes part of a prompt.
+as unconfirmed, the chat shows none of the merged turn's events until it does (the flush mutes the
+live emit while it waits), and a `/model` typed after a draft becomes part of a prompt.
 
 ### E19. grok — an entry that spent its delivery attempts stays Queued
 An entry whose attempts are exhausted stays Queued until a stop hands it back; there is no
