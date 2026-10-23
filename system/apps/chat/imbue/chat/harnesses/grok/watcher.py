@@ -84,7 +84,7 @@ _ROOT_TURNS_WAKE_INTERVAL_SECONDS: Final[float] = 0.1
 # How long after a send the worker looks for grok's user turn holding the sent block.
 _DELIVERY_WITNESS_SECONDS: Final[float] = 15.0
 _DELIVERY_POLL_SECONDS: Final[float] = 0.25
-# The longest a flush keeps the live emit muted while it waits for mngr's answer.
+# The longest a flush keeps the live emit muted while it waits for mngr's answer and grok's turn holding the block.
 _EMIT_EMBARGO_CEILING_SECONDS: Final[float] = 120.0
 _USER_ROLE: Final[str] = "user"
 
