@@ -2257,7 +2257,7 @@ class _GrokChat:
     def close(self) -> None:
         self.world.join_timers()
         self.session.close()
-        self.tracker.detach()
+        self.tracker.detach(self._on_published)
         drop_grok_tracker(self.agent_info.id)
         drop_grok_turn_state(self.agent_info.id)
 
