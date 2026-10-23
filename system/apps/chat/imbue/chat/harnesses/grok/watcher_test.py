@@ -907,8 +907,8 @@ def test_the_running_worker_sends_a_held_message_within_a_second_of_the_turn_end
     watcher.start()
     try:
         watcher._queue.enqueue("held", "t0", is_turn_open=True)
-        # Each attempt republishes the queue; two of them have found the turn in flight.
-        wait_for(lambda: publish_count[0] >= 3, timeout=5.0, poll_interval=0.02)
+        # The enqueue publishes the queue and each attempt republishes it; one attempt has found the turn in flight.
+        wait_for(lambda: publish_count[0] >= 2, timeout=5.0, poll_interval=0.02)
         assert grok.sent == []
         turn_ended_at = time.monotonic()
         remove_root_turn(tmp_path, _PLAIN_ROOT)
