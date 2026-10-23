@@ -23,9 +23,6 @@ import pytest
 from oom_priority import bands
 from script_modules_testing import load_script_module
 
-# Every test starts the hook, which starts bash guards and their python checkers; that is well
-# under a second warm, but the suite's 10 s default is for pure Python.
-pytestmark = pytest.mark.timeout(60)
 _SUBPROCESS_TIMEOUT_SECONDS = 30
 
 _SCRIPTS_DIR = Path(__file__).parent
