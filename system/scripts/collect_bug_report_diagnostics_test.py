@@ -377,9 +377,6 @@ def _notes_lines(archive: zipfile.ZipFile) -> list[str]:
     return archive.read("collection-notes.txt").decode("utf-8").splitlines()
 
 
-# --- Caps and contract constants ---
-
-
 def test_the_scan_gate_path_points_at_a_gate_that_exists_in_this_repo() -> None:
     """The gate is addressed by a hardcoded path, so a rename silently disables it.
 
@@ -445,9 +442,6 @@ def test_select_log_files_drops_logs_not_written_to_in_the_last_day(
     ]
 
 
-# --- No ownership or stream filtering ---
-
-
 def test_select_log_files_keeps_every_programs_logs_both_streams(
     tmp_path: Path,
 ) -> None:
@@ -472,9 +466,6 @@ def test_select_log_files_keeps_every_programs_logs_both_streams(
         "terminal-stdout.log",
         "geopolitical-dashboard-stderr.log",
     ]
-
-
-# --- Chat selection ---
 
 
 def test_every_agent_is_a_transcript_candidate(
@@ -782,9 +773,6 @@ def test_transcript_member_names_stay_unique_within_one_archive() -> None:
     assert second.endswith(".jsonl")
 
 
-# --- Zip timestamp clamps ---
-
-
 def test_zip_records_an_epoch_fallback_mtime_at_the_formats_floor() -> None:
     """A transcript whose mtime falls back to the 1970 epoch is clamped to the
     earliest instant a zip can record, rather than failing the whole archive --
@@ -820,9 +808,6 @@ def test_zip_records_a_far_future_chat_at_the_formats_ceiling() -> None:
         # The last instant the format holds, read back a second early because a
         # DOS time records seconds in two-second steps.
         assert archive.infolist()[0].date_time == (2107, 12, 31, 23, 59, 58)
-
-
-# --- Scan verdicts (fail closed) ---
 
 
 def test_scan_targets_releases_every_file_on_a_clean_scan(tmp_path: Path) -> None:
@@ -956,9 +941,6 @@ def test_scan_targets_fails_closed_when_the_scan_times_out(tmp_path: Path) -> No
         "/tmp/logs.txt": module.NOTE_SCANNER_UNAVAILABLE,
         "/tmp/transcript.txt": module.NOTE_SCANNER_UNAVAILABLE,
     }
-
-
-# --- End-to-end output shape ---
 
 
 def test_main_prints_only_the_base64_zip_line_with_all_content_on_a_clean_scan(
@@ -1118,15 +1100,14 @@ def test_main_omits_an_unrequested_content_type_from_both_members_and_notes(
         ]
 
 
-def test_main_withholds_the_whole_archive_when_one_chat_carries_a_secret(
+def test_main_withholds_only_the_chat_that_carries_a_secret_and_names_it(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """One chat's finding withholds every conversation, not just that one.
+    """One chat's finding costs that chat alone, and the notes name it.
 
-    A partial archive is worse than none: a reader cannot tell it from the full
-    set, so the conversations that were dropped look like conversations that
-    never happened. The clean chat here is the proof -- it would have shipped if
-    the verdict were taken per file.
+    The name is what keeps the chats that did arrive from reading as the whole
+    set: without it, a dropped conversation would look like one that never
+    happened.
     """
     secret = "AKIAIOSFODNN7EXAMPLE"
     gate = tmp_path / "gate"
@@ -1142,9 +1123,12 @@ def test_main_withholds_the_whole_archive_when_one_chat_carries_a_secret(
     module.main(["--transcript"])
 
     with _zip_from_stdout(capsys.readouterr().out) as archive:
-        assert archive.namelist() == ["collection-notes.txt"]
+        assert archive.namelist() == [
+            "chats/agent-clean-claude.jsonl",
+            "collection-notes.txt",
+        ]
         assert _notes_lines(archive) == [
-            "recent chats: withheld: the secret scan reported findings"
+            "recent chats: chats/agent-leaky-claude.jsonl: withheld: the secret scan reported findings"
         ]
 
 
@@ -1174,13 +1158,107 @@ def test_main_scans_the_member_name_a_chat_will_be_archived_under(
         ]
 
 
-def test_main_withholds_only_the_logs_when_the_finding_is_in_the_logs(
+def test_a_withheld_member_whose_name_the_scan_flagged_is_not_named_in_the_notes(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A finding in the service logs costs those alone; the clean agent logs and
-    chats still ship. The content-matching gate proves the scan read the staged
-    logs PLAINTEXT -- the finding is against bytes the collector staged, not a
-    predicted name."""
+    """The notes ride the archive unscanned, so a name that is itself a finding
+    stays out of them; the member is counted without it."""
+    secret = "AKIAIOSFODNN7EXAMPLE"
+    gate = tmp_path / "gate"
+    _write_content_matching_stub_scan_gate(gate, secret=secret)
+    chats = {
+        "agent-clean": _chat_events("agent-clean"),
+        f"agent-{secret}": _chat_events("clean"),
+    }
+    module = _load_collector(
+        mngr_binary=_mngr_stub_for_chats(tmp_path, chats), scan_gate_dir=gate
+    )
+
+    module.main(["--transcript"])
+
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert archive.namelist() == [
+            "chats/agent-clean-claude.jsonl",
+            "collection-notes.txt",
+        ]
+        assert _notes_lines(archive) == [
+            "recent chats: an item whose name the scan flagged: withheld: the secret scan reported findings"
+        ]
+
+
+def test_a_credential_in_a_url_query_string_is_blanked_and_its_chat_still_ships(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A sign-in link pasted into a chat would otherwise cost the report that
+    chat. The gate flags the token's own bytes, so the chat shipping is
+    evidence the scanner was handed the blanked text, and the archive carries
+    that same text."""
+    secret = "eyJhbGciOiJIUzI1NiJ9.c2lnbmVkLWluLXRva2Vu.QXk3c2VjcmV0"
+    gate = tmp_path / "gate"
+    _write_content_matching_stub_scan_gate(gate, secret=secret)
+    link = f"https://news.example.com/p/article?token={secret}&utm_source=email"
+    chats = {"agent-reader": _chat_events("reader") + json.dumps({"note": link}) + "\n"}
+    module = _load_collector(
+        mngr_binary=_mngr_stub_for_chats(tmp_path, chats), scan_gate_dir=gate
+    )
+
+    module.main(["--transcript"])
+
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert archive.namelist() == ["chats/agent-reader-claude.jsonl"]
+        chat = archive.read("chats/agent-reader-claude.jsonl").decode("utf-8")
+        assert secret not in chat
+        assert (
+            "https://news.example.com/p/article?token=REDACTED&utm_source=email" in chat
+        )
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "GET /_auth/callback?token=eyJ.a.b&state=keep HTTP/1.1",
+            "GET /_auth/callback?token=REDACTED&state=keep HTTP/1.1",
+        ),
+        (
+            '<a href="https://x.test/p.gif?accessToken=abc.def&amp;sig=QQ">',
+            '<a href="https://x.test/p.gif?accessToken=REDACTED&amp;sig=REDACTED">',
+        ),
+        (
+            '{"url": "https://x.test/?api_key=k-123\\"}',
+            '{"url": "https://x.test/?api_key=REDACTED\\"}',
+        ),
+        (
+            "https://b.s3.amazonaws.com/f?X-Amz-Algorithm=AWS4-HMAC-SHA256"
+            "&X-Amz-Credential=ASIAIOSFODNN7EXAMPLE%2F20250101%2Fus-east-1%2Fs3%2Faws4_request"
+            "&X-Amz-Date=20250101T000000Z&X-Amz-Security-Token=IQo.b3JpZ2lu"
+            "&X-Amz-Signature=8f2a",
+            "https://b.s3.amazonaws.com/f?X-Amz-Algorithm=AWS4-HMAC-SHA256"
+            "&X-Amz-Credential=REDACTED&X-Amz-Date=20250101T000000Z"
+            "&X-Amz-Security-Token=REDACTED&X-Amz-Signature=REDACTED",
+        ),
+        (
+            "https://x.test/?monkey=1&keyboard=2&post_id=3#key=4",
+            "https://x.test/?monkey=1&keyboard=2&post_id=3#key=4",
+        ),
+        ("a token=abc outside any URL stays", "a token=abc outside any URL stays"),
+    ],
+)
+def test_redact_url_credentials_blanks_only_credential_named_query_parameters(
+    text: str, expected: str
+) -> None:
+    module = _load_collector()
+
+    assert module.redact_url_credentials(text) == expected
+
+
+def test_main_withholds_only_the_log_file_the_finding_is_in(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A finding in one service log costs that file alone; the report's metadata,
+    the clean agent logs and the chats still ship. The content-matching gate
+    proves the scan read the staged log PLAINTEXT -- the finding is against
+    bytes the collector staged, not a predicted name."""
     secret = "AKIAIOSFODNN7EXAMPLE"
     gate = tmp_path / "gate"
     _write_content_matching_stub_scan_gate(gate, secret=secret)
@@ -1214,15 +1292,14 @@ def test_main_withholds_only_the_logs_when_the_finding_is_in_the_logs(
     module.main(["--logs", "--transcript"])
 
     with _zip_from_stdout(capsys.readouterr().out) as archive:
-        # Every service-logs member goes, metadata included; the clean agent log
-        # and chat still ship, and the notes say what happened to the logs.
         assert archive.namelist() == [
+            "metadata.json",
             "agent-logs/agent-clean/app_server.log",
             "chats/agent-clean-claude.jsonl",
             "collection-notes.txt",
         ]
         assert _notes_lines(archive) == [
-            "workspace logs: withheld: the secret scan reported findings"
+            "workspace logs: logs/system_interface.log: withheld: the secret scan reported findings"
         ]
 
 
@@ -1268,9 +1345,6 @@ def test_main_reports_everything_scanner_unavailable_when_the_gate_is_missing(
         ]
 
 
-# --- The size cap ---
-
-
 def test_main_packs_every_collected_chat_with_no_size_cap(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1303,9 +1377,6 @@ def test_main_packs_every_collected_chat_with_no_size_cap(
             "chats/agent-b-claude.jsonl",
             "chats/agent-a-claude.jsonl",
         ]
-
-
-# --- Agent (harness) logs ---
 
 
 def test_agent_logs_are_collected_from_every_shape_a_harness_writes(
@@ -1640,12 +1711,11 @@ def test_a_log_db_row_the_render_cannot_format_reports_itself_rather_than_raisin
 def test_a_secret_in_a_log_db_does_not_cost_the_report_its_harness_logs(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The log db is scanned as its own class, so a row the allowlist did not
-    anticipate costs the report the db and nothing else.
+    """A row the allowlist did not anticipate costs the report the db and
+    nothing else.
 
-    Sharing a class with the harness log files would mean one such row withholds
-    ``app_server.log`` and every agent's ``stderr.log`` -- the logs most likely
-    to explain the bug -- which is the opposite of what collecting the db is for.
+    Losing ``app_server.log`` with it -- the log most likely to explain the
+    bug -- would be the opposite of what collecting the db is for.
     """
     agents_dir = tmp_path / "agents"
     now = time.time()
@@ -1880,7 +1950,7 @@ def test_panes_do_not_displace_the_harness_logs_of_the_agent_that_broke(
     assert sum(1 for name in names if name.endswith("pane.txt")) == 2
 
 
-def test_a_secret_rendered_on_a_pane_withholds_the_agent_logs_and_nothing_else(
+def test_a_secret_rendered_on_a_pane_withholds_that_pane_and_nothing_else(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A pane is scanned like everything else that leaves the container.
@@ -1889,8 +1959,8 @@ def test_a_secret_rendered_on_a_pane_withholds_the_agent_logs_and_nothing_else(
     out of a file, and it is the class a credential is most likely to be
     rendered into. The content-matching gate flags whichever staged file holds
     the secret, so a pass here is evidence the scanner was handed the pane's own
-    text -- not that a member name was predicted. The agent's clean log file goes
-    with it: a class ships whole or not at all.
+    text -- not that a member name was predicted. The agent's clean log file
+    still ships.
     """
     secret = "AKIAIOSFODNN7EXAMPLE"
     gate = tmp_path / "gate"
@@ -1933,11 +2003,12 @@ def test_a_secret_rendered_on_a_pane_withholds_the_agent_logs_and_nothing_else(
         assert archive.namelist() == [
             "metadata.json",
             "logs/system_interface.log",
+            "agent-logs/agent-clean/app_server.log",
             "chats/agent-clean-claude.jsonl",
             "collection-notes.txt",
         ]
         assert _notes_lines(archive) == [
-            "agent logs: withheld: the secret scan reported findings"
+            "agent logs: agent-logs/agent-clean/pane.txt: withheld: the secret scan reported findings"
         ]
 
 
