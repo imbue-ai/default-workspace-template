@@ -20,6 +20,10 @@ from oom_priority import bands
 from workspace_layout.testing import FakeShell
 from workspace_layout.testing import connected_client
 
+from imbue.mngr.cli.common_opts import apply_settings_to_config
+from imbue.mngr.config.data_types import MngrConfig
+from imbue.mngr_claude.plugin import ClaudeAgentConfig
+
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import commit_account
@@ -77,6 +81,7 @@ from imbue.chat.create_defaults import create_defaults_path
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
 from imbue.chat.harnesses.codex.model import codex_models_to_options
 from imbue.chat.harnesses.codex.model import get_codex_model_options_path
+from imbue.chat.harnesses.binding import resolve_binding
 from imbue.chat.harnesses.codex.model import write_codex_model_options
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
@@ -7229,3 +7234,76 @@ def test_the_sweep_callback_maps_the_agent_name_to_its_id_and_marks_the_compacti
     assert cause == CompactionCause.IDLE
     assert requested_at < time.monotonic()
     assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+
+def _initial_claude_settings(command: str) -> dict[str, Any]:
+    tokens = command.split()
+    settings = [tokens[index + 1] for index, token in enumerate(tokens) if token == "-S"]
+    config = apply_settings_to_config(MngrConfig(), settings, frozenset()).agent_types["claude"]
+    assert isinstance(config, ClaudeAgentConfig)
+    return config.settings_overrides
+
+
+def test_new_chats_start_on_the_remembered_model_with_the_first_message(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    binary, argv_log = write_recording_mngr_binary(tmp_path)
+    agent_manager = AgentManager.build(broadcaster, mngr_binary=binary, chat_files_root=tmp_path / "chats")
+    account = resolve_binding()
+    remembered = ModelPick(model_id="sonnet[1m]", effort="high")
+    try:
+        agent_manager.remember_chat_selection(account.id, remembered)
+        created = agent_manager.create_chat("", message="Use my selected model")
+        outcome = agent_manager.wait_for_chat_creation(created.chat_id, 10)
+        assert outcome is not None and outcome.is_created
+    finally:
+        agent_manager.stop()
+    command = argv_log.read_text().strip()
+    initial = _initial_claude_settings(command)
+    assert initial["model"] == remembered.model_id
+    assert initial["effortLevel"] == remembered.effort
+    assert "--message Use my selected model" in command
+
+
+def test_explicit_new_chat_picks_replace_the_remembered_selection(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    binary, argv_log = write_recording_mngr_binary(tmp_path)
+    agent_manager = AgentManager.build(broadcaster, mngr_binary=binary, chat_files_root=tmp_path / "chats")
+    account = resolve_binding()
+    try:
+        agent_manager.remember_chat_selection(account.id, ModelPick(model_id="sonnet[1m]", effort="high"))
+        explicit = ModelPick(model_id="haiku", effort="low")
+        created = agent_manager.create_chat("", account_id=account.id, model_pick=explicit)
+        outcome = agent_manager.wait_for_chat_creation(created.chat_id, 10)
+        assert outcome is not None and outcome.is_created
+    finally:
+        agent_manager.stop()
+    initial = _initial_claude_settings(argv_log.read_text())
+    assert initial["model"] == explicit.model_id
+    assert initial["effortLevel"] == explicit.effort
+    assert agent_manager._chat_model_defaults.get(account.id) == explicit
+
+
+def test_a_completed_new_chat_needs_no_model_switch_after_launch(
+    broadcaster: WebSocketBroadcaster,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=binary, chat_files_root=tmp_path / "chats")
+    manager.remember_chat_selection(resolve_binding().id, ModelPick(model_id="sonnet[1m]", effort="high"))
+    try:
+        created = manager.create_chat("", message="First message")
+        outcome = manager.wait_for_chat_creation(created.chat_id, 10)
+        assert outcome is not None and outcome.is_created
+        assert "--message First message" in argv_log.read_text()
+        assert "agent_types.claude.settings_overrides.model" in argv_log.read_text()
+    finally:
+        manager.stop()

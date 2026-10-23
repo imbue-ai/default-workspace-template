@@ -36,6 +36,7 @@ from playwright.sync_api import expect
 
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import delete_account
+from imbue.chat.accounts import read_index
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.auto_open import chat_root_path
@@ -44,6 +45,7 @@ from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.registry import get_model_state_path
 from imbue.chat.models import ChatSnapshot
+from imbue.chat.models import ModelPick
 from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import FIXTURE_AGENT_ID
@@ -58,6 +60,10 @@ from imbue.chat.testing import remove_background_task_marker
 from imbue.chat.testing import running_workspace
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import write_background_task_marker
+from imbue.chat.testing import write_recording_mngr_binary
+from imbue.mngr.cli.common_opts import apply_settings_to_config
+from imbue.mngr.config.data_types import MngrConfig
+from imbue.mngr_claude.plugin import ClaudeAgentConfig
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import DEFAULT_STATIC_DIRECTORY as SHELL_STATIC_DIRECTORY
 from imbue.system_interface.shell.desktops import DEFAULT_DESKTOP_NAME
@@ -2379,3 +2385,44 @@ def test_a_draft_typed_on_the_phone_is_back_after_a_reload(e2e_server: RunningWo
     expect(_shown_chat_of_root(page).locator(".message-input-textbox")).to_have_value(
         "Half a thought, typed on a phone", timeout=15000
     )
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_model_selection_is_the_default_for_new_chats_even_when_the_rail_loaded_another_account(
+    tmp_path: Path,
+    page: Page,
+) -> None:
+    with running_workspace(
+        tmp_path, find_free_port(), find_free_port(), additional_accounts=(("anthropic", "Anthropic"),)
+    ) as server:
+        manager = server.chat_state.agent_manager
+        state_path = get_model_state_path(HarnessType.CLAUDE, server.agent_info.agent_state_dir)
+        state_path.write_text(json.dumps({"model": "claude-opus-5-5", "effort": "high", "fast": False}))
+        manager.refresh_model_choice(FIXTURE_AGENT_ID)
+        _open_phone_chat_root(page, server)
+        chat = _shown_chat_of_root(page)
+        expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
+        chat.locator("[data-composer-settings]").click()
+        with page.expect_response(
+            lambda response: response.request.method == "POST" and response.url.endswith("/model")
+        ) as picked:
+            chat.locator('[data-effort-level="max"]').click()
+        assert picked.value.status == 200
+        assert read_index().default_account == server.account_ids[0]
+        expected = ModelPick(model_id="opus[1m]", effort="max", fast=False)
+        assert manager._chat_model_defaults.get(server.account_ids[0]) == expected
+        page.keyboard.press("Escape")
+        page.locator("[data-chat-header-list]").click()
+        binary, argv_log = write_recording_mngr_binary(tmp_path)
+        manager._mngr_binary = binary
+        with page.expect_response(lambda response: response.url.endswith("/api/chats/create")) as created:
+            page.locator(".chat-rail-new").click()
+        assert created.value.status == 201
+        wait_for(lambda: argv_log.exists(), timeout=10, poll_interval=0.1, error_message="new chat launch")
+        command = argv_log.read_text().split()
+        assert f"account={server.account_ids[0]}" in command
+        settings = [command[index + 1] for index, token in enumerate(command) if token == "-S"]
+        initial = apply_settings_to_config(MngrConfig(), settings, frozenset()).agent_types["claude"]
+        assert isinstance(initial, ClaudeAgentConfig)
+        assert initial.settings_overrides["model"] == expected.model_id
+        assert initial.settings_overrides["effortLevel"] == expected.effort

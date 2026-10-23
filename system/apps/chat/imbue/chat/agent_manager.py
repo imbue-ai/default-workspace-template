@@ -31,6 +31,7 @@ from imbue.chat.accounts import account_label_for
 from imbue.chat.accounts import harness_for
 from imbue.chat.accounts import index_path
 from imbue.chat.accounts import resolve_account
+from imbue.chat.accounts import set_default_account
 from imbue.chat.accounts import set_mru
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import CompactionCause
@@ -71,6 +72,7 @@ from imbue.chat.chat_handoffs import failure_notice
 from imbue.chat.chat_handoffs import has_user_turn
 from imbue.chat.chat_handoffs import is_genuine_user_turn
 from imbue.chat.chat_handoffs import mngr_failure_reason
+from imbue.chat.chat_model_defaults import ChatModelDefaultsStore
 from imbue.chat.chat_rebinds import RebindCancelledError
 from imbue.chat.chat_rebinds import RebindDeps
 from imbue.chat.chat_rebinds import RebindRunner
@@ -126,6 +128,7 @@ from imbue.chat.harnesses.model import resolve_model_choice
 from imbue.chat.harnesses.model import validate_model_pick
 from imbue.chat.harnesses.registry import build_account_binding
 from imbue.chat.harnesses.registry import build_interrupt_to_composer
+from imbue.chat.harnesses.registry import build_model_launch
 from imbue.chat.harnesses.registry import build_resolver
 from imbue.chat.harnesses.registry import build_shoulder_tap
 from imbue.chat.harnesses.registry import build_tracker
@@ -360,6 +363,7 @@ def _build_chat_create_command(
     initial_message: str = "",
     extra_labels: Sequence[str] = (),
     settings: Sequence[str] = (),
+    agent_args: Sequence[str] = (),
 ) -> list[str]:
     """Build the ``mngr create`` argv for a chat's agent on a given harness.
 
@@ -425,6 +429,8 @@ def _build_chat_create_command(
     # its message and sends it afterwards, so it passes none here.
     if initial_message:
         cmd.extend(["--message", initial_message])
+    if agent_args:
+        cmd.extend(["--", *agent_args])
     return cmd
 
 
@@ -1012,6 +1018,7 @@ class AgentManager:
     _chat_record_by_id: dict[ChatId, ChatRecord]
     # The workspace-wide chat settings (the fast mode a new chat starts in), read on every create.
     _chat_settings: ChatSettingsStore
+    _chat_model_defaults: ChatModelDefaultsStore
     # Where a chat's handoff files live (its summaries and prompts), beside its record.
     _chat_files_root: Path
     _prompt_template_path: Path
@@ -1242,6 +1249,10 @@ class AgentManager:
         manager._provisional_chats = seeded_provisional_chats(manager._chat_record_by_id)
         manager._title_override_by_chat = {}
         manager._chat_settings = chat_settings if chat_settings is not None else ChatSettingsStore(path=None)
+        settings_path = manager._chat_settings.path
+        manager._chat_model_defaults = ChatModelDefaultsStore(
+            path=None if settings_path is None else settings_path.with_name("model-defaults.json")
+        )
         manager._chat_files_root = chat_files_root
         manager._prompt_template_path = prompt_template_path
         manager._handoff_capabilities = None
@@ -2062,6 +2073,7 @@ class AgentManager:
             )
         self._broadcast_chats_updated()
         _record_mru(target.account.id)
+        self.remember_chat_selection(target.account.id, model_pick)
         _loguru_logger.info(
             "Chat {} is moving from {} to {} (account {})",
             chat_id,
@@ -2114,6 +2126,7 @@ class AgentManager:
             )
         self._broadcast_chats_updated()
         _record_mru(target.account.id)
+        self.remember_chat_selection(target.account.id, model_pick)
         _loguru_logger.info(
             "Chat {} is moving agent {} from account {} to account {}",
             chat_id,
@@ -2400,6 +2413,22 @@ class AgentManager:
                 "Chat {}: could not discard successor {} before the retry: {}", chat_id, successor_id, e
             )
         self.remove_agent(successor_id)
+
+    def remember_chat_selection(self, account_id: str, pick: ModelPick | None = None) -> None:
+        """Make a user's explicit provider/model/effort selection the next chat's defaults.
+
+        Automatic speed changes and merely opening an older chat do not call this. A secondary
+        chat may keep model preferences in its copied store, but never changes the live account pin.
+        """
+        if not account_id:
+            return
+        try:
+            if pick is not None:
+                self._chat_model_defaults.remember(account_id, pick)
+            if not self._is_secondary:
+                set_default_account(account_id, True)
+        except (AccountError, OSError) as error:
+            _loguru_logger.warning("Could not remember chat selection for {}: {}", account_id, error)
 
     def apply_model_pick(self, agent_info: AgentInfo, pick: ModelPick) -> None:
         """Put a running agent on ``pick``: the model bar's own path, for an agent that has just come up.
@@ -3582,10 +3611,9 @@ class AgentManager:
         kept on the provisional record like the message, so a relaunch by ``chat_id`` (the
         page's "Try again") creates on the same terms and refuses new ones.
 
-        ``model_pick`` is the model the chat runs on. It is applied once the agent is up, so
-        with a pick the create is silent and the message is delivered afterwards through the
-        send path, the way a handoff's successor gets its prompt; a pick the agent refuses is
-        logged and the chat runs on its harness's default.
+        ``model_pick`` overrides the account's remembered model and effort. The harness's
+        launch settings apply it before the agent starts, including its first message. Only a
+        harness with no create-time model controls applies the pick after starting instead.
         """
         extra_labels = dict(labels or {})
         try:
@@ -3711,9 +3739,28 @@ class AgentManager:
             message if seed_record is None else seed_context_message(self._chat_files_root / launched_chat_id, message)
         )
 
-        # With a pick the message follows the create rather than riding it: the model has to be
-        # set before the first turn, and ``mngr create --message`` starts that turn itself.
-        deferred_message = launch_message if model_pick is not None else ""
+        is_remembered_pick = model_pick is None
+        if model_pick is None:
+            model_pick = self._chat_model_defaults.get(account.id)
+        if account_id or not is_remembered_pick:
+            self.remember_chat_selection(account.id, None if is_remembered_pick else model_pick)
+
+        # Put the model into provisioning/launch, so even the first published model state and
+        # first turn use the selection. A live switch remains only for harnesses lacking a
+        # create-time model control.
+        model_launch = None
+        if model_pick is not None:
+            axes = frozenset({ModelAxis.MODEL, ModelAxis.EFFORT}) if is_remembered_pick else frozenset(ModelAxis)
+            model_launch = build_model_launch(
+                harness,
+                ModelIdentity(model_id=model_pick.model_id, effort=model_pick.effort, fast=model_pick.fast),
+                axes,
+            )
+        startup_settings = list(model_launch.settings) if model_launch is not None else []
+        if is_installation_check_skipped:
+            startup_settings.append(SKIP_CLAUDE_INSTALLATION_CHECK_SETTING)
+        deferred_pick = model_pick if model_launch is None else None
+        deferred_message = launch_message if deferred_pick is not None else ""
         create_labels = [
             *membership_labels,
             autocompact.label,
@@ -3731,7 +3778,8 @@ class AgentManager:
             account_args,
             initial_message="" if deferred_message else launch_message,
             extra_labels=create_labels,
-            settings=[SKIP_CLAUDE_INSTALLATION_CHECK_SETTING] if is_installation_check_skipped else [],
+            settings=startup_settings,
+            agent_args=model_launch.agent_args if model_launch is not None else (),
         )
 
         self._broadcast_provisional(provisional)
@@ -3754,7 +3802,7 @@ class AgentManager:
             labels,
             harness,
             record_entry,
-            model_pick,
+            deferred_pick,
             deferred_message,
         )
 

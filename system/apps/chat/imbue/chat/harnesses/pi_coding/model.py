@@ -45,6 +45,7 @@ from imbue.chat.harnesses.model import HarnessCatalog
 from imbue.chat.harnesses.model import HarnessModelResolver
 from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelIdentity
+from imbue.chat.harnesses.model import ModelLaunch
 from imbue.chat.harnesses.model import PickerMode
 from imbue.chat.harnesses.model import SwitchMode
 from imbue.chat.harnesses.model import SwitchResult
@@ -203,6 +204,13 @@ class PiModelResolver(HarnessModelResolver):
     _state_dir: Path
     _agent_name: str
     _start_agent: Callable[[str], None]
+
+    @classmethod
+    def launch_choice(cls, identity: ModelIdentity, axes: frozenset[ModelAxis]) -> ModelLaunch:
+        arguments = ["--model", identity.model_id]
+        if identity.effort is not None:
+            arguments.extend(["--thinking", identity.effort])
+        return ModelLaunch(agent_args=tuple(arguments))
 
     @classmethod
     def build(cls, agent_info: AgentInfo, start_agent_fn: Callable[[str], None] = start_agent) -> "PiModelResolver":

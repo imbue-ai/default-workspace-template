@@ -37,6 +37,7 @@ from imbue.chat.harnesses.model import HarnessCatalog
 from imbue.chat.harnesses.model import HarnessModelResolver
 from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelIdentity
+from imbue.chat.harnesses.model import ModelLaunch
 from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.model import PickerMode
 from imbue.chat.harnesses.model import SwitchMode
@@ -305,6 +306,16 @@ class CodexModelResolver(HarnessModelResolver):
 
     _agent_state_dir: Path
     _open_client: Callable[[], CodexAppServerClient]
+
+    @classmethod
+    def launch_choice(cls, identity: ModelIdentity, axes: frozenset[ModelAxis]) -> ModelLaunch:
+        settings = [f"agent_types.codex.model={json.dumps(identity.model_id)}"]
+        if identity.effort is not None:
+            settings.append(f"agent_types.codex.model_reasoning_effort={json.dumps(identity.effort)}")
+        if ModelAxis.FAST in axes:
+            tier = "priority" if identity.fast else "default"
+            settings.append(f"agent_types.codex.config_overrides.service_tier={json.dumps(tier)}")
+        return ModelLaunch(settings=tuple(settings))
 
     @classmethod
     def build(

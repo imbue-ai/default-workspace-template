@@ -60,6 +60,9 @@ from imbue.chat.harnesses.interrupt import InterruptToComposer
 from imbue.chat.harnesses.interrupt import RestartDrainInterruptToComposer
 from imbue.chat.harnesses.model import HarnessCatalog
 from imbue.chat.harnesses.model import HarnessModelResolver
+from imbue.chat.harnesses.model import ModelAxis
+from imbue.chat.harnesses.model import ModelIdentity
+from imbue.chat.harnesses.model import ModelLaunch
 from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.model import model_state_path
 from imbue.chat.harnesses.one_shot import OneShotCompletion
@@ -596,6 +599,13 @@ def build_one_shot_completion(harness: HarnessType) -> OneShotCompletion | None:
 def build_resolver(agent_info: AgentInfo) -> HarnessModelResolver:
     """Build the model resolver for ``agent_info``'s harness."""
     return get_harness_spec(agent_info.harness).resolver_class.build(agent_info)
+
+
+def build_model_launch(
+    harness: HarnessType, identity: ModelIdentity, axes: frozenset[ModelAxis]
+) -> ModelLaunch | None:
+    """The model settings for a not-yet-created agent, resolved by its harness."""
+    return get_harness_spec(harness).resolver_class.launch_choice(identity, axes)
 
 
 def list_account_options(harness: HarnessType, account_dir: Path) -> tuple[ModelOption, ...] | None:

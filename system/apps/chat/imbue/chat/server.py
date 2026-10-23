@@ -109,6 +109,7 @@ from imbue.chat.harnesses.interrupt import restart_drain
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.message_display import split_background_task_reports
 from imbue.chat.harnesses.model import InvalidModelPickError
+from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelIdentity
 from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.model import validate_model_pick
@@ -162,6 +163,7 @@ from imbue.chat.models import IntakeResponse
 from imbue.chat.models import IntakeTarget
 from imbue.chat.models import InterruptAgentResponse
 from imbue.chat.models import ModelOptionsResponse
+from imbue.chat.models import ModelPick
 from imbue.chat.models import NoProviderAccountError
 from imbue.chat.models import OkResponse
 from imbue.chat.models import PendingIntakeView
@@ -1034,6 +1036,11 @@ def _set_model_choice_endpoint(chat_id: str) -> Response:
     # Force one authoritative broadcast so the optimistic pick reconciles even when
     # the resolved value is unchanged (see H1 in the model-bar plan).
     agent_manager.refresh_model_choice(agent_info.id)
+    if any(axis in {ModelAxis.MODEL, ModelAxis.EFFORT} for axis in req.axes):
+        agent_manager.remember_chat_selection(
+            agent_info.labels.get("account", ""),
+            ModelPick(model_id=req.model_id, effort=req.effort, fast=req.fast),
+        )
     return model_response(SendMessageResponse(status="ok"))
 
 

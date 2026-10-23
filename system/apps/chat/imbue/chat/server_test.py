@@ -21,8 +21,8 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import pytest
-from app_schema.testing import assert_api_schema_describes_app
 from app_manifest.testing import assert_document_policy_admits_page
+from app_schema.testing import assert_api_schema_describes_app
 from chat_background_tasks.listing import chats_from_agents_payload
 from flask import Flask
 from flask.testing import FlaskClient
@@ -38,6 +38,7 @@ from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import delete_account
 from imbue.chat.accounts import index_path
 from imbue.chat.accounts import mint_account_dir
+from imbue.chat.accounts import read_index
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo
@@ -5070,3 +5071,28 @@ def test_a_compaction_that_finished_while_no_watcher_ran_ends_when_the_chat_is_o
 
 def test_the_chat_describes_its_api_the_way_its_manifest_says(client: FlaskClient) -> None:
     assert_api_schema_describes_app(client, Path(__file__).resolve().parents[2] / "app.toml")
+
+
+@pytest.mark.parametrize("axes", [["model"], ["effort"], ["fast"]])
+def test_only_a_model_or_effort_pick_updates_new_chat_defaults(tmp_path: Path, axes: list[str]) -> None:
+    account_id, _ = mint_account_dir()
+    commit_account(account_id, "anthropic", "Anthropic")
+    info = _model_agent_info("agent-00000000000000000000000000000074", tmp_path)
+    info = info.model_copy_update(to_update(info.field_ref().labels, {"account": account_id}))
+    manager, _ = _manager_with_resolver(info)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    try:
+        with patch("imbue.chat.server._find_active_agent", return_value=info):
+            response = client.post(
+                f"/api/chats/{info.id}/model",
+                json={"model_id": "sonnet[1m]", "effort": "high", "fast": False, "axes": axes},
+            )
+        assert response.status_code == 200
+        if axes == ["fast"]:
+            assert manager._chat_model_defaults.get(account_id) is None
+            assert read_index().default_account is None
+        else:
+            assert manager._chat_model_defaults.get(account_id) == ModelPick(model_id="sonnet[1m]", effort="high")
+            assert read_index().default_account == account_id
+    finally:
+        manager.stop()
