@@ -334,7 +334,8 @@ def _was_answered(result: MessageResult) -> bool:
     """Whether a delivery that reached no agent as a success still reached one.
 
     The agent refused it, may already have typed it (mngr's ``SUBMISSION_UNCONFIRMED``), or took it
-    and a dialog came up behind it (``blocked_agents``).
+    and a dialog came up behind it (``blocked_agents``). An unclassified failure (``UNKNOWN``) counts
+    too: mngr may have typed before it failed.
     """
     return bool(result.blocked_agents) or any(
         failure.kind not in _STALE_LOCATION_FAILURE_KINDS for failure in result.failures
