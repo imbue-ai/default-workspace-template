@@ -4,6 +4,8 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
+import pytest
+
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.grok.queue_tracker import drop_tracker
 from imbue.chat.harnesses.grok.tap import GrokAtomicShoulderTap
@@ -13,6 +15,7 @@ from imbue.chat.harnesses.grok.testing import write_root_turn
 from imbue.chat.harnesses.grok.turn_state import drop_turn_state
 from imbue.chat.harnesses.grok.watcher import GrokSessionWatcher
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.mngr.errors import AgentNotFoundError
 
 _SESSION = "01a156d6-f927-7091-91a4-f6692a5800da"
 _PLACEHOLDER = "pending-wake:01a156db-10ae-70c2-9a0f-a0dff6d5f376"
@@ -294,6 +297,21 @@ def test_a_refused_tap_press_releases_the_claim(tmp_path: Path) -> None:
     assert status == "press_refused"
     assert error_detail is not None
     assert watcher._queue.is_sending() is False
+
+
+def test_a_tap_whose_press_raises_releases_the_claim_and_wakes_the_worker(tmp_path: Path) -> None:
+    agent_info, watcher, grok = _setup(tmp_path)
+    grok.begin_turn()
+    _hold(watcher, "held")
+
+    def press_into_a_destroyed_agent() -> bool:
+        raise AgentNotFoundError("agent-grok-tap")
+
+    with pytest.raises(AgentNotFoundError):
+        _tap(agent_info, watcher, press_into_a_destroyed_agent)
+
+    assert watcher._queue.is_sending() is False
+    assert watcher._flush_wake.is_set()
 
 
 def test_a_tap_mngr_refuses_into_a_turn_grok_just_ended_is_no_error(tmp_path: Path) -> None:

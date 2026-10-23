@@ -164,15 +164,17 @@ class GrokAtomicShoulderTap(AtomicShoulderTap):
         _block, claimed, generation = watcher.claim_queue_for_tap()
         if not claimed:
             return ShoulderTapOutcome(status=_SEND_IN_FLIGHT)
-        is_pressed = _press_once(self._agent_info, press_chord)
-        deadline_seconds = (
-            self.turn_end_deadline_seconds
-            if is_pressed
-            else min(REFUSED_PRESS_TURN_END_SECONDS, self.turn_end_deadline_seconds)
-        )
-        is_turn_ended = _wait_for_turns_to_end(agent_state_dir, turns, deadline_seconds)
-        watcher.release_tap_claim(claimed, generation)
-        watcher.notify_idle()
+        try:
+            is_pressed = _press_once(self._agent_info, press_chord)
+            deadline_seconds = (
+                self.turn_end_deadline_seconds
+                if is_pressed
+                else min(REFUSED_PRESS_TURN_END_SECONDS, self.turn_end_deadline_seconds)
+            )
+            is_turn_ended = _wait_for_turns_to_end(agent_state_dir, turns, deadline_seconds)
+        finally:
+            watcher.release_tap_claim(claimed, generation)
+            watcher.notify_idle()
         if is_turn_ended:
             return ShoulderTapOutcome(status=_FLUSHED if is_pressed else _NO_OPEN_TURN)
         if not is_pressed:
