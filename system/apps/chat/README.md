@@ -796,6 +796,17 @@ sign-in for Codex in ChatGPT's security settings. "Sign in again" on an API-key
 account asks for a key again; any other account signs in through its lane's
 first way in (`reauth_method` on each account row).
 
+An xAI sign-in has no browser to relay. `grok login --device-auth` prints a
+page and a one-time code; the chooser shows both and waits while the user
+confirms the code on that page, from any device, and grok decides the outcome:
+its clean exit with its "Signed in" line succeeds, and its `Error:` line is the
+failure shown. A pasted xAI API key is checked with xAI (`GET
+https://api.x.ai/v1/api-key`) before anything is written, and then replaces the
+account's `auth.json` with grok's key scope. Every agent on the account shares
+that file, so the chat writes it only under grok's own `auth.json.lock`, and a
+device sign-in takes away a key an earlier paste left, which grok would
+otherwise fall back to.
+
 Only the workspace's owner can deliver a relayed callback: the callback route
 answers 403 to a request whose `X-Imbue-Identity` says `owner: false`.
 
