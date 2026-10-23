@@ -32,6 +32,7 @@ from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.agent_manager import FAST_ROLE_TEMPLATE
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
@@ -7238,7 +7239,8 @@ def test_the_sweep_callback_maps_the_agent_name_to_its_id_and_marks_the_compacti
 
 
 def test_a_rooms_create_argv_names_the_room_type_starts_it_on_boot_and_stacks_no_role_template() -> None:
-    argv = _chat_create_argv(harness=HarnessType.ROOM)
+    # The fast template a chat in fast mode stacks is an AI agent's too, so the one builder drops it for a room.
+    argv = _chat_create_argv(harness=HarnessType.ROOM, extra_role_templates=(FAST_ROLE_TEMPLATE,))
     assert argv[argv.index("--type") + 1] == HarnessType.ROOM
     assert "--start-on-boot" in argv and "--template" not in argv
     assert_mngr_argv_valid(argv)

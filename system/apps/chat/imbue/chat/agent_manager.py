@@ -391,10 +391,17 @@ def _build_chat_create_command(
         "--type",
         harness,
         # A room's agent is its reader (the multiplayer spec, section 7.3): the chat template's output style and
-        # role are an AI agent's, and a room should be up whenever the host is, since every message appends to
-        # its transcript.
-        *(("--start-on-boot",) if harness is HarnessType.ROOM else ("--template", CHAT_ROLE_TEMPLATE)),
-        *[arg for role in extra_role_templates for arg in ("--template", role)],
+        # role, and every role template stacked on it, are an AI agent's, and a room should be up whenever the
+        # host is, since every message appends to its transcript.
+        *(
+            ("--start-on-boot",)
+            if harness is HarnessType.ROOM
+            else (
+                "--template",
+                CHAT_ROLE_TEMPLATE,
+                *[arg for role in extra_role_templates for arg in ("--template", role)],
+            )
+        ),
         # Tags this as a user-created agent so the OOM launch wrapper puts it in the
         # dynamic chat band (re-tagged from live UI engagement), not the worker band.
         "--label",
@@ -3781,11 +3788,7 @@ class AgentManager:
         account_args = _account_binding_args(
             harness, account.id if account is not None else "", self._get_agent_state_dir(agent_id)
         )
-        role_templates = (
-            ()
-            if harness is HarnessType.ROOM
-            else (*extra_role_templates, *launch_role_templates(fast_mode.launches_fast))
-        )
+        role_templates = (*extra_role_templates, *launch_role_templates(fast_mode.launches_fast))
 
         # A seeded chat's first agent joins a conversation it cannot see: the seed is a segment
         # this app renders from a file, which no harness transcript holds, so its launch carries
