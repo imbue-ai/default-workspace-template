@@ -39,6 +39,8 @@ from imbue.chat.harnesses.registry import build_one_shot_completion
 from imbue.chat.latchkey_gateway import GatewayAccess
 from imbue.chat.main_chat import MAIN_CHAT_FILENAME
 from imbue.chat.main_chat import MainChatStore
+from imbue.chat.mentions import MENTIONS_DIRNAME
+from imbue.chat.mentions import MentionStore
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.message_stamps import STAMPS_FILENAME
 from imbue.chat.roster_client import RosterClient
@@ -198,6 +200,7 @@ def build_production_state(
         ),
         authors=AuthorStore(root=chat_records_root),
         roster=RosterClient(shell=shell),
+        mentions=MentionStore(root=data_dir / MENTIONS_DIRNAME),
     )
     # Eviction wiring: the state drops what an agent holds resident -- the transcript,
     # watch thread, and inotify watches -- when the manager sees it destroyed (the whole

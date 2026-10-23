@@ -32,6 +32,7 @@ from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.agent_manager import FAST_ROLE_TEMPLATE
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
@@ -57,7 +58,9 @@ from imbue.chat.chat_autocompact import read_autocompact_state
 from imbue.chat.chat_autocompact import write_autocompact_state
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_fast_mode import read_fast_mode_state
+from imbue.chat.chat_handoffs import CREATE_WITHOUT_ACCOUNT_ENV
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
+from imbue.chat.chat_handoffs import create_command_env
 from imbue.chat.chat_rebinds import RebindCancelledError
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import ChatRecordError
@@ -116,6 +119,7 @@ from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceReport
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
+from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.state import ChatAppState
 from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
@@ -7229,3 +7233,155 @@ def test_the_sweep_callback_maps_the_agent_name_to_its_id_and_marks_the_compacti
     assert cause == CompactionCause.IDLE
     assert requested_at < time.monotonic()
     assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+
+# Rooms (the multiplayer spec, section 7.3): a chat whose agent is the room's reader.
+
+
+def test_a_rooms_create_argv_names_the_room_type_starts_it_on_boot_and_stacks_no_role_template() -> None:
+    # The fast template a chat in fast mode stacks is an AI agent's too, so the one builder drops it for a room.
+    argv = _chat_create_argv(harness=HarnessType.ROOM, extra_role_templates=(FAST_ROLE_TEMPLATE,))
+    assert argv[argv.index("--type") + 1] == HarnessType.ROOM
+    assert "--start-on-boot" in argv and "--template" not in argv
+    assert_mngr_argv_valid(argv)
+
+
+def test_only_a_rooms_create_carries_the_no_account_mark_in_its_environment() -> None:
+    assert create_command_env(HarnessType.ROOM, {"PATH": "/bin"}) == {"PATH": "/bin", CREATE_WITHOUT_ACCOUNT_ENV: "1"}
+    assert create_command_env(HarnessType.CLAUDE, {"PATH": "/bin"}) == {"PATH": "/bin"}
+
+
+def test_a_switch_to_a_room_is_a_fresh_start_handoff_to_the_room_harness_on_no_account(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    first = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
+    try:
+        kind, phase, _block = manager.begin_switch(
+            ChatId(first), "", "", "m-1", HeldSendOrigin.CLIENT, kind=ChatKind.ROOM
+        )
+        assert (kind, phase) == (TransitionKind.HANDOFF, HandoffPhase.SUMMARIZING)
+
+        record = _wait_until_settled(store, ChatId(first))
+        assert [entry.harness for entry in record.agents] == [HarnessType.CLAUDE, HarnessType.ROOM]
+        assert (record.agents[1].account_id, record.agents[1].lane, record.agents[1].is_fresh_start) == ("", "", True)
+        (snapshot,) = manager.get_chat_snapshots()
+        assert snapshot.kind is ChatKind.ROOM and snapshot.active_agent.account_id is None
+        # The room is created on no account and asked for no summary: the chat keeps its history as segments.
+        create_line = next(line for line in argv_log.read_text().splitlines() if line.startswith("create "))
+        assert "--type room" in create_line and "--start-on-boot" in create_line and "account=" not in create_line
+        # The create guard lets a room's create through on no account only with this mark in its environment.
+        assert create_line.endswith(f" {CREATE_WITHOUT_ACCOUNT_ENV}=1")
+        assert sent == []
+    finally:
+        manager.stop()
+
+
+def test_a_chat_that_is_a_room_already_is_not_switched_to_a_room_again(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    manager, _store, _argv_log = _handoff_manager(broadcaster, tmp_path, [])
+    room = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, room, name="Lounge", harness=HarnessType.ROOM, labels={"display_name": "Lounge"})
+    try:
+        with pytest.raises(HandoffError, match="is a room already"):
+            manager.begin_switch(ChatId(room), "", "", "m-1", HeldSendOrigin.CLIENT, kind=ChatKind.ROOM)
+        with pytest.raises(HandoffError, match="names no account"):
+            manager.begin_switch(ChatId(room), _openai_account(), "", "m-1", HeldSendOrigin.CLIENT, kind=ChatKind.ROOM)
+    finally:
+        manager.stop()
+
+
+def test_a_switch_to_a_room_names_no_model(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    """A pick beside a room would only fail the switch at its model step, after the room was made: refused first."""
+    manager, store, _argv_log = _handoff_manager(broadcaster, tmp_path, [])
+    chat = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, chat, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
+    try:
+        with pytest.raises(HandoffError, match="names no model"):
+            manager.begin_switch(
+                ChatId(chat),
+                "",
+                "",
+                "m-1",
+                HeldSendOrigin.CLIENT,
+                model_pick=ModelPick(model_id="opus"),
+                kind=ChatKind.ROOM,
+            )
+        assert store.read(ChatId(chat)) is None
+    finally:
+        manager.stop()
+
+
+def test_the_main_chat_is_not_switched_to_a_room(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    manager, store, _argv_log = _handoff_manager(broadcaster, tmp_path, [])
+    main = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, main, name="Main", labels={"display_name": "Main", "account": "acct-anthropic"})
+    manager.note_agent_list_known()
+    assert manager.make_main_chat(ChatId(main))
+    try:
+        with pytest.raises(HandoffError, match="main chat cannot become a room"):
+            manager.begin_switch(ChatId(main), "", "", "m-1", HeldSendOrigin.CLIENT, kind=ChatKind.ROOM)
+        with pytest.raises(HandoffError, match="main chat cannot become a room"):
+            manager.retry_handoff(ChatId(main), "", kind=ChatKind.ROOM)
+        assert store.read(ChatId(main)) is None and manager.get_main_chat_id() == ChatId(main)
+    finally:
+        manager.stop()
+
+
+def test_a_switch_off_a_room_takes_the_rooms_transcript_as_its_summary(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    room = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, room, name="Lounge", harness=HarnessType.ROOM, labels={"display_name": "Lounge"})
+    account = _openai_account()
+    try:
+        kind, _phase, _block = manager.begin_switch(ChatId(room), account, "Carry on", "m-1", HeldSendOrigin.CLIENT)
+        assert kind is TransitionKind.HANDOFF
+
+        record = _wait_until_settled(store, ChatId(room))
+        assert [entry.harness for entry in record.agents] == [HarnessType.ROOM, HarnessType.CODEX]
+        # Nobody was asked for a summary: the room's transcript, as the fake reader holds it, was written as one
+        # and rides the successor's prompt.
+        assert [text for _agent, text, _id in sent if text.startswith("/handoff-summary")] == []
+        summary = (tmp_path / "chats" / room / "summaries" / "1.md").read_text()
+        assert summary.startswith("[") and "the owner:" in summary
+        (prompt,) = [text for _agent, text, message_id in sent if message_id.startswith("handoff-prompt-")]
+        assert "<predecessor-summary>" in prompt and "Carry on" in prompt
+        assert "--type codex" in argv_log.read_text() and CREATE_WITHOUT_ACCOUNT_ENV not in argv_log.read_text()
+    finally:
+        manager.stop()
+
+
+def test_a_room_is_never_the_main_chat(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    """A room is not a main-chat candidate (the multiplayer spec, section 7.3): the star refuses it by hand, and
+    does not fall to it when the main chat is deleted, however recently the room was messaged."""
+    mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
+    stamps = MessageStampStore(path=None)
+    stamps.record(ChatId("agent-chat"), at=100.0)
+    stamps.record(ChatId("agent-room"), at=200.0)
+    manager = AgentManager.build(
+        broadcaster,
+        mngr_binary=mngr_binary,
+        message_stamps=stamps,
+        main_chat=MainChatStore(path=tmp_path / MAIN_CHAT_FILENAME),
+        chat_files_root=tmp_path / "chats",
+    )
+    try:
+        seed_agent_state(manager, "agent-chat", name="Chat-1")
+        seed_agent_state(manager, "agent-room", name="Lounge", harness=HarnessType.ROOM)
+        manager.note_agent_list_known()
+        assert manager.get_main_chat_id() == ChatId("agent-chat")
+
+        assert manager.make_main_chat(ChatId("agent-room")) is False
+        assert manager.get_main_chat_id() == ChatId("agent-chat")
+
+        manager.destroy_chat(ChatId("agent-chat"))
+
+        assert manager.get_main_chat_id() is None
+    finally:
+        manager.stop()

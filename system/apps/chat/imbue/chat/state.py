@@ -9,10 +9,14 @@ from flask import current_app
 from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
+from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.interfaces import ShellLayoutInterface
+from workspace_layout.primitives import ParticipantKey
 
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.authors import AUTHOR_FIELD
+from imbue.chat.authors import AUTHOR_NAME_FIELD
 from imbue.chat.authors import AuthorStore
 from imbue.chat.chat_intakes import PendingIntakeStore
 from imbue.chat.chat_naming import ChatNamer
@@ -26,8 +30,11 @@ from imbue.chat.harnesses.interrupt import RestartProcess
 from imbue.chat.harnesses.registry import build_loader
 from imbue.chat.harnesses.registry import build_watcher
 from imbue.chat.harnesses.registry import get_harness_spec
+from imbue.chat.harnesses.room.transcript import is_workspace_agent_turn
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
+from imbue.chat.mentions import MentionHandler
+from imbue.chat.mentions import MentionStore
 from imbue.chat.primitives import ChatId
 from imbue.chat.roster_client import RosterClient
 from imbue.chat.secret_requests import SecretRequestChatBridge
@@ -111,10 +118,15 @@ class ChatAppState(MutableModel):
     )
     authors: AuthorStore = Field(description="Who wrote each message a visitor or a visiting agent sent, per chat")
     roster: RosterClient = Field(description="The shell's roster: names, keys, and handles, cached briefly")
+    mentions: MentionStore = Field(description="The mentions each person has not looked at yet (section 7.4)")
     # The secret requests agents file and the env files their answers are written to, and
     # the router's bridge the routes reach the chats through (attached by ``create_application``).
     secret_requests: SecretRequestStore
     secret_request_bridge: SecretRequestChatBridge | None = None
+    mention_handler: MentionHandler | None = Field(
+        default=None,
+        description="What a room send's mentions do; attached by ``create_application`` beside the routes",
+    )
     watchers: dict[str, AgentSessionWatcher] = {}
     # The archived segments read so far, by agent id: loaded on the first read that reaches
     # one and dropped with the chat (``stop_and_remove_watcher``, or
@@ -165,6 +177,10 @@ class ChatAppState(MutableModel):
                 chat_id = self.agent_manager.chat_id_of_agent(agent_id)
                 # The stored events are the same dicts, so the author stamps outlive this broadcast.
                 self.authors.stamp_events(chat_id, events)
+                self.name_authors(events)
+                # The workspace agent posting into a room answers whatever the room asked (section 7.4).
+                if any(is_workspace_agent_turn(event) for event in events):
+                    self.agent_manager.clear_chat_awaiting(chat_id)
                 # Deliver-live-only: session events are persisted in JSONL and recoverable
                 # via the REST /events endpoint, so nothing is buffered for replay. The
                 # fan-out is keyed by chat, so a page's stream follows the chat across a
@@ -219,6 +235,7 @@ class ChatAppState(MutableModel):
             # A compaction that finished while no watcher ran (a chat nobody had open) ends here.
             self.agent_manager.stamp_compaction_events(agent_info, backlog)
             self.authors.stamp_events(self.agent_manager.chat_id_of_agent(agent_info.id), backlog)
+            self.name_authors(backlog)
             self.agent_manager.update_session_events(agent_info.id, backlog)
             watcher.start()
         finally:
@@ -228,6 +245,22 @@ class ChatAppState(MutableModel):
             if is_evicted:
                 watcher.stop()
         return watcher
+
+    def name_authors(self, events: list[dict[str, Any]]) -> None:
+        """Name, from the roster, the author of every turn whose transcript names its author's key but not what
+        they are called (a room's reader records the key alone), in place; a key the roster lacks keeps the key."""
+        for event in events:
+            author = event.get(AUTHOR_FIELD)
+            if not isinstance(author, str) or not author or AUTHOR_NAME_FIELD in event:
+                continue
+            try:
+                key = ParticipantKey(author)
+            except InvalidLayoutValueError as e:
+                logger.warning("A transcript names an author that is not a participant key; kept as written: {}", e)
+                event[AUTHOR_NAME_FIELD] = author
+                continue
+            entry = self.roster.participant(key)
+            event[AUTHOR_NAME_FIELD] = entry.display_name if entry is not None else author
 
     def has_watcher(self, agent_id: str) -> bool:
         """Whether a session watcher is resident for the agent.

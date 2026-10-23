@@ -5,13 +5,14 @@ import type { ChatRow } from "./rows";
 export function chatRowFixture(chatId: string, overrides: Partial<ChatRow> = {}): ChatRow {
   return {
     chatId,
+    kind: "agent",
     title: chatId,
     status: "idle",
     labels: {},
     agentIds: [chatId],
     lastActiveMs: null,
-    isProvisional: false,
     isMain: false,
+    hasMention: false,
     ...overrides,
   };
 }

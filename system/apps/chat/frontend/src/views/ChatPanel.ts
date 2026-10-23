@@ -45,6 +45,7 @@ import {
   getChatById,
   getProvisionalChat,
   hasReceivedChatList,
+  isRoomChat,
   launchChat,
   removeChatsUpdatedListener,
 } from "../models/Chats";
@@ -436,6 +437,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     }
   }
 
+  /** Load the chat once. */
   function ensureChatLoaded(chatId: string, isStreamed: boolean): void {
     if (chatId === currentChatId) {
       return;
@@ -708,6 +710,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       // The terminal back face attaches to the agent's own tmux session, which a chat still being
       // created does not have: without a name the terminal dispatch attaches to whatever session
       // it finds, so the flip waits for the agent to register.
+      const isRoom = isRoomChat(chatId);
       const isListed = getChatById(chatId) !== undefined;
       // The shell's live visibility for this frame, fed in by the page. Read
       // it before building content / running lifecycle hooks so the scroll hooks
@@ -815,7 +818,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 // failed, with a retry on any account (spec 5.10).
                 m(SwitchDialog, { chatId }),
                 m(HandoffFailedNotice, { chatId }),
-                isConversationNotFound(chatId)
+                isConversationNotFound(chatId) || isRoom
                   ? null
                   : m(ActivityIndicator, {
                       chatId,
@@ -862,7 +865,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 isCompact && isListed ? null : m(ModelProviderMenu, { chatId }),
                 m(ConnectingIndicator, { chatId }),
                 m(FastModeNotice, { chatId }),
-                !isListed || (isCompact && !isFlipped)
+                !isListed || isRoom || (isCompact && !isFlipped)
                   ? null
                   : m("div", { class: "composer-under-bar-actions ml-auto flex items-center gap-0.5" }, [
                       m(TerminalViewToggle, { on: isFlipped, onToggle: toggleSourceView }),

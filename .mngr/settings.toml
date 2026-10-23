@@ -263,6 +263,17 @@ Give every Bash call a `description`, `tk` calls included: a few plain words say
 parent_type = "command"
 command = "sleep infinity"
 
+# the "room" agent type: a chat room, a chat among the workspace's people with
+# no AI agent (the multiplayer spec, section 7.3). Its process is the room's
+# reader (system/scripts/room_agent.py): what `mngr message <room>` types into
+# its pane is appended to the room's transcript, the common transcript under
+# the agent's state dir that `mngr transcript <room>` renders and the chat app
+# tails. The chat app creates one per room and appends people's messages to the
+# same transcript itself.
+[agent_types.room]
+parent_type = "command"
+command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/room_agent.py"
+
 # the "codex" agent type -- OpenAI Codex CLI as a peer harness to claude. It is
 # its own base type (registered by the imbue-mngr-codex plugin, installed
 # with the mngr tool by system/scripts/build_workspace.sh), so no parent_type. Auto-approve

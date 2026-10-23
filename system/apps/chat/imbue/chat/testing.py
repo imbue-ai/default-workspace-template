@@ -15,6 +15,7 @@ the agent manager.
 from __future__ import annotations
 
 import fcntl
+import importlib.util
 import json
 import os
 import queue
@@ -42,6 +43,7 @@ from datetime import timezone
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 from typing import Final
 from unittest.mock import patch
@@ -82,6 +84,7 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.signed_in import SignedIn
+from imbue.chat.mentions import MentionStore
 from imbue.chat.models import ActiveAgentSnapshot
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import ChatSnapshot
@@ -92,6 +95,7 @@ from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.primitives import ChatId
+from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.roster_client import RosterClient
 from imbue.chat.secret_requests import SecretRequestStore
@@ -543,13 +547,32 @@ def write_recording_mngr_binary(tmp_path: Path) -> tuple[str, Path]:
 
     One line per invocation, whatever the arguments hold: a newline inside an argument (a
     ``--message`` carrying a whole conversation) is written as a space, so a reader can still
-    count the calls and split a line into its tokens.
+    count the calls and split a line into its tokens. A create run with the no-account mark in
+    its environment (a room's) ends its line with ``MINDS_CREATE_WITHOUT_ACCOUNT=<value>``.
     """
     log_path = tmp_path / "mngr-argv.log"
     script = tmp_path / "fake-mngr"
-    script.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$(printf '%s' \"$*\" | tr '\\n' ' ')\" >> \"{log_path}\"\n")
+    script.write_text(
+        "#!/bin/sh\n"
+        "printf '%s%s\\n' \"$(printf '%s' \"$*\" | tr '\\n' ' ')\" "
+        '"${MINDS_CREATE_WITHOUT_ACCOUNT:+ MINDS_CREATE_WITHOUT_ACCOUNT=$MINDS_CREATE_WITHOUT_ACCOUNT}" '
+        f'>> "{log_path}"\n'
+    )
     script.chmod(0o755)
     return str(script), log_path
+
+
+# The room's reader (``system/scripts/room_agent.py``), which writes a room's transcript from the agent's pane.
+ROOM_AGENT_SCRIPT_PATH: Final[Path] = Path(__file__).parents[5] / "system" / "scripts" / "room_agent.py"
+
+
+def load_room_agent_script() -> ModuleType:
+    """The room's reader as a module, for a test that writes a room's transcript the way ``mngr message`` comes to."""
+    spec = importlib.util.spec_from_file_location("room_agent_for_tests", ROOM_AGENT_SCRIPT_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def put_stand_in_cli_on_path(tmp_path: Path, name: str, body: str, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -706,6 +729,7 @@ def build_test_state(
     secret_requests: SecretRequestStore | None = None,
     chat_namer: ChatNamer | None = None,
     authors: AuthorStore | None = None,
+    mentions: MentionStore | None = None,
 ) -> ChatAppState:
     """Build a `ChatAppState` for tests, injecting fakes where provided.
 
@@ -746,6 +770,9 @@ def build_test_state(
         # Never this package's own data/: a test that reads the annotations back injects a store under its tmp_path.
         authors=authors if authors is not None else AuthorStore(root=Path(tempfile.mkdtemp(prefix="chat-authors-"))),
         roster=RosterClient(shell=shell if shell is not None else DisconnectedShell()),
+        mentions=mentions
+        if mentions is not None
+        else MentionStore(root=Path(tempfile.mkdtemp(prefix="chat-mentions-"))),
     )
     # Match production: eviction drops a destroyed agent's transcripts, the release a stopped chat's
     # that nobody is streaming, and removing a chat's active agent ends the chat's streams.
@@ -1062,6 +1089,7 @@ def make_chat_snapshot(chat_id: str, last_messaged_at: float | None = None, name
     """A listed chat as the pages see it: one idle claude agent, for tests that reason over snapshots alone."""
     return ChatSnapshot(
         chat_id=ChatId(chat_id),
+        kind=ChatKind.AGENT,
         title=name.replace("-", " "),
         name=name,
         project=None,

@@ -24,12 +24,19 @@ const state = vi.hoisted(() => {
     // load that fails (or none at all).
     loadLands: null as unknown[] | null,
     restored: [] as unknown[],
+    // Every launch of a chat awaiting its first send, and why the next one is refused (null for none).
+    launches: [] as unknown[][],
+    launchRefusal: null as string | null,
   };
 });
 vi.mock("../models/Chats", () => ({
   getChatById: () => state.chat ?? undefined,
   addChatsUpdatedListener: () => undefined,
   addActiveAgentChangedListener: () => undefined,
+  launchChat: (...args: unknown[]) => {
+    state.launches.push(args);
+    return state.launchRefusal === null ? Promise.resolve({}) : Promise.reject(new Error(state.launchRefusal));
+  },
 }));
 vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),
@@ -94,6 +101,7 @@ import {
   beginSwitchTo,
   beginSwitchToAccountId,
   closeSwitchDialog,
+  launchAwaitingChatAsRoom,
   openSwitchDialog,
   takeBackSwitch,
 } from "./SwitchDialog";
@@ -181,9 +189,23 @@ describe("the switch dialog", () => {
     state.isStartAccepted = true;
     state.isTranscriptLoaded = true;
     state.loadLands = null;
+    state.launches.length = 0;
+    state.launchRefusal = null;
     setPendingAccount("agent-1", null);
     // The dialog is module state: a test that leaves it up would render into the next one's root.
     closeSwitchDialog();
+  });
+
+  it("launches a chat awaiting its first send as a room, on no account and with nothing said", async () => {
+    await launchAwaitingChatAsRoom("agent-first");
+    expect(state.launches).toEqual([["agent-first", "", "", "room"]]);
+    expect(state.notices).toEqual([]);
+  });
+
+  it("raises the composer's failure notice when the room's launch is refused", async () => {
+    state.launchRefusal = "no room for you";
+    await launchAwaitingChatAsRoom("agent-first");
+    expect(state.notices).toEqual([{ title: "Couldn't make a room", detail: "no room for you" }]);
   });
 
   it("switches a chat with no user turn at once, with no dialog and nothing to say", async () => {

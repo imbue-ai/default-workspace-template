@@ -276,17 +276,24 @@ def _post_op(server: RunningWorkspace, body: dict[str, Any]) -> int:
         return 0
 
 
-def _post_intake(server: RunningWorkspace, body: dict[str, Any]) -> str:
-    """Post one intake to the chat app, as the shell's launch does for a POST launch path; the path it answers."""
+def _post_chat_json(server: RunningWorkspace, path: str, body: dict[str, Any]) -> dict[str, Any]:
+    """POST ``body`` as JSON to the chat app's ``path``; the parsed answer, which must come under 200."""
     request = urllib.request.Request(
-        f"{server.chat_url}/api/chats/intake",
+        f"{server.chat_url}{path}",
         data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=10) as response:
-        assert response.status == 200
-        return str(json.loads(response.read())["path"])
+        assert response.status == 200, f"{path} answered {response.status}"
+        answer = json.loads(response.read())
+    assert isinstance(answer, dict)
+    return answer
+
+
+def _post_intake(server: RunningWorkspace, body: dict[str, Any]) -> str:
+    """Post one intake to the chat app, as the shell's launch does for a POST launch path; the path it answers."""
+    return str(_post_chat_json(server, "/api/chats/intake", body)["path"])
 
 
 def _navigate_chat_window(server: RunningWorkspace, client_id: str, path: str) -> None:
