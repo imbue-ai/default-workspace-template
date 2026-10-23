@@ -26,7 +26,7 @@
  *
  *   * there is no `Runs on <harness>` picker -- provider -> harness is fixed in V1, so the
  *     header states it as a fact rather than offering it as a choice;
- *   * `code_then_wait` (OpenAI's device flow) runs the other way round from a paste flow: it
+ *   * `code_then_wait` (a device flow) runs the other way round from a paste flow: it
  *     shows a code you carry to the browser rather than taking one back, so its step 2 is a
  *     code plus a Copy button.
  *
