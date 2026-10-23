@@ -325,10 +325,13 @@ class ApplyPlan(NamedTuple):
 
     Every apply restarts the services agent, pre-flights the merged backend
     first, and probes afterwards; the plan only decides the work in front of
-    that. The system-interface split (frontend vs backend, source vs manifest)
-    is finer than :func:`classify_path`'s single ``system_interface`` class
-    because those four need different work; ``provisioner`` is the
-    pinned-toolchain re-run, keyed on the files the provisioner reads.
+    that. The frontend split (source vs npm manifest) and ``backend_src`` are
+    finer than :func:`classify_path`'s single ``system_interface`` class because
+    they need different work. ``backend_manifest`` is a root manifest that moves
+    both shared environments (the mngr tool's reinstall and the venv's sync);
+    ``app_pyproject`` is any app's ``pyproject.toml``, the shell's included,
+    which only the venv installs; ``resyncs_venv`` is either. ``provisioner`` is
+    the pinned-toolchain re-run, keyed on the files the provisioner reads.
     """
 
     frontend_src: bool
