@@ -4982,7 +4982,7 @@ class _CompactionReportingMngrMessenger(RecordingMngrMessenger):
 
 
 def test_a_compaction_mngr_waits_out_shows_while_it_runs_and_ends_with_its_compacted_event(tmp_path: Path) -> None:
-    """Measured live on grok: noted after mngr returned, the request outlived its compacted event by minutes."""
+    """The request is noted before mngr is asked, so a compaction mngr waits out shows while it runs."""
     agent_info = _agent_info(agent_id=f"agent-{uuid4().hex}", harness=HarnessType.GROK, agent_state_dir=tmp_path)
     managers: list[AgentManager] = []
     shown_while_compacting: list[bool] = []

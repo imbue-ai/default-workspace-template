@@ -266,7 +266,7 @@ class _KnownLocationDeliveries:
 def test_a_press_falls_back_to_discovery_only_when_the_known_location_reached_no_agent(
     failure_kind: SendFailureKind | None, is_pressed_after_discovery: bool
 ) -> None:
-    """A grok Ctrl+C mngr refused, pressed again after discovery, can cancel a turn grok started meanwhile."""
+    """A press the agent refused is not pressed again, where it could cancel a turn the agent started meanwhile."""
     deliveries = _KnownLocationDeliveries(failure_kind)
     messenger = MngrMessenger(discover=deliveries.discover, press=deliveries.deliver)
 
@@ -294,7 +294,7 @@ def test_a_press_falls_back_to_discovery_only_when_the_known_location_reached_no
 def test_a_send_falls_back_to_discovery_only_when_the_known_location_reached_no_agent(
     failure_kind: SendFailureKind | None, is_blocked: bool, is_sent_after_discovery: bool
 ) -> None:
-    """A grok send refused as busy, sent again after discovery, cost each REFUSE race a discovery and a second send."""
+    """A send the agent answered at its known location, refused or possibly typed, is not sent again."""
     deliveries = _KnownLocationDeliveries(failure_kind, is_blocked)
     messenger = MngrMessenger(discover=deliveries.discover, send=deliveries.deliver)
 
