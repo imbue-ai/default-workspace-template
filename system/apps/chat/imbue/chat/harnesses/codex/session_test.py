@@ -12,7 +12,6 @@ response is what restores the text to the composer.
 from __future__ import annotations
 
 import json
-import time
 from collections import deque
 from collections.abc import Mapping
 from pathlib import Path
@@ -28,6 +27,7 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.harnesses.session_watcher import StreamedReply
+from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_codex.app_server_client import CodexAppServerClient
 from imbue.mngr_codex.app_server_client import TransportClosedError
 
@@ -170,11 +170,7 @@ def test_the_streamed_reply_is_the_live_connections_and_none_once_it_is_gone(tmp
             "params": {"threadId": "thread-1", "itemId": "msg-1", "delta": "Tides rise"},
         }
     )
-    deadline = time.monotonic() + 3.0
-    while session.read_streamed_reply() is None and time.monotonic() < deadline:
-        time.sleep(0.02)
-
-    assert session.read_streamed_reply() == StreamedReply(message_id="msg-1", text="Tides rise")
+    wait_for(lambda: session.read_streamed_reply() == StreamedReply(message_id="msg-1", text="Tides rise"))
 
     session.on_lifecycle_dead()
     assert session.read_streamed_reply() is None

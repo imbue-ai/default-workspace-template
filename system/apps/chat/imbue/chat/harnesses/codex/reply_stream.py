@@ -46,6 +46,9 @@ class CodexReplyStream(MutableModel):
             self._on_item(method, params)
         elif method == "turn/completed":
             self._on_turn_completed()
+        else:
+            # Every other notification says nothing about the reply being written.
+            pass
 
     def read(self) -> StreamedReply | None:
         """The agent message streamed so far, or None while there is none."""
