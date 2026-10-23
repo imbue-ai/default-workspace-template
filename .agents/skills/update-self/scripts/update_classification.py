@@ -304,7 +304,7 @@ def _is_backend_manifest(path: str) -> bool:
     return path in ("uv.lock", "pyproject.toml", PLUGIN_MANIFEST_PATH)
 
 
-def _is_app_manifest(path: str) -> bool:
+def _is_app_pyproject(path: str) -> bool:
     """Whether ``path`` is an app's ``pyproject.toml``, which only the workspace venv
     installs.
 
@@ -335,7 +335,7 @@ class ApplyPlan(NamedTuple):
     frontend_manifest: bool
     backend_src: bool
     backend_manifest: bool
-    app_manifest: bool
+    app_pyproject: bool
     provisioner: bool
 
     @property
@@ -348,7 +348,7 @@ class ApplyPlan(NamedTuple):
 
     @property
     def resyncs_venv(self) -> bool:
-        return self.backend_manifest or self.app_manifest
+        return self.backend_manifest or self.app_pyproject
 
 
 def plan_apply(
@@ -366,7 +366,7 @@ def plan_apply(
     frontend_manifest = False
     backend_src = False
     backend_manifest = False
-    app_manifest = False
+    app_pyproject = False
     provisioner = False
     for path in paths:
         if path in provisioner_inputs:
@@ -388,8 +388,8 @@ def plan_apply(
             frontend_src = True
         elif _is_backend_manifest(path):
             backend_manifest = True
-        elif _is_app_manifest(path):
-            app_manifest = True
+        elif _is_app_pyproject(path):
+            app_pyproject = True
         elif (
             path.startswith(f"{SYSTEM_INTERFACE_DIR}/imbue/")
             and path.endswith(".py")
@@ -401,6 +401,6 @@ def plan_apply(
         frontend_manifest=frontend_manifest,
         backend_src=backend_src,
         backend_manifest=backend_manifest,
-        app_manifest=app_manifest,
+        app_pyproject=app_pyproject,
         provisioner=provisioner,
     )

@@ -111,7 +111,7 @@ _IMPORTED_SOURCE_PREFIXES = (
 # up, so it still catches a ``[tool.uv.sources]`` re-point or a
 # ``[tool.uv.workspace]`` members/exclude edit. That leaves this list a
 # deliberate narrowing away from the apply's ``_is_backend_manifest`` and
-# ``_is_app_manifest`` in
+# ``_is_app_pyproject`` in
 # ``.agents/skills/update-self/scripts/update_classification.py``, which it
 # otherwise mirrors: over-counting costs the apply one extra reinstall, and
 # costs this banner the trust it only gets to spend once.

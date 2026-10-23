@@ -432,7 +432,7 @@ shell's, chat's, and terminal's supervisord pids and `git rev-parse HEAD`.
   naming the chat's instances API.
 - **E15 Rollback that does not restore health (exit 3).** Only in a workspace you can
   afford to break: after an apply with the flag of a chat change that also edits its
-  app manifest (a `description` change in `system/apps/chat/pyproject.toml`, so the
+  `pyproject.toml` (a `description` change in `system/apps/chat/pyproject.toml`, so the
   apply copies the venv aside), sabotage the kept venv copy
   (`data/.state/update-apply/snapshots/venv`: delete its `bin/chat-app`) so the restore
   yields an unbootable chat, then Roll back. Sabotaging only the kept bundle does not
@@ -545,9 +545,10 @@ E5, E8, E9, E15, F5, X4), then these. Numbering continues each group's.
 - **D5's `--timeout` is the worker's own completion time.** Pass one the stand-in can meet,
   or accept `timed_out: true` beside the right `branch`.
 - **An app's environment copy is the venv's.** Every critical app runs from the workspace
-  venv, which the apply copies aside only when a backend or app manifest changed, so a
-  chat-only or frontend apply holds bundles only (F3). E15, and E20 and E24's environment
-  variants, need an apply that changes one (an app's `pyproject.toml` will do).
+  venv, which the apply copies aside only when a backend manifest or an app's
+  `pyproject.toml` changed, so a chat-only or frontend apply holds bundles only (F3). E15,
+  and E20 and E24's environment variants, need an apply that changes one (an app's
+  `pyproject.toml` will do).
 
 ### B. The shared script
 
@@ -600,9 +601,9 @@ E5, E8, E9, E15, F5, X4), then these. Numbering continues each group's.
     note and rebuilt from merged source. Both apps are included because both bundles were
     replaced, not because the missing stamp affects rollback targeting. Stamp checks still
     prevent installing worker bundles built from stale or unverified source.
-- **E20 An app manifest touches every critical app.** Apply a harmless edit to
+- **E20 An app's `pyproject.toml` touches every critical app.** Apply a harmless edit to
   `system/apps/system_interface/pyproject.toml` (a `description` change) with the flag.
-  Pass: the plan counts the change as an app manifest, so the apply re-syncs the
+  Pass: the plan counts the change as an app pyproject, so the apply re-syncs the
   workspace venv every app runs from; the record's `apps` and `programs` name `chat`,
   `system_interface`, and `terminal`; `snapshots` include the venv and not the mngr tool
   environment; band on chat and terminal tabs and the shell's banner. Roll back: all

@@ -2156,7 +2156,7 @@ _CHAT_FRONTEND_DIFF = "M\tsystem/apps/chat/frontend/src/views/Thread.ts\n"
 _SETTINGS_DIFF = "M\t.mngr/settings.toml\n"
 _APT_SNAPSHOT_DIFF = "M\t.mngr/apt-snapshot-timestamp\n"
 _BACKEND_MANIFEST_DIFF = "M\tuv.lock\n"
-_APP_MANIFEST_DIFF = "M\tsystem/apps/browser/pyproject.toml\n"
+_APP_PYPROJECT_DIFF = "M\tsystem/apps/browser/pyproject.toml\n"
 _FRONTEND_MANIFEST_DIFF = "M\tsystem/apps/system_interface/frontend/package.json\n"
 _DOCS_DIFF = "M\tREADME.md\nM\t.agents/changelog/some-entry.md\n"
 
@@ -2173,7 +2173,7 @@ def _plan(paths: list[str]) -> update_classification.ApplyPlan:
 
 
 @pytest.mark.parametrize(
-    ("path", "is_backend_manifest", "is_app_manifest"),
+    ("path", "is_backend_manifest", "is_app_pyproject"),
     [
         ("system/apps/system_interface/pyproject.toml", False, True),
         ("system/apps/browser/pyproject.toml", False, True),
@@ -2189,7 +2189,7 @@ def _plan(paths: list[str]) -> update_classification.ApplyPlan:
     ],
 )
 def test_plan_apply_resyncs_the_venv_when_any_apps_pyproject_changes(
-    path: str, is_backend_manifest: bool, is_app_manifest: bool
+    path: str, is_backend_manifest: bool, is_app_pyproject: bool
 ) -> None:
     # The workspace venv is every app's only install, and an app's console scripts
     # reach it only through a sync: a pyproject edit that leaves uv.lock alone (a new
@@ -2198,8 +2198,8 @@ def test_plan_apply_resyncs_the_venv_when_any_apps_pyproject_changes(
     plan = _plan([path])
 
     assert plan.backend_manifest is is_backend_manifest
-    assert plan.app_manifest is is_app_manifest
-    assert plan.resyncs_venv is (is_backend_manifest or is_app_manifest)
+    assert plan.app_pyproject is is_app_pyproject
+    assert plan.resyncs_venv is (is_backend_manifest or is_app_pyproject)
 
 
 def test_plan_apply_maps_each_change_class() -> None:
@@ -2213,7 +2213,7 @@ def test_plan_apply_maps_each_change_class() -> None:
         ]
     )
     assert plan.frontend_src and plan.frontend_manifest
-    assert plan.backend_src and plan.app_manifest
+    assert plan.backend_src and plan.app_pyproject
     assert plan.provisioner
 
 
@@ -2599,7 +2599,7 @@ def test_apply_an_apps_pyproject_change_resyncs_the_venv_before_the_preflight(
 ) -> None:
     # An app's pyproject can add a console script without moving uv.lock, and the
     # pre-flight and the restart both exec it from the venv, so the sync comes first.
-    runner = _apply_runner(_APP_MANIFEST_DIFF, apply_repo)
+    runner = _apply_runner(_APP_PYPROJECT_DIFF, apply_repo)
     spawner = _SyncObservingSpawner(runner=runner)
 
     code = _apply(runner, _FakeHttp(_all_healthy), spawner, apply_repo)
@@ -2613,7 +2613,7 @@ def test_apply_an_apps_pyproject_change_leaves_the_mngr_tool_alone(
 ) -> None:
     # Nothing an app declares reaches the mngr tool, so an app-only release copies the
     # venv aside and re-syncs it, and neither copies nor reinstalls the tool.
-    runner = _apply_runner(_APP_MANIFEST_DIFF, apply_repo)  # no tools on PATH
+    runner = _apply_runner(_APP_PYPROJECT_DIFF, apply_repo)  # no tools on PATH
 
     code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
 
@@ -6415,10 +6415,10 @@ def test_a_rollback_rebuilds_the_mngr_tool_it_could_not_copy_aside(
 def test_a_rollback_resyncs_the_venv_it_could_not_copy_aside_after_an_app_only_apply(
     apply_repo: Path,
 ) -> None:
-    # The forward sync rewrote the venv from the merged app manifest, and with no copy
+    # The forward sync rewrote the venv from the merged app pyproject, and with no copy
     # to put back only a sync from the restored tree undoes it. The mngr tool was never
     # touched, so nothing reinstalls it.
-    runner = _apply_runner(_APP_MANIFEST_DIFF, apply_repo)  # no .venv to copy aside
+    runner = _apply_runner(_APP_PYPROJECT_DIFF, apply_repo)  # no .venv to copy aside
     spawner = _FakeSpawner(output="ImportError: boom", exited=True)
 
     code = _apply(
@@ -8041,13 +8041,13 @@ def test_the_record_names_every_critical_app_the_apply_touched(
     assert record.programs == ["chat", "system_interface", "terminal"]
 
 
-@pytest.mark.parametrize("diff", [_BACKEND_MANIFEST_DIFF, _APP_MANIFEST_DIFF])
+@pytest.mark.parametrize("diff", [_BACKEND_MANIFEST_DIFF, _APP_PYPROJECT_DIFF])
 def test_the_record_names_every_critical_app_when_the_apply_resyncs_the_venv(
     apply_repo: Path, diff: str
 ) -> None:
-    """A backend or app manifest re-syncs the workspace venv every app runs from, and
-    copies it aside first: a rollback that restores that copy has to restart every
-    critical app, so the record names them all, not the shell alone."""
+    """A backend manifest or an app pyproject re-syncs the workspace venv every app runs
+    from, and copies it aside first: a rollback that restores that copy has to restart
+    every critical app, so the record names them all, not the shell alone."""
     _write_app(apply_repo, "chat", "chat", "chat-app", True)
     runner = _apply_runner(diff, apply_repo)
 

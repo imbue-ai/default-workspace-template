@@ -794,7 +794,7 @@ def _recover_running_state(
                 destinations,
                 is_mngr_source_required=False,
             )
-        elif plan.app_manifest and VENV_SNAPSHOT_NAME not in restored:
+        elif plan.app_pyproject and VENV_SNAPSHOT_NAME not in restored:
             sync_workspace_venv(repo_root, runner, keep_protected)
         if live_service_restarted:
             run_checked(
@@ -1182,7 +1182,7 @@ def apply_update(
                 destinations,
                 ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
             )
-        elif plan.app_manifest:
+        elif plan.app_pyproject:
             sync_workspace_venv(
                 repo_root, runner, expend, ENVIRONMENT_REFRESH_TIMEOUT_SECONDS
             )
@@ -1557,8 +1557,8 @@ def _touched_critical_apps(
 
     Read off the merged tree's manifests: an app is touched when a changed path is
     under its directory, when the bundle it owns was rebuilt, when the apply re-synced
-    the workspace venv every app runs from (a backend or app manifest change), or, for the
-    shell, when anything the shell's process runs changed. A frontend apply replaces every bundle, so include
+    the workspace venv every app runs from (a backend manifest or app pyproject change), or,
+    for the shell, when anything the shell's process runs changed. A frontend apply replaces every bundle, so include
     each critical owner even if that app's source was unchanged. An extra restart is
     acceptable; rollback targeting does not need to compare installed and kept source
     stamps.
