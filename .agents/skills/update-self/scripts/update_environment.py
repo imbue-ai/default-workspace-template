@@ -136,8 +136,8 @@ def tool_snapshot_name(tool_name: str) -> str:
 VENV_SNAPSHOT_NAME = "venv"
 
 
-# The snapshot names that together cover the backend environments a manifest
-# change rebuilds. A rollback that could not put both of them back has to
+# The snapshot names that together cover the backend environments a backend
+# manifest change rebuilds. A rollback that could not put both of them back has to
 # re-resolve both from the restored tree: a restored venv over a tool
 # environment still built from the rolled-back-away tree is the
 # ModuleNotFoundError-on-``mngr`` state that reads as recovered while nothing
