@@ -8859,6 +8859,37 @@ def test_find_removed_app_tools_names_the_editable_install_whose_app_left_the_tr
     assert removed[0].bin_dir == tool_env.bin_dir(home)
 
 
+def test_a_removed_tool_found_in_two_installations_is_copied_aside_once_per_installation(
+    tmp_path: Path,
+) -> None:
+    # A pre-pin workspace holds the old browser tool under $HOME/.local beside the
+    # pinned copy; one snapshot name for both would leave the second copy over the
+    # first, and a rollback would put that one back in both places.
+    repo_root = _make_apply_repo(tmp_path)
+    gone_app_dir = repo_root / update_layout.APPS_DIR / "browser"
+    pinned_home = tool_env.tool_home()
+    other_home = tmp_path / "other-home"
+    for home in (pinned_home, other_home):
+        _with_editable_receipt(home, "browser", gone_app_dir, ["agentic-browser-fleet"])
+    removed = update_environment.find_removed_app_tools(
+        repo_root, update_environment.tool_locations_to_scan([other_home])
+    )
+    plan = _plan(["README.md"])
+
+    targets = update_environment.snapshot_targets(
+        plan,
+        repo_root,
+        update_environment.resolve_tool_destinations(plan, _RecordingRunner()),
+        removed,
+    )
+
+    assert [source for _name, source in targets] == [
+        tool_env.tools_dir(pinned_home) / "browser",
+        tool_env.tools_dir(other_home) / "browser",
+    ]
+    assert len({name for name, _source in targets}) == 2
+
+
 def test_the_apply_uninstalls_the_tool_of_an_app_the_merge_removed_before_installing_the_rest(
     apply_repo: Path,
 ) -> None:
@@ -8871,7 +8902,14 @@ def test_the_apply_uninstalls_the_tool_of_an_app_the_merge_removed_before_instal
     runner = _apply_runner("M\tsystem/apps/screen/pyproject.toml\n", apply_repo)
     snapshot_copy = update_apply_contract.snapshots_root(
         apply_repo
-    ) / update_environment.tool_snapshot_name("browser")
+    ) / update_environment.removed_tool_snapshot_name(
+        update_environment.RemovedAppTool(
+            "browser",
+            gone_app_dir.resolve(),
+            tool_env.tools_dir(home),
+            tool_env.bin_dir(home),
+        )
+    )
     is_copy_present_at_uninstall: list[bool] = []
 
     def note_copy(argv: list[str]) -> None:

@@ -6,6 +6,7 @@ restores from.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -142,7 +143,7 @@ def snapshot_targets(
     for removed in removed_app_tools:
         targets.append(
             (
-                tool_snapshot_name(removed.tool_name),
+                removed_tool_snapshot_name(removed),
                 removed.tool_dir / removed.tool_name,
             )
         )
@@ -151,6 +152,17 @@ def snapshot_targets(
 
 def tool_snapshot_name(tool_name: str) -> str:
     return f"tool-{tool_name}"
+
+
+def removed_tool_snapshot_name(removed: RemovedAppTool) -> str:
+    """The snapshot name of one installation of a removed app's tool.
+
+    The tool's name alone would not do: the scan covers several installations
+    (the pinned directory and the sweep homes), and a pre-pin workspace holds
+    the same tool in two of them, each to be put back where it was.
+    """
+    installation = hashlib.sha256(str(removed.tool_dir.resolve()).encode()).hexdigest()
+    return f"{tool_snapshot_name(removed.tool_name)}-{installation[:12]}"
 
 
 # The snapshot names that together cover the backend environments a manifest
