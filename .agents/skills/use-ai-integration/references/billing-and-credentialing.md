@@ -46,7 +46,8 @@ Workspace credentials live in a per-ACCOUNT config directory. Signing in through
 chooser mints `~/.minds/accounts/<id>/`, and a chat is bound to one at create time by an env var
 naming that folder -- `CLAUDE_CONFIG_DIR` for claude, `CODEX_HOME` for codex, `HOME` for
 antigravity, `PI_CODING_AGENT_DIR` for pi, and `GROK_AUTH_PATH` (the folder's `auth.json`) for
-grok. Nothing rebinds a chat afterwards.
+grok. Switching a chat to another account later rebinds it in place, except a grok chat, which
+moves to a new agent bound to the other account.
 
 This used to be one shared `~/.claude/settings.json` written by a single sign-in modal, which is
 why the resolver below still falls back to it when no account exists. The shared path is still what
