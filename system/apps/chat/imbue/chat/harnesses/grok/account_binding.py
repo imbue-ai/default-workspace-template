@@ -11,6 +11,7 @@ from imbue.chat.harnesses.account_binding import AGENT_ENV_FILENAME
 from imbue.chat.harnesses.account_binding import AccountBinding
 from imbue.chat.harnesses.account_binding import DefaultCreateBinding
 from imbue.chat.harnesses.account_binding import rewrite_env_var
+from imbue.imbue_common.pure import pure
 from imbue.mngr_grok.api import GROK_AUTH_PATH_ENV_VAR
 from imbue.mngr_grok.api import build_pinned_grok_environment
 from imbue.mngr_grok.api import render_pinned_grok_home
@@ -18,6 +19,10 @@ from imbue.mngr_grok.api import render_pinned_grok_home
 logger = _loguru_logger
 
 _GROK_HOME_ENV_VAR: Final = "GROK_HOME"
+# Grok takes a key from XAI_API_KEY, and credentials, endpoints and config overlays from its GROK_* variables.
+XAI_API_KEY_ENV_VAR: Final = "XAI_API_KEY"
+_GROK_ENV_VAR_PREFIX: Final = "GROK_"
+GROK_MODELS_COMMAND: Final = ("grok", "models")
 AUTH_FILENAME: Final = "auth.json"
 # The auth.json scope grok keeps a stored API key under; every other scope is a session login.
 API_KEY_SCOPE: Final = "xai::api_key"
@@ -27,6 +32,12 @@ _REQUIRED_SCOPE_FIELDS: Final = ("key", "auth_mode", "create_time", "user_id")
 
 def _auth_path(account_dir: Path) -> Path:
     return account_dir / AUTH_FILENAME
+
+
+@pure
+def is_grok_ambient_variable(name: str) -> bool:
+    """Whether grok would read the server's own variable ``name`` in place of an account's credential or config."""
+    return name == XAI_API_KEY_ENV_VAR or name.startswith(_GROK_ENV_VAR_PREFIX)
 
 
 class GrokAccountBinding(AccountBinding):

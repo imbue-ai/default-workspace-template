@@ -23,6 +23,8 @@ from loguru import logger as _loguru_logger
 from pydantic import SecretStr
 
 from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
+from imbue.chat.harnesses.grok.account_binding import GROK_MODELS_COMMAND
+from imbue.chat.harnesses.grok.account_binding import is_grok_ambient_variable
 from imbue.chat.harnesses.grok.account_binding import read_sole_api_key
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.registry import build_account_binding
@@ -64,15 +66,11 @@ _PROBES: Final[dict[HarnessType, tuple[tuple[str, ...], str | None]]] = {
 
 # `grok models` exits 0 whatever it finds; its first line names the session login in auth.json and ignores a
 # stored API key.
-_GROK_MODELS_COMMAND: Final = ("grok", "models")
 _GROK_SIGNED_IN_BANNER: Final = "You are logged in with "
 _GROK_SIGNED_OUT_BANNER: Final = "You are not authenticated."
 # Where grok checks an API key before using it, and the flags of a 200 that mean the key is unusable.
 _XAI_API_KEY_INFO_URL: Final = "https://api.x.ai/v1/api-key"
 _XAI_API_KEY_UNUSABLE_FLAGS: Final = ("api_key_blocked", "api_key_disabled", "team_blocked")
-# Grok reads its own variables as credentials, endpoints and config overlays.
-_GROK_ENV_VAR_PREFIX: Final = "GROK_"
-_XAI_API_KEY_ENV_VAR: Final = "XAI_API_KEY"
 
 
 def _send(request: httpx.Request) -> httpx.Response:
@@ -121,7 +119,7 @@ def _is_grok_signed_in(
     api_key = read_sole_api_key(account_dir)
     if api_key is not None:
         return probe_xai_api_key(api_key, fetcher)
-    finished = _run_probe(HarnessType.GROK, _GROK_MODELS_COMMAND, account_dir, runner)
+    finished = _run_probe(HarnessType.GROK, GROK_MODELS_COMMAND, account_dir, runner)
     if finished is None:
         return SignedIn.UNKNOWN
     output = (finished.stdout or "") + (finished.stderr or "")
@@ -199,4 +197,4 @@ def _is_ambient_auth(harness: HarnessType, name: str) -> bool:
     """Whether the server's own variable ``name`` could answer the probe for the folder."""
     if name in MANAGED_AUTH_ENV_KEYS:
         return True
-    return harness is HarnessType.GROK and (name == _XAI_API_KEY_ENV_VAR or name.startswith(_GROK_ENV_VAR_PREFIX))
+    return harness is HarnessType.GROK and is_grok_ambient_variable(name)

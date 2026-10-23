@@ -21,7 +21,10 @@ from loguru import logger
 
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.account_binding import AGENT_ENV_FILENAME
+from imbue.chat.harnesses.grok.account_binding import GROK_MODELS_COMMAND
 from imbue.chat.harnesses.grok.account_binding import GrokAccountBinding
+from imbue.chat.harnesses.grok.account_binding import XAI_API_KEY_ENV_VAR
+from imbue.chat.harnesses.grok.account_binding import is_grok_ambient_variable
 from imbue.chat.harnesses.grok.account_binding import read_sole_api_key
 from imbue.chat.harnesses.grok.queue_tracker import enqueue_control_command
 from imbue.chat.harnesses.model import EffortChoice
@@ -68,15 +71,11 @@ GROK_CATALOG: Final[HarnessCatalog] = HarnessCatalog(
 # The directory, relative to the agent state dir, that mngr_grok's status line writes model_state.json in.
 GROK_STATE_RELATIVE_PATH: Final[Path] = get_model_state_path(Path(".")).parent
 
-_GROK_MODELS_COMMAND: Final[tuple[str, ...]] = ("grok", "models")
 # What `grok models` prints before its listing, one `  * <id> (default)` or `  - <id>` line per model.
 _AVAILABLE_MODELS_HEADER: Final[str] = "Available models:"
 _LISTED_MODEL_MARKERS: Final[tuple[str, ...]] = ("* ", "- ")
 _DEFAULT_MODEL_SUFFIX: Final[str] = " (default)"
 _LIST_MODELS_TIMEOUT_SECONDS: Final[float] = 30.0
-# Grok reads its own variables as credentials, endpoints and config overlays, and lists models for an xAI key.
-_GROK_ENV_VAR_PREFIX: Final[str] = "GROK_"
-_XAI_API_KEY_ENV_VAR: Final[str] = "XAI_API_KEY"
 
 # Holds one `/model` or `/effort` line for the agent's flush worker, which sends it alone.
 HoldControlCommand = Callable[[Path, str], None]
@@ -102,15 +101,11 @@ def build_grok_models_environment(account_dir: Path) -> dict[str, str]:
     An account whose only credential is a stored API key gets it as ``XAI_API_KEY``: ``grok models`` lists
     nothing for a key it finds in ``auth.json``.
     """
-    environment = {
-        name: value
-        for name, value in os.environ.items()
-        if name != _XAI_API_KEY_ENV_VAR and not name.startswith(_GROK_ENV_VAR_PREFIX)
-    }
+    environment = {name: value for name, value in os.environ.items() if not is_grok_ambient_variable(name)}
     environment.update(GrokAccountBinding().account_env(account_dir))
     api_key = read_sole_api_key(account_dir)
     if api_key is not None:
-        environment[_XAI_API_KEY_ENV_VAR] = api_key.get_secret_value()
+        environment[XAI_API_KEY_ENV_VAR] = api_key.get_secret_value()
     return environment
 
 
@@ -120,7 +115,7 @@ def list_account_model_ids(
     """The model ids ``grok models`` lists for the account, or None when it gave no answer."""
     try:
         finished = runner(
-            command=list(_GROK_MODELS_COMMAND),
+            command=list(GROK_MODELS_COMMAND),
             is_checked=False,
             timeout=_LIST_MODELS_TIMEOUT_SECONDS,
             cwd=None,
