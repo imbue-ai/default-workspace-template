@@ -7294,6 +7294,27 @@ def test_a_chat_that_is_a_room_already_is_not_switched_to_a_room_again(
         manager.stop()
 
 
+def test_a_switch_to_a_room_names_no_model(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    """A pick beside a room would only fail the switch at its model step, after the room was made: refused first."""
+    manager, store, _argv_log = _handoff_manager(broadcaster, tmp_path, [])
+    chat = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, chat, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
+    try:
+        with pytest.raises(HandoffError, match="names no model"):
+            manager.begin_switch(
+                ChatId(chat),
+                "",
+                "",
+                "m-1",
+                HeldSendOrigin.CLIENT,
+                model_pick=ModelPick(model_id="opus"),
+                kind=ChatKind.ROOM,
+            )
+        assert store.read(ChatId(chat)) is None
+    finally:
+        manager.stop()
+
+
 def test_the_main_chat_is_not_switched_to_a_room(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
     manager, store, _argv_log = _handoff_manager(broadcaster, tmp_path, [])
     main = f"agent-{uuid4().hex}"

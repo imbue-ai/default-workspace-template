@@ -2131,12 +2131,16 @@ class AgentManager:
         the handoff a fresh start: no summary is asked for and no prompt is written, so the
         successor begins as a new chat would, and so does a switch to a room, which takes no prompt (the
         multiplayer spec, section 7.6). Raises ``ChatConvergingError`` for a chat already converging and
-        ``HandoffError`` when the chat has no active agent, the account is unknown or the chat's own, or the
-        main chat is to become a room (it never is one, S3). ``begin_switch`` decides between this and a rebind.
+        ``HandoffError`` when the chat has no active agent, the account is unknown or the chat's own, a model is
+        named beside a room (which runs on none), or the main chat is to become a room (it never is one, S3).
+        ``begin_switch`` decides between this and a rebind.
         """
         self._refuse_switch_in_secondary(chat_id)
         runner = self._handoff_runner()
         target = _resolve_switch_target(account_id, kind)
+        # Refused before anything is written: a pick on a room's successor would fail the switch at its model step.
+        if target.harness is HarnessType.ROOM and model_pick is not None:
+            raise HandoffError("A switch to a room names no model")
         self._refuse_room_for_main_chat(chat_id, target)
         now = datetime.now(timezone.utc)
         # Resolved twice on purpose: the freshness read walks the retiring agent's transcript,
