@@ -9,6 +9,7 @@ import pytest
 
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
+from imbue.chat.harnesses.grok import queue_tracker
 from imbue.chat.harnesses.grok.queue_tracker import GrokSendVerdict
 from imbue.chat.harnesses.grok.testing import ROOTS_RELATIVE_PATH
 from imbue.chat.harnesses.grok.testing import add_grok_session
@@ -942,9 +943,9 @@ def test_the_running_worker_sends_a_held_message_within_a_second_of_the_turn_end
     assert sent_at[0] - turn_ended_at < 1.5
 
 
-def test_a_loader_runs_no_flush_worker(tmp_path: Path) -> None:
+def test_a_loader_holds_no_queue_for_the_agent(tmp_path: Path) -> None:
     write_grok_agent_state(tmp_path, find_fixture_scenario("plain"))
-    loader = GrokTranscriptLoader.build_loader(_agent_info(tmp_path))
 
-    assert not hasattr(loader, "_flush_thread")
-    assert not hasattr(loader, "_queue")
+    GrokTranscriptLoader.build_loader(_agent_info(tmp_path)).get_all_events()
+
+    assert tmp_path.name not in queue_tracker._TRACKERS
