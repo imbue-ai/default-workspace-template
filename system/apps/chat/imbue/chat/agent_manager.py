@@ -850,7 +850,6 @@ def _converging_status(phase: HandoffPhase) -> ChatStatus:
 
 
 @pure
-@pure
 def _chat_title(agent: AgentStateItem, chat: _ResolvedChat) -> str:
     """The name a chat is listed under: the one the user typed, else its agent's name; its handoff's while it converges."""
     if chat.handoff is not None:
@@ -858,6 +857,7 @@ def _chat_title(agent: AgentStateItem, chat: _ResolvedChat) -> str:
     return agent.labels.get("display_name") or agent.name
 
 
+@pure
 def chat_snapshot_for_active_agent(
     agent: AgentStateItem,
     chat: _ResolvedChat,
