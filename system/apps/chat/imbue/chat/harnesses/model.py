@@ -178,10 +178,8 @@ class HarnessCatalog(FrozenModel):
     # string, prefix included, so a harness that wants no credit at all declares "" -- the
     # frontend then renders nothing. Claude does this today.
     powered_by_text: str
-    # Whether this harness can flush a queued "shoulder tap" atomically -- merging the parked
-    # messages into the currently-running turn without a restart. True only for codex, whose
-    # patched binary watches shoulder_tap_atomic.jsonl and ABA-gates the flush on the live turn
-    # id. False harnesses (claude, pi) keep the restart-based flush.
+    # Whether this harness can flush a queued "shoulder tap" without a restart; the tap endpoint
+    # refuses a harness that cannot.
     native_atomic_shoulder_tap_possible: bool = False
 
 

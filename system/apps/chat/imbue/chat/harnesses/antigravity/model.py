@@ -84,7 +84,7 @@ ANTIGRAVITY_CATALOG: Final[HarnessCatalog] = HarnessCatalog(
     # lie about the set's size.
     picker_mode=PickerMode.LIST,
     powered_by_text="Powered by Antigravity",
-    # agy's tap does not restart: it ends the turn with Escape and then delivers the block we
+    # agy's tap does not restart: it ends the turn with one ctrl+c and then delivers the block we
     # were holding, so the entries never blink out (contract E1). Codex's shape, not claude's.
     native_atomic_shoulder_tap_possible=True,
 )
