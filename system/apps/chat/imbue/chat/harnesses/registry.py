@@ -7,8 +7,11 @@ branches on the harness name.
 
 Adding a harness is one :class:`HarnessType` member, one :class:`HarnessSpec` entry here, one
 subclass per concern, its label in ``lanes.HARNESS_LABEL``, its ``[agent_types.<name>]`` block
-in ``.mngr/settings.toml`` (launching through the OOM band wrapper), and -- if it emits markers
-of its own -- one member of :class:`~imbue.chat.harnesses.events.SpecialEventKind`. No consumer
+in ``.mngr/settings.toml`` (launching through the OOM band wrapper), its mngr plugin package (a
+dependency of the chat app, pinned in the root ``pyproject.toml`` and listed in
+``system/config/mngr_plugins.toml``), its CLI installed by ``system/scripts/setup_system.sh``,
+and -- if it emits markers of its own -- one member of
+:class:`~imbue.chat.harnesses.events.SpecialEventKind`. No consumer
 of the registry changes: ``ChatAppState`` (``state.py``) builds watchers through
 :func:`build_watcher`, ``agent_manager`` builds trackers through :func:`build_tracker`, and
 neither names a harness.
