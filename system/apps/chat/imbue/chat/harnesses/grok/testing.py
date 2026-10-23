@@ -1,7 +1,7 @@
 """Test utilities for the grok harness: a fake grok agent state dir in mngr_grok's layout, built from captured sessions.
 
-The layout is mngr_grok's private one, written here by hand; ``watcher_test.py`` pins it against
-``imbue.mngr_grok.api``'s readers, so an mngr bump that moves it fails there first.
+The layout is mngr_grok's private one, written here by hand; ``watcher_test.py`` and ``session_test.py`` pin it
+against ``imbue.mngr_grok.api``'s readers, so an mngr bump that moves it fails there first.
 """
 
 import json
