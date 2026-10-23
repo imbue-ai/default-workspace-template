@@ -820,6 +820,24 @@ def test_anything_unexpected_lets_the_call_through_and_is_logged(
             "unknown hook command 'post-tool-use'",
             id="unknown-command",
         ),
+        pytest.param(
+            hook.PRE_TOOL_USE_COMMAND,
+            '["not", "an", "object"]',
+            "the hook input is not a JSON object (list)",
+            id="not-an-object",
+        ),
+        pytest.param(
+            hook.PRE_TOOL_USE_COMMAND,
+            '{"sessionId": "s", "toolName": 3}',
+            "the payload names no tool and input (keys: sessionId, toolName)",
+            id="no-tool",
+        ),
+        pytest.param(
+            hook.PRE_TOOL_USE_COMMAND,
+            '{"tool_name": "run_terminal_command", "tool_input": {"description": "x"}}',
+            "a run_terminal_command call with no command",
+            id="shell-call-without-a-command",
+        ),
     ],
 )
 def test_input_the_hook_cannot_use_lets_the_call_through_and_is_logged(

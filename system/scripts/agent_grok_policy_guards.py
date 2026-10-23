@@ -472,6 +472,10 @@ def handle_pre_tool_use(
 ) -> HookReply:
     call = read_tool_call(payload)
     if call is None:
+        note(
+            context.state_dir,
+            f"the payload names no tool and input (keys: {', '.join(sorted(payload))}); allowing the call",
+        )
         return ALLOW
     if call.tool_name == WORKFLOW_TOOL_NAME:
         return deny_reply(WORKFLOW_REFUSAL)
@@ -486,6 +490,7 @@ def handle_pre_tool_use(
 
     command = call.tool_input.get("command")
     if not isinstance(command, str) or not command:
+        note(context.state_dir, f"a {call.tool_name} call with no command; allowing it")
         return ALLOW
     if payload.get("toolInputTruncated") is True:
         return deny_reply(TRUNCATED_COMMAND_REFUSAL)
@@ -538,7 +543,13 @@ def read_payload(stdin: IO[str], state_dir: Path | None) -> Mapping[str, object]
             f"the hook input is not JSON ({len(raw)} bytes); allowing the call",
         )
         return None
-    return payload if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        note(
+            state_dir,
+            f"the hook input is not a JSON object ({type(payload).__name__}); allowing the call",
+        )
+        return None
+    return payload
 
 
 def run_hook(
