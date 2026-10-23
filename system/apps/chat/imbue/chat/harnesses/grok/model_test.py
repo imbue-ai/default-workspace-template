@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.harnesses.grok.account_binding import API_KEY_SCOPE
 from imbue.chat.harnesses.grok.model import GROK_CATALOG
 from imbue.chat.harnesses.grok.model import GrokModelResolver
 from imbue.chat.harnesses.grok.model import build_grok_models_environment
@@ -16,7 +17,10 @@ from imbue.chat.harnesses.grok.model import parse_grok_models_output
 from imbue.chat.harnesses.grok.model import read_agent_account_dir
 from imbue.chat.harnesses.grok.queue_tracker import drop_tracker
 from imbue.chat.harnesses.grok.queue_tracker import get_tracker
+from imbue.chat.harnesses.grok.testing import GROK_SESSION_SCOPE
+from imbue.chat.harnesses.grok.testing import build_grok_key_scope
 from imbue.chat.harnesses.grok.testing import make_grok_agent_info
+from imbue.chat.harnesses.grok.testing import write_grok_auth
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelIdentity
@@ -76,9 +80,7 @@ def _agent_info(state_dir: Path) -> AgentInfo:
 
 
 def _write_api_key_account(account_dir: Path, key: str = "xai-key-5c1e") -> Path:
-    account_dir.mkdir(parents=True, exist_ok=True)
-    scope = {"key": key, "auth_mode": "api_key", "create_time": "2026-10-19T19:11:22.318953Z", "user_id": ""}
-    (account_dir / "auth.json").write_text(json.dumps({"xai::api_key": scope}))
+    write_grok_auth(account_dir, {API_KEY_SCOPE: build_grok_key_scope(key)})
     return account_dir
 
 
@@ -282,7 +284,7 @@ def test_an_account_holding_only_an_api_key_lists_with_it_as_xai_api_key(tmp_pat
 
 
 def test_an_account_with_a_session_login_lists_without_an_xai_api_key(tmp_path: Path) -> None:
-    (tmp_path / "auth.json").write_text(json.dumps({"https://auth.x.ai::client-id": {"key": "token"}}))
+    write_grok_auth(tmp_path, {GROK_SESSION_SCOPE: {"key": "token"}})
 
     assert "XAI_API_KEY" not in build_grok_models_environment(tmp_path)
 
