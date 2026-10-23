@@ -91,6 +91,8 @@ _VERDICT_BY_FAILURE_KIND: Final[dict[str, GrokSendVerdict]] = {
     SendFailureKind.AGENT_BUSY.value: GrokSendVerdict.BUSY,
     SendFailureKind.INPUT_BLOCKED.value: GrokSendVerdict.BLOCKED,
     SendFailureKind.SUBMISSION_UNCONFIRMED.value: GrokSendVerdict.UNCONFIRMED,
+    # mngr may have typed before an unclassified failure, as when its Enter fails.
+    SendFailureKind.UNKNOWN.value: GrokSendVerdict.UNCONFIRMED,
     SendFailureKind.NOT_READY.value: GrokSendVerdict.RETRY,
     SendFailureKind.AGENT_NOT_FOUND.value: GrokSendVerdict.RETRY,
 }

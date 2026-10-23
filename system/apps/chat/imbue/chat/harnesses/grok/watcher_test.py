@@ -698,6 +698,23 @@ def test_a_message_typed_after_a_draft_left_in_grok_s_composer_is_delivered_once
     assert watcher.get_queued_messages() == []
 
 
+def test_a_send_mngr_failed_unclassified_after_typing_is_not_typed_again_once_grok_logs_it(tmp_path: Path) -> None:
+    watcher, grok, _broadcast = _flushing_watcher(tmp_path)
+
+    def fail_after_typing() -> None:
+        raise SendFailedError("tmux send-keys Enter failed", "unknown")
+
+    grok.on_send = fail_after_typing
+    watcher._queue.enqueue("typed once", "t0", is_turn_open=True)
+
+    watcher._attempt_flush()
+    grok.on_send = None
+    watcher._attempt_flush()
+
+    assert grok.sent == ["typed once"]
+    assert watcher.get_queued_messages() == []
+
+
 def test_a_send_mngr_could_not_confirm_and_grok_logged_no_turn_for_spends_an_attempt(tmp_path: Path) -> None:
     watcher, grok, broadcast = _flushing_watcher(tmp_path)
     queued_id = watcher._queue.enqueue("never logged", "t0", is_turn_open=True)
