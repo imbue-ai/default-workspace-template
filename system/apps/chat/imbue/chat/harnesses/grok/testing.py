@@ -152,7 +152,7 @@ def write_live_grok_pid(agent_state_dir: Path) -> None:
 
 
 def grok_update_line(session_id: str, update: dict[str, Any], timestamp_ms: int) -> bytes:
-    """One updates.jsonl record in the shape grok 1.0.62 writes it."""
+    """One hand-built updates.jsonl record carrying the fields the parser reads, not grok's exact bytes."""
     record = {
         "timestamp": timestamp_ms // 1000,
         "method": "session/update",
