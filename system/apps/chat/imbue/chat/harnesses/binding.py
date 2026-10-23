@@ -51,9 +51,11 @@ def resolve_binding(account_id: str = "", home: Path | None = None) -> Account:
 
 
 # The harnesses a chat may change account on in place (a rebind, spec 6): every one with an
-# account binding. A same-harness target on a harness outside this set takes the handoff path,
-# which is the fallback the spec names for a harness that cannot resume under a swapped
-# credential; drop a harness here to route it that way.
+# account binding except grok. A same-harness target on a harness outside this set takes the
+# handoff path, which is the fallback the spec names for a harness that cannot resume under a
+# swapped credential; drop a harness here to route it that way. Grok takes it because mngr_grok
+# merges an account's consent answers into the agent's home only at provision, which a rebind's
+# restart skips and a handoff's create runs.
 REBIND_VERIFIED_HARNESSES: Final[frozenset[HarnessType]] = frozenset(
     {HarnessType.CLAUDE, HarnessType.CODEX, HarnessType.PI_CODING, HarnessType.ANTIGRAVITY}
 )

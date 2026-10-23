@@ -57,6 +57,7 @@ from imbue.chat.harnesses.codex.session import CodexHarnessSession
 from imbue.chat.harnesses.codex.watcher import CodexSessionWatcher
 from imbue.chat.harnesses.codex.watcher import CodexTranscriptLoader
 from imbue.chat.harnesses.events import SpecialEventKind
+from imbue.chat.harnesses.grok.account_binding import GrokAccountBinding
 from imbue.chat.harnesses.grok.activity import GrokActivityTracker
 from imbue.chat.harnesses.grok.watcher import GrokSessionWatcher
 from imbue.chat.harnesses.grok.watcher import GrokTranscriptLoader
@@ -555,6 +556,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         startup_ready_marker=StartupReadyMarker(
             filename=GROK_SESSION_STARTED_MARKER_FILENAME, is_deleted_at_launch=True
         ),
+        binding_class=GrokAccountBinding,
         # The shared placeholders: the model bar switches nothing and its catalog is empty.
         resolver_class=PlaceholderModelResolver,
         catalog_factory=lambda: EMPTY_CATALOG,

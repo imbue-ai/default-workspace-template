@@ -56,6 +56,8 @@ class PasteSink(StrEnum):
     PI_AUTH_JSON = "pi_auth_json"
     # codex's own 0600 auth.json, holding a raw key in API-key mode.
     CODEX_AUTH_JSON = "codex_auth_json"
+    # The `xai::api_key` scope of grok's 0600 auth.json, a map of credential scopes.
+    GROK_AUTH_JSON = "grok_auth_json"
 
 
 class Scrape(FrozenModel):
@@ -101,6 +103,9 @@ class PtyMethod(FrozenModel):
     pty_columns: int = DEFAULT_PTY_COLUMNS
 
     scrape: Scrape
+    # A device sign-in's one-time code, which the user confirms on the scraped page. A method with
+    # one shows the page and the code and waits for the CLI to finish, rather than taking a code back.
+    device_code_scrape: Scrape | None = None
     # None for a CLI that prints no success line, which falls back to the probe.
     success: str | None = None
     # (pattern, user-facing copy). "{1}" interpolates the pattern's first group, so a CLI
@@ -114,7 +119,8 @@ class PtyMethod(FrozenModel):
 
     # Ink's synchronized-update marker. None means the CLI emits no frame boundaries, so
     # the replay collapses to a single final-screen snapshot -- a real loss of the
-    # longest-wins protection, safe only when an OSC 8 hyperlink carries the value anyway.
+    # longest-wins protection, safe only when an OSC 8 hyperlink carries the value anyway
+    # or the CLI prints the value once as a plain line and never redraws it.
     frame_marker: str | None = "\x1b[?2026l"
     scrape_timeout_s: float = 30.0
     # A wall clock for the whole flow. Nothing else bounds it: the machinery only advances
@@ -372,6 +378,56 @@ LANE_GOOGLE = Lane(
     ),
 )
 
+# grok
+# `grok login --device-auth` prints a page and a one-time code as plain lines, waits until the code
+# is confirmed on that page, then exits: 0 after "✓ Signed in", 1 after "Error: <why>". Nothing
+# comes back to type in, so its flow shows the code and waits.
+
+_GROK_URL_CHARSET: Final = r"[A-Za-z0-9%&=?_.~/:+#-]"
+_GROK_DEVICE_URL_SCRAPE = Scrape(
+    trigger=r"https://accounts\.x\.ai/oauth2/device\S*",
+    strict=rf"https://accounts\.x\.ai/oauth2/device{_GROK_URL_CHARSET}*",
+    continuation=rf"^{_GROK_URL_CHARSET}+$",
+)
+# The code sits alone on its row, two spaces in, under the line that asks for it.
+_GROK_DEVICE_CODE_SCRAPE = Scrape(
+    trigger=r"(?:Confirm this code in your browser|Then enter this code):",
+    strict=r"(?<=^  )[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*(?= *$)",
+    continuation=r"^[A-Za-z0-9-]+$",
+)
+_GROK_DEVICE_FAILURES: Final = (
+    (r"Error: Authorization denied", "Access wasn't approved on xAI's page."),
+    (r"Error: Device code expired", "The code expired before it was confirmed. Start over to get a fresh one."),
+    (r"Error: ([^\r\n]*)", "{1}"),
+)
+
+LANE_XAI = Lane(
+    id="xai",
+    provider_name="xAI",
+    subtitle="Use your SuperGrok subscription, or pay per token.",
+    harness=HarnessType.GROK,
+    methods=(
+        PtyMethod(
+            id="device",
+            label="Continue with your xAI account",
+            description="Sign in to xAI in your browser and confirm the code shown below.",
+            argv=("login", "--device-auth"),
+            scrape=_GROK_DEVICE_URL_SCRAPE,
+            device_code_scrape=_GROK_DEVICE_CODE_SCRAPE,
+            success=r"✓ Signed in",
+            failures=_GROK_DEVICE_FAILURES,
+            frame_marker=None,
+        ),
+        PasteMethod(
+            id="api_key",
+            label="Use an API key",
+            description="Paste an xAI API key.",
+            sink=PasteSink.GROK_AUTH_JSON,
+            signup_url="https://console.x.ai",
+        ),
+    ),
+)
+
 # pi
 # Both pi lanes are plain file writes. pi's auth.json is a map keyed by provider id, so
 # "one provider per account folder" is our rule, not pi's -- we simply never write two.
@@ -525,6 +581,7 @@ LANES: Final[tuple[Lane, ...]] = (
     LANE_ANTHROPIC,
     LANE_OPENAI,
     LANE_GOOGLE,
+    LANE_XAI,
     LANE_OPENCODE_GO,
     LANE_OPENROUTER,
     LANE_API_KEY,

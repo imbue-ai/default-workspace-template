@@ -1,13 +1,16 @@
 """Binding an agent to an account, per harness: the scope a CLI runs under, and how an agent is pointed at it.
 
-"Which account" is one environment variable per harness:
+"Which account" is one environment variable per harness, except grok, which splits it in two:
 
     claude   CLAUDE_CONFIG_DIR
     codex    CODEX_HOME
     agy      HOME               (it has no config-dir override -- the home IS the scope)
     pi       PI_CODING_AGENT_DIR
+    grok     GROK_HOME          (where it keeps state; the account folder for a sign-in, the
+                                 agent's own home for an agent)
+             GROK_AUTH_PATH     (the credential file; the account's, for both)
 
-mngr already sets all four per-agent; binding changes what they point at, and nothing else. Each
+mngr already sets these per-agent; binding changes what they point at, and nothing else. Each
 harness registers an ``AccountBinding`` on its ``HarnessSpec`` (``registry.build_account_binding``),
 so nothing outside the harness modules branches on which harness it binds.
 
@@ -20,10 +23,10 @@ land at the right moments:
     --env KEY=VALUE              written to <state>/env BEFORE provisioning
     --extra-provision-command    run AFTER provisioning, BEFORE start
 
-So claude binds through the env file (its launch command carries no inline `env`, so the
-sourced value wins), and the other three bind by replacing the credential symlink that
-provisioning just created -- the same `ln -sfn` mngr itself used, one step later
-(``CredentialLinkAccountBinding``).
+So claude and grok bind through the env file (claude's launch command carries no inline `env`,
+and grok's launch script keeps an env-file `GROK_AUTH_PATH`, so the sourced value wins), and the
+other three bind by replacing the credential symlink that provisioning just created -- the same
+`ln -sfn` mngr itself used, one step later (``CredentialLinkAccountBinding``).
 
 A create that names no account gets the same binding from the workspace's own mngr config:
 the account store writes the default account's harness and binding into
@@ -48,6 +51,9 @@ from imbue.imbue_common.frozen_model import FrozenModel
 # sources the agent's env before running the command.
 _STATE_DIR_SHELL_VAR: Final = '"$MNGR_AGENT_STATE_DIR"'
 
+# mngr's per-agent env file, sourced into the agent's tmux session on every start.
+AGENT_ENV_FILENAME: Final = "env"
+
 
 class BindingError(RuntimeError):
     """An agent could not be bound to an account."""
@@ -70,9 +76,9 @@ class AccountBinding(ABC):
     def account_env(self, account_dir: Path) -> dict[str, str]:
         """The environment that scopes the harness's CLI to one account.
 
-        Only the scoping variable -- callers layer this over `os.environ` themselves, because
-        both `pexpect.spawn` and `Popen` REPLACE the environment rather than merging into it, and
-        a child without `PATH` never starts.
+        Only the scoping variables and any pins the CLI needs outside an agent -- callers layer
+        this over `os.environ` themselves, because both `pexpect.spawn` and `Popen` REPLACE the
+        environment rather than merging into it, and a child without `PATH` never starts.
         """
 
     @abstractmethod
@@ -175,3 +181,17 @@ def _replace_symlink(source: Path, dest: Path) -> None:
     temp_path.unlink(missing_ok=True)
     os.symlink(source, temp_path)
     os.replace(temp_path, dest)
+
+
+def rewrite_env_var(env_path: Path, key: str, value: str) -> None:
+    """Set one ``KEY=VALUE`` line in an env file mngr wrote, keeping every other line as it is."""
+    lines = env_path.read_text().splitlines() if env_path.exists() else []
+    kept = [line for line in lines if not line.startswith(f"{key}=")]
+    # mngr's own quoting rule for the values it writes.
+    is_quoted = any(character in value for character in (" ", '"', "'", "\n"))
+    written = '"' + value.replace('"', '\\"') + '"' if is_quoted else value
+    temp_path = env_path.with_name(f"{env_path.name}.rebind-tmp")
+    temp_path.write_text("\n".join([*kept, f"{key}={written}"]) + "\n")
+    if env_path.exists():
+        temp_path.chmod(env_path.stat().st_mode & 0o777)
+    os.replace(temp_path, env_path)
