@@ -73,14 +73,17 @@ from update_environment import (
     BACKEND_SNAPSHOT_NAMES,
     ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
     discard_snapshots,
+    find_removed_app_tools,
     refresh_app_tools,
     refresh_backend_dependencies,
     remove_shadowing_app_tool_installs,
     remove_shadowing_mngr_installs,
+    remove_tool_installs_of_removed_apps,
     resolve_tool_destinations,
     restore_snapshots,
     run_provisioner,
     take_snapshots,
+    tool_locations_to_scan,
     tool_snapshot_name,
 )
 from update_layout import (
@@ -111,6 +114,7 @@ from update_probes import (
     has_chat_program,
     preflight,
     preflight_chat,
+    prune_registry_rows_of_removed_programs,
     read_critical_apps,
     read_critical_programs,
     refresh_workspace_view,
@@ -631,14 +635,19 @@ _NOT_RECOVERED = RecoveryOutcome(is_recovered=False, is_frontend_confirmed=False
 
 
 def _app_tools_to_rebuild(
-    app_tools: Sequence[AppTool], restored: Collection[str], repo_root: Path
+    app_tools: Sequence[AppTool],
+    restored: Collection[str],
+    repo_root: Path,
+    uninstalled: Collection[str] = frozenset(),
 ) -> tuple[AppTool, ...]:
     """The app tools a rollback re-resolves from the restored tree.
 
     An app tool with no copy to put back (a non-critical app, or a copy that
     could not be taken) is re-resolved. An app the merge added has no directory
     in the restored tree to resolve from, so its environment is left as the
-    failed apply built it, with a note saying so.
+    failed apply built it, with a note saying so -- unless the recovery already
+    uninstalled it (``uninstalled``), which it does for one it could find by its
+    receipt.
     """
     rebuildable: list[AppTool] = []
     for app in app_tools:
@@ -646,6 +655,8 @@ def _app_tools_to_rebuild(
             continue
         if (repo_root / app.directory / "pyproject.toml").is_file():
             rebuildable.append(app)
+        elif app.tool_name in uninstalled:
+            continue
         else:
             sys.stderr.write(
                 f"recovery: the app at {app.directory} is not in the restored tree, so "
@@ -753,6 +764,7 @@ def _recover_running_state(
     snapshots: Sequence[SnapshotRecord],
     is_frontend_expected: bool,
     provisioner_ran: bool,
+    sweep_homes: Sequence[Path],
 ) -> RecoveryOutcome:
     """After the tree is restored to known-good, restore the pre-apply state and
     confirm the workspace is healthy.
@@ -773,6 +785,14 @@ def _recover_running_state(
     to go on.
     """
     try:
+        # The merge's own apps are gone from the restored tree: their tool
+        # environments go first, so the console scripts they took over are free
+        # for the restored tools' entrypoints to be put back.
+        uninstalled_app_tools = find_removed_app_tools(
+            repo_root, tool_locations_to_scan(sweep_homes)
+        )
+        for note in remove_tool_installs_of_removed_apps(uninstalled_app_tools, runner):
+            sys.stderr.write(note)
         failed = set(restore_snapshots(snapshots))
         restored = {record.name for record in snapshots} - failed
         if provisioner_ran:
@@ -822,7 +842,10 @@ def _recover_running_state(
                 is_mngr_source_required=False,
             )
         rebuildable_app_tools = _app_tools_to_rebuild(
-            plan.app_tools, restored, repo_root
+            plan.app_tools,
+            restored,
+            repo_root,
+            uninstalled={removed.tool_name for removed in uninstalled_app_tools},
         )
         if rebuildable_app_tools:
             refresh_app_tools(
@@ -1182,8 +1205,15 @@ def apply_update(
     failure: ApplyFailed | None = None
     try:
         destinations = resolve_tool_destinations(plan, runner)
+        # An app the merge removed leaves its tool environment behind, and the console
+        # scripts that environment owns block the install of the app that replaces it,
+        # so it goes before the refresh -- copied aside first, since the rolled-back
+        # tree runs it.
+        removed_app_tools = find_removed_app_tools(
+            repo_root, tool_locations_to_scan(sweep_homes)
+        )
         marker.snapshots = take_snapshots(
-            plan, repo_root, destinations, marker.snapshots
+            plan, repo_root, destinations, marker.snapshots, removed_app_tools
         )
         _advance(PHASE_SNAPSHOTTED)
 
@@ -1215,6 +1245,8 @@ def apply_update(
                 destinations,
                 ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
             )
+        for note in remove_tool_installs_of_removed_apps(removed_app_tools, runner):
+            sys.stderr.write(note)
         if plan.app_tools:
             refresh_app_tools(
                 plan.app_tools,
@@ -1304,6 +1336,15 @@ def apply_update(
             )
             _advance(PHASE_BUILT)
 
+        # A registry row whose program the merged tree no longer declares would
+        # survive the restart (nothing but the program itself ever rewrote it), so
+        # it goes before the fresh shell reads the registry; a rolled-back program
+        # registers itself again on its next start.
+        for pruned in prune_registry_rows_of_removed_programs(repo_root, runner):
+            sys.stderr.write(
+                f"refresh: removed the registry row of '{pruned}': the merged tree declares no "
+                "supervisord program for it\n"
+            )
         # Every apply restarts the services agent, whatever the diff: the
         # running chat app imports mngr in-process, the shell and
         # the chat both import the workspace libraries and re-read
@@ -1470,6 +1511,7 @@ def apply_update(
                 snapshots=marker.snapshots,
                 is_frontend_expected=is_frontend_expected,
                 provisioner_ran=marker.provisioner_ran,
+                sweep_homes=sweep_homes,
             )
         except (subprocess.CalledProcessError, OSError) as rollback_exc:
             sys.stderr.write(f"the rollback itself failed: {rollback_exc}\n")
@@ -2038,6 +2080,7 @@ def recover(
     base_url: str | None = None,
     now: Callable[[], float] = time.time,
     is_pid_live: Callable[[int], bool] = default_is_pid_a_live_apply,
+    sweep_homes: Sequence[Path],
 ) -> int:
     """Roll back an interrupted apply from its marker.
 
@@ -2173,6 +2216,7 @@ def recover(
         snapshots=marker.snapshots,
         is_frontend_expected=bool(marker.frontend_expected),
         provisioner_ran=marker.provisioner_ran,
+        sweep_homes=sweep_homes,
     )
     if outcome.is_recovered:
         clear_marker(repo_root)

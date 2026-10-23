@@ -474,17 +474,17 @@ path below instead.
 **When the update touches a critical app (`system/apps/system_interface/`,
 `system/apps/chat/`, `system/apps/terminal/`, `system/apps/terminal_pty/`),
 `system/apps/getting_started/frontend/`, `system/apps/files/frontend/`,
-`system/apps/routines/frontend/`, `system/libs/workspace_ui/`,
-`system/libs/workspace_layout/`, or `system/package.json` /
-`system/package-lock.json` at all** (every critical app's tree, plus the
-Getting Started, Files and Routines frontends, the shared library,
-and the npm files, whose change rebuilds every frontend bundle, and the layout
-wire contract the critical apps run), also take the `editing
+`system/apps/routines/frontend/`, `system/apps/screen/frontend/`,
+`system/libs/workspace_ui/`, `system/libs/workspace_layout/`, or
+`system/package.json` / `system/package-lock.json` at all** (every critical
+app's tree, plus the Getting Started, Files, Routines and Screen frontends, the
+shared library, and the npm files, whose change rebuilds every frontend bundle,
+and the layout wire contract the critical apps run), also take the `editing
 critical app <name>` lease for each critical app it touches through the apply,
 as `update-app/references/critical-app.md` does (`<name>` is the app's
 `app.toml` name, so `system/apps/terminal_pty/` is `terminal-pty`; the Getting
-Started, Files and Routines frontends, `workspace_ui`, and the npm files count as both
-`system_interface` and `chat`; `workspace_layout` counts as `system_interface`,
+Started, Files, Routines and Screen frontends, `workspace_ui`, and the npm files count
+as both `system_interface` and `chat`; `workspace_layout` counts as `system_interface`,
 `chat`, and `terminal`). Take them all or none, as that reference says:
 check each one in `tk ready` (`grep -E -- "- editing critical app <name>$"`,
 anchored so `terminal` does not match `terminal-pty`'s lease), take them in
@@ -506,10 +506,10 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 ```
 
 When the report names the worker's **built frontend bundles** (the shell's
-`static/`, the chat app's, the Getting Started app's, the Files app's, and the Routines app's), append
-`--worker-bundle system_interface=<path> --worker-bundle chat=<path>
---worker-bundle getting_started=<path> --worker-bundle files=<path> --worker-bundle routines=<path>` so the
-exact builds the worker validated
+`static/`, the chat app's, the Getting Started app's, the Files app's, the Routines app's, and the
+Screen's), append `--worker-bundle system_interface=<path> --worker-bundle chat=<path>
+--worker-bundle getting_started=<path> --worker-bundle files=<path> --worker-bundle routines=<path>
+--worker-bundle screen=<path>` so the exact builds the worker validated
 are installed instead of a live build; the apply installs them only as a set (one
 `npm run build` emits them all), and builds live when any is missing or stale.
 

@@ -7115,6 +7115,7 @@ def _recover(
         base_url=_LIVE_BASE,
         now=now,
         is_pid_live=is_pid_live,
+        sweep_homes=(),
     )
 
 
@@ -7583,6 +7584,7 @@ def _recover_boot_path(repo: Path) -> int:
         http=_FakeHttp(_all_healthy),
         sleeper=lambda _s: None,
         base_url=_LIVE_BASE,
+        sweep_homes=(),
     )
 
 
@@ -8800,3 +8802,210 @@ def test_a_rollback_whose_restored_app_serves_no_page_is_an_emergency_that_keeps
     assert "copies are still kept" in settled.outcome
     assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
     assert not _refreshed_the_view(runner, apply_repo)
+
+
+# ---------------------------------------------------------------------------
+# apply: the tool of an app the merge removed, and the registry row of a program it dropped
+
+
+def _with_editable_receipt(
+    home: Path, tool_name: str, source_dir: Path, scripts: Sequence[str]
+) -> Path:
+    """A uv tool environment under ``home`` installed editable from ``source_dir``, with ``scripts`` linked
+    into the bin directory as uv links them: the environment's path."""
+    environment = tool_env.tools_dir(home) / tool_name
+    (environment / "bin").mkdir(parents=True, exist_ok=True)
+    tool_env.bin_dir(home).mkdir(parents=True, exist_ok=True)
+    entrypoints = ""
+    for script in scripts:
+        (environment / "bin" / script).write_text(
+            f"#!{environment}/bin/python3\nimport sys\n"
+        )
+        (tool_env.bin_dir(home) / script).symlink_to(environment / "bin" / script)
+        entrypoints += f'    {{ name = "{script}", install-path = "{tool_env.bin_dir(home) / script}", from = "{tool_name}" }},\n'
+    (environment / update_layout.RECEIPT).write_text(
+        "[tool]\n"
+        f'requirements = [{{ name = "{tool_name}", editable = "{source_dir}" }}]\n'
+        f"entrypoints = [\n{entrypoints}]\n"
+    )
+    return environment
+
+
+def test_find_removed_app_tools_names_the_editable_install_whose_app_left_the_tree(
+    tmp_path: Path,
+) -> None:
+    repo_root = _make_apply_repo(tmp_path)
+    home = tool_env.tool_home()
+    gone_app_dir = repo_root / update_layout.APPS_DIR / "browser"
+    _with_editable_receipt(home, "browser", gone_app_dir, ["agentic-browser-fleet"])
+    _with_editable_receipt(
+        home,
+        "system-interface",
+        repo_root / update_layout.SYSTEM_INTERFACE_DIR,
+        ["system-interface"],
+    )
+    _with_receipt(
+        update_layout.MNGR_TOOL_NAME,
+        f'[tool]\nrequirements = [{{ name = "imbue-mngr", git = "{_MNGR_GIT}?rev={_MNGR_REV}" }}]\n',
+    )
+    locations = update_environment.tool_locations_to_scan([tmp_path / "elsewhere"])
+
+    removed = update_environment.find_removed_app_tools(repo_root, locations)
+
+    assert [(tool.tool_name, tool.source_dir) for tool in removed] == [
+        ("browser", gone_app_dir.resolve())
+    ]
+    assert removed[0].tool_dir == tool_env.tools_dir(home)
+    assert removed[0].bin_dir == tool_env.bin_dir(home)
+
+
+def test_the_apply_uninstalls_the_tool_of_an_app_the_merge_removed_before_installing_the_rest(
+    apply_repo: Path,
+) -> None:
+    # The old browser app's tool still owns the agentic-browser-fleet script the Screen
+    # declares too, and uv refuses to install a tool over another tool's entrypoint; so
+    # the removed app's tool goes first, copied aside in case the apply rolls back.
+    home = tool_env.tool_home()
+    gone_app_dir = apply_repo / update_layout.APPS_DIR / "browser"
+    _with_editable_receipt(home, "browser", gone_app_dir, ["agentic-browser-fleet"])
+    runner = _apply_runner("M\tsystem/apps/screen/pyproject.toml\n", apply_repo)
+    snapshot_copy = update_apply_contract.snapshots_root(
+        apply_repo
+    ) / update_environment.tool_snapshot_name("browser")
+    is_copy_present_at_uninstall: list[bool] = []
+
+    def note_copy(argv: list[str]) -> None:
+        if argv[:3] == ["uv", "tool", "uninstall"]:
+            is_copy_present_at_uninstall.append(snapshot_copy.is_dir())
+
+    runner.on_command = note_copy
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    uninstall_index = runner.calls.index(["uv", "tool", "uninstall", "browser"])
+    install_indexes = [
+        index
+        for index, argv in enumerate(runner.calls)
+        if argv[:3] == ["uv", "tool", "install"]
+    ]
+    assert install_indexes and uninstall_index < min(install_indexes)
+    assert runner.envs[uninstall_index]["UV_TOOL_DIR"] == str(tool_env.tools_dir(home))
+    assert runner.envs[uninstall_index]["UV_TOOL_BIN_DIR"] == str(
+        tool_env.bin_dir(home)
+    )
+    assert is_copy_present_at_uninstall == [True]
+
+
+def test_a_rollback_puts_back_the_tool_of_an_app_the_merge_removed(
+    apply_repo: Path,
+) -> None:
+    # The forward pass uninstalled the removed app's tool; the rolled-back tree runs
+    # that app again, so its environment and the entrypoints it owned come back.
+    home = tool_env.tool_home()
+    gone_app_dir = apply_repo / update_layout.APPS_DIR / "browser"
+    environment = _with_editable_receipt(
+        home, "browser", gone_app_dir, ["agentic-browser-fleet"]
+    )
+    entrypoint = tool_env.bin_dir(home) / "agentic-browser-fleet"
+    runner = _apply_runner("M\tsystem/apps/screen/pyproject.toml\n", apply_repo)
+
+    def emulate_uninstall(argv: list[str]) -> None:
+        if argv[:4] == ["uv", "tool", "uninstall", "browser"]:
+            entrypoint.unlink()
+            shutil.rmtree(environment)
+
+    runner.on_command = emulate_uninstall
+    spawner = _FakeSpawner(output="ImportError: boom", exited=True)
+
+    code = _apply(
+        runner,
+        _FakeHttp(lambda url: 200 if _is_live(url) else None),
+        spawner,
+        apply_repo,
+    )
+
+    assert code == 2
+    assert (environment / update_layout.RECEIPT).is_file()
+    assert entrypoint.is_symlink() and entrypoint.resolve() == (
+        environment / "bin" / "agentic-browser-fleet"
+    )
+
+
+def test_read_supervisord_programs_lists_programs_and_listeners_across_the_drop_ins(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    (repo_root / update_layout.SUPERVISORD_DROPIN_DIR).mkdir(parents=True)
+    (repo_root / update_layout.SUPERVISORD_CONF).write_text(
+        "[supervisord]\nnodaemon=true\n[program:cron]\ncommand=cron\n"
+    )
+    (repo_root / update_layout.SUPERVISORD_DROPIN_DIR / "screen.conf").write_text(
+        "[program:screen]\ncommand=screen-service\n\n[group:screen-stack]\nprograms=screen-xorg\n"
+    )
+    (repo_root / update_layout.SUPERVISORD_DROPIN_DIR / "screen-watch.conf").write_text(
+        "[eventlistener:screen-watch]\ncommand=screen-watch\n"
+    )
+
+    assert update_probes.read_supervisord_programs(repo_root) == frozenset(
+        {"cron", "screen", "screen-watch"}
+    )
+    assert update_probes.read_supervisord_programs(tmp_path / "no-such-repo") is None
+
+
+def test_the_apply_prunes_registry_rows_whose_program_the_merged_tree_no_longer_declares(
+    apply_repo: Path,
+) -> None:
+    # Nothing but a program's own start ever rewrote its row, and the removed browser
+    # app's program never starts again: without the prune the launcher keeps a dead
+    # "Browser" tile and the share gateway a dead origin for the life of the workspace.
+    (apply_repo / update_layout.SUPERVISORD_DROPIN_DIR).mkdir(parents=True)
+    (apply_repo / update_layout.SUPERVISORD_CONF).write_text(
+        "[supervisord]\nnodaemon=true\n"
+    )
+    (apply_repo / update_layout.SUPERVISORD_DROPIN_DIR / "screen.conf").write_text(
+        "[program:screen]\ncommand=screen-service\n"
+    )
+    registry = apply_repo / update_layout.APPS_REGISTRY_PATH
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(
+        '[[apps]]\nname = "screen"\nurl = "http://localhost:8090"\nprogram = "screen"\n\n'
+        '[[apps]]\nname = "browser"\nurl = "http://localhost:8081"\nprogram = "browser"\n\n'
+        '[[apps]]\nname = "owner-exec"\nurl = "http://localhost:8650"\n'
+    )
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    removals = [
+        argv
+        for argv in runner.calls
+        if argv[1:4] == [update_layout.FORWARD_PORT_SCRIPT, "--remove", "--name"]
+    ]
+    assert [argv[4] for argv in removals] == ["browser"]
+    prune_index = runner.calls.index(removals[0])
+    restart_index = runner.calls.index(
+        ["mngr", "start", "--restart", "system-services"]
+    )
+    assert prune_index < restart_index
+
+
+def test_the_apply_prunes_no_registry_row_when_the_tree_has_no_supervisord_table(
+    apply_repo: Path,
+) -> None:
+    registry = apply_repo / update_layout.APPS_REGISTRY_PATH
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(
+        '[[apps]]\nname = "browser"\nurl = "http://localhost:8081"\nprogram = "browser"\n'
+    )
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert not [
+        argv
+        for argv in runner.calls
+        if argv[1:3] == [update_layout.FORWARD_PORT_SCRIPT, "--remove"]
+    ]

@@ -817,6 +817,7 @@ def _cmd_recover(args: argparse.Namespace) -> int:
         no_restart=args.no_restart,
         runner=Runner(),
         http=HttpClient(),
+        sweep_homes=default_sweep_homes(),
     )
 
 

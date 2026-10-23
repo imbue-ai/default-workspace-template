@@ -174,6 +174,23 @@ is still launching (an agent's own `new --url` among them) is not held: it is qu
 opens in front once the launch finishes. Agents queued for the Screen are woken through the chat messenger as the
 browser fleet's were.
 
+## Upgrading a workspace that ran the browser app
+
+A workspace built before the Screen takes it through `update-self` like any
+release; the apply does what the browser app's removal needs. It uninstalls the
+old `browser` uv tool before installing the `screen` one (both declare the
+`agentic-browser-fleet` console script, and uv refuses to install over another
+tool's script), copying the old environment aside so a rollback restores it.
+It builds the viewer with the other frontend bundles. It removes the browser
+app's registry row before the restart, since no program re-registers it. The
+restart ends the old `xvfb` and `browser` programs with the old supervisord,
+which frees display `:99` for the Screen's Xorg. The Chromium profile under
+`$MNGR_HOST_DIR/browser-profiles/` and the tab manifest at
+`data/.apps/browser/instances.json` keep their paths, so the browser comes back
+with its logins and tabs the first time the Screen starts it, and env-converge
+installs the stack on the first boot after the update, the service answering
+`installing` meanwhile.
+
 ## Bands
 
 The stack's four programs and the watcher sit at `SCREEN_STACK` (850): above every agent,
