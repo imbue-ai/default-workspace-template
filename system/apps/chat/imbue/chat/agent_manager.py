@@ -1630,6 +1630,20 @@ class AgentManager:
                 self._awaiting_by_chat[chat_id] = (*waiting, asked_chat_id)
         self._broadcast_chats_updated()
 
+    def forget_chat_awaiting(self, chat_id: ChatId, asked_chat_id: ChatId) -> None:
+        """The mention from ``chat_id`` never reached ``asked_chat_id`` (its send was refused): the chat no longer
+        waits on it, while still waiting on any other chat it asked."""
+        with self._lock:
+            waiting = self._awaiting_by_chat.get(chat_id, ())
+            if asked_chat_id not in waiting:
+                return
+            remaining = tuple(asked for asked in waiting if asked != asked_chat_id)
+            if remaining:
+                self._awaiting_by_chat[chat_id] = remaining
+            else:
+                del self._awaiting_by_chat[chat_id]
+        self._broadcast_chats_updated()
+
     def clear_chat_awaiting(self, chat_id: ChatId) -> None:
         """An agent answered into ``chat_id``: it waits on none."""
         with self._lock:

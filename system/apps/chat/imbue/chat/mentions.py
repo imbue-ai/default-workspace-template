@@ -135,31 +135,35 @@ class MentionDeliverer(MutableModel, ABC):
     """How a room's mention reaches an agent chat."""
 
     @abstractmethod
-    def deliver(self, chat_id: ChatId, delivered: str, message_id: str) -> None:
-        """Send ``delivered`` to the chat as the message ``message_id``."""
+    def deliver(self, chat_id: ChatId, delivered: str, message_id: str, on_refused: Callable[[], None]) -> None:
+        """Send ``delivered`` to the chat as the message ``message_id``; ``on_refused`` is run when the chat does
+        not take it (a send held for a converging chat is taken)."""
 
 
 class BackgroundMentionDeliverer(MentionDeliverer):
     """Runs the send under the app's context on a thread of its own, since a send can take seconds and the room's
-    post must not wait on it; a refusal is logged."""
+    post must not wait on it; a refusal is logged and reported."""
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
     send: MentionSend = Field(frozen=True, description="The ordinary send path")
 
-    def deliver(self, chat_id: ChatId, delivered: str, message_id: str) -> None:
+    def deliver(self, chat_id: ChatId, delivered: str, message_id: str, on_refused: Callable[[], None]) -> None:
         threading.Thread(
             target=self._run,
-            args=(current_app.app_context(), chat_id, delivered, message_id),
+            args=(current_app.app_context(), chat_id, delivered, message_id, on_refused),
             daemon=True,
             name=f"room-mention-{str(chat_id)[-8:]}",
         ).start()
 
-    def _run(self, app_context: AppContext, chat_id: ChatId, delivered: str, message_id: str) -> None:
+    def _run(
+        self, app_context: AppContext, chat_id: ChatId, delivered: str, message_id: str, on_refused: Callable[[], None]
+    ) -> None:
         with app_context:
             refusal = self.send(chat_id, delivered, message_id)
         if refusal is not None:
             logger.warning("A room's mention could not reach chat {}: {}", chat_id, refusal)
+            on_refused()
 
 
 class MentionHandler(MutableModel):
@@ -241,5 +245,12 @@ class MentionHandler(MutableModel):
         delivered = author_prefix(sender_name, prefix_safe_text(room_title, str(room_id))) + text
         # Annotated before delivery, so the chat's turn is stamped with the sender's own key (section 5.2).
         self.authors.record(chat_id, new_author_annotation(message_id, sender, sender_name, delivered))
+        # Noted before the send, so the row reacts at once; a refusal takes it back, since the message never reached
+        # the chat and no answer is coming.
         self.agent_manager.note_chat_awaiting(room_id, chat_id)
-        self.deliverer.deliver(chat_id, delivered, message_id)
+        self.deliverer.deliver(
+            chat_id,
+            delivered,
+            message_id,
+            on_refused=lambda: self.agent_manager.forget_chat_awaiting(room_id, chat_id),
+        )
