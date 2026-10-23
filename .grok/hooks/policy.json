@@ -1,0 +1,42 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_grok_policy_guards.py pre-tool-use",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_grok_policy_guards.py user-prompt-submit",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_open_tickets_stop_nudge.sh",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "bash /opt/agent-plugins/imbue-code-guardian/plugins/imbue-code-guardian/scripts/stop_hook_entrypoint.sh",
+            "timeout": 900
+          }
+        ]
+      }
+    ]
+  }
+}
