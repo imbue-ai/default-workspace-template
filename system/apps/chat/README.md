@@ -110,6 +110,24 @@ observe`, its own supervised service) writes, and serves:
 - Agent-authored files by their absolute on-disk path (`file_serving.py`), so a
   chat's markdown can show an image the agent wrote.
 
+## Keyboard shortcuts
+
+While the chat list or a chat's message area has focus:
+
+| Action | Mac | Windows / Linux |
+| --- | --- | --- |
+| New chat | Cmd+N | Ctrl+N |
+| Select chat 1 through 9 in the displayed list order | Cmd+1 through Cmd+9 | Ctrl+1 through Ctrl+9 |
+| Previous chat | Cmd+Shift+[ | Ctrl+Shift+[ |
+| Next chat | Cmd+Shift+] | Ctrl+Shift+] |
+
+Previous and next wrap at the ends of the list. A number with no matching chat
+does nothing. New chat uses the same account selection as the New chat button.
+The keys also work while typing, and switching preserves each chat's draft.
+Both Cmd and Ctrl are accepted so the bindings work without platform detection.
+The chat handles keys it receives; a browser or operating system can reserve a
+chord before it reaches the page.
+
 ## The agent observer
 
 The chat does not run an observer of its own. `agent-observer`

@@ -35,7 +35,10 @@ export class InnerFramePool {
   private isRootShown = false;
   private isCompact = false;
 
-  constructor(private readonly container: HTMLElement) {}
+  constructor(
+    private readonly container: HTMLElement,
+    private readonly onKeyDown?: (event: KeyboardEvent) => void,
+  ) {}
 
   /** Whether ``source`` is the window of one of this pool's frames. */
   isInnerWindow(source: MessageEventSource | null): boolean {
@@ -115,6 +118,7 @@ export class InnerFramePool {
     const held: HeldFrame = { frame, lastShownAt: Date.now(), isLoaded: false };
     frame.addEventListener("load", () => {
       held.isLoaded = true;
+      if (this.onKeyDown !== undefined) frame.contentDocument?.addEventListener("keydown", this.onKeyDown, true);
       this.api(chatId)?.setCompact(this.isCompact);
       this.introduce(chatId);
       this.tell(chatId, this.isRootShown && this.shownChatId === chatId ? "shown" : "hidden");

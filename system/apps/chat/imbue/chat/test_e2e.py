@@ -1157,6 +1157,56 @@ def test_a_chat_selector_intake_with_one_chat_sends_to_it_on_the_server_and_the_
 
 
 @pytest.mark.timeout(120, func_only=False)
+@pytest.mark.parametrize("modifier", ["Control", "Meta"])
+def test_chat_shortcuts_work_from_the_message_box_inside_a_preview_frame(
+    tmp_path: Path, page: Page, modifier: str
+) -> None:
+    """A preview frames the chat without sending shell visibility messages; its focused keys still work."""
+    with _running_e2e_server(tmp_path, additional_agents=[(_SECOND_AGENT_ID, "Second chat")]) as server:
+        page.route(
+            "**/__keyboard_preview",
+            lambda route: route.fulfill(
+                content_type="text/html",
+                body=f'<iframe style="width:1200px;height:800px" src="{_FIXTURE_ROOT_PATH}"></iframe>',
+            ),
+        )
+        created_id = "agent-keyboard-created"
+        page.route(
+            "**/api/chats/create",
+            lambda route: route.fulfill(json={"chat_id": created_id, "name": "Keyboard chat"}),
+        )
+        page.goto(f"{server.chat_url}/__keyboard_preview")
+        root = page.frame_locator("iframe")
+        rows = root.locator(".chat-rail-row")
+        expect(rows).to_have_count(2, timeout=15000)
+        ids = [rows.nth(index).get_attribute("data-chat-id") for index in range(2)]
+
+        def press(chord: str) -> None:
+            root.frame_locator("iframe.chat-root-frame:not([hidden])").locator("textarea").first.focus()
+            page.keyboard.press(chord)
+
+        message_box = root.frame_locator("iframe.chat-root-frame:not([hidden])").locator("textarea").first
+        message_box.fill("Draft stays here")
+        press("x")
+        expect(message_box).to_have_value("Draft stays herex")
+        press(f"{modifier}+9")
+        expect(root.locator('.chat-rail-row[aria-current="true"]')).to_have_attribute("data-chat-id", ids[0])
+        press(f"{modifier}+2")
+        expect(root.locator('.chat-rail-row[aria-current="true"]')).to_have_attribute("data-chat-id", ids[1])
+        press(f"{modifier}+Shift+BracketLeft")
+        expect(root.locator('.chat-rail-row[aria-current="true"]')).to_have_attribute("data-chat-id", ids[0])
+        press(f"{modifier}+Shift+BracketLeft")
+        expect(root.locator('.chat-rail-row[aria-current="true"]')).to_have_attribute("data-chat-id", ids[1])
+        press(f"{modifier}+Shift+BracketRight")
+        expect(root.locator('.chat-rail-row[aria-current="true"]')).to_have_attribute("data-chat-id", ids[0])
+        expect(message_box).to_have_value("Draft stays herex")
+        press(f"{modifier}+1")
+        expect(root.locator('.chat-rail-row[aria-current="true"]')).to_have_attribute("data-chat-id", ids[0])
+        press(f"{modifier}+n")
+        expect(root.locator("iframe.chat-root-frame:not([hidden])")).to_have_attribute("data-chat-id", created_id)
+
+
+@pytest.mark.timeout(120, func_only=False)
 def test_the_chat_list_opened_with_nothing_selected_shows_the_most_recent_chat(tmp_path: Path, page: Page) -> None:
     """The chat list is never open empty: at ``/`` it selects the most recent chat and reports that selection."""
     with _running_e2e_server(tmp_path) as server:

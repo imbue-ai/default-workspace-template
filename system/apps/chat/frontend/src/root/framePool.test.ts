@@ -69,6 +69,18 @@ afterEach(() => {
 });
 
 describe("InnerFramePool", () => {
+  it("delivers key presses from the focused chat page to the root", () => {
+    const onKeyDown = vi.fn();
+    pool = new InnerFramePool(container, onKeyDown);
+    pool.show("agent-a");
+    loadPage("agent-a");
+    const innerDocument = frameOf("agent-a").contentDocument;
+    expect(innerDocument).not.toBeNull();
+    innerDocument?.dispatchEvent(new KeyboardEvent("keydown", { key: "2", metaKey: true }));
+    expect(onKeyDown).toHaveBeenCalledOnce();
+    expect(onKeyDown.mock.calls[0][0].key).toBe("2");
+  });
+
   it("makes one frame per chat at its page, shows the selected one and hides the rest", () => {
     pool.show("agent-a");
     pool.show("agent-b");

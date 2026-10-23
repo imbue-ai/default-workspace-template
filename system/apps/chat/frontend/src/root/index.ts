@@ -54,6 +54,7 @@ import { initChatUnread, markRead, noteStatuses } from "./chatUnread";
 import { initRailWidth } from "./railWidth";
 import { startNewChat } from "./newChat";
 import { InnerFramePool } from "./framePool";
+import { chatIdForShortcut, chatShortcut } from "./keyboardShortcuts";
 import { startInnerFrameRelay } from "./relay";
 import { groupedRows, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
@@ -186,6 +187,27 @@ async function openNewChat(): Promise<void> {
   if (outcome.kind === "created") startedHere.add(outcome.chatId);
   awaitingListing.add(outcome.chatId);
   select(outcome.chatId);
+}
+
+function onChatKeyDown(event: KeyboardEvent): void {
+  // A key press already comes from the focused document. Do not gate it on the shell's
+  // visibility messages: a preview frames this root without that shell connection.
+  if (event.defaultPrevented || newChatRefusal !== null || pendingPick !== null) return;
+  const shortcut = chatShortcut(event);
+  if (shortcut === null) return;
+  const chatId =
+    shortcut.kind === "new"
+      ? null
+      : chatIdForShortcut(
+          shortcut,
+          railRows().map((row) => row.chatId),
+          selectedChatId,
+        );
+  if (shortcut.kind !== "new" && chatId === null) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (shortcut.kind === "new") void openNewChat();
+  else select(chatId);
 }
 
 /** Show ``chatId`` once the pending intake is applied or given up, reporting the selection even when it is the one
@@ -351,7 +373,7 @@ const ChatRoot: m.Component = {
             class: "chat-root-frames absolute inset-0",
             // The frames are the pool's DOM, not mithril's: never reconciled.
             oncreate: ({ dom }: m.VnodeDOM) => {
-              pool = new InnerFramePool(dom as HTMLElement);
+              pool = new InnerFramePool(dom as HTMLElement, onChatKeyDown);
               pool.setCompact(isCompact);
               if (handshake !== null) pool.setHandshake(handshake);
               pool.setRootShown(isRootShown);
@@ -476,6 +498,7 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
 }
 
 function bootstrap(): void {
+  document.addEventListener("keydown", onChatKeyDown, true);
   initChatUnread();
   initRailWidth();
   initChats();
