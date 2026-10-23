@@ -76,10 +76,15 @@ class AccountBinding(ABC):
     def account_env(self, account_dir: Path) -> dict[str, str]:
         """The environment that scopes the harness's CLI to one account.
 
-        Only the scoping variables and any pins the CLI needs outside an agent -- callers layer
-        this over `os.environ` themselves, because both `pexpect.spawn` and `Popen` REPLACE the
-        environment rather than merging into it, and a child without `PATH` never starts.
+        Only the scoping variables and any pins the CLI needs outside an agent -- a CLI starts from
+        `account_process_env`, which layers this over the server's environment, because both
+        `pexpect.spawn` and `Popen` REPLACE the environment rather than merging into it, and a child
+        without `PATH` never starts.
         """
+
+    def account_process_env(self, account_dir: Path) -> dict[str, str]:
+        """The whole environment a run of the harness's CLI on one account starts with."""
+        return {**os.environ, **self.account_env(account_dir)}
 
     @abstractmethod
     def credential_paths(self, account_dir: Path) -> tuple[Path, ...]:

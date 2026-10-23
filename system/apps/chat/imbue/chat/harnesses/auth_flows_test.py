@@ -1070,6 +1070,30 @@ def test_a_grok_device_sign_in_gives_its_cli_the_browser_shim_and_relays_nothing
     assert started.relay_url is None
 
 
+def test_a_grok_device_sign_in_runs_without_the_servers_own_grok_variables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """grok would read them in place of the account's credential, issuer or config."""
+    monkeypatch.setenv("XAI_API_KEY", "xai-server-key")
+    monkeypatch.setenv("GROK_OIDC_ISSUER", "http://127.0.0.1:9")
+    monkeypatch.setenv("GROK_CONFIG", "/etc/grok/server.toml")
+    spawned_envs: list[dict[str, str]] = []
+
+    def spawner(*_args: object, env: dict[str, str], **_kwargs: object) -> FakePexpectProcess:
+        spawned_envs.append(env)
+        Path(env["MINDS_SIGNIN_URL_FILE"]).write_text(_GROK_PAGE + "\n")
+        return FakePexpectProcess([(0, _GROK_DEVICE_SCREEN)])
+
+    service = _grok_service(tmp_path, spawner=spawner)
+
+    service.start("xai", "device")
+
+    (env,) = spawned_envs
+    assert {"XAI_API_KEY", "GROK_OIDC_ISSUER", "GROK_CONFIG"}.isdisjoint(env)
+    assert env["GROK_AUTH_PATH"] == str(Path(env["GROK_HOME"]) / "auth.json")
+    assert "PATH" in env
+
+
 def test_a_grok_device_sign_in_takes_no_code_back(tmp_path: Path) -> None:
     """Its code goes into the browser; typed into the CLI it would only cut the user's time to confirm it."""
     process = FakePexpectProcess([(0, _GROK_DEVICE_SCREEN)])

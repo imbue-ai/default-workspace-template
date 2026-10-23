@@ -430,8 +430,7 @@ class AuthFlowService:
         session.scratch_dir = Path(tempfile.mkdtemp(prefix="minds-sign-in-"))
         socket_path = session.scratch_dir / APP_SERVER_SOCKET_FILENAME
         env = {
-            **os.environ,
-            **build_account_binding(session.lane.harness).account_env(account_path),
+            **build_account_binding(session.lane.harness).account_process_env(account_path),
             BROWSER_ENV_VAR: str(self._work_dir / BROWSER_SHIM_RELATIVE_PATH),
             SIGN_IN_URL_FILE_ENV_VAR: str(session.scratch_dir / SIGN_IN_URL_FILENAME),
             SIGN_IN_FLOW_ENV_VAR: "1",
@@ -494,7 +493,7 @@ class AuthFlowService:
 
     def _drive_locked(self, session: _Session, method: PtyMethod, account_path: Path) -> tuple[str | None, str | None]:
         """Spawn the CLI, get it to the point of showing something, and scrape it."""
-        env = {**os.environ, **build_account_binding(session.lane.harness).account_env(account_path)}
+        env = build_account_binding(session.lane.harness).account_process_env(account_path)
         code_scrape = method.device_code_scrape
         url_file: Path | None = None
         # A device sign-in's CLI opens its page itself; the shim records it instead of a browser opening here.
