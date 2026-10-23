@@ -401,7 +401,7 @@ def _grok_subagents_notice(content: str, lines_start: int, count: int) -> Messag
         outcomes.append(f'"{line.group(1)}" {line.group(2).strip()}')
         line = _GROK_SUBAGENT_LINE_RE.match(content, line.end())
     label = "Background subagent completed" if count == 1 else "Background subagents completed"
-    return MessageDisplay(display=DisplayKind.NOTICE, display_label=label, display_body="; ".join(outcomes) or None)
+    return MessageDisplay(display=DisplayKind.NOTICE, display_label=label, display_body="; ".join(outcomes))
 
 
 def _wake_notice(content: str) -> MessageDisplay:
@@ -410,7 +410,7 @@ def _wake_notice(content: str) -> MessageDisplay:
         prose = _MARKUP_TAG_RE.sub("", line).strip()
         if prose:
             return MessageDisplay(display=DisplayKind.NOTICE, display_label=_WAKE_NOTICE_LABEL, display_body=prose)
-    return MessageDisplay(display=DisplayKind.NOTICE, display_label=_WAKE_NOTICE_LABEL)
+    return MessageDisplay(display=DisplayKind.NOTICE, display_label=_WAKE_NOTICE_LABEL, display_body="")
 
 
 def _match_merged_background_task_reports(content: str) -> MessageDisplay | None:

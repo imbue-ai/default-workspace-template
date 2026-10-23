@@ -623,6 +623,16 @@ def test_a_grok_subagent_wake_names_each_subagent_and_how_it_ended() -> None:
     assert two.display_body == '"stub subagent bg" completed successfully; "map the repo" failed'
 
 
+def test_a_grok_subagent_wake_whose_line_does_not_parse_shows_no_part_of_the_prompt() -> None:
+    unparsed = _GROK_SUBAGENT_WAKE.replace('"stub subagent bg"', '"review "auth" module"', 1)
+
+    decision = classify_user_message(unparsed)
+
+    assert decision is not None
+    assert decision.display_label == "Background subagent completed"
+    assert decision.display_body == ""
+
+
 def test_grok_monitor_wakes_are_notices() -> None:
     ended = classify_user_message(_GROK_MONITOR_END_WAKE)
     event = classify_user_message(_GROK_MONITOR_EVENT_WAKE)
@@ -646,7 +656,7 @@ def test_a_wake_turn_no_detector_names_is_still_a_notice_carrying_its_first_line
     bare = classify_user_message("<system-reminder></system-reminder>", is_wake=True)
     assert bare is not None
     assert bare.display is DisplayKind.NOTICE
-    assert bare.display_body is None
+    assert bare.display_body == ""
 
 
 def test_a_detector_still_names_a_wake_turn() -> None:
