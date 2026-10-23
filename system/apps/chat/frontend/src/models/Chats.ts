@@ -559,7 +559,7 @@ export interface CreatedChat {
  * shows up as provisional until mngr registers it). The display name is minted server-side.
  * ``projectId`` becomes the agent's ``project`` label and is empty for a chat started outside
  * any project; ``message`` is the chat's first message, sent once it runs (empty sends none).
- * A ``kind`` of ``"room"`` starts a room instead, on no account and no model (section 7.3).
+ * Always an agent chat: a room starts from a chat awaiting its first send (``launchChat``).
  * Throws a ``CreateChatRefusedError`` with the server's detail on rejection.
  */
 export function createChat(
@@ -567,10 +567,9 @@ export function createChat(
   accountId: string = "",
   message: string = "",
   pick: ModelIdentity | null = null,
-  kind: ChatKind = "agent",
 ): Promise<CreatedChat> {
   // No harness: the account decides it. An empty account_id takes the most recently used account.
-  return postCreateChat({ project_id: projectId, account_id: accountId, message, model: pick, kind });
+  return postCreateChat({ project_id: projectId, account_id: accountId, message, model: pick });
 }
 
 /** The chat a chat list with none to show opens on: one waiting for its first send, which launches it on the
