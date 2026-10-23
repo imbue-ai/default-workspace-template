@@ -28,6 +28,7 @@ from flask import request
 from flask.ctx import AppContext
 from loguru import logger
 from pydantic import Field
+from pydantic import field_validator
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.identity import participant_key_of
 from workspace_layout.primitives import ParticipantKey
@@ -71,6 +72,8 @@ MENTIONS_ROUTE: Final[str] = "/api/mentions"
 PENDING_MENTIONS_ROUTE: Final[str] = "/api/mentions/pending"
 
 _AGENT_FALLBACK_NAME: Final[str] = "Agent"
+# A visiting agent's key, as ``workspace_layout.identity.participant_key_of`` mints it from the gateway's identity.
+_VISITING_AGENT_KEY_PREFIX: Final[str] = "agent:"
 
 # The send a room's mention goes through: the app, the target, the text as delivered, and the message id; the
 # refusal's detail, or None once accepted.
@@ -133,8 +136,16 @@ class RoomPostRequest(FrozenModel):
     message: str = Field(min_length=1, description="What the agent says")
     author: ParticipantKey = Field(
         default=WORKSPACE_AGENT_PARTICIPANT_KEY,
-        description="``workspace-agent`` for the workspace's own agent, or a visiting agent's ``agent:<id>``",
+        description="``workspace-agent`` for the workspace's own agent, or a visiting agent's ``agent:<id>``; a "
+        "person's key is refused, since the route posts as an agent",
     )
+
+    @field_validator("author")
+    @classmethod
+    def _author_is_an_agent(cls, author: ParticipantKey) -> ParticipantKey:
+        if author != WORKSPACE_AGENT_PARTICIPANT_KEY and not str(author).startswith(_VISITING_AGENT_KEY_PREFIX):
+            raise ValueError("author must be 'workspace-agent' or a visiting agent's 'agent:<id>'")
+        return author
 
 
 class MentionHandler(MentionActions):

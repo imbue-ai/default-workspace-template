@@ -5505,6 +5505,10 @@ def test_a_mention_of_the_agent_from_a_room_reaches_the_main_chat_prefixed_until
     # An author that is not a participant key is a bad body, like any other.
     malformed = client.post(f"/api/rooms/{room_id}/post", json={"message": "hi", "author": "not a key"})
     assert malformed.status_code == 400
+    # The route posts as an agent: a person's key is refused rather than taken as that person's turn.
+    as_person = client.post(f"/api/rooms/{room_id}/post", json={"message": "hi", "author": "user:user-josh-0001"})
+    assert as_person.status_code == 400
+    assert len(client.get(f"/api/rooms/{room_id}/messages").get_json()["events"]) == 2
 
 
 def test_a_room_title_the_prefix_could_not_carry_is_cleaned_in_the_delivered_mention(
