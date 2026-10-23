@@ -121,6 +121,7 @@ from imbue.chat.testing import close_ws
 from imbue.chat.testing import compact_summary_record
 from imbue.chat.testing import drain_is_connecting_pushes
 from imbue.chat.testing import is_chat_connecting
+from imbue.chat.testing import load_room_agent_script
 from imbue.chat.testing import make_agent_fixture
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
@@ -5323,7 +5324,6 @@ def test_the_workspace_agents_picture_is_fetched_from_the_shell_and_relayed_with
 _JOSH = RequestIdentity(owner=True, user_id="user-josh-0001", email="josh@example.com")
 _MAIN_ID = "agent-00000000000000000000000000000041"
 _LOUNGE_ID = "agent-00000000000000000000000000000042"
-_ROOM_AGENT_SCRIPT = Path(__file__).parents[5] / "system" / "scripts" / "room_agent.py"
 
 
 def _peopled_app(
@@ -5368,10 +5368,7 @@ def _room_events(client: FlaskClient) -> list[dict[str, Any]]:
 
 def _post_into_room_as_the_agent(text: str) -> None:
     """What ``mngr message <room>`` comes to: the room's reader appends the typed text as the workspace agent's."""
-    spec = importlib.util.spec_from_file_location("room_agent_for_server_tests", _ROOM_AGENT_SCRIPT)
-    assert spec is not None and spec.loader is not None
-    room_agent = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(room_agent)
+    room_agent = load_room_agent_script()
     state_dir = agent_state_dir(get_host_dir(), _LOUNGE_ID)
     author, name, said = room_agent.author_of_typed_text(text)
     room_agent.ensure_header(state_dir / room_agent.TRANSCRIPT_RELATIVE_PATH, _LOUNGE_ID)
