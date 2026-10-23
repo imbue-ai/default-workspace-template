@@ -5,11 +5,16 @@ import { chatRowFixture } from "./chatRowFixture";
 import type { ChatRow } from "./rows";
 import { SendPicker, pickableRows } from "./SendPicker";
 
-function row(chatId: string, title: string, isProvisional = false): ChatRow {
-  return chatRowFixture(chatId, { title, kind: isProvisional ? "provisional" : "agent" });
+function row(chatId: string, title: string, kind: ChatRow["kind"] = "agent"): ChatRow {
+  return chatRowFixture(chatId, { title, kind });
 }
 
-const ROWS = [row("agent-1", "Plan the launch"), row("agent-2", "Fix the tests"), row("agent-3", "New chat", true)];
+const ROWS = [
+  row("agent-1", "Plan the launch"),
+  row("agent-2", "Fix the tests"),
+  row("agent-3", "New chat", "provisional"),
+  row("room-0123456789abcdef", "Lounge", "room"),
+];
 
 let root: HTMLElement | null = null;
 
@@ -29,8 +34,9 @@ afterEach(() => {
 });
 
 describe("pickableRows", () => {
-  it("offers the chats that are agents, narrowed by title", () => {
+  it("offers the chats that are agents, narrowed by title, and neither a chat not yet an agent nor a room", () => {
     expect(pickableRows(ROWS, "").map((candidate) => candidate.chatId)).toEqual(["agent-1", "agent-2"]);
+    expect(pickableRows(ROWS, "lounge")).toEqual([]);
     expect(pickableRows(ROWS, "tests").map((candidate) => candidate.chatId)).toEqual(["agent-2"]);
     expect(pickableRows(ROWS, "zzz")).toEqual([]);
   });
