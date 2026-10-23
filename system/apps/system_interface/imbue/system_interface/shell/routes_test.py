@@ -1144,7 +1144,7 @@ def test_placements_are_saved_per_client_and_a_stale_save_is_refused(client: Fla
             {
                 "window_id": window["id"],
                 "frame": {"x": 0.1, "y": 0.1, "width": 0.5, "height": 0.5},
-                "state": "MAXIMIZED",
+                "state": "FULLSCREEN",
                 "is_minimized": False,
             },
             {
@@ -1159,7 +1159,7 @@ def test_placements_are_saved_per_client_and_a_stale_save_is_refused(client: Fla
     assert saved.status_code == 200 and saved.get_json()["updated_at"] is not None
     stored = client.get("/api/placements/home?client=c2").get_json()
     assert [placement["window_id"] for placement in stored["placements"]] == [window["id"]]
-    assert stored["placements"][0]["state"] == "MAXIMIZED" and stored["updated_at"] == saved.get_json()["updated_at"]
+    assert stored["placements"][0]["state"] == "FULLSCREEN" and stored["updated_at"] == saved.get_json()["updated_at"]
     assert [message for message in drain_messages(client_queue) if message["type"] == "placements_updated"] == [
         {"type": "placements_updated", "desktop_id": "home", "client_id": "c2", "save_id": "save-0000000000000001"}
     ]
@@ -1245,6 +1245,9 @@ def test_ops_open_and_edit_windows_in_the_target_clients_layout(client: FlaskCli
     assert framed["layout"]["placements"][-1]["frame"] == {"x": 0.1, "y": 0.2, "width": 0.5, "height": 0.5}
     maximized = _op(client, "maximize", {"window": first_id}, requester).get_json()
     assert maximized["layout"]["placements"][-1]["state"] == "MAXIMIZED"
+    fullscreen = _op(client, "place", {"window": first_id, "state": "FULLSCREEN"}, requester).get_json()
+    assert fullscreen["layout"]["placements"][-1]["state"] == "FULLSCREEN"
+    assert fullscreen["layout"]["placements"][-1]["frame"] == framed["layout"]["placements"][-1]["frame"]
     restored = _op(client, "restore", {"window": first_id}, requester).get_json()
     assert restored["layout"]["placements"][-1]["state"] == "NORMAL"
     navigated = _op(client, "navigate", {"window": first_id, "path": "/?session=terminal-9"}, requester).get_json()

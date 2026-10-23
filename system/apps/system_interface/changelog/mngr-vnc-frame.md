@@ -1,0 +1,15 @@
+The shell gains the Screen spec's `FULLSCREEN` placement state and immersive mode (`docs/system/specs/screen/spec.md`, section 12; mngr's `specs/screen-studio-integration/spec.md`, section 5):
+
+- A fullscreen window fills the whole viewport, the taskbar's band included, with no title bar, resize handles, corners or shadow. Both geometry editors answer its frame as the viewport (`Viewport` / `"viewport"` beside the frames; `fit_state_frame` / `fitStateFrame`, `viewport_rect` / `viewportRect`, `backdrop_frame_of` / `backdropFrameOf`), the fit metrics gain the taskbar height, and the shared geometry vectors gain the `fullscreen` cases and `snap_frames.FULLSCREEN`. While a fullscreen window is on the active desktop's screen the layout root carries `data-fullscreen-window`, under which the backdrop stops clipping and paints over the taskbar.
+
+- The title bar of a maximized window offers Fullscreen beside Restore; the window menu gains Fullscreen (Exit fullscreen) and, where the Imbue Studio chrome announced `immersive: true`, Immersive (Leave immersive); the taskbar entry's Restore size covers a fullscreen window too. A fullscreen window shows a strip at its top edge on hover (`data-fullscreen-strip`) with Exit fullscreen, Immersive where the chrome can, and a word on the keys ("Press Immersive to send every key").
+
+- Immersive mode goes through the embed contract (v9): `minds:immersive-request {windowId, on}` is sent straight from the click of the strip's or the menu's Immersive, only to a chrome whose capabilities carried `immersive: true`; `minds:immersive-changed {on, keyboardLocked, error?}` lands in the store, an `error` as a toast. The mode is never persisted. The store's `toggleFullscreen`, `isFullscreenShown`, `requestImmersive`, `leaveImmersive` and `onImmersiveChanged` carry it, and `store/embedderBridge.ts` wires the chrome's capabilities and changes to the store.
+
+- The page iframes gain `fullscreen` in their `allow` list and `allow-pointer-lock` in their sandbox list, so the Screen's viewer can lock the pointer and the chrome's fullscreen request is delegated down every frame. A fullscreen page drops its rounded bottom corners.
+
+- `place --state FULLSCREEN` round-trips through the op route and the placements files like every other state.
+
+The layout pipeline test for `workspace-layout open https://...` expects the Screen app to be named when it is not registered, since a bare URL opens through the Screen's `browser` launch path now.
+
+- The launcher's rows for a one-window app (an unpinned app whose default shortcut focuses: the Screen, Getting Started, Memory & disk) launch with the `focus` target, so a second client pressing "Screen" or "Browser" lands in the Screen window the desktop already holds (raised in that client's layout) instead of opening another; before, every client that opened the Screen from the launcher got its own window, and the taskbar filled with them. A focus shortcut whose window this client never placed does the same instead of opening a second.

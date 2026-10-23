@@ -37,18 +37,34 @@ Built-in apps:
   at the workspace folder. Its `files-app` entry point runs a small server that
   serves the files, and the files shared from the user's computers, with a
   frontend from that same npm workspace.
-- `browser/` - The live browser: a fleet of Chromium browsers streamed to the
-  UI by its daemon (`browser-service`).
+- `screen/` - The Screen: the workspace's one streamed Linux desktop (Xorg, XFCE,
+  PulseAudio and neko) as a window, with the control lease the human and the
+  agents share, the `screen` command, and the browser (one Fortress Chromium on
+  the Screen, the `browser` launch path, the fleet API and the CDP proxy agents
+  drive it through, `agentic-browser-fleet`). Served on port 8090 by the
+  `screen-service` package.
+
+
 - `routines/` - Routines: everything that runs on a schedule (the routines
+
   library, `system/libs/routines/`), each with its health, next run and history,
+
   and run-now, on/off, reschedule and fix controls. Served on port 8050 by the
+
   `routines-app` package; it stores nothing of its own.
+
 - `system_monitor/` - System Monitor: how much CPU, memory and disk the
+
   workspace is using, on an overview and a view per resource: which chats,
+
   code checkers, and apps use them, the busy stretches, which programs the
+
   memory guard stopped in the last 24 hours, and the state of the backups.
+
   Served on port 8040 by the `system-monitor` package; it keeps nothing on
+
   disk (its graphs come from the `resource_sampler` program beside the memory
+
   guard, `system/services/oom_priority/`).
 - `datalib/` - The Datalib app: datalib's web UI (`datalib-http`) over the store
   the `datalib` skill writes. Not announced to users yet: its program is not in
@@ -74,7 +90,7 @@ it uses; `[scope] exclude` lists gitignore-style globs that no review or test
 pass considers, on top of the built-in ones (`system/vendor/**`, `data/**`,
 `**/node_modules/**`, `**/dist/**`, `**/.venv/**`); `[wiring] programs` names
 the supervisord programs the app owns beyond its own block and its
-`<name>-<role>` sidecars (the browser declares `xvfb`). A reference may not point
+`<name>-<role>` sidecars (the Screen declares the four programs of its stack and its watcher). A reference may not point
 inside the app's own directory (already implicit) or into another app's (that is
 a `pyproject.toml` dependency), and every one must exist, which
 `system/test_app_manifests.py` checks for every manifest in the tree. Together

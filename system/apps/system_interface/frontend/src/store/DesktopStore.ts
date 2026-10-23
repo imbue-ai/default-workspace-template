@@ -70,17 +70,18 @@ import { isPreviewShell } from "../model/PreviewShell";
 import { noticeFromWire } from "../model/UpdateNotice";
 import type { DeepLink } from "../model/deepLinks";
 import {
-  MAXIMIZED_FRAME,
   fitFrameToBackdrop,
+  fitStateFrame,
   frameForState,
   frameFromPixels,
   frameToPixels,
   movedRect,
   resizedRect,
+  snapFrame,
   snapZoneForRelease,
   unsnapFrame,
 } from "../geometry/frames";
-import type { PixelPoint, PixelRect, PixelSize, ResizeEdge } from "../geometry/frames";
+import type { PixelPoint, PixelRect, PixelSize, ResizeEdge, SnapZone } from "../geometry/frames";
 import { defaultFloatingPosition, floatingEntryRect, floatingPositionFromPixels } from "../geometry/floating";
 import {
   cellAtPoint,
@@ -91,10 +92,11 @@ import {
   withRoomMadeFor,
 } from "../geometry/grid";
 import type { GridDimensions, PlacedShortcut } from "../geometry/grid";
-import { placementOf } from "../geometry/stack";
+import { isPlacementShown, placementOf } from "../geometry/stack";
 import {
   activeDesktop,
   activeFocusedWindowId,
+  activePlacements,
   appByName,
   desktopById,
   detachedWindowsOf,
@@ -265,6 +267,35 @@ const NULL_OUTSIDE_LINK_OPENER: OutsideLinkOpener = {
   openInBrowser: () => undefined,
 };
 
+/** The shell's side of immersive mode (the Screen integration spec, section 5): the ask to the embedding chrome to
+ *  take the whole app window with the keyboard locked, or to give it back. Every call is a no-op without an
+ *  embedder; the store asks only once the chrome has said it can (``minds:embedder-capabilities``). */
+export interface ImmersiveBridge {
+  requestImmersive(windowId: string, isOn: boolean): void;
+}
+
+const NULL_IMMERSIVE_BRIDGE: ImmersiveBridge = {
+  requestImmersive: () => undefined,
+};
+
+/** Immersive mode as the chrome last reported it (``minds:immersive-changed``) while it is on: the window that
+ *  asked for it, when this shell did the asking, and whether the keyboard lock was obtained. */
+export interface ImmersiveStatus {
+  readonly windowId: string | null;
+  readonly isKeyboardLocked: boolean;
+}
+
+/** What the chrome says of immersive mode after every change. */
+export interface ImmersiveChange {
+  readonly isOn: boolean;
+  readonly isKeyboardLocked: boolean;
+  /** Why a request could not be honoured, when it could not. */
+  readonly error: string | null;
+}
+
+/** What the toast says when the chrome could not enter immersive mode. */
+export const IMMERSIVE_REFUSED_NOTICE = "Immersive mode could not start";
+
 // The layout verbs that edit a placement, which two shells never apply. A solo shell (the pull-out-window spec,
 // section 7.5) is a view of one window, and the desktop's arrangement belongs to the client's main window; its
 // two exceptions are its own window's detach (the first load's fallback, when no desktop shell wrote it) and
@@ -293,6 +324,8 @@ export interface StoreDependencies {
   readonly popOut?: PopOutBridge;
   /** Where external links open when no app takes them; absent opens none. */
   readonly outsideLinks?: OutsideLinkOpener;
+  /** The immersive-mode conversation with the embedder; absent means no embedder. */
+  readonly immersive?: ImmersiveBridge;
   /** The one window this shell shows edge to edge (a pulled-out window's own desktop window), else null. */
   readonly soloWindowId?: string | null;
   /** Whether the chrome reopened the solo window's desktop window (a session restore, a reopen of the app, a
@@ -316,7 +349,7 @@ export interface MoveGesture {
   readonly startPointer: PixelPoint;
   readonly currentRect: PixelRect;
   /** The snap zone the pointer is in right now, drawn as the preview; applied on release. */
-  readonly zone: WindowState | null;
+  readonly zone: SnapZone | null;
   /** Whether a snapped or maximized window has been un-snapped by this drag. */
   readonly isUnsnapped: boolean;
   /** Whether the chrome watches this drag (``minds:window-drag-started`` went out): it opens a desktop window of
@@ -417,11 +450,18 @@ export class DesktopStore {
   private markAppsLoaded: () => void = () => undefined;
   private readonly popOut: PopOutBridge;
   private readonly outsideLinks: OutsideLinkOpener;
+  private readonly immersiveBridge: ImmersiveBridge;
   private readonly soloWindowId: string | null;
   /** Whether the embedder can pull a window out; off until it says so (an older chrome, a plain browser). */
   private canPopOut = false;
   /** Whether the embedder opens external links outside the workspace for it; off until it says so. */
   private canOpenLinksOutside = false;
+  /** Whether the embedder takes immersive-mode requests; off until it says so (an older chrome, a plain browser). */
+  private canImmerse = false;
+  /** Immersive mode while the chrome says it is on; never persisted (the integration spec, S4). */
+  private immersive: ImmersiveStatus | null = null;
+  /** The window whose immersive request is out and unanswered, so the answer can be credited to it. */
+  private immersiveRequestWindowId: string | null = null;
   /** The detached set as last reported to the embedder, serialized, so a redraw reports nothing new. */
   private lastReportedDetached: string | null = null;
   /** Solo mode's first layout load is still owed: the one load that may re-detach the solo window. */
@@ -444,6 +484,7 @@ export class DesktopStore {
     this.metrics = deps.metrics;
     this.popOut = deps.popOut ?? NULL_POP_OUT_BRIDGE;
     this.outsideLinks = deps.outsideLinks ?? NULL_OUTSIDE_LINK_OPENER;
+    this.immersiveBridge = deps.immersive ?? NULL_IMMERSIVE_BRIDGE;
     this.soloWindowId = deps.soloWindowId ?? null;
     this.isSoloFirstLayoutPending = this.soloWindowId !== null;
     this.appsLoaded = new Promise((resolve) => {
@@ -477,6 +518,53 @@ export class DesktopStore {
   /** The embedder said whether it opens external links for the workspace (``minds:embedder-capabilities``). */
   setCanOpenLinksOutside(canOpenLinksOutside: boolean): void {
     this.canOpenLinksOutside = canOpenLinksOutside;
+  }
+
+  /** Whether the embedder can take the app window immersive for a window of this desktop. */
+  getCanImmerse(): boolean {
+    return this.canImmerse;
+  }
+
+  /** The embedder said whether it takes immersive-mode requests (``minds:embedder-capabilities``). */
+  setCanImmerse(canImmerse: boolean): void {
+    if (this.canImmerse === canImmerse) return;
+    this.canImmerse = canImmerse;
+    this.notifyListeners();
+  }
+
+  /** Immersive mode as the chrome last reported it, or null while it is off. */
+  getImmersive(): ImmersiveStatus | null {
+    return this.immersive;
+  }
+
+  /** Ask the chrome to take the app window immersive for ``windowId`` (the fullscreen strip's or the window menu's
+   *  "Immersive"). Called straight from the click handler: the chrome needs the gesture's activation for its
+   *  fullscreen request, so nothing may wait between the click and the send. Nothing is asked of a chrome that
+   *  never said it could. */
+  requestImmersive(windowId: string): void {
+    if (!this.canImmerse || findWindow(this.state, windowId) === null) return;
+    this.immersiveRequestWindowId = windowId;
+    this.immersiveBridge.requestImmersive(windowId, true);
+  }
+
+  /** Ask the chrome to leave immersive mode (the strip's control, the menu's row); the mode ends when the chrome
+   *  says so. The ask names the window that entered it, else ``windowId``, the one the control belongs to: the
+   *  contract validates the id, so a mode the chrome entered on its own still needs a real one to leave by. */
+  leaveImmersive(windowId: string): void {
+    const immersive = this.immersive;
+    if (immersive === null) return;
+    this.immersiveBridge.requestImmersive(immersive.windowId ?? this.immersiveRequestWindowId ?? windowId, false);
+  }
+
+  /** The chrome said immersive mode changed (``minds:immersive-changed``), by a request of this shell's or on its
+   *  own (the user held Escape, the OS left fullscreen). A refused request is a toast. */
+  onImmersiveChanged(change: ImmersiveChange): void {
+    if (change.error !== null) this.toast(`${IMMERSIVE_REFUSED_NOTICE}: ${change.error}`);
+    this.immersive = change.isOn
+      ? { windowId: this.immersiveRequestWindowId, isKeyboardLocked: change.isKeyboardLocked }
+      : null;
+    if (!change.isOn) this.immersiveRequestWindowId = null;
+    this.notifyListeners();
   }
 
   /** Whether a window move in progress has pulled ``windowId`` out of the chrome's window (it is hidden meanwhile). */
@@ -596,9 +684,18 @@ export class DesktopStore {
     return !isPreviewShell() && isAppStoppable(this.state, app);
   }
 
-  /** The rectangle a placement renders at, in backdrop pixels (the fit applied). */
+  /** The rectangle a placement renders at, in backdrop pixels (the fit applied; the whole viewport for a
+   *  fullscreen window). */
   renderedRect(placement: Placement): PixelRect {
-    return fitFrameToBackdrop(frameForState(placement.frame, placement.state), this.backdrop, this.metrics);
+    return fitStateFrame(frameForState(placement.frame, placement.state), this.backdrop, this.metrics);
+  }
+
+  /** Whether a fullscreen window is on the active desktop's screen: the desktop then paints over the taskbar's
+   *  band, which the backdrop otherwise clips. */
+  isFullscreenShown(): boolean {
+    return activePlacements(this.state).some(
+      (placement) => isPlacementShown(placement) && placement.state === "FULLSCREEN",
+    );
   }
 
   subscribe(listener: Listener): () => void {
@@ -1546,7 +1643,9 @@ export class DesktopStore {
         this.restoreWindow(run.windowId);
         return;
       case "open":
-        await this.launchAt(run.app, run.launch, {}, { kind: "new" });
+        // A focus shortcut whose window this client has never placed still has one on the desktop when another
+        // client opened it: the shell finds it at the launch path and raises it here rather than opening a second.
+        await this.launchAt(run.app, run.launch, {}, { kind: mode === "focus" ? "focus" : "new" });
         return;
       case "connecting":
         this.toast(STILL_CONNECTING_NOTICE);
@@ -1573,18 +1672,21 @@ export class DesktopStore {
   }
 
   /** Run a launch-path row (launcher plan section 3.3): a GET launch path at its app's pin path raises the pinned
-   *  window on the active desktop and opens nothing; every other launches into a new window. */
+   *  window on the active desktop and opens nothing; a row of a one-window app launches into the window the
+   *  desktop already holds (whichever client opened it; the shell raises it here) and opens one only when there
+   *  is none; every other launches into a new window. */
   async runLaunchRow(appName: string, launchId: string): Promise<void> {
     const found = this.launchOf(appName, launchId);
     if (found === null) return;
-    if (launchRowKindOf(found.app, found.launchPath) === "focus") {
+    const kind = launchRowKindOf(found.app, found.launchPath);
+    if (kind === "focus") {
       const pinned = pinnedWindowOf(this.state, found.app.name);
       if (pinned !== null) {
         this.restoreWindow(pinned.id);
         return;
       }
     }
-    await this.launchAt(found.app.name, found.launchPath.id, {}, { kind: "new" });
+    await this.launchAt(found.app.name, found.launchPath.id, {}, { kind: kind === "one" ? "focus" : "new" });
   }
 
   /** Run a free-text row with ``text`` (launcher plan section 3.2, post-launch-paths plan section 4.1),
@@ -1815,6 +1917,15 @@ export class DesktopStore {
     const placement = placementOf(this.state.layout, windowId);
     if (placement.state === "MAXIMIZED") this.dispatch({ type: "window_restored", windowId });
     else this.dispatch({ type: "window_state_set", windowId, state: "MAXIMIZED" });
+  }
+
+  /** Fill the viewport with a window (the title bar's and the menu's "Fullscreen"), or bring a fullscreen window
+   *  back to its kept frame (the strip's "Exit fullscreen"). Immersive mode is the chrome's own layer and is left
+   *  as it is (the Screen spec, D13). */
+  toggleFullscreen(windowId: string): void {
+    const placement = placementOf(this.state.layout, windowId);
+    if (placement.state === "FULLSCREEN") this.dispatch({ type: "window_restored", windowId });
+    else this.dispatch({ type: "window_state_set", windowId, state: "FULLSCREEN" });
   }
 
   /** Pull a window out into a desktop window of the embedder's own without a drag (the window menu's "Open in
@@ -2347,7 +2458,7 @@ export class DesktopStore {
   snapPreviewRect(): PixelRect | null {
     const gesture = this.gesture;
     if (gesture === null || gesture.kind !== "move" || gesture.zone === null) return null;
-    return frameToPixels(frameForState(MAXIMIZED_FRAME, gesture.zone), this.backdrop);
+    return frameToPixels(snapFrame(gesture.zone), this.backdrop);
   }
 }
 

@@ -66,6 +66,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
       const heldKey = held === null ? null : shortcutKey(held.app, held.launch);
       const windowsById = new Map(desktop.windows.map((window) => [window.id, window]));
       const snapRect = store.snapPreviewRect();
+      const immersive = store.getImmersive();
 
       return m(
         "div",
@@ -159,6 +160,14 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                   sizeMenuTrigger: attrs.sizeMenuTrigger(window.id),
                   isShielded: window.id !== focusedWindowId || attrs.isOverlayOpen,
                   isStopped: isAppShownStopped(state, app),
+                  immersive: store.getCanImmerse()
+                    ? {
+                        isOn: immersive !== null,
+                        isKeyboardLocked: immersive?.isKeyboardLocked === true,
+                        onEnter: () => store.requestImmersive(window.id),
+                        onLeave: () => store.leaveImmersive(window.id),
+                      }
+                    : null,
                   onRaise: () => store.raiseWindow(window.id),
                   onControl: (control, event) => attrs.onWindowControl(window.id, control, event),
                   onToggleMaximize: () => store.toggleMaximized(window.id),

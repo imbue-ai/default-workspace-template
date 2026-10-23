@@ -6,8 +6,8 @@
 max_parallel = 20
 test_timeout_secs = 600
 sandbox_repo_root = "/home/user/workspace"
-# First boot, then what a CI image needs on top of it (the browser stack and the
-# offload binary); once per checkpoint build.
+# First boot, then what a CI image needs on top of it (the Screen's stack, Fortress
+# included, and the offload binary); once per checkpoint build.
 sandbox_init_cmd = "default-workspace-template-seed && bash /home/user/workspace/system/scripts/offload_sandbox_init.sh"
 post_patch_cmd = "bash /home/user/workspace/system/scripts/offload_post_patch.sh"
 
@@ -51,7 +51,7 @@ build_inputs = [
     "system/scripts/default_workspace_template_seed.sh",
     "system/scripts/seed_home_skeleton.sh",
     # What the first-boot steps run on top of it.
-    "system/scripts/env.d/1000-playwright-fortress.sh",
+    "system/scripts/env.d/2000-screen.sh",
     "system/scripts/env.d/1300-mcpc-home-link.sh",
     "system/scripts/offload_sandbox_init.sh",
 ]

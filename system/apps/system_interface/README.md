@@ -29,7 +29,7 @@ format. In brief:
   its origin the page is at, and the title the page last reported. That is
   the whole of what the shell knows about what a window shows.
 - A **placement** is where one client keeps one window: its frame in fractions
-  of the backdrop, whether it is snapped or maximized, whether it is
+  of the backdrop, whether it is snapped, maximized, or fullscreen, whether it is
   minimized, whether it is pulled out into a desktop window of the Imbue Studio app's
   own; the order is the stack. A **client** is one browser context,
   identified by a stored id, with an active desktop. Truth is shared,

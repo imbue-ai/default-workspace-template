@@ -680,6 +680,8 @@ extra_provision_command__extend = [
 # difference between the two, so the body lives here once and the overlay reuses
 # it -- nothing to keep in sync.
 [create_templates.docker]
+# The Screen's ICE muxes (docs/system/specs/screen/spec.md section 5.1).
+publish__extend = ["59000/udp", "59000/tcp"]
 provider = "docker"
 target_path = "/home/user/workspace/"
 setting__extend = ["providers.docker.is_enabled=true"]
@@ -731,6 +733,8 @@ setting__extend = ["providers.docker.docker_runtime=runsc"]
 
 # template for lima VM provider
 [create_templates.lima]
+# The Screen's ICE muxes (docs/system/specs/screen/spec.md section 5.1).
+publish__extend = ["59000/udp", "59000/tcp"]
 provider = "lima"
 target_path = "/home/user/workspace/"
 idle_mode = "disabled"
@@ -806,6 +810,9 @@ extra_provision_command__extend = [
 # passed to mngr create as the Modal build arg `-b --timeout=<seconds>`) rather than
 # through a template overlay, since a template cannot name a connection instance.
 [create_templates.modal]
+# The Screen's ICE muxes (docs/system/specs/screen/spec.md section 5.1): TCP alone, since Modal
+# tunnels carry TCP only and mngr refuses a UDP declaration before the sandbox exists.
+publish__extend = ["59000/tcp"]
 target_path = "/home/user/workspace/"
 # Disable idle detection entirely -- the host should never auto-shutdown. The
 # sandbox instead runs until the max-age timeout the connection block sets
@@ -833,6 +840,8 @@ extra_provision_command__extend = [
 
 # template for vultr VPS provider (cloud mode)
 [create_templates.vultr]
+# The Screen's ICE muxes (docs/system/specs/screen/spec.md section 5.1).
+publish__extend = ["59000/udp", "59000/tcp"]
 provider = "vultr"
 target_path = "/home/user/workspace/"
 # ``--vps-region=sjc`` (Silicon Valley) instead of the mngr_vultr default
@@ -998,6 +1007,8 @@ systemctl restart --no-block minds-autostart.service
 # `aws` / `imbue_cloud` templates. Declaring `provider = "ovh"` here used to make
 # slice bakes fail ("conflicting providers": the slice address vs this template).
 [create_templates.pool_host]
+# The Screen's ICE muxes (docs/system/specs/screen/spec.md section 5.1).
+publish__extend = ["59000/udp", "59000/tcp"]
 target_path = "/home/user/workspace/"
 # No plan / datacenter / sizing baked in: each pool-bake path appends its own per
 # invocation -- the OVH backend appends ``-b --vps-datacenter=<region>`` (plan
@@ -1164,6 +1175,8 @@ systemctl restart --no-block minds-autostart.service
 
 # template for AWS EC2 VPS provider (aws mode)
 [create_templates.aws]
+# The Screen's ICE muxes (docs/system/specs/screen/spec.md section 5.1).
+publish__extend = ["59000/udp", "59000/tcp"]
 target_path = "/home/user/workspace/"
 # No `provider` declared: Imbue Studio addresses the create as
 # `system-services@<host>.aws_<hex>`, which selects the connection instance
@@ -1330,6 +1343,8 @@ systemctl restart --no-block minds-autostart.service
 # type come from that provider block (`default_zone` / `default_machine_type`)
 # plus the matching `-b --gcp-zone=` / `-b --gcp-machine-type=` Imbue Studio passes.
 [create_templates.gcp]
+# The Screen's ICE muxes (docs/system/specs/screen/spec.md section 5.1).
+publish__extend = ["59000/udp", "59000/tcp"]
 target_path = "/home/user/workspace/"
 build_arg__extend = ["--file=system/Dockerfile", "."]
 # Disable idle detection entirely -- the host should never auto-shutdown; the
@@ -1483,6 +1498,8 @@ systemctl restart --no-block minds-autostart.service
 # VM size come from that provider block (`default_region` / `default_vm_size`)
 # plus the matching `-b --azure-region=` / `-b --azure-vm-size=` Imbue Studio passes.
 [create_templates.azure]
+# The Screen's ICE muxes (docs/system/specs/screen/spec.md section 5.1).
+publish__extend = ["59000/udp", "59000/tcp"]
 target_path = "/home/user/workspace/"
 build_arg__extend = ["--file=system/Dockerfile", "."]
 # Disable idle detection entirely -- the host should never auto-shutdown; the
@@ -1637,6 +1654,8 @@ systemctl restart --no-block minds-autostart.service
 # (`imbue_cloud_<user id>`), so it's not declared here -- the
 # `<name>@<host>.imbue_cloud_<user id>` address tells mngr where to land.
 [create_templates.imbue_cloud]
+# The Screen's ICE muxes (docs/system/specs/screen/spec.md section 5.1).
+publish__extend = ["59000/udp", "59000/tcp"]
 # Leased pool hosts must never auto-shutdown -- the host is borrowed for a
 # whole user session, not a one-shot job.
 idle_mode = "disabled"

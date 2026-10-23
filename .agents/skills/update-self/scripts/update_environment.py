@@ -6,6 +6,7 @@ restores from.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -21,6 +22,7 @@ from update_apply_contract import SnapshotRecord, snapshots_root
 from update_banding import ExpendWrapper
 from update_classification import ApplyPlan, AppTool
 from update_layout import (
+    APPS_DIR,
     FRONTEND_BUNDLES,
     MNGR_ASSETS_SCRIPT,
     MNGR_EXECUTABLE,
@@ -98,18 +100,23 @@ def run_provisioner(runner: Runner, repo_root: Path) -> str | None:
 
 
 def snapshot_targets(
-    plan: ApplyPlan, repo_root: Path, destinations: Mapping[str, ToolDestination]
+    plan: ApplyPlan,
+    repo_root: Path,
+    destinations: Mapping[str, ToolDestination],
+    removed_app_tools: Sequence[RemovedAppTool] = (),
 ) -> list[tuple[str, Path]]:
     """The state the apply's destructive steps can destroy, by plan.
 
     Every entry is a directory restored by a plain copy: the built bundles
     (the shell's and the chat's) and the npm workspace's ``node_modules`` (the
     build and ``npm ci`` both delete before they produce), the root venv
-    (``uv sync`` rewrites it), the mngr tool environment, and the tool
+    (``uv sync`` rewrites it), the mngr tool environment, the tool
     environment of every *critical* app the plan
-    reinstalls (``uv tool install --reinstall`` rebuilds them from scratch). A
-    non-critical app's tool is not copied aside: a rollback reinstalls it from
-    the restored tree instead.
+    reinstalls (``uv tool install --reinstall`` rebuilds them from scratch), and
+    the tool environment of every app the merge removed
+    (:func:`remove_tool_installs_of_removed_apps` uninstalls it, and the
+    rolled-back tree has it to run again). A non-critical app's tool is not
+    copied aside: a rollback reinstalls it from the restored tree instead.
 
     A tool environment is named by ``destinations``
     (:func:`resolve_tool_destinations`), the same value the reinstall is given,
@@ -133,11 +140,29 @@ def snapshot_targets(
                 destinations[tool_name].tool_dir / tool_name,
             )
         )
+    for removed in removed_app_tools:
+        targets.append(
+            (
+                removed_tool_snapshot_name(removed),
+                removed.tool_dir / removed.tool_name,
+            )
+        )
     return targets
 
 
 def tool_snapshot_name(tool_name: str) -> str:
     return f"tool-{tool_name}"
+
+
+def removed_tool_snapshot_name(removed: RemovedAppTool) -> str:
+    """The snapshot name of one installation of a removed app's tool.
+
+    The tool's name alone would not do: the scan covers several installations
+    (the pinned directory and the sweep homes), and a pre-pin workspace holds
+    the same tool in two of them, each to be put back where it was.
+    """
+    installation = hashlib.sha256(str(removed.tool_dir.resolve()).encode()).hexdigest()
+    return f"{tool_snapshot_name(removed.tool_name)}-{installation[:12]}"
 
 
 # The snapshot names that together cover the backend environments a manifest
@@ -155,6 +180,7 @@ def take_snapshots(
     repo_root: Path,
     destinations: Mapping[str, ToolDestination],
     existing: Sequence[SnapshotRecord],
+    removed_app_tools: Sequence[RemovedAppTool] = (),
 ) -> list[SnapshotRecord]:
     """Copy aside everything the forward apply could destroy; return the manifest.
 
@@ -173,7 +199,9 @@ def take_snapshots(
     ]
     already = {record.name for record in kept}
     root = snapshots_root(repo_root)
-    for name, source in snapshot_targets(plan, repo_root, destinations):
+    for name, source in snapshot_targets(
+        plan, repo_root, destinations, removed_app_tools
+    ):
         if name in already:
             continue
         if not source.exists():
@@ -430,6 +458,136 @@ def _pinned_tool_location() -> tuple[Path, Path]:
     """
     home = tool_env.tool_home()
     return tool_env.tools_dir(home), tool_env.bin_dir(home)
+
+
+def _uv_tool_env(tool_dir: Path, bin_dir: Path) -> dict[str, str]:
+    """This process's environment with uv pointed at one installation: ``UV_TOOL_DIR``
+    and ``UV_TOOL_BIN_DIR``, the pair every ``uv tool`` command the apply runs is
+    addressed by."""
+    env = dict(os.environ)
+    env["UV_TOOL_DIR"] = str(tool_dir)
+    env["UV_TOOL_BIN_DIR"] = str(bin_dir)
+    return env
+
+
+class RemovedAppTool(NamedTuple):
+    """A uv tool installed editable from an app directory the tree no longer has:
+    its environment's name, the source it was installed from, and the uv tool and
+    bin directories it lives under."""
+
+    tool_name: str
+    source_dir: Path
+    tool_dir: Path
+    bin_dir: Path
+
+
+def _editable_source_dirs(receipt_path: Path) -> list[Path]:
+    """The directories a tool's receipt says it was installed from in place (uv writes
+    an ``editable`` or ``directory`` requirement for ``uv tool install -e <dir>``);
+    nothing for a receipt that will not read or names only published packages."""
+    try:
+        receipt = tomllib.loads(receipt_path.read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        return []
+    tool = receipt.get("tool")
+    requirements = tool.get("requirements", []) if isinstance(tool, dict) else []
+    sources: list[Path] = []
+    for requirement in requirements if isinstance(requirements, list) else []:
+        if not isinstance(requirement, dict):
+            continue
+        for key in ("editable", "directory"):
+            value = requirement.get(key)
+            if isinstance(value, str) and value:
+                sources.append(Path(value))
+    return sources
+
+
+def tool_locations_to_scan(homes: Sequence[Path]) -> list[tuple[Path, Path]]:
+    """``(tool_dir, bin_dir)`` of every installation an app tool can live in: the one the
+    build pins, then uv's directories under each of ``homes`` (where a pre-pin apply
+    left its copies)."""
+    locations = [_pinned_tool_location()]
+    locations.extend(
+        (tool_env.tools_dir(home), tool_env.bin_dir(home)) for home in homes
+    )
+    return locations
+
+
+def find_removed_app_tools(
+    repo_root: Path, tool_locations: Sequence[tuple[Path, Path]]
+) -> list[RemovedAppTool]:
+    """The tools under ``tool_locations`` whose editable source is an app directory
+    under ``repo_root``'s apps directory that the tree there no longer has.
+
+    Read off the tree being applied (the merged tree, or the restored one on
+    rollback): an app the release removes leaves its tool environment behind,
+    and the console scripts that environment owns stand in the way of the app
+    that replaces it -- uv refuses to install a tool over an entrypoint another
+    tool's receipt lists. A tool whose source directory is still in the tree,
+    and one installed from a published package, are never named.
+    """
+    apps_root = (repo_root / APPS_DIR).resolve()
+    removed: list[RemovedAppTool] = []
+    scanned: set[Path] = set()
+    for tool_dir, bin_dir in tool_locations:
+        # A home this process may not read (another user's) holds nothing it could uninstall.
+        try:
+            environments = sorted(tool_dir.iterdir()) if tool_dir.is_dir() else []
+        except OSError:
+            continue
+        resolved_tool_dir = tool_dir.resolve()
+        if resolved_tool_dir in scanned:
+            continue
+        scanned.add(resolved_tool_dir)
+        for environment in environments:
+            receipt_path = environment / RECEIPT
+            try:
+                is_receipt = receipt_path.is_file()
+            except OSError:
+                continue
+            if not is_receipt:
+                continue
+            for source in _editable_source_dirs(receipt_path):
+                resolved_source = source.resolve()
+                if not resolved_source.is_relative_to(apps_root):
+                    continue
+                if (resolved_source / "pyproject.toml").is_file():
+                    continue
+                removed.append(
+                    RemovedAppTool(environment.name, resolved_source, tool_dir, bin_dir)
+                )
+                break
+    return removed
+
+
+def remove_tool_installs_of_removed_apps(
+    removed_app_tools: Sequence[RemovedAppTool], runner: Runner
+) -> list[str]:
+    """``uv tool uninstall`` each of ``removed_app_tools`` from the installation it
+    lives in, which also removes the console scripts it owned; returns one line per
+    tool for the apply's log. A refusal is reported rather than raised: the install
+    that follows then names what is still in its way.
+    """
+    notes: list[str] = []
+    for removed in removed_app_tools:
+        result = runner.run(
+            ["uv", "tool", "uninstall", removed.tool_name],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=_uv_tool_env(removed.tool_dir, removed.bin_dir),
+        )
+        if getattr(result, "returncode", 0) != 0:
+            stderr = (getattr(result, "stderr", "") or "").strip()
+            notes.append(
+                f"warning: could not uninstall the tool '{removed.tool_name}' of the removed app at "
+                f"{removed.source_dir} ({stderr or 'uv tool uninstall failed'}); an install it blocks will say so.\n"
+            )
+            continue
+        notes.append(
+            f"refresh: uninstalled the tool '{removed.tool_name}' of the removed app at {removed.source_dir}\n"
+        )
+    return notes
 
 
 class ToolDestination(NamedTuple):
@@ -801,9 +959,7 @@ def _reinstall_tool(
             f"refresh: removed {stale}, an entrypoint into '{tool_name}' its receipt "
             "does not list (left by an earlier rollback).\n"
         )
-    env = dict(os.environ)
-    env["UV_TOOL_DIR"] = str(destination.tool_dir)
-    env["UV_TOOL_BIN_DIR"] = str(destination.bin_dir)
+    env = _uv_tool_env(destination.tool_dir, destination.bin_dir)
     argv = [
         "uv",
         "tool",

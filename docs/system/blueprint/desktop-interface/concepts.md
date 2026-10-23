@@ -65,7 +65,7 @@ It has no status, no listing of what is inside an app, and no verbs on the app's
 
 ### 2.3 Placement and layout
 
-A placement is how one client keeps one window: the **frame** (a rectangle in fractions of the backdrop), the **state** (`NORMAL`, `SNAPPED_LEFT`, `SNAPPED_RIGHT`, or `MAXIMIZED`), whether it is **minimized**, and whether it is **detached** (pulled out into a desktop window of the embedding chrome's own, the desktop keeping a ghost at its frame; contracts section 4.2 and mngr's `specs/pull-out-window/spec.md`).
+A placement is how one client keeps one window: the **frame** (a rectangle in fractions of the backdrop), the **state** (`NORMAL`, `SNAPPED_LEFT`, `SNAPPED_RIGHT`, `MAXIMIZED`, or `FULLSCREEN`, the last filling the whole viewport over the taskbar with no title bar; the Screen spec's L2 layer), whether it is **minimized**, and whether it is **detached** (pulled out into a desktop window of the embedding chrome's own, the desktop keeping a ghost at its frame; contracts section 4.2 and mngr's `specs/pull-out-window/spec.md`).
 The frame is kept through every state, so restore always has somewhere to go, and minimized and detached are orthogonal to the state.
 A layout is one client's placements for one desktop, in stacking order, last on top.
 Raising, minimizing, maximizing, snapping, moving, and resizing are per client and never leave the client.
@@ -99,10 +99,11 @@ A page that ends up somewhere else reports its real path, and the window follows
 
 ### 2.7 Title bar and window controls
 
-Left to right: the app icon, the title, the window menu (three dots, directly after the title), then at the right edge minimize, maximize (restore when maximized), close.
+Left to right: the app icon, the title, the window menu (three dots, directly after the title), then at the right edge minimize, maximize (fullscreen and restore when maximized), close.
 No status indicator.
 The title bar is the drag handle; double-click toggles maximize; dragging to the left or right edge snaps to that half, and to the top edge maximizes.
-The window menu offers Refresh, Open in its own window (where the embedding chrome can pull windows out), Share, Quit the app (which closes every window of it and stops it; `docs/system/specs/stop-when-no-windows.md`), and Close.
+A fullscreen window has no title bar: a strip at its top edge shows on hover with Exit fullscreen and, where the Imbue Studio chrome can take the whole app window with the keyboard locked, Immersive (the Screen spec, section 12; mngr's `specs/screen-studio-integration/spec.md`).
+The window menu offers Move and resize, Fullscreen, Immersive (where the chrome can), Open in its own window (where the embedding chrome can pull windows out), Share, Quit the app (which closes every window of it and stops it; `docs/system/specs/stop-when-no-windows.md`), and Close.
 Close removes the window from the desktop for everyone; there is no separate "remove from desktop".
 A pinned window keeps its close control and its menus' Close, and each minimizes it: it is never closed, only minimized.
 
@@ -229,6 +230,6 @@ Recorded here so the spec need not re-argue them.
 13. Every desktop is shared; there is no sharing mode. A visiting user gets a desktop of their own on arrival instead.
 14. A window's URL is followed live by every client, navigated in-app where the page can and by reload otherwise, never echoed back to the client that drove it. The independent scope is the one exception: such a window's path is each client's own, and only an agent's `navigate` moves one client's page.
 15. Every seeded shortcut opens a new window of its app, labelled with the app's name; the app decides what a new window holds (the chat's is its list, never a new chat). The browser's and Getting Started's are the two focus-mode shortcuts, each an app one window is enough of (`docs/system/specs/window-bound-resources.md`, launcher-and-getting-started plan section 3.6).
-16. A terminal and the browser are window-bound: the app collects the resource once a window has shown it and none does any more, told of closes by the shell and sweeping the shell's windows regardless; the shell destroys nothing.
-17. The fleet holds one browser; closing its last window stops it and keeps its profile, and its next window starts it again.
-18. An agent that wants a terminal or a browser opens a window for it, minimized, and with nobody connected the window is still opened, unplaced.
+16. A terminal is window-bound: the app collects the resource once a window has shown it and none does any more, told of closes by the shell and sweeping the shell's windows regardless; the shell destroys nothing. The browser was window-bound too until the Screen spec (`docs/system/specs/screen/spec.md`, D3 and D15): it runs on the Screen now, whose stack never stops for emptiness, so no window close collects it.
+17. The fleet holds one browser; closing its last window stops it and keeps its profile, and its next window starts it again. Superseded by the Screen spec (`docs/system/specs/screen/spec.md`, D3 and D15): the browser is a launch path of the Screen, whose stack never stops for emptiness, so closing the last Screen window stops nothing.
+18. An agent that wants a terminal, or the Screen (the browser runs on it), opens a window for it, minimized, and with nobody connected the window is still opened, unplaced.

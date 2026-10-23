@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# The browser command the Screen's XFCE session runs (its "Web Browser" launcher through helpers.rc, an http(s) link
+# through mimeapps.list) and the x-www-browser alternative: the Screen's own browser launch path, so the page opens
+# in the fleet's Chromium (its profile, its CDP proxy, the control lease) and never in a second one. Installed at
+# /usr/local/bin/screen-browser-open by system/scripts/env.d/2000-screen.sh. The URL argument is optional.
+set -euo pipefail
+
+exec screen browser open "$@"

@@ -61,7 +61,8 @@ export const WINDOW_DRAG_ENDED: "minds:window-drag-ended" =
 // Payload: { windows: [{ windowId, title }] }.
 export const DETACHED_WINDOWS: "minds:detached-windows" =
   "DETACHED_WINDOWS" in embedContract ? embedContract.DETACHED_WINDOWS : "minds:detached-windows";
-// Embedder -> workspace: what the chrome can do, right after WORKSPACE_READY. Payload: { canPopOut }.
+// Embedder -> workspace: what the chrome can do, right after WORKSPACE_READY. Payload: { canPopOut,
+// opensExternalLinks?, immersive? }.
 export const EMBEDDER_CAPABILITIES: "minds:embedder-capabilities" =
   "EMBEDDER_CAPABILITIES" in embedContract ? embedContract.EMBEDDER_CAPABILITIES : "minds:embedder-capabilities";
 // Embedder -> workspace: return a pulled-out window to the desktop. Payload: { windowId, frame? }.
@@ -92,6 +93,16 @@ export const OPEN_LINK: "minds:open-link" = "OPEN_LINK" in embedContract ? embed
 // for an external link that embedder handed over with OPEN_LINK.
 export const OPEN_EXTERNAL: "minds:open-external" =
   "OPEN_EXTERNAL" in embedContract ? embedContract.OPEN_EXTERNAL : "minds:open-external";
+// The immersive-mode pair (contract v9, the Screen integration spec section 5), probed the same way.
+// Workspace -> embedder: take the app window Fullscreen-API fullscreen with the keyboard locked for this window
+// (``on: true``), or give it back. Payload: { windowId, on }. Sent only to an embedder that said ``immersive`` with
+// EMBEDDER_CAPABILITIES, and from a user gesture when entering.
+export const IMMERSIVE_REQUEST: "minds:immersive-request" =
+  "IMMERSIVE_REQUEST" in embedContract ? embedContract.IMMERSIVE_REQUEST : "minds:immersive-request";
+// Embedder -> workspace: immersive mode is now on or off, by a request or on the chrome's own (the user held
+// Escape, the OS left fullscreen). Payload: { on, keyboardLocked, error? }.
+export const IMMERSIVE_CHANGED: "minds:immersive-changed" =
+  "IMMERSIVE_CHANGED" in embedContract ? embedContract.IMMERSIVE_CHANGED : "minds:immersive-changed";
 
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 
@@ -111,6 +122,7 @@ const EMBEDDER_TO_WORKSPACE_TYPES: readonly string[] = [
   TEAR_OUT,
   PROVIDER_SIGN_IN_ACK,
   OPEN_LINK,
+  IMMERSIVE_CHANGED,
 ];
 
 // One replaceable handler per embedder->workspace type, registered by the

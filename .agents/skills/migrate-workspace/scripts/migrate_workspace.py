@@ -231,7 +231,7 @@ LEGACY_PATH_MAP: Mapping[str, str] = {
     "apps/system_interface/": "system/apps/system_interface/",
     "libs/app_watcher/": "system/services/app_watcher/",
     "libs/bootstrap/": "system/libs/bootstrap/",
-    "libs/browser/": "system/apps/browser/",
+    "libs/browser/": "system/apps/screen/",
     "libs/cloudflare_tunnel/": "system/services/cloudflare_tunnel/",
     "libs/github_sync/": "system/libs/github_sync/",
     "libs/host_backup/": "system/services/host_backup/",

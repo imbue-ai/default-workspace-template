@@ -130,6 +130,7 @@ def build_agent_test_app(
         pending_logins=PendingLoginRegistry(),
         auth_label=auth_label,
         get_registered_apps=lambda: apps,
+        get_connect_info=lambda: {"ice_servers": [], "candidates": []},
         admit_agent=build_agent_admitter(context, lambda: list(apps)),
     )
     register_agent_routes(

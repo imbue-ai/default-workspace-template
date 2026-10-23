@@ -189,7 +189,13 @@ def find_wiring_sections(repo_root: Path, manifest: AppManifest) -> tuple[Wiring
     # standalone program (`share` for `share-gateway`), which is what keeps an unrelated
     # program from being claimed here.
     sidecar_prefix = f"program:{manifest.name}-"
-    declared_sections = [f"program:{program}" for program in manifest.wiring.programs]
+    # A declared program may be a supervisord event listener (the Screen's watcher), whose block is an
+    # ``[eventlistener:...]`` section; either spelling of the name is the declaration's block.
+    declared_sections = [
+        section
+        for program in manifest.wiring.programs
+        for section in (f"program:{program}", f"eventlistener:{program}")
+    ]
 
     wiring: list[WiringSection] = []
     defined_sections: set[str] = set()
@@ -211,11 +217,11 @@ def find_wiring_sections(repo_root: Path, manifest: AppManifest) -> tuple[Wiring
         if owned_sections:
             wiring.append(WiringSection(path=conf_path, sections=owned_sections))
 
-    for declared_section in declared_sections:
-        if declared_section not in defined_sections:
+    for program in manifest.wiring.programs:
+        if f"program:{program}" not in defined_sections and f"eventlistener:{program}" not in defined_sections:
             raise ScopeComputationError(
-                f"manifest {manifest.name} declares wiring program {declared_section!r}, which "
-                f"{repo_root / _SUPERVISORD_CONF} and its drop-ins do not define"
+                f"manifest {manifest.name} declares wiring program {program!r} (program:{program} or "
+                f"eventlistener:{program}), which {repo_root / _SUPERVISORD_CONF} and its drop-ins do not define"
             )
     return tuple(wiring)
 

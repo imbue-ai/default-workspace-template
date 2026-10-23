@@ -41,7 +41,9 @@ def is_process_alive(pid: int) -> bool:
     return (_PROC_DIR / str(pid)).exists()
 
 
-def record_agent_pid(pid: int, agent_name: str, is_worker: bool, agent_id: str | None = None) -> None:
+def record_agent_pid(
+    pid: int, agent_name: str, is_worker: bool, agent_id: str | None = None
+) -> None:
     """Register ``pid`` as the main process of ``agent_name``.
 
     ``agent_id`` (mngr's stable per-agent id) is recorded alongside the name so a
@@ -79,7 +81,9 @@ def lookup_agent(pid: int) -> dict | None:
     return data
 
 
-def live_pids_by_agent_id(is_alive: Callable[[int], bool] = is_process_alive) -> dict[str, list[int]]:
+def live_pids_by_agent_id(
+    is_alive: Callable[[int], bool] = is_process_alive,
+) -> dict[str, list[int]]:
     """Every live registered pid, grouped by the ``agent_id`` recorded with it.
 
     An agent can hold more than one (codex's TUI and its app-server daemon). Entries
@@ -106,7 +110,9 @@ def live_pids_by_agent_id(is_alive: Callable[[int], bool] = is_process_alive) ->
     return pids_by_agent_id
 
 
-def lookup_pid_by_agent_id(agent_id: str, is_alive: Callable[[int], bool] = is_process_alive) -> int | None:
+def lookup_pid_by_agent_id(
+    agent_id: str, is_alive: Callable[[int], bool] = is_process_alive
+) -> int | None:
     """Return the live main-process pid recorded for ``agent_id``, or None.
 
     So a consumer holding only the id (the OOM prioritizer) can re-tag that

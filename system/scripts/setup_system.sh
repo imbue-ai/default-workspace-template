@@ -89,21 +89,14 @@ install_downloaded_binary() {
 # daemon, is not among them: it is the imbue-ai fork, installed below by
 # install_earlyoom.sh. supervisor provides the system supervisord + supervisorctl
 # that `uv run bootstrap` execs into the foreground.
-# xvfb + xclip (the browser fleet's virtual display and its clipboard bridge)
-# are baked here, NOT deferred to the env.d browser unit: [program:xvfb] execs
-# Xvfb directly at boot, and a binary that static service config promises at
-# every boot must exist in the image. They are a few MB; only the heavy
-# Fortress/Chromium stack stays deferred.
+# The Screen's stack (Xorg, XFCE, PulseAudio, neko, Fortress, xclip) is not baked:
+# nothing execs any of it at boot, so it installs on first boot through the
+# env-converge unit system/scripts/env.d/2000-screen.sh.
 apt-get update
 apt-get install -y --no-install-recommends \
     bash build-essential ca-certificates cron curl fd-find git git-lfs jq less nano \
     openssh-server procps restic ripgrep rsync sqlite3 supervisor tini tmux unison util-linux wget \
-    xclip xvfb xxd xmlstarlet
-# Runtime libraries the pixelflux/pcmflux wheels (the browser fleet's H.264 + Opus
-# media pipes) dlopen at import -- without libva pixelflux's import raises (guarded in
-# videopipe.py) -- plus xdpyinfo, which videopipe uses to size the capture. Baked small.
-apt-get install -y --no-install-recommends \
-    libva2 libva-drm2 libva-x11-2 libpixman-1-0 x11-utils pulseaudio pulseaudio-utils
+    xxd xmlstarlet
 rm -rf /var/lib/apt/lists/*
 
 # The Debian `supervisor` package enables a systemd unit that immediately starts

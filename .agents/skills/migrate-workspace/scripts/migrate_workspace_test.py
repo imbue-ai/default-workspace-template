@@ -106,7 +106,7 @@ def test_map_legacy_path_splits_the_builtin_packages_three_ways() -> None:
         "system/libs/bootstrap/README.md"
     )
     assert migrate_workspace.map_legacy_path("libs/browser/README.md").new_path == (
-        "system/apps/browser/README.md"
+        "system/apps/screen/README.md"
     )
 
 
@@ -143,7 +143,7 @@ def test_map_legacy_path_flags_the_overloaded_prefixes_as_ambiguous() -> None:
 def test_map_legacy_path_leaves_current_layout_paths_alone() -> None:
     for path in (
         ".agents/skills/caretaker/SKILL.md",
-        "system/apps/browser/README.md",
+        "system/apps/screen/README.md",
         "data/memories/note.md",
     ):
         mapping = migrate_workspace.map_legacy_path(path)
@@ -461,7 +461,7 @@ def test_parse_supervisord_ports_reads_the_real_template_config(
     # registry scan covers them); the others register from their program lines.
     assert {(port.name, port.port) for port in ports} >= {
         ("system_interface", 8000),
-        ("browser", 8081),
+        ("screen", 8090),
     }
     assert not {port.name for port in ports} & {"terminal", "chat", "files"}
     assert [port.name for port in ports].count("system_interface") == 1

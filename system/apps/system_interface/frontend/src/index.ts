@@ -3,7 +3,6 @@ import { getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import {
   DETACHED_WINDOWS,
-  EMBEDDER_CAPABILITIES,
   OPEN_EXTERNAL,
   OPEN_LINK,
   POP_OUT_WINDOW,
@@ -21,6 +20,7 @@ import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCurs
 import * as api from "./model/api";
 import { isDeepLinkEmpty, parseDeepLink, stripDeepLinkParams } from "./model/deepLinks";
 import type { DeepLink } from "./model/deepLinks";
+import { connectEmbedderToStore, immersiveBridge } from "./store/embedderBridge";
 import { parseSoloMode } from "./model/soloMode";
 import { isPreviewShell } from "./model/PreviewShell";
 import type { Frame } from "./model/records";
@@ -107,6 +107,7 @@ function bootstrap(): void {
           reloadInterface,
           popOut: popOutBridge,
           outsideLinks,
+          immersive: immersiveBridge,
           soloWindowId: solo?.windowId ?? null,
           isSoloReopened: solo?.isReopened ?? false,
         });
@@ -135,11 +136,9 @@ function bootstrap(): void {
   // types through the endpoint's observer, any other (a notification's destination) through the relay.
   setEmbedderMessageObserver((message) => void desktopStore.relayEmbedderMessage(message, null));
   setEmbedderAppMessageHandler((message) => void desktopStore.relayEmbedderMessage(message, null));
-  // The pull-out conversation's two asks from the chrome: what it can do, and a window to bring back.
-  setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) => {
-    desktopStore.setCanPopOut(message.canPopOut === true);
-    desktopStore.setCanOpenLinksOutside(message.opensExternalLinks === true);
-  });
+  // What the chrome can do, and its immersive-mode changes; then the pull-out conversation's ask to bring a
+  // window back.
+  connectEmbedderToStore(desktopStore);
   setEmbedderMessageHandler(REATTACH_WINDOW, (message) => {
     const windowId = message.windowId;
     if (typeof windowId !== "string" || windowId === "") return;

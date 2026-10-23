@@ -23,8 +23,8 @@ git ls-files -s | awk -F'\t' '$1 ~ /^120000/ { print $2 }' > /tmp/offload-symlin
 git checkout-index -f --stdin < /tmp/offload-symlinks
 rm /tmp/offload-symlinks
 
-# The browser stack, which a workspace installs on first boot rather than in the image.
-ENV_CONVERGE_WORKSPACE_DIR="$REPO_ROOT" bash "$REPO_ROOT/system/scripts/env.d/1000-playwright-fortress.sh"
+# The Screen's stack (Fortress included), which a workspace installs on first boot rather than in the image.
+ENV_CONVERGE_WORKSPACE_DIR="$REPO_ROOT" bash "$REPO_ROOT/system/scripts/env.d/2000-screen.sh"
 
 # offload has no prebuilt binary, so build it with a toolchain that is removed again afterwards.
 readonly BUILD_HOME="/opt/offload-build"

@@ -890,7 +890,7 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     # Base commit: one pre-existing top-level entry (must NOT be reported as
     # newly added), plus a source file the target will leave untouched.
     _write("changelog/old-entry.md")
-    _write("system/apps/browser/src/browser/session.py", "print('hi')\n")
+    _write("system/apps/screen/src/screen/service.py", "print('hi')\n")
     _git("add", "-A")
     _git("commit", "-q", "-m", "base")
     _git("tag", "base")
@@ -899,10 +899,10 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     # entry (excluded), and a non-changelog source change (ignored).
     _write(".agents/changelog/my-branch.md")
     _write("system/changelog/my-branch.md")
-    _write("system/apps/browser/changelog/my-branch.md")
+    _write("system/apps/screen/changelog/my-branch.md")
     _write("system/apps/system_interface/changelog/my-branch.md")
     _write("system/services/gamma/changelog/my-branch.md")
-    _write("system/apps/browser/src/browser/session.py", "print('bye')\n")
+    _write("system/apps/screen/src/screen/service.py", "print('bye')\n")
     _git("add", "-A")
     _git("commit", "-q", "-m", "target")
     _git("tag", "target")
@@ -924,7 +924,7 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     added = json.loads(capsys.readouterr().out)["added"]
     assert sorted(added) == [
         ".agents/changelog/my-branch.md",
-        "system/apps/browser/changelog/my-branch.md",
+        "system/apps/screen/changelog/my-branch.md",
         "system/apps/system_interface/changelog/my-branch.md",
         "system/changelog/my-branch.md",
         "system/services/gamma/changelog/my-branch.md",
@@ -933,7 +933,7 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     # The worker guide has the tool run from the staged skill's scripts
     # directory. A git pathspec is cwd-relative, so from a subdirectory the
     # changelog glob matched nothing and the digest was silently empty.
-    subdir = tmp_path / "system" / "apps" / "browser"
+    subdir = tmp_path / "system" / "apps" / "screen"
     assert (
         update_self.main(
             [
@@ -1665,10 +1665,10 @@ def _mngr_requirement(package: str, subdirectory: str) -> str:
 _MNGR_BASE = _mngr_requirement("imbue-mngr", "libs/mngr")
 
 # The Python apps a workspace tree carries, as the apply discovers them
-# (``read_app_tools``): the shell (critical) and the browser daemon (not).
+# (``read_app_tools``): the shell (critical) and the Screen service (not).
 _APP_FIXTURES = (
     ("system_interface", "system-interface", "system-interface", True),
-    ("browser", "browser", "browser-service", False),
+    ("screen", "screen", "screen-service", False),
 )
 
 
@@ -1971,7 +1971,7 @@ _FIXTURE_PROGRAMS = (
     "terminal",
     "terminal-pty",
     "files",
-    "browser",
+    "screen",
 )
 
 
@@ -2192,11 +2192,11 @@ def test_read_app_tools_lists_every_python_app_in_the_tree() -> None:
     assert shell.executable == update_layout.TOOL_NAME
     assert shell.plugin_key == "system_interface"
     assert shell.is_critical is True
-    browser = by_name["browser"]
-    assert browser.directory == "system/apps/browser"
-    assert browser.executable == "browser-service"
-    assert browser.plugin_key == "browser"
-    assert browser.is_critical is False
+    screen = by_name["screen"]
+    assert screen.directory == "system/apps/screen"
+    assert screen.executable == "screen-service"
+    assert screen.plugin_key == "screen"
+    assert screen.is_critical is False
     terminal = by_name["terminal-app"]
     assert terminal.directory == "system/apps/terminal"
     assert terminal.executable == "terminal-app"
@@ -2226,7 +2226,7 @@ def test_read_app_tools_leaves_a_pre_manifest_app_to_the_root_venv(
 
     tools = update_classification.read_app_tools(repo_root)
 
-    assert {app.tool_name for app in tools} == {"system-interface", "browser"}
+    assert {app.tool_name for app in tools} == {"system-interface", "screen"}
     assert "legacy" not in capsys.readouterr().err
 
 
@@ -2253,7 +2253,7 @@ def test_read_app_tools_skips_an_app_it_cannot_describe(tmp_path: Path, capsys) 
 
     tools = update_classification.read_app_tools(repo_root)
 
-    assert {app.tool_name for app in tools} == {"system-interface", "browser"}
+    assert {app.tool_name for app in tools} == {"system-interface", "screen"}
     err = capsys.readouterr().err
     assert "broken" in err and "unreadable" in err and "nameless" in err
 
@@ -2268,13 +2268,13 @@ def test_read_app_tools_skips_an_app_it_cannot_describe(tmp_path: Path, capsys) 
         ("system/apps/system_interface/app.toml", {"system-interface"}),
         ("system/apps/chat/imbue/chat/server.py", {"chat"}),
         ("system/apps/chat/app.toml", {"chat"}),
-        ("system/apps/browser/src/browser/runner.py", {"browser"}),
-        ("system/apps/browser/pyproject.toml", {"browser"}),
+        ("system/apps/screen/src/screen/service.py", {"screen"}),
+        ("system/apps/screen/pyproject.toml", {"screen"}),
         # The frontend bundle and served assets never change what the tool resolves to.
         ("system/apps/system_interface/frontend/src/App.ts", set()),
         ("system/apps/chat/frontend/src/index.ts", set()),
         ("system/apps/chat/imbue/chat/static/chat.html", set()),
-        ("system/apps/browser/src/browser/static/app.js", set()),
+        ("system/apps/screen/src/screen/static/index.html", set()),
         ("system/apps/terminal/src/terminal_app/main.py", {"terminal-app"}),
         ("system/apps/terminal/terminal_tmux.conf", {"terminal-app"}),
         ("system/apps/files/src/files_app/server.py", {"files-app"}),
@@ -2582,7 +2582,7 @@ def test_apply_backend_manifest_refreshes_every_environment(apply_repo: Path) ->
         "-e",
     ]
     assert [argv[4] for argv in installs[1:]] == [
-        "system/apps/browser",
+        "system/apps/screen",
         update_layout.SYSTEM_INTERFACE_DIR,
     ]
     assert runner.ran("uv", "sync", "--all-packages", "--frozen")
@@ -2630,16 +2630,16 @@ def test_apply_backend_source_change_reinstalls_only_the_apps_own_tool(
     assert runner.ran(*_RESTART)
 
 
-def test_apply_browser_change_reinstalls_the_browser_tool_alone(
+def test_apply_screen_change_reinstalls_the_screen_tool_alone(
     apply_repo: Path,
 ) -> None:
-    runner = _apply_runner("M\tsystem/apps/browser/src/browser/runner.py\n", apply_repo)
+    runner = _apply_runner("M\tsystem/apps/screen/src/screen/service.py\n", apply_repo)
 
     code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
 
     assert code == 0
     installs = runner.argvs_starting("uv", "tool", "install")
-    assert [argv[4] for argv in installs] == ["system/apps/browser"]
+    assert [argv[4] for argv in installs] == ["system/apps/screen"]
     assert not runner.ran("uv", "sync")
 
 
@@ -3888,7 +3888,7 @@ def test_a_health_probe_that_never_finds_the_app_says_what_it_last_saw(
 def test_read_critical_apps_reads_only_critical_apps_the_user_can_open(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # The fixture tree already carries the shell (critical, internal) and the browser.
+    # The fixture tree already carries the shell (critical, internal) and the Screen.
     repo_root = _make_apply_repo(tmp_path)
     _write_openable_app(repo_root, "terminal")
     _write_openable_app(repo_root, "chat")
@@ -6025,18 +6025,18 @@ def test_snapshots_copy_aside_the_tool_of_a_critical_app_but_not_of_another(
     tmp_path: Path,
 ) -> None:
     # The shell is critical (its manifest says so), so an apply that touches
-    # it copies its tool environment aside for the rollback; the browser is
+    # it copies its tool environment aside for the rollback; the Screen is
     # not, so a rollback reinstalls its tool from the restored tree instead.
     repo_root = _make_apply_repo(tmp_path)
     runner = _RecordingRunner()
     shell_tool = _tool_on_path(
         tmp_path, runner, "system-interface", update_layout.TOOL_NAME
     )
-    _tool_on_path(tmp_path, runner, "browser", "browser-service")
+    _tool_on_path(tmp_path, runner, "screen", "screen-service")
     plan = update_classification.plan_apply(
         [
             _BACKEND_DIFF.split("\t")[1].strip(),
-            "system/apps/browser/src/browser/runner.py",
+            "system/apps/screen/src/screen/service.py",
         ],
         _PROVISIONER_INPUTS,
         update_classification.read_app_tools(repo_root),
@@ -6432,7 +6432,7 @@ def test_a_rollback_rebuilds_the_tool_envs_it_could_not_copy_aside(
     # time has no copy to put back. A rollback that keyed the rebuild on the
     # venv alone reported success with the tools still built from the
     # rolled-back-away tree -- the ModuleNotFoundError-on-mngr state. The
-    # browser's tool is never copied aside (not critical), so it is rebuilt too.
+    # Screen's tool is never copied aside (not critical), so it is rebuilt too.
     (apply_repo / ".venv").mkdir()
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)  # no tools on PATH
     spawner = _FakeSpawner(output="ImportError: boom", exited=True)
@@ -6707,10 +6707,10 @@ def test_recovery_rebuilds_only_the_app_tools_with_no_copy_and_a_directory(
     restored = {update_environment.tool_snapshot_name("system-interface")}
 
     rebuild = update_apply._app_tools_to_rebuild(
-        (by_name["system-interface"], by_name["browser"], added), restored, repo_root
+        (by_name["system-interface"], by_name["screen"], added), restored, repo_root
     )
 
-    assert rebuild == (by_name["browser"],)
+    assert rebuild == (by_name["screen"],)
     assert "system/apps/gone is not in the restored tree" in capsys.readouterr().err
 
 
@@ -7115,6 +7115,7 @@ def _recover(
         base_url=_LIVE_BASE,
         now=now,
         is_pid_live=is_pid_live,
+        sweep_homes=(),
     )
 
 
@@ -7583,6 +7584,7 @@ def _recover_boot_path(repo: Path) -> int:
         http=_FakeHttp(_all_healthy),
         sleeper=lambda _s: None,
         base_url=_LIVE_BASE,
+        sweep_homes=(),
     )
 
 
@@ -8109,7 +8111,7 @@ def test_the_record_names_every_critical_app_the_apply_touched(
     _write_registry(apply_repo, {"chat": _CHAT_ROW_URL, "terminal": _TERMINAL_ROW_URL})
     runner = _apply_runner(
         "M\tsystem/libs/workspace_ui/src/origin.ts\nM\tsystem/apps/terminal/src/terminal_app/main.py\n"
-        "M\tsystem/apps/browser/src/browser/session.py\n",
+        "M\tsystem/apps/screen/src/screen/service.py\n",
         apply_repo,
     )
 
@@ -8800,3 +8802,247 @@ def test_a_rollback_whose_restored_app_serves_no_page_is_an_emergency_that_keeps
     assert "copies are still kept" in settled.outcome
     assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
     assert not _refreshed_the_view(runner, apply_repo)
+
+
+# apply: the tool of an app the merge removed, and the registry row of a program it dropped
+
+
+def _with_editable_receipt(
+    home: Path, tool_name: str, source_dir: Path, scripts: Sequence[str]
+) -> Path:
+    """A uv tool environment under ``home`` installed editable from ``source_dir``, with ``scripts`` linked
+    into the bin directory as uv links them: the environment's path."""
+    environment = tool_env.tools_dir(home) / tool_name
+    (environment / "bin").mkdir(parents=True, exist_ok=True)
+    tool_env.bin_dir(home).mkdir(parents=True, exist_ok=True)
+    entrypoints = ""
+    for script in scripts:
+        (environment / "bin" / script).write_text(
+            f"#!{environment}/bin/python3\nimport sys\n"
+        )
+        (tool_env.bin_dir(home) / script).symlink_to(environment / "bin" / script)
+        entrypoints += f'    {{ name = "{script}", install-path = "{tool_env.bin_dir(home) / script}", from = "{tool_name}" }},\n'
+    (environment / update_layout.RECEIPT).write_text(
+        "[tool]\n"
+        f'requirements = [{{ name = "{tool_name}", editable = "{source_dir}" }}]\n'
+        f"entrypoints = [\n{entrypoints}]\n"
+    )
+    return environment
+
+
+def test_find_removed_app_tools_names_the_editable_install_whose_app_left_the_tree(
+    tmp_path: Path,
+) -> None:
+    repo_root = _make_apply_repo(tmp_path)
+    home = tool_env.tool_home()
+    gone_app_dir = repo_root / update_layout.APPS_DIR / "browser"
+    _with_editable_receipt(home, "browser", gone_app_dir, ["agentic-browser-fleet"])
+    _with_editable_receipt(
+        home,
+        "system-interface",
+        repo_root / update_layout.SYSTEM_INTERFACE_DIR,
+        ["system-interface"],
+    )
+    _with_receipt(
+        update_layout.MNGR_TOOL_NAME,
+        f'[tool]\nrequirements = [{{ name = "imbue-mngr", git = "{_MNGR_GIT}?rev={_MNGR_REV}" }}]\n',
+    )
+    locations = update_environment.tool_locations_to_scan([tmp_path / "elsewhere"])
+
+    removed = update_environment.find_removed_app_tools(repo_root, locations)
+
+    assert [(tool.tool_name, tool.source_dir) for tool in removed] == [
+        ("browser", gone_app_dir.resolve())
+    ]
+    assert removed[0].tool_dir == tool_env.tools_dir(home)
+    assert removed[0].bin_dir == tool_env.bin_dir(home)
+
+
+def test_a_removed_tool_found_in_two_installations_is_copied_aside_once_per_installation(
+    tmp_path: Path,
+) -> None:
+    # A pre-pin workspace holds the old browser tool under $HOME/.local beside the
+    # pinned copy; one snapshot name for both would leave the second copy over the
+    # first, and a rollback would put that one back in both places.
+    repo_root = _make_apply_repo(tmp_path)
+    gone_app_dir = repo_root / update_layout.APPS_DIR / "browser"
+    pinned_home = tool_env.tool_home()
+    other_home = tmp_path / "other-home"
+    for home in (pinned_home, other_home):
+        _with_editable_receipt(home, "browser", gone_app_dir, ["agentic-browser-fleet"])
+    removed = update_environment.find_removed_app_tools(
+        repo_root, update_environment.tool_locations_to_scan([other_home])
+    )
+    plan = _plan(["README.md"])
+
+    targets = update_environment.snapshot_targets(
+        plan,
+        repo_root,
+        update_environment.resolve_tool_destinations(plan, _RecordingRunner()),
+        removed,
+    )
+
+    assert [source for _name, source in targets] == [
+        tool_env.tools_dir(pinned_home) / "browser",
+        tool_env.tools_dir(other_home) / "browser",
+    ]
+    assert len({name for name, _source in targets}) == 2
+
+
+def test_the_apply_uninstalls_the_tool_of_an_app_the_merge_removed_before_installing_the_rest(
+    apply_repo: Path,
+) -> None:
+    # The old browser app's tool still owns the agentic-browser-fleet script the Screen
+    # declares too, and uv refuses to install a tool over another tool's entrypoint; so
+    # the removed app's tool goes first, copied aside in case the apply rolls back.
+    home = tool_env.tool_home()
+    gone_app_dir = apply_repo / update_layout.APPS_DIR / "browser"
+    _with_editable_receipt(home, "browser", gone_app_dir, ["agentic-browser-fleet"])
+    runner = _apply_runner("M\tsystem/apps/screen/pyproject.toml\n", apply_repo)
+    snapshot_copy = update_apply_contract.snapshots_root(
+        apply_repo
+    ) / update_environment.removed_tool_snapshot_name(
+        update_environment.RemovedAppTool(
+            "browser",
+            gone_app_dir.resolve(),
+            tool_env.tools_dir(home),
+            tool_env.bin_dir(home),
+        )
+    )
+    is_copy_present_at_uninstall: list[bool] = []
+
+    def note_copy(argv: list[str]) -> None:
+        if argv[:3] == ["uv", "tool", "uninstall"]:
+            is_copy_present_at_uninstall.append(snapshot_copy.is_dir())
+
+    runner.on_command = note_copy
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    uninstall_index = runner.calls.index(["uv", "tool", "uninstall", "browser"])
+    install_indexes = [
+        index
+        for index, argv in enumerate(runner.calls)
+        if argv[:3] == ["uv", "tool", "install"]
+    ]
+    assert install_indexes and uninstall_index < min(install_indexes)
+    assert runner.envs[uninstall_index]["UV_TOOL_DIR"] == str(tool_env.tools_dir(home))
+    assert runner.envs[uninstall_index]["UV_TOOL_BIN_DIR"] == str(
+        tool_env.bin_dir(home)
+    )
+    assert is_copy_present_at_uninstall == [True]
+
+
+def test_a_rollback_puts_back_the_tool_of_an_app_the_merge_removed(
+    apply_repo: Path,
+) -> None:
+    # The forward pass uninstalled the removed app's tool; the rolled-back tree runs
+    # that app again, so its environment and the entrypoints it owned come back.
+    home = tool_env.tool_home()
+    gone_app_dir = apply_repo / update_layout.APPS_DIR / "browser"
+    environment = _with_editable_receipt(
+        home, "browser", gone_app_dir, ["agentic-browser-fleet"]
+    )
+    entrypoint = tool_env.bin_dir(home) / "agentic-browser-fleet"
+    runner = _apply_runner("M\tsystem/apps/screen/pyproject.toml\n", apply_repo)
+
+    def emulate_uninstall(argv: list[str]) -> None:
+        if argv[:4] == ["uv", "tool", "uninstall", "browser"]:
+            entrypoint.unlink()
+            shutil.rmtree(environment)
+
+    runner.on_command = emulate_uninstall
+    spawner = _FakeSpawner(output="ImportError: boom", exited=True)
+
+    code = _apply(
+        runner,
+        _FakeHttp(lambda url: 200 if _is_live(url) else None),
+        spawner,
+        apply_repo,
+    )
+
+    assert code == 2
+    assert (environment / update_layout.RECEIPT).is_file()
+    assert entrypoint.is_symlink() and entrypoint.resolve() == (
+        environment / "bin" / "agentic-browser-fleet"
+    )
+
+
+def test_read_supervisord_programs_lists_programs_and_listeners_across_the_drop_ins(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    (repo_root / update_layout.SUPERVISORD_DROPIN_DIR).mkdir(parents=True)
+    (repo_root / update_layout.SUPERVISORD_CONF).write_text(
+        "[supervisord]\nnodaemon=true\n[program:cron]\ncommand=cron\n"
+    )
+    (repo_root / update_layout.SUPERVISORD_DROPIN_DIR / "screen.conf").write_text(
+        "[program:screen]\ncommand=screen-service\n\n[group:screen-stack]\nprograms=screen-xorg\n"
+    )
+    (repo_root / update_layout.SUPERVISORD_DROPIN_DIR / "screen-watch.conf").write_text(
+        "[eventlistener:screen-watch]\ncommand=screen-watch\n"
+    )
+
+    assert update_probes.read_supervisord_programs(repo_root) == frozenset(
+        {"cron", "screen", "screen-watch"}
+    )
+    assert update_probes.read_supervisord_programs(tmp_path / "no-such-repo") is None
+
+
+def test_the_apply_prunes_registry_rows_whose_program_the_merged_tree_no_longer_declares(
+    apply_repo: Path,
+) -> None:
+    # Nothing but a program's own start ever rewrote its row, and the removed browser
+    # app's program never starts again: without the prune the launcher keeps a dead
+    # "Browser" tile and the share gateway a dead origin for the life of the workspace.
+    (apply_repo / update_layout.SUPERVISORD_DROPIN_DIR).mkdir(parents=True)
+    (apply_repo / update_layout.SUPERVISORD_CONF).write_text(
+        "[supervisord]\nnodaemon=true\n"
+    )
+    (apply_repo / update_layout.SUPERVISORD_DROPIN_DIR / "screen.conf").write_text(
+        "[program:screen]\ncommand=screen-service\n"
+    )
+    registry = apply_repo / update_layout.APPS_REGISTRY_PATH
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(
+        '[[apps]]\nname = "screen"\nurl = "http://localhost:8090"\nprogram = "screen"\n\n'
+        '[[apps]]\nname = "browser"\nurl = "http://localhost:8081"\nprogram = "browser"\n\n'
+        '[[apps]]\nname = "owner-exec"\nurl = "http://localhost:8650"\n'
+    )
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    removals = [
+        argv
+        for argv in runner.calls
+        if argv[1:4] == [update_layout.FORWARD_PORT_SCRIPT, "--remove", "--name"]
+    ]
+    assert [argv[4] for argv in removals] == ["browser"]
+    prune_index = runner.calls.index(removals[0])
+    restart_index = runner.calls.index(
+        ["mngr", "start", "--restart", "system-services"]
+    )
+    assert prune_index < restart_index
+
+
+def test_the_apply_prunes_no_registry_row_when_the_tree_has_no_supervisord_table(
+    apply_repo: Path,
+) -> None:
+    registry = apply_repo / update_layout.APPS_REGISTRY_PATH
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(
+        '[[apps]]\nname = "browser"\nurl = "http://localhost:8081"\nprogram = "browser"\n'
+    )
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert not [
+        argv
+        for argv in runner.calls
+        if argv[1:3] == [update_layout.FORWARD_PORT_SCRIPT, "--remove"]
+    ]

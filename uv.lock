@@ -7,19 +7,19 @@ resolution-markers = [
     "python_full_version >= '3.14' and platform_machine == 'aarch64' and sys_platform == 'linux'",
     "python_full_version >= '3.14' and platform_machine == 'x86_64' and sys_platform == 'linux'",
     "(python_full_version >= '3.14' and platform_machine == 'AMD64' and sys_platform == 'win32') or (python_full_version >= '3.14' and platform_machine == 'x86_64' and sys_platform == 'win32')",
-    "(python_full_version >= '3.14' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'x86_64') or (python_full_version >= '3.14' and platform_machine == 'AMD64' and sys_platform == 'darwin') or (python_full_version >= '3.14' and platform_machine == 'aarch64' and sys_platform == 'darwin') or (python_full_version >= '3.14' and platform_machine == 'AMD64' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine == 'arm64' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine == 'aarch64' and sys_platform == 'win32') or (python_full_version >= '3.14' and platform_machine == 'arm64' and sys_platform == 'win32') or (python_full_version >= '3.14' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')",
+    "(python_full_version >= '3.14' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (python_full_version >= '3.14' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine != 'AMD64' and platform_machine != 'x86_64' and sys_platform == 'win32') or (python_full_version >= '3.14' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')",
     "python_full_version == '3.13.*' and platform_machine == 'arm64' and sys_platform == 'darwin'",
     "python_full_version == '3.13.*' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
     "python_full_version == '3.13.*' and platform_machine == 'aarch64' and sys_platform == 'linux'",
     "python_full_version == '3.13.*' and platform_machine == 'x86_64' and sys_platform == 'linux'",
     "(python_full_version == '3.13.*' and platform_machine == 'AMD64' and sys_platform == 'win32') or (python_full_version == '3.13.*' and platform_machine == 'x86_64' and sys_platform == 'win32')",
-    "(python_full_version == '3.13.*' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'x86_64') or (python_full_version == '3.13.*' and platform_machine == 'AMD64' and sys_platform == 'darwin') or (python_full_version == '3.13.*' and platform_machine == 'aarch64' and sys_platform == 'darwin') or (python_full_version == '3.13.*' and platform_machine == 'AMD64' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine == 'arm64' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine == 'aarch64' and sys_platform == 'win32') or (python_full_version == '3.13.*' and platform_machine == 'arm64' and sys_platform == 'win32') or (python_full_version == '3.13.*' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')",
+    "(python_full_version == '3.13.*' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (python_full_version == '3.13.*' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine != 'AMD64' and platform_machine != 'x86_64' and sys_platform == 'win32') or (python_full_version == '3.13.*' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')",
     "python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin'",
     "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
     "python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux'",
     "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux'",
     "(python_full_version < '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'win32')",
-    "(python_full_version < '3.13' and platform_machine != 'AMD64' and platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'x86_64') or (python_full_version < '3.13' and platform_machine == 'AMD64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine == 'AMD64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'win32') or (python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'win32') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')",
+    "(python_full_version < '3.13' and platform_machine != 'arm64' and platform_machine != 'x86_64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine != 'AMD64' and platform_machine != 'x86_64' and sys_platform == 'win32') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')",
 ]
 
 [manifest]
@@ -27,7 +27,6 @@ members = [
     "app-manifest",
     "app-schema",
     "bootstrap",
-    "browser",
     "caretaker",
     "chat",
     "chat-background-tasks",
@@ -43,6 +42,7 @@ members = [
     "pytest-workspace-env",
     "routines",
     "routines-app",
+    "screen",
     "share-gateway",
     "system-interface",
     "system-monitor",
@@ -231,7 +231,7 @@ dev = [
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
     { name = "flask", specifier = ">=3.0" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pathspec", specifier = ">=1.1" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -268,7 +268,7 @@ dev = [
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "flask", specifier = ">=3.0" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "openapi-spec-validator", marker = "extra == 'testing'", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -467,55 +467,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/0b/92/1f8a454cf90bcb0c0e32a25817441cb7f3702fdd76710d7018abad12a2fc/botocore-1.43.57.tar.gz", hash = "sha256:001a5653bebc03b862bde2da63bad4adb0b30072a3f247aba4daae5aa097b546", size = 15739550, upload-time = "2026-07-27T19:30:57.916Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/41/7a/1cfe9c296df0fa6e0143c8622b10f21fa8fb9cce25450e9a8e5cf6523e4b/botocore-1.43.57-py3-none-any.whl", hash = "sha256:319c6d79f66c3f3f2b538f7dcdc90e410a15a7bfced1db06479134947e629482", size = 15424433, upload-time = "2026-07-27T19:30:55.08Z" },
-]
-
-[[package]]
-name = "browser"
-version = "0.1.0"
-source = { editable = "system/apps/browser" }
-dependencies = [
-    { name = "app-manifest" },
-    { name = "app-schema" },
-    { name = "flask" },
-    { name = "flask-sock" },
-    { name = "oom-priority" },
-    { name = "pcmflux" },
-    { name = "pixelflux" },
-    { name = "psutil" },
-    { name = "python-xlib" },
-    { name = "simple-websocket" },
-    { name = "websockets" },
-    { name = "werkzeug" },
-    { name = "workspace-layout" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "app-schema", extra = ["testing"] },
-    { name = "ty" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "app-manifest", editable = "system/libs/app_manifest" },
-    { name = "app-schema", editable = "system/libs/app_schema" },
-    { name = "flask", specifier = ">=3.0" },
-    { name = "flask-sock", specifier = ">=0.7" },
-    { name = "oom-priority", editable = "system/services/oom_priority" },
-    { name = "pcmflux", specifier = ">=2.0.0" },
-    { name = "pixelflux", specifier = ">=2.0.0" },
-    { name = "psutil", specifier = ">=5.9" },
-    { name = "python-xlib", specifier = ">=0.33" },
-    { name = "simple-websocket", specifier = ">=1.0" },
-    { name = "websockets", specifier = ">=13" },
-    { name = "werkzeug", specifier = ">=3.0" },
-    { name = "workspace-layout", editable = "system/libs/workspace_layout" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
-    { name = "ty", specifier = "==0.0.85" },
 ]
 
 [[package]]
@@ -759,18 +710,18 @@ requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "app-schema", editable = "system/libs/app_schema" },
     { name = "chat-background-tasks", editable = "system/libs/chat_background_tasks" },
-    { name = "concurrency-group", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fconcurrency_group&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
+    { name = "concurrency-group", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fconcurrency_group&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
     { name = "flask", specifier = ">=3.0" },
     { name = "flask-sock", specifier = ">=0.7" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
-    { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
-    { name = "imbue-mngr-antigravity", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_antigravity&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
-    { name = "imbue-mngr-autocompact", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_autocompact&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
-    { name = "imbue-mngr-claude", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_claude&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
-    { name = "imbue-mngr-codex", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_codex&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
-    { name = "imbue-mngr-opencode", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_opencode&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
-    { name = "imbue-mngr-pi-coding", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_pi_coding&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
+    { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
+    { name = "imbue-mngr-antigravity", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_antigravity&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
+    { name = "imbue-mngr-autocompact", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_autocompact&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
+    { name = "imbue-mngr-claude", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_claude&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
+    { name = "imbue-mngr-codex", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_codex&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
+    { name = "imbue-mngr-opencode", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_opencode&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
+    { name = "imbue-mngr-pi-coding", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_pi_coding&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
     { name = "oom-priority", editable = "system/services/oom_priority" },
     { name = "pexpect", specifier = ">=4.9" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
@@ -851,8 +802,8 @@ wheels = [
 
 [[package]]
 name = "concurrency-group"
-version = "0.1.20"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fconcurrency_group&rev=ea4afd649f89277a8916137d735fbb189a45101d#ea4afd649f89277a8916137d735fbb189a45101d" }
+version = "0.1.21"
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fconcurrency_group&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308#f92468a3b3a5638e829029e8693ae9a1eb8fb308" }
 dependencies = [
     { name = "imbue-common" },
     { name = "loguru" },
@@ -1045,7 +996,7 @@ requires-dist = [
     { name = "env-converge", editable = "system/services/env_converge" },
     { name = "github-sync", editable = "system/libs/github_sync" },
     { name = "host-backup", editable = "system/services/host_backup" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
     { name = "litellm", specifier = ">=1.88.1" },
     { name = "playwright", specifier = "==1.58.0" },
     { name = "routines", editable = "system/libs/routines" },
@@ -1057,14 +1008,14 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "imbue-common", extras = ["testing"], git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
-    { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
-    { name = "imbue-mngr-antigravity", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_antigravity&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
-    { name = "imbue-mngr-autocompact", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_autocompact&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
-    { name = "imbue-mngr-claude", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_claude&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
-    { name = "imbue-mngr-codex", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_codex&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
-    { name = "imbue-mngr-opencode", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_opencode&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
-    { name = "imbue-mngr-pi-coding", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_pi_coding&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
+    { name = "imbue-common", extras = ["testing"], git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
+    { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
+    { name = "imbue-mngr-antigravity", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_antigravity&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
+    { name = "imbue-mngr-autocompact", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_autocompact&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
+    { name = "imbue-mngr-claude", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_claude&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
+    { name = "imbue-mngr-codex", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_codex&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
+    { name = "imbue-mngr-opencode", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_opencode&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
+    { name = "imbue-mngr-pi-coding", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_pi_coding&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
     { name = "inline-snapshot", specifier = ">=0.31" },
     { name = "mngr-cli-contract", editable = "system/libs/mngr_cli_contract" },
     { name = "pytest", specifier = ">=8.0" },
@@ -1122,7 +1073,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
     { name = "loguru", specifier = ">=0.7.0" },
 ]
 
@@ -1220,7 +1171,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.1" },
     { name = "flask", specifier = ">=3.0" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "werkzeug", specifier = ">=3.0" },
@@ -1400,7 +1351,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.1" },
     { name = "flask", specifier = ">=3.0" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
@@ -1714,7 +1665,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
     { name = "loguru", specifier = ">=0.7.0" },
 ]
 
@@ -1780,8 +1731,8 @@ wheels = [
 
 [[package]]
 name = "imbue-common"
-version = "0.1.20"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=ea4afd649f89277a8916137d735fbb189a45101d#ea4afd649f89277a8916137d735fbb189a45101d" }
+version = "0.1.21"
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308#f92468a3b3a5638e829029e8693ae9a1eb8fb308" }
 dependencies = [
     { name = "argon2-cffi" },
     { name = "boto3" },
@@ -1806,8 +1757,8 @@ testing = [
 
 [[package]]
 name = "imbue-mngr"
-version = "0.2.17"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=ea4afd649f89277a8916137d735fbb189a45101d#ea4afd649f89277a8916137d735fbb189a45101d" }
+version = "0.3.0"
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308#f92468a3b3a5638e829029e8693ae9a1eb8fb308" }
 dependencies = [
     { name = "cel-python" },
     { name = "click" },
@@ -1816,8 +1767,8 @@ dependencies = [
     { name = "coolname" },
     { name = "cryptography" },
     { name = "imbue-common" },
+    { name = "imbue-overlay" },
     { name = "markdown-it-py" },
-    { name = "overlay" },
     { name = "packaging" },
     { name = "paramiko" },
     { name = "pluggy" },
@@ -1839,8 +1790,8 @@ dependencies = [
 
 [[package]]
 name = "imbue-mngr-antigravity"
-version = "0.1.8"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_antigravity&rev=ea4afd649f89277a8916137d735fbb189a45101d#ea4afd649f89277a8916137d735fbb189a45101d" }
+version = "0.2.0"
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_antigravity&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308#f92468a3b3a5638e829029e8693ae9a1eb8fb308" }
 dependencies = [
     { name = "imbue-mngr" },
 ]
@@ -1848,26 +1799,26 @@ dependencies = [
 [[package]]
 name = "imbue-mngr-autocompact"
 version = "0.1.0"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_autocompact&rev=ea4afd649f89277a8916137d735fbb189a45101d#ea4afd649f89277a8916137d735fbb189a45101d" }
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_autocompact&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308#f92468a3b3a5638e829029e8693ae9a1eb8fb308" }
 dependencies = [
     { name = "imbue-mngr" },
 ]
 
 [[package]]
 name = "imbue-mngr-claude"
-version = "0.2.17"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_claude&rev=ea4afd649f89277a8916137d735fbb189a45101d#ea4afd649f89277a8916137d735fbb189a45101d" }
+version = "0.3.0"
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_claude&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308#f92468a3b3a5638e829029e8693ae9a1eb8fb308" }
 dependencies = [
     { name = "anthropic" },
     { name = "imbue-mngr" },
-    { name = "overlay" },
+    { name = "imbue-overlay" },
     { name = "rich" },
 ]
 
 [[package]]
 name = "imbue-mngr-codex"
-version = "0.1.4"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_codex&rev=ea4afd649f89277a8916137d735fbb189a45101d#ea4afd649f89277a8916137d735fbb189a45101d" }
+version = "0.2.0"
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_codex&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308#f92468a3b3a5638e829029e8693ae9a1eb8fb308" }
 dependencies = [
     { name = "imbue-mngr" },
     { name = "websockets" },
@@ -1875,27 +1826,32 @@ dependencies = [
 
 [[package]]
 name = "imbue-mngr-opencode"
-version = "0.2.17"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_opencode&rev=ea4afd649f89277a8916137d735fbb189a45101d#ea4afd649f89277a8916137d735fbb189a45101d" }
+version = "0.3.0"
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_opencode&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308#f92468a3b3a5638e829029e8693ae9a1eb8fb308" }
 dependencies = [
     { name = "imbue-mngr" },
 ]
 
 [[package]]
 name = "imbue-mngr-pi-coding"
-version = "0.1.14"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_pi_coding&rev=ea4afd649f89277a8916137d735fbb189a45101d#ea4afd649f89277a8916137d735fbb189a45101d" }
+version = "0.2.0"
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_pi_coding&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308#f92468a3b3a5638e829029e8693ae9a1eb8fb308" }
 dependencies = [
     { name = "imbue-mngr" },
 ]
 
 [[package]]
 name = "imbue-mngr-ttyd"
-version = "0.1.14"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_ttyd&rev=ea4afd649f89277a8916137d735fbb189a45101d#ea4afd649f89277a8916137d735fbb189a45101d" }
+version = "0.2.0"
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_ttyd&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308#f92468a3b3a5638e829029e8693ae9a1eb8fb308" }
 dependencies = [
     { name = "imbue-mngr" },
 ]
+
+[[package]]
+name = "imbue-overlay"
+version = "0.1.0"
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Foverlay&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308#f92468a3b3a5638e829029e8693ae9a1eb8fb308" }
 
 [[package]]
 name = "import-linter"
@@ -2311,7 +2267,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
-    { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
+    { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
 ]
 
 [package.metadata.requires-dev]
@@ -2485,11 +2441,6 @@ wheels = [
 ]
 
 [[package]]
-name = "overlay"
-version = "0.1.0"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Foverlay&rev=ea4afd649f89277a8916137d735fbb189a45101d#ea4afd649f89277a8916137d735fbb189a45101d" }
-
-[[package]]
 name = "packaging"
 version = "26.2"
 source = { registry = "https://pypi.org/simple" }
@@ -2528,25 +2479,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/5a/82/42f767fc1c1143d6fd36efb827202a2d997a375e160a71eb2888a925aac1/pathspec-1.1.1.tar.gz", hash = "sha256:17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a", size = 135180, upload-time = "2026-04-27T01:46:08.907Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f1/d9/7fb5aa316bc299258e68c73ba3bddbc499654a07f151cba08f6153988714/pathspec-1.1.1-py3-none-any.whl", hash = "sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189", size = 57328, upload-time = "2026-04-27T01:46:07.06Z" },
-]
-
-[[package]]
-name = "pcmflux"
-version = "2.0.0"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5c/ac/86cc0ec075eaae8eec057d1ad391c53bd3c600fd069cc9f0f5b08b868865/pcmflux-2.0.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:4f8d6a245d51c9523a4420ccdc3549f2b77b8ec88e6ca16d058a1c01c5d4f77f", size = 3497503, upload-time = "2026-07-17T17:34:34.696Z" },
-    { url = "https://files.pythonhosted.org/packages/61/ca/4b00cfa09f9c50adbc67882485fcea05cf3faf3d7ae2db37480d45d1af82/pcmflux-2.0.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:97fa0a0a8bd21defb747cf6dfb1d0b68c5e1900347b23273456f121a2c184c65", size = 3720959, upload-time = "2026-07-17T17:34:35.931Z" },
-    { url = "https://files.pythonhosted.org/packages/f2/26/164efd38f0f1280c06ed5523422735510ae0bc44559c6a3dde49381d2726/pcmflux-2.0.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:c49abe0f3ee9387dc40ca52ad96bcee7e24b7b47d978f8afb98dc9193e180252", size = 1912538, upload-time = "2026-07-17T17:34:37.453Z" },
-    { url = "https://files.pythonhosted.org/packages/b5/e2/6af30d83dd1d8532f547d60e8339f45770dd648892dd9d49a09dc87f8269/pcmflux-2.0.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:3b73e9bce2236a86bdf1135f3b1fbc23642e04094b87b51ffaf3de4de0460dba", size = 2033427, upload-time = "2026-07-17T17:34:39.324Z" },
-    { url = "https://files.pythonhosted.org/packages/0f/9b/e4bf1d7da63951e3ca5c9dc57a6e0e41e0275b4451d55d7bb63bfe78b39b/pcmflux-2.0.0-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:c092419a228ba92058b2b1982ca6190006ea8fe207463dcdfcf6a5632c57bd4d", size = 3496998, upload-time = "2026-07-17T17:34:40.662Z" },
-    { url = "https://files.pythonhosted.org/packages/6d/e5/ab80cd4d0b111bcda3cfe211a2f84b961dabaea8e1c9fb8e9118ca533e89/pcmflux-2.0.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:28ec2b33327085b00d9c5773e8093b85256837bca03257b167869c9ab4584ab1", size = 3720206, upload-time = "2026-07-17T17:34:42.13Z" },
-    { url = "https://files.pythonhosted.org/packages/13/8f/cfc355979d3b573050f31fb3f24409964df7c7450c4718dfe681bb9a1131/pcmflux-2.0.0-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:8195667a366f5a76ec6cfcc096e564ae3ce77bee17c20f89f858a42c8f9673ac", size = 1911988, upload-time = "2026-07-17T17:34:43.454Z" },
-    { url = "https://files.pythonhosted.org/packages/a9/25/653ca49b0eefde185a417e80f333a61d319cc338e425bf93327c02f89b48/pcmflux-2.0.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:dc37be36026f578d7068b2ea68d39a1484051619966c608c6db29b7edc512a1a", size = 2032633, upload-time = "2026-07-17T17:34:44.963Z" },
-    { url = "https://files.pythonhosted.org/packages/78/28/a4209023b9d3420814e3d79dc179ef11eddf89b15bc1a1b15eaeb473967f/pcmflux-2.0.0-cp314-cp314-manylinux_2_28_aarch64.whl", hash = "sha256:d19c1f2c9773eb3e185f92e34ff331cfb5d2546d07494332f32e8aaa8f41f647", size = 3497279, upload-time = "2026-07-17T17:34:46.265Z" },
-    { url = "https://files.pythonhosted.org/packages/fd/69/99bb9d02fe925a0f38d9359e0761a9d38d831c293eba71654f3d29f13acf/pcmflux-2.0.0-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:050a8c7d7c099ee363279f085cab65e5f9891dc6ab9481a3edf64a901d276352", size = 3720558, upload-time = "2026-07-17T17:34:47.593Z" },
-    { url = "https://files.pythonhosted.org/packages/7a/95/724be40b85fe8ee64381211cbf64c09dd7668e1a81747eda383c17f3f54c/pcmflux-2.0.0-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:09ff0496f5e1f46b7f092cf07b3ccf7be27ef4c1d910ec29e6420f7094576e91", size = 1912333, upload-time = "2026-07-17T17:34:48.879Z" },
-    { url = "https://files.pythonhosted.org/packages/12/b0/58a9201f2110400ce6a3ed5974484acad536632e61870d387de518616bad/pcmflux-2.0.0-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:64fa58c7004c9719b87342fab273b50a618cf39d8021455d3df0f124d2e61d0f", size = 2033011, upload-time = "2026-07-17T17:34:50.126Z" },
 ]
 
 [[package]]
@@ -2605,22 +2537,79 @@ wheels = [
 ]
 
 [[package]]
-name = "pixelflux"
-version = "2.0.0"
+name = "pillow"
+version = "13.0.0"
 source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ce/a4/9cc30690a394a8305e8be4c9036aa16d0dfddadd09079860b582f562496d/pillow-13.0.0.tar.gz", hash = "sha256:cdcd1ba258178f7356d74170c9a81ba4eab6a5d55748bc402a5a2a6fe6be3510", size = 47058631, upload-time = "2026-10-16T22:18:09.718Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ab/f4/44bcd167afbe66b30f07dc3b720d97e651497f4176127b06d4f2ad23739c/pixelflux-2.0.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:7f0080b49dd9ca36cb5f177f94f8624d371d6b3d14627c2a00f04d01ae3dde91", size = 16148418, upload-time = "2026-07-17T17:33:19.8Z" },
-    { url = "https://files.pythonhosted.org/packages/7f/48/ca937b3780cff1ef663191791d3a0636c2788be17cc799752a6859befdf3/pixelflux-2.0.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:4a4dcc178704be708a93f6f7949b42e6350e0c94fc2159c34940477541b89070", size = 16920134, upload-time = "2026-07-17T17:33:22.038Z" },
-    { url = "https://files.pythonhosted.org/packages/5a/45/55224e0b75b8f807a0b65255890b7ba05a4c8d51c17b289a1a129245d9cd/pixelflux-2.0.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:c20296416944f847f8ec36ec5cedd823a77da2438190f5e9fcf9e0c059fd7159", size = 38353535, upload-time = "2026-07-17T17:33:24.807Z" },
-    { url = "https://files.pythonhosted.org/packages/87/b1/83f763eea321965b906793e5f3f0eb6dfb13f174cfa6bc72fb51414a5d3d/pixelflux-2.0.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:94bf23a1decc613125dff15ea7b250fb53b73aeb4c444ff01bd7b411038a6969", size = 40899169, upload-time = "2026-07-17T17:33:27.73Z" },
-    { url = "https://files.pythonhosted.org/packages/10/74/38f4b2f59b1a98b1f9da4d223fcd88d64194f6dcabf16f61ced77424e72a/pixelflux-2.0.0-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:52ef5b99510b4d6a8937f7af0c3334abc8b31d126549e3c5272399dfb3aca6c0", size = 16149472, upload-time = "2026-07-17T17:33:30.192Z" },
-    { url = "https://files.pythonhosted.org/packages/09/b2/79a27f3cbe8c296ecd98770469cc7cda2c8858b2e09b98a1f935d9652188/pixelflux-2.0.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:90a2d83be569458dff359c5dfa83c47bbccf546aa09214fc2ed8806dfd42068d", size = 16920905, upload-time = "2026-07-17T17:33:32.496Z" },
-    { url = "https://files.pythonhosted.org/packages/3b/46/c4adbecb373fdf31c41310993891168b1e2a518e2fd5e02f56847ef30ce4/pixelflux-2.0.0-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:2b2f6641cf8754a9f20846c260b7d75f68b0b717548942f55f2743ecb023905d", size = 38354047, upload-time = "2026-07-17T17:33:34.919Z" },
-    { url = "https://files.pythonhosted.org/packages/45/c5/3883dff49b6dee6c882440198482c0ede4eb8a666b02663cc8d7afa36056/pixelflux-2.0.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:452f1b93936896a8032fb76c4d426df5ef9e27c11cabf2244985715cc0c29e7f", size = 40899560, upload-time = "2026-07-17T17:33:37.831Z" },
-    { url = "https://files.pythonhosted.org/packages/01/eb/899b089ad868a4ded2e726df93cfe0914ac9daa89774809ddd65c4829b0d/pixelflux-2.0.0-cp314-cp314-manylinux_2_28_aarch64.whl", hash = "sha256:033afea1c4308416460249b554bd717731a62b7ae7b676357069eb294f723c24", size = 16149333, upload-time = "2026-07-17T17:33:40.594Z" },
-    { url = "https://files.pythonhosted.org/packages/94/da/b4b134d12f46fadc5edc94f778ac324ca6ab02b5b9be91466f95251e6f14/pixelflux-2.0.0-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:7c501d184fba79746ca63118b5cc462851b7cad217094e11a011696b3bfa3953", size = 16920901, upload-time = "2026-07-17T17:33:42.921Z" },
-    { url = "https://files.pythonhosted.org/packages/a6/e2/61d7e982e2f0d2a6585088706b076774a0a1e129b818cf2d7aee882001a0/pixelflux-2.0.0-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:7c4663696c45bcd961df9a5ac664a309880374c7fe48244f58831a447ffd7109", size = 38353621, upload-time = "2026-07-17T17:33:45.789Z" },
-    { url = "https://files.pythonhosted.org/packages/40/b5/7ba6e9868e0c05bcaa96f417bcbba88f801041fcb224db5e1313d142e48d/pixelflux-2.0.0-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:80c8e09569449818a8682e8324dcc1e8ef974d4e9bf63482bd82bb1125fb1921", size = 40899826, upload-time = "2026-07-17T17:33:48.878Z" },
+    { url = "https://files.pythonhosted.org/packages/7a/b8/58d79332229482eb0d27c82973850808c19d37e5bdc14443d3417bd373f5/pillow-13.0.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:67c8d44ad89fa7eb88de5d6ef6199b1e03dd24974f85a67639fc8badb801fe79", size = 5568643, upload-time = "2026-10-16T22:15:44.474Z" },
+    { url = "https://files.pythonhosted.org/packages/39/4b/f2ed53d83aa44ac19599ac0a54897f867fafb95f406980d1e24083f8cbe3/pillow-13.0.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:fc481f742ccda20e9ed760b8f978dff50f2a4e9bc253ac167fb0a05b0783ef52", size = 4852329, upload-time = "2026-10-16T22:15:46.284Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/bb/9e30e8ed18c20800ee327a12107d5249ad8dc444867b3adfcc21654e3c71/pillow-13.0.0-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:8bf295fe459343bc6093c8e5e0df60bfa189e0fcb775a22e2c2488fdeccc6c0d", size = 6519309, upload-time = "2026-10-16T22:15:48.14Z" },
+    { url = "https://files.pythonhosted.org/packages/e6/99/fdf65cc539e266ab93546c261bdf98411fe165c6e4e13f9dbf597097192b/pillow-13.0.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:42d63be3af4f9b951b199b0a9d23365d37ab14687e6d77b74940432c8515c4ca", size = 7144542, upload-time = "2026-10-16T22:15:50.093Z" },
+    { url = "https://files.pythonhosted.org/packages/26/9b/f38b7c4d8f599537e2d1a6d546cec9beef7536ff8f5c49a3f9c78179d8ac/pillow-13.0.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:4bd024d567eca931b668978d672dba914d4b8e2628e2c3073a2ad178de8a2620", size = 6618042, upload-time = "2026-10-16T22:15:52.054Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/7c/45ee28531f89ee4582967d8a17f7a26d71ca64cd902b93c269590cd60a00/pillow-13.0.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:23edf4ec4b6f4f240e8df6e4985e9ee2ced86474632433e55fb1e2548744bf40", size = 7228137, upload-time = "2026-10-16T22:15:54.009Z" },
+    { url = "https://files.pythonhosted.org/packages/01/bc/9c2a969cb1b70201d04fa17fd5aedf02a732870b8da86bceaaa30b0ca385/pillow-13.0.0-cp312-cp312-win32.whl", hash = "sha256:02464da86f561f410e13b061ec37c3068a9cb557a095494157742d07b3c24a27", size = 6515423, upload-time = "2026-10-16T22:15:56.25Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/cd/73a79ecdc822076002eb24b5e1e4a530b0bb5310fcb6d239abbec877110b/pillow-13.0.0-cp312-cp312-win_amd64.whl", hash = "sha256:ff3fe9eb621fbb9db4c4be33ab946f6bac5f98ab50ca8d3260503653656c961b", size = 7272166, upload-time = "2026-10-16T22:15:58.597Z" },
+    { url = "https://files.pythonhosted.org/packages/4a/a3/be5a1236efd085b3984e4305da8f179ae9dab80c991d2ad78f2bd5c4c843/pillow-13.0.0-cp312-cp312-win_arm64.whl", hash = "sha256:c3bc8ee0271387e0b1e3ad0ff893645990a656e79bf9c42f4f734a3642b11d51", size = 2698943, upload-time = "2026-10-16T22:16:00.637Z" },
+    { url = "https://files.pythonhosted.org/packages/82/e2/9132d38df320e8099e2642d9fa538f18a7dfebf68a875a31725dc2a115aa/pillow-13.0.0-cp313-cp313-ios_13_0_arm64_iphoneos.whl", hash = "sha256:e98b4f91f99b24b1da72e10621ba181f7281922384a7403094debb4199de6c00", size = 4190620, upload-time = "2026-10-16T22:16:02.527Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/be/436dac0996876f65ef1916ffb711c5ef4af2ebc57414b6f16642e07f6b47/pillow-13.0.0-cp313-cp313-ios_13_0_arm64_iphonesimulator.whl", hash = "sha256:34fb3db1149c879343861831728c243c432d4a5afc8f1878ca7612ef8de2a033", size = 4290286, upload-time = "2026-10-16T22:16:04.861Z" },
+    { url = "https://files.pythonhosted.org/packages/60/16/7c1007162e4169ea0d5bec47e2e0b2174f56c50cf5b8c02a1dc23e41037e/pillow-13.0.0-cp313-cp313-ios_13_0_x86_64_iphonesimulator.whl", hash = "sha256:2d50500a4a3bc6469adcdb319cf05d688b08ca3bf0f22a05339f3b25b433a599", size = 3723169, upload-time = "2026-10-16T22:16:06.956Z" },
+    { url = "https://files.pythonhosted.org/packages/08/bc/578ab2eaa04705a8978bd9be0fe15c3d43a8fc95097c4f7e39540e79e4fa/pillow-13.0.0-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:ef5fe6b7db3f501c56000ba8fe7c7e1a35ca1d45824fbeb95a67daa85cff4dbe", size = 5568469, upload-time = "2026-10-16T22:16:08.664Z" },
+    { url = "https://files.pythonhosted.org/packages/98/c8/ccede3dcc4f274b80fb49199eed1ef34ba05566c8b71976b9d1f111da2e3/pillow-13.0.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:f11a3c1358bb3c68012a7b1f41b223c3db9f7bfde90b481df028cfe1c3363313", size = 4852187, upload-time = "2026-10-16T22:16:10.693Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/3c/cd0770e96d20bfd990db024bcbd43897ff3e88da1f4782cf90ea231b1d4f/pillow-13.0.0-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:19b66ca0a4d25cc0200b381ce824c7ea090db61427315e73cfb05dbf1b35c369", size = 6515908, upload-time = "2026-10-16T22:16:12.896Z" },
+    { url = "https://files.pythonhosted.org/packages/ef/fe/f5cdaa2d1c4086e757430f368c271a58ee29cfe7378e7ae7b9d964015c25/pillow-13.0.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:5f56499c1a74d2b862beb0c33b8016f99d095858455df9d21583bbbc1c15b582", size = 7142544, upload-time = "2026-10-16T22:16:14.844Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/b5/a54f6d44adbcd23737c8c12953f42be107e4cca64e247c0ca3a5b563061c/pillow-13.0.0-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:a2a14cd73d5e6c927f644b0110ee81f59c4ef506259ec9183904747f2caacc81", size = 6613097, upload-time = "2026-10-16T22:16:16.893Z" },
+    { url = "https://files.pythonhosted.org/packages/e6/b4/9e6c1207c21b2e91db0d15c16d30f3701ce5add1bd4da0e787761e66cb6e/pillow-13.0.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:08b826a9bf1265c76de04a42061d61ea6b109418b7826f28ff1ecdfaa26c5502", size = 7224846, upload-time = "2026-10-16T22:16:19.195Z" },
+    { url = "https://files.pythonhosted.org/packages/78/9f/d3c3cb0518f3dd1eee0ef501535f53d15597a53c5c4118d178086143397a/pillow-13.0.0-cp313-cp313-win32.whl", hash = "sha256:12b0fa15879fe5a9d9eebe66e4e2d74128a773b1a4448010c9c714f45e04b9d8", size = 6516013, upload-time = "2026-10-16T22:16:21.389Z" },
+    { url = "https://files.pythonhosted.org/packages/d7/ed/1b16fb66a37e1b9e41370b93b2c614c7da761a5b2a41dc333f7af4639962/pillow-13.0.0-cp313-cp313-win_amd64.whl", hash = "sha256:9dda0788a9932776a75d8bcc020076edc308ce2508b51f6739a45e3158b3fc42", size = 7284777, upload-time = "2026-10-16T22:16:23.393Z" },
+    { url = "https://files.pythonhosted.org/packages/87/7d/8d02eba9f7ecc87f8e90f731e032cc4773802f2a843763afd0c66a535ff4/pillow-13.0.0-cp313-cp313-win_arm64.whl", hash = "sha256:40a266371ece581e5de13b6635ef78d7487824af80561b6ca27694a88c19bc0f", size = 2698826, upload-time = "2026-10-16T22:16:25.382Z" },
+    { url = "https://files.pythonhosted.org/packages/8e/45/fbad9c7f5e2f1745c373a434d46072bc84eddfefaa28b852425ac957fda6/pillow-13.0.0-cp314-cp314-ios_13_0_arm64_iphoneos.whl", hash = "sha256:44629d4498c9cb6b2051806155f22141df0d8a929c56134b166655232dfb2f8c", size = 4190721, upload-time = "2026-10-16T22:16:27.524Z" },
+    { url = "https://files.pythonhosted.org/packages/a2/bf/2074902a259a90692c5dbf132885d21671644cbbd3f690047516243a55db/pillow-13.0.0-cp314-cp314-ios_13_0_arm64_iphonesimulator.whl", hash = "sha256:bf97ba1b5542050e9b0c74e632323b6d8136cc99d64e193abebee22fe6013c76", size = 4290236, upload-time = "2026-10-16T22:16:29.562Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/a5/3d1bb93b8ea38d15d21356c1b8e9f50971ac592aaa248f7fb71739094c0e/pillow-13.0.0-cp314-cp314-ios_13_0_x86_64_iphonesimulator.whl", hash = "sha256:aa694c49787040943570d61c9b8fc01271bd2a2cfdd55f0d896f8aecdce1a981", size = 3723093, upload-time = "2026-10-16T22:16:31.249Z" },
+    { url = "https://files.pythonhosted.org/packages/84/a1/be060135d85187b25fa8b2573786c0e45c62ae27527fff5257675eb97f4a/pillow-13.0.0-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:49c12af515073e9bf511e4ef736743bf70d531a643668722279314b937742ba4", size = 5572253, upload-time = "2026-10-16T22:16:33.103Z" },
+    { url = "https://files.pythonhosted.org/packages/b5/f4/0bf6f1ac9ba7ee2ffe9914aeb410a1035a0c1a3c42f122388d7fc950bc4b/pillow-13.0.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:d9b0a2bee3f3e03e9f29057aedb807dbf1e1d96ee1b9d0f422d9db6c8583271d", size = 4852269, upload-time = "2026-10-16T22:16:35.102Z" },
+    { url = "https://files.pythonhosted.org/packages/83/16/b603274617b3e6728da3a0133d4fba1ea8d7fbe0c4ea5fef9cbffa398b8b/pillow-13.0.0-cp314-cp314-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:5933fcea5a5ba64c686f55c886a115cbfd92f2900460784a1e79909fdbafd7b6", size = 6516058, upload-time = "2026-10-16T22:16:37.228Z" },
+    { url = "https://files.pythonhosted.org/packages/1d/f2/1371707ce438ba9a43f9d24089828494ec6f9396e28cd7903aa704dd6306/pillow-13.0.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:e91c2b1cbeae768c98752e67e717e283d68dae45717b41f2d91eaee648e37b7d", size = 7142574, upload-time = "2026-10-16T22:16:39.172Z" },
+    { url = "https://files.pythonhosted.org/packages/b9/a9/62cf68587f910bc87c5951bcb6e9430c7643a65076adf5f18b4bf350e2bd/pillow-13.0.0-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:7f6299e494e46253d40c34653cac369412f44ca53b5f85d848d3f95b1ed0546c", size = 6614295, upload-time = "2026-10-16T22:16:41.117Z" },
+    { url = "https://files.pythonhosted.org/packages/6c/c9/9e9b48178649730299be0bafbf5f810a5b6977538f5a92d47e4ba5f5d608/pillow-13.0.0-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:f9bd7d260d986f3553518c5d723544346fa48031f8aef3265d786aeb59845bc0", size = 7224841, upload-time = "2026-10-16T22:16:43.118Z" },
+    { url = "https://files.pythonhosted.org/packages/8f/48/c44e91384b1b6c072a714a63d00608acc16a6a968735e478e4be4384e5ac/pillow-13.0.0-cp314-cp314-win32.whl", hash = "sha256:2e31c4e68cffd7b1f116127626813b82fcba19edf6b940a7b0c266d6484d0055", size = 6508694, upload-time = "2026-10-16T22:16:45.883Z" },
+    { url = "https://files.pythonhosted.org/packages/50/e2/7ad17747517e4c813dca78257d6bb593466f8231baf1384bc98d92745edb/pillow-13.0.0-cp314-cp314-win_amd64.whl", hash = "sha256:f7cbb7a64e7ec664775195e4f81923bc8a93d9451b963f844e59118f63147a7a", size = 7281830, upload-time = "2026-10-16T22:16:47.725Z" },
+    { url = "https://files.pythonhosted.org/packages/41/9f/e5b51f2ce8ef4563215334035403ce61a244f93a2e65c24a940131618f87/pillow-13.0.0-cp314-cp314-win_arm64.whl", hash = "sha256:a6aaa7871aebca081eb5c45f83e845bbd9712ae99fa9286dbfdcee835e63f4b4", size = 2695468, upload-time = "2026-10-16T22:16:49.515Z" },
+    { url = "https://files.pythonhosted.org/packages/97/73/a53502f731f6c84805a4ce87a8881e86d07a65aee64728b900d112dc703e/pillow-13.0.0-cp314-cp314t-macosx_10_15_x86_64.whl", hash = "sha256:7b999816b5850a35ada08443e6e03945f1f6488144a83afe2d37b240a552aafa", size = 5578196, upload-time = "2026-10-16T22:16:51.291Z" },
+    { url = "https://files.pythonhosted.org/packages/21/50/7e949959a56b5559c78ef172b70fc6025706acb289f3f648a15329e4fa6f/pillow-13.0.0-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:67871a13cf47275201553b536c025da777f997fa562a19eb798af4ad4b97c18f", size = 4857276, upload-time = "2026-10-16T22:16:53.399Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/52/43ded0ac08e77e39d17bd6d894162572201b5e8fdc4a022b14c55a1960a4/pillow-13.0.0-cp314-cp314t-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:e8ca8f69b7c77fa96dad99f8638c1fc4f1c0bed4acaa1baf7a3c31bdb80a0ab1", size = 6607008, upload-time = "2026-10-16T22:16:55.525Z" },
+    { url = "https://files.pythonhosted.org/packages/0d/2e/4a57ed216d5bf877387cba4d44c02aa87abe51ad2e06404aa6b597c4da39/pillow-13.0.0-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:6bce6a29c3898191f4c9998e4d4e8f69790caeabde46e54da4bc235ce5bde683", size = 7224281, upload-time = "2026-10-16T22:16:57.738Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/3d/2929b248e135752d63aaeabf53f6de797e905b7b6263f9c1e2adade20aba/pillow-13.0.0-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:816752a5ef76a80484c8c441c85593b7ea9304f6231fc5776ad1fbff7e773058", size = 6695600, upload-time = "2026-10-16T22:16:59.842Z" },
+    { url = "https://files.pythonhosted.org/packages/bc/33/fb0da992cf084ed1ee6ee05e96b6191e35c351eb707ca2df874feb24ce47/pillow-13.0.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:5bdb38ba220b61b4ec31dd1046dea6b016d3c6850a23f43ed8b58332b2fc668e", size = 7300589, upload-time = "2026-10-16T22:17:01.686Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/af/c30dd9ef6a3dce84ecb1b2393cac629047a32e66279056c6cb46c3ffd65c/pillow-13.0.0-cp314-cp314t-win32.whl", hash = "sha256:06903aac074d00c988e77a1fc435286dc498506d4ca8d6f69df9babddf4ecc15", size = 6517204, upload-time = "2026-10-16T22:17:03.722Z" },
+    { url = "https://files.pythonhosted.org/packages/85/d5/ef3a8ae7609c8ab26570abf18194882534b480d245a9148b895a2262c004/pillow-13.0.0-cp314-cp314t-win_amd64.whl", hash = "sha256:9a635068d9793c7f0d929f39f18b58f1bd86c236e8e7b64167b86af9232ebca0", size = 7286695, upload-time = "2026-10-16T22:17:05.543Z" },
+    { url = "https://files.pythonhosted.org/packages/84/3c/0861db0c69a03689ebe3e7599d35668a414deb5aaafd8255215e4e62e3d3/pillow-13.0.0-cp314-cp314t-win_arm64.whl", hash = "sha256:0d1a9cf7bc6917538b20f8d06b9ab2147e542f68849e96fc58eb66bdf6acc692", size = 2698098, upload-time = "2026-10-16T22:17:07.674Z" },
+    { url = "https://files.pythonhosted.org/packages/6e/eb/e86a41962a3a31ad495a3d6a912d9002b01bba4a6fa71c28703abdca7f69/pillow-13.0.0-cp315-cp315-ios_13_0_arm64_iphoneos.whl", hash = "sha256:7d5e097eabd5d4915c27ac9f6e9325bb1e01a7c94d7348b5c4451d3fc30e8521", size = 4191213, upload-time = "2026-10-16T22:17:09.449Z" },
+    { url = "https://files.pythonhosted.org/packages/dd/04/7e7445e706afec84ef06dc25b2c77f9cecff242c23730c62928ad1089d4a/pillow-13.0.0-cp315-cp315-ios_13_0_arm64_iphonesimulator.whl", hash = "sha256:51ebb529fc5e8abdd55302f6c3f8943037348ec2384329a3e55677f69ae2fdfc", size = 4290650, upload-time = "2026-10-16T22:17:11.196Z" },
+    { url = "https://files.pythonhosted.org/packages/46/85/d534089068ac40c0f61f650389a296c812eab745a8a733f81feec39ae955/pillow-13.0.0-cp315-cp315-ios_13_0_x86_64_iphonesimulator.whl", hash = "sha256:c87a04e7f152ee4db5dbe15f0bfa3fe628a1aeedbe66b81c43b87f52c813f9ac", size = 3723078, upload-time = "2026-10-16T22:17:12.772Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/2b/00b5c3b401df538b5dbe311d3899730fae5ba1e21cb8b80a128887ac6747/pillow-13.0.0-cp315-cp315-macosx_10_15_x86_64.whl", hash = "sha256:20722cd5375533ad754053363a80b8fb30c79d37930a6f7228030e237ce3bd5d", size = 5572292, upload-time = "2026-10-16T22:17:14.539Z" },
+    { url = "https://files.pythonhosted.org/packages/72/f5/a6b0610f946e9b54ae888ba7ad29d6e2f8d9b11f69e212d70416b7186c09/pillow-13.0.0-cp315-cp315-macosx_11_0_arm64.whl", hash = "sha256:04a63720f79e22fd54d897c233a68314c50ca0603360f54ce2bd5db8f0f43782", size = 4852222, upload-time = "2026-10-16T22:17:16.521Z" },
+    { url = "https://files.pythonhosted.org/packages/1e/d0/c0ff25bb0427ec70f32aac995453321fc3c4494a46c7292ff02d9d260b04/pillow-13.0.0-cp315-cp315-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:4f8db54177035a2b5f717f94475b74907e12a96dc74f6d487f3966b0a4694071", size = 6527349, upload-time = "2026-10-16T22:17:18.534Z" },
+    { url = "https://files.pythonhosted.org/packages/85/11/e46fa0bcc0fc117f1eacc206b3d51f04d583fab328b4b740672d0438d83f/pillow-13.0.0-cp315-cp315-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:8f36aa77f74b14a2103622b196402c71330e4e7cf4122ee45c854e9a01e0eecf", size = 7152873, upload-time = "2026-10-16T22:17:20.415Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/53/2bdeca705f3a58679fa9201233193c86a30238340ca29b3a152c3fcc719b/pillow-13.0.0-cp315-cp315-musllinux_1_2_aarch64.whl", hash = "sha256:149a1c323ba366f90b48e6f1a6db6582eb50512df374588de56fc909abc0f0f3", size = 6626871, upload-time = "2026-10-16T22:17:22.361Z" },
+    { url = "https://files.pythonhosted.org/packages/14/de/3829030f209722ade3753bb456b805a0e7f885cf885b483407365c82e9ca/pillow-13.0.0-cp315-cp315-musllinux_1_2_x86_64.whl", hash = "sha256:e892354a424b1e82a78ba16785822bdd40de06f19446a3d4a28047df1a4f8932", size = 7236439, upload-time = "2026-10-16T22:17:24.352Z" },
+    { url = "https://files.pythonhosted.org/packages/44/b1/67fc37388382bc036a74f04da5bb6fcbf90ec3ac1f45893e06176c373fd3/pillow-13.0.0-cp315-cp315-win32.whl", hash = "sha256:8e459b613cf31f8980f584387b4fe47bf08e076e288d61aa8eba1f7fd4ddbb81", size = 6508688, upload-time = "2026-10-16T22:17:26.314Z" },
+    { url = "https://files.pythonhosted.org/packages/44/05/fdb6a79aee10861165526b41b7b440e36ee1ff58613b2fbefe3acbf06d4f/pillow-13.0.0-cp315-cp315-win_amd64.whl", hash = "sha256:d4737f50d23ddd11d6685faacbb9252887dde0bc7997127757247983d74399d6", size = 7281107, upload-time = "2026-10-16T22:17:28.198Z" },
+    { url = "https://files.pythonhosted.org/packages/e6/9c/6c6f7dc2a566467baf121394e83de25ac287cffe34cc030726beb4be0224/pillow-13.0.0-cp315-cp315-win_arm64.whl", hash = "sha256:2310e2adfc13c6d457d7d0f2ffdd5c56a74a317650cf765887df8d515a647ac0", size = 2695513, upload-time = "2026-10-16T22:17:30.013Z" },
+    { url = "https://files.pythonhosted.org/packages/23/16/e9120defdb8bff693b582d035312acc6f530cdc2bc5238a87f410efccd82/pillow-13.0.0-cp315-cp315t-macosx_10_15_x86_64.whl", hash = "sha256:21c32061a5512dc13f87cc7303e120e4d77c2f70df89a35af0e3ce246e5ac57f", size = 5578129, upload-time = "2026-10-16T22:17:31.642Z" },
+    { url = "https://files.pythonhosted.org/packages/47/22/76faf2bb2448f48a84cf894c1e2bb1090d7d2b1aa521ece131cb2f05d631/pillow-13.0.0-cp315-cp315t-macosx_11_0_arm64.whl", hash = "sha256:1c774b9c0ba0d0b356f71530677b39028878a2cae5a93e0a13779cfd17120f88", size = 4857428, upload-time = "2026-10-16T22:17:33.43Z" },
+    { url = "https://files.pythonhosted.org/packages/b3/64/0861ea4e03c50b14af9ed9dd8b9f388ab42f445c623a9fcbab19aef7aa55/pillow-13.0.0-cp315-cp315t-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:20822140c9a2ba9c5e42df342b0a892ab2e102fc0e3db967a133bb9ce3f898bb", size = 6612582, upload-time = "2026-10-16T22:17:35.415Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/20/cd1e9b3f60a9f3d5ebe46da36955c26004092a501f7f2c42f9fcc26611bc/pillow-13.0.0-cp315-cp315t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:ffea6b2986a797c84b6d1d27d4f43e0b83c73fc16281a930891cd237cf0d08fe", size = 7230176, upload-time = "2026-10-16T22:17:37.362Z" },
+    { url = "https://files.pythonhosted.org/packages/b6/ef/ffb0a2fc85690714fb7ac662956949645d57f15bf4426f520da361e7b6e3/pillow-13.0.0-cp315-cp315t-musllinux_1_2_aarch64.whl", hash = "sha256:05cd2cd39055d0b9650060e4513ef4a9a0aea870083950bd046a0d6490f93a22", size = 6703640, upload-time = "2026-10-16T22:17:39.313Z" },
+    { url = "https://files.pythonhosted.org/packages/e0/c2/6402ee3ccb3363aeed8fdb3f9fe56703ac5377a539f0b81b53999d7e121f/pillow-13.0.0-cp315-cp315t-musllinux_1_2_x86_64.whl", hash = "sha256:c6fd031333dedcad7ce3e03d244093f43504f209e86925ebdb2b868fa4037630", size = 7309231, upload-time = "2026-10-16T22:17:41.021Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/96/d6b82e8b8c06ad143b66b12e0b31051e4bf489b4fabca1f390a14fe1ebde/pillow-13.0.0-cp315-cp315t-win32.whl", hash = "sha256:c50c80e3591e5cf9a8dfa6007d4f10732f02e32263850999286e56ccd650cfb2", size = 6517200, upload-time = "2026-10-16T22:17:42.886Z" },
+    { url = "https://files.pythonhosted.org/packages/60/d4/0062e6005e9b270b165015aafd343364ac378ec5a685431ea42baad33357/pillow-13.0.0-cp315-cp315t-win_amd64.whl", hash = "sha256:adb3c2124c68e480f4632d06cb7caa3b48a51678475f483b4edb1c6dee29ea43", size = 7287488, upload-time = "2026-10-16T22:17:45.56Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/81/b8eb349746be7bce47dd95337c6634e84910af91b59aaa9159c034c614fa/pillow-13.0.0-cp315-cp315t-win_arm64.whl", hash = "sha256:4a25756244bdcce3b50580baadf320fa48297f0eeb8e114ba64139a40d4d0fc8", size = 2698073, upload-time = "2026-10-16T22:17:47.556Z" },
+    { url = "https://files.pythonhosted.org/packages/60/da/f6d644e631c5b370c5d0b899f3ccadd2780aab070b29a110527cf4e1fd2c/pillow-13.0.0-pp312-pypy312_pp80-macosx_10_15_x86_64.whl", hash = "sha256:8619685cad8efc4c38c66d3b36aad854523297c43d748b3b6f0cc03c90ba3463", size = 5523188, upload-time = "2026-10-16T22:17:59.334Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/b0/2594f202d743a35d4fe80682bfd96f277e5ca7aecb27cf64ef5bfc1d000b/pillow-13.0.0-pp312-pypy312_pp80-macosx_11_0_arm64.whl", hash = "sha256:7e91e97a929232cdb828889ee6ad0e48d7f40f4ec38818f4e4a8968b2b1af22e", size = 4806808, upload-time = "2026-10-16T22:18:01.188Z" },
+    { url = "https://files.pythonhosted.org/packages/8e/ed/d504165ef79af6fafe25c76726cf30f544cc236002f7ed054f1d51adc4ff/pillow-13.0.0-pp312-pypy312_pp80-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:93ff9c9c3663ce23aaa5d0b6b6abac55359e2a0c06c7e30f3771829af816be63", size = 5464358, upload-time = "2026-10-16T22:18:02.779Z" },
+    { url = "https://files.pythonhosted.org/packages/7b/fe/a10aba5503ca13e9e009b8bd0a1a4ce5584bdce246245fd6f3a83701369c/pillow-13.0.0-pp312-pypy312_pp80-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:e65dd6e75de67b2362a4fa3e16aa627595f65054dc4ec73d64680c84d592fa61", size = 6043514, upload-time = "2026-10-16T22:18:04.538Z" },
+    { url = "https://files.pythonhosted.org/packages/c0/37/66b12dc476041fe523bca29c9d58fbf1ea92a4eaf73acfb9e993948f1191/pillow-13.0.0-pp312-pypy312_pp80-win_amd64.whl", hash = "sha256:567f20f1c75897d7663830da6ea8af719e03d712b1d9ee7f813319f9ece42e5a", size = 7366030, upload-time = "2026-10-16T22:18:06.638Z" },
 ]
 
 [[package]]
@@ -3058,7 +3047,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pytest", specifier = ">=8.0" },
 ]
@@ -3334,8 +3323,8 @@ wheels = [
 
 [[package]]
 name = "resource-guards"
-version = "0.1.8"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fresource_guards&rev=ea4afd649f89277a8916137d735fbb189a45101d#ea4afd649f89277a8916137d735fbb189a45101d" }
+version = "0.1.9"
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fresource_guards&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308#f92468a3b3a5638e829029e8693ae9a1eb8fb308" }
 dependencies = [
     { name = "pluggy" },
     { name = "pytest" },
@@ -3449,7 +3438,7 @@ requires-dist = [
     { name = "chat-background-tasks", editable = "system/libs/chat_background_tasks" },
     { name = "click", specifier = ">=8.1" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "tomlkit", specifier = ">=0.12" },
@@ -3492,7 +3481,7 @@ requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "app-schema", editable = "system/libs/app_schema" },
     { name = "flask", specifier = ">=3.0" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "routines", editable = "system/libs/routines" },
@@ -3641,6 +3630,79 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/76/43/35e4d8aa320bffe8287fe8f65f578fa2d2db0a64212f0e710dce58267854/s3transfer-0.19.2.tar.gz", hash = "sha256:ba0309fd86be3c27dbf78cdd813c13c5e1df16e5874b99d2535ebbdfb9892993", size = 165592, upload-time = "2026-07-22T19:30:44.432Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/bc/e7/5c595c75e9f41a44f30e526eda465ea0b4eec93470e074e4a111b253f13a/s3transfer-0.19.2-py3-none-any.whl", hash = "sha256:d8168eccca828cbb2cd573675333f3bddd254313a9c42494b84c76b539e8ba25", size = 90216, upload-time = "2026-07-22T19:30:43.251Z" },
+]
+
+[[package]]
+name = "screen"
+version = "0.1.0"
+source = { editable = "system/apps/screen" }
+dependencies = [
+    { name = "app-manifest" },
+    { name = "app-schema" },
+    { name = "click" },
+    { name = "flask" },
+    { name = "flask-sock" },
+    { name = "httpx" },
+    { name = "imbue-common" },
+    { name = "loguru" },
+    { name = "oom-priority" },
+    { name = "pillow" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "python-xlib" },
+    { name = "pyyaml" },
+    { name = "simple-websocket" },
+    { name = "websockets" },
+    { name = "werkzeug" },
+    { name = "workspace-layout" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "app-schema", extra = ["testing"] },
+    { name = "coverage" },
+    { name = "inline-snapshot" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "pytest-timeout" },
+    { name = "ruff" },
+    { name = "ty" },
+    { name = "types-pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "app-manifest", editable = "system/libs/app_manifest" },
+    { name = "app-schema", editable = "system/libs/app_schema" },
+    { name = "click", specifier = ">=8.1" },
+    { name = "flask", specifier = ">=3.0" },
+    { name = "flask-sock", specifier = ">=0.7" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
+    { name = "loguru", specifier = ">=0.7" },
+    { name = "oom-priority", editable = "system/services/oom_priority" },
+    { name = "pillow", specifier = ">=10" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pydantic-settings", specifier = ">=2.13.1" },
+    { name = "python-xlib", specifier = ">=0.33" },
+    { name = "pyyaml", specifier = ">=6" },
+    { name = "simple-websocket", specifier = ">=1.0" },
+    { name = "websockets", specifier = ">=13" },
+    { name = "werkzeug", specifier = ">=3.0" },
+    { name = "workspace-layout", editable = "system/libs/workspace_layout" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
+    { name = "coverage" },
+    { name = "inline-snapshot", specifier = ">=0.13" },
+    { name = "pytest", specifier = ">=9.0" },
+    { name = "pytest-cov", specifier = ">=7.0.0" },
+    { name = "pytest-timeout", specifier = ">=2.3.0" },
+    { name = "ruff", specifier = "~=0.12.8" },
+    { name = "ty", specifier = "==0.0.85" },
+    { name = "types-pyyaml" },
 ]
 
 [[package]]
@@ -3830,12 +3892,12 @@ requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "app-schema", editable = "system/libs/app_schema" },
     { name = "chat-background-tasks", editable = "system/libs/chat_background_tasks" },
-    { name = "concurrency-group", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fconcurrency_group&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
+    { name = "concurrency-group", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fconcurrency_group&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
     { name = "defusedxml", specifier = ">=0.7" },
     { name = "flask", specifier = ">=3.1" },
     { name = "flask-sock", specifier = ">=0.7" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
     { name = "resvg-py", specifier = ">=0.5.0" },
     { name = "simple-websocket", specifier = ">=1.0" },
@@ -3849,7 +3911,7 @@ dev = [
     { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
     { name = "chat", editable = "system/apps/chat" },
     { name = "coverage" },
-    { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
+    { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
     { name = "inline-snapshot", specifier = ">=0.13" },
     { name = "mngr-cli-contract", editable = "system/libs/mngr_cli_contract" },
     { name = "playwright", specifier = ">=1.40" },
@@ -3892,7 +3954,7 @@ requires-dist = [
     { name = "flask", specifier = ">=3.0" },
     { name = "host-backup", editable = "system/services/host_backup" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
     { name = "oom-priority", editable = "system/services/oom_priority" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "werkzeug", specifier = ">=3.0" },
@@ -3953,8 +4015,8 @@ requires-dist = [
     { name = "app-schema", editable = "system/libs/app_schema" },
     { name = "click", specifier = ">=8.1" },
     { name = "flask", specifier = ">=3.0" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
-    { name = "imbue-mngr-ttyd", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_ttyd&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
+    { name = "imbue-mngr-ttyd", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_ttyd&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "werkzeug", specifier = ">=3.0" },
@@ -3965,7 +4027,7 @@ requires-dist = [
 dev = [
     { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
+    { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
     { name = "ty", specifier = "==0.0.85" },
 ]
 
@@ -4159,6 +4221,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e4/b6/4cdb11fb6006be6309844dc5f88b6efef3f5ea5352ade42a1e9308570e28/types_paramiko-4.0.0.20260518.tar.gz", hash = "sha256:286f6830945cba63797eedf375ed87138d93198121253afe66c5d6dbcf91318d", size = 29193, upload-time = "2026-05-18T06:06:36.776Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/44/a2/1a54b77758c9c175526bd0448de353f0563e71ba1ddc8bd4ac0c835deafd/types_paramiko-4.0.0.20260518-py3-none-any.whl", hash = "sha256:0ffaf1a6eb796833a49653cba4c7be13af51c8269d75234972d6239763dda270", size = 38791, upload-time = "2026-05-18T06:06:35.771Z" },
+]
+
+[[package]]
+name = "types-pyyaml"
+version = "6.0.12.20260906"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/90/6e/abec85b9013db5b934b0280a6dd104904d84f7bcbaab2e2f3def87ac7463/types_pyyaml-6.0.12.20260906.tar.gz", hash = "sha256:f59c1cc05010b833d2d72287bbaa72610106b28d42d89a907313117faba85212", size = 18649, upload-time = "2026-09-06T06:35:35.362Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/15/c0/fc0644b7ddcfb969e95845837143cb5173ddd6e06ee4ba5fc493cd9329b7/types_pyyaml-6.0.12.20260906-py3-none-any.whl", hash = "sha256:bca893ff0d51df5c9053137d5d0e6ccd36e939a196356f1d5c16372422f5137b", size = 21282, upload-time = "2026-09-06T06:35:34.372Z" },
 ]
 
 [[package]]
@@ -4363,7 +4434,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=ea4afd649f89277a8916137d735fbb189a45101d" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=f92468a3b3a5638e829029e8693ae9a1eb8fb308" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.12" },
 ]

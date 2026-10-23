@@ -182,6 +182,7 @@ def test_open_lands_a_window_the_window_verbs_arrange_and_close_takes_away(
         ("minimize", [], (window_id, "SNAPPED_LEFT", True)),
         ("restore", [], (window_id, "NORMAL", False)),
         ("maximize", [], (window_id, "MAXIMIZED", False)),
+        ("place", ["--state", "fullscreen"], (window_id, "FULLSCREEN", False)),
         ("place", ["--frame", "0.1,0.1,0.5,0.5"], (window_id, "NORMAL", False)),
     ):
         result = _run_layout_command([verb, window_id, *extra], layout_server, sandbox)
@@ -287,13 +288,13 @@ def test_retired_spellings_and_verbs_are_refused_before_they_reach_the_shell(
     assert _windows(layout_server, _sandbox(tmp_path)) == []
 
 
-def test_a_url_needs_the_browser_app(
+def test_a_url_needs_the_screen_app(
     layout_server: PipelineHarness, connected_client: "queue.Queue[str | None]", tmp_path: Path
 ) -> None:
-    """``open https://...`` is the browser's ``new`` launch path, so with no browser registered it fails naming it."""
+    """``open https://...`` is the Screen's ``browser`` launch path, so with no Screen registered it fails naming it."""
     result = _run_layout_command(["open", "https://example.com/"], layout_server, _sandbox(tmp_path))
 
-    assert result.returncode != 0 and "browser" in result.stderr
+    assert result.returncode != 0 and "screen" in result.stderr
     assert _windows(layout_server, _sandbox(tmp_path)) == []
 
 

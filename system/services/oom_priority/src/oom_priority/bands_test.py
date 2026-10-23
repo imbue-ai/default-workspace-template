@@ -54,8 +54,7 @@ _BUILTIN_SERVICE_ORDER = (
     "github-sync",
     "host-backup",
     "cron",
-    "xvfb",
-    "browser",
+    "screen",
     "files",
     "routines",
     "getting-started",
@@ -110,7 +109,7 @@ def test_unrecognized_supervisord_program_falls_back_to_the_user_service_band() 
 
 def test_supervisord_program_bands_preserve_the_shedding_order() -> None:
     # Program names that double as service keys resolve to their service band;
-    # the OOM machinery itself stays protected; the browser stays the single
+    # the OOM machinery itself stays protected; Chromium's processes stay the single
     # most-expendable thing, above even an agent's subprocesses.
     for key in _BUILTIN_SERVICE_ORDER:
         assert bands.supervisord_program_band(key, {}) == bands.SERVICE_BANDS[key]
@@ -119,12 +118,19 @@ def test_supervisord_program_bands_preserve_the_shedding_order() -> None:
     assert (
         bands.supervisord_program_band("publish_cgroup_meminfo", {}) == bands.PROTECTED
     )
+    # The Screen's stack members and watcher resolve to the stack's band, not the service's.
+    for member in (
+        "screen-xorg",
+        "screen-session",
+        "screen-pulse",
+        "screen-neko",
+        "screen-watch",
+    ):
+        assert bands.supervisord_program_band(member, {}) == bands.SCREEN_STACK, member
     assert bands.SHARED_BROWSER > bands.AGENT_SUBPROCESS
-    # The `browser` program is the coordinator, not Chromium: it resolves to its
+    # The `screen` program launches Chromium but is not Chromium: it resolves to its
     # service band, never to the shared-browser band its children occupy.
-    assert (
-        bands.supervisord_program_band("browser", {}) == bands.SERVICE_BANDS["browser"]
-    )
+    assert bands.supervisord_program_band("screen", {}) == bands.SERVICE_BANDS["screen"]
 
 
 def test_primary_agent_is_pinned_to_the_never_shed_band() -> None:
@@ -207,20 +213,33 @@ def test_renderers_land_at_the_very_top_of_the_browser_band() -> None:
     assert bands.shared_browser_oom_score_adj(0) == bands.SHARED_BROWSER_FLOOR
 
 
-def test_browser_coordinator_is_shed_after_the_chromium_it_manages() -> None:
-    # The coordinator is a service, not a browser: it holds little memory, the
-    # Chromium processes outlive its death, and supervisord restarts it straight
-    # back into the same session. Ranked inside the browser band it would be
-    # picked first under pressure and free none of the memory that matters, so it
-    # must sit below the whole band -- and, like any service, below the agents.
-    coordinator = bands.SERVICE_BANDS["browser"]
-    assert coordinator < bands.SHARED_BROWSER_FLOOR
-    assert coordinator < bands.shared_browser_oom_score_adj(0)
-    assert coordinator < bands.USER_AGENT
+def test_the_screen_service_is_shed_after_the_chromium_it_launches() -> None:
+    # The Screen service is a service, not a browser: it holds little memory, and
+    # ranked inside the browser band it would be picked first under pressure and
+    # free none of the memory that matters, so it must sit below the whole band --
+    # and, like any service, below the agents and the programs on the Screen.
+    service = bands.SERVICE_BANDS["screen"]
+    assert service < bands.SHARED_BROWSER_FLOOR
+    assert service < bands.shared_browser_oom_score_adj(0)
+    assert service < bands.USER_AGENT
+    assert service < bands.AGENT_SUBPROCESS
+
+
+def test_the_screen_stack_is_shed_after_every_agent_and_before_the_programs_on_it() -> (
+    None
+):
+    # The desktop an agent or the user launched goes before any agent, an abandoned chat
+    # at its stale ceiling included, and after what runs on it: an agent's subprocesses
+    # (the programs `screen run` starts and the sweep raises) and Chromium above them.
+    assert bands.CHAT_AGENT_STALE_CEILING < bands.SCREEN_STACK
+    assert bands.WORKER_AGENT < bands.SCREEN_STACK
+    assert bands.SCREEN_STACK < bands.AGENT_SUBPROCESS
+    assert bands.SCREEN_STACK < bands.SHARED_BROWSER_FLOOR
+    assert bands.SERVICE_BANDS["screen"] < bands.SCREEN_STACK
 
 
 def test_browser_remap_output_is_never_below_the_floor() -> None:
-    # The browser service's sweep only remaps values *below* the floor; the remap
+    # The Screen service's sweep only remaps values *below* the floor; the remap
     # emitting values at/above the floor is what makes repeated sweeps idempotent
     # (a remapped process is never remapped again). Out-of-range inputs clamp.
     for value in (-1000, -1, 0, 1, 299, 300, 999, 1000, 2000):
@@ -335,7 +354,7 @@ def test_a_registered_apps_priority_resolves_its_program_through_the_band_table(
         "news-dashboard": "files",
         "my-tool": "user",
         "odd": "no-such-band",
-        "browser": "system_interface",
+        "screen": "system_interface",
     }
     assert (
         bands.supervisord_program_band("news-dashboard", registry)
@@ -345,7 +364,7 @@ def test_a_registered_apps_priority_resolves_its_program_through_the_band_table(
     assert bands.supervisord_program_band("odd", registry) == bands.USER_SERVICE
     # A row wins over the by-name table for the same program.
     assert (
-        bands.supervisord_program_band("browser", registry)
+        bands.supervisord_program_band("screen", registry)
         == bands.SERVICE_BANDS["system_interface"]
     )
 

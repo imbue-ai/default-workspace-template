@@ -231,7 +231,7 @@ def _pick_port(
         repo_root / "system/supervisord.conf"
     ) | _apps_toml_ports(repo_root / "data" / ".state" / "apps.toml")
     # Reserve known internal ports that may not have supervisor entries
-    in_use.add(8083)  # browser CDP proxy
+    in_use.add(8083)  # the Screen's CDP proxy
     if requested is not None:
         if requested in in_use or is_port_bound(requested):
             sys.exit(

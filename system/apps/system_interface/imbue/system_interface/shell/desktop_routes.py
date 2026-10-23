@@ -103,6 +103,7 @@ from imbue.system_interface.shell.data_types import WindowLocationReport
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.data_types import desktop_layout_view
 from imbue.system_interface.shell.data_types import effective_launch_paths
+from imbue.system_interface.shell.desktop_document import backdrop_frame_of
 from imbue.system_interface.shell.desktop_document import choose_show_target
 from imbue.system_interface.shell.desktop_document import default_launch_path_id
 from imbue.system_interface.shell.desktop_document import effective_placements
@@ -1137,7 +1138,7 @@ def _pair_beside(shell: ShellState, target: _DesktopOpTarget, anchor: Window | N
     # snapshot the op started from is one window short.
     desktop = shell.get_desktop(target.desktop.id)
     placement = placement_of(shell.read_desktop_layout(desktop, target.client_id), anchor.id)
-    standing = frame_for_state(placement.frame, placement.state)
+    standing = backdrop_frame_of(frame_for_state(placement.frame, placement.state))
     kept, opened = paired_frames(standing)
     is_anchor_hidden = placement.is_minimized or placement.is_detached
     shell.edit_desktop_layout(

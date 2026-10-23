@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""List what could be stopped to free memory: idle chats and workers, and browsers no window shows.
+"""List what could be stopped to free memory: idle chats and workers, and the browser while no window shows the Screen.
 
 A lead runs this after one of its agents reports a shed (see the README's "Memory candidates"),
 shows the user the list next to the free memory, and stops only what the user approves. This
@@ -14,9 +14,9 @@ It joins three sources, each read independently so one failing leaves the others
   background task will wake its agent, which ``chat_background_tasks`` reads from the chats'
   marker files. Its memory is the summed RSS of its process trees, rooted at the pid mngr
   reports plus every live pid the agent-pid registry holds for it;
-- browsers, from the browser service's ``GET /browsers``: a ``running`` browser that no desktop
-  window shows, per the shell's ``GET /api/desktops``. Its memory is the summed RSS of every
-  Chromium process on its profile.
+- browsers, from the Screen service's ``GET /browsers``: a ``running`` browser while no desktop
+  window shows the Screen it runs on, per the shell's ``GET /api/desktops``. Its memory is the
+  summed RSS of every Chromium process on its profile.
 
 A source that cannot be read is reported as unknown (``null`` candidates plus a note), never as
 "nothing to stop".
@@ -102,14 +102,13 @@ MNGR_LIST_ARGV: Final[tuple[str, ...]] = (
 MNGR_LIST_TIMEOUT_SECONDS: Final[float] = 60.0
 HTTP_TIMEOUT_SECONDS: Final[float] = 10.0
 
-# The browser service's address, resolved as its CLI (system/apps/browser/src/browser/fleet.py) does.
-BROWSER_APP_NAME: Final[str] = "browser"
-ENV_BROWSER_SERVICE_URL: Final[str] = "MINDS_BROWSER_SERVICE_URL"
-DEFAULT_BROWSER_SERVICE_URL: Final[str] = "http://127.0.0.1:8081"
+# The Screen service's address, resolved as its commands (system/apps/screen/src/screen/cli.py) do: the browser
+# runs on the Screen and its fleet API lives in the Screen service.
+SCREEN_APP_NAME: Final[str] = "screen"
+ENV_SCREEN_SERVICE_URL: Final[str] = "MINDS_SCREEN_SERVICE_URL"
+DEFAULT_SCREEN_SERVICE_URL: Final[str] = "http://127.0.0.1:8090"
 BROWSER_RUNNING_LIFECYCLE: Final[str] = "running"
-# A browser's viewer page names it by this query parameter (browser.primitives.SESSION_QUERY_KEY).
-BROWSER_SESSION_QUERY_KEY: Final[str] = "session"
-# The final component of every browser's Chromium profile dir (browser.session._profile_dir).
+# The final component of every browser's Chromium profile dir (screen.primitives.BROWSER_PROFILE_DIR_PREFIX).
 BROWSER_PROFILE_DIR_PREFIX: Final[str] = "browser-use-user-data-dir-"
 USER_DATA_DIR_FLAG: Final[str] = "--user-data-dir="
 
@@ -174,7 +173,7 @@ class AgentCandidate(NamedTuple):
 
 
 class BrowserCandidate(NamedTuple):
-    """A running browser no desktop window shows."""
+    """A running browser while no desktop window shows the Screen."""
 
     name: str
     controller: str
@@ -213,7 +212,7 @@ class Sources(NamedTuple):
     proc_dir: Path
     run_command: RunCommand
     fetch_json: FetchJson
-    browser_service_url: str
+    screen_service_url: str
     shell_url: str
     now: datetime
     is_chat_busy: IsChatBusy
@@ -447,45 +446,24 @@ def fetch_json_over_http(url: str, timeout_seconds: float) -> Any:
         return json.loads(response.read())
 
 
-def browser_names_shown_by_windows(desktops: Any) -> set[str] | None:
-    """The browsers some desktop window shows, from the shell's desktops document, or None when the
-    document is not shaped as one (which, like an unreachable shell, means "unknown", never "none").
-
-    Mirrors ``workspace_layout.windows.read_app_window_paths``: a window's own path and each
-    client's path of it all count.
-    """
+def is_screen_shown(desktops: Any) -> bool | None:
+    """Whether some desktop window shows the Screen (the browser's windows are on it), from the shell's desktops
+    document, or None when the document is not shaped as one (which, like an unreachable shell, means "unknown",
+    never "no")."""
     if not isinstance(desktops, dict) or not isinstance(desktops.get("desktops"), list):
         return None
-    shown: set[str] = set()
+    is_shown = False
     for desktop in desktops["desktops"]:
         if not isinstance(desktop, dict) or not isinstance(
             desktop.get("windows"), list
         ):
             return None
         for window in desktop["windows"]:
-            if not isinstance(window, dict):
+            if not isinstance(window, dict) or not isinstance(window.get("app"), str):
                 return None
-            window_path = window.get("path")
-            client_paths = window.get("client_paths", {})
-            if (
-                not isinstance(window.get("app"), str)
-                or not isinstance(window_path, str)
-                or not isinstance(client_paths, dict)
-                or not all(
-                    isinstance(client_path, str)
-                    for client_path in client_paths.values()
-                )
-            ):
-                return None
-            if window["app"] != BROWSER_APP_NAME:
-                continue
-            for path in (window_path, *client_paths.values()):
-                values = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query).get(
-                    BROWSER_SESSION_QUERY_KEY
-                )
-                if values:
-                    shown.add(values[0])
-    return shown
+            if window["app"] == SCREEN_APP_NAME:
+                is_shown = True
+    return is_shown
 
 
 def chromium_pids_for_browser(browser_name: str, proc_dir: Path) -> tuple[int, ...]:
@@ -514,27 +492,27 @@ def chromium_pids_for_browser(browser_name: str, proc_dir: Path) -> tuple[int, .
 
 
 def _browser_controller(browser: Mapping[str, Any]) -> str:
-    """Who controls the browser, in the fleet CLI's ``ls`` words."""
+    """Who controls the Screen the browser runs on, in the fleet CLI's ``ls`` words."""
     if browser.get("controller") == "agent":
         return (
             f"agent {browser.get('owner_name') or browser.get('owner_agent_id') or '?'}"
         )
-    return "human" if browser.get("human_pinned") else "free"
+    return "human" if browser.get("controller") == "human" else "free"
 
 
 def unviewed_browser_candidates(
-    browsers: Sequence[Mapping[str, Any]], shown_names: set[str], proc_dir: Path
+    browsers: Sequence[Mapping[str, Any]], is_screen_shown: bool, proc_dir: Path
 ) -> list[BrowserCandidate]:
-    """The running browsers no window shows, largest memory first."""
+    """The running browsers while no window shows the Screen, largest memory first."""
     candidates: list[BrowserCandidate] = []
+    if is_screen_shown:
+        return candidates
     for browser in browsers:
         name = browser.get("id")
         if (
             not isinstance(name, str)
             or browser.get("lifecycle") != BROWSER_RUNNING_LIFECYCLE
         ):
-            continue
-        if name in shown_names:
             continue
         raw_tabs = browser.get("tabs")
         tabs = (
@@ -568,18 +546,18 @@ def _fetch(fetch_json: FetchJson, url: str) -> tuple[Any, str | None]:
 
 
 def collect_browser_section(sources: Sources) -> BrowserSection:
-    fleet_url = f"{sources.browser_service_url}/browsers"
+    fleet_url = f"{sources.screen_service_url}/browsers"
     fleet, fleet_error = _fetch(sources.fetch_json, fleet_url)
     if fleet_error is not None:
         return BrowserSection(
             None,
-            (f"could not reach the browser service at {fleet_url}: {fleet_error}",),
+            (f"could not reach the Screen service at {fleet_url}: {fleet_error}",),
         )
     browsers = fleet.get("browsers") if isinstance(fleet, dict) else None
     if not isinstance(browsers, list):
         return BrowserSection(
             None,
-            (f"the browser service at {fleet_url} answered without a browsers list",),
+            (f"the Screen service at {fleet_url} answered without a browsers list",),
         )
     browser_records = [browser for browser in browsers if isinstance(browser, dict)]
     if not any(
@@ -588,20 +566,21 @@ def collect_browser_section(sources: Sources) -> BrowserSection:
     ):
         return BrowserSection((), ())
 
-    # Only a running browser holds memory, and only the shell knows which ones a window shows.
+    # Only a running browser holds memory, and only the shell knows whether a window shows the Screen.
     desktops_url = f"{sources.shell_url}{DESKTOPS_ROUTE}"
     desktops, desktops_error = _fetch(sources.fetch_json, desktops_url)
-    shown = browser_names_shown_by_windows(desktops) if desktops_error is None else None
-    if shown is None:
+    is_shown = is_screen_shown(desktops) if desktops_error is None else None
+    if is_shown is None:
         reason = desktops_error or "not a desktops document"
         return BrowserSection(
             None,
             (
-                f"could not read the shell's windows at {desktops_url} ({reason}), so which browsers no window shows is unknown",
+                f"could not read the shell's windows at {desktops_url} ({reason}), so whether a window shows the Screen is unknown",
             ),
         )
     return BrowserSection(
-        tuple(unviewed_browser_candidates(browser_records, shown, sources.proc_dir)), ()
+        tuple(unviewed_browser_candidates(browser_records, is_shown, sources.proc_dir)),
+        (),
     )
 
 
@@ -741,7 +720,7 @@ def render_table(report: Report) -> str:
         )
     lines += [f"  note: {note}" for note in report.agents.notes]
 
-    lines += ["", "Browsers no window shows (running):"]
+    lines += ["", "Browsers running while no window shows the Screen:"]
     browsers = report.browsers.candidates
     if browsers is None:
         lines.append("  unknown")
@@ -782,17 +761,17 @@ def _run_command(
     )
 
 
-def resolve_browser_service_url() -> str:
-    """The browser service's base URL: the env override, the app registry's row, then the default."""
-    override = os.environ.get(ENV_BROWSER_SERVICE_URL, "")
+def resolve_screen_service_url() -> str:
+    """The Screen service's base URL: the env override, the app registry's row, then the default."""
+    override = os.environ.get(ENV_SCREEN_SERVICE_URL, "")
     if override:
         return override.rstrip("/")
     registry = app_registry.registry_path()
     if not registry.is_absolute():
         registry = _REPO_ROOT / registry
     return (
-        app_registry.read_app_url(registry, BROWSER_APP_NAME)
-        or DEFAULT_BROWSER_SERVICE_URL
+        app_registry.read_app_url(registry, SCREEN_APP_NAME)
+        or DEFAULT_SCREEN_SERVICE_URL
     )
 
 
@@ -804,7 +783,7 @@ def busy_chat_check(environ: Mapping[str, str]) -> IsChatBusy:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="List idle chats and workers, and browsers no window shows, alongside free memory. Stops nothing."
+        description="List idle chats and workers, and the browser while no window shows the Screen, alongside free memory. Stops nothing."
     )
     parser.add_argument(
         "--json",
@@ -816,7 +795,7 @@ def main() -> None:
         proc_dir=_PROC_DIR,
         run_command=_run_command,
         fetch_json=fetch_json_over_http,
-        browser_service_url=resolve_browser_service_url(),
+        screen_service_url=resolve_screen_service_url(),
         shell_url=os.environ.get(ENV_SHELL_URL, DEFAULT_SHELL_URL).rstrip("/"),
         now=datetime.now(timezone.utc),
         is_chat_busy=busy_chat_check(os.environ),
