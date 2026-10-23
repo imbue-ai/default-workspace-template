@@ -11,7 +11,6 @@ provider over the network and a 20-second hiccup is not evidence of anything.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
@@ -24,13 +23,11 @@ from pydantic import SecretStr
 
 from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
 from imbue.chat.harnesses.grok.account_binding import GROK_MODELS_COMMAND
-from imbue.chat.harnesses.grok.account_binding import is_grok_ambient_variable
 from imbue.chat.harnesses.grok.account_binding import read_sole_api_key
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.registry import build_account_binding
 from imbue.concurrency_group.errors import ProcessError
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
-from imbue.imbue_common.pure import pure
 
 logger = _loguru_logger
 
@@ -163,17 +160,14 @@ def _run_probe(
     harness: HarnessType, command: tuple[str, ...], account_dir: Path, runner: Callable[..., Any]
 ) -> Any | None:
     """The probe command's finished process, or None when it could not run or timed out."""
-    # The scoping variable is layered OVER the ambient environment, never used alone:
-    # `Popen` replaces rather than merges, so a bare {"CODEX_HOME": ...} would drop PATH and
-    # the probe would fail closed on every account.
-    #
-    # But the ambient environment is the SERVER's, and on a workspace upgraded from the
-    # shared-login era it can still carry ANTHROPIC_API_KEY. claude reports `loggedIn: true,
-    # apiKeySource: ANTHROPIC_API_KEY` on the strength of that alone -- so an empty account
-    # folder would commit as signed in, become the most-recently-used, and launch every later
-    # chat with no credential. The question is whether THIS FOLDER is authenticated.
-    env = {name: value for name, value in os.environ.items() if not _is_ambient_auth(harness, name)}
-    env.update(build_account_binding(harness).account_env(account_dir))
+    # The server's environment can still carry ANTHROPIC_API_KEY on a workspace upgraded from the
+    # shared-login era, and claude reports `loggedIn: true` on the strength of that alone, so an
+    # empty account folder would commit as signed in. The question is whether THIS FOLDER is.
+    env = {
+        name: value
+        for name, value in build_account_binding(harness).account_process_env(account_dir).items()
+        if name not in MANAGED_AUTH_ENV_KEYS
+    }
     try:
         finished = runner(
             command=list(command),
@@ -190,11 +184,3 @@ def _run_probe(
         logger.warning("{} signed-in probe timed out", harness.value)
         return None
     return finished
-
-
-@pure
-def _is_ambient_auth(harness: HarnessType, name: str) -> bool:
-    """Whether the server's own variable ``name`` could answer the probe for the folder."""
-    if name in MANAGED_AUTH_ENV_KEYS:
-        return True
-    return harness is HarnessType.GROK and is_grok_ambient_variable(name)
