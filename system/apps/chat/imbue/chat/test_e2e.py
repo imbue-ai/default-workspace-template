@@ -277,10 +277,14 @@ def _post_op(server: RunningWorkspace, body: dict[str, Any]) -> int:
 
 
 def _post_chat_json(
-    server: RunningWorkspace, path: str, body: dict[str, Any], headers: dict[str, str] | None = None
+    server: RunningWorkspace,
+    path: str,
+    body: dict[str, Any],
+    headers: dict[str, str] | None = None,
+    expected_status: int = 200,
 ) -> dict[str, Any]:
     """POST ``body`` as JSON to the chat app's ``path`` (with ``headers`` beside the content type); the parsed
-    answer, which must come under a 200."""
+    answer, which must come under ``expected_status``."""
     request = urllib.request.Request(
         f"{server.chat_url}{path}",
         data=json.dumps(body).encode(),
@@ -288,7 +292,7 @@ def _post_chat_json(
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=10) as response:
-        assert response.status == 200
+        assert response.status == expected_status, f"{path} answered {response.status}"
         answer = json.loads(response.read())
     assert isinstance(answer, dict)
     return answer
@@ -627,7 +631,7 @@ def test_a_room_lists_beside_the_chats_and_draws_each_persons_message_under_thei
     a message from the owner and draws a visitor's as the visitor's turn, and its composer says how to reach the
     agent."""
     _open_fixture_chat(page, e2e_server)
-    room_id = str(_post_chat_json(e2e_server, "/api/rooms", {"title": "Lounge"})["id"])
+    room_id = str(_post_chat_json(e2e_server, "/api/rooms", {"title": "Lounge"}, expected_status=201)["id"])
 
     row = _chat_root(page).locator(f'.chat-rail-row[data-chat-id="{room_id}"]')
     expect(row).to_be_visible(timeout=15000)
