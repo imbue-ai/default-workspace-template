@@ -6,7 +6,7 @@ and a `roots` file naming its top-level sessions; any other session directory is
 child session.
 
 - `sessions/` is a verbatim copy of mngr's `libs/mngr_grok/imbue/mngr_grok/resources/test_fixtures/sessions/`
-  at mngr commit `d7fe6b3ccb` (the commit this template pins), captured in grok's TUI. Its own
+  at the mngr commit `pyproject.toml` pins, captured in grok's TUI. Its own
   `README.md` lists the scenarios. mngr's transcript converter is tested on the same files.
 - `tui_sessions/` was captured for the chat app in grok's TUI, on a private tmux server:
   `subagent_ends_mid_reply` (an agent made by mngr with the template's hooks: a background
