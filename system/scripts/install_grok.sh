@@ -13,7 +13,7 @@ set -euo pipefail
 GROK_VERSION="1.0.62"
 INSTALL_PATH="/usr/local/bin/grok"
 
-# `grok --version` prints `grok 1.0.62 (1474f9cbdd91)` and needs no network.
+# `grok --version` prints `grok <GROK_VERSION> (<build>)` and needs no network.
 reports_pinned_version() {
     case "$("$1" --version 2>/dev/null || true)" in
         "grok ${GROK_VERSION} ("*) return 0 ;;
