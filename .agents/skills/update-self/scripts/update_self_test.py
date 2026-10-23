@@ -5951,7 +5951,7 @@ def test_snapshots_roundtrip_bundle_envs_and_node_modules(tmp_path: Path) -> Non
             "system/apps/system_interface/pyproject.toml",
         ]
     )
-    # No tools on PATH and an empty pinned home -> no tool-env copies.
+    # An app pyproject re-syncs only the venv, so nothing copies the mngr tool aside.
     runner = _RecordingRunner()
 
     snapshots = update_environment.take_snapshots(
