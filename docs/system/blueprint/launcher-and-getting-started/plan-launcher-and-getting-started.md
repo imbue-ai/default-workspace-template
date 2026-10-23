@@ -133,7 +133,8 @@ Running any row closes the menu and clears the field.
 ### 3.6 The Getting Started app
 
 An ordinary app under `system/apps/getting_started`, registered as `getting-started` ("Getting Started"), declaring no launch paths (so the shell synthesizes its one, `open` at `/`, labelled "Open Getting Started"; contracts section 2), a `default_shortcut` of `{launch = "open", mode = "focus"}` (one window is what it is for, as for the browser), `launcher_rank = 5`, `critical = false`, and the first-visit opener of section 3.4.
-Its page holds, top to bottom: a search field over its own content; "Start something", the eight intent tiles of today's `startSomething.ts`, two to a row with four shown at first and the rest behind "See more"; "Start from a template", the catalog shelves of today's `TemplateShelves.ts`.
+Its page holds, top to bottom: a search field over its own content; "Bring in your chats", a card offering to copy the user's Claude and ChatGPT conversations into the workspace; "Start something", the eight intent tiles of today's `startSomething.ts`, two to a row with four shown at first and the rest behind "See more"; "Start from a template", the catalog shelves of today's `TemplateShelves.ts`.
+The chat import card follows the import-chats skill's status file (`GET /api/chat-import`), leaves the page while a query is typed, and is put away for good by its "Not now" or "Hide" (`POST /api/chat-import/dismiss`, kept under `data/.state/getting-started/`).
 The page is its own scroller (the shared base styles pin the body to the viewport), so a window shorter than its content scrolls.
 Picking a template shows the template's detail as a page inside the app (today's `TemplateDetailModal`, with a back control instead of a close), whose two actions are "Make it mine" and "Create a new machine from it".
 Every tile and both actions start a chat with a seeded text through `shell:start-with-text` (section 3.7); the Getting Started window stays where it is and the chat comes up beside it.
@@ -161,6 +162,8 @@ When the machine has no free-text row the shell tells the user through its notif
 | The first-visit window itself | Shell, shared, an ordinary window once opened |
 | The launcher's rows, highlight, and query | Derived in the browser, transient |
 | The intents, the template catalog, the detail page | The Getting Started app |
+| Whether the chat import card was put away | The Getting Started app, in its state directory |
+| How far a chat import has got | The import-chats skill, in its status file |
 | Which chat a sent text goes to | The chat app, in its picker |
 
 ### 3.9 Invariants

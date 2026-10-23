@@ -1,9 +1,10 @@
 /**
  * The Getting Started page's root: it connects to the shell that frames it (reporting ``/`` and its
  * title once greeted; it has one page, so it declares no navigation and a navigate reloads it),
- * requests the template catalog once, and mounts the page. What a tile or a detail action starts
- * goes to the shell as ``shell:start-with-text``: the shell runs its launcher's primary text action
- * with it, so this page never names the app that takes it.
+ * requests the template catalog once and the chat import card's state on load and on every focus,
+ * and mounts the page. What a tile or a detail action starts goes to the shell as
+ * ``shell:start-with-text``: the shell runs its launcher's primary text action with it, so this
+ * page never names the app that takes it.
  */
 
 import m from "mithril";
@@ -13,6 +14,7 @@ import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
 import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
+import { dismissChatImport, getChatImport, refreshChatImport } from "./models/ChatImport";
 import { ensureTemplateCatalogRequested, getTemplateCatalogState } from "./models/TemplateCatalog";
 import { GettingStartedPage } from "./views/GettingStartedPage";
 
@@ -27,19 +29,25 @@ function bootstrap(): void {
       connection.location(PAGE_PATH, PAGE_TITLE);
     },
   });
-  window.addEventListener("focus", () => connection.focused());
+  window.addEventListener("focus", () => {
+    connection.focused();
+    void refreshChatImport();
+  });
   // The element menu (element-reference-menu plan section 8): a reference drafts through the shell.
   installElementContextMenu({ connection, handshake: () => handshake, open: createContextMenuOpener().open });
   // The pointer hides while text is typed into the search field.
   installCursorHidingWhileTyping(document);
   ensureTemplateCatalogRequested();
+  void refreshChatImport();
   const rootElement = document.getElementById("app");
   if (rootElement === null) return;
   m.mount(rootElement, {
     view: () =>
       m(GettingStartedPage, {
         catalog: getTemplateCatalogState(),
+        chatImport: getChatImport(),
         onStartWithText: (text) => connection.startWithText(text),
+        onDismissChatImport: () => void dismissChatImport(),
       }),
   });
 }

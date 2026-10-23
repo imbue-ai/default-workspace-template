@@ -3,8 +3,10 @@ import "@imbue/workspace-ui/src/testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it } from "vitest";
+import type { ChatImport } from "../models/ChatImport";
 import type { TemplateCatalogState } from "../models/TemplateCatalog";
 import { catalogTemplateRecord } from "../testing/records";
+import { IMPORT_PROMPT } from "./ChatImportCard";
 import { GettingStartedPage } from "./GettingStartedPage";
 import { START_OPTIONS, START_PAGE_SIZE } from "./startSomething";
 
@@ -29,9 +31,19 @@ const LOADED: TemplateCatalogState = {
   },
 };
 
-function render(catalog: TemplateCatalogState = LOADED): { root: HTMLElement; started: string[] } {
+function render(
+  catalog: TemplateCatalogState = LOADED,
+  chatImport: ChatImport | null = null,
+): { root: HTMLElement; started: string[] } {
   const started: string[] = [];
-  const root = mountView(() => m(GettingStartedPage, { catalog, onStartWithText: (text) => started.push(text) }));
+  const root = mountView(() =>
+    m(GettingStartedPage, {
+      catalog,
+      chatImport,
+      onStartWithText: (text) => started.push(text),
+      onDismissChatImport: () => undefined,
+    }),
+  );
   return { root, started };
 }
 
@@ -43,6 +55,18 @@ function typeQuery(root: HTMLElement, query: string): void {
 }
 
 describe("the Getting Started page", () => {
+  it("offers the chat import above the tiles at rest, and leaves it out of search results", () => {
+    const { root, started } = render(LOADED, { is_dismissed: false, sources: {} });
+    const card = root.querySelector('[data-section="chat-import"]')!;
+    expect(card.compareDocumentPosition(root.querySelector('[data-section="start-something"]')!)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    root.querySelector<HTMLElement>('[data-chat-import-action="import"]')!.click();
+    expect(started).toEqual([IMPORT_PROMPT]);
+    typeQuery(root, "routine");
+    expect(root.querySelector('[data-section="chat-import"]')).toBeNull();
+  });
+
   it("shows the first page of tiles, See more reveals the rest, and a tile starts a chat with its prompt", () => {
     const { root, started } = render();
     expect(root.querySelectorAll("[data-start]")).toHaveLength(START_PAGE_SIZE);

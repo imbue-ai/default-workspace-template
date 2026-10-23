@@ -1,8 +1,10 @@
-"""The app's routes on its own origin: the page, the health probe, the template catalog, and the contract module.
+"""The app's routes on its own origin: the page, the health probe, the template catalog, the chat import card's
+state, and the contract module.
 
 The page is the frontend's built document (``static/index.html``); its bundle is served under ``/assets``. The
 catalog route answers the freshest copy the store holds, with each drawing resolved to a URL (``catalog`` is null
-when no catalog URL is configured, and a 503 says nothing could be loaded). The contract module the page speaks to
+when no catalog URL is configured, and a 503 says nothing could be loaded). The chat import routes answer what the
+chat import has brought in and record that the user put its card away. The contract module the page speaks to
 the shell with is the shell's build output, served from this origin (desktop-interface contracts.md section 7).
 """
 
@@ -15,6 +17,7 @@ from flask import Response
 from flask import send_file
 from flask import send_from_directory
 from flask.typing import ResponseReturnValue
+from loguru import logger
 from pydantic import Field
 from werkzeug.exceptions import NotFound
 
@@ -28,6 +31,9 @@ from app_schema.api_schema import SchemalessRoute
 from app_schema.api_schema import register_api_schema_route
 from app_schema.routes import error_response
 from app_schema.routes import model_response
+from getting_started.chat_import import ChatImportResponse
+from getting_started.chat_import import ChatImportStore
+from getting_started.errors import StateFileError
 from getting_started.template_catalog import CatalogDocument
 from getting_started.template_catalog import TemplateCatalogAvailability
 from getting_started.template_catalog import TemplateCatalogStore
@@ -39,9 +45,12 @@ HEALTH_PATH: Final[str] = "/api/health"
 APP_DISPLAY_NAME: Final[str] = "Getting Started"
 APP_DESCRIPTION: Final[str] = "The ways into the workspace: things to start, and the published templates to adapt."
 TEMPLATES_CATALOG_PATH: Final[str] = "/api/templates-catalog"
+CHAT_IMPORT_PATH: Final[str] = "/api/chat-import"
+CHAT_IMPORT_DISMISS_PATH: Final[str] = "/api/chat-import/dismiss"
 PAGE_DOCUMENT_FILENAME: Final[str] = "index.html"
 
 HTTP_NOT_FOUND: Final[int] = 404
+HTTP_INTERNAL_SERVER_ERROR: Final[int] = 500
 HTTP_SERVICE_UNAVAILABLE: Final[int] = 503
 
 _TEMPLATES_UNAVAILABLE_DETAIL: Final[str] = "failed to load templates"
@@ -74,14 +83,22 @@ ROUTE_TABLE: RouteTable = {
     ("GET", "/assets/{filename}"): SchemalessRoute(reason="one file of the page's built bundle"),
     ("GET", HEALTH_PATH): RouteModels(response_model=HealthResponse),
     ("GET", TEMPLATES_CATALOG_PATH): RouteModels(response_model=TemplatesCatalogResponse),
+    ("GET", CHAT_IMPORT_PATH): RouteModels(response_model=ChatImportResponse),
+    ("POST", CHAT_IMPORT_DISMISS_PATH): RouteModels(response_model=ChatImportResponse),
     ("GET", APP_CONTRACT_ROUTE): SchemalessRoute(reason="the app contract module, a JavaScript file"),
 }
 
 
-def build_pages_blueprint(static_directory: Path, catalog: TemplateCatalogStore, contract_path: Path) -> Blueprint:
+def build_pages_blueprint(
+    static_directory: Path, catalog: TemplateCatalogStore, chat_import: ChatImportStore, contract_path: Path
+) -> Blueprint:
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
     register_api_schema_route(
-        blueprint, DEFAULT_API_SCHEMA_PATH, title=APP_DISPLAY_NAME, description=APP_DESCRIPTION, route_table=ROUTE_TABLE
+        blueprint,
+        DEFAULT_API_SCHEMA_PATH,
+        title=APP_DISPLAY_NAME,
+        description=APP_DESCRIPTION,
+        route_table=ROUTE_TABLE,
     )
     # The template drawings live beside the catalog (catalog/README.md), so the page admits images from the
     # catalog's origin besides its own; with no catalog there is no templates section and nothing to admit.
@@ -137,11 +154,29 @@ def build_pages_blueprint(static_directory: Path, catalog: TemplateCatalogStore,
             case _ as unreachable:
                 assert_never(unreachable)
 
+    @blueprint.get(CHAT_IMPORT_PATH)
+    def chat_import_state() -> ResponseReturnValue:
+        """The "Bring in your chats" card's state: each source the chat import has recorded, and whether the card
+        was put away."""
+        return model_response(chat_import.view())
+
+    @blueprint.post(CHAT_IMPORT_DISMISS_PATH)
+    def dismiss_chat_import() -> ResponseReturnValue:
+        """Put the "Bring in your chats" card away for good, and answer its state."""
+        try:
+            chat_import.dismiss()
+        except StateFileError as e:
+            logger.warning("Could not put the chat import card away: {}", e)
+            return error_response(str(e), HTTP_INTERNAL_SERVER_ERROR)
+        return model_response(chat_import.view())
+
     @blueprint.get(APP_CONTRACT_ROUTE)
     def app_contract() -> ResponseReturnValue:
         """The app contract module: how the page talks to the shell framing it."""
         if not contract_path.is_file():
-            return error_response(f"the workspace shell's frontend is not built: {contract_path} is missing", HTTP_NOT_FOUND)
+            return error_response(
+                f"the workspace shell's frontend is not built: {contract_path} is missing", HTTP_NOT_FOUND
+            )
         # Flask resolves a relative path against the app's own directory, not the cwd the path names.
         return send_file(contract_path.absolute(), mimetype="text/javascript")
 
