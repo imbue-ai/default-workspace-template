@@ -8804,7 +8804,6 @@ def test_a_rollback_whose_restored_app_serves_no_page_is_an_emergency_that_keeps
     assert not _refreshed_the_view(runner, apply_repo)
 
 
-# ---------------------------------------------------------------------------
 # apply: the tool of an app the merge removed, and the registry row of a program it dropped
 
 
