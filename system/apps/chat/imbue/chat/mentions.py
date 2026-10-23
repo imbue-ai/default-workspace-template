@@ -233,7 +233,10 @@ class MentionHandler(MutableModel):
         else:
             return
         snapshot = self.agent_manager.get_chat_snapshot(str(chat_id))
-        if snapshot is None or snapshot.kind is not ChatKind.AGENT:
+        if snapshot is None:
+            logger.warning("Room {} mentioned chat {}, which is no longer listed", room_id, chat_id)
+            return
+        if snapshot.kind is not ChatKind.AGENT:
             return
         delivered = author_prefix(sender_name, prefix_safe_text(room_title, str(room_id))) + text
         # Annotated before delivery, so the chat's turn is stamped with the sender's own key (section 5.2).
