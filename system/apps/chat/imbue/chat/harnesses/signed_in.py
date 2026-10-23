@@ -1,12 +1,12 @@
 """Deciding whether an account folder actually holds a working sign-in.
 
-Used at exactly one moment: just after a sign-in flow finishes, to decide whether to commit
-an account row. It is NOT a liveness check -- nothing polls this, and an account that stops
-working later is discovered when a turn fails, not by asking here.
+Used when a sign-in flow finishes, to decide whether to commit an account row, and for a pasted
+xAI key before the key is written. It is NOT a liveness check -- nothing polls this, and an
+account that stops working later is discovered when a turn fails, not by asking here.
 
 The three-way answer matters. Collapsing "could not run the probe" into "signed out" would
-delete a folder the user just completed a browser OAuth into, because the probes shell out to
-CLIs that fetch over the network and a 20-second hiccup is not evidence of anything.
+delete a folder the user just completed a browser OAuth into, because a probe asks a CLI or the
+provider over the network and a 20-second hiccup is not evidence of anything.
 """
 
 from __future__ import annotations
