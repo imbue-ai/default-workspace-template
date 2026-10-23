@@ -208,7 +208,7 @@ def _as_output_text(value: Any) -> str | None:
 
 @pure
 def tool_result_text(update: dict[str, Any]) -> str:
-    """The whole text a finished call gave the model, from its terminal ``tool_call_update``.
+    """The text a finished call's terminal ``tool_call_update`` holds for its result.
 
     The model-facing rawOutput field where grok keeps one, else the update's content blocks,
     else the text of the rawOutput variant (a listing, an edit's confirmation, an error).

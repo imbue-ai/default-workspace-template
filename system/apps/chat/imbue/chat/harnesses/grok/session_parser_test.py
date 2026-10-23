@@ -678,7 +678,7 @@ def test_every_workspace_tool_reads_in_the_shared_vocabulary() -> None:
     ]
 
 
-def test_each_tool_result_carries_the_text_grok_gave_the_model() -> None:
+def test_each_tool_result_carries_the_text_its_record_holds() -> None:
     parsed = _parse("tools")
     details = {
         event["tool_name"]: detail_for(event, parsed.record_of(event))
