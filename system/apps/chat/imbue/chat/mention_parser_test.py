@@ -12,9 +12,11 @@ _AGENT = ParticipantKey("workspace-agent")
 _MAIN = ChatId("agent-00000000000000000000000000000001")
 _READER = ChatId("agent-00000000000000000000000000000002")
 
+_INVITED = ParticipantKey("email:ann@example.com")
 _ROSTER = (
     roster_participant(_JOSH, display_name="Josh", handle="Josh", is_owner=True),
     roster_participant(_BOB, display_name="Josh", handle="Josh-2"),
+    roster_participant(_INVITED, kind=ParticipantKind.INVITED, display_name="ann@example.com", handle="ann"),
     roster_participant(_AGENT, kind=ParticipantKind.WORKSPACE_AGENT, display_name="Atlas", handle="agent"),
 )
 
@@ -31,15 +33,17 @@ def test_the_table_keeps_the_rosters_handles_and_adds_each_chat_by_title_after_t
     assert [(target.handle, target.kind) for target in table] == [
         ("Josh", "person"),
         ("Josh-2", "person"),
+        ("ann", "invited"),
         ("agent", "workspace_agent"),
         ("Main-chat", "chat"),
         ("Newsreader-Chat", "chat"),
         # A room called like a person collides with both Joshes and takes the next free suffix.
         ("Josh-3", "chat"),
     ]
-    assert table[3].chat_id == _MAIN and table[3].key is None and table[3].is_chat
+    assert table[4].chat_id == _MAIN and table[4].key is None and table[4].is_chat
     assert table[0].key == _JOSH and table[0].chat_id is None
-    assert [target.is_person for target in table] == [True, True, False, False, False, False]
+    # An invited email resolves but names no person to act for until they sign up.
+    assert [target.is_person for target in table] == [True, True, False, False, False, False, False]
 
 
 def test_mentions_resolve_case_insensitively_once_each_in_order_and_never_inside_a_word() -> None:

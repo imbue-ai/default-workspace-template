@@ -6,7 +6,9 @@ A handle is a participant's display name with runs of whitespace as one hyphen a
 ``@Josh-2`` for the later of two Joshes), the workspace's agent is ``@agent``, and every chat's title as it stands
 now is a handle too (``@Main-chat``), resolved after the people and agents so a chat never shadows a person. A
 sent message's mentions are found here on the server by the same rule the composer's popover uses, so a handle
-typed by hand resolves the same as one picked.
+typed by hand resolves the same as one picked. An invited email's handle resolves too, but names no person to
+act for: an invited person cannot be mentioned yet (section 4.1), since the key their mark would be kept under is
+not the one they get on signing up.
 """
 
 import re
@@ -26,7 +28,7 @@ from imbue.imbue_common.pure import pure
 # The kind a chat's handle wears in the table, beside the roster's participant kinds.
 CHAT_HANDLE_KIND: Final[str] = "chat"
 # The kinds a mention is acted on for as a person's: the pending mark and, for the owner, the desktop app's feed.
-PERSON_KINDS: Final[frozenset[str]] = frozenset({ParticipantKind.PERSON.value, ParticipantKind.INVITED.value})
+PERSON_KINDS: Final[frozenset[str]] = frozenset({ParticipantKind.PERSON.value})
 
 # ``@`` then a handle, not inside a word or another mention (``foo@bar`` and ``@@x`` mention nobody). The handle
 # alphabet includes ``.`` and ``-``, so a sentence's trailing punctuation rides along and is tried off below.
@@ -49,7 +51,7 @@ class MentionTarget(FrozenModel):
 
     @property
     def is_person(self) -> bool:
-        """Whether the handle names a person (with an account or invited), never an agent or a chat."""
+        """Whether the handle names a person with an account, never an invited one, an agent, or a chat."""
         return self.key is not None and self.kind in PERSON_KINDS
 
 
