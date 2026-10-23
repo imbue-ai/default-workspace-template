@@ -129,7 +129,11 @@ def test_the_file_is_read_from_mngrs_project_config_override(tmp_path: Path) -> 
     assert passed.returncode == 0
 
 
-def test_a_create_the_chat_app_marks_as_needing_no_account_passes_inside_the_workspace(tmp_path: Path) -> None:
+def test_a_create_the_chat_app_marks_as_needing_no_account_passes_inside_the_workspace(
+    tmp_path: Path,
+) -> None:
     """A chat room's create: the one agent that runs on no account."""
-    result = _run(tmp_path, **_inside_workspace(tmp_path), MINDS_CREATE_WITHOUT_ACCOUNT="1")
+    result = _run(
+        tmp_path, **_inside_workspace(tmp_path), MINDS_CREATE_WITHOUT_ACCOUNT="1"
+    )
     assert result.returncode == 0
