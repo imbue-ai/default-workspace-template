@@ -107,12 +107,10 @@ class RoomSnapshot(FrozenModel):
     )
 
 
-@pure
 def mint_room_id() -> ChatId:
     return ChatId(f"room-{secrets.token_hex(8)}")
 
 
-@pure
 def now_timestamp() -> IsoTimestamp:
     return IsoTimestamp(format_nanosecond_iso_timestamp(datetime.now(timezone.utc)))
 
