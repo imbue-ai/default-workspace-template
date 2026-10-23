@@ -251,8 +251,11 @@ function connect(): void {
     connected = true;
     console.info("[chat-ws] connected");
     reconnectBackoff.reset();
-    // A change to the account list while the socket was down was pushed to no one.
-    if (hasConnectedBefore) rereadAccounts();
+    // A change to the account list, or to someone's pending mentions, while the socket was down was pushed to no one.
+    if (hasConnectedBefore) {
+      rereadAccounts();
+      notifyMentionsUpdated();
+    }
     hasConnectedBefore = true;
     // The app replays what it holds (its provisional chats, then its chat list) on every
     // connection; the list ends the replay and must be handled even when nothing changed.
@@ -297,6 +300,12 @@ function scheduleReconnect(): void {
 
 /** Read the account list again because it changed outside this page (a sign-in or a removal in another chat or
  *  window), so a chat whose account was removed shows it at once; a failed read keeps the list read before. */
+function notifyMentionsUpdated(): void {
+  for (const listener of mentionsUpdatedListeners) {
+    listener();
+  }
+}
+
 function rereadAccounts(): void {
   loadAccounts().then(
     () => m.redraw(),
@@ -321,9 +330,7 @@ function handleEvent(event: WsEvent): void {
       break;
     }
     case "mentions_updated":
-      for (const listener of mentionsUpdatedListeners) {
-        listener();
-      }
+      notifyMentionsUpdated();
       break;
     case "chats_updated": {
       isChatListReceived = true;
