@@ -156,7 +156,7 @@ def test_a_cancel_that_leaves_a_pending_wake_placeholder_has_ended_the_turn(tmp_
 
 
 def test_a_turn_grok_starts_once_the_cancel_landed_is_left_running_and_restarts_nothing(tmp_path: Path) -> None:
-    """A restart with --no-resume would throw away the session's context for a turn the stop did end."""
+    """A restart would kill the turn grok started after the cancel had already ended the one the stop found."""
     agent_info, watcher, grok = _setup(tmp_path)
     grok.begin_turn()
     _hold(watcher, "held")

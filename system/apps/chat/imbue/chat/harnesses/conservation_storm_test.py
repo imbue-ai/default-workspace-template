@@ -1875,7 +1875,7 @@ class _GrokWorld:
         return True
 
     def restart_process(self) -> tuple[bool, str]:
-        """``mngr start --restart --no-resume``: grok dies with whatever it held and relaunches into a fresh session."""
+        """``mngr start --restart --no-resume``: grok dies with its turn and its own queue, and relaunches."""
         with self._acting():
             self.restart_count += 1
             self.stats["restart"] += 1
@@ -2392,7 +2392,7 @@ class _GrokChat:
         assert not delivered_by_stop, f"stop delivered {delivered_by_stop} instead of returning them\n{note()}"
         killed_prompt_id = world.prompt_id_at_last_restart
         if world.restart_count > restarts_before and (found_prompt_id is None or killed_prompt_id != found_prompt_id):
-            # The restart is the hammer for a turn stop could not end; any other restart wipes a session for nothing.
+            # The restart is the hammer for a turn stop could not end; any other restart kills a turn for nothing.
             self.record_violation(
                 f"stop restarted grok with --no-resume although the turn it found "
                 f"({world.prompt_text_by_id.get(found_prompt_id or '', 'none')!r}) had ended; the turn it killed was "
