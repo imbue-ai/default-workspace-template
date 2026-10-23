@@ -5,11 +5,13 @@ A harness is resolved EXACTLY ONCE, in :mod:`agent_discovery`, from mngr's
 receives an already-resolved object from this module and never re-derives, re-checks, or
 branches on the harness name.
 
-Adding a harness is one :class:`HarnessSpec` entry here, one subclass per concern, and --
-if it emits markers of its own -- one member of
-:class:`~imbue.chat.harnesses.events.SpecialEventKind`. Nothing else changes:
-``ChatAppState`` (``state.py``) builds watchers through :func:`build_watcher`, ``agent_manager`` builds
-trackers through :func:`build_tracker`, and neither names a harness.
+Adding a harness is one :class:`HarnessType` member, one :class:`HarnessSpec` entry here, one
+subclass per concern, its label in ``lanes.HARNESS_LABEL``, its ``[agent_types.<name>]`` block
+in ``.mngr/settings.toml`` (launching through the OOM band wrapper), and -- if it emits markers
+of its own -- one member of :class:`~imbue.chat.harnesses.events.SpecialEventKind`. No consumer
+of the registry changes: ``ChatAppState`` (``state.py``) builds watchers through
+:func:`build_watcher`, ``agent_manager`` builds trackers through :func:`build_tracker`, and
+neither names a harness.
 
 One spec per harness rather than a dict per concern, deliberately: parallel registries
 would mean two places to edit for one harness, which is how the split drifts.
@@ -55,6 +57,7 @@ from imbue.chat.harnesses.codex.session import CodexHarnessSession
 from imbue.chat.harnesses.codex.watcher import CodexSessionWatcher
 from imbue.chat.harnesses.codex.watcher import CodexTranscriptLoader
 from imbue.chat.harnesses.events import SpecialEventKind
+from imbue.chat.harnesses.grok.placeholder import GrokPlaceholderActivityTracker
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import InterruptToComposer
 from imbue.chat.harnesses.interrupt import RestartDrainInterruptToComposer
@@ -88,6 +91,7 @@ from imbue.chat.harnesses.session_watcher import TranscriptLoader
 from imbue.chat.harnesses.startup_readiness import StartupReadyMarker
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.mngr_grok.api import SESSION_STARTED_MARKER_FILENAME as GROK_SESSION_STARTED_MARKER_FILENAME
 
 
 class PopupTrigger(StrEnum):
@@ -476,7 +480,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
     # registered anyway, because an UNregistered harness is not neutral -- ``parse_harness``
     # would fall it back to claude and point claude's watcher at another harness's state dir.
     # So it names the shared placeholders (see ``harnesses/placeholder.py``) until its own
-    # implementation lands. antigravity has since landed all four and no longer uses them.
+    # implementation lands.
     HarnessType.OPENCODE: HarnessSpec(
         name=HarnessType.OPENCODE,
         watcher_class=PlaceholderSessionWatcher,
@@ -533,6 +537,26 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         popups=(_MODEL_BAR_POPUP,),
         # No `/login` popup, unlike codex and pi: agy has no such command. Signing in is what
         # a bare `agy` does on first launch, which is what the instructions below say.
+    ),
+    # grok is LAUNCH-ONLY, like opencode: it names the shared placeholders until its own
+    # watcher, tracker, resolver and catalog land.
+    HarnessType.GROK: HarnessSpec(
+        name=HarnessType.GROK,
+        watcher_class=PlaceholderSessionWatcher,
+        loader_class=PlaceholderSessionWatcher,
+        tracker_class=GrokPlaceholderActivityTracker,
+        process_started_marker_filename=GrokPlaceholderActivityTracker.marker_filename,
+        # Written by mngr_grok's hook at grok's SessionStart and deleted by its launch script. It can
+        # appear before grok's paywall paints, so a send relies on mngr_grok's gate check, not on it.
+        startup_ready_marker=StartupReadyMarker(
+            filename=GROK_SESSION_STARTED_MARKER_FILENAME, is_deleted_at_launch=True
+        ),
+        resolver_class=PlaceholderModelResolver,
+        catalog_factory=lambda: EMPTY_CATALOG,
+        # mngr_grok's status line writes model_state.json at the state-dir root.
+        model_state_relative_path=Path("."),
+        special_kinds=frozenset(),
+        popups=(_MODEL_BAR_POPUP,),
     ),
     # The seed segment of a chat the Imbue Studio app opened (``chat_seed.py``): turns the app wrote
     # before the workspace had any agent, read like an archived segment. No agent ever runs

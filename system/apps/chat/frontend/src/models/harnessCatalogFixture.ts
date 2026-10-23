@@ -8,6 +8,7 @@ const LABEL_BY_HARNESS: Record<string, string> = {
   "pi-coding": "Pi",
   opencode: "OpenCode",
   antigravity: "Antigravity CLI",
+  grok: "Grok Build",
 };
 
 const COMPACTABLE_HARNESSES = new Set(["claude", "codex", "pi-coding"]);

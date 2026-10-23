@@ -2727,6 +2727,7 @@ def test_chats_on_a_harness_mngr_cannot_compact_are_never_swept(
             ("chat-claude", HarnessType.CLAUDE),
             ("chat-antigravity", HarnessType.ANTIGRAVITY),
             ("chat-opencode", HarnessType.OPENCODE),
+            ("chat-grok", HarnessType.GROK),
         ):
             seed_agent_state(
                 manager, agent_id, name=f"{agent_id}-name", labels={"user_created": "true"}, harness=harness

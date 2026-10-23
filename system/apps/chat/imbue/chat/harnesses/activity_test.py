@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -13,6 +14,8 @@ from imbue.chat.harnesses.harness_type import parse_harness
 from imbue.chat.harnesses.pi_coding.activity import PiActivityTracker
 from imbue.chat.harnesses.registry import build_tracker
 from imbue.chat.harnesses.registry import get_harness_spec
+from imbue.chat.harnesses.startup_readiness import StartupReadyMarker
+from imbue.chat.harnesses.startup_readiness import is_harness_starting_up
 from imbue.mngr_claude.claude_config import COMPACTING_MARKER_FILENAME
 from imbue.mngr_claude.claude_config import LAST_COMPACTION_FILENAME
 
@@ -33,7 +36,7 @@ _TRACKER_HARNESSES = (HarnessType.CLAUDE, HarnessType.CODEX, HarnessType.PI_CODI
 # behind them. Emptying this tuple is what retires ``harnesses/placeholder.py``. antigravity
 # graduated out of it once its real watcher landed; it still uses the placeholder RESOLVER,
 # which is why its catalog is asserted empty below rather than here.
-_PLACEHOLDER_HARNESSES = (HarnessType.OPENCODE,)
+_PLACEHOLDER_HARNESSES = (HarnessType.OPENCODE, HarnessType.GROK)
 
 
 def _turn_started_marker() -> dict[str, Any]:
@@ -249,9 +252,10 @@ def test_placeholder_harness_dot_follows_the_active_marker(harness: HarnessType)
     """A launch-only harness derives its dot from mngr's ``active`` marker and nothing else.
 
     Both plugins behind these harnesses maintain that marker already, so the dot is live even
-    with no transcript. The states it can reach are exactly two: THINKING while a turn is in
-    flight, IDLE otherwise -- never TOOL_RUNNING, which needs an unmatched tool call from a
-    transcript. Pinned here so swapping in a real tracker is a deliberate, visible change.
+    with no transcript. The states it can reach are exactly two: THINKING while the marker is
+    present (a turn in flight, and for grok also a subagent still running), IDLE otherwise --
+    never TOOL_RUNNING, which needs an unmatched tool call from a transcript. Pinned here so
+    swapping in a real tracker is a deliberate, visible change.
     """
     tracker = build_tracker(harness)
     assert (
@@ -284,6 +288,7 @@ def test_placeholder_harness_reports_an_empty_transcript(harness: HarnessType) -
         (HarnessType.CLAUDE, "claude_process_started"),
         (HarnessType.CODEX, "codex_process_started"),
         (HarnessType.PI_CODING, "pi_process_started"),
+        (HarnessType.GROK, "grok_process_started"),
     ],
 )
 def test_process_started_marker_is_declared_on_the_spec(harness: HarnessType, expected: str) -> None:
@@ -293,6 +298,17 @@ def test_process_started_marker_is_declared_on_the_spec(harness: HarnessType, ex
     local state dir. Pinned to the literal mngr touches, since a drift here silently costs
     the prioritizer its aging rather than raising."""
     assert get_harness_spec(harness).process_started_marker_filename == expected
+
+
+def test_a_grok_agent_reads_as_starting_until_its_session_starts(tmp_path: Path) -> None:
+    """mngr_grok's launch deletes ``grok_session_started`` before touching ``grok_process_started``,
+    and grok's SessionStart hook writes it, so a send reads as connecting exactly while it is absent."""
+    spec = get_harness_spec(HarnessType.GROK)
+    assert spec.startup_ready_marker == StartupReadyMarker(filename="grok_session_started", is_deleted_at_launch=True)
+    (tmp_path / "grok_process_started").touch()
+    assert is_harness_starting_up(tmp_path, spec.startup_ready_marker, spec.process_started_marker_filename)
+    (tmp_path / "grok_session_started").touch()
+    assert not is_harness_starting_up(tmp_path, spec.startup_ready_marker, spec.process_started_marker_filename)
 
 
 def test_spec_process_started_marker_matches_its_tracker() -> None:

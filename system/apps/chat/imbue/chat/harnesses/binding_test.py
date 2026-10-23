@@ -51,10 +51,11 @@ def test_each_harness_scopes_through_exactly_one_variable(tmp_path: Path) -> Non
     assert build_account_binding(HarnessType.PI_CODING).account_env(tmp_path) == {"PI_CODING_AGENT_DIR": str(tmp_path)}
 
 
-def test_a_harness_no_account_runs_has_no_binding_to_build() -> None:
-    """No lane signs in to opencode, so there is nothing to scope, create, or rebind it with: asking raises."""
+@pytest.mark.parametrize("harness", [HarnessType.OPENCODE, HarnessType.GROK])
+def test_a_harness_no_account_runs_has_no_binding_to_build(harness: HarnessType) -> None:
+    """No lane signs in to opencode or grok, so there is nothing to scope, create, or rebind it with: asking raises."""
     with pytest.raises(BindingError):
-        build_account_binding(HarnessType.OPENCODE)
+        build_account_binding(harness)
 
 
 def test_credential_paths_match_what_mngr_provisions(tmp_path: Path) -> None:
@@ -249,10 +250,11 @@ def test_a_re_auth_clears_every_file_that_says_the_account_is_signed_in(tmp_path
         )
 
 
-def test_every_scoped_harness_can_be_rebound_and_the_unscoped_one_cannot() -> None:
+def test_every_scoped_harness_can_be_rebound_and_the_unscoped_ones_cannot() -> None:
     assert REBIND_VERIFIED_HARNESSES == frozenset(_BOUND_HARNESSES)
     assert all(is_rebind_supported(harness) for harness in _BOUND_HARNESSES)
     assert not is_rebind_supported(HarnessType.OPENCODE)
+    assert not is_rebind_supported(HarnessType.GROK)
 
 
 def test_rebinding_claude_rewrites_only_the_config_dir_line_and_lands_whole(tmp_path: Path) -> None:
