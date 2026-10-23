@@ -106,9 +106,9 @@ class Grants:
             return True
         return any(normalized in service_grants.emails for service_grants in self.services.values())
 
-    def granted_app_names(self) -> set[str]:
-        """The services (the shell's apps) the document admits someone to on their own origin: each
-        ``[services.<name>]`` table naming anyone (a workspace-level grant exempts none)."""
+    def granted_service_names(self) -> set[str]:
+        """The services the document admits someone to on their own origin: each ``[services.<name>]`` table
+        naming anyone (a workspace-level grant exempts none)."""
         return {
             name
             for name, grant_list in self.services.items()
