@@ -604,6 +604,16 @@ def test_a_send_mngr_refuses_as_busy_keeps_the_message_held_without_spending_an_
     assert watcher.get_queued_messages() == []
 
 
+def test_a_session_send_that_reports_the_text_untaken_keeps_the_message_held(tmp_path: Path) -> None:
+    watcher, _grok, _broadcast = _flushing_watcher(tmp_path)
+    watcher._queue.bind_session_send(lambda _text: False)
+    watcher._queue.enqueue("held", "t0", is_turn_open=False)
+
+    watcher._attempt_flush()
+
+    assert _held(watcher) == [("held", False)]
+
+
 def test_a_gate_screen_keeps_the_held_messages_and_retries_them(tmp_path: Path) -> None:
     watcher, grok, _broadcast = _flushing_watcher(tmp_path)
     queued_id = watcher._queue.enqueue("held behind a gate", "t0", is_turn_open=True)

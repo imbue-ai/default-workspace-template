@@ -600,19 +600,22 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
         """Send ``text`` through mngr: the session's send when one is bound, which names a refusal's kind."""
         session_send = self._queue.get_session_send()
         if session_send is None:
-            if self._flush_send is not None and self._flush_send(text):
-                return _SENT_RESULT
-            verdict = GrokSendVerdict.BUSY if is_hold_required(self._agent_state_dir) else GrokSendVerdict.FAILED
-            return GrokSendResult(verdict=verdict, reason="", failure_kind="")
+            is_taken = self._flush_send is not None and self._flush_send(text)
+            return _SENT_RESULT if is_taken else self._untaken_send_result()
         try:
-            session_send(text)
+            is_taken = session_send(text)
         except SendFailedError as error:
             verdict = _VERDICT_BY_FAILURE_KIND.get(error.kind, GrokSendVerdict.FAILED)
             return GrokSendResult(verdict=verdict, reason=error.detail, failure_kind=error.kind)
         except MngrError as error:
             logger.opt(exception=error).warning("grok: mngr could not send to {}", self._agent_id)
             return GrokSendResult(verdict=GrokSendVerdict.FAILED, reason=str(error), failure_kind="")
-        return _SENT_RESULT
+        return _SENT_RESULT if is_taken else self._untaken_send_result()
+
+    def _untaken_send_result(self) -> GrokSendResult:
+        """A send that reports grok did not take the text: busy while a turn holds the queue, else failed."""
+        verdict = GrokSendVerdict.BUSY if is_hold_required(self._agent_state_dir) else GrokSendVerdict.FAILED
+        return GrokSendResult(verdict=verdict, reason="", failure_kind="")
 
     def _await_turn_holding(self, witness_start: int, block: str) -> bool:
         """Whether a user turn grok logged since the send holds the block, looking until the witness window ends."""
