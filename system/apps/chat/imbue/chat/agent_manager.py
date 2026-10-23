@@ -610,7 +610,10 @@ class AgentBusyState(FrozenModel):
     """Whether one agent will resume on its own, as the agent listing reports it."""
 
     chat_id: ChatId = Field(description="The chat the agent belongs to")
-    is_busy: bool = Field(description="A turn is in flight, or the agent runs a chat with a pending background task")
+    is_busy: bool = Field(
+        description="A turn is in flight, the agent runs a chat with a pending background task, or a finished "
+        "harness task's own turn is still to come"
+    )
     background_tasks: tuple[BackgroundTask, ...] = Field(
         description="The chat's pending tasks, oldest first; empty unless the agent is the chat's active agent"
     )
