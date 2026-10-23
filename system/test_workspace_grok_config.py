@@ -38,7 +38,9 @@ _DOCKERFILE_PATH = _REPO_ROOT / "system" / "Dockerfile"
 _SUPERVISORD_CONF_DIR = _REPO_ROOT / "system" / "supervisord.conf.d"
 _GROK_ACCOUNT_VARIABLES = frozenset({"GROK_AUTH_PATH", "XAI_API_KEY", "GROK_HOME"})
 _EXPORT_KEYS = frozenset({"env", "host_env", "pass_env", "pass_host_env"})
-_DOCKERFILE_EXPORT_RE = re.compile(r"^\s*(?:ENV|ARG)\s+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE)
+_DOCKERFILE_EXPORT_RE = re.compile(
+    r"^\s*(?:ENV|ARG)\s+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE
+)
 _SUPERVISORD_ENVIRONMENT_RE = re.compile(r"^\s*environment\s*=(.*)$", re.MULTILINE)
 _SUPERVISORD_VARIABLE_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*=")
 _OOM_LAUNCHER_COMMAND = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py grok"
@@ -61,33 +63,25 @@ def _load_grok_agent_config(
     return resolved.agent_config.model_dump(mode="json")
 
 
-def test_grok_block_never_turns_shared_auth_off(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    [
+        pytest.param("share_auth", True, id="never_turns_shared_auth_off"),
+        pytest.param(
+            "busy_send_policy", "REFUSE", id="refuses_sends_while_a_turn_runs"
+        ),
+        pytest.param(
+            "command",
+            _OOM_LAUNCHER_COMMAND,
+            id="launches_through_the_oom_band_launcher",
+        ),
+        pytest.param("version", None, id="pins_no_version"),
+    ],
+)
+def test_grok_block_field(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, expected: object
 ) -> None:
-    assert _load_grok_agent_config(tmp_path, monkeypatch)["share_auth"] is True
-
-
-def test_grok_block_refuses_sends_while_a_turn_runs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    assert (
-        _load_grok_agent_config(tmp_path, monkeypatch)["busy_send_policy"] == "REFUSE"
-    )
-
-
-def test_grok_launches_through_the_oom_band_launcher(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    assert (
-        _load_grok_agent_config(tmp_path, monkeypatch)["command"]
-        == _OOM_LAUNCHER_COMMAND
-    )
-
-
-def test_grok_block_pins_no_version(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    assert _load_grok_agent_config(tmp_path, monkeypatch)["version"] is None
+    assert _load_grok_agent_config(tmp_path, monkeypatch)[field] == expected
 
 
 def test_grok_settings_overrides_keep_every_key_mngr_renders(
@@ -162,4 +156,6 @@ def test_no_workspace_wide_export_names_a_grok_account_variable() -> None:
     assert "MNGR_AGENT_ROLE" in settings_names
     assert "XDG_CACHE_HOME" in dockerfile_names
     assert "MALLOC_ARENA_MAX" in supervisord_names
-    assert _GROK_ACCOUNT_VARIABLES.isdisjoint([*settings_names, *dockerfile_names, *supervisord_names])
+    assert _GROK_ACCOUNT_VARIABLES.isdisjoint(
+        [*settings_names, *dockerfile_names, *supervisord_names]
+    )
