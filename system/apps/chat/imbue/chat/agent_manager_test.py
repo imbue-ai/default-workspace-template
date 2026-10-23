@@ -7355,3 +7355,33 @@ def test_a_switch_off_a_room_takes_the_rooms_transcript_as_its_summary(
         assert "--type codex" in argv_log.read_text() and CREATE_WITHOUT_ACCOUNT_ENV not in argv_log.read_text()
     finally:
         manager.stop()
+
+
+def test_a_room_is_never_the_main_chat(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    """A room is not a main-chat candidate (the multiplayer spec, section 7.3): the star refuses it by hand, and
+    does not fall to it when the main chat is deleted, however recently the room was messaged."""
+    mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
+    stamps = MessageStampStore(path=None)
+    stamps.record(ChatId("agent-chat"), at=100.0)
+    stamps.record(ChatId("agent-room"), at=200.0)
+    manager = AgentManager.build(
+        broadcaster,
+        mngr_binary=mngr_binary,
+        message_stamps=stamps,
+        main_chat=MainChatStore(path=tmp_path / MAIN_CHAT_FILENAME),
+        chat_files_root=tmp_path / "chats",
+    )
+    try:
+        seed_agent_state(manager, "agent-chat", name="Chat-1")
+        seed_agent_state(manager, "agent-room", name="Lounge", harness=HarnessType.ROOM)
+        manager.note_agent_list_known()
+        assert manager.get_main_chat_id() == ChatId("agent-chat")
+
+        assert manager.make_main_chat(ChatId("agent-room")) is False
+        assert manager.get_main_chat_id() == ChatId("agent-chat")
+
+        manager.destroy_chat(ChatId("agent-chat"))
+
+        assert manager.get_main_chat_id() is None
+    finally:
+        manager.stop()
