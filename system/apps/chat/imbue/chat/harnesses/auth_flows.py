@@ -1206,6 +1206,7 @@ def _write_grok_api_key(auth_path: Path, api_key: str, lock_wait_seconds: float)
             "coding_data_retention_opt_out": True,
         }
         atomic_write(auth_path, json.dumps({GROK_API_KEY_SCOPE: scope}, indent=2) + "\n")
+        auth_path.chmod(0o600)
 
 
 def _drop_grok_api_key(auth_path: Path, lock_wait_seconds: float) -> None:

@@ -12,6 +12,7 @@ import itertools
 import json
 import os
 import re
+import stat
 import threading
 from collections.abc import Callable
 from collections.abc import Generator
@@ -1226,6 +1227,7 @@ def test_a_key_xai_accepts_replaces_an_expired_login_and_the_file_whole(tmp_path
     assert list(after) == ["xai::api_key"]
     assert after["xai::api_key"]["key"] == "xai-new-key"
     assert path.stat().st_ino != inode
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert restarted == [account_id]
 
 
