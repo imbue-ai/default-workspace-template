@@ -3,8 +3,7 @@
 Grok writes a ``turn_completed`` record for every turn it ends, normal, cancelled or failed
 (surfaced by :mod:`harnesses.grok.session_parser` as ``turn_started`` / ``turn_completed`` /
 ``turn_aborted`` special events of a top-level session), so "the agent is working" is a latch on
-those, as for codex. It is kept per top-level session, because ``/new`` opens a second one in the
-same process. A quit writes no ``turn_completed`` and answers no tool call, so an open turn or an
+those. It is kept per top-level session, because ``/new`` opens a second one in the same process. A quit writes no ``turn_completed`` and answers no tool call, so an open turn or an
 unanswered call from before the current grok process started belongs to a dead process and does
 not count.
 """
