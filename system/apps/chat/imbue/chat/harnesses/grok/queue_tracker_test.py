@@ -155,11 +155,13 @@ def test_a_partial_delivery_keeps_the_entries_grok_did_not_commit(tmp_path: Path
 def test_an_entry_stops_being_sent_after_its_attempts_but_stays_visible(tmp_path: Path) -> None:
     tracker = _tracker(tmp_path)
     queued_id = tracker.enqueue("never committed", "t0", is_turn_open=True)
+    assert tracker.has_deliverable_entries() is True
     for _ in range(MAX_DELIVERY_ATTEMPTS):
         _block, claimed, generation = tracker.begin_flush()
         tracker.finish_flush(claimed, generation, delivered=(), result=_SENT)
 
     assert tracker.is_exhausted(queued_id) is True
+    assert tracker.has_deliverable_entries() is False
     assert tracker.begin_flush()[1] == ()
     assert _contents(tracker) == ["never committed"]
 

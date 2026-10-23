@@ -73,6 +73,10 @@ class GrokHarnessSession(FileHarnessSession):
     def is_sending(self) -> bool:
         return self._queue().is_sending() or super().is_sending()
 
+    def is_tap_available(self, *, has_queued: bool) -> bool:
+        """Offered while a held message still has delivery attempts left and nothing is Sending."""
+        return super().is_tap_available(has_queued=has_queued) and self._queue().has_deliverable_entries()
+
     def _queue(self) -> GrokQueueTracker:
         return get_tracker(self._deps.state_dir)
 

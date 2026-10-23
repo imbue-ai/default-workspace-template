@@ -11,6 +11,7 @@ from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.harnesses.grok.queue_tracker import GrokQueueTracker
 from imbue.chat.harnesses.grok.queue_tracker import GrokSendResult
 from imbue.chat.harnesses.grok.queue_tracker import GrokSendVerdict
+from imbue.chat.harnesses.grok.queue_tracker import MAX_DELIVERY_ATTEMPTS
 from imbue.chat.harnesses.grok.queue_tracker import REFUSED_VERDICTS
 from imbue.chat.harnesses.grok.queue_tracker import get_tracker
 from imbue.chat.harnesses.grok.queue_tracker import session_token
@@ -118,6 +119,25 @@ def test_a_message_sent_behind_a_turn_is_queued_at_once_and_never_typed(tmp_path
     assert _contents(tracker) == ["also this", "and this"]
     assert [entry["is_sending"] for entry in tracker.snapshot()] == [False, False]
     assert session.is_tap_available(has_queued=True) is True
+
+
+def test_the_tap_is_not_offered_once_every_held_message_spent_its_attempts(tmp_path: Path) -> None:
+    agent_state_dir = tmp_path / "agent-exhausted"
+    session = _session(agent_state_dir, [])
+    write_root_turn(agent_state_dir, _SESSION, "prompt-1")
+    tracker = get_tracker(agent_state_dir)
+    tracker.attach(publish=lambda _snapshot: None, wake=lambda: None)
+    session.send("never committed", "m1")
+    for _ in range(MAX_DELIVERY_ATTEMPTS):
+        _block, claimed, generation = tracker.begin_flush()
+        tracker.finish_flush(
+            claimed,
+            generation,
+            delivered=(),
+            result=GrokSendResult(verdict=GrokSendVerdict.UNCONFIRMED, reason="", failure_kind=""),
+        )
+
+    assert session.is_tap_available(has_queued=True) is False
 
 
 def test_a_message_sent_to_an_idle_grok_answers_once_the_worker_sent_it(tmp_path: Path) -> None:

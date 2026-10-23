@@ -7,6 +7,9 @@ from pathlib import Path
 import pytest
 
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.harnesses.grok.queue_tracker import GrokSendResult
+from imbue.chat.harnesses.grok.queue_tracker import GrokSendVerdict
+from imbue.chat.harnesses.grok.queue_tracker import MAX_DELIVERY_ATTEMPTS
 from imbue.chat.harnesses.grok.tap import GrokAtomicShoulderTap
 from imbue.chat.harnesses.grok.tap import GrokInterruptToComposer
 from imbue.chat.harnesses.grok.testing import make_grok_agent_info
@@ -250,6 +253,23 @@ def test_a_stop_right_after_a_refused_tap_still_has_mngr_press(tmp_path: Path) -
 def test_a_tap_with_nothing_queued_presses_nothing(tmp_path: Path) -> None:
     agent_info, watcher, grok = _setup(tmp_path)
     grok.begin_turn()
+
+    assert _tap(agent_info, watcher, grok.cancelling_press) == ("nothing_queued", None)
+    assert grok.press_count == 0
+
+
+def test_a_tap_with_only_messages_that_spent_their_attempts_presses_nothing(tmp_path: Path) -> None:
+    agent_info, watcher, grok = _setup(tmp_path)
+    grok.begin_turn()
+    _hold(watcher, "never committed")
+    for _ in range(MAX_DELIVERY_ATTEMPTS):
+        _block, claimed, generation = watcher._queue.begin_flush()
+        watcher._queue.finish_flush(
+            claimed,
+            generation,
+            delivered=(),
+            result=GrokSendResult(verdict=GrokSendVerdict.UNCONFIRMED, reason="", failure_kind=""),
+        )
 
     assert _tap(agent_info, watcher, grok.cancelling_press) == ("nothing_queued", None)
     assert grok.press_count == 0

@@ -529,6 +529,14 @@ class GrokQueueTracker:
         with self._lock:
             return self._attempts.get(queued_id, 0) >= MAX_DELIVERY_ATTEMPTS
 
+    def has_deliverable_entries(self) -> bool:
+        """Whether a held message still has delivery attempts left, so a flush or a tap could claim it."""
+        with self._lock:
+            return any(
+                self._attempts.get(str(entry["queued_id"]), 0) < MAX_DELIVERY_ATTEMPTS
+                for entry in self._queued.snapshot()
+            )
+
 
 # One tracker per agent for the agent's life, shared by its watcher, its session, the stop and tap executors and
 # the model bar. Keyed by agent id alone; a grok relaunch is adopted in place by ``set_session``.

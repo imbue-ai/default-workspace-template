@@ -144,9 +144,9 @@ class GrokAtomicShoulderTap(AtomicShoulderTap):
         A refused press still waits a little for the turn to end, since mngr refuses one into a turn grok has just
         ended; that turn ending is no error.
         """
-        if not watcher.get_queued_block():
-            return ShoulderTapOutcome(status=_NOTHING_QUEUED)
         agent_state_dir = self._agent_info.agent_state_dir
+        if not watcher.get_queued_block() or not get_tracker(agent_state_dir).has_deliverable_entries():
+            return ShoulderTapOutcome(status=_NOTHING_QUEUED)
         turns = get_cancellable_turns(agent_state_dir)
         if not turns:
             watcher.notify_idle()
