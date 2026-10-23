@@ -66,11 +66,12 @@ dev = [
     # root .venv so `uv run mngr` parses its agent_types fields instead of
     # rejecting them as "Unknown fields".
     "imbue-mngr-pi-coding",
-    # imbue-mngr-opencode / imbue-mngr-antigravity: same rationale as the three
-    # above -- registering the opencode / antigravity agent types so mngr can parse
-    # their `[agent_types.*]` config blocks.
+    # imbue-mngr-opencode / imbue-mngr-antigravity / imbue-mngr-grok: same rationale as
+    # the three above -- registering the opencode / antigravity / grok agent types so mngr
+    # can parse their `[agent_types.*]` config blocks.
     "imbue-mngr-opencode",
     "imbue-mngr-antigravity",
+    "imbue-mngr-grok",
     "imbue-mngr-autocompact",
     # Shared validator that checks mngr CLI argvs against the live mngr command
     # tree; used by the per-feature contract tests (bootstrap's manager_test,
@@ -130,6 +131,7 @@ imbue-mngr-codex = { git = "https://github.com/imbue-ai/mngr-internal", rev = "d
 imbue-mngr-pi-coding = { git = "https://github.com/imbue-ai/mngr-internal", rev = "d7fe6b3ccb137cd99e98244e8270d24ca465e4df", subdirectory = "libs/mngr_pi_coding" }
 imbue-mngr-opencode = { git = "https://github.com/imbue-ai/mngr-internal", rev = "d7fe6b3ccb137cd99e98244e8270d24ca465e4df", subdirectory = "libs/mngr_opencode" }
 imbue-mngr-antigravity = { git = "https://github.com/imbue-ai/mngr-internal", rev = "d7fe6b3ccb137cd99e98244e8270d24ca465e4df", subdirectory = "libs/mngr_antigravity" }
+imbue-mngr-grok = { git = "https://github.com/imbue-ai/mngr-internal", rev = "d7fe6b3ccb137cd99e98244e8270d24ca465e4df", subdirectory = "libs/mngr_grok" }
 imbue-mngr-autocompact = { git = "https://github.com/imbue-ai/mngr-internal", rev = "d7fe6b3ccb137cd99e98244e8270d24ca465e4df", subdirectory = "libs/mngr_autocompact" }
 concurrency-group = { git = "https://github.com/imbue-ai/mngr-internal", rev = "d7fe6b3ccb137cd99e98244e8270d24ca465e4df", subdirectory = "libs/concurrency_group" }
 imbue-mngr-ttyd = { git = "https://github.com/imbue-ai/mngr-internal", rev = "d7fe6b3ccb137cd99e98244e8270d24ca465e4df", subdirectory = "libs/mngr_ttyd" }

@@ -722,6 +722,7 @@ dependencies = [
     { name = "imbue-mngr-autocompact" },
     { name = "imbue-mngr-claude" },
     { name = "imbue-mngr-codex" },
+    { name = "imbue-mngr-grok" },
     { name = "imbue-mngr-opencode" },
     { name = "imbue-mngr-pi-coding" },
     { name = "oom-priority" },
@@ -769,6 +770,7 @@ requires-dist = [
     { name = "imbue-mngr-autocompact", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fmngr_autocompact&rev=d7fe6b3ccb137cd99e98244e8270d24ca465e4df" },
     { name = "imbue-mngr-claude", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fmngr_claude&rev=d7fe6b3ccb137cd99e98244e8270d24ca465e4df" },
     { name = "imbue-mngr-codex", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fmngr_codex&rev=d7fe6b3ccb137cd99e98244e8270d24ca465e4df" },
+    { name = "imbue-mngr-grok", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fmngr_grok&rev=d7fe6b3ccb137cd99e98244e8270d24ca465e4df" },
     { name = "imbue-mngr-opencode", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fmngr_opencode&rev=d7fe6b3ccb137cd99e98244e8270d24ca465e4df" },
     { name = "imbue-mngr-pi-coding", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fmngr_pi_coding&rev=d7fe6b3ccb137cd99e98244e8270d24ca465e4df" },
     { name = "oom-priority", editable = "system/services/oom_priority" },
@@ -1024,6 +1026,7 @@ dev = [
     { name = "imbue-mngr-autocompact" },
     { name = "imbue-mngr-claude" },
     { name = "imbue-mngr-codex" },
+    { name = "imbue-mngr-grok" },
     { name = "imbue-mngr-opencode" },
     { name = "imbue-mngr-pi-coding" },
     { name = "inline-snapshot" },
@@ -1063,6 +1066,7 @@ dev = [
     { name = "imbue-mngr-autocompact", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fmngr_autocompact&rev=d7fe6b3ccb137cd99e98244e8270d24ca465e4df" },
     { name = "imbue-mngr-claude", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fmngr_claude&rev=d7fe6b3ccb137cd99e98244e8270d24ca465e4df" },
     { name = "imbue-mngr-codex", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fmngr_codex&rev=d7fe6b3ccb137cd99e98244e8270d24ca465e4df" },
+    { name = "imbue-mngr-grok", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fmngr_grok&rev=d7fe6b3ccb137cd99e98244e8270d24ca465e4df" },
     { name = "imbue-mngr-opencode", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fmngr_opencode&rev=d7fe6b3ccb137cd99e98244e8270d24ca465e4df" },
     { name = "imbue-mngr-pi-coding", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fmngr_pi_coding&rev=d7fe6b3ccb137cd99e98244e8270d24ca465e4df" },
     { name = "inline-snapshot", specifier = ">=0.31" },
@@ -1871,6 +1875,14 @@ source = { git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2F
 dependencies = [
     { name = "imbue-mngr" },
     { name = "websockets" },
+]
+
+[[package]]
+name = "imbue-mngr-grok"
+version = "0.1.0"
+source = { git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fmngr_grok&rev=d7fe6b3ccb137cd99e98244e8270d24ca465e4df#d7fe6b3ccb137cd99e98244e8270d24ca465e4df" }
+dependencies = [
+    { name = "imbue-mngr" },
 ]
 
 [[package]]

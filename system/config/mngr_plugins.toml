@@ -37,6 +37,11 @@ package = "imbue-mngr-antigravity"
 subdirectory = "libs/mngr_antigravity"
 tools = ["mngr", "chat"]
 
+[[plugins]]
+package = "imbue-mngr-grok"
+subdirectory = "libs/mngr_grok"
+tools = ["mngr", "chat"]
+
 # The wait plugin only adds a CLI command, so no app's tool has a use for it.
 [[plugins]]
 package = "imbue-mngr-wait"
