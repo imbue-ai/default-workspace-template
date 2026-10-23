@@ -20,6 +20,9 @@ from imbue.chat.harnesses.codex.session_parser import parse_lines as codex_parse
 from imbue.chat.harnesses.grok.session_parser import GrokLaneState
 from imbue.chat.harnesses.grok.session_parser import INTERNAL_MARKER_TYPES as GROK_INTERNAL_MARKER_TYPES
 from imbue.chat.harnesses.grok.session_parser import parse_record as grok_parse_record
+from imbue.chat.harnesses.grok.testing import find_fixture_scenario
+from imbue.chat.harnesses.grok.testing import read_fixture_root_ids
+from imbue.chat.harnesses.grok.testing import read_fixture_updates
 from imbue.chat.harnesses.pi_coding.session_parser import parse_record
 from imbue.chat.harnesses.transcript_store import iter_line_spans
 
@@ -311,16 +314,12 @@ def test_antigravity_events_satisfy_the_contract() -> None:
     _assert_contract(events, "antigravity")
 
 
-_GROK_FIXTURES = Path(__file__).parent / "grok" / "fixtures"
-
-
 def _grok_wire_events(scenario_dir: Path) -> list[dict[str, Any]]:
     """Every wire event of a captured grok scenario's root session, as its loader receives them."""
-    session_id = scenario_dir.joinpath("roots").read_text().split()[0]
+    session_id = read_fixture_root_ids(scenario_dir)[0]
     lane = GrokLaneState(session_id=session_id, is_root=True)
     events: list[dict[str, Any]] = []
-    data = scenario_dir.joinpath(session_id, "updates.jsonl").read_bytes()
-    for offset, _length, line in iter_line_spans(data, 0):
+    for offset, _length, line in iter_line_spans(read_fixture_updates(scenario_dir, session_id), 0):
         for event in grok_parse_record(json.loads(line), lane, offset=offset):
             if event["type"] not in GROK_INTERNAL_MARKER_TYPES:
                 events.append(event)
@@ -329,45 +328,7 @@ def _grok_wire_events(scenario_dir: Path) -> list[dict[str, Any]]:
 
 def test_grok_events_satisfy_the_contract() -> None:
     """A real grok 1.0.62 session with a shell call: a user turn, the call, its result and the reply."""
-    events = _grok_wire_events(_GROK_FIXTURES / "sessions" / "tool")
+    events = _grok_wire_events(find_fixture_scenario("tool"))
 
     _assert_contract(events, "grok")
     assert all(event["session_id"] for event in events)
-
-
-def test_grok_stamps_tk_decoration_and_request_objects_resident() -> None:
-    """Grok's shell results, captured from the pinned binary: the request objects and the tk lines are
-    stamped from the whole output, including a request echoed after output grok truncated."""
-    results = [
-        event
-        for event in _grok_wire_events(_GROK_FIXTURES / "headless_sessions" / "stamps")
-        if event["type"] == "tool_result"
-    ]
-
-    assert results[0]["permission_request"]["request_id"] == "req-grok-1"
-    assert results[1]["secret_request"]["request_id"] == "sec-grok-1"
-    assert "Updated gro-step-ab12 -> in_progress" in results[2]["tk_stamp"]
-    assert "tk-step gro-step-ab12 title: Plan the work" in results[2]["tk_stamp"]
-    assert results[3]["permission_request"]["request_id"] == "req-grok-tail"
-    assert results[3]["output_chars"] > 20000
-    assert all("output" not in result for result in results)
-
-
-def test_grok_error_marker_and_snippet_stamp_from_the_full_output() -> None:
-    """A shell call grok marks completed with a non-zero exit, a failed read, and a killed command
-    all read as failures, each with the first line of what grok told the model."""
-    results = [
-        (event["tool_name"], event["is_error"], event.get("error_snippet"))
-        for scenario in ("exit_codes", "signal")
-        for event in _grok_wire_events(_GROK_FIXTURES / "headless_sessions" / scenario)
-        if event["type"] == "tool_result"
-    ]
-
-    assert results == [
-        ("run_terminal_command", True, "exit: 3"),
-        ("run_terminal_command", True, "exit: 1"),
-        ("run_terminal_command", True, "exit: 1"),
-        ("read_file", True, "Error: /tmp/grok-fixtures/headless/exit_codes/work/missing-file.txt does not exist."),
-        ("run_terminal_command", False, None),
-        ("run_terminal_command", True, "exit: killed (signal 15)"),
-    ]

@@ -1,18 +1,16 @@
 """Tests for grok's tool labels, held to the tool names and argument keys grok 1.0.62 declares."""
 
 import json
-from pathlib import Path
 
 import pytest
 
+from imbue.chat.harnesses.grok.testing import GROK_FIXTURES_DIR
 from imbue.chat.harnesses.grok.tool_labels import SHELL_COMMAND_KEY
 from imbue.chat.harnesses.grok.tool_labels import SHELL_TOOL_NAMES
 from imbue.chat.harnesses.grok.tool_labels import TOOL_LABELS
 from imbue.chat.harnesses.grok.tool_labels import USE_TOOL_INNER_NAME_KEY
 from imbue.chat.harnesses.grok.tool_labels import shell_command
 from imbue.chat.harnesses.grok.tool_labels import tool_labels
-
-_FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def _labels(tool_name: str, raw_input: dict[str, object], native_label: str = "Native") -> tuple[str, str]:
@@ -103,7 +101,7 @@ def test_shell_command_is_the_command_of_the_two_shell_tools_only() -> None:
 
 def _declared_arguments() -> dict[str, set[str]]:
     """Each tool's argument keys, from the tool definitions grok 1.0.62 recorded for a captured session."""
-    definitions = json.loads(next(_FIXTURES.rglob("tool_definitions.json")).read_text())
+    definitions = json.loads(next(GROK_FIXTURES_DIR.rglob("tool_definitions.json")).read_text())
     return {
         definition["function"]["name"]: set(definition["function"]["parameters"].get("properties", {}))
         for definition in definitions
@@ -129,7 +127,7 @@ def test_every_tool_and_argument_key_the_labels_read_is_one_grok_declares() -> N
 def test_every_argument_a_captured_call_sent_is_one_grok_declares() -> None:
     declared = _declared_arguments()
     sent: dict[str, set[str]] = {}
-    for path in _FIXTURES.rglob("updates.jsonl"):
+    for path in GROK_FIXTURES_DIR.rglob("updates.jsonl"):
         for line in path.read_text().splitlines():
             update = json.loads(line)["params"]["update"]
             if update.get("sessionUpdate") == "tool_call":

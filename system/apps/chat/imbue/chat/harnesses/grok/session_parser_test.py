@@ -19,6 +19,7 @@ from imbue.chat.harnesses.grok.session_parser import record_timestamp
 from imbue.chat.harnesses.grok.session_parser import unwrap_send_now
 from imbue.chat.harnesses.grok.testing import find_fixture_scenario
 from imbue.chat.harnesses.grok.testing import list_fixture_scenarios
+from imbue.chat.harnesses.grok.testing import read_fixture_root_ids
 from imbue.chat.harnesses.transcript_store import TranscriptStore
 from imbue.chat.harnesses.transcript_store import iter_line_spans
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -46,7 +47,7 @@ def _parse_session(scenario_dir: Path, session_id: str) -> ParsedSession:
     records_by_offset: dict[int, dict[str, Any]] = {}
     markers: list[dict[str, Any]] = []
     source_offset_by_event_id: dict[str, int] = {}
-    roots = scenario_dir.joinpath("roots").read_text().split()
+    roots = read_fixture_root_ids(scenario_dir)
     lane = GrokLaneState(session_id=session_id, is_root=session_id in roots)
     store = TranscriptStore.build()
     path = scenario_dir / session_id / "updates.jsonl"
@@ -72,7 +73,7 @@ def _parse_session(scenario_dir: Path, session_id: str) -> ParsedSession:
 
 def _parse(scenario: str, session_id: str | None = None) -> ParsedSession:
     scenario_dir = find_fixture_scenario(scenario)
-    chosen = session_id or scenario_dir.joinpath("roots").read_text().split()[0]
+    chosen = session_id or read_fixture_root_ids(scenario_dir)[0]
     return _parse_session(scenario_dir, chosen)
 
 
@@ -712,7 +713,7 @@ def test_monitor_reports_wake_grok_as_notices() -> None:
 
 @pytest.mark.parametrize("scenario_dir", _ALL_SCENARIOS, ids=lambda path: path.name)
 def test_every_payload_is_off_the_wire_and_served_whole_from_the_events_own_record(scenario_dir: Path) -> None:
-    for session_id in scenario_dir.joinpath("roots").read_text().split():
+    for session_id in read_fixture_root_ids(scenario_dir):
         parsed = _parse_session(scenario_dir, session_id)
         for event in parsed.events:
             assert not {"output", "thinking"} & event.keys()
