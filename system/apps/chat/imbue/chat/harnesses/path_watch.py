@@ -16,7 +16,8 @@ rollout files under a stable sessions root all wake the loop without reschedulin
 anything else is watched via its parent directory (so a not-yet-created file --
 claude's ``settings.json`` before first launch -- is caught the moment it appears).
 Directories that do not exist yet are retried on each loop, mirroring the codex
-watcher's lazy observer start.
+watcher's lazy observer start, and so is a watched directory that was deleted, whose watch
+watchdog stops for good.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from typing import Any
 
 from loguru import logger
 from watchdog.observers import Observer
+from watchdog.observers.api import ObservedWatch
 
 from imbue.chat.watcher_common import POLL_INTERVAL_SECONDS
 from imbue.chat.watcher_common import WakeOnChangeHandler
@@ -54,7 +56,7 @@ class PathWatcher:
     # The watchdog Observer, once started. ``Any`` because watchdog's Observer is a
     # factory alias, not a type expression the checker accepts.
     _observer: Any
-    _watched_dirs: set[str]
+    _watch_by_key: dict[str, ObservedWatch]
     _thread: threading.Thread | None
     _min_cycle_interval_seconds: float
 
@@ -73,7 +75,7 @@ class PathWatcher:
         self._stop_event = threading.Event()
         self._observer_lock = threading.Lock()
         self._observer = None
-        self._watched_dirs = set()
+        self._watch_by_key = {}
         self._thread = None
         return self
 
@@ -129,6 +131,10 @@ class PathWatcher:
         path's parent directory (catching a file that does not exist yet). A dir
         that is still absent is skipped and retried on the next loop.
         """
+        with self._observer_lock:
+            running_observer = self._observer
+        if running_observer is not None:
+            self._forget_stopped_watches(running_observer)
         handler = WakeOnChangeHandler(self._wake_event)
         for path in self._paths:
             if path.is_dir():
@@ -138,16 +144,28 @@ class PathWatcher:
             if not target.is_dir():
                 continue
             key = f"{target}:{recursive}"
-            if key in self._watched_dirs:
+            if key in self._watch_by_key:
                 continue
             observer = self._start_observer_if_needed()
             if observer is None:
                 return
             try:
-                observer.schedule(handler, str(target), recursive=recursive)
-                self._watched_dirs.add(key)
+                self._watch_by_key[key] = observer.schedule(handler, str(target), recursive=recursive)
             except OSError as e:
                 logger.debug("PathWatcher failed to schedule {}: {}", target, e)
+
+    def _forget_stopped_watches(self, observer: Any) -> None:
+        """Unschedule each watch whose emitter stopped, which watchdog does once the watched directory is deleted.
+
+        Scheduling the same path again would reuse the stopped emitter, so the watch is removed
+        first and its key dropped, leaving the loop to schedule a fresh one.
+        """
+        running_watches = {emitter.watch for emitter in list(observer.emitters) if emitter.should_keep_running()}
+        for key, watch in list(self._watch_by_key.items()):
+            if watch not in running_watches:
+                logger.debug("PathWatcher's watch on {} stopped; watching it again once it exists", watch.path)
+                observer.unschedule(watch)
+                del self._watch_by_key[key]
 
     def _start_observer_if_needed(self) -> Any:
         """Return the running watchdog observer, starting it on first use.

@@ -1,5 +1,6 @@
 """Unit tests for the shared PathWatcher."""
 
+import shutil
 import threading
 import time
 from itertools import pairwise
@@ -10,6 +11,7 @@ import pytest
 from watchdog.utils import BaseThread
 
 from imbue.chat.harnesses.path_watch import PathWatcher
+from imbue.mngr.utils.polling import wait_for
 
 
 class _StopGatedDirPath(Path):
@@ -145,6 +147,37 @@ def test_a_stream_of_wakes_is_batched_into_one_refresh_per_minimum_interval(tmp_
     assert 2 <= len(cycles) <= 6
     gaps = [later - earlier for earlier, later in pairwise(cycles)]
     assert min(gaps) >= interval * 0.9
+
+
+def _has_running_watch_on(watcher: PathWatcher, path: Path) -> bool:
+    observer = watcher._observer
+    return observer is not None and any(
+        emitter.watch.path == str(path) and emitter.should_keep_running() for emitter in list(observer.emitters)
+    )
+
+
+def test_a_watched_directory_that_is_deleted_and_recreated_is_watched_again(tmp_path: Path) -> None:
+    """watchdog stops a watch whose directory is deleted; the recreated directory gets a fresh one."""
+    watched_dir = tmp_path / "turns"
+    watched_dir.mkdir()
+    watcher = PathWatcher.build((watched_dir,), lambda: None, min_cycle_interval_seconds=0.0)
+    watcher.start()
+    try:
+        wait_for(lambda: _has_running_watch_on(watcher, watched_dir), error_message="the directory was never watched")
+        shutil.rmtree(watched_dir)
+        wait_for(
+            lambda: not _has_running_watch_on(watcher, watched_dir),
+            error_message="the deleted directory's watch kept running",
+        )
+
+        watched_dir.mkdir()
+
+        wait_for(
+            lambda: _has_running_watch_on(watcher, watched_dir),
+            error_message="the recreated directory was not watched again",
+        )
+    finally:
+        watcher.stop()
 
 
 def test_stopping_a_batched_watcher_does_not_wait_out_its_interval(tmp_path: Path) -> None:
