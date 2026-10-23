@@ -12,7 +12,6 @@ from imbue.chat.harnesses.grok.queue_tracker import GrokQueueTracker
 from imbue.chat.harnesses.grok.queue_tracker import GrokSendResult
 from imbue.chat.harnesses.grok.queue_tracker import GrokSendVerdict
 from imbue.chat.harnesses.grok.queue_tracker import REFUSED_VERDICTS
-from imbue.chat.harnesses.grok.queue_tracker import drop_tracker
 from imbue.chat.harnesses.grok.queue_tracker import get_tracker
 from imbue.chat.harnesses.grok.queue_tracker import session_token
 from imbue.chat.harnesses.grok.session import GrokHarnessSession
@@ -36,7 +35,6 @@ def _session(
     agent_state_dir: Path, typed: list[str], *, is_grok_running: bool = True, is_starting_up: bool = False
 ) -> GrokHarnessSession:
     agent_state_dir.mkdir(parents=True, exist_ok=True)
-    drop_tracker(agent_state_dir.name)
     if is_grok_running:
         write_live_grok_pid(agent_state_dir)
     session = GrokHarnessSession.build(

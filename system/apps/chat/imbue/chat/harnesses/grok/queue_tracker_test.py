@@ -12,7 +12,6 @@ from imbue.chat.harnesses.grok.queue_tracker import GrokSendVerdict
 from imbue.chat.harnesses.grok.queue_tracker import InvalidControlCommandError
 from imbue.chat.harnesses.grok.queue_tracker import MAX_DELIVERY_ATTEMPTS
 from imbue.chat.harnesses.grok.queue_tracker import OUTBOX_FILENAME
-from imbue.chat.harnesses.grok.queue_tracker import drop_tracker
 from imbue.chat.harnesses.grok.queue_tracker import enqueue_control_command
 from imbue.chat.harnesses.grok.queue_tracker import get_tracker
 from imbue.chat.harnesses.grok.queue_tracker import session_token
@@ -508,16 +507,13 @@ def test_the_control_lane_takes_only_model_and_effort_lines(tmp_path: Path, comm
 def test_enqueue_control_command_reaches_the_agents_shared_tracker_and_wakes_its_worker(tmp_path: Path) -> None:
     woken: list[bool] = []
     tracker = get_tracker(tmp_path)
-    try:
-        tracker.attach(publish=lambda _snapshot: None, wake=lambda: woken.append(True))
+    tracker.attach(publish=lambda _snapshot: None, wake=lambda: woken.append(True))
 
-        enqueue_control_command(tmp_path, "/effort medium")
+    enqueue_control_command(tmp_path, "/effort medium")
 
-        assert get_tracker(tmp_path) is tracker
-        assert tracker.next_control_command() == "/effort medium"
-        assert woken == [True]
-    finally:
-        drop_tracker(tmp_path.name)
+    assert get_tracker(tmp_path) is tracker
+    assert tracker.next_control_command() == "/effort medium"
+    assert woken == [True]
 
 
 def test_a_running_stop_refuses_every_claim_and_wakes_the_worker_when_it_ends(tmp_path: Path) -> None:

@@ -15,7 +15,6 @@ from imbue.chat.harnesses.grok.model import build_grok_models_environment
 from imbue.chat.harnesses.grok.model import list_account_model_ids
 from imbue.chat.harnesses.grok.model import parse_grok_models_output
 from imbue.chat.harnesses.grok.model import read_agent_account_dir
-from imbue.chat.harnesses.grok.queue_tracker import drop_tracker
 from imbue.chat.harnesses.grok.queue_tracker import get_tracker
 from imbue.chat.harnesses.grok.testing import GROK_SESSION_SCOPE
 from imbue.chat.harnesses.grok.testing import build_grok_key_scope
@@ -191,19 +190,16 @@ def _fail(_line: str) -> bool:
 def test_the_registered_resolver_holds_its_lines_in_the_agents_control_lane(tmp_path: Path) -> None:
     state_dir = tmp_path / "agent-00000000000000000000000000000042"
     state_dir.mkdir()
-    try:
-        build_resolver(_agent_info(state_dir)).switch(
-            ModelIdentity(model_id="grok-4.5", effort="medium", fast=False),
-            frozenset({ModelAxis.MODEL, ModelAxis.EFFORT}),
-            _fail,
-        )
+    build_resolver(_agent_info(state_dir)).switch(
+        ModelIdentity(model_id="grok-4.5", effort="medium", fast=False),
+        frozenset({ModelAxis.MODEL, ModelAxis.EFFORT}),
+        _fail,
+    )
 
-        tracker = get_tracker(state_dir)
-        assert tracker.has_held_work()
-        assert tracker.snapshot() == []
-        assert tracker.next_control_command() == "/model grok-4.5"
-    finally:
-        drop_tracker(state_dir.name)
+    tracker = get_tracker(state_dir)
+    assert tracker.has_held_work()
+    assert tracker.snapshot() == []
+    assert tracker.next_control_command() == "/model grok-4.5"
 
 
 @pytest.mark.parametrize(

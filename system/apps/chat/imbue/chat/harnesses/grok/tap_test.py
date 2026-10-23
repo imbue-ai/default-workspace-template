@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from imbue.chat.agent_discovery import AgentInfo
-from imbue.chat.harnesses.grok.queue_tracker import drop_tracker
 from imbue.chat.harnesses.grok.tap import GrokAtomicShoulderTap
 from imbue.chat.harnesses.grok.tap import GrokInterruptToComposer
 from imbue.chat.harnesses.grok.testing import make_grok_agent_info
@@ -89,7 +88,6 @@ class _Grok:
 def _setup(tmp_path: Path) -> tuple[AgentInfo, GrokSessionWatcher, _Grok]:
     agent_state_dir = tmp_path / "agent-grok-tap"
     agent_state_dir.mkdir()
-    drop_tracker(agent_state_dir.name)
     agent_info = make_grok_agent_info(agent_state_dir, agent_state_dir.name, "grok-tap")
     watcher = GrokSessionWatcher.build(agent_info, lambda _agent_id, _events: None)
     return agent_info, watcher, _Grok(agent_state_dir)

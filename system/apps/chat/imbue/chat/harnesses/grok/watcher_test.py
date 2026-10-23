@@ -10,7 +10,6 @@ import pytest
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.harnesses.grok.queue_tracker import GrokSendVerdict
-from imbue.chat.harnesses.grok.queue_tracker import drop_tracker
 from imbue.chat.harnesses.grok.testing import ROOTS_RELATIVE_PATH
 from imbue.chat.harnesses.grok.testing import add_grok_session
 from imbue.chat.harnesses.grok.testing import append_grok_updates
@@ -507,7 +506,6 @@ def _flushing_watcher(
 ) -> tuple[GrokSessionWatcher, _ScriptedGrok, list[dict[str, Any]]]:
     """A primed, unstarted watcher over a grok whose one session already holds a finished turn."""
     write_grok_agent_state(agent_state_dir, find_fixture_scenario("plain"))
-    drop_tracker(agent_state_dir.name)
     watcher, broadcast, _reported = _build_watcher(agent_state_dir)
     watcher._prime()
     grok = _ScriptedGrok(agent_state_dir)
@@ -918,7 +916,6 @@ def test_a_root_turn_change_wakes_the_worker_only_while_something_is_held(tmp_pa
 def test_the_running_worker_sends_a_held_message_within_a_second_of_the_turn_ending(tmp_path: Path) -> None:
     """The root-turn directory wakes the worker: the transcript's idle edge can come before mngr clears the turn."""
     write_grok_agent_state(tmp_path, find_fixture_scenario("plain"))
-    drop_tracker(tmp_path.name)
     write_root_turn(tmp_path, _PLAIN_ROOT, "prompt-9")
     watcher, _broadcast, _reported = _build_watcher(tmp_path)
     grok = _ScriptedGrok(tmp_path)
