@@ -12,10 +12,13 @@ of the committed file, resolved to the grok plugin's config.
 5. ``settings_overrides`` folds onto mngr's rendered ``config.toml`` without dropping any key mngr
    writes there.
 6. grok's file tools are denied the secrets directory.
+7. No workspace-wide export names a grok credential or home variable: one inherited by every agent
+   would override each chat's own account binding and grok home.
 """
 
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -31,6 +34,13 @@ from imbue.mngr_grok.api import render_pinned_grok_home
 
 _REPO_ROOT = Path(__file__).parents[1]
 _SETTINGS_PATH = _REPO_ROOT / ".mngr" / "settings.toml"
+_DOCKERFILE_PATH = _REPO_ROOT / "system" / "Dockerfile"
+_SUPERVISORD_CONF_DIR = _REPO_ROOT / "system" / "supervisord.conf.d"
+_GROK_ACCOUNT_VARIABLES = frozenset({"GROK_AUTH_PATH", "XAI_API_KEY", "GROK_HOME"})
+_EXPORT_KEYS = frozenset({"env", "host_env", "pass_env", "pass_host_env"})
+_DOCKERFILE_EXPORT_RE = re.compile(r"^\s*(?:ENV|ARG)\s+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE)
+_SUPERVISORD_ENVIRONMENT_RE = re.compile(r"^\s*environment\s*=(.*)$", re.MULTILINE)
+_SUPERVISORD_VARIABLE_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*=")
 _OOM_LAUNCHER_COMMAND = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py grok"
 
 
@@ -114,3 +124,42 @@ def test_grok_file_tools_are_denied_the_secrets_directory(
         "settings_overrides"
     ]
     assert settings_overrides["permission"] == {"deny": ["Read(**/.secrets/**)"]}
+
+
+def _exported_names(value: Any) -> list[str]:
+    """The variable names an export value sets: a table's keys, or each list entry up to its `=`."""
+    if isinstance(value, dict):
+        return list(value.keys())
+    if isinstance(value, list):
+        return [entry.split("=", 1)[0] for entry in value if isinstance(entry, str)]
+    return []
+
+
+def _settings_export_names(value: Any) -> list[str]:
+    """Every variable name an env, host_env, pass_env or pass_host_env key (or its `__extend`) sets, at any depth."""
+    if isinstance(value, dict):
+        names: list[str] = []
+        for key, child in value.items():
+            if key.removesuffix("__extend") in _EXPORT_KEYS:
+                names.extend(_exported_names(child))
+            names.extend(_settings_export_names(child))
+        return names
+    if isinstance(value, list):
+        return [name for child in value for name in _settings_export_names(child)]
+    return []
+
+
+def test_no_workspace_wide_export_names_a_grok_account_variable() -> None:
+    settings_names = _settings_export_names(tomllib.loads(_SETTINGS_PATH.read_text()))
+    dockerfile_names = _DOCKERFILE_EXPORT_RE.findall(_DOCKERFILE_PATH.read_text())
+    supervisord_names = [
+        name
+        for conf_path in sorted(_SUPERVISORD_CONF_DIR.glob("*.conf"))
+        for environment in _SUPERVISORD_ENVIRONMENT_RE.findall(conf_path.read_text())
+        for name in _SUPERVISORD_VARIABLE_RE.findall(environment)
+    ]
+
+    assert "MNGR_AGENT_ROLE" in settings_names
+    assert "XDG_CACHE_HOME" in dockerfile_names
+    assert "MALLOC_ARENA_MAX" in supervisord_names
+    assert _GROK_ACCOUNT_VARIABLES.isdisjoint([*settings_names, *dockerfile_names, *supervisord_names])
