@@ -4261,20 +4261,33 @@ def test_a_turn_that_ends_to_wait_is_published_with_its_wait_never_idle_in_betwe
         manager.stop()
 
 
+def _grok_chat_manager(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[AgentManager, BackgroundTaskReader, Path]:
+    """A manager reading background tasks under ``tmp_path``, mngr's host dir there, and agent-1's grok state dir."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    manager, reader = _manager_reading_tasks(broadcaster, tmp_path)
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    return manager, reader, state_dir
+
+
+def _track_grok_chat(manager: AgentManager) -> None:
+    """Track agent-1 as Chat-1, a RUNNING grok chat."""
+    seed_agent_state(manager, "agent-1", name="Chat-1", state="RUNNING", harness=HarnessType.GROK)
+    manager._ensure_activity_tracking("agent-1")
+
+
 def test_a_grok_turn_that_leaves_a_background_subagent_running_reads_background_not_working(
     broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """mngr_grok keeps ``active`` (and a RUNNING lifecycle) while a background subagent outlives the top-level turn
     that started it. Grok's dot reads the turn's end from its transcript and declares no ``active`` marker, so the
     turn is not left closing: the chat waits on the subagent's marker as ``background``."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    manager, reader = _manager_reading_tasks(broadcaster, tmp_path)
-    state_dir = tmp_path / "agents" / "agent-1"
-    state_dir.mkdir(parents=True)
+    manager, reader, state_dir = _grok_chat_manager(broadcaster, tmp_path, monkeypatch)
     root_session_id = "01a156db-07ea-7993-b2e6-dcaa7cb0a81c"
     try:
-        seed_agent_state(manager, "agent-1", name="Chat-1", state="RUNNING", harness=HarnessType.GROK)
-        manager._ensure_activity_tracking("agent-1")
+        _track_grok_chat(manager)
         (state_dir / "active").touch()
         manager.update_session_events(
             "agent-1",
@@ -4332,9 +4345,7 @@ def test_a_grok_subagent_that_ends_during_a_later_turn_keeps_the_chat_waiting_un
     """grok 1.0.62's own session logs replayed line by line through the grok watcher, wired as the app wires it: a
     background subagent ends while a later turn runs, that turn's Stop hook drops its marker, and grok wakes the
     session for it once the turn ends. The chat reads background between the two turns, never idle."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    manager, reader = _manager_reading_tasks(broadcaster, tmp_path)
-    state_dir = tmp_path / "agents" / "agent-1"
+    manager, reader, state_dir = _grok_chat_manager(broadcaster, tmp_path, monkeypatch)
     scenario_dir = find_fixture_scenario("subagent_ends_mid_reply")
     root_ids = read_fixture_root_ids(scenario_dir)
     (child_id,) = [session_id for session_id in read_fixture_session_ids(scenario_dir) if session_id not in root_ids]
@@ -4346,8 +4357,7 @@ def test_a_grok_subagent_that_ends_during_a_later_turn_keeps_the_chat_waiting_un
     watcher = _grok_watcher_wired_to(manager, state_dir)
     marker_path = reader.chat_dir(ChatId("agent-1")) / f"harness-grok-{child_id}.json"
     try:
-        seed_agent_state(manager, "agent-1", name="Chat-1", state="RUNNING", harness=HarnessType.GROK)
-        manager._ensure_activity_tracking("agent-1")
+        _track_grok_chat(manager)
         statuses: list[ChatStatus] = []
         is_subagent_finished = False
         for _timestamp, session_id, line in heapq.merge(*lines_by_session, key=itemgetter(0)):
@@ -4385,14 +4395,11 @@ def test_a_grok_chat_whose_history_ended_its_background_work_reads_idle_when_the
     broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scenario: str
 ) -> None:
     """A watcher primes on the whole history, whose ended work grok already woke the session for."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    manager, _reader = _manager_reading_tasks(broadcaster, tmp_path)
-    state_dir = tmp_path / "agents" / "agent-1"
+    manager, _reader, state_dir = _grok_chat_manager(broadcaster, tmp_path, monkeypatch)
     write_grok_agent_state(state_dir, find_fixture_scenario(scenario))
     watcher = _grok_watcher_wired_to(manager, state_dir)
     try:
-        seed_agent_state(manager, "agent-1", name="Chat-1", state="RUNNING", harness=HarnessType.GROK)
-        manager._ensure_activity_tracking("agent-1")
+        _track_grok_chat(manager)
         manager.update_session_events("agent-1", watcher.get_all_events())
         watcher._prime()
         watcher._emit_cycle()
@@ -4431,12 +4438,9 @@ def test_a_task_whose_own_turn_is_still_to_come_keeps_the_chat_busy_past_the_tur
 ) -> None:
     """grok reports ``will_wake`` on a background task's end; one that ends during a turn starts its own turn after
     it, and the turn's Stop hook has removed its marker by then."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    manager, reader = _manager_reading_tasks(broadcaster, tmp_path)
-    (tmp_path / "agents" / "agent-1").mkdir(parents=True)
+    manager, reader, _state_dir = _grok_chat_manager(broadcaster, tmp_path, monkeypatch)
     try:
-        seed_agent_state(manager, "agent-1", name="Chat-1", state="RUNNING", harness=HarnessType.GROK)
-        manager._ensure_activity_tracking("agent-1")
+        _track_grok_chat(manager)
         write_background_task_marker(reader, "agent-1", "sub-1", os.getpid(), harness=HarnessType.GROK.value)
         _observe_grok_turn_marker(manager, SpecialEventKind.TURN_STARTED, "2026-10-21T22:33:18.973Z")
 
@@ -4464,12 +4468,9 @@ def test_a_task_whose_own_turn_starts_in_the_batch_that_ends_the_last_one_stops_
 ) -> None:
     """grok can end a turn and start the one a task's end wakes within one read, so the agent never reads idle
     between them and no turn start claims the task; the watcher reports it over again as that turn starts."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    manager, _reader = _manager_reading_tasks(broadcaster, tmp_path)
-    (tmp_path / "agents" / "agent-1").mkdir(parents=True)
+    manager, _reader, _state_dir = _grok_chat_manager(broadcaster, tmp_path, monkeypatch)
     try:
-        seed_agent_state(manager, "agent-1", name="Chat-1", state="RUNNING", harness=HarnessType.GROK)
-        manager._ensure_activity_tracking("agent-1")
+        _track_grok_chat(manager)
         _observe_grok_turn_marker(manager, SpecialEventKind.TURN_STARTED, "2026-10-21T22:33:18.973Z")
         manager.forget_finished_tasks("agent-1", HarnessType.GROK, ("sub-1",), is_wake_turn_pending=True)
         manager.update_session_events(
@@ -4500,12 +4501,9 @@ def test_a_task_whose_own_turn_starts_in_the_batch_that_ends_the_last_one_stops_
 def test_a_task_whose_own_turn_never_comes_stops_keeping_the_chat_busy_after_the_grace_passes(
     broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    manager, _reader = _manager_reading_tasks(broadcaster, tmp_path)
-    (tmp_path / "agents" / "agent-1").mkdir(parents=True)
+    manager, _reader, _state_dir = _grok_chat_manager(broadcaster, tmp_path, monkeypatch)
     try:
-        seed_agent_state(manager, "agent-1", name="Chat-1", state="RUNNING", harness=HarnessType.GROK)
-        manager._ensure_activity_tracking("agent-1")
+        _track_grok_chat(manager)
         _observe_grok_turn_marker(manager, SpecialEventKind.TURN_STARTED, "2026-10-21T22:33:18.973Z")
         manager.forget_finished_tasks("agent-1", HarnessType.GROK, ("sub-1",), is_wake_turn_pending=True)
         _observe_grok_turn_marker(manager, SpecialEventKind.TURN_COMPLETED, "2026-10-21T22:33:49.348Z")
