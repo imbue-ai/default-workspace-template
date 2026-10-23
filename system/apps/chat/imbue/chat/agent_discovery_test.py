@@ -257,6 +257,42 @@ def test_a_send_that_may_have_typed_at_the_known_location_is_not_sent_again(is_b
 
 
 @pytest.mark.usefixtures("isolated_mngr_env")
+@pytest.mark.parametrize(
+    ("failure_kind", "is_pressed_after_discovery"),
+    [
+        pytest.param(SendFailureKind.INPUT_BLOCKED, False, id="refused"),
+        pytest.param(SendFailureKind.AGENT_NOT_FOUND, True, id="agent_moved"),
+        pytest.param(None, True, id="nothing_matched"),
+    ],
+)
+def test_a_press_falls_back_to_discovery_only_when_the_known_location_reached_no_agent(
+    failure_kind: SendFailureKind | None, is_pressed_after_discovery: bool
+) -> None:
+    """A grok Ctrl+C mngr refused, pressed again after discovery, can cancel a turn grok started meanwhile."""
+    discover_calls: list[AgentId] = []
+    press_calls: list[tuple[AgentMatch, ...]] = []
+
+    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
+        discover_calls.append(agent_id)
+        return (_make_match(host="host-b"),)
+
+    def _press(matches: Sequence[AgentMatch], key: str, ctx: MngrContext) -> MessageResult:
+        press_calls.append(tuple(matches))
+        if str(matches[0].host_name) == "host-b":
+            return MessageResult(successful_agents=[str(match.agent_id) for match in matches])
+        failures = (
+            [] if failure_kind is None else [AgentSendFailure(agent_name="alpha", reason="no", kind=failure_kind)]
+        )
+        return MessageResult(failures=failures)
+
+    messenger = MngrMessenger(discover=_discover, press=_press)
+    is_pressed = messenger.press_key_chord_to_agent(_AGENT_ID, "C-c", (_make_match(),))
+
+    assert is_pressed is is_pressed_after_discovery
+    assert (len(press_calls), len(discover_calls)) == ((2, 1) if is_pressed_after_discovery else (1, 0))
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
 def test_returns_a_reason_when_nothing_reachable() -> None:
     """A send that reaches no agent reports why, since the reason is what the user can act on."""
 

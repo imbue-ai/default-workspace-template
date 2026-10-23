@@ -335,6 +335,17 @@ def _may_have_typed(result: MessageResult) -> bool:
     )
 
 
+# The failure kinds of a delivery that found no agent where the caller located it.
+_STALE_LOCATION_FAILURE_KINDS: Final[frozenset[SendFailureKind]] = frozenset(
+    {SendFailureKind.AGENT_NOT_FOUND, SendFailureKind.AGENT_UNREACHABLE}
+)
+
+
+def _was_answered(result: MessageResult) -> bool:
+    """Whether a delivery that reached no agent as a success still reached one, which refused it."""
+    return any(failure.kind not in _STALE_LOCATION_FAILURE_KINDS for failure in result.failures)
+
+
 def _without_send_prefix(message: str, agent_name: str) -> str:
     """Drop mngr's standalone-raise framing from a blocked message before showing it.
 
@@ -450,12 +461,16 @@ class MngrMessenger(FrozenModel):
         The key-chord sibling of ``send_to_agent`` and resolves the agent exactly the same
         way (known location first, discovery on a miss), but delivers a keystroke rather than
         text and never auto-starts a stopped agent. Returns True when the chord reached the
-        agent.
+        agent. A press the agent refused is not pressed again.
         """
         mngr_ctx, cg = _get_mngr_context()
         try:
-            if known_locations and self.press(known_locations, key, mngr_ctx).successful_agents:
-                return True
+            if known_locations:
+                result = self.press(known_locations, key, mngr_ctx)
+                if result.successful_agents:
+                    return True
+                if _was_answered(result):
+                    return False
             matches = self.discover(agent_id, mngr_ctx)
             return bool(self.press(matches, key, mngr_ctx).successful_agents)
         finally:
