@@ -156,6 +156,15 @@ def test_the_hooks_read_the_grok_pid_mngr_grok_records_as_read_grok_pid_does(
     assert hooks.recorded_grok_pid(tmp_path) == read_grok_pid(tmp_path)
 
 
+def test_the_hooks_read_a_record_older_than_its_live_process_as_read_grok_pid_does(
+    tmp_path: Path,
+) -> None:
+    _record_grok_pid(tmp_path, os.getpid())
+    os.utime(tmp_path / hooks.GROK_PID_RELATIVE_PATH, (0, 0))
+
+    assert hooks.recorded_grok_pid(tmp_path) == read_grok_pid(tmp_path)
+
+
 def test_the_grok_pid_record_is_read_from_where_mngr_grok_keeps_it(
     tmp_path: Path,
 ) -> None:
