@@ -6396,13 +6396,24 @@ def test_a_rollback_rebuilds_the_mngr_tool_it_could_not_copy_aside(
     assert "nothing to copy aside for 'tool-imbue-mngr'" in capsys.readouterr().err
 
 
-def test_a_rollback_resyncs_the_venv_it_could_not_copy_aside_after_an_app_only_apply(
-    apply_repo: Path,
+@pytest.mark.parametrize("is_venv_copied", [True, False])
+def test_an_app_only_rollback_resyncs_the_venv_only_when_it_has_no_copy(
+    apply_repo: Path, is_venv_copied: bool
 ) -> None:
-    # The forward sync rewrote the venv from the merged app pyproject, and with no copy
-    # to put back only a sync from the restored tree undoes it. The mngr tool was never
-    # touched, so nothing reinstalls it.
-    runner = _apply_runner(_APP_PYPROJECT_DIFF, apply_repo)  # no .venv to copy aside
+    # The forward sync rewrote the venv from the merged app pyproject. A copy put back
+    # undoes that on its own; with none, only a sync from the restored tree does. The
+    # mngr tool was never touched, so nothing reinstalls it.
+    venv_marker = apply_repo / ".venv" / "marker.txt"
+    if is_venv_copied:
+        venv_marker.parent.mkdir()
+        venv_marker.write_text("pre-apply")
+    runner = _apply_runner(_APP_PYPROJECT_DIFF, apply_repo)
+
+    def sync_rewrites_the_venv(argv: list[str]) -> None:
+        if argv[:2] == ["uv", "sync"] and venv_marker.parent.is_dir():
+            venv_marker.write_text("synced")
+
+    runner.on_command = sync_rewrites_the_venv
     spawner = _FakeSpawner(output="ImportError: boom", exited=True)
 
     code = _apply(
@@ -6415,7 +6426,9 @@ def test_a_rollback_resyncs_the_venv_it_could_not_copy_aside_after_an_app_only_a
     assert code == 2
     # The forward sync is wrapped expendable; recovery's is not.
     recovery_syncs = [c for c in runner.raw_calls if c[:2] == ["uv", "sync"]]
-    assert len(recovery_syncs) == 1
+    assert len(recovery_syncs) == (0 if is_venv_copied else 1)
+    if is_venv_copied:
+        assert venv_marker.read_text() == "pre-apply"
     assert not runner.ran("uv", "tool", "install")
 
 
