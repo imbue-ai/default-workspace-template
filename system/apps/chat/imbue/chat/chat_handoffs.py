@@ -18,6 +18,7 @@ successor is created under a pre-minted id, so a retry after a failed pick adopt
 than creating another.
 """
 
+import os
 import shlex
 import string
 from collections.abc import Callable
@@ -839,9 +840,9 @@ class HandoffRunner:
             ),
         )
         command = self._deps.build_create_command(spec)
-        first_error = self._run_create(chat_id, command)
+        first_error = self._run_create(chat_id, command, spec.harness)
         error = (
-            self._recreate_after_destroying_half_made(chat_id, handoff.next_agent_id, command)
+            self._recreate_after_destroying_half_made(chat_id, handoff.next_agent_id, command, spec.harness)
             if first_error is not None and is_duplicate_id_refusal(first_error, handoff.next_agent_id)
             else first_error
         )
@@ -882,7 +883,7 @@ class HandoffRunner:
         return successor_info
 
     def _recreate_after_destroying_half_made(
-        self, chat_id: ChatId, successor_id: str, command: list[str]
+        self, chat_id: ChatId, successor_id: str, command: list[str], harness: HarnessType
     ) -> str | None:
         """Destroy the half-made agent holding the successor's id and run the create once more.
 
@@ -896,7 +897,7 @@ class HandoffRunner:
             logger.warning(
                 "Handoff of chat {}: could not destroy the half-made agent {}: {}", chat_id, successor_id, e
             )
-        return self._run_create(chat_id, command)
+        return self._run_create(chat_id, command, harness)
 
     def _fail(self, chat_id: ChatId, handoff_id: str, error: str, step: HandoffFailedStep) -> None:
         """The failed phase (spec 5.10): the chat lists its retiring agent, the page shows why, and a retry reruns ``step``."""
@@ -911,14 +912,15 @@ class HandoffRunner:
             ),
         )
 
-    def _run_create(self, chat_id: ChatId, command: list[str]) -> str | None:
-        """Run the successor's create; None on success, else the notice the failed phase shows."""
+    def _run_create(self, chat_id: ChatId, command: list[str], harness: HarnessType) -> str | None:
+        """Run the successor's create on ``harness``; None on success, else the notice the failed phase shows."""
         output_tail = CreationOutputTail()
         logger.info("Handoff of chat {}: mngr create: {}", chat_id, shlex.join(command))
         try:
             result = run_local_command_modern_version(
                 command=command,
                 cwd=self._deps.work_dir,
+                env=create_command_env(harness, os.environ),
                 is_checked=False,
                 trace_output=True,
                 trace_on_line_callback=output_tail,
@@ -1064,6 +1066,20 @@ def deliver_held_send(
             agent_info.id,
             outcome.value,
         )
+
+
+# The environment a room's ``mngr create`` carries, which the workspace's create guard
+# (``system/scripts/require_create_account.py``) honors: the one create that runs on no account.
+CREATE_WITHOUT_ACCOUNT_ENV: Final[str] = "MINDS_CREATE_WITHOUT_ACCOUNT"
+
+
+@pure
+def create_command_env(harness: HarnessType, environ: Mapping[str, str]) -> dict[str, str]:
+    """The environment a chat's ``mngr create`` runs with, for the manager's create and the handoff's: the
+    process's own, plus the no-account mark for a room."""
+    if harness is not HarnessType.ROOM:
+        return dict(environ)
+    return {**environ, CREATE_WITHOUT_ACCOUNT_ENV: "1"}
 
 
 @pure

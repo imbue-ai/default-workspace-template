@@ -545,11 +545,17 @@ def write_recording_mngr_binary(tmp_path: Path) -> tuple[str, Path]:
 
     One line per invocation, whatever the arguments hold: a newline inside an argument (a
     ``--message`` carrying a whole conversation) is written as a space, so a reader can still
-    count the calls and split a line into its tokens.
+    count the calls and split a line into its tokens. A create run with the no-account mark in
+    its environment (a room's) ends its line with ``MINDS_CREATE_WITHOUT_ACCOUNT=<value>``.
     """
     log_path = tmp_path / "mngr-argv.log"
     script = tmp_path / "fake-mngr"
-    script.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$(printf '%s' \"$*\" | tr '\\n' ' ')\" >> \"{log_path}\"\n")
+    script.write_text(
+        "#!/bin/sh\n"
+        "printf '%s%s\\n' \"$(printf '%s' \"$*\" | tr '\\n' ' ')\" "
+        '"${MINDS_CREATE_WITHOUT_ACCOUNT:+ MINDS_CREATE_WITHOUT_ACCOUNT=$MINDS_CREATE_WITHOUT_ACCOUNT}" '
+        f'>> "{log_path}"\n'
+    )
     script.chmod(0o755)
     return str(script), log_path
 

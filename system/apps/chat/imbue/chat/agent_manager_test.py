@@ -32,7 +32,6 @@ from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_manager import AgentManager
-from imbue.chat.agent_manager import CREATE_WITHOUT_ACCOUNT_ENV
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
@@ -46,7 +45,6 @@ from imbue.chat.agent_manager import _build_chat_rename_command
 from imbue.chat.agent_manager import _chat_project_label
 from imbue.chat.agent_manager import _rename_failure_detail
 from imbue.chat.agent_manager import chat_status_for_agent
-from imbue.chat.agent_manager import create_command_env
 from imbue.chat.agent_manager import is_rebind_target
 from imbue.chat.agent_manager import launch_role_templates
 from imbue.chat.auto_open import AutoOpenLedger
@@ -59,7 +57,9 @@ from imbue.chat.chat_autocompact import read_autocompact_state
 from imbue.chat.chat_autocompact import write_autocompact_state
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_fast_mode import read_fast_mode_state
+from imbue.chat.chat_handoffs import CREATE_WITHOUT_ACCOUNT_ENV
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
+from imbue.chat.chat_handoffs import create_command_env
 from imbue.chat.chat_rebinds import RebindCancelledError
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import ChatRecordError
@@ -7270,6 +7270,8 @@ def test_a_switch_to_a_room_is_a_fresh_start_handoff_to_the_room_harness_on_no_a
         # The room is created on no account and asked for no summary: the chat keeps its history as segments.
         create_line = next(line for line in argv_log.read_text().splitlines() if line.startswith("create "))
         assert "--type room" in create_line and "--start-on-boot" in create_line and "account=" not in create_line
+        # The create guard lets a room's create through on no account only with this mark in its environment.
+        assert create_line.endswith(f" {CREATE_WITHOUT_ACCOUNT_ENV}=1")
         assert sent == []
     finally:
         manager.stop()
@@ -7327,6 +7329,6 @@ def test_a_switch_off_a_room_takes_the_rooms_transcript_as_its_summary(
         assert summary.startswith("[") and "the owner:" in summary
         (prompt,) = [text for _agent, text, message_id in sent if message_id.startswith("handoff-prompt-")]
         assert "<predecessor-summary>" in prompt and "Carry on" in prompt
-        assert "--type codex" in argv_log.read_text()
+        assert "--type codex" in argv_log.read_text() and CREATE_WITHOUT_ACCOUNT_ENV not in argv_log.read_text()
     finally:
         manager.stop()

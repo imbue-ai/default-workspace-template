@@ -67,6 +67,7 @@ from imbue.chat.chat_handoffs import HandoffRunner
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
 from imbue.chat.chat_handoffs import cancel_refused_detail
 from imbue.chat.chat_handoffs import converging_detail
+from imbue.chat.chat_handoffs import create_command_env
 from imbue.chat.chat_handoffs import created_chat_agent_labels
 from imbue.chat.chat_handoffs import deliver_held_send
 from imbue.chat.chat_handoffs import failure_notice
@@ -432,19 +433,6 @@ def _build_chat_create_command(
     if initial_message:
         cmd.extend(["--message", initial_message])
     return cmd
-
-
-# The environment a room's ``mngr create`` carries, which the workspace's create guard
-# (``system/scripts/require_create_account.py``) honors: the one create that runs on no account.
-CREATE_WITHOUT_ACCOUNT_ENV: Final[str] = "MINDS_CREATE_WITHOUT_ACCOUNT"
-
-
-@pure
-def create_command_env(harness: HarnessType, environ: Mapping[str, str]) -> dict[str, str]:
-    """The environment a chat's ``mngr create`` runs with: the process's own, plus the no-account mark for a room."""
-    if harness is not HarnessType.ROOM:
-        return dict(environ)
-    return {**environ, CREATE_WITHOUT_ACCOUNT_ENV: "1"}
 
 
 def _account_binding_args(harness: HarnessType, account_id: str, state_dir: Path) -> list[str]:
