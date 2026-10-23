@@ -7290,6 +7290,22 @@ def test_a_chat_that_is_a_room_already_is_not_switched_to_a_room_again(
         manager.stop()
 
 
+def test_the_main_chat_is_not_switched_to_a_room(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    manager, store, _argv_log = _handoff_manager(broadcaster, tmp_path, [])
+    main = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, main, name="Main", labels={"display_name": "Main", "account": "acct-anthropic"})
+    manager.note_agent_list_known()
+    assert manager.make_main_chat(ChatId(main))
+    try:
+        with pytest.raises(HandoffError, match="main chat cannot become a room"):
+            manager.begin_switch(ChatId(main), "", "", "m-1", HeldSendOrigin.CLIENT, kind=ChatKind.ROOM)
+        with pytest.raises(HandoffError, match="main chat cannot become a room"):
+            manager.retry_handoff(ChatId(main), "", kind=ChatKind.ROOM)
+        assert store.read(ChatId(main)) is None and manager.get_main_chat_id() == ChatId(main)
+    finally:
+        manager.stop()
+
+
 def test_a_switch_off_a_room_takes_the_rooms_transcript_as_its_summary(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:

@@ -2122,12 +2122,13 @@ class AgentManager:
         the handoff a fresh start: no summary is asked for and no prompt is written, so the
         successor begins as a new chat would, and so does a switch to a room, which takes no prompt (the
         multiplayer spec, section 7.6). Raises ``ChatConvergingError`` for a chat already converging and
-        ``HandoffError`` when the chat has no active agent or the account is unknown or the chat's own.
-        ``begin_switch`` decides between this and a rebind.
+        ``HandoffError`` when the chat has no active agent, the account is unknown or the chat's own, or the
+        main chat is to become a room (it never is one, S3). ``begin_switch`` decides between this and a rebind.
         """
         self._refuse_switch_in_secondary(chat_id)
         runner = self._handoff_runner()
         target = _resolve_switch_target(account_id, kind)
+        self._refuse_room_for_main_chat(chat_id, target)
         now = datetime.now(timezone.utc)
         # Resolved twice on purpose: the freshness read walks the retiring agent's transcript,
         # which must not happen under the lock, so the chat is re-resolved for the write.
@@ -2220,6 +2221,12 @@ class AgentManager:
         if agent_info is None:
             return False
         return not has_user_turn(capabilities.ensure_watcher(agent_info).get_all_events())
+
+    def _refuse_room_for_main_chat(self, chat_id: ChatId, target: _SwitchTarget) -> None:
+        """Raise ``HandoffError`` for a switch that would make the main chat a room: the main chat is never a room
+        (the multiplayer spec, S3 and section 7.6). Called outside the lock, which ``get_main_chat_id`` takes."""
+        if target.harness is HarnessType.ROOM and chat_id == self.get_main_chat_id():
+            raise HandoffError("The main chat cannot become a room")
 
     def _movable_agent_locked(self, chat_id: ChatId, target: _SwitchTarget) -> AgentStateItem:
         """The tracked agent a chat may be moved off (or rebound), or the refusal (spec 5.2). Lock held."""
@@ -2397,6 +2404,7 @@ class AgentManager:
         self._refuse_switch_in_secondary(chat_id)
         self._require_switch_capabilities()
         target = _resolve_switch_target(account_id, kind)
+        self._refuse_room_for_main_chat(chat_id, target)
         discarded_successor_id: str | None = None
         with self._lock:
             record = self._chat_record_by_id.get(chat_id)

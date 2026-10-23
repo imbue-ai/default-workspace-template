@@ -17,12 +17,18 @@ vi.hoisted(() => {
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
 });
 
-const agentState: { agent: ChatSnapshot | null; provisional: { account_id: string } | undefined } = {
+const agentState: {
+  agent: ChatSnapshot | null;
+  provisional: { account_id: string } | undefined;
+  mainChatId: string | null;
+} = {
   agent: null,
   provisional: undefined,
+  mainChatId: null,
 };
 vi.mock("../models/Chats", () => ({
   getChatById: () => agentState.agent ?? undefined,
+  getMainChatId: () => agentState.mainChatId,
   getProvisionalChat: () => agentState.provisional,
 }));
 
@@ -163,10 +169,12 @@ vi.mock("../shell", () => ({
 // armed card's Model row reopens it. Both recorded by account id.
 const begun: string[] = [];
 const reopened: string[] = [];
+const roomSwitches: string[] = [];
 vi.mock("./SwitchDialog", async (importOriginal) => ({
   takeBackSwitch: (await importOriginal<typeof import("./SwitchDialog")>()).takeBackSwitch,
   beginSwitchTo: (_chatId: string, account: { id: string }) => begun.push(account.id),
   openSwitchDialog: (_chatId: string, account: { id: string }) => reopened.push(account.id),
+  switchToRoom: (chatId: string) => Promise.resolve(roomSwitches.push(chatId)),
 }));
 
 import m from "mithril";
@@ -288,6 +296,8 @@ beforeEach(() => {
   chooserOpens.length = 0;
   agentState.provisional = undefined;
   agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-1" } });
+  agentState.mainChatId = null;
+  roomSwitches.length = 0;
   catalogState.catalog = catalogOf();
   settingsState.choice = { identity: { model_id: "opus", effort: null, fast: false }, matched: OPUS, pending: null };
   providerState.accounts = [ACCOUNT];
@@ -699,6 +709,21 @@ describe("the combo card", () => {
     expect(getPendingAccountId("a1")).toBeNull();
     expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
     expect(started).toEqual([]);
+  });
+
+  it("offers to make the chat a room from the Provider submenu, but never the main chat", () => {
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="providers"]');
+    clickSubmenuRow("Chat room");
+    expect(roomSwitches).toEqual(["a1"]);
+    expect(document.querySelector('[data-menu-part="menu"]')).toBeNull();
+
+    agentState.mainChatId = "a1";
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="providers"]');
+    expect(document.querySelector(".model-provider-menu-room")).toBeNull();
   });
 
   it("hands an account on the chat's own harness to the dialog too, now that a chat can change account in place", () => {
