@@ -53,6 +53,27 @@ def test_enqueue_publishes_and_wakes_the_worker_before_it_returns(tmp_path: Path
     assert tracker.concatenated_block() == "first\nsecond"
 
 
+def test_detaching_a_replaced_watcher_keeps_the_hooks_of_the_one_that_attached_since(tmp_path: Path) -> None:
+    published: list[str] = []
+    woken: list[str] = []
+    tracker = _tracker(tmp_path)
+
+    def old_publish(_snapshot: list[dict[str, object]]) -> None:
+        published.append("old")
+
+    def new_publish(_snapshot: list[dict[str, object]]) -> None:
+        published.append("new")
+
+    tracker.attach(publish=old_publish, wake=lambda: woken.append("old"))
+    tracker.attach(publish=new_publish, wake=lambda: woken.append("new"))
+    tracker.detach(old_publish)
+    tracker.enqueue("after the old watcher stopped", "t0", is_turn_open=True)
+    tracker.detach(new_publish)
+    tracker.enqueue("after both stopped", "t1", is_turn_open=True)
+
+    assert (published, woken) == (["new"], ["new"])
+
+
 def test_a_message_with_no_turn_in_the_way_shows_as_sending_and_one_behind_a_turn_as_queued(tmp_path: Path) -> None:
     tracker = _tracker(tmp_path)
     tracker.enqueue("idle", "t0", is_turn_open=False)

@@ -170,10 +170,12 @@ class GrokQueueTracker:
             self._publish = publish
             self._wake = wake
 
-    def detach(self) -> None:
+    def detach(self, publish: PublishCallback) -> None:
+        """Unbind the watcher that attached ``publish``; a watcher that attached since keeps its hooks."""
         with self._lock:
-            self._publish = None
-            self._wake = None
+            if self._publish == publish:
+                self._publish = None
+                self._wake = None
 
     def bind_session_send(self, send: SessionSendCallback) -> None:
         """Hand the flush worker the agent session's send, which reports why mngr refused a send."""

@@ -389,7 +389,7 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
             if self._flush_thread.is_alive():
                 logger.warning("grok: the flush worker of {} outlived its watcher; detaching it", self._agent_id)
             self._flush_thread = None
-        self._queue.detach()
+        self._queue.detach(self._publish_snapshot)
         super().stop()
         drop_turn_state(self._agent_id)
 
