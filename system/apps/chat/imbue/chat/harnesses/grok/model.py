@@ -11,7 +11,6 @@ Which of the catalog's models an account offers is asked of ``grok models`` unde
 listing that fails, or names none of the catalog's models, offers the whole catalog.
 """
 
-import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -24,7 +23,6 @@ from imbue.chat.harnesses.account_binding import AGENT_ENV_FILENAME
 from imbue.chat.harnesses.grok.account_binding import GROK_MODELS_COMMAND
 from imbue.chat.harnesses.grok.account_binding import GrokAccountBinding
 from imbue.chat.harnesses.grok.account_binding import XAI_API_KEY_ENV_VAR
-from imbue.chat.harnesses.grok.account_binding import is_grok_ambient_variable
 from imbue.chat.harnesses.grok.account_binding import read_sole_api_key
 from imbue.chat.harnesses.grok.queue_tracker import enqueue_control_command
 from imbue.chat.harnesses.model import EffortChoice
@@ -101,8 +99,7 @@ def build_grok_models_environment(account_dir: Path) -> dict[str, str]:
     An account whose only credential is a stored API key gets it as ``XAI_API_KEY``: ``grok models`` lists
     nothing for a key it finds in ``auth.json``.
     """
-    environment = {name: value for name, value in os.environ.items() if not is_grok_ambient_variable(name)}
-    environment.update(GrokAccountBinding().account_env(account_dir))
+    environment = GrokAccountBinding().account_process_env(account_dir)
     api_key = read_sole_api_key(account_dir)
     if api_key is not None:
         environment[XAI_API_KEY_ENV_VAR] = api_key.get_secret_value()
