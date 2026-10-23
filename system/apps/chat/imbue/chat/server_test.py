@@ -5009,6 +5009,27 @@ def test_a_compaction_mngr_waits_out_shows_while_it_runs_and_ends_with_its_compa
         state.shutdown()
 
 
+class _CompactionFailingMngrMessenger(RecordingMngrMessenger):
+    """A recording messenger whose compaction request fails with an error mngr did not turn into a send failure."""
+
+    def request_compaction(self, agent_id: AgentId, instructions: str | None) -> None:
+        raise MngrError("mngr's config could not be read")
+
+
+def test_a_compaction_request_that_fails_unexpectedly_is_withdrawn(tmp_path: Path) -> None:
+    agent_info = _agent_info(agent_id=f"agent-{uuid4().hex}", harness=HarnessType.GROK, agent_state_dir=tmp_path)
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=_CompactionFailingMngrMessenger())
+    state = build_test_state(agent_manager=manager)
+    try:
+        with pytest.raises(MngrError):
+            _request_compaction_from_mngr(manager, agent_info, "/compact", _EXCHANGE_EVENTS)
+
+        assert agent_info.id not in manager._compaction_pending_by_agent
+        assert not manager.is_compaction_in_flight(agent_info)
+    finally:
+        state.shutdown()
+
+
 def _claude_stop_with_no_open_turn(tmp_path: Path) -> tuple[AgentInfo, Path]:
     """A claude agent with an active chord binding and no turn in flight."""
     state_dir, config_dir = _claude_tap_dirs(tmp_path)

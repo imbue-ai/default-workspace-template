@@ -608,11 +608,13 @@ def _request_compaction_from_mngr(
         raise SendFailedError(COMPACT_WHILE_BUSY_DETAIL, COMPACT_UNAVAILABLE_SEND_FAILURE_KIND)
     requested_at = time.monotonic()
     agent_manager.note_compaction_requested(agent_info.id, CompactionCause.MANUAL, requested_at)
+    is_requested = False
     try:
         agent_manager.request_agent_compaction(AgentId(agent_info.id), compact_command_instructions(text))
-    except (SendFailedError, AgentNotFoundError):
-        agent_manager.withdraw_compaction_request(agent_info.id, requested_at)
-        raise
+        is_requested = True
+    finally:
+        if not is_requested:
+            agent_manager.withdraw_compaction_request(agent_info.id, requested_at)
     return SendOutcome.OK
 
 
