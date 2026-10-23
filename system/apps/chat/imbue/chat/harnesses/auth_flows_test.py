@@ -1242,6 +1242,20 @@ def test_a_key_xai_refuses_never_touches_a_grok_account_s_file(tmp_path: Path) -
     assert [account.id for account in read_index(tmp_path).accounts] == [account_id]
 
 
+def test_a_grok_key_xai_cannot_judge_is_kept(tmp_path: Path) -> None:
+    """xAI unreachable or erroring is no evidence against the key."""
+    service = _grok_service(tmp_path, xai_key_probe=lambda _key: SignedIn.UNKNOWN)
+
+    started = service.start("xai", "api_key")
+    status = service.submit_key(started.flow_id, "xai-unjudged-key")
+
+    assert status.state is FlowState.OK
+    (account,) = read_index(tmp_path).accounts
+    scopes = json.loads(_grok_auth_path(tmp_path, account.id).read_text())
+    assert list(scopes) == ["xai::api_key"]
+    assert scopes["xai::api_key"]["key"] == "xai-unjudged-key"
+
+
 def test_a_key_xai_accepts_replaces_an_expired_login_and_the_file_whole(tmp_path: Path) -> None:
     """The login is usually why a key is pasted: it no longer works, and grok's probe of the account says no
     whatever the key. Left in the file it would outrank the key. The file is renamed into place, since every agent
