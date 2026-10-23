@@ -130,6 +130,11 @@ class RoomListResponse(FrozenModel):
     rooms: tuple[RoomSnapshot, ...] = Field(description="Every room, oldest first")
 
 
+class RoomPostAuthorError(ValueError):
+    """A loopback room post named a person as its author; raised inside validation, so pydantic reports it as a
+    ``ValidationError`` and the route answers 400."""
+
+
 class RoomPostRequest(FrozenModel):
     """The body of ``POST /api/rooms/<id>/post`` (loopback only): what an agent says into a room."""
 
@@ -144,7 +149,7 @@ class RoomPostRequest(FrozenModel):
     @classmethod
     def _author_is_an_agent(cls, author: ParticipantKey) -> ParticipantKey:
         if author != WORKSPACE_AGENT_PARTICIPANT_KEY and not str(author).startswith(_VISITING_AGENT_KEY_PREFIX):
-            raise ValueError("author must be 'workspace-agent' or a visiting agent's 'agent:<id>'")
+            raise RoomPostAuthorError("author must be 'workspace-agent' or a visiting agent's 'agent:<id>'")
         return author
 
 
