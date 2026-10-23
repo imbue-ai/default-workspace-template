@@ -11,6 +11,7 @@ from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.harnesses.grok.queue_tracker import GrokQueueTracker
 from imbue.chat.harnesses.grok.queue_tracker import GrokSendResult
 from imbue.chat.harnesses.grok.queue_tracker import GrokSendVerdict
+from imbue.chat.harnesses.grok.queue_tracker import REFUSED_VERDICTS
 from imbue.chat.harnesses.grok.queue_tracker import drop_tracker
 from imbue.chat.harnesses.grok.queue_tracker import get_tracker
 from imbue.chat.harnesses.grok.queue_tracker import session_token
@@ -69,7 +70,7 @@ def _attach_scripted_worker(tracker: GrokQueueTracker, result: GrokSendResult) -
         if not claimed:
             return
         claimed_blocks.append(block)
-        if result.verdict in (GrokSendVerdict.BUSY, GrokSendVerdict.BLOCKED, GrokSendVerdict.RETRY):
+        if result.verdict in REFUSED_VERDICTS:
             tracker.refuse_flush(claimed, generation, result)
         else:
             delivered = claimed if result.verdict is GrokSendVerdict.SENT else ()
