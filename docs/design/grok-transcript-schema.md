@@ -171,7 +171,9 @@ offered. `use_tool` runs only MCP integration tools: given `run_terminal_command
 A real latchkey gateway's echo and the real secret-request script (the `stamps` capture echoes
 their shapes with `printf`), the rule blocks of a trusted folder's `AGENTS.md`, a real account's
 `web_fetch` and `web_search`, a prompt written as more than one `user_message_chunk`, a child
-session's `interrupted` turn, and a background shell that ends during a turn.
+session's `interrupted` turn, a background shell that ends during a turn, and a session holding a
+`/compact`: the `compaction_checkpoint` row's shape comes from lines copied into
+`session_parser_test.py`, not from a fixture scenario.
 
 ## How to re-measure
 
