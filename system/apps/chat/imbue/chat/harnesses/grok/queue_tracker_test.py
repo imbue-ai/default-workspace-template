@@ -377,6 +377,21 @@ def test_a_torn_journal_line_is_skipped(tmp_path: Path) -> None:
     assert _contents(_tracker(tmp_path)) == ["kept"]
 
 
+def test_an_unreadable_journal_or_launch_marker_reads_as_empty_and_is_logged(
+    tmp_path: Path, loguru_records: list[str]
+) -> None:
+    (tmp_path / OUTBOX_FILENAME).mkdir()
+    not_a_state_dir = tmp_path / "not-a-dir"
+    not_a_state_dir.write_text("")
+
+    assert _contents(_tracker(tmp_path)) == []
+    assert session_token(not_a_state_dir) == ""
+    assert [record.split(" ", 1)[0] for record in loguru_records if "could not read the" in record] == [
+        "WARNING",
+        "WARNING",
+    ]
+
+
 def test_republish_announces_the_queue_unchanged(tmp_path: Path) -> None:
     published: list[list[str]] = []
     tracker = _tracker(tmp_path)

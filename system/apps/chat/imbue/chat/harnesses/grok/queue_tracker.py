@@ -88,7 +88,10 @@ def session_token(agent_state_dir: Path) -> str:
     """The current grok process's identity: the launch marker's mtime, or '' when grok never launched."""
     try:
         return str((agent_state_dir / PROCESS_STARTED_MARKER_FILENAME).stat().st_mtime_ns)
-    except OSError:
+    except FileNotFoundError:
+        return ""
+    except OSError as error:
+        logger.opt(exception=error).warning("grok: could not read the launch marker in {}", agent_state_dir)
         return ""
 
 
@@ -209,7 +212,10 @@ class GrokQueueTracker:
             return
         try:
             lines = self._outbox_path.read_text().splitlines()
-        except OSError:
+        except FileNotFoundError:
+            return
+        except OSError as error:
+            logger.opt(exception=error).warning("grok: could not read the queue journal {}", self._outbox_path)
             return
         for line in lines[-_MAX_REPLAY_LINES:]:
             try:
