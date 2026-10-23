@@ -4755,8 +4755,8 @@ class AgentManager:
     def _recheck_busy_chats(self) -> None:
         """After each background-task poller pass, recheck what no file stamp shows.
 
-        Counts the pass against every held finished-task removal and applies the ones no turn
-        claimed. Re-reads every busy chat's markers: a marker goes stale when its process dies,
+        Counts the pass against every held finished-task removal of an agent with no turn in
+        flight and applies the ones no turn claimed. Re-reads every busy chat's markers: a marker goes stale when its process dies,
         which changes no file (a runner the memory shedder killed leaves its marker behind), and
         this is what returns such a chat to idle within a poll interval. Re-derives every closing
         turn, which its harness ends by removing a marker that nothing else re-reads.
@@ -5486,9 +5486,9 @@ class AgentManager:
     def _end_pending_compaction_by_a_later_turn(self, agent_id: str, events: list[dict[str, Any]]) -> bool:
         """End the agent's pending compaction request when one of ``events`` is a user turn begun after it.
 
-        Only on a harness that keeps no ``compacting`` marker and compacts outside any turn (pi):
-        it runs no turn while it compacts, so its compaction is over, or it refused it (pi reports
-        a refusal nowhere the chat can read). Returns whether a request was ended.
+        Only on a harness that keeps no ``compacting`` marker and compacts outside any turn (pi,
+        grok): it runs no turn while it compacts, so its compaction is over, or it refused it (the
+        harness reports a refusal nowhere the chat can read). Returns whether a request was ended.
         """
         with self._lock:
             tracker = self._activity_tracker_by_agent.get(agent_id)
