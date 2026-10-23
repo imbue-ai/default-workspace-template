@@ -299,14 +299,15 @@ function scheduleReconnect(): void {
   }, delayMs);
 }
 
-/** Read the account list again because it changed outside this page (a sign-in or a removal in another chat or
- *  window), so a chat whose account was removed shows it at once; a failed read keeps the list read before. */
+/** Tell the pages someone's pending mentions changed, so each reads its own again. */
 function notifyMentionsUpdated(): void {
   for (const listener of mentionsUpdatedListeners) {
     listener();
   }
 }
 
+/** Read the account list again because it changed outside this page (a sign-in or a removal in another chat or
+ *  window), so a chat whose account was removed shows it at once; a failed read keeps the list read before. */
 function rereadAccounts(): void {
   loadAccounts().then(
     () => m.redraw(),
