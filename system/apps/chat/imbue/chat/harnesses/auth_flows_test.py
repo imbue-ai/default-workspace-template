@@ -1003,8 +1003,8 @@ def _start_device_reauth_over_a_pasted_key(service: AuthFlowService, tmp_path: P
 
 def _grok_session_account(tmp_path: Path) -> tuple[str, Path]:
     """A committed xAI account whose auth.json holds a session login alone, as `grok login` leaves one."""
-    account_id, account_dir = mint_account_dir(tmp_path)
-    path = account_dir / "auth.json"
+    account_id, folder = mint_account_dir(tmp_path)
+    path = folder / "auth.json"
     path.write_text(json.dumps({_GROK_LOGIN_SCOPE: _GROK_LOGIN}))
     commit_account(account_id, "xai", "xAI", tmp_path)
     return account_id, path
