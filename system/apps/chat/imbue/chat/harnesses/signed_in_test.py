@@ -228,24 +228,34 @@ def test_a_grok_session_login_is_judged_by_the_grok_models_banner(
     assert seen["command"] == ["grok", "models"]
 
 
-def test_a_grok_account_with_a_session_beside_its_key_is_judged_by_the_banner(tmp_path: Path) -> None:
-    """The session is what grok's turns use first, so it is the session that has to work."""
-    write_grok_auth(tmp_path, {GROK_SESSION_SCOPE: {"key": "session-token"}, "xai::api_key": build_grok_key_scope()})
-    runner = _runner_returning(_Finished(stdout=_GROK_SIGNED_IN_OUTPUT))
-    assert is_signed_in(HarnessType.GROK, tmp_path, runner, _no_fetcher) is SignedIn.YES
-
-
-def test_a_grok_key_grok_cannot_read_is_judged_by_the_banner_not_by_xai(tmp_path: Path) -> None:
-    """Measured on 1.0.62: a key scope without `create_time` and `user_id` makes grok take the whole file as empty,
-    so a key xAI would accept is still no credential to the agents."""
-    write_grok_auth(tmp_path, {"xai::api_key": {"key": "xai-key-5c1e", "auth_mode": "api_key"}})
-    runner = _runner_returning(_Finished(stdout=_GROK_SIGNED_OUT_OUTPUT))
-    assert is_signed_in(HarnessType.GROK, tmp_path, runner, _no_fetcher) is SignedIn.NO
-
-
-def test_a_grok_account_with_no_credential_file_is_judged_by_the_banner(tmp_path: Path) -> None:
-    runner = _runner_returning(_Finished(stdout=_GROK_SIGNED_OUT_OUTPUT))
-    assert is_signed_in(HarnessType.GROK, tmp_path, runner, _no_fetcher) is SignedIn.NO
+@pytest.mark.parametrize(
+    ("scopes", "banner", "verdict"),
+    (
+        # The session is what grok's turns use first, so it is the session that has to work.
+        pytest.param(
+            {GROK_SESSION_SCOPE: {"key": "session-token"}, "xai::api_key": build_grok_key_scope()},
+            _GROK_SIGNED_IN_OUTPUT,
+            SignedIn.YES,
+            id="session-beside-key",
+        ),
+        # Measured on 1.0.62: a key scope without `create_time` and `user_id` makes grok take the whole file as
+        # empty, so a key xAI would accept is still no credential to the agents.
+        pytest.param(
+            {"xai::api_key": {"key": "xai-key-5c1e", "auth_mode": "api_key"}},
+            _GROK_SIGNED_OUT_OUTPUT,
+            SignedIn.NO,
+            id="unreadable-key",
+        ),
+        pytest.param(None, _GROK_SIGNED_OUT_OUTPUT, SignedIn.NO, id="no-credential-file"),
+    ),
+)
+def test_a_grok_account_without_a_sole_readable_key_is_judged_by_the_banner_not_by_xai(
+    tmp_path: Path, scopes: dict[str, object] | None, banner: str, verdict: SignedIn
+) -> None:
+    if scopes is not None:
+        write_grok_auth(tmp_path, scopes)
+    runner = _runner_returning(_Finished(stdout=banner))
+    assert is_signed_in(HarnessType.GROK, tmp_path, runner, _no_fetcher) is verdict
 
 
 def test_the_grok_probe_does_not_carry_the_servers_own_credentials_endpoints_or_overlays(
