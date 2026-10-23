@@ -33,7 +33,7 @@ DATALIB_CONFIG="$DATA_ROOT/config.toml"
 mkdir -p "$DATA_ROOT"
 
 # Nothing of datalib is installed until it is first used. This installs the
-# binaries (pinned to datalib v0.43.0), datalib's agent guide, and the Node
+# binaries (pinned to datalib v0.44.0), datalib's agent guide, and the Node
 # runtime a sync shells out to, about 195 MB together on the first run, then
 # adds the Datalib app to the workspace and starts it; from then on the app is
 # listed. After the first run it only checks that all of it is in place and
@@ -124,7 +124,7 @@ mirrored data, and use the HTTP API all live there, and they change with the
 version pinned above. The install script saved a copy beside the binaries:
 
 ```bash
-cat "$HOME/.local/share/datalib/v0.43.0/docs/agent_user.md"
+cat "$HOME/.local/share/datalib/v0.44.0/docs/agent_user.md"
 ```
 
 It is the guide at the same tag the binaries are installed from, so it matches
@@ -132,7 +132,7 @@ the tools you have. Two docs it links are saved with it, at the same relative
 paths: `user/getting_your_data.md` (each source's setup) and
 `user/config_examples/all_sources.toml` (a config naming every source). Its
 other relative links resolve against
-`https://github.com/imbue-ai/datalib/blob/v0.43.0/docs/`, and that is also
+`https://github.com/imbue-ai/datalib/blob/v0.44.0/docs/`, and that is also
 where to read the guide if the local copy is missing. Don't rely on remembered
 command lines or config shapes -- go read it.
 
