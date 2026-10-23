@@ -633,7 +633,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         class: inputClass({ mono: true, extra: "flex-1" }),
         type: "password",
         value: keyInput,
-        placeholder: withPicker ? (selected?.hint ?? "Paste your key") : (selected?.hint ?? "sk-..."),
+        placeholder: withPicker
+          ? (selected?.hint ?? "Paste your key")
+          : (selected?.hint ?? (method?.key_hint || "sk-...")),
         spellcheck: false,
         autocomplete: "off",
         "data-1p-ignore": "",

@@ -83,6 +83,7 @@ function lane(overrides: Partial<Lane> = {}): Lane {
         label: "Claude subscription",
         description: "Sign in with your Claude account.",
         signup_url: "",
+        key_hint: "",
         note: "",
         shape: "url_then_code",
         is_primary: true,
@@ -103,6 +104,7 @@ const PI_KEY_LANE = lane({
       label: "Paste a key",
       description: "Pick the provider, then paste its key.",
       signup_url: "",
+      key_hint: "",
       note: "",
       shape: "paste",
       is_primary: true,
@@ -372,6 +374,7 @@ describe("a sign-in finished in the browser", () => {
         label: "Use your ChatGPT plan (runs on Codex)",
         description: "",
         signup_url: "",
+        key_hint: "",
         note: "",
         shape: "browser",
         is_primary: true,
@@ -381,6 +384,7 @@ describe("a sign-in finished in the browser", () => {
         label: "ChatGPT with a code",
         description: "",
         signup_url: "",
+        key_hint: "",
         note: "",
         shape: "code_then_wait",
         is_primary: false,
@@ -398,6 +402,7 @@ describe("a sign-in finished in the browser", () => {
           label: "Use an API key",
           description: "",
           signup_url: "",
+          key_hint: "",
           note: "",
           shape: "paste",
           is_primary: false,
@@ -548,6 +553,7 @@ describe("a sign-in finished in the browser", () => {
             label: "Continue with your xAI account",
             description: "",
             signup_url: "",
+            key_hint: "",
             note: "",
             shape: "code_then_wait",
             is_primary: true,
@@ -557,6 +563,7 @@ describe("a sign-in finished in the browser", () => {
             label: "Use an API key",
             description: "",
             signup_url: "https://console.x.ai",
+            key_hint: "xai-...",
             note: "",
             shape: "paste",
             is_primary: false,
@@ -574,6 +581,33 @@ describe("a sign-in finished in the browser", () => {
     expect(root.textContent).toContain("ABCD-1234");
     expect(root.textContent).not.toContain(PASTE_STEP_LABEL);
     expect(root.textContent).toContain("Use an API key");
+  });
+
+  it("hints at an xAI key in the xAI lane's key field", async () => {
+    state.lanes = [
+      lane({
+        id: "xai",
+        provider_name: "xAI",
+        harness: "grok",
+        methods: [
+          {
+            id: "api_key",
+            label: "Use an API key",
+            description: "Paste an xAI API key.",
+            signup_url: "",
+            key_hint: "xai-...",
+            note: "",
+            shape: "paste",
+            is_primary: true,
+          },
+        ],
+      }),
+    ];
+    state.flow = { ...(startedFlow("paste", null) as object), url: null, laneId: "xai", methodId: "api_key" };
+
+    const root = await clickLane("xai");
+
+    expect(root.querySelector('[data-e2e="api-key-input"]')?.getAttribute("placeholder")).toBe("xai-...");
   });
 
   it("shows no note on the one-time code, which does not need the setting", async () => {

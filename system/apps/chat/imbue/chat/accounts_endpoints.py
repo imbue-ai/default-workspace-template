@@ -66,6 +66,7 @@ class SignInMethodRow(FrozenModel):
     label: str = Field(description="The method's name on its button")
     description: str = Field(description="What the method asks of the user, in a line")
     signup_url: str = Field(description="Where to get a key for a paste method; '' for the others")
+    key_hint: str = Field(description="What a paste method's key looks like, for its field; '' for the others")
     note: str = Field(description="A note shown beside an app-server method; '' for the others")
     shape: FlowShape = Field(description="What the dialog renders for the flow: a link and a code, a code, or a paste")
     is_primary: bool = Field(description="Whether this is the lane's first, recommended method")
@@ -187,6 +188,7 @@ def list_lanes() -> Response:
                     label=method.label,
                     description=method.description,
                     signup_url=method.signup_url if isinstance(method, PasteMethod) else "",
+                    key_hint=method.key_hint if isinstance(method, PasteMethod) else "",
                     note=method.note if isinstance(method, AppServerMethod) else "",
                     shape=flow_shape(method),
                     is_primary=index == 0,

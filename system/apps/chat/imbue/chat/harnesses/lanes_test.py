@@ -123,10 +123,11 @@ def test_xai_signs_in_with_grok_s_device_code_first_and_a_key_second() -> None:
     assert device.frame_marker is None
     assert not device.relays_browser_sign_in
     assert isinstance(api_key, PasteMethod)
-    assert (api_key.id, api_key.sink, api_key.signup_url) == (
+    assert (api_key.id, api_key.sink, api_key.signup_url, api_key.key_hint) == (
         "api_key",
         PasteSink.GROK_AUTH_JSON,
         "https://console.x.ai",
+        "xai-...",
     )
 
 

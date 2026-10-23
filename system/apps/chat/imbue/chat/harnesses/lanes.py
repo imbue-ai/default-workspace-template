@@ -141,6 +141,8 @@ class PasteMethod(FrozenModel):
     # Where to go to get a key in the first place. A lane whose provider you have to subscribe
     # to before a key exists needs this; one you already have an account with does not.
     signup_url: str = ""
+    # What a key looks like, for the paste field; empty for the field's default.
+    key_hint: str = ""
     # As on `PtyMethod`, and for the same reason: nothing else bounds a flow, and the service
     # is single-flight, so an abandoned one is in the way of the next. Shorter than a browser
     # method's, because there is no round trip to wait out -- the field is already on screen.
@@ -424,6 +426,7 @@ LANE_XAI = Lane(
             description="Paste an xAI API key.",
             sink=PasteSink.GROK_AUTH_JSON,
             signup_url="https://console.x.ai",
+            key_hint="xai-...",
         ),
     ),
 )
