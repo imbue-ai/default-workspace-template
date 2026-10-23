@@ -47,8 +47,9 @@ A user turn that reads `The user sent a message while you were working:` followe
 `<user_query>...</user_query>` block is grok's send-now wrapper, and the chat shows the words inside
 it, as mngr's transcript converter does; no capture here holds one.
 
-Ignored: `hook_execution`, `retry_state`, `task_backgrounded`, `background_tasks`, `plan`,
-`available_commands_update`, `session_info_update`, the other compaction kinds and the rewind kinds.
+Ignored: `hook_execution`, `retry_state`, `task_backgrounded`, `plan`, `available_commands_update`,
+`session_info_update`, the other compaction kinds and the rewind kinds; `background_tasks` too, except
+that it joins the text lines it falls between (below).
 
 ## Assistant text
 
@@ -56,8 +57,9 @@ One run of text is one `agent_message_chunk` line, written when the run ends: 60
 streamed over 33 s gave one line (its `eventId` jumped from 78 to 678), and 30,000 deltas (210 KB)
 gave one line. A background subagent that ends while the run streams splits it: grok writes
 `subagent_finished`, then the text so far and the rest as two consecutive lines (in both of two
-runs; `tui_sessions/subagent_ends_mid_reply` is one). The chat joins consecutive text lines into
-one message. Text sent before a tool call in the same response is its own line ahead of the
+runs; `tui_sessions/subagent_ends_mid_reply` is one). The chat joins text lines that are consecutive,
+or that only `task_completed`, `subagent_finished` and `background_tasks` records separate, into one
+message. Text sent before a tool call in the same response is its own line ahead of the
 `tool_call`. `reasoning_content` deltas become one `agent_thought_chunk` line ahead of the text.
 
 ## Tool results
