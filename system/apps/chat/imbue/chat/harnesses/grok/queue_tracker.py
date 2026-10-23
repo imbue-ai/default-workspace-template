@@ -135,6 +135,8 @@ class GrokQueueTracker:
     _attempts: dict[str, int]
     # The settled first send of each entry that was Sending, until its POST reads it.
     _first_send_result_by_id: dict[str, GrokSendResult]
+    # The entries enqueued as Sending whose POST is still to read their first send.
+    _result_waiter_ids: set[str]
     # The control lane: the latest command per verb.
     _control_command_by_verb: dict[str, str]
     _session_send: SessionSendCallback | None
@@ -155,6 +157,7 @@ class GrokQueueTracker:
         self._pending_send = set()
         self._attempts = {}
         self._first_send_result_by_id = {}
+        self._result_waiter_ids = set()
         self._control_command_by_verb = {}
         self._session_send = None
         self._publish = None
@@ -296,6 +299,7 @@ class GrokQueueTracker:
             self._queued.add(queued_id, content, timestamp, False)
             if not is_turn_open:
                 self._pending_send.add(queued_id)
+                self._result_waiter_ids.add(queued_id)
             self._settled_locked()
         self._wake_worker()
         return queued_id
@@ -391,18 +395,21 @@ class GrokQueueTracker:
 
     def _record_first_send_result_locked(self, claimed: tuple[str, ...], result: GrokSendResult) -> None:
         for queued_id in claimed:
-            if queued_id in self._pending_send:
+            if queued_id in self._pending_send and queued_id in self._result_waiter_ids:
                 self._first_send_result_by_id[queued_id] = result
 
     def wait_for_send_result(self, queued_id: str, timeout_seconds: float) -> GrokSendResult | None:
         """Block until the first send of an entry enqueued as Sending settles; None when it was held instead, or on timeout."""
         with self._lock:
-            self._settled_condition.wait_for(
-                lambda: queued_id in self._first_send_result_by_id
-                or (queued_id not in self._pending_send and queued_id not in self._sending_ids),
-                timeout=timeout_seconds,
-            )
-            return self._first_send_result_by_id.pop(queued_id, None)
+            try:
+                self._settled_condition.wait_for(
+                    lambda: queued_id in self._first_send_result_by_id
+                    or (queued_id not in self._pending_send and queued_id not in self._sending_ids),
+                    timeout=timeout_seconds,
+                )
+                return self._first_send_result_by_id.pop(queued_id, None)
+            finally:
+                self._result_waiter_ids.discard(queued_id)
 
     def withdraw(self, queued_id: str) -> bool:
         """Take an unclaimed entry back out of the queue; False when it is claimed or gone."""

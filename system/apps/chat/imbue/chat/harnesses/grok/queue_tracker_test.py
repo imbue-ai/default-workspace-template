@@ -325,6 +325,17 @@ def test_a_waiting_send_times_out_when_no_worker_settles_it(tmp_path: Path) -> N
     assert _sending_flags(tracker) == [True]
 
 
+def test_a_first_send_that_settles_after_its_wait_gave_up_is_not_kept(tmp_path: Path) -> None:
+    tracker = _tracker(tmp_path)
+    queued_id = tracker.enqueue("idle send", "t0", is_turn_open=False)
+    assert tracker.wait_for_send_result(queued_id, 0.0) is None
+    _block, claimed, generation = tracker.begin_flush()
+
+    tracker.finish_flush(claimed, generation, delivered=(), result=_FAILED)
+
+    assert tracker.wait_for_send_result(queued_id, 0.0) is None
+
+
 # The journal's lifetime (contract Part B)
 
 
