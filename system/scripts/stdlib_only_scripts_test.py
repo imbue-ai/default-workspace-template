@@ -27,6 +27,7 @@ _SCRIPTS_RUN_WITH_SYSTEM_PYTHON = (
     "claude_background_task_hooks.py",
     "collect_bug_report_diagnostics.py",
     "forward_port.py",
+    "grok_background_task_hooks.py",
     "install_mngr.py",
     "list_mngr_plugins.py",
     "message_chat.py",

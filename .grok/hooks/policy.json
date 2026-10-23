@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/grok_background_task_hooks.py session-start || true",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "hooks": [
@@ -7,6 +18,18 @@
             "type": "command",
             "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_grok_policy_guards.py pre-tool-use",
             "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "spawn_subagent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/grok_background_task_hooks.py post-tool-use || true",
+            "timeout": 10
           }
         ]
       }
@@ -34,6 +57,11 @@
             "type": "command",
             "command": "bash /opt/agent-plugins/imbue-code-guardian/plugins/imbue-code-guardian/scripts/stop_hook_entrypoint.sh",
             "timeout": 900
+          },
+          {
+            "type": "command",
+            "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/grok_background_task_hooks.py stop || true",
+            "timeout": 10
           }
         ]
       }

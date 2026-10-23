@@ -169,3 +169,29 @@ def test_grok_hook_commands_expand_no_bare_variable() -> None:
     for _, handler in _handlers(grok):
         command = handler["command"]
         assert "$" not in command.replace(_GROK_WORK_DIR_REFERENCE, ""), command
+
+
+def test_grok_records_its_background_tasks_where_claude_does_and_at_a_spawn() -> None:
+    """Each event runs its own subcommand, and `|| true` keeps a missing script's exit 2 from
+    holding grok's turn open at Stop."""
+    claude = json.loads(_CLAUDE_SETTINGS.read_text())
+    grok = json.loads(_GROK_HOOKS.read_text())
+    claude_events = [
+        event
+        for event in _all_events(claude)
+        for command in _hook_commands(claude, event)
+        if "claude_background_task_hooks.py" in command
+    ]
+    grok_commands = [
+        (event, command)
+        for event in _all_events(grok)
+        for command in _hook_commands(grok, event)
+        if "grok_background_task_hooks.py" in command
+    ]
+    script = f"python3 {_GROK_WORK_DIR_REFERENCE}/system/scripts/grok_background_task_hooks.py"
+    assert sorted(claude_events) == ["SessionStart", "Stop"]
+    assert sorted(grok_commands) == [
+        ("PostToolUse", f"{script} post-tool-use || true"),
+        ("SessionStart", f"{script} session-start || true"),
+        ("Stop", f"{script} stop || true"),
+    ]
