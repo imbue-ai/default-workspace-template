@@ -21,6 +21,7 @@ import os
 import re
 import sys
 import uuid
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Any
@@ -122,7 +123,7 @@ def record_activity(state_dir: Path, agent_id: str) -> None:
     )
 
 
-def read_messages(stdin: IO[bytes]):
+def read_messages(stdin: IO[bytes]) -> Iterator[str]:
     """Yield each typed message: a line, or the whole of a bracketed paste, without its markers or trailing newline."""
     pasted: list[bytes] | None = None
     while True:
