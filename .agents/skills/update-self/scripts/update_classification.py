@@ -287,11 +287,12 @@ def classify_merge(
 
 
 def _is_backend_manifest(path: str) -> bool:
-    """Whether ``path`` feeds the mngr tool's reinstall.
+    """Whether ``path`` calls for the mngr tool's reinstall as well as the venv's sync.
 
     The root ``pyproject.toml`` pins the mngr commit the tool and the workspace venv
-    both install from, so a move of that pin (and the ``uv.lock`` that follows it)
-    moves the chat app's and the shell's dependency closure as well as the tool's.
+    both install from, so a move of that pin moves the chat app's and the shell's
+    dependency closure as well as the tool's. The ``uv.lock`` that follows a pin move
+    counts with it, though the reinstall itself reads only the pin.
 
     The plugin manifest counts without being a Python manifest: it is what
     :func:`_manifest_extras` unions into the mngr tool's reinstall, so it decides
@@ -326,9 +327,9 @@ class ApplyPlan(NamedTuple):
     first, and probes afterwards; the plan only decides the work in front of
     that. The frontend split (source vs npm manifest) and ``backend_src`` are
     finer than :func:`classify_path`'s single ``system_interface`` class because
-    they need different work. ``backend_manifest`` is a manifest the mngr tool's
-    reinstall reads (the root ones, which move the venv too, and the plugin
-    manifest), so it reinstalls the tool and re-syncs the venv;
+    they need different work. ``backend_manifest`` is the root ``pyproject.toml``
+    or the plugin manifest, which the mngr tool's reinstall reads, or the
+    ``uv.lock`` that follows the pin, so it reinstalls the tool and re-syncs the venv;
     ``app_pyproject`` is any app's ``pyproject.toml``, the shell's included,
     which only the venv installs; ``resyncs_venv`` is either. ``provisioner`` is
     the pinned-toolchain re-run, keyed on the files the provisioner reads.
