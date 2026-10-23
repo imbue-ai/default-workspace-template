@@ -12,6 +12,7 @@ from imbue.chat.harnesses.grok.queue_tracker import GrokSendVerdict
 from imbue.chat.harnesses.grok.queue_tracker import MAX_DELIVERY_ATTEMPTS
 from imbue.chat.harnesses.grok.tap import GrokAtomicShoulderTap
 from imbue.chat.harnesses.grok.tap import GrokInterruptToComposer
+from imbue.chat.harnesses.grok.tap import TURN_END_DEADLINE_SECONDS
 from imbue.chat.harnesses.grok.testing import make_grok_agent_info
 from imbue.chat.harnesses.grok.testing import remove_root_turn
 from imbue.chat.harnesses.grok.testing import write_root_turn
@@ -229,12 +230,17 @@ def test_a_second_stop_right_after_a_landed_press_presses_again_and_restarts_not
 # The shoulder tap
 
 
-def _tap(agent_info: AgentInfo, watcher: GrokSessionWatcher, press: Callable[[], bool]) -> tuple[str, str | None]:
+def _tap(
+    agent_info: AgentInfo,
+    watcher: GrokSessionWatcher,
+    press: Callable[[], bool],
+    turn_end_deadline_seconds: float = _SHORT_DEADLINE_SECONDS,
+) -> tuple[str, str | None]:
     def must_not_send(_block: str) -> bool:
         raise AssertionError("the tap never sends: the flush worker is the only typist")
 
     tap = GrokAtomicShoulderTap.build(agent_info)
-    tap.turn_end_deadline_seconds = _SHORT_DEADLINE_SECONDS
+    tap.turn_end_deadline_seconds = turn_end_deadline_seconds
     outcome = tap.tap(watcher, press, must_not_send)
     return outcome.status, outcome.error_detail
 
@@ -342,7 +348,10 @@ def test_a_tap_mngr_refuses_into_a_turn_grok_just_ended_is_no_error(tmp_path: Pa
     _hold(watcher, "held")
 
     try:
-        assert _tap(agent_info, watcher, grok.refused_press_before_the_turn_file_goes) == ("no_open_turn", None)
+        assert _tap(agent_info, watcher, grok.refused_press_before_the_turn_file_goes, TURN_END_DEADLINE_SECONDS) == (
+            "no_open_turn",
+            None,
+        )
     finally:
         grok.join_timers()
     assert watcher._queue.is_sending() is False
