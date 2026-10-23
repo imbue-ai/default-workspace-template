@@ -1,10 +1,10 @@
 """The shell's client-activity report for a send: which client (and desktop) a message to a chat came from, so agents
 can attribute requests through ``workspace-layout context`` (desktop contracts.md section 5.1).
 
-Every path a person's message enters a chat through reports it the same way, whatever the chat's kind: the agent
-chat's send path and switch route, and a room's post. The log is the shell's and is keyed by chat id, so the report
-names the chat alone; a caller naming no client or no desktop (a script, a legacy page) is not recorded, and neither is
-anything a secondary chat (a preview) hears.
+Every path a person's message enters a chat through reports it the same way, whatever the chat's kind: the send
+path (which a room's message takes as an agent chat's does) and the switch route. The log is the shell's and is keyed
+by chat id, so the report names the chat alone; a caller naming no client or no desktop (a script, a legacy page) is
+not recorded, and neither is anything a secondary chat (a preview) hears.
 """
 
 import threading
