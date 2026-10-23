@@ -209,15 +209,17 @@ HARNESS_LABEL: Final[dict[HarnessType, str]] = {
     HarnessType.SEED: "Imbue Studio",
 }
 
+# The characters of a URL a sign-in CLI prints; a wrapped URL's continuation rows hold nothing else.
+_SIGN_IN_URL_CHARSET: Final = r"[A-Za-z0-9%&=?_.~/:+#-]"
+
 # claude
 # The one CLI with real one-shot auth subcommands, which is why its flows were the first to
 # work and why the rest of this file is shaped the way it is.
 
-_CLAUDE_URL_CHARSET: Final = r"[A-Za-z0-9%&=?_.~/:+#-]"
 _CLAUDE_URL_SCRAPE = Scrape(
     trigger=r"https://\S*oauth/authorize\S*",
-    strict=rf"https://{_CLAUDE_URL_CHARSET}*oauth/authorize{_CLAUDE_URL_CHARSET}*",
-    continuation=rf"^{_CLAUDE_URL_CHARSET}+$",
+    strict=rf"https://{_SIGN_IN_URL_CHARSET}*oauth/authorize{_SIGN_IN_URL_CHARSET}*",
+    continuation=rf"^{_SIGN_IN_URL_CHARSET}+$",
 )
 _CLAUDE_TOKEN_SCRAPE = Scrape(
     trigger=r"sk-ant-oat01-[A-Za-z0-9_-]+",
@@ -327,11 +329,10 @@ LANE_OPENAI = Lane(
 # No auth subcommand at all: bare `agy` prompts on first launch. The menu is a blind
 # keystroke script, which is exactly why `expect_before_keys` exists.
 
-_AGY_URL_CHARSET: Final = r"[A-Za-z0-9%&=?_.~/:+#-]"
 _AGY_URL_SCRAPE = Scrape(
     trigger=r"https://accounts\.google\.com/o/oauth2/auth\S*",
-    strict=rf"https://accounts\.google\.com/o/oauth2/auth{_AGY_URL_CHARSET}*",
-    continuation=rf"^{_AGY_URL_CHARSET}+$",
+    strict=rf"https://accounts\.google\.com/o/oauth2/auth{_SIGN_IN_URL_CHARSET}*",
+    continuation=rf"^{_SIGN_IN_URL_CHARSET}+$",
     # The real URL is ~700 characters. Without a floor the strict pattern happily matches
     # the first row of a wrapped one -- which is a valid-looking URL missing response_type,
     # so Google answers 401 rather than anything that reads as truncation.
@@ -383,11 +384,10 @@ LANE_GOOGLE = Lane(
 # is confirmed on that page, then exits: 0 after "✓ Signed in", 1 after "Error: <why>". Nothing
 # comes back to type in, so its flow shows the code and waits.
 
-_GROK_URL_CHARSET: Final = r"[A-Za-z0-9%&=?_.~/:+#-]"
 _GROK_DEVICE_URL_SCRAPE = Scrape(
     trigger=r"https://accounts\.x\.ai/oauth2/device\S*",
-    strict=rf"https://accounts\.x\.ai/oauth2/device{_GROK_URL_CHARSET}*",
-    continuation=rf"^{_GROK_URL_CHARSET}+$",
+    strict=rf"https://accounts\.x\.ai/oauth2/device{_SIGN_IN_URL_CHARSET}*",
+    continuation=rf"^{_SIGN_IN_URL_CHARSET}+$",
 )
 # The code sits alone on its row, two spaces in, under the line that asks for it.
 _GROK_DEVICE_CODE_SCRAPE = Scrape(
