@@ -132,6 +132,8 @@ class GrokQueueTracker:
     _settled_condition: threading.Condition
     # Ids a flush or a tap has claimed; they stay in the snapshot as Sending.
     _sending_ids: set[str]
+    # The claimed ids a tap holds only to grey its button, which a stop still takes.
+    _tap_claimed_ids: set[str]
     # Bumped when claimed work becomes void (a restart took the entries, or grok relaunched).
     _generation: int
     # How many stops are running; while any is, no flush may claim the messages a stop is about to return.
@@ -158,6 +160,7 @@ class GrokQueueTracker:
         self._lock = threading.RLock()
         self._settled_condition = threading.Condition(self._lock)
         self._sending_ids = set()
+        self._tap_claimed_ids = set()
         self._generation = 0
         self._flush_pause_count = 0
         self._pending_send = set()
@@ -276,12 +279,14 @@ class GrokQueueTracker:
         for queued_id in queued_ids:
             self._queued.resolve(queued_id)
             self._sending_ids.discard(queued_id)
+            self._tap_claimed_ids.discard(queued_id)
             self._pending_send.discard(queued_id)
             self._attempts.pop(queued_id, None)
 
     def _clear_entries_locked(self) -> None:
         self._queued.clear()
         self._sending_ids.clear()
+        self._tap_claimed_ids.clear()
         self._pending_send.clear()
         self._attempts.clear()
         self._generation += 1
@@ -357,6 +362,13 @@ class GrokQueueTracker:
             self._settled_locked()
             return "\n".join(str(entry["content"]) for entry in entries), claimed, self._generation
 
+    def begin_tap_claim(self) -> tuple[str, tuple[str, ...], int]:
+        """Claim as ``begin_flush`` does, only to grey the tap's button: a stop still takes what it claims."""
+        with self._lock:
+            block, claimed, generation = self.begin_flush()
+            self._tap_claimed_ids.update(claimed)
+            return block, claimed, generation
+
     def pause_flushes(self) -> None:
         """Refuse every claim until the matching resume: a stop is cancelling a turn and returning what is held."""
         with self._lock:
@@ -368,11 +380,12 @@ class GrokQueueTracker:
         self._wake_worker()
 
     def release_claim(self, claimed: tuple[str, ...], generation: int) -> None:
-        """Un-claim without charging an attempt: the tap claimed only to grey its button."""
+        """Un-claim without charging an attempt: a tap's claim, or a flush's that never reached the send."""
         with self._lock:
             if generation != self._generation:
                 return
             self._sending_ids.difference_update(claimed)
+            self._tap_claimed_ids.difference_update(claimed)
             self._settled_locked()
 
     def refuse_flush(self, claimed: tuple[str, ...], generation: int, result: GrokSendResult) -> None:
@@ -453,9 +466,13 @@ class GrokQueueTracker:
             return True
 
     def take_unclaimed(self) -> tuple[str, tuple[str, ...]]:
-        """Remove and return every unclaimed entry as one block, for stop; a claimed flush keeps its entries."""
+        """Remove and return every entry no flush has claimed as one block, for stop; a tap's claim keeps none."""
         with self._lock:
-            entries = [e for e in self._queued.snapshot() if str(e["queued_id"]) not in self._sending_ids]
+            entries = [
+                entry
+                for entry in self._queued.snapshot()
+                if str(entry["queued_id"]) not in self._sending_ids - self._tap_claimed_ids
+            ]
             taken = tuple(str(entry["queued_id"]) for entry in entries)
             self._drop_ids_locked(taken)
             self._settled_locked()

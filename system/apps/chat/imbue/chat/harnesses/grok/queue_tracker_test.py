@@ -206,6 +206,19 @@ def test_stop_takes_only_unclaimed_entries_and_the_spared_flush_still_settles(tm
     assert tracker.snapshot() == []
 
 
+def test_stop_takes_what_a_tap_claimed_and_leaves_the_worker_nothing_to_send(tmp_path: Path) -> None:
+    tracker = _tracker(tmp_path)
+    tracker.enqueue("tapped", "t0", is_turn_open=True)
+    _block, claimed, generation = tracker.begin_tap_claim()
+
+    block, taken = tracker.take_unclaimed()
+    tracker.release_claim(claimed, generation)
+
+    assert (block, taken) == ("tapped", claimed)
+    assert tracker.begin_flush() == ("", (), generation)
+    assert tracker.is_sending() is False
+
+
 def test_the_restart_takes_everything_and_voids_the_claim(tmp_path: Path) -> None:
     tracker = _tracker(tmp_path)
     tracker.enqueue("in flight", "t0", is_turn_open=True)

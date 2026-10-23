@@ -506,7 +506,7 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
         return self._queue.take_all()
 
     def claim_queue_for_tap(self) -> tuple[str, tuple[str, ...], int]:
-        return self._queue.begin_flush()
+        return self._queue.begin_tap_claim()
 
     def release_tap_claim(self, claimed: tuple[str, ...], generation: int) -> None:
         self._queue.release_claim(claimed, generation)
