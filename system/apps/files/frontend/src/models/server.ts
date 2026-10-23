@@ -72,9 +72,9 @@ export function pageUrlOf(path: string, page: "view" | "edit"): string {
   return `${urlOf(path)}?${page}`;
 }
 
-/** Where a download of a path comes from: the file itself, or a folder as a zip. */
+/** Where a download of a path comes from: the file's bytes as an attachment, or a folder as a zip. */
 export function downloadUrlOf(path: string, isFolder: boolean): string {
-  return isFolder ? `${urlOf(path)}?zip` : urlOf(path);
+  return `${urlOf(path)}?${isFolder ? "zip" : "download"}`;
 }
 
 async function failureOf(response: Response, what: string): Promise<ServerError> {

@@ -1092,15 +1092,17 @@ export class DesktopStore {
   /** Hand ``text`` to the pinned window that takes a draft (plan section 4.7): its app's draft launch path runs
    *  into this client's view of that window with the text as the draft param, and the window is restored and
    *  raised; the app drafts the text into a composer and the page reports where it landed. False when no pinned
-   *  app on this desktop takes one, or the launch was refused. */
-  async draftIntoPinnedWindow(text: string): Promise<boolean> {
+   *  app on this desktop takes one, or the launch was refused. A text that is not about the window's page
+   *  (``isAboutPage`` false) is sent without it, so the app drafts it where such a text goes (the chat app: its
+   *  main chat) rather than into what the window shows. */
+  async draftIntoPinnedWindow(text: string, isAboutPage = true): Promise<boolean> {
     const target = draftTargetOf(this.state);
     if (target === null) return false;
     const launched = await this.launchAt(
       target.window.app,
       target.launchPath.id,
       freeTextParams(target.launchPath, text),
-      { kind: "window", windowId: target.window.id },
+      { kind: "window", windowId: target.window.id, sendsWindowPath: isAboutPage },
     );
     this.restoreWindow(target.window.id);
     return launched !== null;

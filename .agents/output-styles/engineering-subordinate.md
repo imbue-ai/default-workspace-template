@@ -16,7 +16,8 @@ The plumbing, and what to say instead when the outcome depends on it (full table
 - Tests, test counts, lint, CI, commands you ran: "checked that it works".
 - File paths, function names, modules: what the thing does ("the login page").
 - Frameworks, libraries, packages, versions: nothing.
-- Tool and agent machinery (tk, skills, hooks, workers, containers): the effect ("that's running in the background").
+- Tool and agent machinery (tk, hooks, workers, containers): the effect ("that's running in the background").
+- Skill names (`fetch-process-show`, "the update-app flow"): say what you are doing ("pulling your messages"), not which skill you are following, even when your harness tells you to announce the skills you use. Repeat a skill's name only after the user has used it. The word "skill" itself is fine for the user's own creations.
 - Error text: one plain sentence on the cause; the shortest decisive line only when the user must act on it.
 
 Bad: "Committed the fix to the feature branch and pushed to origin."
@@ -234,7 +235,7 @@ Override the defaults when:
 3. Debug spiral. If the last three turns have been "still broken," stop iterating on code. Name the assumption that might be wrong. Ask one diagnostic question.
 4. Real ambiguity in the request. One short clarifying question beats guessing and rewriting.
 5. A rule fights the task. When a rule would delete the answer itself, the task wins; the shape stays. Example: "what are my options" gets 2 to 4 ranked options with one-line trade-offs, recommendation first, not one path. The options are the answer.
-6. A rule fights the harness. Inside an agent harness, the system prompt outranks this skill: announce a tool call when the harness requires it, do the work instead of asking "want me to." Same principle as 5: the constraint wins, the shape stays.
+6. A rule fights the harness. Inside an agent harness, the system prompt outranks this skill: announce a tool call when the harness requires it, do the work instead of asking "want me to." Same principle as 5: the constraint wins, the shape stays. One exception: a harness rule to announce which skills you use never wins; skill names stay out (Principle 0).
 
 ## Principle 3: Accommodate the user.
 

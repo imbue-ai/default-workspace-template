@@ -2,8 +2,9 @@
  * The rows of the chat root's list, and their order: pure functions over the chat snapshots
  * and provisional chats the chat app streams, so the list is testable without a DOM.
  *
- * The list is ordered by recency: the chat most recently messaged leads, one never messaged
- * trails, except one started from this root, which leads until its first message. A chat
+ * The workspace's main chat (the welcome chat) always leads. The rest is ordered by recency: the
+ * chat most recently messaged leads, one never messaged trails, except one started from this root,
+ * which leads until its first message. A chat
  * another agent started (a worker, labelled ``agent_created`` and ``lead_agent`` by
  * ``create_worker.py``) is filed under the chat that owns the agent the lead label names, one
  * level deep, and the pair moves together.
@@ -22,6 +23,8 @@ export interface ChatRow {
   lastActiveMs: number | null;
   /** True for a chat the app has minted but that is not an agent yet. */
   isProvisional: boolean;
+  /** True for the workspace's main chat, where a text with no chat of its own goes. */
+  isMain: boolean;
 }
 
 // What a chat that is not an agent yet is doing, as a chat status.
@@ -33,7 +36,11 @@ const STATUS_BY_PROVISIONAL_PHASE: Readonly<Record<ProvisionalChatPhase, string>
 
 const PROVISIONAL_TITLE = "New chat";
 
-export function rowsFromSnapshots(chats: readonly ChatSnapshot[], provisional: readonly ProvisionalChat[]): ChatRow[] {
+export function rowsFromSnapshots(
+  chats: readonly ChatSnapshot[],
+  provisional: readonly ProvisionalChat[],
+  mainChatId: string | null,
+): ChatRow[] {
   const known = new Set(chats.map((chat) => chat.chat_id));
   const rows: ChatRow[] = chats.map((chat) => ({
     chatId: chat.chat_id,
@@ -43,6 +50,7 @@ export function rowsFromSnapshots(chats: readonly ChatSnapshot[], provisional: r
     agentIds: chat.agent_ids,
     lastActiveMs: chat.last_messaged_at === null ? null : chat.last_messaged_at * 1000,
     isProvisional: false,
+    isMain: chat.chat_id === mainChatId,
   }));
   for (const chat of provisional) {
     if (known.has(chat.chat_id)) continue;
@@ -54,9 +62,15 @@ export function rowsFromSnapshots(chats: readonly ChatSnapshot[], provisional: r
       agentIds: [],
       lastActiveMs: null,
       isProvisional: true,
+      isMain: chat.chat_id === mainChatId,
     });
   }
   return rows;
+}
+
+/** A chat whose first agent is being created: it takes no rename, delete, or other verb until it is up. */
+export function isBeingCreated(row: ChatRow): boolean {
+  return row.isProvisional && row.status === STATUS_BY_PROVISIONAL_PHASE.creating;
 }
 
 export function isAgentStarted(row: ChatRow): boolean {
@@ -92,7 +106,8 @@ export function parentOf(row: ChatRow, rows: readonly ChatRow[]): ChatRow | null
   return parent;
 }
 
-/** The list in display order: each root chat by recency, its helpers right under it. */
+/** The list in display order: the main chat's group first, then each root chat by recency, its helpers right
+ *  under it. */
 export function groupedRows(rows: readonly ChatRow[], startedHere: ReadonlySet<string>): ChatRow[] {
   const helpersByParent = new Map<string, ChatRow[]>();
   const roots: ChatRow[] = [];
@@ -107,6 +122,13 @@ export function groupedRows(rows: readonly ChatRow[], startedHere: ReadonlySet<s
   }));
   const latestOf = (group: { root: ChatRow; helpers: ChatRow[] }): number =>
     Math.max(recencyKey(group.root, startedHere), ...group.helpers.map((helper) => recencyKey(helper, startedHere)));
-  groups.sort((first, second) => latestOf(second) - latestOf(first));
+  groups.sort(
+    (first, second) => Number(second.root.isMain) - Number(first.root.isMain) || latestOf(second) - latestOf(first),
+  );
   return groups.flatMap((group) => [group.root, ...group.helpers]);
+}
+
+/** Whether the list (in display order) starts with the main chat, which then sits alone above the rest. */
+export function startsWithMainChat(rows: readonly ChatRow[]): boolean {
+  return rows[0]?.isMain === true;
 }

@@ -33,7 +33,8 @@ README for details.
 - `pytest_executable_tmp/` - Test-only pytest plugin that keeps a session's
   temporary files where a stub executable written there can run, or stops
   the session before any test starts.
-- `pytest_workspace_env/` - Test-only pytest plugin that, with
+- `pytest_workspace_env/` - Test-only pytest plugin that clears the
+  environment an mngr agent runs with before any test code runs, and, with
   `DWT_REQUIRE_WORKSPACE_ENV=1` set, fails rather than skips any test (the CI
   job that runs the suites inside the workspace image sets it).
 - `tk_command_parsing/` - Parsing helpers for the vendored `tk` ticket

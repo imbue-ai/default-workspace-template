@@ -28,6 +28,9 @@ STOPS_WINDOW = timedelta(hours=24)
 _SENDING = re.compile(
     r'^sending SIG\w+ to process (\d+) uid \d+ "([^"]*)".*?cmdline "(.*)$'
 )
+# The UTC time oom_priority's earlyoom-stamp puts before every line of the log. Lines written
+# before earlyoom ran through it have none, and stay in the log until it is rotated.
+_STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z ")
 
 
 def read_shed_log(log: Path = SHED_LOG) -> list[dict[str, Any]]:
@@ -52,7 +55,8 @@ def _parse_shed_log(log: Path, mtime_ns: int, size: int) -> list[dict[str, Any]]
         return []
     out: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
-    for line in lines:
+    for stamped_line in lines:
+        line = _STAMP.sub("", stamped_line, count=1)
         if current is not None:
             # A command with newlines runs on until its closing quote; anything else ends it
             # unfinished, and the stop is then left out so no other line is glued onto it.
