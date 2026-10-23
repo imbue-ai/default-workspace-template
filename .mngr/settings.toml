@@ -478,7 +478,8 @@ append_system_prompt__extend = ["""Do not use any built-in tools related to memo
 #
 # share_auth stays at its default, true: only then does the GROK_AUTH_PATH an account binding writes
 # into the agent's env file reach grok. busy_send_policy = REFUSE fails a send that finds a turn in
-# flight instead of having grok queue it, so the chat app's queue is the only one.
+# flight as it starts instead of having grok queue it, so what waits for a turn waits in the chat
+# app's queue; only a turn that starts while mngr types still gets the message queued in grok.
 [agent_types.grok]
 auto_allow_permissions = true
 auto_dismiss_dialogs_at_startup = true
