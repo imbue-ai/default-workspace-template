@@ -460,6 +460,16 @@ def _pinned_tool_location() -> tuple[Path, Path]:
     return tool_env.tools_dir(home), tool_env.bin_dir(home)
 
 
+def _uv_tool_env(tool_dir: Path, bin_dir: Path) -> dict[str, str]:
+    """This process's environment with uv pointed at one installation: ``UV_TOOL_DIR``
+    and ``UV_TOOL_BIN_DIR``, the pair every ``uv tool`` command the apply runs is
+    addressed by."""
+    env = dict(os.environ)
+    env["UV_TOOL_DIR"] = str(tool_dir)
+    env["UV_TOOL_BIN_DIR"] = str(bin_dir)
+    return env
+
+
 class RemovedAppTool(NamedTuple):
     """A uv tool installed editable from an app directory the tree no longer has:
     its environment's name, the source it was installed from, and the uv tool and
@@ -560,15 +570,12 @@ def remove_tool_installs_of_removed_apps(
     """
     notes: list[str] = []
     for removed in removed_app_tools:
-        env = dict(os.environ)
-        env["UV_TOOL_DIR"] = str(removed.tool_dir)
-        env["UV_TOOL_BIN_DIR"] = str(removed.bin_dir)
         result = runner.run(
             ["uv", "tool", "uninstall", removed.tool_name],
             capture_output=True,
             text=True,
             check=False,
-            env=env,
+            env=_uv_tool_env(removed.tool_dir, removed.bin_dir),
         )
         if getattr(result, "returncode", 0) != 0:
             stderr = (getattr(result, "stderr", "") or "").strip()
@@ -952,9 +959,7 @@ def _reinstall_tool(
             f"refresh: removed {stale}, an entrypoint into '{tool_name}' its receipt "
             "does not list (left by an earlier rollback).\n"
         )
-    env = dict(os.environ)
-    env["UV_TOOL_DIR"] = str(destination.tool_dir)
-    env["UV_TOOL_BIN_DIR"] = str(destination.bin_dir)
+    env = _uv_tool_env(destination.tool_dir, destination.bin_dir)
     argv = [
         "uv",
         "tool",
