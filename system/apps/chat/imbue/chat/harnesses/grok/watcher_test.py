@@ -615,6 +615,20 @@ def test_a_flush_whose_log_read_fails_leaves_the_message_unclaimed_for_the_next_
     assert watcher.get_queued_messages() == []
 
 
+def test_a_flush_whose_log_read_raises_unexpectedly_leaves_the_message_for_a_stop_to_take(tmp_path: Path) -> None:
+    watcher, grok, _broadcast = _flushing_watcher(tmp_path)
+    watcher._queue.enqueue("held", "t0", is_turn_open=True)
+    unconvertible_time = {"timestamp": 10**12, "method": "_x.ai/session/update", "params": {"update": {}}}
+    append_grok_updates(tmp_path, _PLAIN_ROOT, json.dumps(unconvertible_time).encode() + b"\n")
+
+    with pytest.raises(ValueError):
+        watcher._attempt_flush()
+
+    block, _taken = watcher.take_unclaimed_queue()
+    assert grok.sent == []
+    assert block == "held"
+
+
 def test_a_send_mngr_confirmed_is_not_typed_again_when_the_log_read_after_it_fails(tmp_path: Path) -> None:
     watcher, grok, _broadcast = _flushing_watcher(tmp_path)
     grok.is_committing = False
