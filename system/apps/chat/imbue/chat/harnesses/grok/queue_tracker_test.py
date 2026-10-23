@@ -363,6 +363,15 @@ def test_adopting_a_new_session_drops_the_held_messages_and_the_journal(tmp_path
     assert not (tmp_path / OUTBOX_FILENAME).exists()
 
 
+def test_an_unknown_session_keeps_the_held_messages(tmp_path: Path) -> None:
+    tracker = _tracker(tmp_path, token="session-1")
+    tracker.enqueue("held", "t0", is_turn_open=True)
+
+    assert tracker.set_session(None) is False
+    assert _contents(tracker) == ["held"]
+    assert _contents(_tracker(tmp_path, token="session-1")) == ["held"]
+
+
 def test_no_session_journals_nothing(tmp_path: Path) -> None:
     _tracker(tmp_path, token="").enqueue("held", "t0", is_turn_open=True)
 
@@ -377,7 +386,7 @@ def test_a_torn_journal_line_is_skipped(tmp_path: Path) -> None:
     assert _contents(_tracker(tmp_path)) == ["kept"]
 
 
-def test_an_unreadable_journal_or_launch_marker_reads_as_empty_and_is_logged(
+def test_an_unreadable_journal_reads_as_empty_and_an_unreadable_launch_marker_as_unknown_and_both_are_logged(
     tmp_path: Path, loguru_records: list[str]
 ) -> None:
     (tmp_path / OUTBOX_FILENAME).mkdir()
@@ -385,7 +394,7 @@ def test_an_unreadable_journal_or_launch_marker_reads_as_empty_and_is_logged(
     not_a_state_dir.write_text("")
 
     assert _contents(_tracker(tmp_path)) == []
-    assert session_token(not_a_state_dir) == ""
+    assert session_token(not_a_state_dir) is None
     assert [record.split(" ", 1)[0] for record in loguru_records if "could not read the" in record] == [
         "WARNING",
         "WARNING",

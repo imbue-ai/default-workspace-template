@@ -84,15 +84,16 @@ class InvalidControlCommandError(ValueError):
     """Raised for a control-lane command that is not a single `/model` or `/effort` line."""
 
 
-def session_token(agent_state_dir: Path) -> str:
-    """The current grok process's identity: the launch marker's mtime, or '' when grok never launched."""
+def session_token(agent_state_dir: Path) -> str | None:
+    """The current grok process's identity: the launch marker's mtime, '' when grok never launched, or None when the
+    marker cannot be read."""
     try:
         return str((agent_state_dir / PROCESS_STARTED_MARKER_FILENAME).stat().st_mtime_ns)
     except FileNotFoundError:
         return ""
     except OSError as error:
         logger.opt(exception=error).warning("grok: could not read the launch marker in {}", agent_state_dir)
-        return ""
+        return None
 
 
 def _control_command_verb(command: str) -> str:
@@ -281,10 +282,13 @@ class GrokQueueTracker:
 
     # session identity
 
-    def set_session(self, token: str) -> bool:
-        """Adopt ``token``; on a change, drop every held message (never sent into a new grok). True if it changed."""
+    def set_session(self, token: str | None) -> bool:
+        """Adopt ``token``; on a change, drop every held message (never sent into a new grok). True if it changed.
+
+        None, an unreadable launch marker, keeps the current session.
+        """
         with self._lock:
-            if token == self._session_token:
+            if token is None or token == self._session_token:
                 return False
             dropped_count = len(self._queued.snapshot())
             if dropped_count:
@@ -539,7 +543,8 @@ def get_tracker(agent_state_dir: Path) -> GrokQueueTracker:
         existing = _TRACKERS.get(agent_id)
         if existing is not None:
             return existing
-        tracker = GrokQueueTracker.build(agent_state_dir / OUTBOX_FILENAME, session_token(agent_state_dir))
+        token = session_token(agent_state_dir)
+        tracker = GrokQueueTracker.build(agent_state_dir / OUTBOX_FILENAME, "" if token is None else token)
         _TRACKERS[agent_id] = tracker
         return tracker
 
