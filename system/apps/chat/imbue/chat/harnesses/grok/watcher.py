@@ -97,6 +97,10 @@ _VERDICT_BY_FAILURE_KIND: Final[dict[str, GrokSendVerdict]] = {
 _SENT_RESULT: Final[GrokSendResult] = GrokSendResult(verdict=GrokSendVerdict.SENT, reason="", failure_kind="")
 # A send that raised before mngr answered.
 _UNSENT_RESULT: Final[GrokSendResult] = GrokSendResult(verdict=GrokSendVerdict.FAILED, reason="", failure_kind="")
+# A send that answered only that grok did not take the text, which mngr may still have typed.
+_UNTAKEN_RESULT: Final[GrokSendResult] = GrokSendResult(
+    verdict=GrokSendVerdict.UNCONFIRMED, reason="", failure_kind=""
+)
 
 # One complete line of a session log: (record time, byte offset, byte length, record).
 _LogRecord = tuple[str, int, int, dict[str, Any]]
@@ -611,7 +615,7 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
         session_send = self._queue.get_session_send()
         if session_send is None:
             is_taken = self._flush_send is not None and self._flush_send(text)
-            return _SENT_RESULT if is_taken else self._untaken_send_result()
+            return _SENT_RESULT if is_taken else _UNTAKEN_RESULT
         try:
             is_taken = session_send(text)
         except SendFailedError as error:
@@ -620,12 +624,7 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
         except MngrError as error:
             logger.opt(exception=error).warning("grok: mngr could not send to {}", self._agent_id)
             return GrokSendResult(verdict=GrokSendVerdict.FAILED, reason=str(error), failure_kind="")
-        return _SENT_RESULT if is_taken else self._untaken_send_result()
-
-    def _untaken_send_result(self) -> GrokSendResult:
-        """A send that reports grok did not take the text: busy while a turn holds the queue, else failed."""
-        verdict = GrokSendVerdict.BUSY if is_hold_required(self._agent_state_dir) else GrokSendVerdict.FAILED
-        return GrokSendResult(verdict=verdict, reason="", failure_kind="")
+        return _SENT_RESULT if is_taken else _UNTAKEN_RESULT
 
     def _await_turn_holding(self, witness_start: int, block: str) -> bool:
         """Whether a user turn grok logged since the send holds the block, looking until the witness window ends."""

@@ -845,25 +845,28 @@ def test_a_grok_relaunch_drops_the_held_messages_before_anything_is_sent_into_it
     assert watcher.get_queued_messages() == []
 
 
-def test_without_a_bound_session_send_a_refused_flush_hook_send_into_a_turn_reads_busy(tmp_path: Path) -> None:
-    watcher, _grok, _broadcast = _flushing_watcher(tmp_path)
-    watcher._queue.unbind_session_send(_grok.send)
+def test_without_a_bound_session_send_an_untaken_hook_send_grok_ran_is_not_typed_again(tmp_path: Path) -> None:
+    """The flush hook answers only whether mngr confirmed the send, so its False may still have typed the text."""
+    watcher, grok, _broadcast = _flushing_watcher(tmp_path)
+    watcher._queue.unbind_session_send(grok.send)
     assert watcher._queue.get_session_send() is None
     hook_sent: list[str] = []
 
-    def refusing_hook(text: str) -> bool:
+    def unconfirmed_hook(text: str) -> bool:
         hook_sent.append(text)
+        grok.commit(text)
         write_root_turn(tmp_path, _PLAIN_ROOT, "prompt-9")
         return False
 
-    watcher.set_flush_hooks(refusing_hook, lambda: True)
-    queued_id = watcher._queue.enqueue("held", "t0", is_turn_open=True)
+    watcher.set_flush_hooks(unconfirmed_hook, lambda: True)
+    watcher._queue.enqueue("held", "t0", is_turn_open=True)
 
+    watcher._attempt_flush()
+    remove_root_turn(tmp_path, _PLAIN_ROOT)
     watcher._attempt_flush()
 
     assert hook_sent == ["held"]
-    assert watcher._queue.is_exhausted(queued_id) is False
-    assert _held(watcher) == [("held", False)]
+    assert watcher.get_queued_messages() == []
 
 
 def test_a_root_turn_change_wakes_the_worker_only_while_something_is_held(tmp_path: Path) -> None:
