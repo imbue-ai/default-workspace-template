@@ -264,8 +264,9 @@ require-a-step check.
 Project hooks load only for a trusted folder, which mngr seeds for every work dir. Measured:
 `.grok/hooks/policy.json` runs for a root session in a linked worktree whose main checkout is the
 trusted one, and in every kind of subagent (shared, `cwd`, `isolation: "worktree"`). The `Stop`
-entries are the stop nudge and code-guardian's stop gate, by its absolute path under
-`/opt/agent-plugins` (grok sets no plugin root), gated by `.reviewer` settings as on claude.
+entries are the stop nudge, code-guardian's stop gate, by its absolute path under
+`/opt/agent-plugins` (grok sets no plugin root), gated by `.reviewer` settings as on claude, and
+`grok_background_task_hooks.py stop`, which records the background tasks the turn left running.
 There is no cwd `Stop` hook: grok runs hooks from the workspace root.
 
 ## Output contracts (the reference the mapping below relies on)
@@ -350,7 +351,8 @@ When a rule changes, update every harness that carries it:
   is the one guard pi and grok also run on their file tools, because P9 covers a `read` of a
   secret file as much as a `cat`; its checker lists each harness's file-tool names and path
   fields, so a new file tool is an entry there.
-  Keep the rewrite **last** in both hook configs and in pi's handler — a blocker that
+  Keep the rewrite **last** in both hook configs, in pi's handler and in grok's
+  `PRETOOLUSE_SCRIPTS` — a blocker that
   inspects the rewritten command refuses everything (see "Which command a guard sees" above).
 - **Workflow 5 and 7** (`agent_require_steps_pretool.sh`, `agent_open_tickets_reminder.sh`,
   `agent_open_tickets_stop_nudge.sh`): the scripts (claude, codex **and** grok) and the matching
