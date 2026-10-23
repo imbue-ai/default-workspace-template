@@ -19,11 +19,9 @@ from imbue.chat.harnesses.interrupt import IsCompactionInFlight
 from imbue.chat.harnesses.interrupt import PressChord
 from imbue.chat.harnesses.interrupt import RestartProcess
 from imbue.chat.harnesses.interrupt import SettleActivity
-from imbue.chat.harnesses.interrupt import restart_drain
 from imbue.chat.harnesses.session import AtomicShoulderTap
 from imbue.chat.harnesses.session import ShoulderTapOutcome
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
-from imbue.chat.models import AgentRestartError
 from imbue.mngr.utils.polling import poll_until
 from imbue.mngr_grok.api import GrokRootTurn
 
@@ -118,15 +116,16 @@ class GrokInterruptToComposer(InterruptToComposer):
         settle_activity: SettleActivity,
         get_in_flight_block: Callable[[], str],
     ) -> str:
-        """Restart grok and return every held message, the ones a failed restart leaves behind included."""
+        """Restart grok and return every held message, the ones sent while it restarted included."""
         logger.warning("grok: the turn of {} did not end; restarting it", self._agent_info.name)
         in_flight = get_in_flight_block()
         taken_block, _taken = watcher.take_whole_queue()
-        try:
-            late_block = restart_drain(self._agent_info, watcher, restart_process, settle_activity)
-        except AgentRestartError as error:
-            logger.opt(exception=error).warning("grok: could not restart {}", self._agent_info.name)
-            late_block, _late_taken = watcher.take_unclaimed_queue()
+        is_restarted, output = restart_process()
+        if is_restarted:
+            settle_activity()
+        else:
+            logger.warning("grok: could not restart {}: {}", self._agent_info.name, output)
+        late_block, _late_taken = watcher.take_whole_queue()
         return _combine(taken_block, late_block, in_flight)
 
 

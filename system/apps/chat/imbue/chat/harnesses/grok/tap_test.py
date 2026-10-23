@@ -196,17 +196,22 @@ def test_a_refused_press_into_a_turn_that_goes_on_gets_the_restart(tmp_path: Pat
     assert grok.restart_count == 1
 
 
-def test_a_failed_restart_still_returns_every_message_it_took(tmp_path: Path) -> None:
-    """The messages the restart took, and one sent while it ran, go back to the composer rather than nowhere."""
+@pytest.mark.parametrize(
+    "restart_result", [(True, "restarted"), (False, "grok shows its login screen")], ids=["restarted", "failed"]
+)
+def test_a_restart_returns_every_message_it_took_and_one_sent_while_it_ran(
+    tmp_path: Path, restart_result: tuple[bool, str]
+) -> None:
+    """Whether or not grok came back, those messages go back to the composer rather than nowhere."""
     agent_info, watcher, grok = _setup(tmp_path)
     grok.begin_turn()
     _hold(watcher, "taken")
 
-    def failing_restart() -> tuple[bool, str]:
+    def restart() -> tuple[bool, str]:
         _hold(watcher, "sent during the restart")
-        return False, "grok shows its login screen"
+        return restart_result
 
-    assert _stop(agent_info, watcher, grok, grok.ignored_press, failing_restart) == "taken\nsent during the restart"
+    assert _stop(agent_info, watcher, grok, grok.ignored_press, restart) == "taken\nsent during the restart"
     assert watcher.get_queued_messages() == []
 
 
