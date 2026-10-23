@@ -1,1 +1,1 @@
-`Grants.granted_service_names` names the services with a per-service grant (it was `granted_app_names`, the shell's word for them; the shell's reader keeps that name and calls the library's), and the granted-service tests `grants_test.py` took over from the shell are named the same way and tidied.
+Tidied the granted-app tests `grants_test.py` took over from the shell (the extra blank line before `test_render_grants_roundtrips_through_parse` is gone).

@@ -79,7 +79,7 @@ class ShareGrantsReader(MutableModel):
     def granted_app_names(self) -> AbstractSet[str]:
         """The apps with a per-app grant; none while the document cannot be read."""
         grants = self.read_grants()
-        return grants.granted_service_names() if grants is not None else set()
+        return grants.granted_app_names() if grants is not None else set()
 
     def _warn_once(self, grants_mtime_ns: int, message: str) -> None:
         """Warn about a version of the document once, not on every read until the owner rewrites it."""
