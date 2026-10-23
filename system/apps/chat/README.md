@@ -921,7 +921,9 @@ rooms are one list, one id shape, and one push.
 
 A room starts from the awaiting chat's provider chooser ("Chat room (no provider)",
 `POST /api/chats/create` with `"kind": "room"`), which the create guard
-(`system/scripts/require_create_account.py`) lets through on no account. A chat
+(`system/scripts/require_create_account.py`) lets through on no account; the
+awaiting chat's provider chip opens that chooser, as does its first send while
+nothing is signed in. A chat
 converts to a room and back through the ordinary switch (`POST /api/chats/<id>/handoff`
 with `"kind": "room"`, or with an account): a switch to a room is a fresh-start
 handoff on no account, and a switch off a room takes the room's transcript as the

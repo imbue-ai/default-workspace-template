@@ -83,8 +83,15 @@ import {
   isAccountSignedOut,
   openProviderChooser,
 } from "../models/Providers";
-import { beginSwitchTo, beginSwitchToAccountId, openSwitchDialog, switchToRoom, takeBackSwitch } from "./SwitchDialog";
-import type { ProviderAccount } from "../models/Providers";
+import {
+  beginSwitchTo,
+  beginSwitchToAccountId,
+  launchAwaitingChatAsRoom,
+  openSwitchDialog,
+  switchToRoom,
+  takeBackSwitch,
+} from "./SwitchDialog";
+import type { ProviderAccount, ProviderChooserIntent } from "../models/Providers";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
@@ -140,15 +147,15 @@ function effortFillColor(fraction: number): string {
   return `hsl(152 39% ${Math.round(70 - 30 * fraction)}%)`;
 }
 
-/** The chip with no provider signed in: it says so, and a press opens the provider chooser. */
-function notConnectedChip(onSignedIn?: (accountId: string) => void): m.Vnode {
+/** The chip with no provider signed in: it says so, and a press opens the provider chooser with ``intent``. */
+function notConnectedChip(intent: ProviderChooserIntent = {}): m.Vnode {
   return m(
     "button",
     {
       type: "button",
       class: `model-selector-not-connected ${css.TRIGGER}`,
       ...hoverTooltipAttrs("Connect a model provider", "above"),
-      onclick: () => openProviderChooser(onSignedIn === undefined ? {} : { onSignedIn }),
+      onclick: () => openProviderChooser(intent),
     },
     "Not connected",
   );
@@ -159,18 +166,23 @@ function loadingChip(): m.Vnode {
   return m("span", { class: `model-selector-loading ${css.PROVISIONAL_CHIP}` }, "Loading…");
 }
 
-/** The chip for a chat with no agent yet: the account it starts on. With no agent there is no
- *  model to name or change. */
+/** The chip for a chat with no agent yet: the account its first send starts it on. With no agent there is no
+ *  model to name or change, so a press opens the provider chooser, whose room row makes the chat a room instead
+ *  (the multiplayer spec, section 7.3): with an account signed in, the first send launches on it and nothing else
+ *  on the page opens that chooser. */
 function provisionalChip(chatId: string): m.Vnode {
   const provisional = getProvisionalChat(chatId);
   if (provisional === undefined || !areAccountsLoaded()) return loadingChip();
+  const intent: ProviderChooserIntent = { onRoomChosen: () => void launchAwaitingChatAsRoom(chatId) };
   const account = accountForFirstSend(provisional.account_id);
-  if (account === null) return notConnectedChip();
+  if (account === null) return notConnectedChip(intent);
   return m(
-    "span",
+    "button",
     {
-      class: `model-selector-provisional ${css.PROVISIONAL_CHIP}`,
-      ...hoverTooltipAttrs(`This chat starts on ${account.label}`, "above"),
+      type: "button",
+      class: `model-selector-provisional ${css.TRIGGER}`,
+      ...hoverTooltipAttrs(`This chat starts on ${account.label}; press for a chat room instead`, "above"),
+      onclick: () => openProviderChooser(intent),
     },
     account.provider,
   );
@@ -980,9 +992,11 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       if (account === null && matched === null && !isCompact && chat.kind !== "room") {
         if (!areAccountsLoaded()) return loadingChip();
         if (getAccounts().length === 0) {
-          return notConnectedChip((accountId) => {
-            beginSwitchToAccountId(chatId, accountId);
-            m.redraw();
+          return notConnectedChip({
+            onSignedIn: (accountId) => {
+              beginSwitchToAccountId(chatId, accountId);
+              m.redraw();
+            },
           });
         }
       }

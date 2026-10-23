@@ -134,8 +134,10 @@ const providerState: { accounts: unknown[]; defaultId: string | null; isLoaded: 
   defaultId: null,
   isLoaded: true,
 };
-// Every time something opened the provider chooser, with whether it asked to hear of the sign-in.
-const chooserOpens: { hasOnSignedIn: boolean }[] = [];
+// Every time something opened the provider chooser, with whether it asked to hear of the sign-in and whether it
+// offered a room; the last intent is kept so a test can pick the room.
+const chooserOpens: { hasOnSignedIn: boolean; hasOnRoomChosen: boolean }[] = [];
+let lastChooserIntent: { onRoomChosen?: () => void } = {};
 // Every pin or unpin the star asked the server for, as (account id, pinned) pairs.
 const pins: [string, boolean][] = [];
 vi.mock("../models/Providers", () => ({
@@ -151,8 +153,13 @@ vi.mock("../models/Providers", () => ({
   areAccountsLoaded: () => providerState.isLoaded,
   isAccountSignedOut: (id?: string | null) =>
     !!id && providerState.isLoaded && !providerState.accounts.some((a) => (a as { id: string }).id === id),
-  openProviderChooser: (intent: { onSignedIn?: unknown } = {}) =>
-    chooserOpens.push({ hasOnSignedIn: intent.onSignedIn !== undefined }),
+  openProviderChooser: (intent: { onSignedIn?: unknown; onRoomChosen?: () => void } = {}) => {
+    lastChooserIntent = intent;
+    chooserOpens.push({
+      hasOnSignedIn: intent.onSignedIn !== undefined,
+      hasOnRoomChosen: intent.onRoomChosen !== undefined,
+    });
+  },
   deleteAccount: () => Promise.resolve(),
   renameAccount: () => Promise.resolve(),
   loadAccounts: () => Promise.resolve(),
@@ -170,11 +177,14 @@ vi.mock("../shell", () => ({
 const begun: string[] = [];
 const reopened: string[] = [];
 const roomSwitches: string[] = [];
+// The chats awaiting their first send that were launched as rooms, by chat id.
+const roomLaunches: string[] = [];
 vi.mock("./SwitchDialog", async (importOriginal) => ({
   takeBackSwitch: (await importOriginal<typeof import("./SwitchDialog")>()).takeBackSwitch,
   beginSwitchTo: (_chatId: string, account: { id: string }) => begun.push(account.id),
   openSwitchDialog: (_chatId: string, account: { id: string }) => reopened.push(account.id),
   switchToRoom: (chatId: string) => Promise.resolve(roomSwitches.push(chatId)),
+  launchAwaitingChatAsRoom: (chatId: string) => Promise.resolve(roomLaunches.push(chatId)),
 }));
 
 import m from "mithril";
@@ -294,6 +304,8 @@ beforeEach(() => {
   providerState.defaultId = null;
   providerState.isLoaded = true;
   chooserOpens.length = 0;
+  lastChooserIntent = {};
+  roomLaunches.length = 0;
   agentState.provisional = undefined;
   agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-1" } });
   agentState.mainChatId = null;
@@ -316,12 +328,17 @@ describe("the combo card", () => {
     expect(ROOT().querySelector(".model-selector-loading")?.textContent).toBe("Loading…");
   });
 
-  it("names the account a chat with no agent yet starts on, with no menu to open", () => {
+  it("names the account a chat with no agent yet starts on, with no menu, and opens the chooser offering a room", () => {
     agentState.agent = null;
     agentState.provisional = { account_id: "" };
     render();
     expect(ROOT().querySelector(".model-selector-provisional")?.textContent).toBe("Anthropic");
     expect(ROOT().querySelector(".model-selector-trigger")).toBeNull();
+    // With an account signed in the first send launches on it, so this press is the one way to the room row.
+    click(".model-selector-provisional");
+    expect(chooserOpens).toEqual([{ hasOnSignedIn: false, hasOnRoomChosen: true }]);
+    lastChooserIntent.onRoomChosen?.();
+    expect(roomLaunches).toEqual(["a1"]);
   });
 
   it("says a chat with no agent yet is not connected when no provider is signed in, and opens the chooser", () => {
@@ -331,7 +348,7 @@ describe("the combo card", () => {
     render();
     expect(screenText()).toContain("Not connected");
     click(".model-selector-not-connected");
-    expect(chooserOpens).toEqual([{ hasOnSignedIn: false }]);
+    expect(chooserOpens).toEqual([{ hasOnSignedIn: false, hasOnRoomChosen: true }]);
   });
 
   it("does not call a chat not connected before the account list has loaded", () => {
@@ -356,7 +373,7 @@ describe("the combo card", () => {
     render();
     expect(screenText()).toContain("Not connected");
     click(".model-selector-not-connected");
-    expect(chooserOpens).toEqual([{ hasOnSignedIn: true }]);
+    expect(chooserOpens).toEqual([{ hasOnSignedIn: true, hasOnRoomChosen: false }]);
   });
 
   it("keeps a chip under a running chat that names no account while providers are signed in", () => {

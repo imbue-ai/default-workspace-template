@@ -54,6 +54,7 @@ const mocks = vi.hoisted(() => {
     setPendingAccount: vi.fn(),
     openSwitchDialog: vi.fn(),
     beginSwitchToAccountId: vi.fn(),
+    launchAwaitingChatAsRoom: vi.fn(async (_chatId: string) => {}),
     // What the composer registered to hear of a model pick the chat app refused.
     modelChoiceFailureListener: null as ((chatId: string, detail: string) => void) | null,
     // The account ids that read as signed out; empty at rest.
@@ -112,6 +113,7 @@ vi.mock("../models/PendingLane", async (importOriginal) => {
 vi.mock("./SwitchDialog", () => ({
   openSwitchDialog: mocks.openSwitchDialog,
   beginSwitchToAccountId: mocks.beginSwitchToAccountId,
+  launchAwaitingChatAsRoom: mocks.launchAwaitingChatAsRoom,
 }));
 vi.mock("./fast-mode-limit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./fast-mode-limit")>()),
@@ -1567,7 +1569,7 @@ describe("MessageInput on a chat awaiting its first send with nothing signed in"
   });
 
   it("launches the chat as a room, with nothing said yet, when the notice's chooser picks the room row", async () => {
-    mocks.launchChat.mockClear();
+    mocks.launchAwaitingChatAsRoom.mockClear();
     const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731" } } as never);
     (findButton(tree, "Choose a provider")!.attrs!.onclick as () => void)();
 
@@ -1575,7 +1577,7 @@ describe("MessageInput on a chat awaiting its first send with nothing signed in"
     intent.onRoomChosen();
     await flushAsync();
 
-    expect(mocks.launchChat).toHaveBeenCalledWith("agent-first-7731", "", "", "room");
+    expect(mocks.launchAwaitingChatAsRoom).toHaveBeenCalledExactlyOnceWith("agent-first-7731");
   });
 
   it("keeps the phone's leading settings button beside the notice", () => {

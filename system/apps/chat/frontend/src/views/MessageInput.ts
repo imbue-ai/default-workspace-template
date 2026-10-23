@@ -26,7 +26,7 @@ import {
   setSwitchSending,
 } from "../models/PendingLane";
 import type { ProviderAccount } from "../models/Providers";
-import { beginSwitchToAccountId, openSwitchDialog } from "./SwitchDialog";
+import { beginSwitchToAccountId, launchAwaitingChatAsRoom, openSwitchDialog } from "./SwitchDialog";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
 import {
@@ -1437,20 +1437,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
 
       /** In place of the composer while nothing is signed in that a new chat could start on. The chooser opens as the
        *  notice appears, and its button opens it again once dismissed. */
-      function renderNoProviderNotice(): m.Children {
-        const open = (): void => openProviderChooser({ onRoomChosen: () => void launchAsRoom(chatId) });
+      function renderNoProviderNotice(awaitingChatId: string): m.Children {
+        const open = (): void =>
+          openProviderChooser({ onRoomChosen: () => void launchAwaitingChatAsRoom(awaitingChatId) });
         return providerNotice("message-input-no-provider", "Connect an AI provider to start chatting.", open, open);
-      }
-
-      /** The notice's room choice: the awaiting chat is launched as a room, with nothing said yet. */
-      async function launchAsRoom(roomChatId: string | null): Promise<void> {
-        if (roomChatId === null) return;
-        try {
-          await launchChat(roomChatId, "", "", "room");
-        } catch (error) {
-          raiseFailureNotice(roomChatId, { title: "Couldn't make a room", detail: describeRequestError(error) });
-        }
-        m.redraw();
       }
 
       const attachments = getComposerAttachments(chatId);
@@ -1482,7 +1472,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       const blockingNotice = isBlockedBySignedOutAccount
         ? renderSignedOutAccountNotice(chatId)
         : isBlockedByNoProvider
-          ? renderNoProviderNotice()
+          ? renderNoProviderNotice(chatId)
           : null;
 
       // The stop button is only meaningful while the agent has an interruptible
