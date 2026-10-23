@@ -2181,6 +2181,9 @@ def _plan(paths: list[str]) -> update_classification.ApplyPlan:
         ("system/apps/weather_dashboard/pyproject.toml", False, True),
         ("uv.lock", True, False),
         ("pyproject.toml", True, False),
+        # Not a Python manifest, but it decides which plugins the mngr tool's
+        # reinstall carries: a release that only assigns an existing plugin to the
+        # tool changes nothing else, and without this would never register it.
         (update_layout.PLUGIN_MANIFEST_PATH, True, False),
         # Source an editable install already serves, and files no install reads.
         ("system/apps/browser/src/browser/runner.py", False, False),
@@ -2227,25 +2230,6 @@ def test_plan_apply_keys_the_provisioner_run_on_what_it_reads() -> None:
     assert _plan(["system/scripts/install_secret_scanners.sh"]).provisioner
     # A sibling script the provisioner never runs does not.
     assert not _plan(["system/scripts/seed_home_skeleton.sh"]).provisioner
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        # The root manifests the whole workspace environment is resolved from.
-        "pyproject.toml",
-        "uv.lock",
-        # Not a Python manifest, but it is what the refresh unions into the mngr
-        # tool's reinstall, so it decides which plugins that tool carries. A release
-        # that only assigns an existing plugin to the tool changes nothing else, and
-        # without this would never be registered.
-        update_layout.PLUGIN_MANIFEST_PATH,
-    ],
-)
-def test_plan_apply_counts_every_backend_manifest(path: str) -> None:
-    # Missing one of these means skipping `uv sync` and restarting the
-    # workspace against an environment resolved for the pre-merge tree.
-    assert _plan([path]).backend_manifest
 
 
 def test_plan_apply_rebuilds_the_frontends_when_the_mngr_pin_moves() -> None:
