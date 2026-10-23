@@ -47,9 +47,6 @@ function render(): HTMLElement {
     overview: null,
     letterbox: null,
     onWindowControl: vi.fn(),
-    onShowDetachedWindow: vi.fn(),
-    onHideWindowGhost: vi.fn(),
-    onBringBackWindow: vi.fn(),
     onPagesHostCreated: vi.fn(),
   };
   return mountView(() => m(Backdrop, attrs));

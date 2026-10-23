@@ -1,0 +1,3 @@
+A window pulled out into its own Imbue Studio window no longer leaves a ghost on the desktop. Its place on the desktop stays empty while it is out; its taskbar entry stays, marked as pulled out, and offers "Show" and "Bring back to desktop" in its menu. Closing the window's own Imbue Studio window still brings it back where it was.
+
+- The ghost's "Show", "Hide" and "Bring back" buttons go with it, and so do the taskbar entry's "Hide placeholder" / "Show placeholder" rows. Clicking a pulled-out window's taskbar entry always shows its own window, even when it is minimized (an agent's `layout.py minimize` on a pulled-out window).

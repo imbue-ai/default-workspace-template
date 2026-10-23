@@ -1065,7 +1065,7 @@ describe("a press outside what is open", () => {
 });
 
 describe("a pulled-out window", () => {
-  it("draws a ghost in place of the window, whose Bring back returns the window to the desktop", async () => {
+  it("draws nothing in place of the window, and coming back returns the window to the desktop", async () => {
     api.writeLayout("home", CLIENT, {
       updated_at: null,
       placements: [placementRecord("win-1", { is_detached: true })],
@@ -1073,52 +1073,15 @@ describe("a pulled-out window", () => {
     socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-elsewhere" });
     await settle();
     m.redraw.sync();
-    expect(document.querySelector('[data-detached-window="win-1"]')).not.toBeNull();
     expect(document.querySelector('[data-window-id="win-1"]')).toBeNull();
+    expect(document.querySelector(".windows")?.children).toHaveLength(0);
     expect(document.querySelector('[data-taskbar-entry="win-1"]')?.getAttribute("data-detached")).toBe("true");
-    (document.querySelector('[data-ghost-action="bring-back"]') as HTMLElement).click();
+    await store.reattachWindow("win-1", null);
     await settle();
     m.redraw.sync();
-    expect(document.querySelector('[data-detached-window="win-1"]')).toBeNull();
     expect(document.querySelector('[data-window-id="win-1"]')).not.toBeNull();
     expect(document.querySelector('[data-taskbar-entry="win-1"]')?.getAttribute("data-detached")).toBe("false");
     expect(api.layoutOf("home", CLIENT).placements.find((p) => p.window_id === "win-1")?.is_detached).toBe(false);
-  });
-
-  it("draws the ghost of a window pulled out while maximized at the window's frame, where Bring back lands it", async () => {
-    api.writeLayout("home", CLIENT, {
-      updated_at: null,
-      placements: [placementRecord("win-1", { is_detached: true, state: "MAXIMIZED" })],
-    });
-    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-elsewhere" });
-    await settle();
-    store.setBackdropSize({ width: 1000, height: 800 });
-    m.redraw.sync();
-    const ghost = document.querySelector('[data-detached-window="win-1"]') as HTMLElement;
-    expect([ghost.style.left, ghost.style.width, ghost.style.height]).toEqual(["50px", "600px", "560px"]);
-  });
-});
-
-describe("a hidden ghost", () => {
-  it("goes out of sight from the ghost's Hide and comes back from the taskbar entry, the window staying out", async () => {
-    api.writeLayout("home", CLIENT, {
-      updated_at: null,
-      placements: [placementRecord("win-1", { is_detached: true })],
-    });
-    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-elsewhere" });
-    await settle();
-    m.redraw.sync();
-    (document.querySelector('[data-ghost-action="hide"]') as HTMLElement).click();
-    m.redraw.sync();
-    expect(document.querySelector('[data-detached-window="win-1"]')).toBeNull();
-    expect(document.querySelector('[data-window-id="win-1"]')).toBeNull();
-    const entry = document.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement;
-    expect(entry.getAttribute("data-detached")).toBe("true");
-    expect(entry.getAttribute("data-minimized")).toBe("true");
-    entry.click();
-    m.redraw.sync();
-    expect(document.querySelector('[data-detached-window="win-1"]')).not.toBeNull();
-    expect(document.querySelector('[data-window-id="win-1"]')).toBeNull();
   });
 });
 
