@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from imbue.chat.activity_state import ActivityState
+from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
+from imbue.chat.harnesses.events import SpecialEventKind
 from imbue.chat.harnesses.grok.activity import GrokActivityTracker
 from imbue.chat.harnesses.grok.session_parser import record_timestamp
 from imbue.chat.harnesses.grok.testing import add_grok_session
@@ -136,3 +138,31 @@ def test_a_turn_a_quit_cut_short_ends_on_resume_and_its_killed_tool_no_longer_ru
         (_ROOT, "agent_message_chunk", _THINKING),
         (_ROOT, "turn_completed", _IDLE),
     ]
+
+
+def test_a_subagent_s_unanswered_tool_call_leaves_a_top_level_turn_thinking() -> None:
+    tracker = GrokActivityTracker.build()
+    turn_started = {
+        "type": SPECIAL_EVENT_TYPE,
+        "kind": SpecialEventKind.TURN_STARTED.value,
+        "session_id": _ROOT,
+        "timestamp": "2026-10-22T10:00:00Z",
+    }
+    tracker.observe([turn_started, _tool_call_event(_CHILD, "child-call", "2026-10-22T10:00:01Z")])
+    assert tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=True, process_started_at=None) is (
+        _THINKING
+    )
+
+    tracker.observe([_tool_call_event(_ROOT, "root-call", "2026-10-22T10:00:02Z")])
+    assert tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=True, process_started_at=None) is (
+        _TOOL_RUNNING
+    )
+
+
+def _tool_call_event(session_id: str, tool_call_id: str, timestamp: str) -> dict[str, Any]:
+    return {
+        "type": "assistant_message",
+        "session_id": session_id,
+        "timestamp": timestamp,
+        "tool_calls": [{"tool_call_id": tool_call_id}],
+    }

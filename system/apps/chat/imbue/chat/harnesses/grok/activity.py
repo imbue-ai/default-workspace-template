@@ -24,7 +24,8 @@ _TURN_CLOSING_KINDS: Final[frozenset[str]] = frozenset(
 
 
 class GrokActivityTracker(HarnessActivityTracker):
-    """Grok: whether a top-level session has a turn open, from its turn markers, refined to a tool verb."""
+    """Grok: whether a top-level session has a turn open, from its turn markers, refined to a tool verb by that
+    session's own unanswered tool calls."""
 
     # mngr_grok's launch script touches this on every launch; its mtime bounds transcript staleness.
     marker_filename: ClassVar[str] = PROCESS_STARTED_MARKER_FILENAME
@@ -41,15 +42,15 @@ class GrokActivityTracker(HarnessActivityTracker):
     _open_turn_started_at_by_session: dict[str | None, float | None]
     # Each session's newest turn marker time, so a re-delivered older marker cannot move its latch.
     _latch_at_by_session: dict[str | None, float | None]
-    # Each tool call still without a result, by id, with the time of the event that made it.
-    _pending_tool_call_at_by_id: dict[str, float | None]
+    # Each tool call still without a result, by id, with its session and the time of the event that made it.
+    _pending_tool_call_by_id: dict[str, tuple[str | None, float | None]]
     # Every tool call a result has answered, so a re-delivered call event cannot make it pending again.
     _answered_tool_call_ids: set[str]
 
     def _reset_extra(self) -> None:
         self._open_turn_started_at_by_session = {}
         self._latch_at_by_session = {}
-        self._pending_tool_call_at_by_id = {}
+        self._pending_tool_call_by_id = {}
         self._answered_tool_call_ids = set()
 
     def _fold_extra_event(self, event: dict[str, Any], event_at: float | None) -> None:
@@ -60,17 +61,18 @@ class GrokActivityTracker(HarnessActivityTracker):
             tool_call_id = event.get("tool_call_id")
             if tool_call_id:
                 self._answered_tool_call_ids.add(tool_call_id)
-                self._pending_tool_call_at_by_id.pop(tool_call_id, None)
+                self._pending_tool_call_by_id.pop(tool_call_id, None)
         elif event_type == SPECIAL_EVENT_TYPE:
             self._fold_turn_marker(event, event_at)
         else:
             pass
 
     def _fold_tool_calls(self, event: dict[str, Any], event_at: float | None) -> None:
+        session_id = event.get("session_id")
         for tool_call in event.get("tool_calls") or ():
             tool_call_id = tool_call.get("tool_call_id")
             if tool_call_id and tool_call_id not in self._answered_tool_call_ids:
-                self._pending_tool_call_at_by_id.setdefault(tool_call_id, event_at)
+                self._pending_tool_call_by_id.setdefault(tool_call_id, (session_id, event_at))
 
     def _fold_turn_marker(self, event: dict[str, Any], event_at: float | None) -> None:
         kind = event.get("kind")
@@ -87,9 +89,14 @@ class GrokActivityTracker(HarnessActivityTracker):
             self._open_turn_started_at_by_session.pop(session_id, None)
 
     def _current_extra(self) -> tuple[Any, ...]:
+        # Only a top-level session opens a turn, so a subagent's calls never count.
         return (
             frozenset(self._open_turn_started_at_by_session.items()),
-            frozenset(self._pending_tool_call_at_by_id.items()),
+            frozenset(
+                (tool_call_id, called_at)
+                for tool_call_id, (session_id, called_at) in self._pending_tool_call_by_id.items()
+                if session_id in self._open_turn_started_at_by_session
+            ),
         )
 
     def _derive_working(
