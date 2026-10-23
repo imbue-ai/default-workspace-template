@@ -113,8 +113,8 @@ _IMPORTED_SOURCE_PREFIXES = (
 # deliberate narrowing away from the apply's ``_is_backend_manifest`` and
 # ``_is_app_pyproject`` in
 # ``.agents/skills/update-self/scripts/update_classification.py``, which it
-# otherwise mirrors: over-counting costs the apply one extra environment refresh, and
-# costs this banner the trust it only gets to spend once.
+# otherwise mirrors: over-counting costs the apply one extra environment
+# refresh, and costs this banner the trust it only gets to spend once.
 _BACKEND_MANIFESTS = frozenset(
     {
         "system/apps/system_interface/pyproject.toml",
