@@ -36,6 +36,9 @@ EMITTER = "room"
 SCHEMA_VERSION = "ATIF-v1.7"
 WORKSPACE_AGENT_AUTHOR = "workspace-agent"
 NAME_AUTHOR_PREFIX = "name:"
+# The most a ``name:`` key holds after its prefix: ``workspace_layout.primitives.MAX_PARTICIPANT_NAME_LENGTH``,
+# pinned here since this runs on the bare ``python3`` (the chat app's tests check the two agree).
+MAX_AUTHOR_NAME_LENGTH = 60
 
 # ``[from: Name] `` at the start of a typed line: the author convention of ``AGENTS.md``.
 AUTHOR_PREFIX_PATTERN = re.compile(r"^\[from: (?P<name>[^\]\n\s][^\]\n]*?)\] ")
@@ -90,11 +93,11 @@ def step_record(
 
 def author_of_typed_text(text: str) -> tuple[str, str | None, str]:
     """Who a typed message is from and what they said: the name a ``[from: ]`` prefix carries (as a synthetic key,
-    since nothing here can resolve it to a participant), else the workspace agent."""
+    since nothing here can resolve it to a participant; cut to what a key holds), else the workspace agent."""
     match = AUTHOR_PREFIX_PATTERN.match(text)
     if match is None:
         return WORKSPACE_AGENT_AUTHOR, None, text
-    name = match.group("name")
+    name = match.group("name").strip()[:MAX_AUTHOR_NAME_LENGTH]
     return f"{NAME_AUTHOR_PREFIX}{name}", name, text[match.end() :]
 
 
