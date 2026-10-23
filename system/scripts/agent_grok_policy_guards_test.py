@@ -292,6 +292,11 @@ def _recorded(record: Path) -> list[dict[str, Any]]:
             "cd /tmp && tk start wor-1", "runs before it", id="chained-tk-start"
         ),
         pytest.param(
+            "cd /tmp && t\\k start wor-1",
+            "runs before it",
+            id="chained-tk-start-spelled-with-an-escape",
+        ),
+        pytest.param(
             "cat data/.secrets/svc.env",
             "read only by with_secrets.py",
             id="secret-file-read",

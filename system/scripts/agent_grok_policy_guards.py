@@ -98,6 +98,9 @@ BLOCKING_GUARDS: tuple[Guard, ...] = (
     # `ticket` does not contain `tk`.
     Guard("agent_tk_standalone.sh", re.compile(r"\b(tk|ticket)\b"), False),
 )
+# The quote and escape characters a shell drops from a word before it runs it: `t\k` and `t''k` run `tk`.
+_SHELL_QUOTING_RE = re.compile(r"[\\'\"]")
+
 STEP_NUDGE_SCRIPT = "agent_require_steps_pretool.sh"
 REWRITE_SCRIPT = "agent_rewrite_bash_command.py"
 OPEN_STEPS_REMINDER_SCRIPT = "agent_open_tickets_reminder.sh"
@@ -293,6 +296,13 @@ def _first_line(text: str) -> str:
     return text.strip().splitlines()[0] if text.strip() else ""
 
 
+def is_prefilter_hit(prefilter: re.Pattern[str], text: str) -> bool:
+    """Whether a guard's prefilter matches ``text`` as written or with its shell quoting taken out."""
+    return bool(
+        prefilter.search(text) or prefilter.search(_SHELL_QUOTING_RE.sub("", text))
+    )
+
+
 def first_refusal(
     guard_payload: Mapping[str, object], command: str | None, context: DispatchContext
 ) -> str | None:
@@ -308,7 +318,7 @@ def first_refusal(
         searched_text = (
             payload_json if guard.is_for_every_tool or command is None else command
         )
-        if not guard.prefilter.search(searched_text):
+        if not is_prefilter_hit(guard.prefilter, searched_text):
             continue
         result = run_script(guard.script, payload_json, context)
         if result is None:
