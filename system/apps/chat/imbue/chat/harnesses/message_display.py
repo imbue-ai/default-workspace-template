@@ -14,10 +14,10 @@ ITS detectors here; a detector only some harnesses emit simply never fires for t
 
 Order of decision (:func:`classify_user_message`):
 
-1. An explicit detector matches (stop hook, grok's stop-hook note, grok's interrupted-turn note,
-   fleet, task-notification, background-task report, grok's wake report, skill, /welcome, a
-   seeded chat's context block, model-bar traffic, a latchkey resolution, a secret-card
-   resolution, reports merged into a turn with the user's words)
+1. An explicit detector matches (for a harness note only: grok's stop-hook note and its
+   interrupted-turn note; then stop hook, fleet, task-notification, background-task report,
+   grok's wake report, skill, /welcome, a seeded chat's context block, model-bar traffic, a
+   latchkey resolution, a secret-card resolution, reports merged into a turn with the user's words)
    -> that decision. Explicit detectors WIN over ``is_meta`` -- Stop-hook feedback is
    ``is_meta`` yet deliberately surfaces as a chip.
 2. else ``is_wake`` (a turn the harness started itself to report background work) -> a notice.
@@ -105,7 +105,7 @@ _GROK_SUBAGENTS_COMPLETED_RE = re.compile(
     _GROK_REMINDER_OPEN + r"While you were idle, (\d+) background subagents? completed:\n"
 )
 _GROK_SUBAGENT_LINE_RE = re.compile(r'- \[[^\]\n]*\] "([^"\n]*)" \u2014 ([^\n]+?)(?: \([^()\n]*\))?\n')
-_GROK_MONITOR_EVENT_RE = re.compile(r"\A\s*<monitor-event\b[^>]*>([\s\S]*?)</monitor-event>")
+_GROK_MONITOR_EVENT_RE = re.compile(r"\A\s*<monitor-event\b[^>]*>([\s\S]*?)</monitor-event>\s*\Z")
 _GROK_TASK_ORDINARY_END = "exit code: 0"
 _GROK_MONITOR_ORDINARY_END = "exited (code 0)"
 _MARKUP_TAG_RE = re.compile(r"<[^>\n]*>")
@@ -525,14 +525,18 @@ def _match_secret_resolution(content: str) -> MessageDisplay | None:
     )
 
 
+# The notes a harness shows beside the conversation, read as such only when the parser says one is.
+_HARNESS_NOTE_DETECTORS = (
+    _match_grok_stop_note,
+    _match_grok_interrupted_turn,
+)
+
 # Most-specific first; classify_user_message takes the first match.
 _DETECTORS = (
     _match_seed_context,
     _match_welcome,
     _match_skill_expansion,
     _match_stop_hook,
-    _match_grok_stop_note,
-    _match_grok_interrupted_turn,
     _match_task_notification,
     _match_background_task_report,
     _match_grok_wake,
@@ -549,18 +553,21 @@ _DETECTORS = (
 
 
 @pure
-def classify_user_message(content: str, *, is_meta: bool = False, is_wake: bool = False) -> MessageDisplay | None:
+def classify_user_message(
+    content: str, *, is_meta: bool = False, is_wake: bool = False, is_harness_note: bool = False
+) -> MessageDisplay | None:
     """The render decision for one user message, or ``None`` for a genuine human turn shown as it arrived.
 
     ``None`` means the parser emits no ``display`` field and the frontend renders the
     baseline user bubble. Detectors run on the attachment-stripped text (see
     ``_visible_text``); see the module docstring for the precedence rules. ``is_wake`` marks
     a turn the harness started itself (grok's synthetic prompts), which is a notice even when
-    no detector names it.
+    no detector names it. ``is_harness_note`` marks a note the harness shows beside the
+    conversation (grok's), the only text its note detectors read.
     """
     visible = _visible_text(content)
     decision: MessageDisplay | None = None
-    for detect in _DETECTORS:
+    for detect in (_HARNESS_NOTE_DETECTORS + _DETECTORS) if is_harness_note else _DETECTORS:
         decision = detect(visible)
         if decision is not None:
             break
@@ -587,7 +594,7 @@ def classify_user_message(content: str, *, is_meta: bool = False, is_wake: bool 
 
 
 def stamp_user_message_display(
-    event: dict[str, Any], content: str, *, is_meta: bool = False, is_wake: bool = False
+    event: dict[str, Any], content: str, *, is_meta: bool = False, is_wake: bool = False, is_harness_note: bool = False
 ) -> None:
     """Stamp the wire's render-decision fields onto one ``user_message`` event.
 
@@ -595,7 +602,7 @@ def stamp_user_message_display(
     claude's queued-command attachment path), so a new wire field or a precedence change
     lands everywhere at once instead of in per-parser copies.
     """
-    decision = classify_user_message(content, is_meta=is_meta, is_wake=is_wake)
+    decision = classify_user_message(content, is_meta=is_meta, is_wake=is_wake, is_harness_note=is_harness_note)
     if decision is not None:
         decision.apply_to(event)
     if is_non_turn_tail(content, is_meta=is_meta):

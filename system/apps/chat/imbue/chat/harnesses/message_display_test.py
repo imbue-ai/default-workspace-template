@@ -568,14 +568,16 @@ _GROK_STOP_NOTE = "\u21a9 Stop blocked by global/stopblock, continuing: STOPGATE
 
 
 def test_a_grok_stop_hook_note_is_a_chip_showing_the_hooks_feedback() -> None:
-    decision = classify_user_message(_GROK_STOP_NOTE)
+    decision = classify_user_message(_GROK_STOP_NOTE, is_harness_note=True)
 
     assert decision is not None
     assert decision.display is DisplayKind.CHIP
     assert decision.display_label == "Stop hook feedback"
     assert decision.display_body == "STOPGATE_FEEDBACK please continue once more"
 
-    unnamed = classify_user_message("\u21a9 Stop hook feedback, continuing: run the linter first")
+    unnamed = classify_user_message(
+        "\u21a9 Stop hook feedback, continuing: run the linter first", is_harness_note=True
+    )
     assert unnamed is not None
     assert unnamed.display_body == "run the linter first"
 
@@ -641,6 +643,7 @@ def test_grok_monitor_wakes_are_notices() -> None:
     assert (ended.display_label, ended.display_body) == ("Monitor ended", "two ticks")
     assert event is not None and event.display is DisplayKind.NOTICE
     assert (event.display_label, event.display_body) == ("Monitor event", "[two ticks] tick 2")
+    assert classify_user_message(f"{_GROK_MONITOR_EVENT_WAKE}\nwhat is this?") is None
 
 
 def test_a_wake_turn_no_detector_names_is_still_a_notice_carrying_its_first_line() -> None:
@@ -688,7 +691,7 @@ def test_grok_s_note_on_a_turn_its_process_exited_during_is_a_chip() -> None:
         "Committed tool results were kept."
     )
 
-    decision = classify_user_message(note)
+    decision = classify_user_message(note, is_harness_note=True)
 
     assert decision is not None
     assert (decision.display, decision.display_label, decision.display_body) == (
@@ -696,4 +699,5 @@ def test_grok_s_note_on_a_turn_its_process_exited_during_is_a_chip() -> None:
         "Turn interrupted",
         None,
     )
-    assert classify_user_message("Grok stopped before this turn finished, why?") is None
+    assert classify_user_message(f"{note} What happened here?") is None
+    assert classify_user_message(_GROK_STOP_NOTE) is None

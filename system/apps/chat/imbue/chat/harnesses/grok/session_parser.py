@@ -462,12 +462,12 @@ def _turn_error_event(lane: GrokLaneState, offset: int, timestamp: str, agent_re
 def _system_note(lane: GrokLaneState, event_id: str, timestamp: str, message: Any) -> list[dict[str, Any]]:
     """A note grok shows beside the conversation, as a chip; only one the shared detectors name is shown."""
     note = _as_text(message)
-    if note is None or classify_user_message(note) is None:
+    if note is None or classify_user_message(note, is_harness_note=True) is None:
         return []
     event = _base_event("user_message", event_id, timestamp, lane)
     event["role"] = "system"
     event["content"] = note
-    stamp_user_message_display(event, note)
+    stamp_user_message_display(event, note, is_harness_note=True)
     return [event]
 
 
