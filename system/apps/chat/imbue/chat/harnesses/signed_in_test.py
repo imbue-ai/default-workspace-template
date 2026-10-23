@@ -8,13 +8,15 @@ the runner is injected rather than shelling out to whatever binaries this machin
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 
+from imbue.chat.harnesses.grok.testing import GROK_SESSION_SCOPE
+from imbue.chat.harnesses.grok.testing import build_grok_key_scope
+from imbue.chat.harnesses.grok.testing import write_grok_auth
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.harnesses.signed_in import is_signed_in
@@ -127,20 +129,10 @@ def test_a_harness_with_no_probe_is_taken_at_its_word(tmp_path: Path) -> None:
 # What `grok models` printed on the pinned 1.0.62 binary, for a session login and for none.
 _GROK_SIGNED_IN_OUTPUT = "You are logged in with grok.com.\n\nDefault model: grok-4.6\n"
 _GROK_SIGNED_OUT_OUTPUT = "You are not authenticated.\n\nDefault model: grok-4.6\n"
-_GROK_SESSION_SCOPE = "https://auth.x.ai::client-id"
-
-
-def _write_grok_auth(account: Path, scopes: dict[str, object]) -> None:
-    (account / "auth.json").write_text(json.dumps(scopes))
-
-
-def _grok_key_scope(key: str = "xai-key-5c1e") -> dict[str, object]:
-    """The shape grok itself writes for a stored key."""
-    return {"key": key, "auth_mode": "api_key", "create_time": "2026-10-19T19:11:22.318953Z", "user_id": ""}
 
 
 def _key_only_account(account: Path, key: str = "xai-key-5c1e") -> Path:
-    _write_grok_auth(account, {"xai::api_key": _grok_key_scope(key)})
+    write_grok_auth(account, {"xai::api_key": build_grok_key_scope(key)})
     return account
 
 
@@ -229,7 +221,7 @@ def test_a_grok_key_no_request_can_carry_is_refused_without_asking(tmp_path: Pat
 def test_a_grok_session_login_is_judged_by_the_grok_models_banner(
     tmp_path: Path, finished: _Finished, verdict: SignedIn
 ) -> None:
-    _write_grok_auth(tmp_path, {_GROK_SESSION_SCOPE: {"key": "session-token", "auth_mode": "oidc"}})
+    write_grok_auth(tmp_path, {GROK_SESSION_SCOPE: {"key": "session-token", "auth_mode": "oidc"}})
     seen: dict[str, Any] = {}
 
     assert is_signed_in(HarnessType.GROK, tmp_path, _runner_returning(finished, seen), _no_fetcher) is verdict
@@ -238,7 +230,7 @@ def test_a_grok_session_login_is_judged_by_the_grok_models_banner(
 
 def test_a_grok_account_with_a_session_beside_its_key_is_judged_by_the_banner(tmp_path: Path) -> None:
     """The session is what grok's turns use first, so it is the session that has to work."""
-    _write_grok_auth(tmp_path, {_GROK_SESSION_SCOPE: {"key": "session-token"}, "xai::api_key": _grok_key_scope()})
+    write_grok_auth(tmp_path, {GROK_SESSION_SCOPE: {"key": "session-token"}, "xai::api_key": build_grok_key_scope()})
     runner = _runner_returning(_Finished(stdout=_GROK_SIGNED_IN_OUTPUT))
     assert is_signed_in(HarnessType.GROK, tmp_path, runner, _no_fetcher) is SignedIn.YES
 
@@ -246,7 +238,7 @@ def test_a_grok_account_with_a_session_beside_its_key_is_judged_by_the_banner(tm
 def test_a_grok_key_grok_cannot_read_is_judged_by_the_banner_not_by_xai(tmp_path: Path) -> None:
     """Measured on 1.0.62: a key scope without `create_time` and `user_id` makes grok take the whole file as empty,
     so a key xAI would accept is still no credential to the agents."""
-    _write_grok_auth(tmp_path, {"xai::api_key": {"key": "xai-key-5c1e", "auth_mode": "api_key"}})
+    write_grok_auth(tmp_path, {"xai::api_key": {"key": "xai-key-5c1e", "auth_mode": "api_key"}})
     runner = _runner_returning(_Finished(stdout=_GROK_SIGNED_OUT_OUTPUT))
     assert is_signed_in(HarnessType.GROK, tmp_path, runner, _no_fetcher) is SignedIn.NO
 

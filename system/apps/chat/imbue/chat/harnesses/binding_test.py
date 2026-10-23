@@ -5,7 +5,6 @@ shape rather than a property -- a path that drifts binds nothing and fails silen
 the agent quietly running on the shared credential instead.
 """
 
-import json
 import os
 import tomllib
 from pathlib import Path
@@ -26,6 +25,9 @@ from imbue.chat.harnesses.binding import REBIND_VERIFIED_HARNESSES
 from imbue.chat.harnesses.binding import is_rebind_supported
 from imbue.chat.harnesses.binding import resolve_binding
 from imbue.chat.harnesses.grok.account_binding import read_sole_api_key
+from imbue.chat.harnesses.grok.testing import GROK_SESSION_SCOPE
+from imbue.chat.harnesses.grok.testing import build_grok_key_scope
+from imbue.chat.harnesses.grok.testing import write_grok_auth
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import LANES
 from imbue.chat.harnesses.registry import build_account_binding
@@ -39,17 +41,6 @@ _BOUND_HARNESSES = (
     HarnessType.PI_CODING,
     HarnessType.GROK,
 )
-
-_GROK_SESSION_SCOPE = "https://auth.x.ai::client-id"
-# The shape grok itself writes for a stored key.
-_GROK_KEY_SCOPE = {
-    "key": "xai-key-5c1e",
-    "auth_mode": "api_key",
-    "create_time": "2026-10-19T19:11:22.318953Z",
-    "user_id": "",
-    "email": None,
-    "coding_data_retention_opt_out": True,
-}
 
 
 def _link_binding(harness: HarnessType) -> CredentialLinkAccountBinding:
@@ -371,13 +362,8 @@ def test_rebinding_grok_rewrites_only_the_auth_path_line_and_lands_whole(tmp_pat
     assert "GROK_HOME" not in env_path.read_text()
 
 
-def _write_grok_auth(account: Path, scopes: dict[str, object]) -> None:
-    account.mkdir(parents=True, exist_ok=True)
-    (account / "auth.json").write_text(json.dumps(scopes))
-
-
 def test_a_grok_account_holding_only_a_key_reads_as_that_key(tmp_path: Path) -> None:
-    _write_grok_auth(tmp_path, {"xai::api_key": _GROK_KEY_SCOPE})
+    write_grok_auth(tmp_path, {"xai::api_key": build_grok_key_scope()})
     key = read_sole_api_key(tmp_path)
     assert key is not None and key.get_secret_value() == "xai-key-5c1e"
 
@@ -385,10 +371,10 @@ def test_a_grok_account_holding_only_a_key_reads_as_that_key(tmp_path: Path) -> 
 @pytest.mark.parametrize(
     "scopes",
     (
-        {_GROK_SESSION_SCOPE: {"key": "session-token", "auth_mode": "oidc"}},
-        {_GROK_SESSION_SCOPE: {"key": "session-token"}, "xai::api_key": _GROK_KEY_SCOPE},
+        {GROK_SESSION_SCOPE: {"key": "session-token", "auth_mode": "oidc"}},
+        {GROK_SESSION_SCOPE: {"key": "session-token"}, "xai::api_key": build_grok_key_scope()},
         {"xai::api_key": {"key": "xai-key-5c1e", "auth_mode": "api_key"}},
-        {"xai::api_key": {**_GROK_KEY_SCOPE, "key": None}},
+        {"xai::api_key": {**build_grok_key_scope(), "key": None}},
         {},
     ),
     ids=("session", "session-and-key", "key-scope-grok-cannot-read", "key-scope-without-a-key", "empty"),
@@ -397,7 +383,7 @@ def test_a_grok_account_with_a_session_or_no_readable_key_reads_as_no_sole_key(
     tmp_path: Path, scopes: dict[str, object]
 ) -> None:
     """Grok 1.0.62 takes an auth.json whose key scope lacks `create_time` or `user_id` as holding no credential."""
-    _write_grok_auth(tmp_path, scopes)
+    write_grok_auth(tmp_path, scopes)
     assert read_sole_api_key(tmp_path) is None
 
 

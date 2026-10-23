@@ -8,7 +8,6 @@ about the WIRE -- the key sets and the status codes -- which is the part nothing
 
 from __future__ import annotations
 
-import json
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
@@ -23,6 +22,9 @@ from imbue.chat.agent_manager import AgentManager
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.codex.model import codex_model_options_path
 from imbue.chat.harnesses.codex.model import write_codex_model_options
+from imbue.chat.harnesses.grok.testing import GROK_SESSION_SCOPE
+from imbue.chat.harnesses.grok.testing import build_grok_key_scope
+from imbue.chat.harnesses.grok.testing import write_grok_auth
 from imbue.chat.harnesses.lanes import get_lane
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.server import create_application
@@ -491,14 +493,13 @@ def test_an_api_key_account_signs_in_again_with_a_key() -> None:
 
 def test_a_grok_account_holding_only_a_key_signs_in_again_with_a_key() -> None:
     """A grok account with a session login beside a stored key signs in again the way it first did, by device."""
-    key_scope = {"key": "xai-key-5c1e", "auth_mode": "api_key", "create_time": "2026-10-19T00:00:00Z", "user_id": ""}
     key_id, key_dir = mint_account_dir()
     commit_account(key_id, "xai", "xAI")
-    (key_dir / "auth.json").write_text(json.dumps({"xai::api_key": key_scope}))
+    write_grok_auth(key_dir, {"xai::api_key": build_grok_key_scope()})
     session_id, session_dir = mint_account_dir()
     commit_account(session_id, "xai", "xAI")
-    (session_dir / "auth.json").write_text(
-        json.dumps({"https://auth.x.ai::client-id": {"key": "session-token"}, "xai::api_key": key_scope})
+    write_grok_auth(
+        session_dir, {GROK_SESSION_SCOPE: {"key": "session-token"}, "xai::api_key": build_grok_key_scope()}
     )
 
     with _client() as client:

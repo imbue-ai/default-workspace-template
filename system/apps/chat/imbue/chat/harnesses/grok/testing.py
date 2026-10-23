@@ -4,6 +4,8 @@ The layout is mngr_grok's private one, written here by hand; ``watcher_test.py``
 ``imbue.mngr_grok.api``'s readers, so an mngr bump that moves it fails there first.
 """
 
+import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
@@ -25,6 +27,8 @@ ROOTS_RELATIVE_PATH: Final[Path] = Path("plugin", "grok", "roots")
 ROOT_TURNS_RELATIVE_PATH: Final[Path] = Path("plugin", "grok", "turns")
 # The session bucket the fake agent's sessions are filed under: grok names a bucket after its work dir.
 FAKE_SESSION_BUCKET: Final[str] = "%2Ftmp%2Fgrok-fixtures"
+# The auth.json scope of a grok session login, named by its issuer and client id.
+GROK_SESSION_SCOPE: Final[str] = "https://auth.x.ai::client-id"
 
 
 def find_fixture_scenario(name: str) -> Path:
@@ -102,3 +106,21 @@ def write_root_turn(agent_state_dir: Path, session_id: str, prompt_id: str, prom
 def remove_root_turn(agent_state_dir: Path, session_id: str) -> None:
     """Record a top-level turn's end, as mngr_grok's Stop hook does."""
     (agent_state_dir / ROOT_TURNS_RELATIVE_PATH / session_id).unlink()
+
+
+def build_grok_key_scope(key: str = "xai-key-5c1e") -> dict[str, object]:
+    """The ``xai::api_key`` scope grok itself writes for a stored key."""
+    return {
+        "key": key,
+        "auth_mode": "api_key",
+        "create_time": "2026-10-19T19:11:22.318953Z",
+        "user_id": "",
+        "email": None,
+        "coding_data_retention_opt_out": True,
+    }
+
+
+def write_grok_auth(account_dir: Path, scopes: Mapping[str, object]) -> None:
+    """Write a grok account's ``auth.json`` holding ``scopes``."""
+    account_dir.mkdir(parents=True, exist_ok=True)
+    (account_dir / "auth.json").write_text(json.dumps(scopes))
