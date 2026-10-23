@@ -302,6 +302,10 @@ In the ordinary failure modes this is bounded and self-correcting:
   bounded delivery witness, and an attempt ceiling after which the entry stops being retried
   and reads *Queued* rather than *Sending*. Its worker also republishes the queue on every
   tick, level-triggered, so a stale snapshot is corrected as soon as any watcher exists.
+- **grok:** the send only holds the message, and its POST waits at most
+  `SEND_RESULT_WAIT_SECONDS` for the flush worker's first send of it. Each send of the worker is
+  bounded by mngr's confirmation, and an entry that spent `MAX_DELIVERY_ATTEMPTS` reads *Queued*
+  (E19). The worker also republishes the queue on every attempt.
 
 What is NOT bounded is the case where nothing is left to report: a watcher torn down while a
 send is still in flight (its publisher is detached, so the settle updates the queue but
