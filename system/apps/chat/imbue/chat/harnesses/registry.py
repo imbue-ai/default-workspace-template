@@ -545,6 +545,17 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
     # before the workspace had any agent, read like an archived segment. No agent ever runs
     # on it, so every live part is inert: the watcher watches nothing, the tracker reads
     # idle, the resolver switches nothing, and there is no catalog and no popup.
+    HarnessType.SEED: HarnessSpec(
+        name=HarnessType.SEED,
+        watcher_class=SeedSessionWatcher,
+        loader_class=SeedSessionWatcher,
+        tracker_class=SeedActivityTracker,
+        process_started_marker_filename=SeedActivityTracker.marker_filename,
+        resolver_class=PlaceholderModelResolver,
+        catalog_factory=lambda: EMPTY_CATALOG,
+        model_state_relative_path=Path("."),
+        special_kinds=frozenset(),
+    ),
     # A chat room (the multiplayer spec, section 7.3): the agent's process is a reader of its pane, so there is
     # no model, no turn, and no account; the transcript is the room's own file, which a send appends to.
     HarnessType.ROOM: HarnessSpec(
@@ -559,17 +570,6 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         special_kinds=frozenset(),
         session_class=RoomHarnessSession,
         is_author_prefixed=False,
-    ),
-    HarnessType.SEED: HarnessSpec(
-        name=HarnessType.SEED,
-        watcher_class=SeedSessionWatcher,
-        loader_class=SeedSessionWatcher,
-        tracker_class=SeedActivityTracker,
-        process_started_marker_filename=SeedActivityTracker.marker_filename,
-        resolver_class=PlaceholderModelResolver,
-        catalog_factory=lambda: EMPTY_CATALOG,
-        model_state_relative_path=Path("."),
-        special_kinds=frozenset(),
     ),
 }
 
