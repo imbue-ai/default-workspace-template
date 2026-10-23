@@ -6,8 +6,6 @@ merged diff.
 from __future__ import annotations
 
 import re
-import sys
-import tomllib
 from pathlib import Path
 from typing import Collection, NamedTuple, Sequence
 
@@ -15,7 +13,6 @@ from update_layout import (
     APPS_DIR,
     FRONTEND_SOURCE_DIRS,
     FRONTEND_TOOLING_PATHS,
-    MANIFEST_FILENAME,
     NPM_MANIFEST_PATHS,
     PLUGIN_MANIFEST_PATH,
     PROVISIONER_SCRIPT,
@@ -132,8 +129,8 @@ def classify_path(path: str) -> PathClass:
     cover for the lead to finish the rest:
 
     - ``system_interface`` -- ``system/apps/system_interface/**``; the apply
-      rebuilds or installs the bundle and refreshes the backend's environment
-      on a manifest change (:func:`refresh_backend_dependencies`).
+      rebuilds or installs the bundle and re-syncs the workspace venv when the
+      app's ``pyproject.toml`` changes (:func:`sync_workspace_venv`).
     - ``service`` -- ``system/supervisord.conf``, the per-program drop-ins under
       ``system/supervisord.conf.d/**``, and ``system/libs/bootstrap/**``.
     - ``shared_runtime`` -- ``system/scripts/**``, other ``system/libs/**``,
@@ -290,148 +287,36 @@ def classify_merge(
 
 
 def _is_backend_manifest(path: str) -> bool:
-    """Whether ``path`` can change what the backend's environment resolves to.
+    """Whether ``path`` calls for the mngr tool's reinstall as well as the venv's sync.
 
-    Not just the shell's own manifest: the root ``pyproject.toml`` pins the mngr
-    commit every tool and the venv install from, so a move of that pin (and the
-    ``uv.lock`` that follows it) moves the chat app's and the shell's dependency
-    closure exactly as the shell's own manifest does (the chat's own manifest is
-    covered by the lockfile it always moves and by the per-app tool refresh).
+    The root ``pyproject.toml`` pins the mngr commit the tool and the workspace venv
+    both install from, so a move of that pin moves the chat app's and the shell's
+    dependency closure as well as the tool's. The ``uv.lock`` that follows a pin move
+    counts with it, though the reinstall itself reads only the pin.
 
-    The plugin manifest counts for the same reason without being a Python
-    manifest: it is what :func:`_manifest_extras` unions into each tool's
-    reinstall, so it decides which packages the tool environments carry. Without
-    it a release that only re-assigns an existing plugin to another tool would
-    never trigger the refresh that registers it, and the updated workspace would
-    diverge from a freshly built image -- which is the state the manifest exists
-    to prevent.
+    The plugin manifest counts without being a Python manifest: it is what
+    :func:`_manifest_extras` unions into the mngr tool's reinstall, so it decides
+    which plugins that tool carries. Without it a release that only assigns an
+    existing plugin to the tool would never trigger the refresh that registers it,
+    and the updated workspace would diverge from a freshly built image -- which is
+    the state the manifest exists to prevent.
     """
-    return path in (
-        f"{SYSTEM_INTERFACE_DIR}/pyproject.toml",
-        "uv.lock",
-        "pyproject.toml",
-        PLUGIN_MANIFEST_PATH,
-    )
+    return path in ("uv.lock", "pyproject.toml", PLUGIN_MANIFEST_PATH)
 
 
-class AppTool(NamedTuple):
-    """A Python app under ``system/apps/`` and the uv tool environment it runs from.
+def _is_app_pyproject(path: str) -> bool:
+    """Whether ``path`` is an app's ``pyproject.toml``, which only the workspace venv
+    installs.
 
-    ``directory`` is repo-relative; ``tool_name`` is the pyproject's project
-    name (what ``uv tool`` calls the environment); ``executable`` is the first
-    console script the pyproject declares, which is how the installation
-    actually on PATH is located (every script of a tool shares its environment,
-    so any one of them resolves it); ``plugin_key`` is the manifest name the plugin table keys
-    the app's mngr plugins by; ``is_critical`` is the manifest's ``critical``,
-    which makes the tool environment a snapshot-and-rollback target.
+    The venv is the only install of each app, and a change to an app's console
+    scripts reaches it only through a sync, even when the lockfile does not move. The
+    mngr tool reads nothing an app declares, so it is left alone.
     """
-
-    directory: str
-    tool_name: str
-    executable: str
-    plugin_key: str
-    is_critical: bool
-
-
-def _warn_app_skipped(directory: Path, why: str) -> None:
-    sys.stderr.write(
-        f"note: skipping the app at {directory} for the environment refresh ({why}); "
-        "its tool environment will not be reinstalled by this apply.\n"
-    )
-
-
-def read_app_tools(repo_root: Path) -> tuple[AppTool, ...]:
-    """Every Python app that runs from its own tool in the tree at ``repo_root``, in directory order.
-
-    The manifest is the discriminator: an app with both a ``pyproject.toml``
-    and an ``app.toml`` runs from its own uv tool environment, while an app
-    with no ``app.toml`` runs ``uv run <name>`` from the root venv and is left
-    alone.
-
-    Read off the tree being applied (the merged tree, or the restored one on
-    rollback), so an app a release adds is refreshed as it ships. An app whose
-    pyproject or manifest will not parse, that declares no console script, or
-    whose manifest names no app, is skipped with a note rather than raising:
-    this runs on the rollback path too, where an exception would escape the
-    apply's last line of defense.
-    """
-    apps_dir = repo_root / APPS_DIR
-    if not apps_dir.is_dir():
-        return ()
-    tools: list[AppTool] = []
-    for directory in sorted(apps_dir.iterdir()):
-        pyproject_path = directory / "pyproject.toml"
-        manifest_path = directory / MANIFEST_FILENAME
-        if not pyproject_path.is_file() or not manifest_path.is_file():
-            continue
-        try:
-            pyproject = tomllib.loads(pyproject_path.read_text())
-        except (OSError, tomllib.TOMLDecodeError) as exc:
-            _warn_app_skipped(directory, f"its pyproject.toml could not be read: {exc}")
-            continue
-        project = pyproject.get("project", {})
-        tool_name = project.get("name") if isinstance(project, dict) else None
-        scripts = project.get("scripts", {}) if isinstance(project, dict) else {}
-        if not isinstance(tool_name, str) or not tool_name:
-            _warn_app_skipped(directory, "its pyproject.toml names no project")
-            continue
-        if not isinstance(scripts, dict) or not scripts:
-            _warn_app_skipped(
-                directory, "its pyproject.toml declares no console script"
-            )
-            continue
-        try:
-            manifest = tomllib.loads(manifest_path.read_text())
-        except (OSError, tomllib.TOMLDecodeError) as exc:
-            _warn_app_skipped(
-                directory, f"its {MANIFEST_FILENAME} could not be read: {exc}"
-            )
-            continue
-        name = manifest.get("name")
-        if not isinstance(name, str) or not name:
-            _warn_app_skipped(directory, f"its {MANIFEST_FILENAME} names no app")
-            continue
-        is_critical = manifest.get("critical") is True
-        tools.append(
-            AppTool(
-                directory=f"{APPS_DIR}/{directory.name}",
-                tool_name=tool_name,
-                executable=next(iter(scripts)),
-                plugin_key=name,
-                is_critical=is_critical,
-            )
-        )
-    return tuple(tools)
-
-
-# The parts of an app directory that never change what its tool environment
-# resolves to: the frontend bundle's sources and any served static assets.
-_APP_ENVIRONMENT_EXCLUDED_PARTS = frozenset({"frontend", "static"})
-
-
-def _is_app_environment_path(path: str, app: AppTool) -> bool:
-    prefix = f"{app.directory}/"
-    if not path.startswith(prefix):
-        return False
-    directory_parts = path[len(prefix) :].split("/")[:-1]
-    return not _APP_ENVIRONMENT_EXCLUDED_PARTS.intersection(directory_parts)
-
-
-def app_tools_touched_by(
-    paths: Sequence[str], app_tools: Sequence[AppTool]
-) -> tuple[AppTool, ...]:
-    """The apps whose tool environment the changed ``paths`` mean must be reinstalled.
-
-    Any change under an app's directory counts, except under its ``frontend/``
-    or a ``static/`` directory: an editable install picks source edits up on
-    its own, but an entry point, a dependency, or a manifest change does not
-    reach the installed environment without a reinstall, and telling those
-    apart per file is not worth a wrong guess.
-    """
-    return tuple(
-        app
-        for app in app_tools
-        if any(_is_app_environment_path(path, app) for path in paths)
+    parts = path.split("/")
+    return (
+        len(parts) == 4
+        and f"{parts[0]}/{parts[1]}" == APPS_DIR
+        and parts[3] == "pyproject.toml"
     )
 
 
@@ -440,23 +325,22 @@ class ApplyPlan(NamedTuple):
 
     Every apply restarts the services agent, pre-flights the merged backend
     first, and probes afterwards; the plan only decides the work in front of
-    that. The system-interface split (frontend vs backend, source vs manifest)
-    is finer than :func:`classify_path`'s single ``system_interface`` class
-    because those four need different work; ``provisioner`` is the
-    pinned-toolchain re-run, keyed on the files the provisioner reads;
-    ``app_tools`` are the apps whose tool environment the diff can have moved,
-    each reinstalled from the merged tree: the apps whose own directory changed
-    (:func:`app_tools_touched_by`), or every app when a shared backend manifest
-    did, since the pinned mngr packages and the plugin table those name are part
-    of every app tool's closure.
+    that. The frontend split (source vs npm manifest) and ``backend_src`` are
+    finer than :func:`classify_path`'s single ``system_interface`` class because
+    they need different work. ``backend_manifest`` is the root ``pyproject.toml``
+    or the plugin manifest, which the mngr tool's reinstall reads, or the
+    ``uv.lock`` that follows the pin, so it reinstalls the tool and re-syncs the venv;
+    ``app_pyproject`` is any app's ``pyproject.toml``, the shell's included,
+    which only the venv installs; ``resyncs_venv`` is either. ``provisioner`` is
+    the pinned-toolchain re-run, keyed on the files the provisioner reads.
     """
 
     frontend_src: bool
     frontend_manifest: bool
     backend_src: bool
     backend_manifest: bool
+    app_pyproject: bool
     provisioner: bool
-    app_tools: tuple[AppTool, ...] = ()
 
     @property
     def frontend(self) -> bool:
@@ -466,16 +350,19 @@ class ApplyPlan(NamedTuple):
     def backend(self) -> bool:
         return self.backend_src or self.backend_manifest
 
+    @property
+    def resyncs_venv(self) -> bool:
+        return self.backend_manifest or self.app_pyproject
+
 
 def plan_apply(
     paths: Sequence[str],
     provisioner_inputs: Collection[str],
-    app_tools: Sequence[AppTool] = (),
 ) -> ApplyPlan:
     """Classify the merged diff's ``paths`` into an :class:`ApplyPlan`.
 
-    ``provisioner_inputs`` is :func:`read_provisioner_inputs` and ``app_tools``
-    :func:`read_app_tools`, both for the tree being applied. The frontend build
+    ``provisioner_inputs`` is :func:`read_provisioner_inputs` for the tree being
+    applied. The frontend build
     output (``static/``) and ``node_modules`` are gitignored and never appear
     in a diff; they are covered by snapshots, not the plan.
     """
@@ -483,6 +370,7 @@ def plan_apply(
     frontend_manifest = False
     backend_src = False
     backend_manifest = False
+    app_pyproject = False
     provisioner = False
     for path in paths:
         if path in provisioner_inputs:
@@ -504,6 +392,8 @@ def plan_apply(
             frontend_src = True
         elif _is_backend_manifest(path):
             backend_manifest = True
+        elif _is_app_pyproject(path):
+            app_pyproject = True
         elif (
             path.startswith(f"{SYSTEM_INTERFACE_DIR}/imbue/")
             and path.endswith(".py")
@@ -515,8 +405,6 @@ def plan_apply(
         frontend_manifest=frontend_manifest,
         backend_src=backend_src,
         backend_manifest=backend_manifest,
+        app_pyproject=app_pyproject,
         provisioner=provisioner,
-        app_tools=tuple(app_tools)
-        if backend_manifest
-        else app_tools_touched_by(paths, app_tools),
     )

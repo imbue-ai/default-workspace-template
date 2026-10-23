@@ -43,8 +43,8 @@ format. In brief:
 
 ## What the process serves
 
-The `system-interface` tool (the shell's own uv tool environment, run by
-supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
+The `system-interface` entry point (`.venv/bin/system-interface` in the
+workspace venv, run by supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
 
 - `/` and the SPA catch-all: the desktop, built into
   `imbue/system_interface/static/`; `/assets/<path>` for its bundle.

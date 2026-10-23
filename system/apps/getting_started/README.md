@@ -12,7 +12,7 @@ launcher's primary text action; the page names no app, and the Getting Started w
 where it is while the chat comes up beside it.
 
 It runs as the `getting-started` supervisord program (`system/supervisord.conf.d/getting-started.conf`)
-from its own uv tool environment (`system/scripts/build_workspace.sh`), serving on
+from the workspace venv (`.venv/bin/getting-started`), serving on
 `http://127.0.0.1:8030`:
 
 - `GET /`: the page (the frontend's build, `src/getting_started/static/index.html`; a

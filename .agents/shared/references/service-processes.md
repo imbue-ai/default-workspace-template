@@ -19,7 +19,7 @@ does **not** watch the config file -- you apply changes with
 
 ```ini
 [program:my-service]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user uv run my-service
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user .venv/bin/my-service
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -43,7 +43,7 @@ Key fields:
   other shell syntax must be wrapped in `bash -c "..."`:
 
   ```ini
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/foo/app.toml --url http://localhost:8090 && exec foo"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/foo/app.toml --url http://localhost:8090 && exec .venv/bin/foo"
   ```
 
   The `python3 system/services/oom_priority/bin/oom_tag_service.py user` prefix is the **OOM band tag**
@@ -57,10 +57,9 @@ Key fields:
   it must be DNS-safe: lowercase letters/digits with single hyphens
   (underscores are tolerated only for legacy names like `system_interface`),
   not `localhost`, and not starting with `host-` or `agent-`. The app then
-  runs as its own tool's entry point (`foo`, installed by
-  `uv tool install -e system/apps/foo`), never through `uv run`: every Python
-  app has its own uv tool environment, and the root venv is for background
-  services. A registration with no app directory (a preview, an isolated test
+  execs its entry point from the workspace venv (`.venv/bin/foo`, which
+  `uv sync --all-packages` installs), never through `uv run`: the venv is the
+  one install of every Python app and service. A registration with no app directory (a preview, an isolated test
   server, the owner-exec service) keeps the manifest-less
   `forward_port.py --name <name> --url <url>` form with `--internal` or
   `--no-icon`, and never passes `--program`.
@@ -152,8 +151,7 @@ than ~1s later, and it keeps the command self-documenting.
    forgets the removed program.
 
 For an app, also drop its `data/.state/apps.toml` entry with
-`python3 system/scripts/forward_port.py --name <name> --remove` and its tool
-environment with `uv tool uninstall <name>`; for a scaffolded web lib,
+`python3 system/scripts/forward_port.py --name <name> --remove`; for a scaffolded web lib,
 `build-app`'s `cleanup.md` reference covers the full teardown.
 
 ## Modifying a service

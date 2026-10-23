@@ -7,7 +7,7 @@ arguments that install ``imbue-mngr`` itself; ``--tool`` prints those for every 
 prints where mngr comes from.
 
 Where mngr comes from is decided by ``pyproject.toml``'s ``[tool.uv.sources]`` entry
-for ``imbue-mngr`` -- the one place that lives -- so the tool environments and the
+for ``imbue-mngr`` -- the one place that lives -- so the mngr tool and the
 workspace venv can never disagree:
 
     imbue-mngr = { git = "https://github.com/imbue-ai/mngr", rev = "<commit>", subdirectory = "libs/mngr" }
@@ -130,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     what.add_argument(
         "--tool",
-        help="print the plugin arguments for this tool: mngr, or an app's manifest name (e.g. chat)",
+        help="print the plugin arguments for this tool (the table's tools name it: mngr)",
     )
     parser.add_argument(
         "--repo-root",

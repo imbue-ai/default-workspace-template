@@ -55,14 +55,10 @@ The app owns its origin (`<name>-<suffix>.<workspace coordinate>`), its icon, it
 The registered `name` is the developer-facing identifier: the supervisord program, the entry point, the origin label prefix, the share-grant key, and the key minds routes by.
 It is not renameable (stable app ids and renaming are deferred, section 11); `display_name` is what users see and may change freely.
 
-Every Python app, built-in or user-built, runs from its own uv tool environment, installed from the app's own `pyproject.toml` (which names its path dependencies itself).
-The root venv belongs to the background services, agents, skills, and scripts, so an agent that breaks it cannot take down any app, and one app's dependency pins never constrain another's.
-The build installs one tool per Python app directory, the update apply refreshes the tool environments whose app changed (and every app's when a shared backend manifest changed, section 8.3), and the `build-app` scaffold installs a tool for a user-built app.
-An app's supervisord program line runs the tool's own entry point rather than `uv run`; services run under `uv run`.
-The terminal and files apps are small Python launchers around ttyd and dufs, so they are tools too.
-The manifest is what marks an app as running this way: a pre-manifest app has a `pyproject.toml` but no `app.toml`, runs `uv run <name>` from the root venv, and is left alone by the build and the apply.
-Both forms are supported indefinitely, and every app, built-in or user-built, is a member of the root uv workspace's `system/apps/*` glob: one repo, one lockfile, one set of build and test commands.
-Membership and isolation answer different questions: the lock keeps every environment on the same versions, and an app's own tool environment keeps it running while the root venv is rewritten or broken.
+Every Python app, built-in or user-built, runs from the workspace venv, which is its only install (contracts section 14): every app is a member of the root uv workspace's `system/apps/*` glob, so one repo, one lockfile, and one set of build and test commands cover them all.
+An app's supervisord program line execs its entry point from `.venv/bin` rather than through `uv run`, as the services' lines do.
+The terminal and files apps are small Python launchers around ttyd and dufs, so they run the same way.
+No app has a uv tool environment of its own: a second install that the program lines never run drifts from the venv, and anything that boots it instead (the update's pre-flight) tests an install the restart does not run.
 Converting a pre-manifest app to the manifest form is something the update-app skill may offer the next time the user edits that app, with the user present (section 11).
 
 ### 3.2 Instances
@@ -335,7 +331,7 @@ Every file-browser instance is `referenced`, so it is deleted by the shell once 
 ### 7.4 Chat
 
 The chat app, `system/apps/chat/`, holds everything that concerns chats: the harness watchers, transcripts, sends, queue and interrupt handling, model choice, provider accounts and sign-in, uploads, the latchkey catalog proxy, memory-shedding retagging of chat agents, and its own frontend bundle.
-It runs from its own uv tool environment (3.1), installed with the mngr harness plugins that `system/config/mngr_plugins.toml` assigns to `chat`; the shell's tool needs no mngr plugin.
+It runs from the workspace venv (3.1), which carries the mngr harness plugins because the chat package depends on them; the shell needs no mngr plugin.
 Its instances are the workspace's chats, each a sequence of agent transcripts run by one agent at a time (`docs/system/blueprint/chat-agent-split/`), listed from `mngr observe`, excluding the primary services agent; keys are chat ids (the id of the chat's first agent), URLs are `/<chat-id>`, titles are display names, rename goes through `mngr rename` of the active agent, delete through `mngr destroy`, and status maps the active agent's thinking and tool-running to `working`, a pending permission to `attention`, and a stopped agent to `stopped`.
 Its `new` action creates a provisional instance: the chat backend mints the chat id before it runs `mngr create`, so the instance is keyed by that future id, and the tab never changes address.
 Creation starts at once on the pinned default account (a star in the provider menu; `AccountIndex.default_account`), else the most recently used one, else the oldest; with nothing signed in the chat waits, and its page at `/<chat-id>` shows the account chooser, whose sign-in launches the chat under the same id.
@@ -364,9 +360,9 @@ The chat app retags chat agents dynamically, fed by `shell:shown` and `shell:hid
 
 ### 8.3 Updates
 
-The update apply refreshes the tool environment of every manifest app whose directory changed (and of every manifest app when a shared backend manifest changed), holds every app whose manifest says `critical = true` and `instances = true` to its instances API after the restart (beside the shell's health route), and treats every app whose manifest says `critical = true` as a snapshot-and-rollback target alongside the shell.
+The update apply re-syncs the workspace venv every app runs from when a backend manifest or any app's `pyproject.toml` changed, holds every app whose manifest says `critical = true` and `instances = true` to its instances API after the restart (beside the shell's health route), and restarts every app whose manifest says `critical = true` on a rollback alongside the shell (onto the venv's pre-apply copy when the apply re-synced it).
 A program the merge adds needs no `supervisorctl reread` step: the apply restarts the services agent, whose bootstrap window execs a fresh supervisord that reads the merged program table.
-The apply also pre-flights the merged chat app beside the shell (`chat-app --preflight`, a boot that reconciles no accounts, runs no agent manager, and registers nothing), since the chat is the process that imports mngr and the harness plugins.
+The apply also pre-flights the merged chat app beside the shell (`.venv/bin/chat-app --preflight`, the entry point the chat's program runs, in a boot that reconciles no accounts, runs no agent manager, and registers nothing), since the chat is the process that imports mngr and the harness plugins.
 Full per-app generalization of the apply is deferred (section 11).
 
 ### 8.4 External callers
@@ -434,7 +430,6 @@ After phase 11, an existing workspace is upgraded through update-self and exerci
 - Chat-internal cleanups from the old plan (per-chat channel consolidation, chooser refactoring, proto-agent broadcasts), which are invisible to the shell once chat is an app.
 - Full per-app generalization of the update apply.
 - Converting a pre-manifest user app to the manifest form (an offer the update-app skill can make with the user present, never an unattended update), and taking apps out of the root uv workspace, which one lockfile and one set of commands argue against.
-- Pinning each app's tool environment to the root lock's versions (a constraints file exported from `uv.lock` at install time), so a tool environment cannot drift ahead of the lock by a patch version.
 - Migrating the terminal, browser, and files instance sources onto a common implementation beyond the library.
 
 ## 12. Open questions

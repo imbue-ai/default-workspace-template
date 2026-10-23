@@ -20,10 +20,10 @@ from update_layout import (
     APPS_DIR,
     APPS_REGISTRY_PATH,
     CHAT_DIR,
-    CHAT_TOOL_NAME,
+    CHAT_EXECUTABLE,
     MANIFEST_FILENAME,
     SYSTEM_INTERFACE_DIR,
-    TOOL_NAME,
+    SYSTEM_INTERFACE_EXECUTABLE,
 )
 from update_runtime import (
     FetchedPage,
@@ -379,10 +379,13 @@ def preflight(
     """Boot the merged shell backend on a throwaway port and probe it, without
     touching the live service. Returns ``None`` iff it serves a healthy
     response; otherwise what went wrong -- the tail of what the throwaway boot
-    wrote, or, for a boot that could not be spawned at all, a line saying so."""
+    wrote, or, for a boot that could not be spawned at all, a line saying so.
+
+    It boots the entry point the shell's supervisord program execs, from the
+    workspace venv, so what passes here is the install the restart then runs."""
     port = find_free_port()
     return _preflight_boot(
-        argv=[TOOL_NAME],
+        argv=[str(repo_root / SYSTEM_INTERFACE_EXECUTABLE)],
         cwd=repo_root / SYSTEM_INTERFACE_DIR,
         env_overrides={
             "SYSTEM_INTERFACE_HOST": "127.0.0.1",
@@ -406,13 +409,13 @@ def preflight_chat(
 ) -> str | None:
     """Boot the merged chat app on a throwaway port in its side-effect-free mode and
     probe it, the way :func:`preflight` boots the shell. The chat is the process that
-    imports mngr and the harness plugins, so a broken plugin table or a missing
-    dependency in its tool environment shows up here, before the live restart, rather
+    imports mngr and the harness plugins, so a missing plugin or dependency in the
+    workspace venv it runs from shows up here, before the live restart, rather
     than in the post-restart probe and its rollback. ``--preflight`` keeps the boot
     from reconciling the live account store, starting ``mngr observe``, or registering."""
     port = find_free_port()
     return _preflight_boot(
-        argv=[CHAT_TOOL_NAME, "--preflight"],
+        argv=[str(repo_root / CHAT_EXECUTABLE), "--preflight"],
         # The repo root, where supervisord runs the chat from (its paths are relative to it).
         cwd=repo_root,
         env_overrides={"CHAT_HOST": "127.0.0.1", "CHAT_PORT": str(port)},
@@ -458,7 +461,7 @@ def _preflight_boot(
         except OSError as exc:
             # Not booting and failing is the same verdict as failing to boot,
             # and reaching this with the console script missing is exactly what
-            # a tool reinstall that half-succeeded leaves behind.
+            # a venv sync that half-succeeded leaves behind.
             return f"{what} could not be launched ({type(exc).__name__}: {exc})"
         try:
             if wait_healthy(

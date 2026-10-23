@@ -8,10 +8,12 @@ skill bootstrap that extracts the target ref's own copy of the flow.
 
 from __future__ import annotations
 
+import configparser
 import fcntl
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1664,8 +1666,8 @@ def _mngr_requirement(package: str, subdirectory: str) -> str:
 
 _MNGR_BASE = _mngr_requirement("imbue-mngr", "libs/mngr")
 
-# The Python apps a workspace tree carries, as the apply discovers them
-# (``read_app_tools``): the shell (critical) and the browser daemon (not).
+# The Python apps a workspace tree carries, as their manifests describe them:
+# the shell (critical) and the browser daemon (not).
 _APP_FIXTURES = (
     ("system_interface", "system-interface", "system-interface", True),
     ("browser", "browser", "browser-service", False),
@@ -1673,12 +1675,12 @@ _APP_FIXTURES = (
 
 
 def _write_app(
-    repo_root: Path, package: str, tool_name: str, executable: str, is_critical: bool
+    repo_root: Path, package: str, project_name: str, executable: str, is_critical: bool
 ) -> None:
     app_dir = repo_root / update_layout.APPS_DIR / package
     app_dir.mkdir(parents=True, exist_ok=True)
     (app_dir / "pyproject.toml").write_text(
-        f'[project]\nname = "{tool_name}"\nversion = "0.1.0"\n\n[project.scripts]\n{executable} = "{package}.main:main"\n'
+        f'[project]\nname = "{project_name}"\nversion = "0.1.0"\n\n[project.scripts]\n{executable} = "{package}.main:main"\n'
     )
     (app_dir / update_layout.MANIFEST_FILENAME).write_text(
         f'name = "{package}"\ndisplay_name = "{package}"\ninternal = true\ncritical = {str(is_critical).lower()}\n'
@@ -1706,8 +1708,8 @@ def _make_apply_repo(tmp_path: Path) -> Path:
         "[tool.uv.sources]\n"
         f'imbue-mngr = {{ git = "{_MNGR_GIT}", rev = "{_MNGR_REV}", subdirectory = "libs/mngr" }}\n'
     )
-    for package, tool_name, executable, is_critical in _APP_FIXTURES:
-        _write_app(repo_root, package, tool_name, executable, is_critical)
+    for package, project_name, executable, is_critical in _APP_FIXTURES:
+        _write_app(repo_root, package, project_name, executable, is_critical)
     return repo_root
 
 
@@ -2153,7 +2155,8 @@ _BACKEND_DIFF = "M\tsystem/apps/system_interface/imbue/system_interface/server.p
 _CHAT_FRONTEND_DIFF = "M\tsystem/apps/chat/frontend/src/views/Thread.ts\n"
 _SETTINGS_DIFF = "M\t.mngr/settings.toml\n"
 _APT_SNAPSHOT_DIFF = "M\t.mngr/apt-snapshot-timestamp\n"
-_BACKEND_MANIFEST_DIFF = "M\tsystem/apps/system_interface/pyproject.toml\n"
+_BACKEND_MANIFEST_DIFF = "M\tuv.lock\n"
+_APP_PYPROJECT_DIFF = "M\tsystem/apps/browser/pyproject.toml\n"
 _FRONTEND_MANIFEST_DIFF = "M\tsystem/apps/system_interface/frontend/package.json\n"
 _DOCS_DIFF = "M\tREADME.md\nM\t.agents/changelog/some-entry.md\n"
 
@@ -2165,135 +2168,44 @@ _DOCS_DIFF = "M\tREADME.md\nM\t.agents/changelog/some-entry.md\n"
 _PROVISIONER_INPUTS = update_classification.read_provisioner_inputs(_WORKSPACE_ROOT)
 
 
-# The real tree's Python apps, so the plan tests see the apps the template ships.
-_APP_TOOLS = update_classification.read_app_tools(_WORKSPACE_ROOT)
-
-# What a change to a *shared* manifest has to fan out to. Read off the tree
-# rather than spelled out, because a workspace accumulates apps the user built:
-# spelling the template's apps out here would make every app the user adds fail
-# these four cases. The sibling cases below still name single apps literally, so
-# an _APP_TOOLS that silently lost an entry still fails the file.
-_EVERY_APP_TOOL = {app.tool_name for app in _APP_TOOLS}
-
-
 def _plan(paths: list[str]) -> update_classification.ApplyPlan:
-    return update_classification.plan_apply(paths, _PROVISIONER_INPUTS, _APP_TOOLS)
-
-
-def _app_tool(tool_name: str) -> update_classification.AppTool:
-    return next(app for app in _APP_TOOLS if app.tool_name == tool_name)
-
-
-def test_read_app_tools_lists_every_python_app_in_the_tree() -> None:
-    by_name = {app.tool_name: app for app in _APP_TOOLS}
-
-    shell = by_name["system-interface"]
-    assert shell.directory == update_layout.SYSTEM_INTERFACE_DIR
-    assert shell.executable == update_layout.TOOL_NAME
-    assert shell.plugin_key == "system_interface"
-    assert shell.is_critical is True
-    browser = by_name["browser"]
-    assert browser.directory == "system/apps/browser"
-    assert browser.executable == "browser-service"
-    assert browser.plugin_key == "browser"
-    assert browser.is_critical is False
-    terminal = by_name["terminal-app"]
-    assert terminal.directory == "system/apps/terminal"
-    assert terminal.executable == "terminal-app"
-    assert terminal.is_critical is True
-    files = by_name["files-app"]
-    assert files.directory == "system/apps/files"
-    assert files.executable == "files-app"
-    assert files.plugin_key == "files"
-    assert files.is_critical is False
-    # A manifest-only app (the terminal's pty origin, an entry point of the
-    # terminal) has no tool of its own.
-    assert "terminal-pty" not in by_name
-
-
-def test_read_app_tools_leaves_a_pre_manifest_app_to_the_root_venv(
-    tmp_path: Path, capsys
-) -> None:
-    # An app with a pyproject but no app.toml runs `uv run <name>` from the
-    # root venv, so the apply must neither install nor reinstall a tool for
-    # it, and its absence is expected rather than a note.
-    repo_root = _make_apply_repo(tmp_path)
-    legacy = repo_root / update_layout.APPS_DIR / "legacy_dashboard"
-    legacy.mkdir()
-    (legacy / "pyproject.toml").write_text(
-        '[project]\nname = "legacy-dashboard"\n\n[project.scripts]\nlegacy-dashboard = "legacy_dashboard.runner:main"\n'
-    )
-
-    tools = update_classification.read_app_tools(repo_root)
-
-    assert {app.tool_name for app in tools} == {"system-interface", "browser"}
-    assert "legacy" not in capsys.readouterr().err
-
-
-def test_read_app_tools_skips_an_app_it_cannot_describe(tmp_path: Path, capsys) -> None:
-    repo_root = _make_apply_repo(tmp_path)
-    broken = repo_root / update_layout.APPS_DIR / "broken"
-    broken.mkdir()
-    (broken / "pyproject.toml").write_text(
-        '[project]\nname = "broken"\n'
-    )  # no console script
-    (broken / update_layout.MANIFEST_FILENAME).write_text('name = "broken"\n')
-    unreadable = repo_root / update_layout.APPS_DIR / "unreadable"
-    unreadable.mkdir()
-    (unreadable / "pyproject.toml").write_text("[project\n")
-    (unreadable / update_layout.MANIFEST_FILENAME).write_text('name = "unreadable"\n')
-    nameless = repo_root / update_layout.APPS_DIR / "nameless"
-    nameless.mkdir()
-    (nameless / "pyproject.toml").write_text(
-        '[project]\nname = "nameless"\n\n[project.scripts]\nnameless = "nameless.runner:main"\n'
-    )
-    (nameless / update_layout.MANIFEST_FILENAME).write_text(
-        'display_name = "Nameless"\n'
-    )
-
-    tools = update_classification.read_app_tools(repo_root)
-
-    assert {app.tool_name for app in tools} == {"system-interface", "browser"}
-    err = capsys.readouterr().err
-    assert "broken" in err and "unreadable" in err and "nameless" in err
+    return update_classification.plan_apply(paths, _PROVISIONER_INPUTS)
 
 
 @pytest.mark.parametrize(
-    ("path", "tool_names"),
+    ("path", "is_backend_manifest", "is_app_pyproject"),
     [
-        (
-            "system/apps/system_interface/imbue/system_interface/server.py",
-            {"system-interface"},
-        ),
-        ("system/apps/system_interface/app.toml", {"system-interface"}),
-        ("system/apps/chat/imbue/chat/server.py", {"chat"}),
-        ("system/apps/chat/app.toml", {"chat"}),
-        ("system/apps/browser/src/browser/runner.py", {"browser"}),
-        ("system/apps/browser/pyproject.toml", {"browser"}),
-        # The frontend bundle and served assets never change what the tool resolves to.
-        ("system/apps/system_interface/frontend/src/App.ts", set()),
-        ("system/apps/chat/frontend/src/index.ts", set()),
-        ("system/apps/chat/imbue/chat/static/chat.html", set()),
-        ("system/apps/browser/src/browser/static/app.js", set()),
-        ("system/apps/terminal/src/terminal_app/main.py", {"terminal-app"}),
-        ("system/apps/terminal/terminal_tmux.conf", {"terminal-app"}),
-        ("system/apps/files/src/files_app/server.py", {"files-app"}),
-        ("system/apps/files/app.toml", {"files-app"}),
-        ("system/apps/files/frontend/src/index.ts", set()),
-        ("system/apps/routines/src/routines_app/server.py", {"routines-app"}),
-        ("system/apps/routines/frontend/src/index.ts", set()),
-        # A shared backend manifest is part of every app tool's closure: the
-        # pinned mngr packages an app depends on, and the plugin table that
-        # assigns plugins to its tool.
-        ("system/apps/system_interface/pyproject.toml", _EVERY_APP_TOOL),
-        (update_layout.PLUGIN_MANIFEST_PATH, _EVERY_APP_TOOL),
-        ("uv.lock", _EVERY_APP_TOOL),
+        ("system/apps/system_interface/pyproject.toml", False, True),
+        ("system/apps/browser/pyproject.toml", False, True),
+        # A user-built app installs into the same venv the template's apps do.
+        ("system/apps/weather_dashboard/pyproject.toml", False, True),
+        ("uv.lock", True, False),
+        ("pyproject.toml", True, False),
+        # Not a Python manifest, but it decides which plugins the mngr tool's
+        # reinstall carries: a release that only assigns an existing plugin to the
+        # tool changes nothing else, and without this would never register it.
+        (update_layout.PLUGIN_MANIFEST_PATH, True, False),
+        # Source an editable install already serves, and files no install reads.
+        ("system/apps/browser/src/browser/runner.py", False, False),
+        ("system/apps/system_interface/imbue/system_interface/server.py", False, False),
+        ("system/apps/chat/app.toml", False, False),
+        # Pyprojects nested where an app's would be, but deeper.
+        ("system/apps/browser/src/browser/pyproject.toml", False, False),
+        ("system/apps/system_interface/imbue/pyproject.toml", False, False),
     ],
 )
-def test_plan_apply_refreshes_the_tool_of_every_changed_app_directory(
-    path: str, tool_names: set[str]
+def test_plan_apply_classifies_each_environment_manifest(
+    path: str, is_backend_manifest: bool, is_app_pyproject: bool
 ) -> None:
-    assert {app.tool_name for app in _plan([path]).app_tools} == tool_names
+    # The workspace venv is every app's only install, and an app's console scripts
+    # reach it only through a sync: a pyproject edit that leaves uv.lock alone (a new
+    # entry point) must still trigger one, or the restart execs a script that is not there.
+    # Only the root manifests and the plugin manifest feed the mngr tool as well.
+    plan = _plan([path])
+
+    assert plan.backend_manifest is is_backend_manifest
+    assert plan.app_pyproject is is_app_pyproject
+    assert plan.resyncs_venv is (is_backend_manifest or is_app_pyproject)
 
 
 def test_plan_apply_maps_each_change_class() -> None:
@@ -2307,7 +2219,7 @@ def test_plan_apply_maps_each_change_class() -> None:
         ]
     )
     assert plan.frontend_src and plan.frontend_manifest
-    assert plan.backend_src and plan.backend_manifest
+    assert plan.backend_src and plan.app_pyproject
     assert plan.provisioner
 
 
@@ -2323,46 +2235,12 @@ def test_plan_apply_keys_the_provisioner_run_on_what_it_reads() -> None:
     assert not _plan(["system/scripts/seed_home_skeleton.sh"]).provisioner
 
 
-@pytest.mark.parametrize(
-    "path",
-    [
-        # The app's own manifest, and the root ones the whole workspace
-        # environment is resolved from.
-        "system/apps/system_interface/pyproject.toml",
-        "pyproject.toml",
-        "uv.lock",
-        # Not a Python manifest, but it is what the refresh unions into each
-        # tool's reinstall, so it decides which packages the tool environments
-        # carry. A release that only re-assigns an existing plugin to another
-        # tool changes nothing else, and without this would never be registered.
-        update_layout.PLUGIN_MANIFEST_PATH,
-    ],
-)
-def test_plan_apply_counts_every_backend_manifest(path: str) -> None:
-    # Missing one of these means skipping `uv sync` and restarting the
-    # workspace against an environment resolved for the pre-merge tree.
-    assert _plan([path]).backend_manifest
-
-
 def test_plan_apply_rebuilds_the_frontends_when_the_mngr_pin_moves() -> None:
     # The bundles compile in the embed contract and the service icons fetched from the
     # pinned commit, so a release whose only change is the pin still re-emits them.
     plan = _plan([update_layout.PYPROJECT_PATH, "uv.lock"])
 
     assert plan.frontend_src and plan.backend_manifest
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        # Not a manifest: a source file nested where one would be.
-        "system/apps/system_interface/imbue/system_interface/server.py",
-        # A pyproject that is not one of the roots the environment resolves from.
-        "system/apps/system_interface/imbue/pyproject.toml",
-    ],
-)
-def test_plan_apply_does_not_mistake_nested_paths_for_manifests(path: str) -> None:
-    assert not _plan([path]).backend_manifest
 
 
 @pytest.mark.parametrize(
@@ -2459,13 +2337,67 @@ def test_apply_backend_change_preflights_restarts_and_probes(
     code = _apply(runner, http, spawner, apply_repo)
 
     assert code == 0
-    # Pre-flight boots the bare tool on a throwaway port before the restart.
-    assert spawner.spawns == [[update_layout.TOOL_NAME]]
+    # Pre-flight boots the venv's entry point on a throwaway port before the restart.
+    assert spawner.spawns == [[_venv_entry_point(apply_repo, "system-interface")]]
     assert runner.ran(*_RESTART)
     assert any(
         _is_live(url) and update_probes.HEALTH_PATH in url for url in http.get_urls
     )
     assert not runner.ran("npm", "run", "build")
+
+
+def _venv_entry_point(repo_root: Path, script: str) -> str:
+    """Where a pre-flight finds an app's console script: the workspace venv's bin directory."""
+    return str(repo_root / ".venv" / "bin" / script)
+
+
+_OOM_TAGGER = "system/services/oom_priority/bin/oom_tag_service.py"
+
+
+def _supervisord_exec_target(program_conf: Path) -> list[str]:
+    """The argv a supervisord program finally execs: what follows the memory tagger's band
+    key, or, when that is a ``bash -c`` script, what follows the script's last ``exec``."""
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read(program_conf)
+    (section,) = [name for name in parser.sections() if name.startswith("program:")]
+    words = shlex.split(parser[section]["command"])
+    tagged = words[words.index(_OOM_TAGGER) + 2 :]
+    if tagged[:2] != ["bash", "-c"]:
+        return tagged
+    script = shlex.split(tagged[2])
+    last_exec = len(script) - 1 - script[::-1].index("exec")
+    return script[last_exec + 1 :]
+
+
+@pytest.mark.parametrize(
+    ("program_conf", "preflight", "extra_args"),
+    [
+        ("system_interface.conf", update_probes.preflight, []),
+        ("chat.conf", update_probes.preflight_chat, ["--preflight"]),
+    ],
+)
+def test_the_preflight_boots_the_install_supervisord_runs(
+    program_conf: str, preflight, extra_args: list[str]
+) -> None:
+    # The pre-flight exists to boot what the restart will boot. Read off the real tree's
+    # program lines, so a program that moves to another install moves the pre-flight too.
+    spawner = _FakeSpawner()
+
+    verdict = preflight(
+        _WORKSPACE_ROOT,
+        _FakeHttp(_all_healthy),
+        spawner,
+        _no_sleep,
+        expend=list,
+    )
+
+    assert verdict is None
+    executable, *program_args = _supervisord_exec_target(
+        _WORKSPACE_ROOT / "system" / "supervisord.conf.d" / program_conf
+    )
+    assert spawner.spawns == [
+        [str(_WORKSPACE_ROOT / executable), *program_args, *extra_args]
+    ]
 
 
 def _write_chat_program(repo_root: Path) -> None:
@@ -2490,8 +2422,8 @@ def test_apply_preflights_the_chat_app_beside_the_shell_when_the_tree_runs_one(
 
     assert code == 0
     assert spawner.spawns == [
-        [update_layout.TOOL_NAME],
-        [update_layout.CHAT_TOOL_NAME, "--preflight"],
+        [_venv_entry_point(apply_repo, "system-interface")],
+        [_venv_entry_point(apply_repo, "chat-app"), "--preflight"],
     ]
     chat_env = spawner.envs[1]
     assert chat_env["CHAT_HOST"] == "127.0.0.1"
@@ -2507,7 +2439,7 @@ def test_a_failed_chat_preflight_never_restarts_the_live_service(
     runner = _apply_runner(_BACKEND_DIFF, apply_repo)
     spawner = _FakeSpawner(
         output="ModuleNotFoundError: No module named 'imbue.mngr_claude'",
-        exited_argv0=update_layout.CHAT_TOOL_NAME,
+        exited_argv0=_venv_entry_point(apply_repo, "chat-app"),
     )
 
     def shell_boots_and_the_chat_does_not(url: str) -> int | None:
@@ -2535,7 +2467,7 @@ def test_apply_skips_the_chat_preflight_for_a_tree_without_a_chat_program(
     code = _apply(runner, _FakeHttp(_all_healthy), spawner, apply_repo)
 
     assert code == 0
-    assert spawner.spawns == [[update_layout.TOOL_NAME]]
+    assert spawner.spawns == [[_venv_entry_point(apply_repo, "system-interface")]]
 
 
 def test_apply_apt_snapshot_change_provisions_before_any_restart(
@@ -2567,24 +2499,15 @@ def test_apply_settings_change_restarts_without_a_provisioner_run(
 
 
 def test_apply_backend_manifest_refreshes_every_environment(apply_repo: Path) -> None:
-    # A backend manifest moves every environment's closure: the mngr tool,
-    # the root venv, and each app's own tool (the pinned mngr packages and
-    # the plugin table are part of what those resolve).
+    # A backend manifest moves both environments' closures: the mngr tool and the
+    # root venv every app runs from. No app has a tool of its own to reinstall.
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
 
     code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
 
     assert code == 0
     installs = runner.argvs_starting("uv", "tool", "install")
-    assert [argv[3] for argv in installs] == [
-        _MNGR_BASE,
-        "-e",
-        "-e",
-    ]
-    assert [argv[4] for argv in installs[1:]] == [
-        "system/apps/browser",
-        update_layout.SYSTEM_INTERFACE_DIR,
-    ]
+    assert [argv[3] for argv in installs] == [_MNGR_BASE]
     assert runner.ran("uv", "sync", "--all-packages", "--frozen")
     assert runner.ran(*_RESTART)
 
@@ -2613,34 +2536,67 @@ def test_apply_skips_the_asset_fetch_in_a_tree_that_has_no_such_script(
     assert not runner.argvs_starting("bash")
 
 
-def test_apply_backend_source_change_reinstalls_only_the_apps_own_tool(
+def test_apply_backend_source_change_rebuilds_no_environment(
     apply_repo: Path,
 ) -> None:
-    # A change inside an app's directory re-resolves that app's tool (its
-    # entry points and manifest live there), but the shared environments --
-    # the mngr tool and the root venv -- are untouched.
+    # The venv's editable install serves an app's source as it lands, so a source
+    # change needs only the restart: no tool install and no sync.
     runner = _apply_runner(_BACKEND_DIFF, apply_repo)
 
     code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
 
     assert code == 0
-    installs = runner.argvs_starting("uv", "tool", "install")
-    assert [argv[4] for argv in installs] == [update_layout.SYSTEM_INTERFACE_DIR]
+    assert not runner.ran("uv", "tool", "install")
     assert not runner.ran("uv", "sync")
     assert runner.ran(*_RESTART)
 
 
-def test_apply_browser_change_reinstalls_the_browser_tool_alone(
+@dataclass
+class _SyncObservingSpawner(_FakeSpawner):
+    """Records, at each boot, whether ``runner`` had synced the workspace venv yet."""
+
+    runner: _RecordingRunner | None = None
+    synced_at_boot: list[bool] = field(default_factory=list)
+
+    def spawn(
+        self, argv: Sequence[str], cwd: str, env: dict, output_path: Path
+    ) -> _FakeSpawned:
+        assert self.runner is not None
+        self.synced_at_boot.append(
+            self.runner.ran("uv", "sync", "--all-packages", "--frozen")
+        )
+        return super().spawn(argv, cwd, env, output_path)
+
+
+def test_apply_an_apps_pyproject_change_resyncs_the_venv_before_the_preflight(
     apply_repo: Path,
 ) -> None:
-    runner = _apply_runner("M\tsystem/apps/browser/src/browser/runner.py\n", apply_repo)
+    # An app's pyproject can add a console script without moving uv.lock, and the
+    # pre-flight and the restart both exec it from the venv, so the sync comes first.
+    runner = _apply_runner(_APP_PYPROJECT_DIFF, apply_repo)
+    spawner = _SyncObservingSpawner(runner=runner)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), spawner, apply_repo)
+
+    assert code == 0
+    assert spawner.synced_at_boot == [True]
+
+
+def test_apply_an_apps_pyproject_change_leaves_the_mngr_tool_alone(
+    apply_repo: Path, capsys
+) -> None:
+    # Nothing an app declares reaches the mngr tool, so an app-only release copies the
+    # venv aside and re-syncs it, and neither copies nor reinstalls the tool.
+    runner = _apply_runner(_APP_PYPROJECT_DIFF, apply_repo)  # no tools on PATH
 
     code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
 
     assert code == 0
-    installs = runner.argvs_starting("uv", "tool", "install")
-    assert [argv[4] for argv in installs] == ["system/apps/browser"]
-    assert not runner.ran("uv", "sync")
+    assert runner.ran("uv", "sync", "--all-packages", "--frozen")
+    assert not runner.ran("uv", "tool", "install")
+    err = capsys.readouterr().err
+    assert "nothing to copy aside for 'venv'" in err
+    assert "nothing to copy aside for 'tool-imbue-mngr'" not in err
 
 
 def test_apply_frontend_only_change_reinstalls_no_tool(apply_repo: Path) -> None:
@@ -2666,7 +2622,7 @@ def test_apply_docs_only_still_preflights_restarts_and_probes(apply_repo: Path) 
     assert runner.ran("git", "merge", "--ff-only", _MERGE_REF)
     assert not runner.ran("npm")
     assert not runner.ran(*_PROVISION)
-    assert spawner.spawns == [[update_layout.TOOL_NAME]]
+    assert spawner.spawns == [[_venv_entry_point(apply_repo, "system-interface")]]
     assert runner.ran(*_RESTART)
     assert any(
         _is_live(url) and update_probes.HEALTH_PATH in url for url in http.get_urls
@@ -5118,7 +5074,9 @@ def test_only_the_hungry_forward_steps_are_expendable_and_recovery_is_not(
     # sync are what recovery has to rebuild untagged.
     recovery_installs = [c for c in unwrapped if c[:3] == ["uv", "tool", "install"]]
     recovery_syncs = [c for c in unwrapped if c[:2] == ["uv", "sync"]]
-    assert len(recovery_installs) == 3, "recovery should reinstall every tool untagged"
+    assert len(recovery_installs) == 1, (
+        "recovery should reinstall the mngr tool untagged"
+    )
     assert recovery_syncs, "recovery should re-sync the venv untagged"
 
 
@@ -5342,10 +5300,9 @@ def test_only_apply_and_recover_band_themselves(
         assert target == (Path.cwd() if expected == "cwd" else Path(expected))
 
 
-# apply: the uv tool environments
+# apply: the mngr tool environment
 #
-# The refresh rebuilds the uv tool environments the workspace runs from (the
-# mngr tool and one per Python app).
+# The refresh rebuilds the mngr tool's uv tool environment.
 # ``uv tool install --reinstall`` rebuilds a tool from its base package alone,
 # so both halves of this are load-bearing: WHICH installation is rebuilt
 # (``resolve_tool_destinations``, from the console script's own shebang) and WHAT it is
@@ -5413,8 +5370,8 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(apply_repo: Path) ->
     # A release that ships a new plugin (opencode, say) merges a settings.toml
     # its agent type needs, and a reinstall from the receipt alone leaves an
     # mngr that rejects its own config at the restart -- so the merged tree's
-    # manifest is unioned in, for every tool, without repeating what the
-    # receipt already has -- and, since the release moved the pin, the
+    # manifest is unioned in without repeating what the receipt already has --
+    # and, since the release moved the pin, the
     # manifest's commit replaces the receipt's stale one for a plugin both name.
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
     stale_rev = "f" * 40
@@ -5435,12 +5392,12 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(apply_repo: Path) ->
         [[plugins]]
         package = "imbue-mngr-claude"
         subdirectory = "libs/mngr_claude"
-        tools = ["mngr", "system_interface"]
+        tools = ["mngr"]
 
         [[plugins]]
         package = "imbue-mngr-opencode"
         subdirectory = "libs/mngr_opencode"
-        tools = ["mngr", "system_interface"]
+        tools = ["mngr"]
 
         [[plugins]]
         package = "imbue-mngr-wait"
@@ -5462,18 +5419,6 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(apply_repo: Path) ->
         _mngr_requirement("imbue-mngr-opencode", "libs/mngr_opencode"),
         "--with",
         _mngr_requirement("imbue-mngr-wait", "libs/mngr_wait"),
-        "--reinstall",
-    ]
-    assert _install_argv(runner, update_layout.SYSTEM_INTERFACE_DIR) == [
-        "uv",
-        "tool",
-        "install",
-        "-e",
-        update_layout.SYSTEM_INTERFACE_DIR,
-        "--with",
-        _mngr_requirement("imbue-mngr-claude", "libs/mngr_claude"),
-        "--with",
-        _mngr_requirement("imbue-mngr-opencode", "libs/mngr_opencode"),
         "--reinstall",
     ]
 
@@ -5587,12 +5532,6 @@ def test_the_refresh_targets_the_installation_actually_on_path(
     }
     assert envs[_MNGR_BASE]["UV_TOOL_DIR"] == str(tools)
     assert envs[_MNGR_BASE]["UV_TOOL_BIN_DIR"] == str(bin_dir)
-    # A tool that is not on PATH at all has no installation to target: it is
-    # installed beside the mngr tool, whose bin directory the program lines
-    # resolve through (uv's default under $HOME is on nobody's PATH, so a tool
-    # left to it installs fine and is never found).
-    assert envs[update_layout.SYSTEM_INTERFACE_DIR]["UV_TOOL_DIR"] == str(tools)
-    assert envs[update_layout.SYSTEM_INTERFACE_DIR]["UV_TOOL_BIN_DIR"] == str(bin_dir)
 
 
 def _install_tool(home: Path, tool_name: str, executable: str) -> tuple[Path, Path]:
@@ -5680,44 +5619,129 @@ def test_the_only_mngr_install_is_never_removed(tmp_path: Path) -> None:
     assert (tools / update_layout.MNGR_TOOL_NAME).is_dir()
 
 
-@pytest.mark.parametrize(
-    ("path_reaches", "home_copy_survives"),
-    [("the-pinned-copy", False), ("the-home-copy", True), ("nothing", True)],
-)
-def test_an_app_tool_home_copy_is_swept_only_once_path_reaches_the_pinned_install(
-    path_reaches: str, home_copy_survives: bool, apply_repo: Path, tmp_path: Path
-) -> None:
-    # The pre-pin installs left a copy of every app tool under $HOME beside the
-    # stale mngr, and a login shell runs those instead of the refreshed ones.
-    # An app's program line resolves through the pinned bin directory, so the
-    # sweep must never remove the copy PATH runs or leave only an unreached
-    # one: with PATH on the $HOME copy, or on nothing, both copies stay.
+def _install_app_tool(
+    home: Path, repo_root: Path, package: str, tool_name: str, scripts: Sequence[str]
+) -> tuple[Path, list[Path]]:
+    """The per-app uv tool an older build installed for ``system/apps/<package>``, laid out
+    as ``uv tool install -e`` leaves it: a receipt naming the app's directory as the
+    editable source, and a bin-directory symlink to each console script."""
+    environment = tool_env.tools_dir(home) / tool_name
+    (environment / "bin").mkdir(parents=True)
+    (environment / update_layout.RECEIPT).write_text(
+        f'[tool]\nrequirements = [{{ name = "{tool_name}", editable = '
+        f'"{repo_root / update_layout.APPS_DIR / package}" }}]\n'
+    )
+    links: list[Path] = []
+    for script in scripts:
+        (environment / "bin" / script).write_text(f"#!{environment}/bin/python\n")
+        link = tool_env.bin_dir(home) / script
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(environment / "bin" / script)
+        links.append(link)
+    return environment, links
+
+
+def _old_layout(apply_repo: Path, runtime_home: Path) -> tuple[list[Path], Path]:
+    """The app tools a workspace built before the venv-only layout carries -- the shell's
+    and the browser's under the pinned home, and a stale shell copy under ``$HOME`` --
+    beside the mngr tool: ``(every app-tool path, the mngr environment)``."""
     pinned_home = tool_env.tool_home()
-    pinned_shim, pinned_tools = _install_tool(
-        pinned_home, update_layout.TOOL_NAME, update_layout.TOOL_NAME
+    app_paths: list[Path] = []
+    for home, package, tool_name, scripts in (
+        (pinned_home, "system_interface", "system-interface", ["system-interface"]),
+        (
+            pinned_home,
+            "browser",
+            "browser",
+            ["browser-service", "agentic-browser-fleet"],
+        ),
+        (runtime_home, "system_interface", "system-interface", ["system-interface"]),
+    ):
+        environment, links = _install_app_tool(
+            home, apply_repo, package, tool_name, scripts
+        )
+        app_paths.extend([environment, *links])
+    _, mngr_tools = _install_tool(
+        pinned_home, update_layout.MNGR_TOOL_NAME, update_layout.MNGR_EXECUTABLE
     )
-    home_shim, home_tools = _install_tool(
-        tmp_path / "home", update_layout.TOOL_NAME, update_layout.TOOL_NAME
-    )
+    return app_paths, mngr_tools / update_layout.MNGR_TOOL_NAME
+
+
+def test_a_landed_apply_removes_the_app_tools_an_old_layout_workspace_carries(
+    apply_repo: Path, tmp_path: Path
+) -> None:
+    # A landed apply removes the per-app tools an older build made from every home they
+    # were left in, scripts included, and leaves the mngr tool -- before env-converge
+    # re-captures its uv tool record, which would otherwise go on listing them for a
+    # rebuilt rootfs to reinstall.
+    runtime_home = tmp_path / "home"
+    app_paths, mngr_environment = _old_layout(apply_repo, runtime_home)
     runner = _apply_runner(_DOCS_DIFF, apply_repo)
-    if path_reaches == "the-pinned-copy":
-        runner.executables[update_layout.TOOL_NAME] = str(pinned_shim)
-    elif path_reaches == "the-home-copy":
-        runner.executables[update_layout.TOOL_NAME] = str(home_shim)
+    present_at_converge: list[bool] = []
+
+    def watch_converge(argv: list[str]) -> None:
+        if argv[:3] == ["uv", "run", "env-converge"]:
+            present_at_converge.append(
+                any(path.exists() or path.is_symlink() for path in app_paths)
+            )
+
+    runner.on_command = watch_converge
 
     code = _apply(
         runner,
         _FakeHttp(_all_healthy),
         _FakeSpawner(),
         apply_repo,
-        sweep_homes=[tmp_path / "home", pinned_home],
+        target_ref="minds-v0.4.2",
+        sweep_homes=[runtime_home, tool_env.tool_home()],
     )
 
     assert code == 0
-    assert home_shim.exists() is home_copy_survives
-    assert (home_tools / update_layout.TOOL_NAME).is_dir() is home_copy_survives
-    assert pinned_shim.exists()
-    assert (pinned_tools / update_layout.TOOL_NAME).is_dir()
+    assert [path for path in app_paths if path.exists() or path.is_symlink()] == []
+    assert mngr_environment.is_dir()
+    assert present_at_converge == [False]
+
+
+def test_a_rolled_back_apply_leaves_the_old_layout_running_as_it_was(
+    apply_repo: Path, tmp_path: Path
+) -> None:
+    # The apply runs from the target's update-self inside a workspace still laid out the
+    # old way. When the merged tree fails after its restart, the rollback puts the venv
+    # every app runs from back by copy and restarts onto it, and the old app tools are
+    # still where they were: nothing is removed from a workspace whose update did not land.
+    runtime_home = tmp_path / "home"
+    app_paths, _ = _old_layout(apply_repo, runtime_home)
+    venv_marker = apply_repo / ".venv" / "marker.txt"
+    venv_marker.parent.mkdir()
+    venv_marker.write_text("pre-apply")
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    restarts = {"seen": 0}
+
+    def sync_and_count(argv: list[str]) -> None:
+        if argv[:2] == ["uv", "sync"]:
+            venv_marker.write_text("merged")
+        if tuple(argv[:4]) == _RESTART:
+            restarts["seen"] += 1
+
+    runner.on_command = sync_and_count
+
+    def healthy_only_after_the_rollback_restart(url: str) -> int | None:
+        if not _is_live(url):
+            return 200
+        return 200 if restarts["seen"] >= 2 else 500
+
+    code = _apply(
+        runner,
+        _FakeHttp(healthy_only_after_the_rollback_restart),
+        _FakeSpawner(),
+        apply_repo,
+        sweep_homes=[runtime_home, tool_env.tool_home()],
+    )
+
+    assert code == 2
+    assert restarts["seen"] == 2
+    assert venv_marker.read_text() == "pre-apply"
+    assert all(path.exists() for path in app_paths)
 
 
 def test_a_live_apply_sweeps_the_callers_home_and_the_image_builds(
@@ -5738,74 +5762,35 @@ def test_a_live_apply_sweeps_the_callers_home_and_the_image_builds(
     ]
 
 
-def test_a_tool_the_merge_adds_is_installed_beside_the_mngr_tool(
-    apply_repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A tool the merge adds (here the chat's) is on no PATH yet; the merge's
-    install of it must land where the merged program line will find it."""
-    bin_dir = tmp_path / "root" / ".local" / "bin"
-    bin_dir.mkdir(parents=True)
-    tools = tmp_path / "root" / ".local" / "share" / "uv" / "tools"
-    (bin_dir / update_layout.MNGR_EXECUTABLE).write_text(
-        f"#!{tools}/{update_layout.MNGR_TOOL_NAME}/bin/python3\nimport sys\n"
-    )
-    (tools / update_layout.MNGR_TOOL_NAME).mkdir(parents=True)
-    (tools / update_layout.MNGR_TOOL_NAME / update_layout.RECEIPT).write_text(
-        "[tool]\nrequirements = []\n"
-    )
-    _write_app(apply_repo, "chat", "chat", "chat-app", True)
-    runner = _apply_runner(
-        "A\tsystem/apps/chat/imbue/chat/main.py\n" + _BACKEND_MANIFEST_DIFF, apply_repo
-    )
-    runner.executables[update_layout.MNGR_EXECUTABLE] = str(
-        bin_dir / update_layout.MNGR_EXECUTABLE
-    )
-
-    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
-
-    chat_install_env = next(
-        env
-        for argv, env in zip(runner.calls, runner.envs)
-        if argv[:4] == ["uv", "tool", "install", "-e"] and argv[4] == "system/apps/chat"
-    )
-    assert chat_install_env["UV_TOOL_DIR"] == str(tools)
-    assert chat_install_env["UV_TOOL_BIN_DIR"] == str(bin_dir)
-    assert (
-        f"installing 'chat' beside the mngr tool ({bin_dir})" in capsys.readouterr().err
-    )
-
-
 def test_a_tool_with_no_installation_anywhere_goes_to_the_pinned_home(
     apply_repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """With neither the tool's own executable nor mngr an installed uv tool on
-    PATH there is nothing to resolve, and uv's own default is the one answer
-    that is always wrong: it follows ``$HOME``, which at runtime is
-    ``/home/user`` and on no PATH. The build pins a home precisely because it
-    cannot trust the one it runs under; the apply aims at the same one."""
+    """With ``mngr`` not an installed uv tool on PATH there is nothing to
+    resolve, and uv's own default is the one answer that is always wrong: it
+    follows ``$HOME``, which at runtime is ``/home/user`` and on no PATH. The
+    build pins a home precisely because it cannot trust the one it runs under;
+    the apply aims at the same one."""
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
     assert not runner.executables
     pinned = tool_env.tool_home()
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
-    shell_install_env = next(
+    mngr_install_env = next(
         env
         for argv, env in zip(runner.calls, runner.envs)
-        if argv[:4] == ["uv", "tool", "install", "-e"]
-        and argv[4] == update_layout.SYSTEM_INTERFACE_DIR
+        if argv[:4] == ["uv", "tool", "install", _MNGR_BASE]
     )
-    assert shell_install_env["UV_TOOL_DIR"] == str(tool_env.tools_dir(pinned))
-    assert shell_install_env["UV_TOOL_BIN_DIR"] == str(tool_env.bin_dir(pinned))
+    assert mngr_install_env["UV_TOOL_DIR"] == str(tool_env.tools_dir(pinned))
+    assert mngr_install_env["UV_TOOL_BIN_DIR"] == str(tool_env.bin_dir(pinned))
     assert (
-        f"could not identify the uv tool behind '{update_layout.TOOL_NAME}' (not an "
-        f"installed uv tool on PATH) nor the one behind '{update_layout.MNGR_EXECUTABLE}'"
-        f"; installing '{update_layout.TOOL_NAME}' into the build's pinned tool "
-        f"home ({tool_env.bin_dir(pinned)})"
+        f"could not identify the uv tool behind '{update_layout.MNGR_EXECUTABLE}' (not an "
+        f"installed uv tool on PATH); installing '{update_layout.MNGR_TOOL_NAME}' into "
+        f"the build's pinned tool home ({tool_env.bin_dir(pinned)})"
     ) in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("rung", ["own", "beside-mngr", "pinned"])
+@pytest.mark.parametrize("rung", ["own", "pinned"])
 def test_the_copy_taken_aside_is_the_environment_the_reinstall_rebuilds(
     rung: str, apply_repo: Path, tmp_path: Path
 ) -> None:
@@ -5813,42 +5798,25 @@ def test_the_copy_taken_aside_is_the_environment_the_reinstall_rebuilds(
     of any environment but the one the reinstall overwrote would put back the
     wrong thing and leave the rebuilt one standing, so the two must agree at
     every rung of the destination resolution."""
-    homes = {
-        "own": tmp_path / "own",
-        "beside-mngr": tmp_path / "mngr",
-        "pinned": tool_env.tool_home(),
-    }
+    homes = {"own": tmp_path / "own", "pinned": tool_env.tool_home()}
     for name, home in homes.items():
-        env_dir = tool_env.tools_dir(home) / update_layout.TOOL_NAME
+        env_dir = tool_env.tools_dir(home) / update_layout.MNGR_TOOL_NAME
         env_dir.mkdir(parents=True)
         (env_dir / update_layout.RECEIPT).write_text("[tool]\nrequirements = []\n")
         (env_dir / "home.txt").write_text(name)
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
-    if rung in ("own", "beside-mngr"):
+    if rung == "own":
         mngr_shim, _ = _install_tool(
-            homes["beside-mngr"],
-            update_layout.MNGR_TOOL_NAME,
-            update_layout.MNGR_EXECUTABLE,
+            homes["own"], update_layout.MNGR_TOOL_NAME, update_layout.MNGR_EXECUTABLE
         )
         runner.executables[update_layout.MNGR_EXECUTABLE] = str(mngr_shim)
-    if rung == "own":
-        own_shim, _ = _install_tool(
-            homes["own"], update_layout.TOOL_NAME, update_layout.TOOL_NAME
-        )
-        runner.executables[update_layout.TOOL_NAME] = str(own_shim)
     observed: list[tuple[str, str]] = []
 
     def _on_install(argv: list[str]) -> None:
-        if argv[:5] == [
-            "uv",
-            "tool",
-            "install",
-            "-e",
-            update_layout.SYSTEM_INTERFACE_DIR,
-        ]:
+        if argv[:4] == ["uv", "tool", "install", _MNGR_BASE]:
             copy = update_apply_contract.snapshots_root(
                 apply_repo
-            ) / update_environment.tool_snapshot_name(update_layout.TOOL_NAME)
+            ) / update_environment.tool_snapshot_name(update_layout.MNGR_TOOL_NAME)
             env = runner.envs[-1]
             assert env is not None
             observed.append((env["UV_TOOL_DIR"], (copy / "home.txt").read_text()))
@@ -5863,12 +5831,12 @@ def test_the_copy_taken_aside_is_the_environment_the_reinstall_rebuilds(
 def test_the_refresh_survives_a_tool_with_no_receipt(apply_repo: Path) -> None:
     # No readable receipt means the tool is not installed (or predates
     # receipts); the refresh must still run as the plain install it would
-    # otherwise be, for every tool.
+    # otherwise be.
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
-    assert len(runner.argvs_starting("uv", "tool", "install")) == 3
+    assert len(runner.argvs_starting("uv", "tool", "install")) == 1
 
 
 def test_the_refresh_reports_a_receipt_it_cannot_read(apply_repo: Path, capsys) -> None:
@@ -5940,16 +5908,18 @@ def test_tool_location_declines_what_it_cannot_read(
 def test_tool_location_declines_the_workspace_venvs_console_script(
     tmp_path: Path,
 ) -> None:
-    # Both tool names are also `uv sync` members, so PATH can resolve to the
-    # venv's own entrypoint. Deriving a "tool directory" from that would build a
-    # tool environment inside the served checkout -- dirtying the tree the next
+    # mngr is also a `uv sync` member, so PATH can resolve to the venv's own
+    # entrypoint. Deriving a "tool directory" from that would build a tool
+    # environment inside the served checkout -- dirtying the tree the next
     # apply refuses to run on. No receipt, no deal.
     venv_bin = tmp_path / "workspace" / ".venv" / "bin"
     venv_bin.mkdir(parents=True)
-    script = venv_bin / update_layout.TOOL_NAME
+    script = venv_bin / update_layout.MNGR_EXECUTABLE
     script.write_text(f"#!{venv_bin}/python3\nimport sys\n")
 
-    assert update_environment._tool_location(script, update_layout.TOOL_NAME) is None
+    assert (
+        update_environment._tool_location(script, update_layout.MNGR_TOOL_NAME) is None
+    )
 
 
 def test_tool_location_declines_a_script_it_cannot_open(tmp_path: Path) -> None:
@@ -5981,7 +5951,7 @@ def test_snapshots_roundtrip_bundle_envs_and_node_modules(tmp_path: Path) -> Non
             "system/apps/system_interface/pyproject.toml",
         ]
     )
-    # No tools on PATH and an empty pinned home -> no tool-env copies.
+    # An app pyproject re-syncs only the venv, so nothing copies the mngr tool aside.
     runner = _RecordingRunner()
 
     snapshots = update_environment.take_snapshots(
@@ -6010,43 +5980,6 @@ def test_snapshots_roundtrip_bundle_envs_and_node_modules(tmp_path: Path) -> Non
     assert (
         repo_root / update_layout.NPM_ROOT_DIR / "node_modules" / "left-pad.js"
     ).read_text() == "old"
-
-
-def _tool_on_path(
-    tmp_path: Path, runner: _RecordingRunner, tool_name: str, executable: str
-) -> Path:
-    """Install a fake uv tool ``tool_name`` behind console script ``executable``; return its tool dir."""
-    shim, tools = _install_tool(tmp_path / "root", tool_name, executable)
-    runner.executables[executable] = str(shim)
-    return tools / tool_name
-
-
-def test_snapshots_copy_aside_the_tool_of_a_critical_app_but_not_of_another(
-    tmp_path: Path,
-) -> None:
-    # The shell is critical (its manifest says so), so an apply that touches
-    # it copies its tool environment aside for the rollback; the browser is
-    # not, so a rollback reinstalls its tool from the restored tree instead.
-    repo_root = _make_apply_repo(tmp_path)
-    runner = _RecordingRunner()
-    shell_tool = _tool_on_path(
-        tmp_path, runner, "system-interface", update_layout.TOOL_NAME
-    )
-    _tool_on_path(tmp_path, runner, "browser", "browser-service")
-    plan = update_classification.plan_apply(
-        [
-            _BACKEND_DIFF.split("\t")[1].strip(),
-            "system/apps/browser/src/browser/runner.py",
-        ],
-        _PROVISIONER_INPUTS,
-        update_classification.read_app_tools(repo_root),
-    )
-
-    targets = update_environment.snapshot_targets(
-        plan, repo_root, update_environment.resolve_tool_destinations(plan, runner)
-    )
-
-    assert targets == [("tool-system-interface", shell_tool)]
 
 
 def test_existing_snapshot_copies_are_reused_not_overwritten(tmp_path: Path) -> None:
@@ -6424,15 +6357,14 @@ def test_a_rollback_into_a_pre_split_tree_reinstalls_the_shell_frontends_node_mo
     assert runner.cwds_of("npm", "run", "build") == [npm_root, str(shell_frontend)]
 
 
-def test_a_rollback_rebuilds_the_tool_envs_it_could_not_copy_aside(
+def test_a_rollback_rebuilds_the_mngr_tool_it_could_not_copy_aside(
     apply_repo: Path, capsys
 ) -> None:
-    # The venv copy alone is not the environment: the uv tools are recorded
+    # The venv copy alone is not the environment: the mngr tool is recorded
     # (and restored) separately, and one that could not be located at snapshot
     # time has no copy to put back. A rollback that keyed the rebuild on the
-    # venv alone reported success with the tools still built from the
-    # rolled-back-away tree -- the ModuleNotFoundError-on-mngr state. The
-    # browser's tool is never copied aside (not critical), so it is rebuilt too.
+    # venv alone reported success with the tool still built from the
+    # rolled-back-away tree -- the ModuleNotFoundError-on-mngr state.
     (apply_repo / ".venv").mkdir()
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)  # no tools on PATH
     spawner = _FakeSpawner(output="ImportError: boom", exited=True)
@@ -6450,10 +6382,44 @@ def test_a_rollback_rebuilds_the_tool_envs_it_could_not_copy_aside(
     recovery_installs = [
         c for c in runner.raw_calls if c[:3] == ["uv", "tool", "install"]
     ]
-    assert len(recovery_installs) == 3
-    err = capsys.readouterr().err
-    assert "nothing to copy aside for 'tool-imbue-mngr'" in err
-    assert "nothing to copy aside for 'tool-system-interface'" in err
+    assert len(recovery_installs) == 1
+    assert "nothing to copy aside for 'tool-imbue-mngr'" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("is_venv_copied", [True, False])
+def test_an_app_only_rollback_resyncs_the_venv_only_when_it_has_no_copy(
+    apply_repo: Path, is_venv_copied: bool
+) -> None:
+    # The forward sync rewrote the venv from the merged app pyproject. A copy put back
+    # undoes that on its own; with none, only a sync from the restored tree does. The
+    # mngr tool was never touched, so nothing reinstalls it.
+    venv_marker = apply_repo / ".venv" / "marker.txt"
+    if is_venv_copied:
+        venv_marker.parent.mkdir()
+        venv_marker.write_text("pre-apply")
+    runner = _apply_runner(_APP_PYPROJECT_DIFF, apply_repo)
+
+    def sync_rewrites_the_venv(argv: list[str]) -> None:
+        if argv[:2] == ["uv", "sync"] and venv_marker.parent.is_dir():
+            venv_marker.write_text("synced")
+
+    runner.on_command = sync_rewrites_the_venv
+    spawner = _FakeSpawner(output="ImportError: boom", exited=True)
+
+    code = _apply(
+        runner,
+        _FakeHttp(lambda url: 200 if _is_live(url) else None),
+        spawner,
+        apply_repo,
+    )
+
+    assert code == 2
+    # The forward sync is wrapped expendable; recovery's is not.
+    recovery_syncs = [c for c in runner.raw_calls if c[:2] == ["uv", "sync"]]
+    assert len(recovery_syncs) == (0 if is_venv_copied else 1)
+    if is_venv_copied:
+        assert venv_marker.read_text() == "pre-apply"
+    assert not runner.ran("uv", "tool", "install")
 
 
 def test_a_rollback_restores_the_tool_env_the_last_resort_reinstalled(
@@ -6496,21 +6462,22 @@ def test_a_rollback_restores_the_tool_env_the_last_resort_reinstalled(
 
 @dataclass
 class _FakeUvToolInstall:
-    """What ``uv tool install -e <app> --reinstall`` does to the disk for one tool, as
-    uv's ``finalize_tool_install`` does it: unlink the entrypoints the existing receipt
+    """What ``uv tool install <mngr> --reinstall`` does to the disk, as uv's
+    ``finalize_tool_install`` does it: unlink the entrypoints the existing receipt
     lists, rebuild the environment, then refuse -- removing the new environment -- when
     any entrypoint's path already exists (following the link, so one that dangled into
     the old environment exists again once the new one has its script); otherwise link
-    each ``[project.scripts]`` entry into the bin directory and write the receipt.
+    each of ``merged_scripts`` (what the merged pin declares) into the bin directory and
+    write the receipt.
 
     Installed as the runner's ``on_command``; ``is_failing_next`` makes the next install
     die after the old one is gone, as a failed resolve does.
     """
 
     runner: _RecordingRunner
-    repo_root: Path
-    tool_name: str
     home: Path
+    merged_scripts: tuple[str, ...]
+    tool_name: str = update_layout.MNGR_TOOL_NAME
     is_failing_next: bool = False
 
     @property
@@ -6544,18 +6511,14 @@ class _FakeUvToolInstall:
         if argv[:3] != ["uv", "tool", "install"]:
             return
         self.runner.respond(("uv", "tool", "install"), _Result())
-        if "-e" not in argv:
-            return
-        project = self.repo_root / argv[argv.index("-e") + 1]
-        pyproject = tomllib.loads((project / "pyproject.toml").read_text())["project"]
-        if pyproject["name"] != self.tool_name:
+        if argv[3:4] != [_MNGR_BASE]:
             return
         receipt = self.environment / update_layout.RECEIPT
         if receipt.is_file():
             for entrypoint in tomllib.loads(receipt.read_text())["tool"]["entrypoints"]:
                 Path(entrypoint["install-path"]).unlink(missing_ok=True)
         shutil.rmtree(self.environment, ignore_errors=True)
-        scripts = sorted(pyproject.get("scripts", {}))
+        scripts = sorted(self.merged_scripts)
         if self.is_failing_next:
             self.is_failing_next = False
             self._refuse("error: Failed to resolve")
@@ -6586,22 +6549,23 @@ class _FakeUvToolInstall:
         }
 
 
-_PTY_SCRIPT = "system-interface-pty"
+_ADDED_SCRIPT = "mngr-added"
 
 
-def _shell_tool_with_scripts(
+def _mngr_tool_with_scripts(
     apply_repo: Path, tmp_path: Path, runner: _RecordingRunner
 ) -> _FakeUvToolInstall:
-    """The shell's tool installed with its one entrypoint, under a merged tree whose
-    pyproject declares a second one -- the terminal's ``terminal-pty`` on testtest."""
-    (apply_repo / update_layout.SYSTEM_INTERFACE_DIR / "pyproject.toml").write_text(
-        '[project]\nname = "system-interface"\nversion = "0.1.0"\n\n[project.scripts]\n'
-        'system-interface = "system_interface.main:main"\n'
-        f'{_PTY_SCRIPT} = "system_interface.pty_main:main"\n'
+    """The mngr tool installed with its one entrypoint, under a merged pin that declares a
+    second one. The workspace venv is there to copy aside, so a rollback restores both
+    environments by copy and reinstalls nothing."""
+    (apply_repo / ".venv").mkdir()
+    uv = _FakeUvToolInstall(
+        runner, tmp_path / "root", (update_layout.MNGR_EXECUTABLE, _ADDED_SCRIPT)
     )
-    uv = _FakeUvToolInstall(runner, apply_repo, "system-interface", tmp_path / "root")
-    uv.install(["system-interface"])
-    runner.executables[update_layout.TOOL_NAME] = str(uv.bin_dir / "system-interface")
+    uv.install([update_layout.MNGR_EXECUTABLE])
+    runner.executables[update_layout.MNGR_EXECUTABLE] = str(
+        uv.bin_dir / update_layout.MNGR_EXECUTABLE
+    )
     runner.on_command = uv
     return uv
 
@@ -6622,8 +6586,8 @@ def test_a_rollback_puts_a_restored_tools_entrypoints_back_to_the_pre_apply_set(
     # the bin directory beside every other tool's. Restoring the directory alone leaves
     # the entrypoint the apply added dangling into it (and every later reinstall refused
     # over it), and after an install that died, none of the old ones at all.
-    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
-    uv = _shell_tool_with_scripts(apply_repo, tmp_path, runner)
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    uv = _mngr_tool_with_scripts(apply_repo, tmp_path, runner)
     uv.is_failing_next = is_install_failing
     spawner = _FakeSpawner(output="ImportError: boom", exited=True)
 
@@ -6635,7 +6599,7 @@ def test_a_rollback_puts_a_restored_tools_entrypoints_back_to_the_pre_apply_set(
     )
 
     assert code == 2
-    assert uv.entrypoints_into_environment() == {"system-interface": True}
+    assert uv.entrypoints_into_environment() == {update_layout.MNGR_EXECUTABLE: True}
 
 
 def test_a_reinstall_clears_an_entrypoint_an_earlier_rollback_left_dangling(
@@ -6644,74 +6608,17 @@ def test_a_reinstall_clears_an_entrypoint_an_earlier_rollback_left_dangling(
     # A workspace an older rollback already left with a link into the tool that its
     # receipt does not list: uv refuses to overwrite it once the rebuilt environment
     # has its script again, so every apply failed until the link was deleted by hand.
-    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
-    uv = _shell_tool_with_scripts(apply_repo, tmp_path, runner)
-    (uv.bin_dir / _PTY_SCRIPT).symlink_to(uv.environment / "bin" / _PTY_SCRIPT)
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    uv = _mngr_tool_with_scripts(apply_repo, tmp_path, runner)
+    (uv.bin_dir / _ADDED_SCRIPT).symlink_to(uv.environment / "bin" / _ADDED_SCRIPT)
 
     code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
 
     assert code == 0
     assert uv.entrypoints_into_environment() == {
-        "system-interface": True,
-        _PTY_SCRIPT: True,
+        update_layout.MNGR_EXECUTABLE: True,
+        _ADDED_SCRIPT: True,
     }
-
-
-def test_a_rollback_leaves_the_tool_of_an_app_the_merge_added_alone(
-    apply_repo: Path, capsys
-) -> None:
-    # The plan's apps are read off the merged tree. One the merge added has no
-    # directory once the tree is rolled back, so recovery has nothing to
-    # reinstall it from: it must skip that tool (with a note) rather than run
-    # `uv tool install` against a missing directory and report the otherwise
-    # clean rollback as a failed recovery.
-    _write_app(apply_repo, "newapp", "newapp", "newapp", False)
-    new_app_dir = apply_repo / update_layout.APPS_DIR / "newapp"
-    runner = _apply_runner("A\tsystem/apps/newapp/pyproject.toml\n", apply_repo)
-
-    def remove_on_restore(argv: list[str]) -> None:
-        if argv[:2] == ["git", "rm"] and argv[-1].startswith("system/apps/newapp/"):
-            shutil.rmtree(new_app_dir)
-
-    runner.on_command = remove_on_restore
-    spawner = _FakeSpawner(output="ImportError: boom", exited=True)
-
-    code = _apply(
-        runner,
-        _FakeHttp(lambda url: 200 if _is_live(url) else None),
-        spawner,
-        apply_repo,
-    )
-
-    assert code == 2
-    installs = [c for c in runner.calls if c[:3] == ["uv", "tool", "install"]]
-    # The forward install ran (wrapped expendable); recovery did not repeat it.
-    assert [c[4] for c in installs] == ["system/apps/newapp"]
-    assert "system/apps/newapp is not in the restored tree" in capsys.readouterr().err
-
-
-def test_recovery_rebuilds_only_the_app_tools_with_no_copy_and_a_directory(
-    tmp_path: Path, capsys
-) -> None:
-    repo_root = _make_apply_repo(tmp_path)
-    by_name = {
-        app.tool_name: app for app in update_classification.read_app_tools(repo_root)
-    }
-    added = update_classification.AppTool(
-        directory="system/apps/gone",
-        tool_name="gone",
-        executable="gone",
-        plugin_key="gone",
-        is_critical=False,
-    )
-    restored = {update_environment.tool_snapshot_name("system-interface")}
-
-    rebuild = update_apply._app_tools_to_rebuild(
-        (by_name["system-interface"], by_name["browser"], added), restored, repo_root
-    )
-
-    assert rebuild == (by_name["browser"],)
-    assert "system/apps/gone is not in the restored tree" in capsys.readouterr().err
 
 
 def test_a_rollback_survives_a_plugin_manifest_it_cannot_read(
@@ -6739,8 +6646,8 @@ def test_a_rollback_survives_a_plugin_manifest_it_cannot_read(
 
     assert code == 2
     assert update_apply_contract.read_marker(apply_repo) is None
-    # The reinstalls still happened, from the receipt alone.
-    assert len([c for c in runner.raw_calls if c[:3] == ["uv", "tool", "install"]]) == 3
+    # The reinstall still happened, from the receipt alone.
+    assert len([c for c in runner.raw_calls if c[:3] == ["uv", "tool", "install"]]) == 1
     assert "skipping the plugin manifest" in capsys.readouterr().err
 
 
@@ -7977,7 +7884,7 @@ def test_a_failed_preflight_rejects_the_merge_before_the_bundle_is_touched(
     code = _apply(runner, _FakeHttp(only_live_healthy), spawner, apply_repo)
 
     assert code == 2
-    assert spawner.spawns == [[update_layout.TOOL_NAME]]
+    assert spawner.spawns == [[_venv_entry_point(apply_repo, "system-interface")]]
     assert not runner.ran("npm", "run", "build")
     assert not runner.ran(*_RESTART)
     assert _bundle_exists(apply_repo)
@@ -8121,15 +8028,15 @@ def test_the_record_names_every_critical_app_the_apply_touched(
     assert record.programs == ["chat", "system_interface", "terminal"]
 
 
-def test_the_record_names_every_critical_app_whose_tool_the_apply_reinstalled(
-    apply_repo: Path,
+@pytest.mark.parametrize("diff", [_BACKEND_MANIFEST_DIFF, _APP_PYPROJECT_DIFF])
+def test_the_record_names_every_critical_app_when_the_apply_resyncs_the_venv(
+    apply_repo: Path, diff: str
 ) -> None:
-    """A shared backend manifest moves every app tool's closure, so the apply reinstalls
-    (and copies aside) each critical app's tool environment: a rollback that restores
-    those copies has to restart those apps too, so the record names them, not the shell
-    alone."""
+    """A backend manifest or an app pyproject re-syncs the workspace venv every app runs
+    from, and copies it aside first: a rollback that restores that copy has to restart
+    every critical app, so the record names them all, not the shell alone."""
     _write_app(apply_repo, "chat", "chat", "chat-app", True)
-    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    runner = _apply_runner(diff, apply_repo)
 
     assert _apply_keeping_the_rollback_point(runner, apply_repo) == 0
 

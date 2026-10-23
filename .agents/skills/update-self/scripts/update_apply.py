@@ -9,8 +9,8 @@ path needing no network, no package manager, and no working ``mngr``.
 It serves every update flow, not just update-self: the careful flow for a critical app
 hands it an ordinary merge and its own already-built bundle, so both flows
 land the same way. What it must protect is therefore whole-repo -- the root
-venv, the uv tool environments (the mngr tool and each critical app's own),
-``node_modules`` and the built bundle are all copied aside first -- and what it
+venv every app runs from, the mngr tool environment, ``node_modules`` and the
+built bundle are all copied aside first -- and what it
 must survive includes its own death,
 which is what the persistent marker and ``recover`` are for.
 """
@@ -32,6 +32,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Collection, NamedTuple, Sequence
 
+import tool_env
 from update_apply_contract import (
     ENV_DRI_AGENT,
     PHASE_BUILT,
@@ -63,25 +64,22 @@ from update_banding import ExpendWrapper, as_expendable, keep_protected
 from update_classification import (
     CLASS_DOCKERFILE,
     ApplyPlan,
-    AppTool,
     classify_path,
     plan_apply,
-    read_app_tools,
     read_provisioner_inputs,
 )
 from update_environment import (
     BACKEND_SNAPSHOT_NAMES,
     ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
+    VENV_SNAPSHOT_NAME,
     discard_snapshots,
-    refresh_app_tools,
     refresh_backend_dependencies,
-    remove_shadowing_app_tool_installs,
     remove_shadowing_mngr_installs,
     resolve_tool_destinations,
     restore_snapshots,
     run_provisioner,
+    sync_workspace_venv,
     take_snapshots,
-    tool_snapshot_name,
 )
 from update_layout import (
     APPS_DIR,
@@ -630,31 +628,6 @@ class RecoveryOutcome(NamedTuple):
 _NOT_RECOVERED = RecoveryOutcome(is_recovered=False, is_frontend_confirmed=False)
 
 
-def _app_tools_to_rebuild(
-    app_tools: Sequence[AppTool], restored: Collection[str], repo_root: Path
-) -> tuple[AppTool, ...]:
-    """The app tools a rollback re-resolves from the restored tree.
-
-    An app tool with no copy to put back (a non-critical app, or a copy that
-    could not be taken) is re-resolved. An app the merge added has no directory
-    in the restored tree to resolve from, so its environment is left as the
-    failed apply built it, with a note saying so.
-    """
-    rebuildable: list[AppTool] = []
-    for app in app_tools:
-        if tool_snapshot_name(app.tool_name) in restored:
-            continue
-        if (repo_root / app.directory / "pyproject.toml").is_file():
-            rebuildable.append(app)
-        else:
-            sys.stderr.write(
-                f"recovery: the app at {app.directory} is not in the restored tree, so "
-                f"its tool environment ('{app.tool_name}') is left as the failed apply "
-                f"built it; `uv tool uninstall {app.tool_name}` removes it.\n"
-            )
-    return tuple(rebuildable)
-
-
 class _RestoredFrontend(NamedTuple):
     """What a restored tree's frontend looks like: where npm runs and which bundles it serves."""
 
@@ -821,13 +794,8 @@ def _recover_running_state(
                 destinations,
                 is_mngr_source_required=False,
             )
-        rebuildable_app_tools = _app_tools_to_rebuild(
-            plan.app_tools, restored, repo_root
-        )
-        if rebuildable_app_tools:
-            refresh_app_tools(
-                rebuildable_app_tools, repo_root, runner, keep_protected, destinations
-            )
+        elif plan.app_pyproject and VENV_SNAPSHOT_NAME not in restored:
+            sync_workspace_venv(repo_root, runner, keep_protected)
         if live_service_restarted:
             run_checked(
                 runner,
@@ -960,8 +928,9 @@ def apply_update(
     atomic, idempotent, rollback-on-failure motion. Returns the process exit
     code: 0 applied / 2 rolled back / 3 emergency / 1 precondition.
 
-    ``sweep_homes`` are the homes swept for stale mngr and app tool installs
-    after the refresh (:func:`update_environment.default_sweep_homes` for a live apply).
+    ``sweep_homes`` are the homes swept for stale mngr installs after the refresh,
+    and for the per-app tool installs older builds made once the update has landed
+    (:func:`update_environment.default_sweep_homes` for a live apply).
 
     Idempotent throughout: every phase checks current state before acting
     (merge already landed -> skip; snapshot already taken -> reuse; ledger
@@ -1113,11 +1082,9 @@ def apply_update(
     _advance(PHASE_MERGED)
 
     name_status = diff_name_status(repo_root, marker.rollback_to, runner)
-    app_tools = read_app_tools(repo_root)
     plan = plan_apply(
         [path for _, path in name_status],
         read_provisioner_inputs(repo_root),
-        app_tools,
     )
 
     unresolved_frontend_failure: str | None = None
@@ -1215,22 +1182,13 @@ def apply_update(
                 destinations,
                 ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
             )
-        if plan.app_tools:
-            refresh_app_tools(
-                plan.app_tools,
-                repo_root,
-                runner,
-                expend,
-                destinations,
-                ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
+        elif plan.app_pyproject:
+            sync_workspace_venv(
+                repo_root, runner, expend, ENVIRONMENT_REFRESH_TIMEOUT_SECONDS
             )
         for stale in remove_shadowing_mngr_installs(runner, sweep_homes):
             sys.stderr.write(
                 f"refresh: removed {stale}, a stale mngr install that shadowed the refreshed one\n"
-            )
-        for stale in remove_shadowing_app_tool_installs(runner, sweep_homes, app_tools):
-            sys.stderr.write(
-                f"refresh: removed {stale}, a stale app tool install that shadowed the pinned one\n"
             )
         _advance(PHASE_REFRESHED)
 
@@ -1499,6 +1457,23 @@ def apply_update(
         )
         return 3
 
+    # CLEANUP: remove this block with tool_env.remove_app_tool_installs.
+    # Only once the merged tree is live and healthy, and before env-converge re-captures
+    # its uv tool record, which would otherwise keep listing the removed tools. Never
+    # fatal: the update has landed.
+    try:
+        for removed in tool_env.remove_app_tool_installs(
+            sweep_homes, repo_root / APPS_DIR
+        ):
+            sys.stderr.write(
+                f"refresh: removed {removed}, an app tool the workspace venv replaces\n"
+            )
+    except OSError as exc:
+        sys.stderr.write(
+            f"warning: could not remove the per-app tool installs older builds made ({exc}); "
+            "the update is applied, and every app runs from the workspace venv regardless.\n"
+        )
+
     # Post-success bookkeeping (update-self mode only).
     if target_ref is not None:
         # For the fast-forward landing the merge commit IS the worker branch's
@@ -1581,10 +1556,9 @@ def _touched_critical_apps(
     """The critical apps included in this apply's rollback: ``(name, program)``.
 
     Read off the merged tree's manifests: an app is touched when a changed path is
-    under its directory, when the bundle it owns was rebuilt, when the apply reinstalled
-    its tool environment (a shared backend manifest moves every tool's closure, so
-    ``plan.app_tools`` then names every app), or, for the shell, when anything the
-    shell's process runs changed. A frontend apply replaces every bundle, so include
+    under its directory, when the bundle it owns was rebuilt, when the apply re-synced
+    the workspace venv every app runs from (a backend manifest or app pyproject change), or,
+    for the shell, when anything the shell's process runs changed. A frontend apply replaces every bundle, so include
     each critical owner even if that app's source was unchanged. An extra restart is
     acceptable; rollback targeting does not need to compare installed and kept source
     stamps.
@@ -1596,7 +1570,6 @@ def _touched_critical_apps(
     rebuilt_bundle_owners = (
         {bundle.app for bundle in FRONTEND_BUNDLES} if plan.frontend else set()
     )
-    reinstalled_tool_directories = {tool.directory for tool in plan.app_tools}
     touched: list[tuple[str, str]] = []
     for directory in sorted(apps_dir.iterdir()):
         manifest_path = directory / MANIFEST_FILENAME
@@ -1617,7 +1590,7 @@ def _touched_critical_apps(
         is_touched = (
             any(path.startswith(f"{app_directory}/") for path in paths)
             or name in rebuilt_bundle_owners
-            or app_directory in reinstalled_tool_directories
+            or plan.resyncs_venv
             or (name == SHELL_PROGRAM and plan.backend)
         )
         if not is_touched:
@@ -2093,7 +2066,6 @@ def recover(
     plan = plan_apply(
         [path for _, path in name_status],
         read_provisioner_inputs(repo_root),
-        read_app_tools(repo_root),
     )
     try:
         # Before anything commits: an apply killed inside its merge left the

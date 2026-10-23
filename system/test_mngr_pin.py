@@ -3,8 +3,8 @@
 mngr comes from wherever ``pyproject.toml``'s ``[tool.uv.sources]`` entry for
 ``imbue-mngr`` points, and the tracked tree points it at one commit of the public
 mngr repo, or -- on a branch iterating on a paired mngr change -- of the private
-mngr-internal repo. The tool environments (``build_workspace.sh``, the update-self
-refresh) and the workspace venv (``uv.lock``) all derive from that one entry, so
+mngr-internal repo. The mngr tool (installed by ``build_workspace.sh`` and the
+update-self refresh) and the workspace venv (``uv.lock``) both derive from that one entry, so
 nothing may drift from it, and no copy of mngr's source may be tracked in the tree.
 A private pin never ships: the release gates on the mngr side refuse it.
 

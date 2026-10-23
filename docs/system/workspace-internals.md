@@ -19,7 +19,7 @@ Users make "creations". There are conventions for the common kinds:
 - an **app**: something the user opens as a tab and interacts with. Lives
   under `system/apps/<package>/` beside its `app.toml` manifest (name, display
   name, icon, instances, priority, criticality, program), runs as a supervisord
-  program from its own uv tool environment, registers its manifest and port
+  program from the workspace venv, registers its manifest and port
   via `forward_port.py --manifest`, and is served at its own browser origin: the
   app's name is prefixed as a hostname label on the workspace host, so
   locally the app lives at `http://<name>.<host-id>.localhost:8421/` (the
@@ -68,9 +68,8 @@ is named `<app>-<role>`.
   chats), `terminal/`, `files/`, `browser/`, `routines/` (Routines),
   `system_monitor/` (System Monitor),
   and every user-built app, each with an `app.toml` manifest; every
-  Python app with a manifest is installed as its own uv tool and is also a
-  member of the uv workspace via the `system/apps/*` glob; an app with no
-  manifest runs from the root venv)
+  Python app is a member of the uv workspace via the `system/apps/*` glob
+  and runs from the workspace venv)
 - `system/services/` - Standalone background services (`caretaker/`,
   `share_gateway/`, `host_backup/`, `env_converge/`, `oom_priority/`)
 - `system/libs/` - Support libraries, including `bootstrap/` (first-boot

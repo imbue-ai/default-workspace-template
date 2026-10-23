@@ -199,20 +199,17 @@ process restarts:
   ```
 
 - **Dependency or entry-point change to an app** (its `pyproject.toml`):
-  an app with an `app.toml` manifest runs from its own uv tool environment,
-  an editable install of `system/apps/<package>/` that picks up source
-  edits on its own but not a new dependency or console script. Reinstall
-  the tool, then restart (an app with no `app.toml` runs from the root
-  venv: for it, only the `uv sync --all-packages` below is needed):
+  every app runs from the workspace venv, an editable install of
+  `system/apps/<package>/` that picks up source edits on its own but not a
+  new dependency or console script. Sync the venv, then restart:
 
   ```bash
-  uv tool install -e system/apps/<package> --reinstall
-  uv sync --all-packages            # the app is also a workspace member; keep the lockfile current
+  uv sync --all-packages
   supervisorctl restart <name>
   ```
 
-  (Background services under `system/services/` run from the root venv
-  instead: `uv sync --all-packages`, then restart.)
+  (Background services under `system/services/` run from the same venv and
+  take the same two steps.)
 
 - **Frontend-only change** (templates, static JS/CSS served fresh on each
   request): no restart needed -- the next request already serves the new

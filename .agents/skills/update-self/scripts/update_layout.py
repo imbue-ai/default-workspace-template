@@ -1,6 +1,6 @@
 """Where the served workspace lives: the system interface, the pinned mngr and its
-uv tool, the Python apps and their tools, the frontend bundle, and the provisioner
-the apply re-runs.
+uv tool, the workspace venv the Python apps run from, the frontend bundle, and the
+provisioner the apply re-runs.
 """
 
 from __future__ import annotations
@@ -21,9 +21,9 @@ SUPERVISORD_CONF = "system/supervisord.conf"
 SUPERVISORD_DROPIN_DIR = "system/supervisord.conf.d/"
 
 
-# The served app, the editable tool the live service runs from, and the build
-# surfaces. These mirror system/scripts/build_workspace.sh -- the source of
-# truth for how the served environment is constructed.
+# The served app and the build surfaces. These mirror
+# system/scripts/build_workspace.sh -- the source of truth for how the served
+# environment is constructed.
 SYSTEM_INTERFACE_DIR = "system/apps/system_interface"
 
 FRONTEND_DIR = f"{SYSTEM_INTERFACE_DIR}/frontend"
@@ -105,29 +105,32 @@ MNGR_TOOL_NAME = "imbue-mngr"
 
 MNGR_EXECUTABLE = "mngr"
 
-TOOL_NAME = "system-interface"
+# Every Python app's console scripts, as ``uv sync --all-packages`` installs them into the
+# workspace venv. Each app's supervisord program execs its entry point from here, which is
+# the app's only install, so the pre-flight boots these paths too.
+VENV_BIN_DIR = ".venv/bin"
+
+SYSTEM_INTERFACE_EXECUTABLE = f"{VENV_BIN_DIR}/system-interface"
 # The chat app's console script (``[project.scripts]`` of system/apps/chat), the process that
 # imports mngr and the harness plugins; the apply pre-flights it beside the shell.
-CHAT_TOOL_NAME = "chat-app"
+CHAT_EXECUTABLE = f"{VENV_BIN_DIR}/chat-app"
 
 # uv records how a tool was installed here, inside the tool's own directory.
 RECEIPT = "uv-receipt.toml"
 
-# The plugin set each tool is built with, as build_workspace.sh reads it. The
-# receipt only knows the plugins a tool was installed with *last time*, so a
-# release that ships a new plugin needs this to reach an existing workspace:
-# the merged tree's manifest is unioned into the reinstall, keyed by the name
-# the plugin table uses for each tool -- ``mngr`` for the mngr tool, and an
-# app's manifest name (``system/apps/<package>/app.toml``) for the app's tool.
+# The plugin set the mngr tool is built with, as install_mngr.py reads it. The
+# receipt only knows the plugins it was installed with *last time*, so a release
+# that ships a new plugin needs this to reach an existing workspace: the merged
+# tree's manifest is unioned into the reinstall, keyed by the name the plugin
+# table uses for the tool.
 PLUGIN_MANIFEST_PATH = "system/config/mngr_plugins.toml"
 
 MNGR_PLUGIN_KEY = "mngr"
 
-# Every ``system/apps/<package>/`` with both a ``pyproject.toml`` and an
-# ``app.toml`` manifest is a Python app that runs from its own uv tool
-# environment (see build_workspace.sh); the manifest names it and says whether
-# it is critical (a snapshot-and-rollback target in the apply). An app with a
-# pyproject but no manifest runs ``uv run <name>`` from the root venv.
+# Every ``system/apps/<package>/`` with an ``app.toml`` manifest is an app; the
+# manifest names it and says whether it is critical (held to its health in the
+# apply). Every Python app under it, manifest or not, is a member of the root
+# uv workspace and runs from the workspace venv.
 APPS_DIR = "system/apps"
 
 MANIFEST_FILENAME = "app.toml"

@@ -65,7 +65,7 @@ Built-in manifests:
 | `files` | false | `files` | `{launch = "new", mode = "new"}` | `new` ("New File Viewer" at `/home/user/workspace/`, param `path` optional) | the convention |
 | `browser` | false | `browser` | `{launch = "new", mode = "focus"}`; also `window_closed_path = "/api/window-closed"` | `new` ("New Browser" at `/new`, param `url` optional) | the convention |
 | `system-monitor` | false | `system-monitor` | `{launch = "open", mode = "focus"}`; also `launcher_rank = 50` | none; the shell synthesizes `open` at `/` | `SYSTEM_MONITOR_PORT = "{port:main}"` and `SYSTEM_MONITOR_HOST = "{host}"`, no copies (it stores nothing) |
-| `routines` | false | `routines` | `{launch = "open", mode = "focus"}`; also `launcher_rank = 45` and a `[[message_handlers]]` `type = "minds:show-routine", show = "/{routine_id}"` | none; the shell synthesizes `open` at `/` | `ROUTINES_APP_PORT = "{port:main}"`, `ROUTINES_APP_HOST = "{host}"` and `ROUTINES_APP_PREVIEW = "1"` (read-only over the live state: it refuses every change with `403`), no copies (it stores nothing) |
+| `routines` | false | `routines` | `{launch = "open", mode = "focus"}`; also `launcher_rank = 45` and a `[[message_handlers]]` `type = "minds:show-routine", show = "/{routine_id}"` | none; the shell synthesizes `open` at `/` | `routines-app` (the program's name, the default, is the routines library's command line) over `ROUTINES_APP_PORT = "{port:main}"`, `ROUTINES_APP_HOST = "{host}"` and `ROUTINES_APP_PREVIEW = "1"` (read-only over the live state: it refuses every change with `403`), no copies (it stores nothing) |
 
 The chat, terminal, browser, Getting Started, and System Monitor declare `system = true`; Routines does not.
 
@@ -361,16 +361,13 @@ Unknown or stale targets are ignored silently.
 The browser applies these itself through the paths a click takes, before it reports its first `client_state`; the `view` wins over the stored active view.
 The minds chrome does not forward a deep link's query to the shell frame; that lands with the switcher (deferred, see the meta spec).
 
-## 14. Tool environments
+## 14. Python environments
 
-- The manifest is the discriminator: every directory under `system/apps/` with both a `pyproject.toml` and an `app.toml` is a Python app that runs from its own uv tool: `uv tool install -e system/apps/<package> [--with-editable <plugin path>]...`, with the plugin list from `system/config/mngr_plugins.toml` where the app's manifest `name` appears in a plugin's `tools`.
-- A directory with a `pyproject.toml` and no manifest is a pre-manifest app; it runs `uv run <name>` from the root venv, untouched by the build and the apply. There are exactly these two forms, both supported indefinitely, so no code path ever handles a third.
-- The tool's entry point is named after the program and is what the supervisord line runs.
-- `system/scripts/build_workspace.sh` loops over the manifest directories.
-- The update apply reinstalls the tool of every manifest app whose directory changed in the merge (excluding paths under `frontend/` and `static/`), and of every manifest app when a shared backend manifest changed, and snapshots the tool directory of every `critical` app before it does.
-- `system/apps/*` is in the root workspace's member glob, so one lockfile covers the tree, a pre-manifest app's `{ workspace = true }` source in the root pyproject resolves, and a user-built app needs no root-pyproject edit; `uv sync --all-packages` therefore also installs the manifest apps into the root venv, unused, which uv's shared cache makes nearly free. Membership and the tool environments answer different questions: the lock keeps every environment on the same versions, and a tool environment keeps its app running while the root venv is rewritten or broken.
-- The `app_manifest` and `app_schema` libraries are workspace members that apps depend on by path, so a tool install pulls them in editable.
-- Services run from the root venv under `uv run <name>`.
+- Every Python package under `system/apps/` is a member of the root uv workspace (the `system/apps/*` glob) and runs from the workspace venv that `uv sync --all-packages --frozen` writes: one install per app, resolved from the one lockfile. The built-in apps are also root dependencies, like the built-in services, so a `uv sync` without `--all-packages` keeps their entry points (`system/test_app_manifests.py` holds each to it). A user-built app needs no root-pyproject edit, and a pre-manifest app's `{ workspace = true }` source in the root pyproject resolves.
+- An app's supervisord program line execs its entry point from `.venv/bin` (`exec .venv/bin/<script>`, or `oom_tag_service.py <band> .venv/bin/<script>`), never under `uv run` and never by a bare name that a PATH could resolve to some other install. The script is one of the app package's `[project.scripts]` and need not share the program's name (the `chat` program runs `chat-app`), so a `[preview]` table, which runs the program's name when it names no command, names the script whenever the two differ. Services run the same way.
+- The update apply re-syncs the venv when a backend manifest (`uv.lock`, the root `pyproject.toml`, `system/config/mngr_plugins.toml`) or any app's `pyproject.toml` changed, copying it aside first; only a backend manifest also reinstalls the mngr tool. Every apply pre-flights the shell and the chat from the same `.venv/bin` entry points before the restart.
+- The `app_manifest` and `app_schema` libraries are workspace members that apps depend on by path, so the venv carries them editable.
+- No app has a uv tool of its own. A workspace built before this layout may still carry per-app tools (`uv tool install -e system/apps/<package>`), which nothing runs; the build and a landed update remove them (`tool_env.remove_app_tool_installs`).
 
 ## 15. Memory priority
 

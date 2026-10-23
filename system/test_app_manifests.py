@@ -23,6 +23,10 @@ _SUPERVISORD_CONF = _REPO_ROOT / "system" / "supervisord.conf"
 
 _MANIFEST_FLAG = re.compile(r"--manifest\s+(\S+)")
 
+# Where every app's console scripts are installed: the workspace venv, which
+# ``uv sync --all-packages`` writes and every app's program runs its entry point from.
+_VENV_BIN_PREFIX = ".venv/bin/"
+
 
 # The apps the template ships. Only these are checked: a workspace built from the
 # template may carry user-built apps (with a manifest whose priority is ``user``,
@@ -109,8 +113,9 @@ def _script_entry_points(script_name: str) -> list[tuple[Path, str]]:
     """Every app package declaring a console script, with the ``module:function`` it points at.
 
     One package may declare several (the terminal's declares ``terminal-app`` and
-    ``terminal-pty`` both), and several packages may declare the same name, in which case only
-    whichever is on PATH runs -- a declaration alone does not say a package runs anything.
+    ``terminal-pty`` both), and several packages may declare the same name, in which case the
+    venv's bin directory holds only whichever installed last -- a declaration alone does not
+    say a package runs anything.
     """
     return [
         (package, scripts[script_name])
@@ -119,11 +124,23 @@ def _script_entry_points(script_name: str) -> list[tuple[Path, str]]:
     ]
 
 
+def _entry_point_script(command: str) -> str | None:
+    """The console script a program's command ends by running from the workspace venv, by name;
+    ``None`` for a command that ends in anything else."""
+    words = command.split()
+    last = words[-1].strip('"') if words else ""
+    return (
+        last.removeprefix(_VENV_BIN_PREFIX)
+        if last.startswith(_VENV_BIN_PREFIX)
+        else None
+    )
+
+
 def _package_running_program(
     program: str, command_by_program: dict[str, str]
 ) -> Path | None:
     """The app package that runs a supervisord program: the sole declarer of the console script
-    its command ends in, whose script is therefore the only one of the apps' on PATH.
+    its command ends in, whose script is therefore the only one of that name in the venv.
 
     ``None``, so excusing nothing: a program with no block, one whose command runs something
     other than an app's entry point, and one whose script several packages declare -- which of
@@ -131,10 +148,10 @@ def _package_running_program(
     name by ``test_no_two_app_packages_declare_the_same_console_script``, since the collision
     this silence leaves standing says nothing about the duplicated declaration behind it.
     """
-    command = command_by_program.get(program, "")
-    if not command:
+    script = _entry_point_script(command_by_program.get(program, ""))
+    if script is None:
         return None
-    entry_points = _script_entry_points(command.split()[-1])
+    entry_points = _script_entry_points(script)
     if len(entry_points) != 1:
         return None
     return entry_points[0][0]
@@ -143,13 +160,16 @@ def _package_running_program(
 def _entry_point_manifest_paths(command: str) -> list[str]:
     """The manifest an app's own entry point registers with, when the program's command ends in one.
 
-    A Python app runs its tool's console script and registers from inside it (the terminal's
-    entry point calls ``app_manifest.registry.register_app`` with its manifest), so the manifest
-    path is a constant the script's module exports as ``MANIFEST_PATH`` rather than a flag on the
-    command line.
+    A Python app runs its console script from the workspace venv and registers from inside it
+    (the terminal's entry point calls ``app_manifest.registry.register_app`` with its manifest),
+    so the manifest path is a constant the script's module exports as ``MANIFEST_PATH`` rather
+    than a flag on the command line.
     """
+    script = _entry_point_script(command)
     manifest_paths: list[str] = []
-    for package_directory, entry_point in _script_entry_points(command.split()[-1]):
+    for package_directory, entry_point in (
+        _script_entry_points(script) if script else []
+    ):
         module_name = entry_point.partition(":")[0]
         module_relative = Path(*module_name.split(".")).with_suffix(".py")
         for module_file in (
@@ -268,13 +288,11 @@ def test_no_app_claims_another_apps_program_as_a_sidecar() -> None:
 
 
 def test_no_two_app_packages_declare_the_same_console_script() -> None:
-    # An app carrying a manifest installs as its own uv tool (``build_workspace.sh``), and
-    # ``_tool_env.sh`` points every one of those installs at a single ``UV_TOOL_BIN_DIR``, so
-    # two packages declaring one script name leave one file there for whichever installed
-    # last. It is also what lets a supervisord command ending in a bare script name be
-    # traced back to the package that runs it, which the sidecar guard above rests on.
-    # Checked over every app package, user-built apps included: their tools land in the
-    # same directory.
+    # Every app package installs into the one workspace venv, so two packages declaring one
+    # script name leave one file in its bin directory for whichever installed last. It is also
+    # what lets a supervisord command ending in a script name be traced back to the package
+    # that runs it, which the sidecar guard above rests on. Checked over every app package,
+    # user-built apps included: they install into the same venv.
     packages_by_script: dict[str, list[str]] = {}
     for package, scripts in _scripts_by_package().items():
         for script_name in scripts:
@@ -287,6 +305,27 @@ def test_no_two_app_packages_declare_the_same_console_script() -> None:
 
     assert shared == [], (
         f"console scripts declared by more than one app package: {shared}"
+    )
+
+
+def test_every_built_in_python_app_is_a_root_dependency() -> None:
+    # A `uv sync` without --all-packages prunes every workspace member the root project does not
+    # depend on, deleting the console scripts the apps' programs exec from .venv/bin.
+    root = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text())
+    dependencies = {
+        re.split(r"[\s\[<>=!~;]", entry, maxsplit=1)[0]
+        for entry in root["project"]["dependencies"]
+    }
+    missing = sorted(
+        project_name
+        for package in _BUILT_IN_APP_PACKAGES
+        if (pyproject := _APPS_DIR / package / "pyproject.toml").is_file()
+        and (project_name := tomllib.loads(pyproject.read_text())["project"]["name"])
+        not in dependencies
+    )
+
+    assert missing == [], (
+        f"built-in apps the root pyproject.toml does not depend on: {missing}"
     )
 
 
@@ -340,6 +379,27 @@ def test_built_in_manifest_validates_and_matches_its_program(
 @pytest.mark.parametrize(
     "manifest_path", _built_in_manifest_paths(), ids=lambda path: path.parent.name
 )
+def test_built_in_app_runs_its_entry_point_from_the_workspace_venv(
+    manifest_path: Path,
+) -> None:
+    # The venv is an app's only install, and the update's pre-flight boots
+    # ``.venv/bin/<script>``; a bare entry point is resolved through PATH, which can reach
+    # some other install.
+    manifest = load_manifest(manifest_path)
+    command = _command_by_program()[manifest.program]
+    script = _entry_point_script(command)
+
+    assert script is not None, (
+        f"program {manifest.program!r} does not exec from {_VENV_BIN_PREFIX}: {command}"
+    )
+    assert _script_entry_points(script), (
+        f"no app package declares the console script {script!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "manifest_path", _built_in_manifest_paths(), ids=lambda path: path.parent.name
+)
 def test_built_in_manifest_priority_is_a_band(manifest_path: Path) -> None:
     manifest = load_manifest(manifest_path)
 
@@ -351,26 +411,31 @@ def test_built_in_manifest_priority_is_a_band(manifest_path: Path) -> None:
     assert manifest.priority != "user"
 
 
-def _console_scripts(package: str) -> set[str]:
-    return set(
-        tomllib.loads((_APPS_DIR / package / "pyproject.toml").read_text())
-        .get("project", {})
-        .get("scripts", {})
-    )
-
-
-@pytest.mark.parametrize("package", ("system_interface", "chat", "terminal"))
-def test_every_critical_built_in_previews_from_its_own_entry_point(
-    package: str,
+@pytest.mark.parametrize(
+    "manifest_path",
+    [
+        path
+        for path in _built_in_manifest_paths()
+        if "preview" in tomllib.loads(path.read_text())
+    ],
+    ids=lambda path: path.parent.name,
+)
+def test_every_built_in_preview_boots_its_programs_entry_point(
+    manifest_path: Path,
 ) -> None:
-    # A critical app's preview table names the app's real console script, so a preview
-    # boots the tool the program itself runs rather than a stale spelling of it.
-    manifest = load_manifest(_APPS_DIR / package / MANIFEST_FILENAME)
+    # preview_app.py runs ``uv run`` on the preview command, or on the program's name when
+    # the table names none; whatever the venv holds under that name is what boots. Anything
+    # but the script the app's own program runs previews some other package, or nothing.
+    manifest = load_manifest(manifest_path)
+    launched = (
+        manifest.preview.command[0]
+        if manifest.preview.command
+        else str(manifest.program)
+    )
+    program_script = _entry_point_script(_command_by_program()[manifest.program])
 
-    assert manifest.critical is True
-    assert manifest.preview.command, f"{package} declares no preview command"
-    assert manifest.preview.command[0] in _console_scripts(package), (
-        f"{package}'s preview runs {manifest.preview.command[0]!r}, which its pyproject does not export"
+    assert launched == program_script, (
+        f"{manifest.name}'s preview runs {launched!r}, but its program runs {program_script!r}"
     )
 
 

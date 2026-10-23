@@ -273,3 +273,157 @@ def test_the_build_entry_point_sweeps_the_home_it_runs_under(
 
     assert not shadow_env.exists()
     assert pinned_env.is_dir()
+
+
+def _install_receipted_tool(
+    home: Path, tool_name: str, requirement: str, scripts: tuple[str, ...]
+) -> tuple[Path, list[Path]]:
+    """A tool environment under ``home`` laid out as ``uv tool install`` leaves one: a
+    receipt naming ``requirement`` (one TOML inline table), each console script in the
+    environment's own bin/, and a symlink to it in the home's bin directory."""
+    env_dir = tool_env.tools_dir(home) / tool_name
+    (env_dir / "bin").mkdir(parents=True)
+    (env_dir / tool_env.RECEIPT).write_text(f"[tool]\nrequirements = [{requirement}]\n")
+    links: list[Path] = []
+    for script in scripts:
+        env_script = env_dir / "bin" / script
+        env_script.write_text(f"#!{env_dir}/bin/python\n")
+        link = tool_env.bin_dir(home) / script
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(env_script)
+        links.append(link)
+    return env_dir, links
+
+
+def test_every_app_tool_goes_from_every_home_and_nothing_else_does(
+    tmp_path: Path,
+) -> None:
+    """Old builds installed each app as an editable uv tool beside the workspace venv. Those
+    go, in both homes they were left in and with every console script into them (the
+    browser app ships two), and whatever the project's name spelling (uv names the
+    environment by its PEP 503 form), while the mngr tool and a tool installed from anywhere
+    else stay: the receipt's editable source is the only thing that marks an app's tool."""
+    checkout = tmp_path / "mngr-vol" / "workspace"
+    apps = checkout / "system" / "apps"
+    (apps / "browser").mkdir(parents=True)
+    (apps / "system_interface").mkdir()
+    (apps / "weather_dashboard").mkdir()
+    # The build reached the checkout through a symlink, as /home/user reaches /mngr-vol.
+    linked_checkout = tmp_path / "workspace"
+    linked_checkout.symlink_to(checkout)
+    pinned_home = tmp_path / "root"
+    runtime_home = tmp_path / "home" / "user"
+    browser_env, browser_links = _install_receipted_tool(
+        pinned_home,
+        "browser",
+        f'{{ name = "browser", editable = "{linked_checkout}/system/apps/browser/" }}',
+        ("browser-service", "agentic-browser-fleet"),
+    )
+    stale_shell_env, stale_shell_links = _install_receipted_tool(
+        runtime_home,
+        "system-interface",
+        f'{{ name = "system-interface", editable = "{apps}/system_interface" }}',
+        ("system-interface",),
+    )
+    weather_env, weather_links = _install_receipted_tool(
+        pinned_home,
+        "weather-dashboard",
+        f'{{ name = "Weather.Dashboard", editable = "{apps}/weather_dashboard" }}',
+        ("weather-dashboard",),
+    )
+    mngr_env, mngr_links = _install_receipted_tool(
+        pinned_home,
+        tool_env.MNGR_TOOL_NAME,
+        '{ name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?rev=abc" }',
+        ("mngr",),
+    )
+    elsewhere = tmp_path / "scratch" / "helper"
+    elsewhere.mkdir(parents=True)
+    other_env, other_links = _install_receipted_tool(
+        runtime_home,
+        "helper",
+        f'{{ name = "helper", editable = "{elsewhere}" }}',
+        ("helper",),
+    )
+
+    removed = tool_env.remove_app_tool_installs([pinned_home, runtime_home], apps)
+
+    assert set(removed) == {
+        browser_env,
+        *browser_links,
+        stale_shell_env,
+        *stale_shell_links,
+        weather_env,
+        *weather_links,
+    }
+    assert not any(env.exists() for env in (browser_env, stale_shell_env, weather_env))
+    assert not any(
+        link.is_symlink()
+        for link in [*browser_links, *stale_shell_links, *weather_links]
+    )
+    assert mngr_env.is_dir() and all(link.is_symlink() for link in mngr_links)
+    assert other_env.is_dir() and all(link.is_symlink() for link in other_links)
+
+
+def test_an_environment_the_receipt_does_not_describe_is_left_alone(
+    tmp_path: Path,
+) -> None:
+    """A receipt that will not parse, one that is not text, one that parses into some other
+    shape, or one whose editable requirement is a different package (an app pulled in as a
+    plugin of some other tool), proves nothing about the environment it sits in, and a
+    deletion needs proof."""
+    apps = tmp_path / "workspace" / "system" / "apps"
+    (apps / "chat").mkdir(parents=True)
+    home = tmp_path / "root"
+    unreadable_env, _ = _install_receipted_tool(home, "chat", "", ("chat-app",))
+    (unreadable_env / tool_env.RECEIPT).write_text("[tool\n")
+    undecodable_env, _ = _install_receipted_tool(
+        home, "terminal-app", "", ("terminal-app",)
+    )
+    (undecodable_env / tool_env.RECEIPT).write_bytes(b"[tool]\nrequirements = [\xff]\n")
+    misshapen_env, _ = _install_receipted_tool(home, "files-app", "", ("files-app",))
+    (misshapen_env / tool_env.RECEIPT).write_text('tool = "files-app"\n')
+    host_env, _ = _install_receipted_tool(
+        home,
+        "host-tool",
+        f'{{ name = "chat", editable = "{apps}/chat" }}',
+        ("host-tool",),
+    )
+
+    assert tool_env.remove_app_tool_installs([home], apps) == []
+    assert all(
+        env.is_dir()
+        for env in (unreadable_env, undecodable_env, misshapen_env, host_env)
+    )
+
+
+def test_the_build_entry_point_drops_the_app_tools_of_the_checkout_it_builds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What build_workspace.sh invokes: the pinned home from TOOL_ENV_HOME and the home it
+    runs under from $HOME are both swept, so an image baked with app tools under /root
+    loses them on its next create, and a create's own $HOME copy goes too."""
+    repo_root = tmp_path / "workspace"
+    apps = repo_root / "system" / "apps"
+    (apps / "files").mkdir(parents=True)
+    pinned_home = tmp_path / "root"
+    runtime_home = tmp_path / "home" / "user"
+    pinned_env, _ = _install_receipted_tool(
+        pinned_home,
+        "files-app",
+        f'{{ name = "files-app", editable = "{apps}/files" }}',
+        ("files-app",),
+    )
+    runtime_env, _ = _install_receipted_tool(
+        runtime_home,
+        "files-app",
+        f'{{ name = "files-app", editable = "{apps}/files" }}',
+        ("files-app",),
+    )
+    monkeypatch.setenv("TOOL_ENV_HOME", str(pinned_home))
+    monkeypatch.setenv("HOME", str(runtime_home))
+
+    assert tool_env.main(["drop-app-tools", "--repo-root", str(repo_root)]) == 0
+
+    assert not pinned_env.exists()
+    assert not runtime_env.exists()
