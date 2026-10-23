@@ -129,7 +129,11 @@ def _entry_point_script(command: str) -> str | None:
     ``None`` for a command that ends in anything else."""
     words = command.split()
     last = words[-1].strip('"') if words else ""
-    return last.removeprefix(_VENV_BIN_PREFIX) if last.startswith(_VENV_BIN_PREFIX) else None
+    return (
+        last.removeprefix(_VENV_BIN_PREFIX)
+        if last.startswith(_VENV_BIN_PREFIX)
+        else None
+    )
 
 
 def _package_running_program(
@@ -163,7 +167,9 @@ def _entry_point_manifest_paths(command: str) -> list[str]:
     """
     script = _entry_point_script(command)
     manifest_paths: list[str] = []
-    for package_directory, entry_point in _script_entry_points(script) if script else []:
+    for package_directory, entry_point in (
+        _script_entry_points(script) if script else []
+    ):
         module_name = entry_point.partition(":")[0]
         module_relative = Path(*module_name.split(".")).with_suffix(".py")
         for module_file in (
@@ -306,15 +312,21 @@ def test_every_built_in_python_app_is_a_root_dependency() -> None:
     # A `uv sync` without --all-packages prunes every workspace member the root project does not
     # depend on, deleting the console scripts the apps' programs exec from .venv/bin.
     root = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text())
-    dependencies = {re.split(r"[\s\[<>=!~;]", entry, maxsplit=1)[0] for entry in root["project"]["dependencies"]}
+    dependencies = {
+        re.split(r"[\s\[<>=!~;]", entry, maxsplit=1)[0]
+        for entry in root["project"]["dependencies"]
+    }
     missing = sorted(
         project_name
         for package in _BUILT_IN_APP_PACKAGES
         if (pyproject := _APPS_DIR / package / "pyproject.toml").is_file()
-        and (project_name := tomllib.loads(pyproject.read_text())["project"]["name"]) not in dependencies
+        and (project_name := tomllib.loads(pyproject.read_text())["project"]["name"])
+        not in dependencies
     )
 
-    assert missing == [], f"built-in apps the root pyproject.toml does not depend on: {missing}"
+    assert missing == [], (
+        f"built-in apps the root pyproject.toml does not depend on: {missing}"
+    )
 
 
 def test_every_built_in_app_directory_ships_a_manifest() -> None:
@@ -367,7 +379,9 @@ def test_built_in_manifest_validates_and_matches_its_program(
 @pytest.mark.parametrize(
     "manifest_path", _built_in_manifest_paths(), ids=lambda path: path.parent.name
 )
-def test_built_in_app_runs_its_entry_point_from_the_workspace_venv(manifest_path: Path) -> None:
+def test_built_in_app_runs_its_entry_point_from_the_workspace_venv(
+    manifest_path: Path,
+) -> None:
     # The venv is an app's only install, and the update's pre-flight boots
     # ``.venv/bin/<script>``; a bare entry point is resolved through PATH, which can reach
     # some other install.
@@ -375,8 +389,12 @@ def test_built_in_app_runs_its_entry_point_from_the_workspace_venv(manifest_path
     command = _command_by_program()[manifest.program]
     script = _entry_point_script(command)
 
-    assert script is not None, f"program {manifest.program!r} does not exec from {_VENV_BIN_PREFIX}: {command}"
-    assert _script_entry_points(script), f"no app package declares the console script {script!r}"
+    assert script is not None, (
+        f"program {manifest.program!r} does not exec from {_VENV_BIN_PREFIX}: {command}"
+    )
+    assert _script_entry_points(script), (
+        f"no app package declares the console script {script!r}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -395,15 +413,25 @@ def test_built_in_manifest_priority_is_a_band(manifest_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "manifest_path",
-    [path for path in _built_in_manifest_paths() if "preview" in tomllib.loads(path.read_text())],
+    [
+        path
+        for path in _built_in_manifest_paths()
+        if "preview" in tomllib.loads(path.read_text())
+    ],
     ids=lambda path: path.parent.name,
 )
-def test_every_built_in_preview_boots_its_programs_entry_point(manifest_path: Path) -> None:
+def test_every_built_in_preview_boots_its_programs_entry_point(
+    manifest_path: Path,
+) -> None:
     # preview_app.py runs ``uv run`` on the preview command, or on the program's name when
     # the table names none; whatever the venv holds under that name is what boots. Anything
     # but the script the app's own program runs previews some other package, or nothing.
     manifest = load_manifest(manifest_path)
-    launched = manifest.preview.command[0] if manifest.preview.command else str(manifest.program)
+    launched = (
+        manifest.preview.command[0]
+        if manifest.preview.command
+        else str(manifest.program)
+    )
     program_script = _entry_point_script(_command_by_program()[manifest.program])
 
     assert launched == program_script, (
