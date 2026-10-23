@@ -494,6 +494,7 @@ def _run_wired_hook(
         env=env,
         cwd=cwd,
         capture_output=True,
+        timeout=30,
     )
 
 
