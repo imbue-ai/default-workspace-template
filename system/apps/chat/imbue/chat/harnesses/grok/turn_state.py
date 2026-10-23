@@ -9,8 +9,8 @@ from imbue.mngr_grok.api import GrokRootTurn
 from imbue.mngr_grok.api import get_root_turns
 from imbue.mngr_grok.api import is_root_turn_in_flight
 
-# mngr's own spacing between two Ctrl+C presses to one grok: a second press within about a second of a press that
-# found no turn to cancel quits grok.
+# The least time between two Ctrl+C presses the chat asks mngr for into one grok: a second press within about a second
+# of one that found no turn to cancel quits grok.
 MIN_PRESS_INTERVAL_SECONDS: Final[float] = 1.5
 
 
