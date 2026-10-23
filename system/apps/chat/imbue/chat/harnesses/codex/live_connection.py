@@ -173,7 +173,7 @@ class CodexLiveConnection:
         return self._reply_stream.read()
 
     def _on_notification(self, method: str, params: Mapping[str, Any]) -> None:
-        # A notification naming another thread (one the client was bound to before a switch) is not this reply.
+        # A notification naming another thread is not the agent's reply.
         thread_id = params.get("threadId")
         if thread_id is not None and thread_id != self._client.thread_id:
             return

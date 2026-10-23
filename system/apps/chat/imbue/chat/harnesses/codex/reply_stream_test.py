@@ -29,6 +29,12 @@ def test_deltas_add_up_to_the_message_written_so_far() -> None:
     assert stream.read() == StreamedReply(message_id="msg-1", text="Tides rise")
 
 
+def test_a_late_started_notification_keeps_the_deltas_already_heard() -> None:
+    stream = _fed(_delta("msg-1", "Tides "), _agent_message("item/started", "msg-1"), _delta("msg-1", "rise"))
+
+    assert stream.read() == StreamedReply(message_id="msg-1", text="Tides rise")
+
+
 def test_the_next_message_replaces_the_previous_one() -> None:
     stream = _fed(
         _delta("msg-1", "Looking at the file."),

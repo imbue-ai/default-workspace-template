@@ -73,7 +73,8 @@ class CodexReplyStream(MutableModel):
             return
         with self._lock:
             if method == "item/started":
-                self._start_message_locked(item_id)
+                if item_id != self._message_id:
+                    self._start_message_locked(item_id)
                 return
             # The finished item carries the whole text: it replaces the deltas, so a delta the
             # reader missed cannot leave a hole in the draft.
