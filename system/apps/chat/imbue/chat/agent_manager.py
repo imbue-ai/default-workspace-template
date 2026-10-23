@@ -2933,8 +2933,8 @@ class AgentManager:
 
         Same rule the activity gate uses: everything outside the dead states counts as alive,
         and an unknown/unobservable lifecycle is non-evidence rather than death. An agent we
-        have no record of is treated as dead -- the safe direction for the one caller, the
-        antigravity flush, which must never resurrect a stopped agent to deliver its queue.
+        have no record of is treated as dead -- the safe direction for a harness's flush, which
+        must never resurrect a stopped agent to deliver its queue.
         """
         with self._lock:
             agent_state = self._agents.get(agent_id)
