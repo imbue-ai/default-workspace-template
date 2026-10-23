@@ -279,8 +279,10 @@ def account_model_options(account_id: str) -> Response:
 
     The account-level twin of the per-chat ``/model-options``. A static harness offers its whole
     catalog (``models`` and ``options`` both null). A harness whose set is account-derived (codex)
-    has no catalog to offer, so the account's own codex is asked for it. A harness whose model the
-    chat app cannot switch offers nothing (``options`` empty).
+    has no catalog to offer, so the account's own codex is asked for it. A harness whose catalog
+    depends on the account (grok) offers the catalog's models the account's own CLI lists, and the
+    whole catalog when it cannot tell. A harness whose model the chat app cannot switch offers
+    nothing (``options`` empty).
 
     The question is put to the ACCOUNT, never to some other account's agent: the two accounts of one
     provider can be on different subscriptions and genuinely offer different models, so an answer
