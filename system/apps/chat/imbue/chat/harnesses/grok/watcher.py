@@ -462,9 +462,9 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
 
     def _emit_held_events(self) -> None:
         with self._lock:
+            self._emit_embargo_until = 0.0
             self._refresh_locked()
             to_send = self._filter_broadcast(self._store.take_unemitted())
-            self._emit_embargo_until = 0.0
         self._broadcast(to_send)
 
     def _broadcast(self, to_send: list[dict[str, Any]]) -> None:
@@ -606,8 +606,8 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
         """
         match result.verdict:
             case GrokSendVerdict.SENT:
-                if not is_slash_command_message(block) and not self._await_turn_holding(witness_start, block):
-                    logger.info("grok: {} took the sent block but has logged no turn holding it yet", self._agent_id)
+                if not is_slash_command_message(block):
+                    self._log_an_unwitnessed_send(witness_start, block)
                 return True
             case GrokSendVerdict.UNCONFIRMED:
                 return is_slash_command_message(block) or self._await_turn_holding(witness_start, block)
@@ -615,6 +615,16 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
                 return False
             case _ as unreachable:
                 assert_never(unreachable)
+
+    def _log_an_unwitnessed_send(self, witness_start: int, block: str) -> None:
+        """Note a confirmed send that no logged turn holds yet; an unreadable log only loses the note."""
+        try:
+            is_held = self._await_turn_holding(witness_start, block)
+        except (MngrError, OSError) as error:
+            logger.opt(exception=error).warning("grok: could not read {}'s logs for the sent block", self._agent_id)
+            return
+        if not is_held:
+            logger.info("grok: {} took the sent block but has logged no turn holding it yet", self._agent_id)
 
     def _send_through_mngr(self, text: str) -> GrokSendResult:
         """Send ``text`` through mngr: the session's send when one is bound, which names a refusal's kind."""

@@ -614,6 +614,31 @@ def test_a_flush_whose_log_read_fails_leaves_the_message_unclaimed_for_the_next_
     assert watcher.get_queued_messages() == []
 
 
+def test_a_send_mngr_confirmed_is_not_typed_again_when_the_log_read_after_it_fails(tmp_path: Path) -> None:
+    watcher, grok, _broadcast = _flushing_watcher(tmp_path)
+    grok.is_committing = False
+    roots_path = tmp_path / ROOTS_RELATIVE_PATH
+    roots_text = roots_path.read_text()
+
+    def break_the_roots_file() -> None:
+        roots_path.unlink()
+        roots_path.mkdir()
+
+    grok.on_send = break_the_roots_file
+    watcher._queue.enqueue("confirmed once", "t0", is_turn_open=True)
+    with pytest.raises(OSError):
+        watcher._attempt_flush()
+    is_emit_muted = watcher._emit_embargo_until > time.monotonic()
+    grok.on_send = None
+    roots_path.rmdir()
+    roots_path.write_text(roots_text)
+    watcher._attempt_flush()
+
+    assert grok.sent == ["confirmed once"]
+    assert watcher.get_queued_messages() == []
+    assert not is_emit_muted
+
+
 def test_a_gate_screen_keeps_the_held_messages_and_retries_them(tmp_path: Path) -> None:
     watcher, grok, _broadcast = _flushing_watcher(tmp_path)
     queued_id = watcher._queue.enqueue("held behind a gate", "t0", is_turn_open=True)
