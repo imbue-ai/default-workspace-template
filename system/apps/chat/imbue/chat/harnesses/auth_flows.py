@@ -1191,8 +1191,8 @@ def _grok_auth_file_locked(auth_path: Path, wait_seconds: float) -> Generator[bo
 def _write_grok_api_key(auth_path: Path, api_key: str, lock_wait_seconds: float) -> None:
     """Make grok's auth.json hold the key alone, in its `xai::api_key` scope.
 
-    A session login left beside the key would outrank it. The entry is the one grok's own `store_api_key` writes
-    (xai-grok-login `storage.rs`), which grok 1.0.62 reads back as its key. It lands by temp file and rename.
+    A session login left beside the key would outrank it. The entry is the one grok's own `store_api_key` writes,
+    which grok 1.0.62 reads back as its key.
     """
     with _grok_auth_file_locked(auth_path, lock_wait_seconds) as is_locked:
         if not is_locked:
