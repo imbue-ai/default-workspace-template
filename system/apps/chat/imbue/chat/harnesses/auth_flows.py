@@ -1209,13 +1209,17 @@ def _write_grok_api_key(auth_path: Path, api_key: str, lock_wait_seconds: float)
         auth_path.chmod(0o600)
 
 
+def _is_grok_api_key_beside_another_scope(scopes: dict[str, Any]) -> bool:
+    return GROK_API_KEY_SCOPE in scopes and len(scopes) > 1
+
+
 def _drop_grok_api_key(auth_path: Path, lock_wait_seconds: float) -> None:
-    """Remove the `xai::api_key` scope from grok's auth.json, keeping every other scope in it.
+    """Remove the `xai::api_key` scope from grok's auth.json when another scope sits beside it, keeping those.
 
     `grok login` leaves a stored key beside the login it adds, and grok turns to that key whenever the
-    login is not usable, so a device sign-in takes it away.
+    login is not usable, so a device sign-in takes it away. A key that is the file's only credential stays.
     """
-    if GROK_API_KEY_SCOPE not in read_json_dict(auth_path):
+    if not _is_grok_api_key_beside_another_scope(read_json_dict(auth_path)):
         return
     with _grok_auth_file_locked(auth_path, lock_wait_seconds) as is_locked:
         if not is_locked:
@@ -1223,7 +1227,7 @@ def _drop_grok_api_key(auth_path: Path, lock_wait_seconds: float) -> None:
             logger.warning("Left the {} scope in {}: grok held its lock", GROK_API_KEY_SCOPE, auth_path)
             return
         scopes = read_json_dict(auth_path)
-        if GROK_API_KEY_SCOPE not in scopes:
+        if not _is_grok_api_key_beside_another_scope(scopes):
             return
         del scopes[GROK_API_KEY_SCOPE]
         atomic_write(auth_path, json.dumps(scopes, indent=2) + "\n")

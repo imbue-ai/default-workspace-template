@@ -33,6 +33,7 @@ from imbue.chat.harnesses.auth_flows import FlowShape
 from imbue.chat.harnesses.auth_flows import FlowState
 from imbue.chat.harnesses.auth_flows import _auth_command_signatures
 from imbue.chat.harnesses.auth_flows import flow_shape
+from imbue.chat.harnesses.grok.account_binding import API_KEY_SCOPE as GROK_API_KEY_SCOPE
 from imbue.chat.harnesses.grok.testing import GROK_SESSION_SCOPE
 from imbue.chat.harnesses.grok.testing import write_grok_auth
 from imbue.chat.harnesses.harness_type import HarnessType
@@ -1169,6 +1170,25 @@ def test_a_grok_device_sign_in_takes_away_a_pasted_key_and_keeps_the_login(tmp_p
     assert service.poll(flow_id).state is FlowState.OK
     assert json.loads(auth_path.read_text()) == {GROK_SESSION_SCOPE: _GROK_LOGIN}
     assert restarted == [account_id]
+
+
+def test_a_grok_device_re_auth_that_added_no_login_keeps_the_key(tmp_path: Path) -> None:
+    """A clean exit without grok's success line is the probe's to decide, and a key-only file it accepts keeps its key."""
+    process = FakePexpectProcess([(0, _GROK_DEVICE_SCREEN)])
+    service = _grok_service(tmp_path, process)
+    pasted = service.start("xai", "api_key")
+    service.submit_key(pasted.flow_id, "xai-old-key")
+    (account,) = read_index(tmp_path).accounts
+    auth_path = _grok_auth_path(tmp_path, account.id)
+    again = service.start("xai", "device", account_id=account.id)
+    scopes = json.loads(auth_path.read_text())
+    scopes[GROK_API_KEY_SCOPE]["key"] = "xai-rewritten-key"
+    write_grok_auth(auth_path.parent, scopes)
+    process.print_output("Done.\r\n")
+    process.exit(0)
+
+    assert service.poll(again.flow_id).state is FlowState.OK
+    assert json.loads(auth_path.read_text()) == scopes
 
 
 def test_a_first_grok_device_sign_in_leaves_the_file_as_grok_wrote_it(tmp_path: Path) -> None:
