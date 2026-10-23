@@ -38,7 +38,7 @@ def _runner_returning(finished: _Finished, seen: dict[str, Any] | None = None):
     return run
 
 
-# ----- pi: no exit code to read, so the string is the whole test ---------------------------
+# pi: no exit code to read, so the string is the whole test
 
 
 def test_pi_reads_its_actual_signed_out_message(tmp_path: Path) -> None:
@@ -56,7 +56,7 @@ def test_pi_naming_models_is_a_working_credential(tmp_path: Path) -> None:
     assert is_signed_in(HarnessType.PI_CODING, tmp_path, runner) is SignedIn.YES
 
 
-# ----- claude: the server's own credentials must not answer for the folder -----------------
+# claude: the server's own credentials must not answer for the folder
 
 
 def test_the_probe_does_not_carry_the_servers_own_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -84,7 +84,7 @@ def test_claude_and_codex_are_decided_by_the_exit_code(tmp_path: Path) -> None:
         assert is_signed_in(harness, tmp_path, _runner_returning(_Finished(returncode=1))) is SignedIn.NO
 
 
-# ----- the three-way answer ----------------------------------------------------------------
+# the three-way answer
 
 
 def test_a_probe_that_cannot_run_is_unknown_not_signed_out(tmp_path: Path) -> None:
@@ -122,7 +122,7 @@ def test_a_harness_with_no_probe_is_taken_at_its_word(tmp_path: Path) -> None:
     assert is_signed_in(HarnessType.OPENCODE, tmp_path, run) is SignedIn.YES
 
 
-# ----- grok: its banner for a session login, xAI itself for a stored API key ---------------
+# grok: its banner for a session login, xAI itself for a stored API key
 
 # What `grok models` printed on the pinned 1.0.62 binary, for a session login and for none.
 _GROK_SIGNED_IN_OUTPUT = "You are logged in with grok.com.\n\nDefault model: grok-4.6\n"

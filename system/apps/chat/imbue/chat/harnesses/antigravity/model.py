@@ -26,7 +26,6 @@ from imbue.chat.harnesses.model import PickerMode
 from imbue.chat.harnesses.model import SwitchMode
 from imbue.chat.harnesses.model import SwitchResult
 
-# =============================================================================================
 # !!! THIS LIST MUST BE UPDATED WHEN GOOGLE SHIPS NEW ANTIGRAVITY MODELS !!!
 #
 # Pinning the agy BINARY does not pin this. `agy models` fetches the list over the network
@@ -45,7 +44,6 @@ from imbue.chat.harnesses.model import SwitchResult
 # gemini pattern. It exists so a new default model degrades to a readable name instead of a
 # shrug -- NOT as a substitute for updating this list. Re-run `agy models` in a signed-in
 # workspace and paste the output here whenever agy is bumped.
-# =============================================================================================
 _MODEL_ROWS: Final[tuple[tuple[str, str], ...]] = (
     ("gemini-3.7-flash-high", "Gemini 3.7 Flash (High)"),
     ("gemini-3.7-flash-medium", "Gemini 3.7 Flash (Medium)"),
