@@ -330,13 +330,13 @@ fi
 agy --version >/dev/null
 
 # Grok Build CLI (grok). install_grok.sh holds its version pin and per-arch
-# sha256s and installs it to /usr/local/bin/grok; it is reachable by both names,
-# like agy's installer above, and the smoke test is bare for the same reason.
-grok_installer_dir="$(cd "$(dirname "$0")" && pwd)"
-if [ -f "$grok_installer_dir/install_grok.sh" ]; then
-    bash "$grok_installer_dir/install_grok.sh"
+# sha256s and installs it to /usr/local/bin/grok. It is this script's sibling
+# when run from the repo, and default-workspace-template-install-grok beside it
+# in a Dockerfile build. The smoke test is bare, so a missing grok fails `set -e`.
+if [ -f "$sources_dir/install_grok.sh" ]; then
+    bash "$sources_dir/install_grok.sh"
 else
-    bash "$grok_installer_dir/default-workspace-template-install-grok"
+    bash "$sources_dir/default-workspace-template-install-grok"
 fi
 grok --version >/dev/null
 
