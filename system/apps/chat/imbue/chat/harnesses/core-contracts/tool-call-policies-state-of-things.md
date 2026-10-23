@@ -35,6 +35,7 @@ structural rather than unwired. Measured against codex-cli 0.147.0, pi 0.84.1 an
   such as `*`, and `use_tool` reading its arguments from a file (both under "Known bypasses").
   The `[agent_types.grok]` settings carry `[permission] deny = ["Read(**/.secrets/**)"]`, which
   closes both. That rule also denies `read_file` the directory's README, which `cat` still reads.
+  A second rule, `Read(**/.mcpc/**)`, covers mcpc's store by its `~/.mcpc` link (not measured).
 
 - **agy P5 — partial.** The shim sees only `bash -c`, so agy's own editing tools
   (`write_to_file`, `replace_file_content`) can never be nudged: no agy hook carries tool

@@ -117,7 +117,9 @@ def test_grok_file_tools_are_denied_the_secrets_directory(
     settings_overrides = _load_grok_agent_config(tmp_path, monkeypatch)[
         "settings_overrides"
     ]
-    assert settings_overrides["permission"] == {"deny": ["Read(**/.secrets/**)"]}
+    assert settings_overrides["permission"] == {
+        "deny": ["Read(**/.secrets/**)", "Read(**/.mcpc/**)"]
+    }
 
 
 def _exported_names(value: Any) -> list[str]:

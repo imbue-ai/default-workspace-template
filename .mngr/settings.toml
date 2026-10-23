@@ -496,10 +496,11 @@ cli_args = "--disallowed-tools todo_write,ask_user_question,enter_plan_mode,exit
 # A patch onto the config.toml mngr renders for the agent; [features] is one of mngr's own tables, so
 # it merges through __mngr_merge. disable_web_search drops grok's web_search and web_fetch tools, and
 # features.backend_tools = false drops the xAI-hosted web_search and x_search tools a search-capable
-# model is otherwise sent. Each of them reaches the web outside the latchkey gateway. The deny rule
-# keeps grok's file tools out of data/.secrets, including the two routes that never name a path:
-# grep with a `glob` and use_tool reading its arguments from a file.
-settings_overrides = { __mngr_merge = { features = "extend" }, disable_web_search = true, features = { backend_tools = false }, permission = { deny = ["Read(**/.secrets/**)"] } }
+# model is otherwise sent. Each of them reaches the web outside the latchkey gateway. The deny rules
+# keep grok's file tools out of data/.secrets, and out of mcpc's store by its ~/.mcpc link, including
+# the two routes that never name a path: grep with a `glob` and use_tool reading its arguments from a
+# file.
+settings_overrides = { __mngr_merge = { features = "extend" }, disable_web_search = true, features = { backend_tools = false }, permission = { deny = ["Read(**/.secrets/**)", "Read(**/.mcpc/**)"] } }
 # Harness-only instructions, appended to every grok agent's system prompt.
 append_system_prompt__extend = ["""Do not use any built-in tools related to memory or task planning -- their output does not reach the user's workspace chat. Use the `tk` utility for any todos; it is the only task tracker in this workspace. Don't ever use tools for asking user questions or anything that would block the terminal -- just use your words. Do not schedule anything with your `scheduler_*` tools; recurring work in this workspace is a routine (the `manage-routines` skill)."""]
 
