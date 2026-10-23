@@ -405,7 +405,7 @@ def rewrite_prefix(context: DispatchContext) -> str | None:
     """The OOM-band and git-identity prefix for a shell command, or None (logged) when it cannot be
     built, in which case the command runs as written."""
     path = context.scripts_dir / REWRITE_SCRIPT
-    # Loaded here rather than imported at the top, so a broken rewriter costs only the prefix.
+    # Loaded per call, so a broken rewriter costs only the prefix.
     try:
         spec = importlib.util.spec_from_file_location(
             "agent_rewrite_bash_command", path
