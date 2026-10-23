@@ -63,7 +63,7 @@ def test_the_model_bar_commands_are_not_also_in_a_harness_declined_tuple() -> No
             assert overlap == set(), f"{harness}: {overlap} duplicated in the terminal-notice tuple"
 
 
-def test_grok_opens_the_sign_in_for_login_and_logout_and_the_model_picker_for_its_model_alias() -> None:
+def test_grok_opens_the_sign_in_for_login_and_logout_and_declines_its_model_alias_like_model() -> None:
     actions = {
         command: (popup.action, popup.notice_body)
         for popup in HARNESS_SPECS[HarnessType.GROK].popups
