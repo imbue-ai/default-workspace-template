@@ -124,7 +124,8 @@ class GrokQueueTracker:
 
     _queued: QueuedSet
     _outbox_path: Path
-    _session_token: str
+    # None while the launch marker cannot be read, so which grok process holds the entries is unknown.
+    _session_token: str | None
     # Reentrant: a mutation publishes under it, and the publisher can re-enter through the manager.
     _lock: threading.RLock
     # Notified on every settle, so a POST waiting on its message's first send can answer.
@@ -149,7 +150,7 @@ class GrokQueueTracker:
     _wake: Callable[[], None] | None
 
     @classmethod
-    def build(cls, outbox_path: Path, session_token: str) -> "GrokQueueTracker":
+    def build(cls, outbox_path: Path, session_token: str | None) -> "GrokQueueTracker":
         self = cls.__new__(cls)
         self._queued = QueuedSet.build()
         self._outbox_path = outbox_path
@@ -235,6 +236,8 @@ class GrokQueueTracker:
                 self._queued.add(queued_id, content, timestamp, False)
 
     def _write_journal_locked(self) -> None:
+        if self._session_token is None:
+            return
         entries = self._queued.snapshot()
         if not self._session_token or not entries:
             try:
@@ -288,11 +291,15 @@ class GrokQueueTracker:
     def set_session(self, token: str | None) -> bool:
         """Adopt ``token``; on a change, drop every held message (never sent into a new grok). True if it changed.
 
-        None, an unreadable launch marker, keeps the current session.
+        None, an unreadable launch marker, keeps the current session. Adopting a token while the session is unknown
+        drops nothing: it puts the entries journalled under that token ahead of the ones held meanwhile.
         """
         with self._lock:
             if token is None or token == self._session_token:
                 return False
+            if self._session_token is None:
+                self._adopt_session_locked(token)
+                return True
             dropped_count = len(self._queued.snapshot())
             if dropped_count:
                 logger.info("grok: discarding {} held message(s): grok relaunched", dropped_count)
@@ -300,6 +307,15 @@ class GrokQueueTracker:
             self._session_token = token
             self._settled_locked()
             return True
+
+    def _adopt_session_locked(self, token: str) -> None:
+        held_entries = self._queued.snapshot()
+        self._queued.clear()
+        self._session_token = token
+        self._replay()
+        for entry in held_entries:
+            self._queued.add(entry["queued_id"], entry["content"], entry["timestamp"], False)
+        self._settled_locked()
 
     # held messages
 
@@ -554,8 +570,7 @@ def get_tracker(agent_state_dir: Path) -> GrokQueueTracker:
         existing = _TRACKERS.get(agent_id)
         if existing is not None:
             return existing
-        token = session_token(agent_state_dir)
-        tracker = GrokQueueTracker.build(agent_state_dir / OUTBOX_FILENAME, "" if token is None else token)
+        tracker = GrokQueueTracker.build(agent_state_dir / OUTBOX_FILENAME, session_token(agent_state_dir))
         _TRACKERS[agent_id] = tracker
         return tracker
 

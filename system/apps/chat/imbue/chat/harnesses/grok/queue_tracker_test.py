@@ -374,6 +374,18 @@ def test_an_unknown_session_keeps_the_held_messages(tmp_path: Path) -> None:
     assert _contents(_tracker(tmp_path, token="session-1")) == ["held"]
 
 
+def test_a_tracker_built_while_the_session_is_unknown_keeps_the_journal_and_adopts_it(tmp_path: Path) -> None:
+    _tracker(tmp_path, token="session-1").enqueue("journalled", "t0", is_turn_open=True)
+
+    tracker = GrokQueueTracker.build(tmp_path / OUTBOX_FILENAME, None)
+    tracker.enqueue("held meanwhile", "t1", is_turn_open=True)
+    assert _contents(_tracker(tmp_path, token="session-1")) == ["journalled"]
+
+    assert tracker.set_session("session-1") is True
+    assert _contents(tracker) == ["journalled", "held meanwhile"]
+    assert _contents(_tracker(tmp_path, token="session-1")) == ["journalled", "held meanwhile"]
+
+
 def test_no_session_journals_nothing(tmp_path: Path) -> None:
     _tracker(tmp_path, token="").enqueue("held", "t0", is_turn_open=True)
 
