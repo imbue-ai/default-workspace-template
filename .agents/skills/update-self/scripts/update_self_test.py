@@ -2155,7 +2155,8 @@ _BACKEND_DIFF = "M\tsystem/apps/system_interface/imbue/system_interface/server.p
 _CHAT_FRONTEND_DIFF = "M\tsystem/apps/chat/frontend/src/views/Thread.ts\n"
 _SETTINGS_DIFF = "M\t.mngr/settings.toml\n"
 _APT_SNAPSHOT_DIFF = "M\t.mngr/apt-snapshot-timestamp\n"
-_BACKEND_MANIFEST_DIFF = "M\tsystem/apps/system_interface/pyproject.toml\n"
+_BACKEND_MANIFEST_DIFF = "M\tuv.lock\n"
+_APP_MANIFEST_DIFF = "M\tsystem/apps/browser/pyproject.toml\n"
 _FRONTEND_MANIFEST_DIFF = "M\tsystem/apps/system_interface/frontend/package.json\n"
 _DOCS_DIFF = "M\tREADME.md\nM\t.agents/changelog/some-entry.md\n"
 
@@ -2172,28 +2173,33 @@ def _plan(paths: list[str]) -> update_classification.ApplyPlan:
 
 
 @pytest.mark.parametrize(
-    ("path", "is_backend_manifest"),
+    ("path", "is_backend_manifest", "is_app_manifest"),
     [
-        ("system/apps/system_interface/pyproject.toml", True),
-        ("system/apps/browser/pyproject.toml", True),
+        ("system/apps/system_interface/pyproject.toml", False, True),
+        ("system/apps/browser/pyproject.toml", False, True),
         # A user-built app installs into the same venv the template's apps do.
-        ("system/apps/weather_dashboard/pyproject.toml", True),
-        ("uv.lock", True),
-        ("pyproject.toml", True),
-        (update_layout.PLUGIN_MANIFEST_PATH, True),
+        ("system/apps/weather_dashboard/pyproject.toml", False, True),
+        ("uv.lock", True, False),
+        ("pyproject.toml", True, False),
+        (update_layout.PLUGIN_MANIFEST_PATH, True, False),
         # Source an editable install already serves, and files no install reads.
-        ("system/apps/browser/src/browser/runner.py", False),
-        ("system/apps/chat/app.toml", False),
-        ("system/apps/browser/src/browser/pyproject.toml", False),
+        ("system/apps/browser/src/browser/runner.py", False, False),
+        ("system/apps/chat/app.toml", False, False),
+        ("system/apps/browser/src/browser/pyproject.toml", False, False),
     ],
 )
 def test_plan_apply_resyncs_the_venv_when_any_apps_pyproject_changes(
-    path: str, is_backend_manifest: bool
+    path: str, is_backend_manifest: bool, is_app_manifest: bool
 ) -> None:
     # The workspace venv is every app's only install, and an app's console scripts
     # reach it only through a sync: a pyproject edit that leaves uv.lock alone (a new
     # entry point) must still trigger one, or the restart execs a script that is not there.
-    assert _plan([path]).backend_manifest is is_backend_manifest
+    # Only the root manifests and the plugin manifest feed the mngr tool as well.
+    plan = _plan([path])
+
+    assert plan.backend_manifest is is_backend_manifest
+    assert plan.app_manifest is is_app_manifest
+    assert plan.resyncs_venv is (is_backend_manifest or is_app_manifest)
 
 
 def test_plan_apply_maps_each_change_class() -> None:
@@ -2207,7 +2213,7 @@ def test_plan_apply_maps_each_change_class() -> None:
         ]
     )
     assert plan.frontend_src and plan.frontend_manifest
-    assert plan.backend_src and plan.backend_manifest
+    assert plan.backend_src and plan.app_manifest
     assert plan.provisioner
 
 
@@ -2226,9 +2232,7 @@ def test_plan_apply_keys_the_provisioner_run_on_what_it_reads() -> None:
 @pytest.mark.parametrize(
     "path",
     [
-        # The app's own manifest, and the root ones the whole workspace
-        # environment is resolved from.
-        "system/apps/system_interface/pyproject.toml",
+        # The root manifests the whole workspace environment is resolved from.
         "pyproject.toml",
         "uv.lock",
         # Not a Python manifest, but it is what the refresh unions into the mngr
@@ -2262,7 +2266,7 @@ def test_plan_apply_rebuilds_the_frontends_when_the_mngr_pin_moves() -> None:
     ],
 )
 def test_plan_apply_does_not_mistake_nested_paths_for_manifests(path: str) -> None:
-    assert not _plan([path]).backend_manifest
+    assert not _plan([path]).resyncs_venv
 
 
 @pytest.mark.parametrize(
@@ -2595,13 +2599,30 @@ def test_apply_an_apps_pyproject_change_resyncs_the_venv_before_the_preflight(
 ) -> None:
     # An app's pyproject can add a console script without moving uv.lock, and the
     # pre-flight and the restart both exec it from the venv, so the sync comes first.
-    runner = _apply_runner("M\tsystem/apps/browser/pyproject.toml\n", apply_repo)
+    runner = _apply_runner(_APP_MANIFEST_DIFF, apply_repo)
     spawner = _SyncObservingSpawner(runner=runner)
 
     code = _apply(runner, _FakeHttp(_all_healthy), spawner, apply_repo)
 
     assert code == 0
     assert spawner.synced_at_boot == [True]
+
+
+def test_apply_an_apps_pyproject_change_leaves_the_mngr_tool_alone(
+    apply_repo: Path, capsys
+) -> None:
+    # Nothing an app declares reaches the mngr tool, so an app-only release copies the
+    # venv aside and re-syncs it, and neither copies nor reinstalls the tool.
+    runner = _apply_runner(_APP_MANIFEST_DIFF, apply_repo)  # no tools on PATH
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert runner.ran("uv", "sync", "--all-packages", "--frozen")
+    assert not runner.ran("uv", "tool", "install")
+    err = capsys.readouterr().err
+    assert "nothing to copy aside for 'venv'" in err
+    assert "nothing to copy aside for 'tool-imbue-mngr'" not in err
 
 
 def test_apply_frontend_only_change_reinstalls_no_tool(apply_repo: Path) -> None:
@@ -6391,6 +6412,29 @@ def test_a_rollback_rebuilds_the_mngr_tool_it_could_not_copy_aside(
     assert "nothing to copy aside for 'tool-imbue-mngr'" in capsys.readouterr().err
 
 
+def test_a_rollback_resyncs_the_venv_it_could_not_copy_aside_after_an_app_only_apply(
+    apply_repo: Path,
+) -> None:
+    # The forward sync rewrote the venv from the merged app manifest, and with no copy
+    # to put back only a sync from the restored tree undoes it. The mngr tool was never
+    # touched, so nothing reinstalls it.
+    runner = _apply_runner(_APP_MANIFEST_DIFF, apply_repo)  # no .venv to copy aside
+    spawner = _FakeSpawner(output="ImportError: boom", exited=True)
+
+    code = _apply(
+        runner,
+        _FakeHttp(lambda url: 200 if _is_live(url) else None),
+        spawner,
+        apply_repo,
+    )
+
+    assert code == 2
+    # The forward sync is wrapped expendable; recovery's is not.
+    recovery_syncs = [c for c in runner.raw_calls if c[:2] == ["uv", "sync"]]
+    assert len(recovery_syncs) == 1
+    assert not runner.ran("uv", "tool", "install")
+
+
 def test_a_rollback_restores_the_tool_env_the_last_resort_reinstalled(
     apply_repo: Path,
 ) -> None:
@@ -7997,14 +8041,15 @@ def test_the_record_names_every_critical_app_the_apply_touched(
     assert record.programs == ["chat", "system_interface", "terminal"]
 
 
+@pytest.mark.parametrize("diff", [_BACKEND_MANIFEST_DIFF, _APP_MANIFEST_DIFF])
 def test_the_record_names_every_critical_app_when_the_apply_resyncs_the_venv(
-    apply_repo: Path,
+    apply_repo: Path, diff: str
 ) -> None:
-    """A backend manifest re-syncs the workspace venv every app runs from, and copies it
-    aside first: a rollback that restores that copy has to restart every critical app,
-    so the record names them all, not the shell alone."""
+    """A backend or app manifest re-syncs the workspace venv every app runs from, and
+    copies it aside first: a rollback that restores that copy has to restart every
+    critical app, so the record names them all, not the shell alone."""
     _write_app(apply_repo, "chat", "chat", "chat-app", True)
-    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    runner = _apply_runner(diff, apply_repo)
 
     assert _apply_keeping_the_rollback_point(runner, apply_repo) == 0
 

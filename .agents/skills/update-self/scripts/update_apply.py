@@ -71,12 +71,14 @@ from update_classification import (
 from update_environment import (
     BACKEND_SNAPSHOT_NAMES,
     ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
+    VENV_SNAPSHOT_NAME,
     discard_snapshots,
     refresh_backend_dependencies,
     remove_shadowing_mngr_installs,
     resolve_tool_destinations,
     restore_snapshots,
     run_provisioner,
+    sync_workspace_venv,
     take_snapshots,
 )
 from update_layout import (
@@ -792,6 +794,8 @@ def _recover_running_state(
                 destinations,
                 is_mngr_source_required=False,
             )
+        elif plan.app_manifest and VENV_SNAPSHOT_NAME not in restored:
+            sync_workspace_venv(repo_root, runner, keep_protected)
         if live_service_restarted:
             run_checked(
                 runner,
@@ -1178,6 +1182,10 @@ def apply_update(
                 destinations,
                 ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
             )
+        elif plan.app_manifest:
+            sync_workspace_venv(
+                repo_root, runner, expend, ENVIRONMENT_REFRESH_TIMEOUT_SECONDS
+            )
         for stale in remove_shadowing_mngr_installs(runner, sweep_homes):
             sys.stderr.write(
                 f"refresh: removed {stale}, a stale mngr install that shadowed the refreshed one\n"
@@ -1549,7 +1557,7 @@ def _touched_critical_apps(
 
     Read off the merged tree's manifests: an app is touched when a changed path is
     under its directory, when the bundle it owns was rebuilt, when the apply re-synced
-    the workspace venv every app runs from (a backend manifest change), or, for the
+    the workspace venv every app runs from (a backend or app manifest change), or, for the
     shell, when anything the shell's process runs changed. A frontend apply replaces every bundle, so include
     each critical owner even if that app's source was unchanged. An extra restart is
     acceptable; rollback targeting does not need to compare installed and kept source
@@ -1582,7 +1590,7 @@ def _touched_critical_apps(
         is_touched = (
             any(path.startswith(f"{app_directory}/") for path in paths)
             or name in rebuilt_bundle_owners
-            or plan.backend_manifest
+            or plan.resyncs_venv
             or (name == SHELL_PROGRAM and plan.backend)
         )
         if not is_touched:

@@ -117,8 +117,9 @@ def snapshot_targets(
             targets.append((bundle.snapshot_name, repo_root / bundle.static_dir))
     if plan.frontend_manifest:
         targets.append(("node_modules", repo_root / NPM_ROOT_DIR / "node_modules"))
+    if plan.resyncs_venv:
+        targets.append((VENV_SNAPSHOT_NAME, repo_root / ".venv"))
     if plan.backend_manifest:
-        targets.append(("venv", repo_root / ".venv"))
         targets.append(
             (
                 tool_snapshot_name(MNGR_TOOL_NAME),
@@ -132,13 +133,18 @@ def tool_snapshot_name(tool_name: str) -> str:
     return f"tool-{tool_name}"
 
 
+VENV_SNAPSHOT_NAME = "venv"
+
+
 # The snapshot names that together cover the backend environments a manifest
 # change rebuilds. A rollback that could not put both of them back has to
 # re-resolve both from the restored tree: a restored venv over a tool
 # environment still built from the rolled-back-away tree is the
 # ModuleNotFoundError-on-``mngr`` state that reads as recovered while nothing
 # works.
-BACKEND_SNAPSHOT_NAMES = frozenset({"venv", tool_snapshot_name(MNGR_TOOL_NAME)})
+BACKEND_SNAPSHOT_NAMES = frozenset(
+    {VENV_SNAPSHOT_NAME, tool_snapshot_name(MNGR_TOOL_NAME)}
+)
 
 
 def take_snapshots(
@@ -825,6 +831,18 @@ def refresh_backend_dependencies(
             f"refresh: {PYPROJECT_PATH} does not give {MNGR_TOOL_NAME} a source this can "
             "re-resolve; keeping the mngr tool the restored tree was running.\n"
         )
+    sync_workspace_venv(repo_root, runner, expend, timeout)
+    _fetch_mngr_assets(repo_root, runner, expend, timeout)
+
+
+def sync_workspace_venv(
+    repo_root: Path,
+    runner: Runner,
+    expend: ExpendWrapper,
+    timeout: float | None = None,
+) -> None:
+    """Re-sync the workspace venv every app runs from to the current tree, as
+    ``build_workspace.sh`` does."""
     run_checked(
         runner,
         expend(["uv", "sync", "--all-packages", "--frozen"]),
@@ -832,4 +850,3 @@ def refresh_backend_dependencies(
         "uv sync --all-packages --frozen",
         timeout=timeout,
     )
-    _fetch_mngr_assets(repo_root, runner, expend, timeout)

@@ -287,15 +287,12 @@ def classify_merge(
 
 
 def _is_backend_manifest(path: str) -> bool:
-    """Whether ``path`` can change what the backend's environment resolves to.
+    """Whether ``path`` can change what both shared backend environments resolve to:
+    the mngr tool and the workspace venv.
 
-    Not just the shell's own manifest: the root ``pyproject.toml`` pins the mngr
-    commit the mngr tool and the venv install from, so a move of that pin (and the
-    ``uv.lock`` that follows it) moves the chat app's and the shell's dependency
-    closure exactly as the shell's own manifest does. Every app's ``pyproject.toml``
-    counts too: the workspace venv is the only install of each app, and a change to
-    an app's console scripts reaches it only through a sync, even when the lockfile
-    does not move.
+    The root ``pyproject.toml`` pins the mngr commit both install from, so a move of
+    that pin (and the ``uv.lock`` that follows it) moves the chat app's and the
+    shell's dependency closure as well as the tool's.
 
     The plugin manifest counts without being a Python manifest: it is what
     :func:`_manifest_extras` unions into the mngr tool's reinstall, so it decides
@@ -304,8 +301,17 @@ def _is_backend_manifest(path: str) -> bool:
     and the updated workspace would diverge from a freshly built image -- which is
     the state the manifest exists to prevent.
     """
-    if path in ("uv.lock", "pyproject.toml", PLUGIN_MANIFEST_PATH):
-        return True
+    return path in ("uv.lock", "pyproject.toml", PLUGIN_MANIFEST_PATH)
+
+
+def _is_app_manifest(path: str) -> bool:
+    """Whether ``path`` is an app's ``pyproject.toml``, which only the workspace venv
+    installs.
+
+    The venv is the only install of each app, and a change to an app's console
+    scripts reaches it only through a sync, even when the lockfile does not move. The
+    mngr tool reads nothing an app declares, so it is left alone.
+    """
     parts = path.split("/")
     return (
         len(parts) == 4
@@ -329,6 +335,7 @@ class ApplyPlan(NamedTuple):
     frontend_manifest: bool
     backend_src: bool
     backend_manifest: bool
+    app_manifest: bool
     provisioner: bool
 
     @property
@@ -338,6 +345,10 @@ class ApplyPlan(NamedTuple):
     @property
     def backend(self) -> bool:
         return self.backend_src or self.backend_manifest
+
+    @property
+    def resyncs_venv(self) -> bool:
+        return self.backend_manifest or self.app_manifest
 
 
 def plan_apply(
@@ -355,6 +366,7 @@ def plan_apply(
     frontend_manifest = False
     backend_src = False
     backend_manifest = False
+    app_manifest = False
     provisioner = False
     for path in paths:
         if path in provisioner_inputs:
@@ -376,6 +388,8 @@ def plan_apply(
             frontend_src = True
         elif _is_backend_manifest(path):
             backend_manifest = True
+        elif _is_app_manifest(path):
+            app_manifest = True
         elif (
             path.startswith(f"{SYSTEM_INTERFACE_DIR}/imbue/")
             and path.endswith(".py")
@@ -387,5 +401,6 @@ def plan_apply(
         frontend_manifest=frontend_manifest,
         backend_src=backend_src,
         backend_manifest=backend_manifest,
+        app_manifest=app_manifest,
         provisioner=provisioner,
     )
