@@ -1,11 +1,11 @@
 #!/bin/bash
 #
-# Antigravity CLI (agy) installer -- version-LOCKED to 1.1.22.
+# Antigravity CLI (agy) installer -- version-LOCKED to 1.4.3.
 #
 # A vendored, pinned fork of Google's upstream bootstrapper
 # (https://antigravity.google/cli/install.sh). The upstream script queries a
 # "latest" manifest and always installs the newest build, which is not
-# reproducible. This copy hardcodes the 1.1.22 release URL + sha512 per arch
+# reproducible. This copy hardcodes the 1.4.3 release URL + sha512 per arch
 # (captured from the manifest and verified), so every image bakes the exact same
 # agy build. Bump by re-fetching the manifest for the new version and replacing
 # the AGY_VERSION / URL / SHA512 values below.
@@ -17,22 +17,22 @@
 #
 set -euo pipefail
 
-AGY_VERSION="1.1.22"
+AGY_VERSION="1.4.3"
 TARGET_DIR="${1:-$HOME/.local/bin}"
 BINARY_PATH="$TARGET_DIR/agy"
 
-# Pinned 1.1.22 release, per glibc-linux arch (url + sha512 from the manifest).
+# Pinned 1.4.3 release, per glibc-linux arch (url + sha512 from the manifest).
 case "$(uname -m)" in
     x86_64|amd64)
-        url="https://storage.googleapis.com/antigravity-public/antigravity-cli/1.1.22-5711547746615296/linux-x64/cli_linux_x64.tar.gz"
-        sha512="40225d4b1f009412e905f0a234ba3d51487038d1ad1b8fa19331c84be55610a01f5b0ad9916fb871151cc45456c6bc30cc0b1ea5dab6c0616bc8fb262bcdd7a9"
+        url="https://storage.googleapis.com/antigravity-public/antigravity-cli/1.4.3-4577820882632704/linux-x64/cli_linux_x64.tar.gz"
+        sha512="9b726b86280a56e8ffa84b3b3a1c00d19972833a1f6c0b21d85c5fc6e408af6492e4c61353cad9b500bee599af264c92cfc2ead1f5048ab9525328e1e4199c40"
         ;;
     arm64|aarch64)
-        url="https://storage.googleapis.com/antigravity-public/antigravity-cli/1.1.22-5711547746615296/linux-arm/cli_linux_arm64.tar.gz"
-        sha512="b37a718330eb5e270e1ca70135bf964a407ba626fbff7537ac58e094ea31bc623e6d216ef197188fe8b5c46e6f57aee64a3b7c9e23fc855cefee43fe434179d3"
+        url="https://storage.googleapis.com/antigravity-public/antigravity-cli/1.4.3-4577820882632704/linux-arm/cli_linux_arm64.tar.gz"
+        sha512="a906ef290e077871b333cb6f13d4d76ccdfc03ad15f012d6b745c02fa471edc27c10bc3059b87142bf6de0bacd64328f62e608d5736655524b97e8d4b4a0882a"
         ;;
     *)
-        echo "Fatal: agy pin 1.1.22 covers only glibc linux amd64/arm64, got $(uname -m)." >&2
+        echo "Fatal: agy pin 1.4.3 covers only glibc linux amd64/arm64, got $(uname -m)." >&2
         exit 1
         ;;
 esac

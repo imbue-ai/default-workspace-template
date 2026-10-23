@@ -35,7 +35,7 @@ build_inputs = [
     "system/scripts/setup_system.sh",
     "system/scripts/_provision_guard.sh",
     "system/scripts/install_secret_scanners.sh",
-    "system/scripts/agy_install-1.1.22.sh",
+    "system/scripts/agy_install-1.4.3.sh",
     "system/scripts/install_owner_exec.sh",
     "system/scripts/install_earlyoom.sh",
     "system/scripts/install_agent_plugins.sh",
