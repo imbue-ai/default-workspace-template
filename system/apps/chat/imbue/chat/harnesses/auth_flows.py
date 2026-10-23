@@ -63,6 +63,7 @@ from imbue.chat.harnesses.codex.sign_in import app_server_argv
 from imbue.chat.harnesses.codex.sign_in import connect_login_client
 from imbue.chat.harnesses.codex.sign_in import describe_login_failure
 from imbue.chat.harnesses.grok.account_binding import API_KEY_SCOPE as GROK_API_KEY_SCOPE
+from imbue.chat.harnesses.grok.account_binding import AUTH_FILENAME as GROK_AUTH_FILENAME
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import AppServerMethod
 from imbue.chat.harnesses.lanes import CodexLogin
@@ -1143,7 +1144,7 @@ def _drop_pasted_credential(harness: HarnessType, account_path: Path, grok_auth_
         case HarnessType.CLAUDE:
             _drop_claude_env_credential(account_path)
         case HarnessType.GROK:
-            _drop_grok_api_key(account_path / "auth.json", grok_auth_lock_wait_seconds)
+            _drop_grok_api_key(account_path / GROK_AUTH_FILENAME, grok_auth_lock_wait_seconds)
         case (
             HarnessType.CODEX
             | HarnessType.PI_CODING
@@ -1323,7 +1324,7 @@ def _write_paste(
             path.chmod(0o600)
             return lane.provider_name
         case PasteSink.GROK_AUTH_JSON:
-            _write_grok_api_key(account_path / "auth.json", api_key, grok_auth_lock_wait_seconds)
+            _write_grok_api_key(account_path / GROK_AUTH_FILENAME, api_key, grok_auth_lock_wait_seconds)
             return lane.provider_name
         case PasteSink.CLAUDE_ENV:
             write_claude_env(account_path, claude_env_from_paste(api_key))
