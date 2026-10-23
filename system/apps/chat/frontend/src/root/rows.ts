@@ -42,7 +42,7 @@ const STATUS_BY_PROVISIONAL_PHASE: Readonly<Record<ProvisionalChatPhase, string>
 const PROVISIONAL_TITLE = "New chat";
 
 /** A room's status: working while an agent chat it asked (by mention) is still working on the answer, else its
- *  own, which is idle. */
+ *  own (idle, or stopped while its reader is). */
 function roomStatus(room: ChatSnapshot, chats: readonly ChatSnapshot[]): string {
   const isAsked = (chat: ChatSnapshot): boolean => room.awaiting_chat_ids.includes(chat.chat_id);
   return chats.some((chat) => isAsked(chat) && chat.status === "working") ? "working" : room.status;
