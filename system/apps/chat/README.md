@@ -929,7 +929,8 @@ with `"kind": "room"`, or with an account): a switch to a room is a fresh-start
 handoff on no account, and a switch off a room takes the room's transcript as the
 summary its successor reads, so a converted chat keeps its whole history as segments.
 The workspace agent reads a room with `mngr transcript <room>` and answers into it
-with `mngr message <room>`; a visiting agent reads and posts through the chat routes
+with `mngr message --start <room>` (a bare `mngr message` refuses a stopped room);
+a visiting agent reads and posts through the chat routes
 with its own identity.
 
 A mention is `@<handle>` (`mention_parser.py`, section 7.1): the roster's handles as
