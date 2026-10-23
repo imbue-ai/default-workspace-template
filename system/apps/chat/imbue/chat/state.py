@@ -9,6 +9,7 @@ from flask import current_app
 from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
+from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.interfaces import ShellLayoutInterface
 from workspace_layout.primitives import ParticipantKey
 
@@ -252,7 +253,13 @@ class ChatAppState(MutableModel):
             author = event.get(AUTHOR_FIELD)
             if not isinstance(author, str) or not author or AUTHOR_NAME_FIELD in event:
                 continue
-            entry = self.roster.participant(ParticipantKey(author))
+            try:
+                key = ParticipantKey(author)
+            except InvalidLayoutValueError as e:
+                logger.warning("A transcript names an author that is not a participant key; kept as written: {}", e)
+                event[AUTHOR_NAME_FIELD] = author
+                continue
+            entry = self.roster.participant(key)
             event[AUTHOR_NAME_FIELD] = entry.display_name if entry is not None else author
 
     def has_watcher(self, agent_id: str) -> bool:

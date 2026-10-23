@@ -3,6 +3,9 @@ import json
 from pathlib import Path
 from typing import Final
 
+from workspace_layout.primitives import MAX_PARTICIPANT_NAME_LENGTH
+from workspace_layout.primitives import ParticipantKey
+
 from imbue.chat.harnesses.room.transcript import append_record
 from imbue.chat.harnesses.room.transcript import header_record
 from imbue.chat.harnesses.room.transcript import is_workspace_agent_turn
@@ -52,6 +55,20 @@ def test_the_readers_prefixed_step_names_its_author_by_the_prefix() -> None:
     assert event is not None
     assert (event["content"], event["author"], event["author_name"]) == ("morning", "name:Bob", "Bob")
     assert not is_workspace_agent_turn(event)
+
+
+def test_the_readers_prefixed_step_cuts_the_name_to_what_a_participant_key_holds() -> None:
+    room_agent = load_room_agent_script()
+    assert room_agent.MAX_AUTHOR_NAME_LENGTH == MAX_PARTICIPANT_NAME_LENGTH
+
+    author, name, said = room_agent.author_of_typed_text(f"[from: {'x' * 80} ] hi")
+
+    assert (author, name, said) == (
+        f"name:{'x' * MAX_PARTICIPANT_NAME_LENGTH}",
+        "x" * MAX_PARTICIPANT_NAME_LENGTH,
+        "hi",
+    )
+    assert ParticipantKey(author) == author
 
 
 def test_the_header_is_not_a_turn_and_both_writers_mint_the_same_one() -> None:
