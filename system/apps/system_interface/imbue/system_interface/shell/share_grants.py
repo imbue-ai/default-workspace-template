@@ -28,7 +28,6 @@ from share_grants.grants import GrantsError
 from share_grants.grants import parse_grants
 
 from imbue.imbue_common.mutable_model import MutableModel
-from imbue.imbue_common.pure import pure
 
 # Beside ``DEFAULT_SHARE_ENV_PATH`` (``profiles.py``): relative to the workspace root the supervised process runs from.
 DEFAULT_SHARE_GRANTS_PATH: Final[Path] = Path("data/.secrets/share_grants.toml")
@@ -36,17 +35,6 @@ DEFAULT_AGENT_GRANTS_PATH: Final[Path] = AGENT_GRANTS_FILE
 
 # The names of every app with a per-app grant, read once per sweep pass.
 GrantedAppsReader = Callable[[], AbstractSet[str]]
-
-
-@pure
-def granted_app_names_of(grants: Grants) -> set[str]:
-    """The apps the document admits someone to on their own origin: each ``[services.<name>]`` table naming anyone
-    (a workspace-level grant exempts no app)."""
-    return {
-        name
-        for name, grant_list in grants.services.items()
-        if grant_list.users or grant_list.emails or grant_list.email_domains
-    }
 
 
 class ShareGrantsReader(MutableModel):
@@ -91,7 +79,7 @@ class ShareGrantsReader(MutableModel):
     def granted_app_names(self) -> AbstractSet[str]:
         """The apps with a per-app grant; none while the document cannot be read."""
         grants = self.read_grants()
-        return granted_app_names_of(grants) if grants is not None else set()
+        return grants.granted_app_names() if grants is not None else set()
 
     def _warn_once(self, grants_mtime_ns: int, message: str) -> None:
         """Warn about a version of the document once, not on every read until the owner rewrites it."""

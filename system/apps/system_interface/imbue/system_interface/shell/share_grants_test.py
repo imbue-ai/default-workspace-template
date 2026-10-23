@@ -1,14 +1,9 @@
-"""Tests for the per-app share grants: which apps a document grants on their own, and the reader over the share
-materials the minds desktop writes."""
+"""Tests for the reader over the share materials the minds desktop writes."""
 
 import os
 from pathlib import Path
 
-import pytest
-from share_grants.grants import parse_grants
-
 from imbue.system_interface.shell.share_grants import ShareGrantsReader
-from imbue.system_interface.shell.share_grants import granted_app_names_of
 
 # The document as the minds desktop renders it: every scope carries all three lists.
 _GRANTS_WITH_A_PER_APP_GRANT = """\
@@ -27,28 +22,6 @@ users = []
 emails = []
 email_domains = []
 """
-
-
-def test_granted_app_names_are_the_apps_whose_table_names_anyone() -> None:
-    assert granted_app_names_of(parse_grants(_GRANTS_WITH_A_PER_APP_GRANT)) == {"docs"}
-
-
-@pytest.mark.parametrize(
-    "grants_text",
-    [
-        "",
-        '[workspace]\nusers = ["3f1c"]\nemails = ["friend@example.com"]\nemail_domains = ["example.org"]\n',
-        '[services.docs]\nusers = ["  ", ""]\n',
-        '[services."my-app"]\n',
-    ],
-)
-def test_no_app_is_granted_by_a_workspace_grant_alone_or_an_empty_table(grants_text: str) -> None:
-    assert granted_app_names_of(parse_grants(grants_text)) == set()
-
-
-def test_a_quoted_table_key_and_each_of_the_three_lists_grant_their_app() -> None:
-    text = '[services."my-app"]\nemail_domains = ["example.org"]\n\n[services.other]\nusers = ["3f1c"]\n'
-    assert granted_app_names_of(parse_grants(text)) == {"my-app", "other"}
 
 
 def _reader_over(tmp_path: Path) -> ShareGrantsReader:
