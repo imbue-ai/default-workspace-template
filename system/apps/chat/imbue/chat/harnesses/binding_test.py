@@ -104,8 +104,8 @@ def test_claude_binds_through_the_env_file(tmp_path: Path) -> None:
 
 
 def test_grok_binds_through_the_env_file_by_its_credential_path_alone(tmp_path: Path) -> None:
-    """mngr_grok reads an env-file GROK_AUTH_PATH at provision and launch. A GROK_HOME there would move the agent's
-    home, and with it the trust store and the consent source mngr resolves at provision, onto the account."""
+    """mngr_grok reads an env-file GROK_AUTH_PATH at provision and launch. A GROK_HOME there would move the trust store
+    mngr resolves at provision onto the account."""
     binding = build_account_binding(HarnessType.GROK)
     assignment = f"GROK_AUTH_PATH={tmp_path / 'auth.json'}"
 

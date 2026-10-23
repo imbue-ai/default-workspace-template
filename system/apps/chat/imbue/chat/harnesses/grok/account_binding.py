@@ -32,8 +32,8 @@ def _auth_path(account_dir: Path) -> Path:
 class GrokAccountBinding(AccountBinding):
     """Binds grok by the credential file it reads: every agent on an account shares one file and its refresh lock.
 
-    Only `GROK_AUTH_PATH` reaches an agent. Its `GROK_HOME` stays the per-agent home mngr provisions, which is also
-    where mngr resolves the agent's trust store and consent answers from.
+    Only `GROK_AUTH_PATH` reaches an agent, so its `GROK_HOME` stays the per-agent home mngr provisions. mngr reads the
+    agent's folder trust from the host user's grok home and its consent answers from the account folder.
     """
 
     def account_env(self, account_dir: Path) -> dict[str, str]:

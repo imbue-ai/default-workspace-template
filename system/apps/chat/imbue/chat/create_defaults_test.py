@@ -46,8 +46,8 @@ def test_a_claude_account_binds_by_the_config_dir_variable(tmp_path: Path) -> No
 
 
 def test_a_grok_account_binds_by_the_credential_path_variable_alone(tmp_path: Path) -> None:
-    """Every unqualified create gets this env line, so a GROK_HOME here would move every grok agent's home, and the
-    trust store and consent source mngr resolves from it, onto the account folder."""
+    """Every unqualified create gets this env line, so a GROK_HOME here would move the trust store mngr resolves for
+    every grok agent onto the account folder."""
     settings = managed_create_settings(_defaults(HarnessType.GROK, tmp_path))
 
     assert settings[TYPE_KEY] == "grok"
