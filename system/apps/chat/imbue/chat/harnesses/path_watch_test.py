@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from watchdog.observers.api import ObservedWatch
 from watchdog.utils import BaseThread
 
 from imbue.chat.harnesses.path_watch import PathWatcher
@@ -178,6 +179,40 @@ def test_a_watched_directory_that_is_deleted_and_recreated_is_watched_again(tmp_
         )
     finally:
         watcher.stop()
+
+
+class _DeadEmitter:
+    """An emitter whose thread died without being stopped, as one that raised does."""
+
+    def __init__(self, watch: ObservedWatch) -> None:
+        self.watch = watch
+
+    def is_alive(self) -> bool:
+        return False
+
+    def should_keep_running(self) -> bool:
+        return True
+
+
+class _ObserverWithADeadEmitter:
+    def __init__(self, watch: ObservedWatch) -> None:
+        self.emitters = {_DeadEmitter(watch)}
+        self.unscheduled: list[ObservedWatch] = []
+
+    def unschedule(self, watch: ObservedWatch) -> None:
+        self.unscheduled.append(watch)
+
+
+def test_a_watch_whose_emitter_thread_died_is_scheduled_again(tmp_path: Path) -> None:
+    watcher = PathWatcher.build((tmp_path,), lambda: None, min_cycle_interval_seconds=0.0)
+    watch = ObservedWatch(tmp_path, recursive=False)
+    watcher._watch_by_key[f"{tmp_path}:False"] = watch
+    observer = _ObserverWithADeadEmitter(watch)
+
+    watcher._forget_stopped_watches(observer)
+
+    assert observer.unscheduled == [watch]
+    assert watcher._watch_by_key == {}
 
 
 def test_stopping_a_batched_watcher_does_not_wait_out_its_interval(tmp_path: Path) -> None:

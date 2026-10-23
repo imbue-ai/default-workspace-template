@@ -155,12 +155,17 @@ class PathWatcher:
                 logger.debug("PathWatcher failed to schedule {}: {}", target, e)
 
     def _forget_stopped_watches(self, observer: Any) -> None:
-        """Unschedule each watch whose emitter stopped, which watchdog does once the watched directory is deleted.
+        """Unschedule each watch whose emitter stopped, which watchdog does once the watched directory is
+        deleted, or whose emitter thread died.
 
         Scheduling the same path again would reuse the stopped emitter, so the watch is removed
         first and its key dropped, leaving the loop to schedule a fresh one.
         """
-        running_watches = {emitter.watch for emitter in list(observer.emitters) if emitter.should_keep_running()}
+        running_watches = {
+            emitter.watch
+            for emitter in list(observer.emitters)
+            if emitter.is_alive() and emitter.should_keep_running()
+        }
         for key, watch in list(self._watch_by_key.items()):
             if watch not in running_watches:
                 logger.debug("PathWatcher's watch on {} stopped; watching it again once it exists", watch.path)
