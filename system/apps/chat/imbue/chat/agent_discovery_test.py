@@ -218,6 +218,44 @@ def test_stale_known_location_falls_back_to_discovery() -> None:
     assert send_calls == [(stale,), (fresh,)]
 
 
+def _typed_at_the_known_location_result(is_blocked: bool) -> MessageResult:
+    result = MessageResult()
+    if is_blocked:
+        result.blocked_agents.append(("alpha", "a dialog came up behind the message"))
+    else:
+        result.failures.append(
+            AgentSendFailure(
+                agent_name="alpha",
+                reason="Message submission was not confirmed",
+                kind=SendFailureKind.SUBMISSION_UNCONFIRMED,
+            )
+        )
+    return result
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+@pytest.mark.parametrize("is_blocked", [False, True], ids=["unconfirmed", "landed_then_blocked"])
+def test_a_send_that_may_have_typed_at_the_known_location_is_not_sent_again(is_blocked: bool) -> None:
+    """Measured live: a grok send mngr could not confirm, sent again after discovery, reached grok twice."""
+    discover_calls: list[AgentId] = []
+    send_calls: list[tuple[AgentMatch, ...]] = []
+
+    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
+        discover_calls.append(agent_id)
+        return (_make_match(host="host-b"),)
+
+    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
+        send_calls.append(tuple(matches))
+        return _typed_at_the_known_location_result(is_blocked)
+
+    messenger = MngrMessenger(discover=_discover, send=_send)
+    failure = messenger.send_to_agent(_AGENT_ID, "hi", (_make_match(),))
+
+    assert failure is not None
+    assert failure.kind == ("input_blocked" if is_blocked else "submission_unconfirmed")
+    assert (len(send_calls), discover_calls) == (1, [])
+
+
 @pytest.mark.usefixtures("isolated_mngr_env")
 def test_returns_a_reason_when_nothing_reachable() -> None:
     """A send that reaches no agent reports why, since the reason is what the user can act on."""

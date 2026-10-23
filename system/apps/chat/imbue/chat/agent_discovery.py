@@ -324,6 +324,17 @@ def _first_failure(result: MessageResult) -> SendFailure:
     return SendFailure(reason="The agent could not be reached.", kind="agent_unreachable")
 
 
+def _may_have_typed(result: MessageResult) -> bool:
+    """Whether a send that reached no agent as a success may still have put the message in one.
+
+    Its text may be in the agent's input or turn (mngr's ``SUBMISSION_UNCONFIRMED``), or it
+    landed and a dialog came up behind it (``blocked_agents``).
+    """
+    return bool(result.blocked_agents) or any(
+        failure.kind == SendFailureKind.SUBMISSION_UNCONFIRMED for failure in result.failures
+    )
+
+
 def _without_send_prefix(message: str, agent_name: str) -> str:
     """Drop mngr's standalone-raise framing from a blocked message before showing it.
 
@@ -415,6 +426,7 @@ class MngrMessenger(FrozenModel):
         hosts), it falls back to a full mngr discovery. The id is globally unique, so it
         resolves to exactly the intended agent, never fanning out across same-named
         agents on other hosts. STOPPED agents are auto-started (`is_start_desired=True`).
+        A send that may already have typed the message is never sent again.
         """
         mngr_ctx, cg = _get_mngr_context()
         try:
@@ -422,6 +434,8 @@ class MngrMessenger(FrozenModel):
                 result = self.send(known_locations, message, mngr_ctx)
                 if result.successful_agents:
                     return None
+                if _may_have_typed(result):
+                    return _first_failure(result)
             matches = self.discover(agent_id, mngr_ctx)
             result = self.send(matches, message, mngr_ctx)
             if result.successful_agents:
