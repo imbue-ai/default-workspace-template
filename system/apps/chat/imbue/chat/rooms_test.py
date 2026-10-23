@@ -10,6 +10,7 @@ from imbue.chat.rooms import BlankRoomTitleError
 from imbue.chat.rooms import LOUNGE_TITLE
 from imbue.chat.rooms import ROOM_MESSAGES_FILENAME
 from imbue.chat.rooms import ROOM_RECORD_FILENAME
+from imbue.chat.rooms import RoomExistsError
 from imbue.chat.rooms import RoomStore
 from imbue.chat.rooms import new_room_message
 from imbue.chat.rooms import room_message_as_page_event
@@ -128,3 +129,14 @@ def test_an_unreadable_or_newer_record_is_skipped(tmp_path: Path) -> None:
     (newer / ROOM_RECORD_FILENAME).write_text(json.dumps({"version": 99, "id": "room-bbbbbbbbbbbbbbbb", "title": "x"}))
 
     assert [record.id for record in store.read_all()] == [good.id]
+
+
+def test_a_room_is_not_made_under_an_id_that_already_names_one(tmp_path: Path) -> None:
+    store = RoomStore(root=tmp_path)
+    chat_id = ChatId("agent-00000000000000000000000000000007")
+    first = store.create("Chat 3", _OWNER, room_id=chat_id)
+
+    with pytest.raises(RoomExistsError):
+        store.create("Chat 3 again", _BOB, room_id=chat_id)
+
+    assert store.read(chat_id) == first

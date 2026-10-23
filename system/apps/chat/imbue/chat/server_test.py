@@ -5668,3 +5668,17 @@ def test_an_awaiting_chat_whose_create_raced_in_stays_an_agent_chat(app: Flask) 
     assert made.status_code == 409, made.get_data(as_text=True)
     assert client.get("/api/rooms").get_json()["rooms"] == []
     assert manager.get_provisional_chat(awaiting["chat_id"]) is not None
+
+
+def test_a_second_make_room_for_the_same_awaiting_chat_leaves_the_first_ones_room_alone(app: Flask) -> None:
+    client = app.test_client()
+    awaiting = client.post("/api/chats/awaiting").get_json()
+    state = state_of(app)
+    # The first make-room has written the room and is about to discard the awaiting chat.
+    room = state.rooms.create("Chat 2", ParticipantKey("owner"), room_id=ChatId(awaiting["chat_id"]))
+
+    second = client.post(f"/api/chats/awaiting/{awaiting['chat_id']}/make-room")
+
+    assert second.status_code == 409, second.get_data(as_text=True)
+    assert state.rooms.read(room.id) == room
+    assert state.agent_manager.get_provisional_chat(awaiting["chat_id"]) is not None

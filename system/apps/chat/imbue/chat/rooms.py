@@ -65,6 +65,10 @@ class BlankRoomTitleError(ValueError):
     """A room was given a title with nothing in it."""
 
 
+class RoomExistsError(ValueError):
+    """A room was to be made under an id that already names one."""
+
+
 class RoomRecord(FrozenModel):
     """What a room is: ``room.json``."""
 
@@ -213,7 +217,8 @@ class RoomStore(MutableModel):
 
     def create(self, title: str, created_by: ParticipantKey, room_id: ChatId | None = None) -> RoomRecord:
         """Make a room; an empty title takes the first free "Room N". A caller passes ``room_id`` to turn an
-        awaiting chat into a room under the id its page already opened on."""
+        awaiting chat into a room under the id its page already opened on; an id that already names a room
+        raises, so the second of two callers asking at once makes nothing."""
         with self._lock:
             return self._create_locked(title, created_by, room_id)
 
@@ -319,6 +324,8 @@ class RoomStore(MutableModel):
             created_at=now_timestamp(),
             created_by=created_by,
         )
+        if self._record_path(record.id).is_file():
+            raise RoomExistsError(f"Room {record.id} already exists")
         self._write_record_locked(record)
         logger.info("Created room {} ({!r})", record.id, record.title)
         return record

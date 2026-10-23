@@ -54,6 +54,7 @@ from imbue.chat.primitives import parse_chat_ref
 from imbue.chat.request_helpers import json_response
 from imbue.chat.request_helpers import require_loopback
 from imbue.chat.rooms import BlankRoomTitleError
+from imbue.chat.rooms import RoomExistsError
 from imbue.chat.rooms import RoomRecord
 from imbue.chat.rooms import RoomSnapshot
 from imbue.chat.rooms import new_room_message
@@ -427,7 +428,7 @@ def _pending_mentions() -> Response:
 def _make_room(chat_id: str) -> Response:
     """``POST /api/chats/awaiting/<id>/make-room``: turn a chat awaiting its first send into a room under the same
     id, keeping its name (the one conversion there is, S3); 404 for no such awaiting chat, 409 for one that is being
-    created or has a seed to keep."""
+    created, has a seed to keep, or is already a room (a second make-room racing the first)."""
     state = get_state()
     manager = state.agent_manager
     provisional = manager.get_provisional_chat(chat_id)
@@ -437,7 +438,10 @@ def _make_room(chat_id: str) -> Response:
         return error_response(f"Chat '{chat_id}' cannot become a room: it is being created or has a conversation", 409)
     shown = manager.get_provisional_chats_as_shown()
     title = next((entry.name for entry in shown if entry.chat_id == provisional.chat_id), provisional.name)
-    record = state.rooms.create(title, request_participant(), room_id=provisional.chat_id)
+    try:
+        record = state.rooms.create(title, request_participant(), room_id=provisional.chat_id)
+    except RoomExistsError:
+        return error_response(f"Chat '{chat_id}' is already a room", 409)
     # Listed as a room before the awaiting chat is dropped, so the page on it never sees it vanish.
     broadcast_rooms(state)
     if not manager.discard_provisional_chat(chat_id):
