@@ -515,11 +515,13 @@ are installed instead of a live build; the apply installs them only as a set (on
 
 That one command is the whole landing: it fast-forwards the worker's
 `update-self:` merge commit, snapshots the pre-apply state, refreshes the
-affected environments, re-runs `system/scripts/setup_system.sh` when a file it
+affected environments (uninstalling first the tools of apps the merged tree no
+longer has, copied aside for the rollback), re-runs `system/scripts/setup_system.sh` when a file it
 reads changed, pre-flights the merged backend (the shell, and the chat app in its
 side-effect-free `--preflight` mode, since the chat is the process that imports
 mngr and the harness plugins), installs or builds the frontend
-bundle, restarts the services
+bundle, removes the registry rows whose supervisord program the merged tree no
+longer declares, restarts the services
 agent (every apply; the fresh supervisord it brings up reads the merged program
 table, so a program the update adds starts on its own), probes the shell's health
 route and the health route of every critical app the user can open (the chat, the
