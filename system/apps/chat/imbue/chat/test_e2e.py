@@ -814,7 +814,9 @@ def test_the_transcript_reaches_its_bottom_whatever_the_composer_height(tmp_path
         textarea.fill("\n".join(f"draft line {line}" for line in range(12)))
         expect(chat.locator(".message-input-row")).to_have_attribute("data-stacked", "")
         frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
-        assert frame.evaluate(_MAX_TRANSCRIPT_BOTTOM_GAP_JS) <= 1, "a tall composer pulled the transcript off its bottom"
+        assert frame.evaluate(_MAX_TRANSCRIPT_BOTTOM_GAP_JS) <= 1, (
+            "a tall composer pulled the transcript off its bottom"
+        )
         last_reply_box = _box(chat.locator(".message-assistant", has_text="reply-149"))
         assert last_reply_box["bottom"] <= _box(chat.locator(".message-input-box"))["top"]
 

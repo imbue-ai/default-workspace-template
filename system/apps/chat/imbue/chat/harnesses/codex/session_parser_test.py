@@ -654,4 +654,3 @@ def test_context_compaction_synthetic_id_when_no_turn_or_item_id() -> None:
     assert len(events) == 1
     event = events[0]
     assert event["event_id"].startswith("codex-context_compacted-2026-09-21T19:30:50.404Z-")
-

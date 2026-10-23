@@ -61,6 +61,27 @@ class ReplyDraft(FrozenModel):
     text: str = Field(description="The draft's markdown; '' when there is no draft to show")
 
 
+class StreamedReply(FrozenModel):
+    """A reply as the agent's live connection has streamed it so far."""
+
+    message_id: str = Field(description="The harness's own id for the message, which its transcript records too")
+    text: str = Field(description="The message's text so far")
+
+
+# The reply the agent's live connection is streaming (its harness session's ``read_streamed_reply``),
+# or None when it streams none.
+ReadStreamedReplyCallback = Callable[[], StreamedReply | None]
+
+
+class ReplyDraftSources(FrozenModel):
+    """Where a watcher can read a reply that its transcript does not hold yet; each read is the watcher's to make."""
+
+    capture_pane: CapturePaneCallback = Field(description="Captures the agent's terminal pane")
+    read_streamed_reply: ReadStreamedReplyCallback = Field(
+        description="Reads the reply the agent's live connection has streamed so far"
+    )
+
+
 class TranscriptReader(ABC):
     """The read side of one agent's transcript: what a chat transcript's segments are made of.
 
@@ -174,14 +195,14 @@ class AgentSessionWatcher(TranscriptReader, ABC):
         """The current queued-message snapshot; empty for a harness with no populator."""
         return []
 
-    def read_reply_draft(self, capture_pane: CapturePaneCallback) -> ReplyDraft | None:
+    def read_reply_draft(self, sources: ReplyDraftSources) -> ReplyDraft | None:
         """The reply the agent is writing now, which its transcript does not hold yet.
 
-        For a harness that records a reply only once it is finished, while its terminal shows it
-        as it streams. Called by one poller at a time, and only while a page streams the chat and shows
-        it focused.
+        For a harness that records a reply only once it is finished, while its terminal or its live
+        connection shows it as it streams. Called by one poller at a time, and only while a page
+        streams the chat and shows it focused.
         None by default: the harness has no drafts to offer (its transcript already streams, or
-        nothing on screen can be read back).
+        nothing it shows can be read back).
         """
         return None
 

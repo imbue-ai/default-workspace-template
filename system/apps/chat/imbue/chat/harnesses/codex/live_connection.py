@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,8 @@ from imbue.chat.harnesses.codex.ledger import CodexMessageLedger
 from imbue.chat.harnesses.codex.ledger import write_codex_model_state
 from imbue.chat.harnesses.codex.model import FAST_SERVICE_TIER
 from imbue.chat.harnesses.codex.model import open_subscribed_codex_client
+from imbue.chat.harnesses.codex.reply_stream import CodexReplyStream
+from imbue.chat.harnesses.session_watcher import StreamedReply
 from imbue.mngr_codex.app_server_client import CodexAppServerClient
 from imbue.mngr_codex.app_server_client import CodexAppServerError
 from imbue.mngr_codex.app_server_client import CodexModel
@@ -90,6 +93,8 @@ class CodexLiveConnection:
 
     _client: CodexAppServerClient
     _ledger: CodexMessageLedger
+    # The agent message being streamed, from the deltas the reader hears for the ledger anyway.
+    _reply_stream: CodexReplyStream
     _stop_event: threading.Event
     _reader_thread: threading.Thread
     # Flipped False when the reader observes a closed/failed transport (the daemon died). The
@@ -149,6 +154,8 @@ class CodexLiveConnection:
         self = cls.__new__(cls)
         self._client = client
         self._ledger = ledger
+        self._reply_stream = CodexReplyStream()
+        client.add_notification_handler(self._on_notification)
         self._codex_models = codex_models
         self._stop_event = threading.Event()
         self._is_alive = True
@@ -160,6 +167,17 @@ class CodexLiveConnection:
     def ledger(self) -> CodexMessageLedger:
         """The ledger over this connection -- the backend authority for the agent's messages."""
         return self._ledger
+
+    def read_streamed_reply(self) -> StreamedReply | None:
+        """The agent message codex is streaming on the agent's root thread, or None while there is none."""
+        return self._reply_stream.read()
+
+    def _on_notification(self, method: str, params: Mapping[str, Any]) -> None:
+        # A notification naming another thread (one the client was bound to before a switch) is not this reply.
+        thread_id = params.get("threadId")
+        if thread_id is not None and thread_id != self._client.thread_id:
+            return
+        self._reply_stream.handle_notification(method, params)
 
     @property
     def client(self) -> CodexAppServerClient:

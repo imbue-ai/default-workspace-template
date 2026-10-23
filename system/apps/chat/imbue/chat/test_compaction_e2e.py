@@ -577,10 +577,10 @@ def test_a_compact_typed_in_a_codex_or_pi_chat_asks_mngr_and_shows_the_compactio
             tracker = manager._activity_tracker_by_agent[FIXTURE_AGENT_ID]
             _append_jsonl(transcript, [_codex_line("event_msg", {"type": "task_started", "turn_id": "turn-compact"})])
             wait_for(
-                lambda: tracker.derive(
-                    lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None
-                )
-                == ActivityState.THINKING,
+                lambda: (
+                    tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None)
+                    == ActivityState.THINKING
+                ),
                 timeout=10.0,
                 error_message="the compaction's turn never reached the activity tracker",
             )
