@@ -103,6 +103,13 @@ export function getHarnessCatalog(harness: string | undefined): HarnessCatalog |
   return catalogByHarness.get(harness) ?? null;
 }
 
+/** Take ``catalogs`` (what ``GET /api/harnesses`` answers) as the known catalogs, before any load. */
+export function applyHarnessCatalogs(catalogs: Record<string, HarnessCatalog>): void {
+  for (const [harness, catalog] of Object.entries(catalogs)) {
+    catalogByHarness.set(harness, catalog);
+  }
+}
+
 /** Load the catalogs once (single-flight). Awaiting this while a load is in
  *  flight resolves when THAT load lands, so a caller that needs the data (the
  *  composer's slash-command guard) can block on it. Safe to call on every
@@ -115,9 +122,7 @@ export function ensureHarnessCatalogs(): Promise<void> {
         url: apiUrl("/api/harnesses"),
       })
       .then((data) => {
-        for (const [harness, catalog] of Object.entries(data)) {
-          catalogByHarness.set(harness, catalog);
-        }
+        applyHarnessCatalogs(data);
         m.redraw();
       })
       .catch((error) => {

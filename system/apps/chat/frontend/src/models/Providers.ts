@@ -175,15 +175,19 @@ export async function loadLanes(): Promise<void> {
   lanesLoaded = true;
 }
 
+/** What ``GET /api/accounts`` answers. */
+export interface AccountsResponse {
+  accounts: ProviderAccount[];
+  mru: string | null;
+  default: string | null;
+}
+
 export async function loadAccounts(): Promise<void> {
-  const body = await m.request<{
-    accounts: ProviderAccount[];
-    mru: string | null;
-    default: string | null;
-  }>({
-    method: "GET",
-    url: apiUrl("/api/accounts"),
-  });
+  applyAccounts(await m.request<AccountsResponse>({ method: "GET", url: apiUrl("/api/accounts") }));
+}
+
+/** Take ``body`` as the account list: a read's answer, or the one the page was served with. */
+export function applyAccounts(body: AccountsResponse): void {
   accounts = body.accounts;
   mru = body.mru;
   defaultAccountId = body.default;

@@ -1,5 +1,7 @@
 """The chat document over the chat app's real Flask app: the page, its probe route, and the client-activity report."""
 
+import json
+import re
 from pathlib import Path
 from uuid import uuid4
 
@@ -12,7 +14,9 @@ from imbue.chat.documents import CHAT_AGENT_ID_META_NAME
 from imbue.chat.documents import CHAT_ID_META_NAME
 from imbue.chat.documents import CHAT_SESSION_ID_META_NAME
 from imbue.chat.documents import FRONTEND_BUILT_HEADER
+from imbue.chat.documents import INITIAL_STATE_SCRIPT_ID
 from imbue.chat.documents import TERMINAL_LABEL_META_NAME
+from imbue.chat.documents import inject_initial_state_script
 from imbue.chat.models import SendMessageRequest
 from imbue.chat.primitives import ChatId
 from imbue.chat.server import client_activity_report
@@ -63,6 +67,39 @@ def test_the_chat_page_carries_the_chats_identity(tmp_path: Path) -> None:
     assert f'<meta name="{CHAT_AGENT_ID_META_NAME}" content="">' in response.text
     assert f'<meta name="{CHAT_SESSION_ID_META_NAME}" content="">' in response.text
     assert "chat</body>" in response.text
+
+
+def _initial_state(page: str) -> dict | None:
+    match = re.search(rf'<script type="application/json" id="{INITIAL_STATE_SCRIPT_ID}">(.*?)</script>', page)
+    return None if match is None else json.loads(match.group(1))
+
+
+def test_the_chat_page_carries_what_its_first_frame_needs(tmp_path: Path) -> None:
+    chat_id = _agent_id()
+    client, _ = _client(tmp_path, chat_id)
+
+    initial_state = _initial_state(client.get(f"/{chat_id}").text)
+
+    assert initial_state is not None
+    replay = initial_state["replay"]
+    assert replay[-1]["type"] == "chats_updated"
+    assert [chat["chat_id"] for chat in replay[-1]["chats"]] == [chat_id]
+    assert initial_state["accounts"] == client.get("/api/accounts").get_json()
+    assert initial_state["harnesses"] == client.get("/api/harnesses").get_json()
+
+
+def test_a_subagent_page_carries_no_initial_state(tmp_path: Path) -> None:
+    chat_id = _agent_id()
+    client, _ = _client(tmp_path, chat_id)
+
+    assert _initial_state(client.get(f"/{chat_id}.{chat_id}.{uuid4().hex}").text) is None
+
+
+def test_the_initial_state_cannot_close_its_own_script() -> None:
+    page = inject_initial_state_script("<html><head></head><body></body></html>", {"name": "</script><b>"})
+
+    assert page.count("</script>") == 1
+    assert _initial_state(page) == {"name": "</script><b>"}
 
 
 def test_a_subagent_page_names_its_chat_agent_and_session(tmp_path: Path) -> None:

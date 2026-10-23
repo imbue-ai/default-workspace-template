@@ -177,7 +177,7 @@ export interface ProvisionalChat {
   is_seeded: boolean;
 }
 
-type WsEvent =
+export type WsEvent =
   | { type: "chats_updated"; chats: ChatSnapshot[]; main_chat_id: string | null }
   | ({ type: "provisional_chat_created" } & ProvisionalChat)
   | { type: "provisional_chat_completed"; chat_id: string; success: boolean; error: string | null }
@@ -405,7 +405,14 @@ export function whenChatRegistered(chatId: string): Promise<void> {
   });
 }
 
-export function initChats(): void {
+/** Connect to the chat app's socket. ``replay`` is a connect-time replay the page already holds
+ *  (its initial state): handled as one, so the chats are known before the socket opens. The
+ *  socket's own replay then runs over it as on any connection. */
+export function initChats(replay: readonly WsEvent[] = []): void {
+  if (replay.length > 0) {
+    replayedProvisionalIds = new Set();
+    for (const event of replay) handleEvent(event);
+  }
   connect();
 }
 

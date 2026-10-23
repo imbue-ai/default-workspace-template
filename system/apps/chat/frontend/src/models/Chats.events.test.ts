@@ -273,3 +273,41 @@ describe("the account list over the socket", () => {
     expect(providers.loadAccounts).toHaveBeenCalledOnce();
   });
 });
+
+describe("a page served with the connect-time replay", () => {
+  let manager: ChatsModule;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.stubGlobal("WebSocket", FakeSocket);
+    manager = await import("./Chats");
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    FakeSocket.latest = null;
+  });
+
+  it("knows its chats before the socket opens, and the socket's own replay then runs over them", () => {
+    manager.initChats([
+      { type: "provisional_chat_created", ...proto("agent-2", "creating") },
+      { type: "chats_updated", chats: [chat("agent-1")], main_chat_id: "agent-1" },
+    ]);
+    expect(manager.hasReceivedChatList()).toBe(true);
+    expect(manager.getChatById("agent-1")?.chat_id).toBe("agent-1");
+    expect(manager.getMainChatId()).toBe("agent-1");
+    expect(manager.getProvisionalChat("agent-2")?.phase).toBe("creating");
+
+    // The app no longer holds agent-2's create by the time the socket connects.
+    open();
+    push({ type: "chats_updated", chats: [chat("agent-1")], main_chat_id: "agent-1" });
+    expect(manager.getProvisionalChat("agent-2")).toBeUndefined();
+    expect(manager.getChatById("agent-1")?.chat_id).toBe("agent-1");
+  });
+
+  it("waits on the socket as before when the page carries no replay", () => {
+    manager.initChats([]);
+    expect(manager.hasReceivedChatList()).toBe(false);
+    expect(manager.getChats()).toEqual([]);
+  });
+});

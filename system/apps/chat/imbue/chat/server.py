@@ -96,6 +96,7 @@ from imbue.chat.documents import document_response
 from imbue.chat.documents import inject_base_path_meta_tag
 from imbue.chat.documents import inject_chat_identity_meta_tags
 from imbue.chat.documents import inject_hostname_meta_tag
+from imbue.chat.documents import inject_initial_state_script
 from imbue.chat.documents import inject_plugin_script_tags
 from imbue.chat.documents import inject_primary_agent_id_meta_tag
 from imbue.chat.documents import inject_terminal_label_meta_tag
@@ -945,6 +946,11 @@ def record_client_message_activity(
 
 
 def _get_harnesses_endpoint() -> Response:
+    """The static per-harness model catalogs (``_build_harness_catalogs``)."""
+    return model_response(_build_harness_catalogs())
+
+
+def _build_harness_catalogs() -> HarnessCatalogsResponse:
     """The static per-harness model catalogs -- the model bar's compile-time half.
 
     One response covers every harness (each catalog dumped verbatim, plus the harness's
@@ -976,7 +982,7 @@ def _get_harnesses_endpoint() -> Response:
         # handoff prompt use, so the page names a harness the way the backend does.
         catalog["label"] = HARNESS_LABEL[harness]
         catalogs[harness.value] = HarnessCatalogEntry.model_validate(catalog)
-    return model_response(HarnessCatalogsResponse(root=catalogs))
+    return HarnessCatalogsResponse(root=catalogs)
 
 
 def _agent_switch_options(agent_manager: "AgentManager", agent_info: AgentInfo) -> tuple[ModelOption, ...]:
@@ -2209,6 +2215,26 @@ def _root_document() -> Response:
     return document_response(html_content, is_frontend_built=True)
 
 
+def _chat_page_initial_state() -> dict[str, Any]:
+    """What a chat's page would otherwise wait on its socket and first fetches for, read now.
+
+    ``replay`` is the socket's connect-time replay (``_connect_replay_messages``); ``accounts`` and
+    ``harnesses`` are what ``GET /api/accounts`` and ``GET /api/harnesses`` answer. With them the
+    composer's model chip and Source view switch draw on the page's first frame, beside the
+    composer. An account index that cannot be read is left out, and the page reads the accounts
+    as it does without this.
+    """
+    initial_state: dict[str, Any] = {
+        "replay": _connect_replay_messages(get_state().agent_manager),
+        "harnesses": _build_harness_catalogs().model_dump(mode="json"),
+    }
+    try:
+        initial_state["accounts"] = accounts_endpoints.build_accounts_response().model_dump(mode="json")
+    except AccountError as e:
+        _loguru_logger.warning("Served a chat page without its accounts: {}", e)
+    return initial_state
+
+
 def _chat_document(key: str) -> Response:
     """Serve the chat page for a key: a chat id, or ``<chat-id>.<agent-id>.<session-id>`` for a subagent view."""
     subagent = parse_subagent_key(key)
@@ -2226,6 +2252,8 @@ def _chat_document(key: str) -> Response:
     root_path = (request.script_root or "").rstrip("/")
     with_workspace_tags = _inject_workspace_meta_tags(document_path.read_text(), root_path)
     html_content = inject_chat_identity_meta_tags(with_workspace_tags, chat_id, agent_id, session_id)
+    if session_id == "":
+        html_content = inject_initial_state_script(html_content, _chat_page_initial_state())
     if config.javascript_plugin_basenames:
         html_content = inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
     return document_response(html_content, is_frontend_built=True)
@@ -2304,6 +2332,20 @@ def _ws_endpoint(websocket: Any) -> None:
     _run_ws_broadcast_loop(websocket=websocket, agent_manager=get_state().agent_manager)
 
 
+def _connect_replay_messages(agent_manager: AgentManager) -> list[dict[str, Any]]:
+    """What a page is sent on connecting: every provisional chat this process holds, then the chat list.
+
+    The list comes last on purpose -- it is how a page knows the replay is over, so a record it
+    still holds that this process did not replay (a create the previous process was running) can
+    be dropped rather than waited on forever. A chat's page also carries it in its document.
+    """
+    messages = [
+        provisional_chat_created_message(provisional) for provisional in agent_manager.get_provisional_chats_as_shown()
+    ]
+    messages.append(chats_updated_message(agent_manager.get_chat_snapshots(), agent_manager.get_main_chat_id()))
+    return messages
+
+
 def _run_ws_broadcast_loop(websocket: Any, agent_manager: AgentManager) -> None:
     """Stream the broadcaster's messages to ``websocket`` until the page disconnects.
 
@@ -2317,15 +2359,8 @@ def _run_ws_broadcast_loop(websocket: Any, agent_manager: AgentManager) -> None:
     _loguru_logger.info("WS /api/ws connection opened (conn {})", id(client_queue))
     disconnect_reason = "handler exited"
     try:
-        # The connect-time replay: every provisional chat this process holds, then the chat
-        # list. The list comes last on purpose -- it is how a page knows the replay is over,
-        # so a record it still holds that this process did not replay (a create the previous
-        # process was running) can be dropped rather than waited on forever.
-        for provisional in agent_manager.get_provisional_chats_as_shown():
-            websocket.send(json.dumps(provisional_chat_created_message(provisional)))
-        websocket.send(
-            json.dumps(chats_updated_message(agent_manager.get_chat_snapshots(), agent_manager.get_main_chat_id()))
-        )
+        for message in _connect_replay_messages(agent_manager):
+            websocket.send(json.dumps(message))
         shutdown = False
         while not shutdown:
             # The pages send nothing; anything that arrives is drained and ignored.
