@@ -21,14 +21,15 @@ import os
 import re
 import sys
 import uuid
-from datetime import datetime
-from datetime import timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Any
 
 # The transcript's place under the agent's state dir, and the record shape the chat app's room harness reads
 # (``system/apps/chat/imbue/chat/harnesses/room/transcript.py`` pins the same constants).
-TRANSCRIPT_RELATIVE_PATH = Path("events") / "room" / "common_transcript" / "events.jsonl"
+TRANSCRIPT_RELATIVE_PATH = (
+    Path("events") / "room" / "common_transcript" / "events.jsonl"
+)
 ACTIVITY_RELATIVE_PATH = Path("activity") / "agent"
 EMITTER = "room"
 SCHEMA_VERSION = "ATIF-v1.7"
@@ -48,7 +49,9 @@ PASTE_END = b"\x1b[201~"
 
 def header_event_id(agent_id: str) -> str:
     """The header's id: a hash of the agent and the emitter, as every common transcript mints it."""
-    digest = hashlib.sha256(f"{agent_id}:{EMITTER}".encode("utf-8", "replace")).hexdigest()[:32]
+    digest = hashlib.sha256(
+        f"{agent_id}:{EMITTER}".encode("utf-8", "replace")
+    ).hexdigest()[:32]
     return f"header-{digest}"
 
 
@@ -65,7 +68,9 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def step_record(text: str, author: str, author_name: str | None, timestamp: str) -> dict[str, Any]:
+def step_record(
+    text: str, author: str, author_name: str | None, timestamp: str
+) -> dict[str, Any]:
     """One message as a step: a person's (``source`` user) or the workspace agent's (``source`` agent), the author
     under ``extra`` as the chat app reads it."""
     extra: dict[str, Any] = {"author": author}
@@ -110,7 +115,11 @@ def record_activity(state_dir: Path, agent_id: str) -> None:
     activity_path = state_dir / ACTIVITY_RELATIVE_PATH
     activity_path.parent.mkdir(parents=True, exist_ok=True)
     now = datetime.now(timezone.utc)
-    activity_path.write_text(json.dumps({"time": int(now.timestamp() * 1000), "agent_id": agent_id}, indent=2))
+    activity_path.write_text(
+        json.dumps(
+            {"time": int(now.timestamp() * 1000), "agent_id": agent_id}, indent=2
+        )
+    )
 
 
 def read_messages(stdin: IO[bytes]):
@@ -153,7 +162,10 @@ def state_dir_of(environ: dict[str, str]) -> Path:
 def main(environ: dict[str, str], stdin: IO[bytes], stdout: IO[bytes]) -> int:
     agent_id = environ.get("MNGR_AGENT_ID", "").strip()
     if not agent_id:
-        print("room_agent: MNGR_AGENT_ID is not set; this runs only as an mngr agent", file=sys.stderr)
+        print(
+            "room_agent: MNGR_AGENT_ID is not set; this runs only as an mngr agent",
+            file=sys.stderr,
+        )
         return 1
     state_dir = state_dir_of(environ)
     transcript_path = state_dir / TRANSCRIPT_RELATIVE_PATH
@@ -165,7 +177,9 @@ def main(environ: dict[str, str], stdin: IO[bytes], stdout: IO[bytes]) -> int:
             if not text.strip():
                 continue
             author, author_name, said = author_of_typed_text(text)
-            append_record(transcript_path, step_record(said, author, author_name, now_iso()))
+            append_record(
+                transcript_path, step_record(said, author, author_name, now_iso())
+            )
             record_activity(state_dir, agent_id)
     finally:
         stdout.write(BRACKETED_PASTE_DISABLE)
