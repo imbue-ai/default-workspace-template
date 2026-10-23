@@ -572,9 +572,14 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
         block, claimed, generation = self._queue.begin_flush()
         if not claimed:
             return
+        try:
+            with self._lock:
+                self._refresh_locked()
+                witness_start = self._store.total([MAIN_LANE])
+        except (MngrError, OSError):
+            self._queue.release_claim(claimed, generation)
+            raise
         with self._lock:
-            self._refresh_locked()
-            witness_start = self._store.total([MAIN_LANE])
             self._emit_embargo_until = time.monotonic() + _EMIT_EMBARGO_CEILING_SECONDS
         result = _UNSENT_RESULT
         delivered: tuple[str, ...] = ()

@@ -11,6 +11,7 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.harnesses.grok.queue_tracker import GrokSendVerdict
 from imbue.chat.harnesses.grok.queue_tracker import drop_tracker
+from imbue.chat.harnesses.grok.testing import ROOTS_RELATIVE_PATH
 from imbue.chat.harnesses.grok.testing import add_grok_session
 from imbue.chat.harnesses.grok.testing import append_grok_updates
 from imbue.chat.harnesses.grok.testing import find_fixture_scenario
@@ -606,6 +607,24 @@ def test_a_session_send_that_reports_the_text_untaken_keeps_the_message_held(tmp
     watcher._attempt_flush()
 
     assert _held(watcher) == [("held", False)]
+
+
+def test_a_flush_whose_log_read_fails_leaves_the_message_unclaimed_for_the_next_one(tmp_path: Path) -> None:
+    watcher, grok, _broadcast = _flushing_watcher(tmp_path)
+    watcher._queue.enqueue("held", "t0", is_turn_open=True)
+    roots_path = tmp_path / ROOTS_RELATIVE_PATH
+    roots_text = roots_path.read_text()
+    roots_path.unlink()
+    roots_path.mkdir()
+
+    with pytest.raises(OSError):
+        watcher._attempt_flush()
+    roots_path.rmdir()
+    roots_path.write_text(roots_text)
+    watcher._attempt_flush()
+
+    assert grok.sent == ["held"]
+    assert watcher.get_queued_messages() == []
 
 
 def test_a_gate_screen_keeps_the_held_messages_and_retries_them(tmp_path: Path) -> None:
