@@ -1,10 +1,16 @@
 """Tests for the grok transcript loader and session watcher, over grok 1.0.62's own session logs."""
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.agent_discovery import SendFailedError
+from imbue.chat.harnesses.grok.queue_tracker import GrokSendVerdict
+from imbue.chat.harnesses.grok.queue_tracker import drop_tracker
 from imbue.chat.harnesses.grok.testing import add_grok_session
 from imbue.chat.harnesses.grok.testing import append_grok_updates
 from imbue.chat.harnesses.grok.testing import find_fixture_scenario
@@ -18,8 +24,10 @@ from imbue.chat.harnesses.grok.watcher import GrokSessionWatcher
 from imbue.chat.harnesses.grok.watcher import GrokTranscriptLoader
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.registry import get_model_state_path
+from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_grok.api import GrokRootSession
 from imbue.mngr_grok.api import GrokRootTurn
+from imbue.mngr_grok.api import PROCESS_STARTED_MARKER_FILENAME
 from imbue.mngr_grok.api import get_model_state_path as get_grok_model_state_path
 from imbue.mngr_grok.api import get_root_turns
 from imbue.mngr_grok.api import get_session_dir
@@ -436,3 +444,468 @@ def test_an_agent_with_no_session_yet_reads_empty(tmp_path: Path) -> None:
     assert watcher.get_event_offset("grok-anything") == -1
     watcher._emit_cycle()
     assert (broadcast, finished) == ([], [])
+
+
+# The flush worker: the only code that types into grok
+
+_PLAIN_ROOT = "01a156d6-f927-7091-91a4-f6692a5800da"
+
+
+def _update_line(session_id: str, update: dict[str, Any], timestamp_ms: int) -> bytes:
+    """One updates.jsonl record in the shape grok 1.0.62 writes it."""
+    record = {
+        "timestamp": timestamp_ms // 1000,
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": update,
+            "_meta": {"eventId": f"{session_id}-{timestamp_ms}", "agentTimestampMs": timestamp_ms},
+        },
+    }
+    return (json.dumps(record) + "\n").encode()
+
+
+def _committed_turn_lines(session_id: str, prompt: str, prompt_index: int, timestamp_ms: int) -> bytes:
+    """The records grok logs for a submitted prompt it answers: its user chunk, a reply and the turn's end."""
+    user_chunk = {
+        "sessionUpdate": "user_message_chunk",
+        "content": {"type": "text", "text": prompt},
+        "_meta": {"modelId": "stub-model", "promptIndex": prompt_index},
+    }
+    reply = {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "STUB_REPLY: ok"}}
+    turn_end = {"sessionUpdate": "turn_completed", "prompt_id": f"prompt-{prompt_index}", "stop_reason": "end_turn"}
+    return b"".join(
+        _update_line(session_id, update, timestamp_ms + step)
+        for step, update in enumerate((user_chunk, reply, turn_end))
+    )
+
+
+class _ScriptedGrok:
+    """A grok behind mngr's send: logs a turn for each sent text, or refuses the send the way mngr does."""
+
+    def __init__(self, agent_state_dir: Path) -> None:
+        self.agent_state_dir = agent_state_dir
+        self.sent: list[str] = []
+        self.refusal: SendFailedError | None = None
+        self.is_committing = True
+        # mngr types the text but finds no evidence that grok took it.
+        self.is_unconfirmed = False
+        # Text someone left in grok's composer, which mngr types the next message after.
+        self.draft = ""
+        self.on_send: Any = None
+        self._prompt_index = 1
+        self._clock_ms = 1792500000000
+
+    def send(self, text: str) -> bool:
+        if self.refusal is not None:
+            raise self.refusal
+        self.sent.append(text)
+        if self.is_committing:
+            self.commit(self.draft + text)
+            self.draft = ""
+        if self.on_send is not None:
+            self.on_send()
+        if self.is_unconfirmed:
+            raise SendFailedError("Message submission was not confirmed", "submission_unconfirmed")
+        return True
+
+    def commit(self, prompt: str) -> None:
+        """grok logs a user turn holding ``prompt``, and answers it."""
+        append_grok_updates(
+            self.agent_state_dir,
+            _PLAIN_ROOT,
+            _committed_turn_lines(_PLAIN_ROOT, prompt, self._prompt_index, self._clock_ms),
+        )
+        self._prompt_index += 1
+        self._clock_ms += 1000
+
+
+def _flushing_watcher(
+    agent_state_dir: Path, *, is_alive: bool = True
+) -> tuple[GrokSessionWatcher, _ScriptedGrok, list[dict[str, Any]]]:
+    """A primed, unstarted watcher over a grok whose one session already holds a finished turn."""
+    write_grok_agent_state(agent_state_dir, find_fixture_scenario("plain"))
+    drop_tracker(agent_state_dir.name)
+    watcher, broadcast, _reported = _build_watcher(agent_state_dir)
+    watcher._prime()
+    grok = _ScriptedGrok(agent_state_dir)
+    watcher.set_flush_hooks(_fail_if_called, lambda: is_alive)
+    watcher._queue.bind_session_send(grok.send)
+    watcher._queue.attach(publish=watcher._publish_snapshot, wake=lambda: None)
+    watcher.delivery_witness_seconds = 0.3
+    return watcher, grok, broadcast
+
+
+def _fail_if_called(_text: str) -> bool:
+    raise AssertionError("the bound session send carries mngr's refusal kind, so the flush hook is not used")
+
+
+def _held(watcher: GrokSessionWatcher) -> list[tuple[str, bool]]:
+    return [(str(entry["content"]), bool(entry["is_sending"])) for entry in watcher.get_queued_messages()]
+
+
+def test_the_flush_never_types_while_a_top_level_turn_or_a_pending_wake_is_in_flight(tmp_path: Path) -> None:
+    watcher, grok, _broadcast = _flushing_watcher(tmp_path)
+    watcher._queue.enqueue("also fix the tests", "t0", is_turn_open=False)
+
+    write_root_turn(tmp_path, _PLAIN_ROOT, "prompt-9")
+    watcher._attempt_flush()
+    write_root_turn(tmp_path, _PLAIN_ROOT, f"pending-wake:{_BACKGROUND_SUBAGENT_CHILD}")
+    watcher._attempt_flush()
+
+    assert grok.sent == []
+    assert _held(watcher) == [("also fix the tests", False)], "held behind the turn, it reads Queued"
+
+
+def test_the_flush_delivers_the_held_block_once_the_turn_ends_and_witnesses_it_in_the_parsed_log(
+    tmp_path: Path,
+) -> None:
+    watcher, grok, broadcast = _flushing_watcher(tmp_path)
+    write_root_turn(tmp_path, _PLAIN_ROOT, "prompt-9")
+    watcher._queue.enqueue("first", "t0", is_turn_open=True)
+    watcher._queue.enqueue("second\nwith two lines", "t1", is_turn_open=True)
+    remove_root_turn(tmp_path, _PLAIN_ROOT)
+
+    watcher._attempt_flush()
+
+    assert grok.sent == ["first\nsecond\nwith two lines"]
+    assert watcher.get_queued_messages() == []
+    assert [event["content"] for event in broadcast if event["type"] == "user_message"] == [
+        "first\nsecond\nwith two lines"
+    ]
+
+
+def test_a_dead_agent_has_its_messages_held_and_shown_as_queued(tmp_path: Path) -> None:
+    watcher, grok, _broadcast = _flushing_watcher(tmp_path, is_alive=False)
+    watcher._queue.enqueue("stranded", "t0", is_turn_open=False)
+
+    watcher._attempt_flush()
+
+    assert grok.sent == []
+    assert _held(watcher) == [("stranded", False)]
+    block, taken = watcher.take_unclaimed_queue()
+    assert (block, len(taken)) == ("stranded", 1), "stop can still return it to the composer"
+
+
+def test_a_send_mngr_refuses_as_busy_keeps_the_message_held_without_spending_an_attempt(tmp_path: Path) -> None:
+    """A turn that started between the gate and the send is a 'not yet': nothing was typed into grok."""
+    watcher, grok, _broadcast = _flushing_watcher(tmp_path)
+    queued_id = watcher._queue.enqueue("held", "t0", is_turn_open=False)
+    grok.refusal = SendFailedError("grok is running a turn", "agent_busy")
+
+    for _ in range(4):
+        watcher._attempt_flush()
+
+    assert _held(watcher) == [("held", False)]
+    assert watcher._queue.is_exhausted(queued_id) is False
+    grok.refusal = None
+    watcher._attempt_flush()
+    assert grok.sent == ["held"]
+    assert watcher.get_queued_messages() == []
+
+
+def test_a_gate_screen_keeps_the_held_messages_and_retries_them(tmp_path: Path) -> None:
+    watcher, grok, _broadcast = _flushing_watcher(tmp_path)
+    queued_id = watcher._queue.enqueue("held behind a gate", "t0", is_turn_open=True)
+    grok.refusal = SendFailedError("grok shows its consent screen", "input_blocked")
+
+    for _ in range(4):
+        watcher._attempt_flush()
+
+    assert watcher._queue.is_exhausted(queued_id) is False
+    assert _held(watcher) == [("held behind a gate", False)]
+
+
+def test_a_send_mngr_confirmed_is_never_typed_again_though_grok_logs_no_turn_for_it(tmp_path: Path) -> None:
+    """mngr confirmed grok took it, so typing it again would deliver it twice."""
+    watcher, grok, broadcast = _flushing_watcher(tmp_path)
+    watcher._queue.enqueue("taken by grok", "t0", is_turn_open=True)
+    grok.is_committing = False
+
+    for _ in range(3):
+        watcher._attempt_flush()
+
+    assert grok.sent == ["taken by grok"]
+    assert watcher.get_queued_messages() == []
+    assert watcher._emit_embargo_until == 0.0
+
+
+def test_a_message_grok_parked_behind_a_turn_started_inside_mngrs_send_is_typed_once(tmp_path: Path) -> None:
+    """A background shell's follow-up turn can start between mngr's busy check and its paste, and grok runs the
+    paste only after that turn, however long it takes."""
+    watcher, grok, _broadcast = _flushing_watcher(tmp_path)
+    grok.is_committing = False
+    grok.on_send = lambda: write_root_turn(tmp_path, _PLAIN_ROOT, "task-completed-shell-2")
+    watcher._queue.enqueue("parked by grok", "t0", is_turn_open=True)
+
+    watcher._attempt_flush()
+    grok.on_send = None
+    remove_root_turn(tmp_path, _PLAIN_ROOT)
+    grok.commit("parked by grok")
+    grok.is_committing = True
+    watcher._attempt_flush()
+
+    assert grok.sent == ["parked by grok"]
+    assert watcher.get_queued_messages() == []
+
+
+def test_a_message_typed_after_a_draft_left_in_grok_s_composer_is_delivered_once(tmp_path: Path) -> None:
+    """Measured live: mngr types after the draft, finds no evidence for the message alone, and grok logs both."""
+    watcher, grok, _broadcast = _flushing_watcher(tmp_path)
+    grok.draft = "DRAFT-by-human "
+    grok.is_unconfirmed = True
+    watcher._queue.enqueue("after a human draft", "t0", is_turn_open=True)
+
+    watcher._attempt_flush()
+    grok.is_unconfirmed = False
+    watcher._attempt_flush()
+
+    assert grok.sent == ["after a human draft"]
+    assert watcher.get_queued_messages() == []
+
+
+def test_a_send_mngr_could_not_confirm_and_grok_logged_no_turn_for_spends_an_attempt(tmp_path: Path) -> None:
+    watcher, grok, broadcast = _flushing_watcher(tmp_path)
+    queued_id = watcher._queue.enqueue("never logged", "t0", is_turn_open=True)
+    grok.is_committing = False
+    grok.is_unconfirmed = True
+
+    watcher._attempt_flush()
+
+    assert grok.sent == ["never logged"]
+    assert _held(watcher) == [("never logged", False)]
+    assert watcher._queue.is_exhausted(queued_id) is False
+    assert watcher._emit_embargo_until == 0.0
+    append_grok_updates(
+        tmp_path, _PLAIN_ROOT, _committed_turn_lines(_PLAIN_ROOT, "typed at the pane", 7, 1792600000000)
+    )
+    watcher._emit_cycle()
+    assert "typed at the pane" in [event.get("content") for event in broadcast]
+
+
+def test_a_foreign_turn_does_not_resolve_the_held_block(tmp_path: Path) -> None:
+    """A turn someone typed at the pane during the send is not the block: only its text identifies it."""
+    watcher, grok, _broadcast = _flushing_watcher(tmp_path)
+    watcher._queue.enqueue("mine", "t0", is_turn_open=True)
+    grok.is_committing = False
+    grok.is_unconfirmed = True
+    grok.on_send = lambda: append_grok_updates(
+        tmp_path, _PLAIN_ROOT, _committed_turn_lines(_PLAIN_ROOT, "someone else's", 5, 1792600000000)
+    )
+
+    watcher._attempt_flush()
+
+    assert _held(watcher) == [("mine", False)]
+
+
+def test_the_held_messages_chip_departs_before_its_turn_arrives_even_when_the_live_emit_runs_mid_send(
+    tmp_path: Path,
+) -> None:
+    """Contract A3b. The live emit wakes on grok's own write, so it is forced to run inside the send."""
+    watcher, grok, broadcast = _flushing_watcher(tmp_path)
+    order: list[str] = []
+    watcher.set_queue_snapshot_callback(lambda snapshot: order.append("queue-present" if snapshot else "queue-empty"))
+
+    def record_transcript(_agent_id: str, events: list[dict[str, Any]]) -> None:
+        order.append("transcript")
+        broadcast.extend(events)
+
+    watcher._on_events = record_transcript
+    grok.on_send = watcher._emit_cycle
+    watcher._queue.enqueue("deliver me", "t0", is_turn_open=False)
+    order.clear()
+
+    watcher._attempt_flush()
+
+    assert grok.sent == ["deliver me"]
+    assert order.index("queue-empty") < order.index("transcript"), order
+    assert [event["content"] for event in broadcast if event["type"] == "user_message"] == ["deliver me"]
+
+
+def test_a_control_command_goes_out_alone_ahead_of_the_held_block_and_is_never_a_chip(tmp_path: Path) -> None:
+    watcher, grok, _broadcast = _flushing_watcher(tmp_path)
+    grok.is_committing = False
+    published: list[list[str]] = []
+    watcher.set_queue_snapshot_callback(lambda snapshot: published.append([str(e["content"]) for e in snapshot]))
+    watcher._queue.enqueue("hello", "t0", is_turn_open=True)
+    watcher._queue.enqueue_control_command("/model grok-4.6")
+    watcher._queue.enqueue_control_command("/effort low")
+
+    watcher._attempt_flush()
+    watcher._attempt_flush()
+    grok.is_committing = True
+    watcher._attempt_flush()
+
+    assert grok.sent == ["/model grok-4.6", "/effort low", "hello"]
+    assert all(not any(content.startswith("/") for content in snapshot) for snapshot in published)
+    assert watcher.get_queued_messages() == []
+
+
+def test_a_control_command_waits_out_a_turn_like_a_message(tmp_path: Path) -> None:
+    watcher, grok, _broadcast = _flushing_watcher(tmp_path)
+    write_root_turn(tmp_path, _PLAIN_ROOT, "prompt-9")
+    watcher._queue.enqueue_control_command("/model grok-4.5")
+
+    watcher._attempt_flush()
+    assert grok.sent == []
+
+    remove_root_turn(tmp_path, _PLAIN_ROOT)
+    grok.is_committing = False
+    watcher._attempt_flush()
+    assert grok.sent == ["/model grok-4.5"]
+    assert watcher._queue.next_control_command() is None
+
+
+def test_a_control_command_mngr_refuses_for_a_gate_answers_the_send_waiting_behind_it(tmp_path: Path) -> None:
+    """The message meets the same gate, so its POST fails with mngr's words rather than waiting out the gate."""
+    watcher, grok, _broadcast = _flushing_watcher(tmp_path)
+    grok.refusal = SendFailedError("grok shows its consent screen", "input_blocked")
+    watcher._queue.enqueue_control_command("/model grok-4.5")
+    queued_id = watcher._queue.enqueue("hello", "t0", is_turn_open=False)
+
+    watcher._attempt_flush()
+
+    result = watcher._queue.wait_for_send_result(queued_id, 0.0)
+    assert result is not None
+    assert (result.verdict, result.reason) == (GrokSendVerdict.BLOCKED, "grok shows its consent screen")
+    assert _held(watcher) == [("hello", False)]
+    assert watcher._queue.next_control_command() == "/model grok-4.5"
+    assert grok.sent == []
+
+
+@pytest.mark.parametrize(
+    ("command", "model_state"),
+    [
+        ("/effort high", {"model": "grok-4.5", "effort": "high", "fast": False}),
+        ("/model grok-4.6", {"model": "grok-4.6", "effort": "xhigh", "fast": False}),
+    ],
+    ids=["effort", "model"],
+)
+def test_a_control_command_grok_already_runs_is_dropped_unsent(
+    tmp_path: Path, command: str, model_state: dict[str, Any]
+) -> None:
+    """mngr confirms a switch by model_state.json changing, which it never does for one already in force."""
+    watcher, grok, _broadcast = _flushing_watcher(tmp_path)
+    get_grok_model_state_path(tmp_path).write_text(json.dumps(model_state) + "\n")
+    watcher._queue.enqueue_control_command(command)
+
+    watcher._attempt_flush()
+
+    assert grok.sent == []
+    assert watcher._queue.next_control_command() is None
+    assert watcher._flush_wake.is_set()
+
+
+def test_a_control_command_grok_does_not_run_yet_is_sent(tmp_path: Path) -> None:
+    watcher, grok, _broadcast = _flushing_watcher(tmp_path)
+    grok.is_committing = False
+    state = {"model": "grok-4.6", "effort": "high", "fast": False}
+    get_grok_model_state_path(tmp_path).write_text(json.dumps(state) + "\n")
+    watcher._queue.enqueue_control_command("/effort low")
+
+    watcher._attempt_flush()
+
+    assert grok.sent == ["/effort low"]
+
+
+def test_a_slash_command_is_sent_alone_once_and_never_typed_again(tmp_path: Path) -> None:
+    """Measured live: grok runs `/timestamps` or `/new` itself and logs no user turn for it."""
+    watcher, grok, broadcast = _flushing_watcher(tmp_path)
+    watcher._queue.enqueue("before", "t0", is_turn_open=True)
+    watcher._queue.enqueue("/new", "t1", is_turn_open=True)
+    watcher._queue.enqueue("after", "t2", is_turn_open=True)
+
+    def run_locally(text: str) -> bool:
+        if text.startswith("/"):
+            grok.sent.append(text)
+            return True
+        return grok.send(text)
+
+    watcher._queue.bind_session_send(run_locally)
+    for _ in range(5):
+        watcher._attempt_flush()
+
+    assert grok.sent == ["before", "/new", "after"]
+    assert watcher.get_queued_messages() == []
+    assert [event["content"] for event in broadcast if event["type"] == "user_message"] == ["before", "after"]
+
+
+def test_a_grok_relaunch_drops_the_held_messages_before_anything_is_sent_into_it(tmp_path: Path) -> None:
+    watcher, grok, _broadcast = _flushing_watcher(tmp_path)
+    watcher._queue.enqueue("from the old process", "t0", is_turn_open=True)
+    (tmp_path / PROCESS_STARTED_MARKER_FILENAME).write_text("")
+
+    watcher._attempt_flush()
+
+    assert grok.sent == []
+    assert watcher.get_queued_messages() == []
+
+
+def test_without_a_bound_session_send_a_refused_flush_hook_send_into_a_turn_reads_busy(tmp_path: Path) -> None:
+    watcher, _grok, _broadcast = _flushing_watcher(tmp_path)
+    watcher._queue.unbind_session_send(_grok.send)
+    assert watcher._queue.get_session_send() is None
+    hook_sent: list[str] = []
+
+    def refusing_hook(text: str) -> bool:
+        hook_sent.append(text)
+        write_root_turn(tmp_path, _PLAIN_ROOT, "prompt-9")
+        return False
+
+    watcher.set_flush_hooks(refusing_hook, lambda: True)
+    queued_id = watcher._queue.enqueue("held", "t0", is_turn_open=True)
+
+    watcher._attempt_flush()
+
+    assert hook_sent == ["held"]
+    assert watcher._queue.is_exhausted(queued_id) is False
+    assert _held(watcher) == [("held", False)]
+
+
+def test_a_root_turn_change_wakes_the_worker_only_while_something_is_held(tmp_path: Path) -> None:
+    watcher, _grok, _broadcast = _flushing_watcher(tmp_path)
+
+    watcher._on_root_turns_changed()
+    assert not watcher._flush_wake.is_set()
+
+    watcher._queue.enqueue_control_command("/effort high")
+    watcher._on_root_turns_changed()
+    assert watcher._flush_wake.is_set()
+
+
+def test_the_running_worker_sends_a_held_message_within_a_second_of_the_turn_ending(tmp_path: Path) -> None:
+    """The root-turn directory wakes the worker: the transcript's idle edge can come before mngr clears the turn."""
+    write_grok_agent_state(tmp_path, find_fixture_scenario("plain"))
+    drop_tracker(tmp_path.name)
+    write_root_turn(tmp_path, _PLAIN_ROOT, "prompt-9")
+    watcher, _broadcast, _reported = _build_watcher(tmp_path)
+    grok = _ScriptedGrok(tmp_path)
+    sent_at: list[float] = []
+    grok.on_send = lambda: sent_at.append(time.monotonic())
+    publish_count = [0]
+    watcher.set_queue_snapshot_callback(lambda _snapshot: publish_count.__setitem__(0, publish_count[0] + 1))
+    watcher.set_flush_hooks(_fail_if_called, lambda: True)
+    watcher._queue.bind_session_send(grok.send)
+    watcher.delivery_witness_seconds = 0.3
+    watcher.start()
+    try:
+        watcher._queue.enqueue("held", "t0", is_turn_open=True)
+        # Each attempt republishes the queue; two of them have found the turn in flight.
+        wait_for(lambda: publish_count[0] >= 3, timeout=5.0, poll_interval=0.02)
+        assert grok.sent == []
+        turn_ended_at = time.monotonic()
+        remove_root_turn(tmp_path, _PLAIN_ROOT)
+        wait_for(lambda: bool(sent_at), timeout=3.0, poll_interval=0.02)
+    finally:
+        watcher.stop()
+
+    assert grok.sent == ["held"]
+    assert sent_at[0] - turn_ended_at < 1.5
+
+
+def test_a_loader_runs_no_flush_worker(tmp_path: Path) -> None:
+    write_grok_agent_state(tmp_path, find_fixture_scenario("plain"))
+    loader = GrokTranscriptLoader.build_loader(_agent_info(tmp_path))
+
+    assert not hasattr(loader, "_flush_thread")
+    assert not hasattr(loader, "_queue")

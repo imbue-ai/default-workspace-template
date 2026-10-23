@@ -18,6 +18,7 @@ offset; :func:`detail_for` re-reads an event's payloads from the record it came 
   task_completed,        background work that finished
   subagent_finished
   hook_annotation        a Stop hook sending grok back to work
+  compaction_checkpoint  a compaction of a top-level session, as the "Context was compacted" status
   anything else          nothing
 
 Event ids are ``grok-<session id>-<byte offset>-<suffix>``: grok's ``eventId`` restarts with each
@@ -34,9 +35,11 @@ from typing import Final
 
 from pydantic import Field
 
+from imbue.chat.compaction_status import CONTEXT_COMPACTED_CONTENT
 from imbue.chat.harnesses.auth_errors import is_auth_error_text
 from imbue.chat.harnesses.error_patterns import classify_api_error
 from imbue.chat.harnesses.error_patterns import is_provider_fault
+from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.chat.harnesses.events import SpecialEventKind
 from imbue.chat.harnesses.grok.tool_labels import shell_command
@@ -468,6 +471,22 @@ def _system_note(lane: GrokLaneState, event_id: str, timestamp: str, message: An
     return [event]
 
 
+def _compaction_event(lane: GrokLaneState, offset: int, timestamp: str) -> list[dict[str, Any]]:
+    """A top-level session's compaction as the status every harness gives one; a subagent's is not the chat's."""
+    if not lane.is_root:
+        return []
+    event = _base_event("user_message", _event_id(lane.session_id, offset, "compacted"), timestamp, lane)
+    event.update(
+        {
+            "role": "system",
+            "content": CONTEXT_COMPACTED_CONTENT,
+            "display": DisplayKind.STATUS.value,
+            "non_turn_tail": True,
+        }
+    )
+    return [event]
+
+
 def _on_turn_completed(
     update: dict[str, Any], lane: GrokLaneState, offset: int, timestamp: str
 ) -> list[dict[str, Any]]:
@@ -572,6 +591,8 @@ def parse_record(record: dict[str, Any], lane: GrokLaneState, *, offset: int) ->
         case "hook_annotation":
             hook_note_id = _event_id(lane.session_id, offset, "hook-annotation")
             return _system_note(lane, hook_note_id, timestamp, update.get("message"))
+        case "compaction_checkpoint":
+            return _compaction_event(lane, offset, timestamp)
         case _:
             return []
 

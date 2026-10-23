@@ -322,9 +322,10 @@ while since `mngr start` does not wait for the harness to come up. A new chat
 created with a pick (`POST /api/chats/create` takes `model` too) is set up the
 same way. `GET /api/accounts/<account-id>/model-options` is where the dialog
 gets the target account's models, for a handoff's successor and a rebound agent
-alike: the catalog for a static harness, for codex the options an agent of the
-account was last offered, and nothing for antigravity, whose model is changed
-from the agent's terminal.
+alike: the catalog for a static harness, for grok the catalog's models that
+`grok models` lists for the account (all of them when it lists none or cannot
+run), for codex the options an agent of the account was last offered, and
+nothing for antigravity, whose model is changed from the agent's terminal.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
@@ -533,10 +534,13 @@ sweep does no work at all. The plugin's rules are in its README in the mngr repo
 (`libs/mngr_autocompact/README.md`); the cron-driven `mngr autocompact run` it
 describes is not used here, since the sweep is the timer.
 
-Idle compaction applies to the harnesses mngr can compact: Claude, Codex and Pi
+Idle compaction applies to the harnesses mngr can compact: Claude, Codex, Pi and Grok
 (`supports_compaction` in `harnesses/registry.py`, shipped on `/api/harnesses`).
-Antigravity, Grok and OpenCode chats are never compacted or passed to the plugin, and
-their model menu has no Auto-compact row.
+Antigravity and OpenCode chats are never compacted or passed to the plugin, and
+their model menu has no Auto-compact row. xAI publishes no prompt-cache lifetime, so
+mngr_grok reports none, and the plugin passes over a Grok chat unless
+`[plugins.autocompact] cache_ttl_minutes` is set, which this workspace does not set
+since it would be every harness's lifetime.
 
 **The Auto-compact setting.** Each chat is On or Off, chosen in the model menu's
 Auto-compact submenu, which ends with a "New chats start with" row whose On /
@@ -560,19 +564,25 @@ compacted when its harness reaches its own context limit (Claude's
 auto-compaction, for one) and when the user types `/compact`. What a composer
 `/compact` does is the harness's `composer_compact_handling` in
 `harnesses/registry.py`. In a Claude chat it reaches Claude as its own command.
-In a Codex or Pi chat it is never sent, since either would hand it to the model
-as prose: the chat app asks mngr to compact the agent instead, through the same
-`request_compaction` call the sweep makes (`MngrMessenger.request_compaction`),
-passing any text after `/compact` as instructions (Pi uses them, Codex ignores
-them). mngr records the compaction against the agent's idle period, so the sweep
-does not compact it again before its next turn. The send answers 200 with
+In a Codex, Pi or Grok chat it is never sent: Codex and Pi would hand it to the
+model as prose, and a Grok `/compact` typed by the flush worker would show no
+compaction and leave the next held message free to be typed into it. The chat app
+asks mngr to compact the agent instead, through the same `request_compaction`
+call the sweep makes (`MngrMessenger.request_compaction`), passing any text after
+`/compact` as instructions (Pi uses them, Codex and Grok ignore them). For Grok,
+mngr types grok's own `/compact` and holds the agent's message lock until grok
+logs the compaction, so no held message is typed into it meanwhile. mngr records the compaction against the agent's idle period, so the sweep
+does not compact it again before its next turn. The chat shows the request before
+it asks mngr, since mngr's request for Grok returns only once the compaction is
+over, and withdraws it when mngr declines or fails it. The send answers 200 with
 `status: compaction_requested`, and the composer drops its "Sending…" bubble
 then, since no transcript turn will replace it; the status and chips below show
 the compaction. Such a `/compact` is declined with the "/compact wasn't sent"
 notice, asking nothing of mngr, when nothing was said since the last compaction
 (`kind: nothing_to_compact`), and while the agent is mid-turn, compacting, has
-messages queued, or is stopped (`kind: compact_unavailable`), since both
-harnesses start a compaction in place of a running turn; mngr re-checks the idle
+messages queued, or is stopped (`kind: compact_unavailable`), since Codex and
+Pi start a compaction in place of a running turn and mngr types nothing into a
+busy Grok; mngr re-checks the idle
 period under the agent's message lock and declines the same way. A request mngr
 fails is a send failure in mngr's words. pi refuses a compaction of a session
 too small to cut without telling anyone but stderr, so such a Pi `/compact`
@@ -592,9 +602,9 @@ shows only once the agent is idle, so a `/compact` queued behind a running turn
 leaves the turn's label up until the turn ends. The exception is Codex, which
 runs its compaction as a turn (`is_compaction_run_as_turn` on its activity
 tracker): the chat asks it to compact only while idle, so its request shows
-over that turn. Pi writes no marker and compacts outside any turn, so a user
-turn that starts after the chat's request ends the request: pi runs no turn
-while it compacts, so its compaction is over or it refused it. A stopped agent
+over that turn. Pi and Grok write no marker and compact outside any turn, so a
+user turn that starts after the chat's request ends the request: neither runs a
+turn while it compacts, so its compaction is over or it refused it. A stopped agent
 still reads idle. It counts as working: the chat list shows the chat as working, and the
 composer stays open, with a message sent meanwhile queued behind the
 compaction. The activity strip above the composer names who started it, from
@@ -618,11 +628,11 @@ the pair replaces it. The state comes from two signals:
 - The chat app's own requests: the sweep's and a composer `/compact`'s, on every
   harness mngr can compact.
 
-So the status does not show for a Codex or Pi chat's own compaction, or for an
+So the status does not show for a Codex, Pi or Grok chat's own compaction, or for an
 older Claude agent's own compaction or a `/compact` typed in its terminal. It
 clears when the compaction finishes: the "Context was compacted" event arrives,
 or for Claude the marker goes or `last_compaction.json` records a finish after
-the request, or for Pi a user turn starts after it. One that never reports completion (cancelled, failed, or crashed)
+the request, or for Pi or Grok a user turn starts after it. One that never reports completion (cancelled, failed, or crashed)
 stops showing after 10 minutes (`PENDING_COMPACTION_TIMEOUT_SECONDS`), and a
 marker older than that is ignored. A request on a chat nobody has open, which no
 "Context was compacted" event can end, stops after 3 minutes instead
@@ -632,8 +642,9 @@ during a compaction: with no turn in flight it presses Claude's cancel chord
 (`M-q`, bound to `chat:cancel`, the action Escape takes), which cancels the
 compaction. When a chord or a restart was actually sent, the app drops the
 marker and its own pending request, since a cancelled compaction reports no
-completion; a stop that found nothing to interrupt leaves them alone. Codex and Pi interrupts do not
-cancel a compaction (`can_interrupt_compaction`), so their stop button is hidden
+completion; a stop that found nothing to interrupt leaves them alone. Codex, Pi and Grok interrupts do not
+cancel a compaction (`can_interrupt_compaction`; mngr presses Grok's Ctrl+C only
+into a top-level turn, which a compaction is not), so their stop button is hidden
 while they compact. A `/compact` typed in a Claude chat's composer before the
 agent's first reply is declined with "Nothing to compact yet." (a 409 with
 `kind: nothing_to_compact`, which the composer shows as a declined-command
@@ -651,7 +662,7 @@ Where they land depends on who started it:
 - `native` (Claude's own compaction, mid-turn): at the event's position in the
   turn, appended to the chip run beside it, or as a chip row of their own when
   nothing chips beside them.
-- `manual` (a `/compact`): directly below the `/compact` bubble; a Codex or Pi
+- `manual` (a `/compact`): directly below the `/compact` bubble; a Codex, Pi or Grok
   chat shows no such bubble, so there they follow the last turn, as for `idle`.
 - `idle` (the sweep): after the last turn, below its reply, or appended to its
   last chip run when it ended with no reply.

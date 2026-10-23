@@ -593,7 +593,9 @@ def _request_compaction_from_mngr(
     """Have mngr compact the agent in place of sending a composer ``/compact``, and show the compaction as requested.
 
     Declined with ``SendFailedError`` when nothing was said since the last compaction, and while
-    the agent is stopped or busy: mngr's compaction would abort a running turn.
+    the agent is stopped or busy: mngr's compaction would abort a running turn. The request shows
+    before mngr is asked, since mngr can wait out the whole compaction (grok's does), and is
+    withdrawn when mngr declines or fails it.
     """
     if not _has_compactable_exchange(_events_since_last_compaction(events)):
         raise SendFailedError(NOTHING_TO_COMPACT_DETAIL, NOTHING_TO_COMPACT_SEND_FAILURE_KIND)
@@ -605,8 +607,12 @@ def _request_compaction_from_mngr(
     ):
         raise SendFailedError(COMPACT_WHILE_BUSY_DETAIL, COMPACT_UNAVAILABLE_SEND_FAILURE_KIND)
     requested_at = time.monotonic()
-    agent_manager.request_agent_compaction(AgentId(agent_info.id), compact_command_instructions(text))
     agent_manager.note_compaction_requested(agent_info.id, CompactionCause.MANUAL, requested_at)
+    try:
+        agent_manager.request_agent_compaction(AgentId(agent_info.id), compact_command_instructions(text))
+    except (SendFailedError, AgentNotFoundError):
+        agent_manager.withdraw_compaction_request(agent_info.id, requested_at)
+        raise
     return SendOutcome.OK
 
 

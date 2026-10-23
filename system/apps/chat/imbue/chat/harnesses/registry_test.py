@@ -63,6 +63,20 @@ def test_the_model_bar_commands_are_not_also_in_a_harness_declined_tuple() -> No
             assert overlap == set(), f"{harness}: {overlap} duplicated in the terminal-notice tuple"
 
 
+def test_grok_opens_the_sign_in_for_login_and_logout_and_the_model_picker_for_its_model_alias() -> None:
+    actions = {
+        command: (popup.action, popup.notice_body)
+        for popup in HARNESS_SPECS[HarnessType.GROK].popups
+        if popup.trigger is PopupTrigger.COMPOSER_COMMAND
+        for command in popup.commands
+    }
+    assert actions["/login"] == (PopupAction.OPEN_AUTH, None)
+    assert actions["/logout"] == (PopupAction.OPEN_AUTH, None)
+    assert actions["/m"] == actions["/model"]
+    assert actions["/quit"] == (PopupAction.NOTICE, None)
+    assert "/compact" not in actions
+
+
 def test_only_claude_adds_the_billing_line_to_the_fast_mode_notice() -> None:
     bodies = {
         harness: popup.notice_body
@@ -86,7 +100,7 @@ def test_only_the_harnesses_mngr_can_compact_support_compaction_and_only_claude_
         HarnessType.PI_CODING: (True, False),
         HarnessType.OPENCODE: (False, False),
         HarnessType.ANTIGRAVITY: (False, False),
-        HarnessType.GROK: (False, False),
+        HarnessType.GROK: (True, False),
         HarnessType.SEED: (False, False),
     }
 
@@ -99,7 +113,7 @@ def test_a_composer_compact_runs_on_every_harness_mngr_can_compact_and_is_declin
         HarnessType.PI_CODING: ComposerCompactHandling.REQUESTED_FROM_MNGR,
         HarnessType.OPENCODE: ComposerCompactHandling.SENT_AS_TEXT,
         HarnessType.ANTIGRAVITY: ComposerCompactHandling.SENT_AS_TEXT,
-        HarnessType.GROK: ComposerCompactHandling.SENT_AS_TEXT,
+        HarnessType.GROK: ComposerCompactHandling.REQUESTED_FROM_MNGR,
         HarnessType.SEED: ComposerCompactHandling.SENT_AS_TEXT,
     }
     for harness, spec in HARNESS_SPECS.items():

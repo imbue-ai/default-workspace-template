@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from pydantic import Field
 
+from imbue.chat.compaction_status import is_context_compacted_event
 from imbue.chat.harnesses.grok.session_parser import GrokLaneState
 from imbue.chat.harnesses.grok.session_parser import INTERNAL_MARKER_TYPES
 from imbue.chat.harnesses.grok.session_parser import SUBAGENT_SPAWNED_MARKER_TYPE
@@ -872,3 +873,35 @@ def test_record_timestamp_prefers_the_millisecond_time_and_falls_back_to_seconds
     )
     assert record_timestamp({"timestamp": 1792458433, "params": {}}) == "2026-10-20T01:07:13.000Z"
     assert record_timestamp({"params": {}}) == ""
+
+
+# The records grok 1.0.62 wrote to a top-level session's updates.jsonl for a `/compact` mngr sent, on the stub model.
+_COMPACTION_CHECKPOINT_LINE = (
+    '{"timestamp":1792752393,"method":"_x.ai/session/update","params":{"sessionId":"9ff7a9cb-81b2-4b74-9f6c-eaa55af03e15",'
+    '"update":{"sessionUpdate":"compaction_checkpoint","checkpoint_id":"f7697647-ade2-4622-86e6-dd74b398f556",'
+    '"prompt_index_at_compaction":1,"checkpoint_file":"compaction_checkpoints/f7697647-ade2-4622-86e6-dd74b398f556.json",'
+    '"schema_version":1,"created_at":"2026-10-23T10:46:33.825292+00:00"},"_meta":{"eventId":'
+    '"9ff7a9cb-81b2-4b74-9f6c-eaa55af03e15-14","agentTimestampMs":1792752393825}}}'
+)
+_AUTO_COMPACT_COMPLETED_LINE = (
+    '{"timestamp":1792752393,"method":"_x.ai/session/update","params":{"sessionId":"9ff7a9cb-81b2-4b74-9f6c-eaa55af03e15",'
+    '"update":{"sessionUpdate":"auto_compact_completed","tokens_before":6,"tokens_after":6,"summary_preview":null},'
+    '"_meta":{"eventId":"9ff7a9cb-81b2-4b74-9f6c-eaa55af03e15-15","agentTimestampMs":1792752393825}}}'
+)
+
+
+def test_a_compaction_of_a_top_level_session_is_the_context_compacted_status() -> None:
+    records = [json.loads(_COMPACTION_CHECKPOINT_LINE), json.loads(_AUTO_COMPACT_COMPLETED_LINE)]
+
+    events = _wire_events("root", records, True)
+
+    assert [(event["event_id"], event["timestamp"]) for event in events] == [
+        ("grok-root-0-compacted", "2026-10-23T10:46:33.825Z")
+    ]
+    assert is_context_compacted_event(events[0])
+    assert events[0]["role"] == "system"
+    assert events[0]["non_turn_tail"] is True
+
+
+def test_a_subagents_compaction_is_not_the_chats() -> None:
+    assert _wire_events("child", [json.loads(_COMPACTION_CHECKPOINT_LINE)], False) == []

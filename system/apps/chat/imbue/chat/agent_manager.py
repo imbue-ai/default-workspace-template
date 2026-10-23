@@ -4958,6 +4958,20 @@ class AgentManager:
         except OSError as e:
             _loguru_logger.warning("Failed to record the compaction request of agent {}: {}", agent_id, e)
 
+    def withdraw_compaction_request(self, agent_id: str, requested_at: float) -> None:
+        """Forget the compaction this chat noted as requested at ``requested_at``, which mngr then declined or failed."""
+        with self._lock:
+            pending = self._compaction_pending_by_agent.get(agent_id)
+            if pending is None or pending[0] != requested_at:
+                return
+            del self._compaction_pending_by_agent[agent_id]
+        try:
+            (self._get_agent_state_dir(agent_id) / COMPACTION_REQUEST_FILENAME).unlink(missing_ok=True)
+        except OSError as e:
+            _loguru_logger.warning("Failed to remove the compaction request of agent {}: {}", agent_id, e)
+        _loguru_logger.info("autocompact: compaction request withdrawn agent={}", agent_id)
+        self._recompute_activity_state(agent_id, broadcast_on_change=True)
+
     def note_sweep_started(self, agent_names: Sequence[str]) -> None:
         """The idle sweep handed these agents to mngr: until it returns, a compaction of one is the sweep's."""
         started_at = time.monotonic()

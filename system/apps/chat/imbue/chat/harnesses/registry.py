@@ -59,6 +59,12 @@ from imbue.chat.harnesses.codex.watcher import CodexTranscriptLoader
 from imbue.chat.harnesses.events import SpecialEventKind
 from imbue.chat.harnesses.grok.account_binding import GrokAccountBinding
 from imbue.chat.harnesses.grok.activity import GrokActivityTracker
+from imbue.chat.harnesses.grok.model import GROK_CATALOG
+from imbue.chat.harnesses.grok.model import GROK_STATE_RELATIVE_PATH
+from imbue.chat.harnesses.grok.model import GrokModelResolver
+from imbue.chat.harnesses.grok.session import GrokHarnessSession
+from imbue.chat.harnesses.grok.tap import GrokAtomicShoulderTap
+from imbue.chat.harnesses.grok.tap import GrokInterruptToComposer
 from imbue.chat.harnesses.grok.watcher import GrokSessionWatcher
 from imbue.chat.harnesses.grok.watcher import GrokTranscriptLoader
 from imbue.chat.harnesses.harness_type import HarnessType
@@ -272,6 +278,78 @@ _PI_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
     "/scoped-models",
     "/session",
     "/tree",
+)
+
+# Grok Build slash commands the chat declines to send (action="notice"). A grok message is typed into
+# its pane, so each of these, measured on grok 1.0.62 by sending it to a live agent on a stub model and
+# then a message that runs a tool, left that message unsent or unfinished: most open a view over the
+# composer, /quit and /exit end grok, /dashboard's composer dispatches a new agent instead, and the rest
+# change how grok takes every later message. Aliases sit beside the command they resolve to; the
+# first token matches, so every argument form is declined with its command.
+_GROK_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
+    "/agents",
+    "/agents-dashboard",
+    # These two leave always-approve, so the next tool call waits on a permission card.
+    "/always-approve",
+    "/auto",
+    # Hides the footer hints mngr reads grok's state from.
+    "/compact-mode",
+    "/config",
+    "/config-agents",
+    "/context",
+    "/cost",
+    "/dashboard",
+    "/delete",
+    "/docs",
+    "/edit-prompt",
+    "/exit",
+    "/feedback",
+    "/find",
+    "/fork",
+    "/guides",
+    "/help",
+    "/history",
+    "/home",
+    "/hooks",
+    "/howto",
+    "/import-claude",
+    "/log",
+    "/marketplace",
+    "/mcps",
+    # Makes Enter insert a newline, so no later message is submitted.
+    "/ml",
+    "/multiline",
+    "/onboarding",
+    "/personas",
+    # Leaves grok in plan mode, whose exit tool this workspace removes.
+    "/plan",
+    "/plugin",
+    "/plugins",
+    "/preferences",
+    "/prefs",
+    "/privacy",
+    "/quit",
+    "/remember",
+    "/resume",
+    "/rewind",
+    "/sessions",
+    "/settings",
+    "/skills",
+    "/tour",
+    "/transcript",
+    "/tutorial",
+    "/undo",
+    "/usage",
+    "/welcome",
+    "/workflows",
+)
+
+# The model bar's popup for grok also declines `/m`, grok's alias of `/model`.
+_GROK_MODEL_BAR_POPUP: Final[HarnessPopup] = HarnessPopup(
+    trigger=PopupTrigger.COMPOSER_COMMAND,
+    commands=(*_MODEL_BAR_COMMANDS, "/m"),
+    action=PopupAction.NOTICE,
+    notice_body=_MODEL_BAR_NOTICE,
 )
 
 # The auth-intercept commands every auth-declaring harness shares: typing either opens
@@ -557,11 +635,15 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             filename=GROK_SESSION_STARTED_MARKER_FILENAME, is_deleted_at_launch=True
         ),
         binding_class=GrokAccountBinding,
-        # The shared placeholders: the model bar switches nothing and its catalog is empty.
-        resolver_class=PlaceholderModelResolver,
-        catalog_factory=lambda: EMPTY_CATALOG,
-        # mngr_grok's status line writes model_state.json at the state-dir root.
-        model_state_relative_path=Path("."),
+        # The chat holds every message and the watcher's flush worker alone types it, once no top-level turn
+        # is in flight. Stop and the tap press one Ctrl+C, which mngr presses only into a cancellable turn.
+        session_class=GrokHarnessSession,
+        interrupt_to_composer_class=GrokInterruptToComposer,
+        shoulder_tap_class=GrokAtomicShoulderTap,
+        cancel_chord="C-c",
+        resolver_class=GrokModelResolver,
+        catalog_factory=lambda: GROK_CATALOG,
+        model_state_relative_path=GROK_STATE_RELATIVE_PATH,
         special_kinds=frozenset(
             {
                 SpecialEventKind.TURN_STARTED,
@@ -569,7 +651,19 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
                 SpecialEventKind.TURN_ABORTED,
             }
         ),
-        popups=(_MODEL_BAR_POPUP,),
+        # A typed `/logout` would delete the account's `auth.json`, which every agent on the account shares.
+        popups=(
+            HarnessPopup(trigger=PopupTrigger.COMPOSER_COMMAND, commands=_AUTH_COMMANDS, action=PopupAction.OPEN_AUTH),
+            HarnessPopup(
+                trigger=PopupTrigger.COMPOSER_COMMAND, commands=_GROK_DECLINED_COMMANDS, action=PopupAction.NOTICE
+            ),
+            _GROK_MODEL_BAR_POPUP,
+        ),
+        # mngr_grok types grok's `/compact` and holds the agent's message lock until grok logs the compaction.
+        supports_compaction=True,
+        # A compaction is no top-level turn, and mngr presses Ctrl+C only into one.
+        can_interrupt_compaction=False,
+        composer_compact_handling=ComposerCompactHandling.REQUESTED_FROM_MNGR,
     ),
     # The seed segment of a chat the Imbue Studio app opened (``chat_seed.py``): turns the app wrote
     # before the workspace had any agent, read like an archived segment. No agent ever runs

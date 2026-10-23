@@ -2744,7 +2744,7 @@ def test_chats_on_a_harness_mngr_cannot_compact_are_never_swept(
                 manager, agent_id, name=f"{agent_id}-name", labels={"user_created": "true"}, harness=harness
             )
 
-        assert manager.get_opted_in_running_chat_agent_names() == ["chat-claude-name"]
+        assert manager.get_opted_in_running_chat_agent_names() == ["chat-claude-name", "chat-grok-name"]
     finally:
         manager.stop()
 
@@ -7154,6 +7154,7 @@ def test_a_pi_compaction_request_does_not_show_over_a_turn_already_running(
     ("harness", "is_ended"),
     [
         pytest.param(HarnessType.PI_CODING, True, id="pi"),
+        pytest.param(HarnessType.GROK, True, id="grok"),
         pytest.param(HarnessType.CODEX, False, id="codex_whose_compaction_is_a_turn"),
         pytest.param(HarnessType.CLAUDE, False, id="claude_whose_marker_tracks_its_compaction"),
     ],
@@ -7161,7 +7162,8 @@ def test_a_pi_compaction_request_does_not_show_over_a_turn_already_running(
 def test_a_user_turn_after_a_compaction_request_ends_it_only_on_a_harness_compacting_outside_turns_unmarked(
     agent_manager: AgentManager, tmp_path: Path, loguru_records: list[str], harness: HarnessType, is_ended: bool
 ) -> None:
-    """pi runs no turn while it compacts, so a turn after the request means its compaction is over or was refused."""
+    """pi and grok run no turn while they compact, so a turn after the request means the compaction is over or was
+    refused."""
     agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=harness)
     agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic() - 1.0)
     assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
@@ -7191,11 +7193,12 @@ def test_a_pi_compaction_request_ended_by_a_turn_does_not_come_back_once_the_tur
     assert _snapshot_compaction_cause(agent_manager, agent_id) is None
 
 
-def test_a_pi_compact_requested_from_the_composer_shows_compacting_as_requested_until_its_compacted_event(
-    agent_manager: AgentManager, tmp_path: Path
+@pytest.mark.parametrize("harness", [HarnessType.PI_CODING, HarnessType.GROK], ids=["pi", "grok"])
+def test_a_compact_requested_from_the_composer_shows_compacting_as_requested_until_its_compacted_event(
+    agent_manager: AgentManager, tmp_path: Path, harness: HarnessType
 ) -> None:
-    """pi compacts outside a turn, and its compaction record is the only completion it reports."""
-    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=HarnessType.PI_CODING)
+    """pi and grok compact outside a turn, and the compaction record is the only completion either reports."""
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=harness)
 
     agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic())
     assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
@@ -7217,6 +7220,35 @@ def test_a_compaction_request_is_recorded_beside_the_marker(agent_manager: Agent
     assert request is not None
     assert request.cause == CompactionCause.IDLE
     assert request.requested_at < before
+
+
+def test_a_withdrawn_compaction_request_stops_showing_and_leaves_no_record(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """mngr declined or failed the compaction the chat showed as requested before asking it."""
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path, harness=HarnessType.GROK)
+    requested_at = time.monotonic()
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, requested_at)
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+    agent_manager.withdraw_compaction_request(agent_id, requested_at)
+
+    assert agent_id not in agent_manager._compaction_pending_by_agent
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+    assert not (state_dir / COMPACTION_REQUEST_FILENAME).exists()
+
+
+def test_withdrawing_an_older_compaction_request_leaves_a_newer_one(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path, harness=HarnessType.GROK)
+    older = time.monotonic() - 1.0
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic())
+
+    agent_manager.withdraw_compaction_request(agent_id, older)
+
+    assert agent_manager._compaction_pending_by_agent[agent_id][1] == CompactionCause.IDLE
+    assert (state_dir / COMPACTION_REQUEST_FILENAME).exists()
 
 
 def test_a_compaction_request_for_an_agent_without_a_local_state_dir_is_pending_but_not_recorded(

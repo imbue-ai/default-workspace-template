@@ -31,6 +31,12 @@ class GrokActivityTracker(HarnessActivityTracker):
 
     active_marker_filename: ClassVar[str | None] = None
 
+    # mngr_grok writes no compaction marker or record; a compaction shows through the chat's own request.
+    compacting_marker_filename: ClassVar[str | None] = None
+    last_compaction_filename: ClassVar[str | None] = None
+    # A `/compact` opens no turn: grok logs only its compaction_checkpoint and auto_compact_completed records.
+    is_compaction_run_as_turn: ClassVar[bool] = False
+
     # Each top-level session's open turn, by session id, with the time its turn_started marker carries.
     _open_turn_started_at_by_session: dict[str | None, float | None]
     # Each session's newest turn marker time, so a re-delivered older marker cannot move its latch.
