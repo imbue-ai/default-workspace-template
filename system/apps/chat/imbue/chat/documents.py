@@ -2,15 +2,18 @@
 
 The document is the vite build's HTML with meta tags injected per request (the base path, the
 workspace hostname, the primary agent id, the chat's own ids, and the terminal's origin label),
-so the page can read its identity off itself rather than guess it from the URL.
+so the page can read its identity off itself rather than guess it from the URL. A chat's own page
+also carries the state its first frame needs (``inject_initial_state_script``).
 """
 
 import html
 import json
 import os
 import socket
+from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 from typing import Final
 
 from flask import Response
@@ -30,6 +33,8 @@ CHAT_AGENT_ID_META_NAME: Final[str] = "system-interface-chat-agent-id"
 CHAT_SESSION_ID_META_NAME: Final[str] = "system-interface-chat-session-id"
 # The terminal app's origin label, which the chat's terminal back face is served from.
 TERMINAL_LABEL_META_NAME: Final[str] = "system-interface-terminal-label"
+# What the page would otherwise wait on its first fetches for, so it draws it on its first frame.
+INITIAL_STATE_SCRIPT_ID: Final[str] = "chat-initial-state"
 
 
 def html_response(html_content: str, status_code: int = 200) -> Response:
@@ -112,6 +117,16 @@ def inject_chat_identity_meta_tags(html_content: str, chat_id: str, agent_id: st
     with_chat = inject_meta_tag(html_content, CHAT_ID_META_NAME, chat_id)
     with_agent = inject_meta_tag(with_chat, CHAT_AGENT_ID_META_NAME, agent_id)
     return inject_meta_tag(with_agent, CHAT_SESSION_ID_META_NAME, session_id)
+
+
+def inject_initial_state_script(html_content: str, initial_state: Mapping[str, Any]) -> str:
+    """Carry ``initial_state`` in the document as JSON the page reads before it first draws.
+
+    ``<`` is escaped so nothing in the data can close the script element early.
+    """
+    payload = json.dumps(initial_state).replace("<", "\\u003c")
+    script = f'<script type="application/json" id="{INITIAL_STATE_SCRIPT_ID}">{payload}</script>'
+    return html_content.replace("</head>", f"{script}\n</head>")
 
 
 def inject_terminal_label_meta_tag(html_content: str, terminal_label: str) -> str:

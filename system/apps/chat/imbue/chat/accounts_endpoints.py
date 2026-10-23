@@ -203,6 +203,11 @@ def list_lanes() -> Response:
 
 
 def list_accounts() -> Response:
+    """Every signed-in account, with the label the picker shows (``build_accounts_response``)."""
+    return model_response(build_accounts_response())
+
+
+def build_accounts_response() -> AccountsResponse:
     """Every signed-in account, with the label the picker shows.
 
     The label is composed here rather than client-side only because it needs the lane table
@@ -230,7 +235,7 @@ def list_accounts() -> Response:
         )
         for numbered in accounts.number_accounts(index.accounts)
     )
-    return model_response(AccountsResponse(accounts=rows, mru=index.mru, default=index.default_account))
+    return AccountsResponse(accounts=rows, mru=index.mru, default=index.default_account)
 
 
 def _reauth_method_id(account: accounts.Account, harness: HarnessType) -> str:

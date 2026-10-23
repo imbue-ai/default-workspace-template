@@ -7,9 +7,14 @@ import m from "mithril";
 import "./style.css";
 import { getChatAgentId, getChatId, getChatSessionId } from "./document-meta";
 import { addActiveAgentChangedListener, initChats } from "./models/Chats";
+import type { WsEvent } from "./models/Chats";
+import { applyHarnessCatalogs } from "./models/HarnessCatalog";
+import type { HarnessCatalog } from "./models/HarnessCatalog";
+import { readInitialState } from "./initialState";
 import { forgetPendingChoice } from "./models/ModelSettings";
 import { trackPendingLaneSettlement } from "./models/PendingLane";
-import { closeProviderChooser, isProviderChooserOpen, loadAccountsWithRetry } from "./models/Providers";
+import { applyAccounts, closeProviderChooser, isProviderChooserOpen, loadAccountsWithRetry } from "./models/Providers";
+import type { AccountsResponse } from "./models/Providers";
 import { ProviderChooserModal } from "./views/ProviderChooserModal";
 import { llmApi } from "./llm-api";
 import type { LlmApi } from "./llm-api";
@@ -57,8 +62,15 @@ async function bootstrap(): Promise<void> {
   const chatId = getChatId();
   const agentId = getChatAgentId();
   const sessionId = getChatSessionId();
+  // What the chat app served the page with, so its first frame draws the chat, its account and its
+  // model without waiting on the socket or a fetch; both still run and refresh them.
+  const initialState = readInitialState();
+  if (initialState.accounts !== undefined) applyAccounts(initialState.accounts as AccountsResponse);
+  if (initialState.harnesses !== undefined) {
+    applyHarnessCatalogs(initialState.harnesses as Record<string, HarnessCatalog>);
+  }
   // The chat app's own WebSocket, read for this page's own chat.
-  initChats();
+  initChats((initialState.replay ?? []) as WsEvent[]);
   trackBackendArrivals(isMessageCarriedBySwitch);
   trackPendingLaneSettlement();
   // A chat that moved to a new agent starts on that harness's own model (spec 5.12): an
