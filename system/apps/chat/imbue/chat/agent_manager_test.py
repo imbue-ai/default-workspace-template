@@ -1170,11 +1170,11 @@ def test_making_another_chat_the_main_chat_renames_the_old_one_still_named_main_
         listing = _next_chat_listing(q)
         assert listing["main_chat_id"] == "agent-trip"
         titles = {chat["chat_id"]: chat["title"] for chat in listing["chats"]}
-        assert titles["agent-main"] == "Chat 2 (fka Main)"
+        assert titles["agent-main"] == "Chat 2 (was: Main)"
         assert titles["agent-trip"] == "Trip plan"
         wait_until_true(lambda: argv_log.exists(), 10, "the former main chat's rename")
         wait_until_true(
-            lambda: _display_name(manager, "agent-main") == "Chat 2 (fka Main)",
+            lambda: _display_name(manager, "agent-main") == "Chat 2 (was: Main)",
             10,
             "the former main chat to carry its new name",
         )
@@ -1183,7 +1183,7 @@ def test_making_another_chat_the_main_chat_renames_the_old_one_still_named_main_
 
     (rename_argv,) = argv_log.read_text().splitlines()
     assert rename_argv.startswith("rename agent-main ")
-    assert "display_name=Chat 2 (fka Main)" in rename_argv
+    assert "display_name=Chat 2 (was: Main)" in rename_argv
 
 
 def test_making_another_chat_the_main_chat_leaves_a_name_the_user_chose_on_the_old_one(

@@ -1232,7 +1232,7 @@ def test_making_a_chat_the_main_chat_from_its_menu_moves_it_to_the_head_of_the_l
         expect(page.locator(".chat-rail-row[data-main]")).to_have_count(1)
         assert agent_manager.get_main_chat_id() == ChatId(FIXTURE_AGENT_ID)
         former_main_title = page.locator(f'.chat-rail-row[data-chat-id="{welcome.chat_id}"] .chat-rail-title')
-        expect(former_main_title).to_have_text(re.compile(r"^Chat \d+ \(fka Main\)$"))
+        expect(former_main_title).to_have_text(re.compile(r"^Chat \d+ \(was: Main\)$"))
 
 
 @pytest.mark.timeout(120, func_only=False)

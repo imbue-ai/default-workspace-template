@@ -420,7 +420,7 @@ crash, or a relaunch leaves it where it is. The seeded chat takes it first, name
 "Main" (`MAIN_CHAT_NAME`) whatever title the Mind app sent, and a chat's "Make main chat" menu row (`POST
 /api/chats/<chat-id>/make-main`, 409 for a helper another agent started) moves it there. The chat
 made main keeps its own name; the one it replaces, when still named "Main", is renamed to the
-first free "Chat N" marked as the former main chat ("Chat 7 (fka Main)"), shown at once and kept
+first free "Chat N" marked as the former main chat ("Chat 7 (was: Main)"), shown at once and kept
 named as it was if mngr refuses the rename; a name anyone chose stays. When the chat it names is
 deleted (or a chat awaiting its first send is dropped by a restart of this app), a new chat named
 "Main" (else the first free "Chat N", when another chat is already called Main), awaiting its

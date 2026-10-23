@@ -39,7 +39,7 @@ MAIN_CHAT_FILENAME: Final[str] = "main_chat.json"
 # What the seeded chat is called: a name the app chose, so the first message never renames it.
 MAIN_CHAT_NAME: Final[str] = "Main"
 # What marks the chat that was the main chat, after the first free "Chat N" it is renamed to.
-FORMER_MAIN_CHAT_SUFFIX: Final[str] = f" (fka {MAIN_CHAT_NAME})"
+FORMER_MAIN_CHAT_SUFFIX: Final[str] = f" (was: {MAIN_CHAT_NAME})"
 _CHAT_ID_KEY: Final[str] = "chat_id"
 
 
@@ -76,7 +76,7 @@ def is_main_chat_name(name: str) -> bool:
 @pure
 def former_main_chat_name(taken_names: Iterable[str]) -> str:
     """The name a chat still named ``MAIN_CHAT_NAME`` takes when another chat becomes the main chat: the first
-    "Chat N" free both bare and marked, then marked ("Chat 7 (fka Main)")."""
+    "Chat N" free both bare and marked, then marked ("Chat 7 (was: Main)")."""
     taken = list(taken_names)
     unmarked = [name.removesuffix(FORMER_MAIN_CHAT_SUFFIX) for name in taken]
     return first_free_numbered_name(AUTO_NAME_WORD, [*taken, *unmarked]) + FORMER_MAIN_CHAT_SUFFIX

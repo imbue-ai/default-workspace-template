@@ -47,16 +47,16 @@ def test_with_no_chat_there_is_no_main_chat() -> None:
 
 
 def test_the_former_main_chat_takes_the_first_chat_number_free_both_bare_and_marked() -> None:
-    assert former_main_chat_name(["Main", "Chat 1", "Chat 3"]) == "Chat 2 (fka Main)"
-    assert former_main_chat_name(["Chat 1", "Chat 2 (fka Main)"]) == "Chat 3 (fka Main)"
-    assert former_main_chat_name([]) == "Chat 1 (fka Main)"
+    assert former_main_chat_name(["Main", "Chat 1", "Chat 3"]) == "Chat 2 (was: Main)"
+    assert former_main_chat_name(["Chat 1", "Chat 2 (was: Main)"]) == "Chat 3 (was: Main)"
+    assert former_main_chat_name([]) == "Chat 1 (was: Main)"
 
 
 def test_a_chat_is_named_main_however_it_is_capitalized_but_not_when_main_is_only_part_of_its_name() -> None:
     assert is_main_chat_name("Main")
     assert is_main_chat_name("main ")
     assert not is_main_chat_name("Main notes")
-    assert not is_main_chat_name("Chat 2 (fka Main)")
+    assert not is_main_chat_name("Chat 2 (was: Main)")
 
 
 def test_the_store_keeps_the_main_chat_across_a_reload_and_forgets_it_when_cleared(tmp_path: Path) -> None:
