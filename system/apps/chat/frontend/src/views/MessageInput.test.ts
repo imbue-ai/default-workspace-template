@@ -75,6 +75,8 @@ const mocks = vi.hoisted(() => {
     whenChatRegistered: vi.fn(async (_chatId: string) => {}),
     // Whether the chat list names the chat; false for a seeded chat awaiting its first send.
     isChatRegistered: true,
+    // Whether the chat is a room (a message log among the people here), which offers no model and no agent.
+    isRoom: false,
     provisional: undefined as unknown,
     launchChat: vi.fn(async (_chatId: string, _accountId: string, _message?: string) => ({})),
     chooseFastMode: vi.fn(),
@@ -200,6 +202,7 @@ vi.mock("../models/Chats", async (importOriginal) => ({
   getChatById: () =>
     mocks.isChatRegistered ? { active_agent: mocks.agent, handoff: mocks.switching.handoff } : undefined,
   getProvisionalChat: () => mocks.provisional,
+  isRoomChat: () => mocks.isRoom,
   launchChat: (chatId: string, accountId: string, message?: string) => mocks.launchChat(chatId, accountId, message),
   whenChatRegistered: (chatId: string) => mocks.whenChatRegistered(chatId),
 }));
@@ -489,6 +492,21 @@ describe("MessageInput placeholder", () => {
     mocks.agent.activity_state = "COMPACTING";
     const textarea = findByTag(MessageInput().view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
     expect(textarea?.attrs?.placeholder).toBe("Type to queue more messages...");
+  });
+
+  it("tells a room's sender to tag the agent, until a switch off the room holds the message instead", () => {
+    mocks.isRoom = true;
+    try {
+      const room = findByTag(MessageInput().view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
+      expect(room?.attrs?.placeholder).toBe("Message (tag @agent to ask the agent)");
+
+      mocks.switching.handoff = handoffStateFixture({ phase: "summarizing" });
+      const switching = findByTag(MessageInput().view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
+      expect(switching?.attrs?.placeholder).toBe("Type a message; it is delivered once Codex is ready…");
+    } finally {
+      mocks.isRoom = false;
+      mocks.switching.handoff = null;
+    }
   });
 });
 

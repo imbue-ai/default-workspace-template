@@ -1553,13 +1553,15 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                     "px-1 py-1 font-sans text-(length:--font-size-body) leading-[1.4] text-primary focus:outline-none " +
                     "placeholder:text-faint group-data-[stacked]/row:col-span-3 group-data-[stacked]/row:col-start-1 " +
                     "disabled:cursor-not-allowed disabled:opacity-60",
-                  placeholder: isRoomChat(chatId)
-                    ? "Message (tag @agent to ask the agent)"
-                    : handoff !== null
+                  // A switch off a room holds the message like any switch, so its wording comes first.
+                  placeholder:
+                    handoff !== null
                       ? handoffComposerPlaceholder(handoff)
-                      : isAgentWorking
-                        ? "Type to queue more messages..."
-                        : "Type a message...",
+                      : isRoomChat(chatId)
+                        ? "Message (tag @agent to ask the agent)"
+                        : isAgentWorking
+                          ? "Type to queue more messages..."
+                          : "Type a message...",
                   rows: 1,
                   disabled: isComposerDisabled,
                   value: messageText,
