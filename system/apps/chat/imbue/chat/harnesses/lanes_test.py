@@ -82,6 +82,30 @@ def test_a_scrape_trigger_matches_what_its_strict_pattern_matches() -> None:
         assert re.search(method.scrape.strict, sample), lane_id
 
 
+@pytest.mark.parametrize(
+    ("line", "page"),
+    [
+        pytest.param(
+            "  https://accounts.x.ai/oauth2/device?user_code=ABCD-1234",
+            "https://accounts.x.ai/oauth2/device?user_code=ABCD-1234",
+            id="accounts-host",
+        ),
+        pytest.param(
+            "  https://auth.x.ai/oauth2/device?user_code=ABCD-1234",
+            "https://auth.x.ai/oauth2/device?user_code=ABCD-1234",
+            id="issuer-host",
+        ),
+        pytest.param("  https://x.ai/legal/terms-of-service", None, id="another-x-ai-link"),
+        pytest.param("  https://accounts.x.ai.example.test/oauth2/device", None, id="a-host-outside-x-ai"),
+    ],
+)
+def test_grok_s_page_scrape_takes_the_device_page_on_any_x_ai_host(line: str, page: str | None) -> None:
+    method = LANE_XAI.methods[0]
+    assert isinstance(method, PtyMethod)
+    found = re.search(method.scrape.strict, line.ljust(80))
+    assert (None if found is None else found.group().rstrip()) == page
+
+
 def test_chatgpt_signs_in_through_codexs_app_server_in_a_browser_first() -> None:
     """The browser login needs the desktop app's relay; the device login is the fallback without one."""
     browser, device, api_key = LANE_OPENAI.methods

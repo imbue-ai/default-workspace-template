@@ -386,9 +386,11 @@ LANE_GOOGLE = Lane(
 # is confirmed on that page, then exits: 0 after "✓ Signed in", 1 after "Error: <why>". Nothing
 # comes back to type in, so its flow shows the code and waits.
 
+# The page is the verification URI xAI's device endpoint returns, which may be on any x.ai host.
+_GROK_DEVICE_PAGE_PREFIX: Final = r"https://(?:[A-Za-z0-9-]+\.)*x\.ai/oauth2/device"
 _GROK_DEVICE_URL_SCRAPE = Scrape(
-    trigger=r"https://accounts\.x\.ai/oauth2/device\S*",
-    strict=rf"https://accounts\.x\.ai/oauth2/device{_SIGN_IN_URL_CHARSET}*",
+    trigger=rf"{_GROK_DEVICE_PAGE_PREFIX}\S*",
+    strict=rf"{_GROK_DEVICE_PAGE_PREFIX}{_SIGN_IN_URL_CHARSET}*",
     continuation=rf"^{_SIGN_IN_URL_CHARSET}+$",
 )
 # The code sits alone on its row, two spaces in, under the line that asks for it.
