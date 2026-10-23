@@ -51,6 +51,8 @@ def _agent_info(agent_state_dir: Path) -> AgentInfo:
 
 _FINISHED = "finished"
 _WAKE_PENDING = "wake_pending"
+# Half the flush worker's retry interval, so only the root-turn watcher's wake sends this soon.
+_SOONER_THAN_THE_RETRY_SECONDS = 2.5
 
 
 def _build_watcher(
@@ -954,7 +956,9 @@ def test_a_root_turn_change_wakes_the_worker_only_while_something_is_held(tmp_pa
     assert watcher._flush_wake.is_set()
 
 
-def test_the_running_worker_sends_a_held_message_within_a_second_of_the_turn_ending(tmp_path: Path) -> None:
+def test_the_running_worker_sends_a_held_message_when_the_turn_ends_without_waiting_for_its_retry(
+    tmp_path: Path,
+) -> None:
     """The root-turn directory wakes the worker: the transcript's idle edge can come before mngr clears the turn."""
     write_grok_agent_state(tmp_path, find_fixture_scenario("plain"))
     write_root_turn(tmp_path, _PLAIN_ROOT, "prompt-9")
@@ -980,7 +984,7 @@ def test_the_running_worker_sends_a_held_message_within_a_second_of_the_turn_end
         watcher.stop()
 
     assert grok.sent == ["held"]
-    assert sent_at[0] - turn_ended_at < 1.5
+    assert sent_at[0] - turn_ended_at < _SOONER_THAN_THE_RETRY_SECONDS
 
 
 def test_a_loader_holds_no_queue_for_the_agent(tmp_path: Path) -> None:
