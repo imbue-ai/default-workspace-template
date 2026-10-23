@@ -14,28 +14,27 @@ timeless; everything here is a snapshot.
 | P2 no git history rewrite | live | live | live | live | live |
 | P3 permission request stands alone | live | **partial** | live | **partial** | live |
 | P4 OOM band + git identity | live | live | live | live | live |
-| P5 substantive work under a step | live | **partial** | live | **partial** | **partial** |
+| P5 substantive work under a step | live | **partial** | live | **partial** | live |
 | P6 `tk start`/`close` stands alone | live | **partial** | live | live | live |
 | P7 open steps are reconciled | live | live | live | **live (turn-start only)** | **live (first tool call)** |
 | P8 a chat turn with something for the user notifies | prose-only | prose-only | prose-only | prose-only | prose-only |
-| P9 secret file read only by the wrapper | live | live | live | **partial** | **partial** |
+| P9 secret file read only by the wrapper | live | live | live | **partial** | live |
 | P10 secret request stands alone | live | **partial** | live | **partial** | live |
 
 No harness is fully `n/a` any more, and five rows are `partial` for reasons that are
 structural rather than unwired. Measured against codex-cli 0.147.0, pi 0.84.1 and grok 1.0.62.
 
-- **grok P5 — partial.** The nudge runs on every grok tool call and reaches the model as
-  `additionalContext`, but the read-only skip list in `agent_require_steps_pretool.sh` is keyed
-  on claude's tool names, so grok's read-only tools (`read_file`, `grep`, `list_dir`,
-  `search_tool`, ...) are nudged too. It over-fires; it never misses substantive work.
 - **grok P7 — live, first tool call.** grok discards an allowing UserPromptSubmit hook's output
   (JSON `additionalContext` and plain stdout alike, measured), so the prompt only records the
   turn and the reminder rides the first allowed PreToolUse of that turn. A turn that makes no
   allowed tool call gets none.
-- **grok P9 — partial.** The shell half is live, and so are `write` and `grep`, whose names and
-  `file_path`/`path` fields the checker already knows from pi. `read_file` (`target_file`),
-  `search_replace` (`file_path`) and `list_dir` (`target_directory`) reach the checker under
-  their grok names, which it does not list yet. See also `use_tool` under "Known bypasses".
+- **grok P9 — live, partly by grok's own permission rule.** The shell half is live, and so is
+  every grok tool that names a file: `read_file`, `search_replace`, `write` and `grep`'s `path`
+  are refused under the directory, and `list_dir` lists it as `ls` does. Two routes reach a
+  secret file without naming it, so no check on the call's text sees them: `grep` with a `glob`
+  such as `*`, and `use_tool` reading its arguments from a file (both under "Known bypasses").
+  The `[agent_types.grok]` settings carry `[permission] deny = ["Read(**/.secrets/**)"]`, which
+  closes both. That rule also denies `read_file` the directory's README, which `cat` still reads.
 
 - **agy P5 — partial.** The shim sees only `bash -c`, so agy's own editing tools
   (`write_to_file`, `replace_file_content`) can never be nudged: no agy hook carries tool
@@ -314,11 +313,21 @@ are the routes around them that are worth knowing; all were measured.
   all. mngr seeds trust for the work dir, which covers the normal case.
 - **grok in an untrusted folder (open).** `.grok/hooks/` loads only for a trusted folder, as pi's
   extensions do; mngr seeds trust for every work dir.
-- **grok `use_tool` with `tool_input_file` or `file` (open).** grok reads the file before
+- **grok `use_tool` with `tool_input_file` or `file` (closed).** grok reads the file before
   PreToolUse, and the payload carries its parsed contents, not its path, so a JSON file under
-  `data/.secrets/` reaches an MCP tool, and its result the model, without any guard seeing where
-  it came from. A file that is not JSON (the `.env` a secret card writes) fails to parse, and
-  nothing of it is shown.
+  `data/.secrets/` (mcpc's `credentials.json` is one) reaches an MCP tool, and its result the
+  model, without any guard seeing where it came from. A file that is not JSON (the `.env` a
+  secret card writes) fails to parse, and nothing of it is shown. The dispatcher cannot refuse
+  what it never sees; grok's own permission rule `Read(**/.secrets/**)` in `[permission] deny`,
+  which the grok settings carry, refuses the read ("MCP source Read denied"), measured under
+  always-approve.
+- **grok `grep` with a match-all `glob` (closed).** ripgrep searches the hidden and ignored files
+  a glob selects, so `glob: "*"` (which grok's own tool description suggests for searching
+  ignored files), `**`, `?*` or `**/*` from the workspace prints the values in
+  `data/.secrets/`, with no path naming the directory. A glob that does not select the
+  directory itself (`*.env`, `**/*.env`, `data/.secrets/*`) finds nothing there. The same
+  `Read(**/.secrets/**)` rule leaves those files out of grep's results while the search still
+  runs, and refuses `read_file` there by an absolute path or a `..` spelling too, measured.
 - **grok `workflow` and truncated inputs (closed).** The dispatcher refuses `workflow`, a script
   that runs many subagents as one background job, and any shell call grok truncated.
 - **grok `!` commands (open, not agent-reachable).** By grok's own docs a `!` command typed into
@@ -333,15 +342,19 @@ When a rule changes, update every harness that carries it:
 - **Safety 1–4, 9, 10 and workflow 6** (`agent_prevent_commit_rewrite.sh`,
   `agent_block_pipe_tail_head.sh`, `agent_latchkey_request_standalone.sh`,
   `agent_secrets_guard.sh`, `agent_tk_standalone.sh`, `agent_rewrite_bash_command.py`): the
-  scripts alone. claude and codex run them as hooks, and agy's shim and pi's
-  `policy_guards.ts` feed them the same payload. `agent_secrets_guard.sh` is the one guard pi
-  also runs on its file tools, because P9 covers a `read` of a secret file as much as a `cat`.
+  scripts alone. claude and codex run them as hooks, and agy's shim, pi's
+  `policy_guards.ts` and grok's dispatcher feed them the same payload. `agent_secrets_guard.sh`
+  is the one guard pi and grok also run on their file tools, because P9 covers a `read` of a
+  secret file as much as a `cat`; its checker lists each harness's file-tool names and path
+  fields, so a new file tool is an entry there.
   Keep the rewrite **last** in both hook configs and in pi's handler — a blocker that
   inspects the rewritten command refuses everything (see "Which command a guard sees" above).
 - **Workflow 5 and 7** (`agent_require_steps_pretool.sh`, `agent_open_tickets_reminder.sh`,
-  `agent_open_tickets_stop_nudge.sh`): the scripts (claude **and** codex) and the matching
+  `agent_open_tickets_stop_nudge.sh`): the scripts (claude, codex **and** grok) and the matching
   handler in **this repo's** `.pi/extensions/tk_workflow.ts` (pi). The step discipline is
-  this repo's, not mngr's — mngr's lifecycle extension no longer carries any of it.
+  this repo's, not mngr's — mngr's lifecycle extension no longer carries any of it. The
+  require-a-step script's read-only skip list carries claude's and grok's tool names; a new
+  read-only tool on either is an entry there.
 - **Workflow 8** (finish notification): no script on any harness. The rule is in `AGENTS.md`
   and the `notify-user` skill, which every harness reads (see P8 above for why the claude Stop
   hook was removed).

@@ -22,9 +22,11 @@ the link counts as a mention of the directory.
   variables in that command's environment, it does not license it to open the
   file.
 * A **file** tool (claude's Read / Grep / Glob / Edit / Write, pi's read / edit /
-  write / grep / find, codex's ``apply_patch``) is refused when its path, or the
-  patch's file lines, point under ``data/.secrets/``. The directory's README is
-  not a secret and stays readable.
+  write / grep / find, grok's read_file / search_replace / write / grep, codex's
+  ``apply_patch``) is refused when its path, or the patch's file lines, point
+  under ``data/.secrets/``. The directory's README is not a secret and stays
+  readable, and a listing of the directory (pi's ``ls``, grok's ``list_dir``)
+  passes as the shell's ``ls`` does.
 
 Nothing here prints the command or a path back: either may carry a value.
 
@@ -76,7 +78,8 @@ _ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_]\w*=")
 # Tool names whose payload is a shell command: claude and codex ``Bash``, pi's
 # ``bash``, and the empty name the agy shim's synthesised payload may carry.
 _SHELL_TOOL_NAMES = frozenset({"Bash", "bash", ""})
-# claude's file tools plus pi's; codex edits files through apply_patch.
+# claude's file tools, pi's, and grok's (whose write and grep share pi's names);
+# codex edits files through apply_patch.
 _PATH_TOOL_NAMES = frozenset(
     {
         "Read",
@@ -92,12 +95,14 @@ _PATH_TOOL_NAMES = frozenset(
         "write",
         "grep",
         "find",
+        "read_file",
+        "search_replace",
     }
 )
 _PATCH_TOOL_NAME = "apply_patch"
 # Where a file tool names its target. ``pattern`` is a path only for the glob
 # tools (claude's Glob, pi's find); Grep's ``pattern`` is a regex and is left alone.
-_PATH_FIELDS = ("file_path", "path", "notebook_path")
+_PATH_FIELDS = ("file_path", "path", "notebook_path", "target_file")
 _GLOB_TOOL_NAMES = frozenset({"Glob", "find"})
 _PATCH_FILE_LINE_RE = re.compile(
     r"^\*\*\* (?:Add|Update|Delete) File: (.*)$", re.MULTILINE
