@@ -665,9 +665,12 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
     # it starts is already running.
     requested_at = time.monotonic()
     # A send that has to wait for the agent to come up -- a stopped agent the send starts, or a
-    # harness still starting -- reads as Connecting on the chat until it resolves.
+    # harness still starting -- reads as Connecting on the chat until it resolves. A room's send
+    # starts nothing (it appends to the room's transcript), so a stopped room stays stopped and
+    # reads so (the multiplayer spec, section 11).
+    is_revived_by_send = get_harness_spec(agent_info.harness).is_revived_by_send
     with agent_manager.track_connecting_send(agent_info.id, message_id) as mark_connecting:
-        if is_lifecycle_dead(agent_info.state) or session.is_starting_up():
+        if (is_revived_by_send and is_lifecycle_dead(agent_info.state)) or session.is_starting_up():
             mark_connecting()
         outcome = session.send(text, message_id)
         if outcome is SendOutcome.NOT_READY:
@@ -682,7 +685,7 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
         # lifecycle that is true rather than one that says the agent they just messaged is dead.
         # Inside the connecting scope, so the chat never reads as stopped and not connecting,
         # which would let the stopped-chat release drop the watcher of the chat it revived.
-        if outcome is SendOutcome.OK:
+        if outcome is SendOutcome.OK and is_revived_by_send:
             agent_manager.note_agent_alive(agent_info.id)
     if outcome is SendOutcome.OK and compact_handling is ComposerCompactHandling.FORWARDED_TO_HARNESS:
         agent_manager.note_compaction_requested(agent_info.id, CompactionCause.MANUAL, requested_at)

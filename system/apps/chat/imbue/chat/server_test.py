@@ -1097,6 +1097,27 @@ def test_send_message_to_a_stopped_file_agent_marks_it_alive() -> None:
     assert tracked is not None and tracked.state == "WAITING"
 
 
+def test_a_send_into_a_stopped_room_appends_and_leaves_the_room_stopped(tmp_path: Path) -> None:
+    """A room's send appends to its transcript and starts nothing (the multiplayer spec, section 11): the room
+    keeps reading as stopped, and its reader is revived by ``mngr message``, the start verb, or boot, not by a page."""
+    room_id = "agent-00000000000000000000000000000737"
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger, chat_files_root=tmp_path / "chats")
+    manager.note_agent_list_known()
+    seed_agent_state(manager, room_id, name="Attic", state="STOPPED", harness=HarnessType.ROOM)
+    agent_state_dir(get_host_dir(), room_id).mkdir(parents=True, exist_ok=True)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+
+    response = client.post(f"/api/chats/{room_id}/message", json={"message": "anyone here?", "message_id": "m-1"})
+
+    assert response.status_code == 200
+    assert messenger.sent == []
+    events = client.get(f"/api/chats/{room_id}/events").get_json()["events"]
+    assert [event["content"] for event in events] == ["anyone here?"]
+    tracked = manager.get_agent_by_id(room_id)
+    assert tracked is not None and tracked.state == "STOPPED"
+
+
 class _ReleasingAsEachSendEndsAgentManager(AgentManager):
     """Runs the chat app's release the moment a send's connecting scope ends, as an observe event could."""
 

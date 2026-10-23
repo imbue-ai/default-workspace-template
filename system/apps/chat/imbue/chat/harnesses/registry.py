@@ -371,6 +371,10 @@ class HarnessSpec(FrozenModel):
     # Whether the harness is told a non-owner's author by the ``[from: <name>] `` prefix on the delivered text
     # (the multiplayer spec, section 5.3). A room records the author structurally, so its messages carry none.
     is_author_prefixed: bool = True
+    # Whether a send starts a stopped agent: mngr's send auto-starts a stopped file-session agent, and the codex
+    # session revives one itself. A room's send appends to its transcript and starts nothing, so a stopped room
+    # stays stopped until ``mngr message``, the start verb, or boot (the multiplayer spec, section 11).
+    is_revived_by_send: bool = True
 
 
 HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
@@ -570,6 +574,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         special_kinds=frozenset(),
         session_class=RoomHarnessSession,
         is_author_prefixed=False,
+        is_revived_by_send=False,
     ),
 }
 
