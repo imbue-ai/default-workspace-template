@@ -2194,7 +2194,7 @@ def _plan(paths: list[str]) -> update_classification.ApplyPlan:
         ("system/apps/system_interface/imbue/pyproject.toml", False, False),
     ],
 )
-def test_plan_apply_resyncs_the_venv_when_any_apps_pyproject_changes(
+def test_plan_apply_classifies_each_environment_manifest(
     path: str, is_backend_manifest: bool, is_app_pyproject: bool
 ) -> None:
     # The workspace venv is every app's only install, and an app's console scripts
