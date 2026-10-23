@@ -129,8 +129,8 @@ def classify_path(path: str) -> PathClass:
     cover for the lead to finish the rest:
 
     - ``system_interface`` -- ``system/apps/system_interface/**``; the apply
-      rebuilds or installs the bundle and refreshes the backend's environment
-      on a manifest change (:func:`refresh_backend_dependencies`).
+      rebuilds or installs the bundle and re-syncs the workspace venv when the
+      app's ``pyproject.toml`` changes (:func:`sync_workspace_venv`).
     - ``service`` -- ``system/supervisord.conf``, the per-program drop-ins under
       ``system/supervisord.conf.d/**``, and ``system/libs/bootstrap/**``.
     - ``shared_runtime`` -- ``system/scripts/**``, other ``system/libs/**``,
