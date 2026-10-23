@@ -2545,10 +2545,10 @@ def test_grok_conservation_storm_stop_and_tap_executors(tmp_path: Path) -> None:
     The property is the other storms' (contract A1), checked after every op rather than per round: each accepted
     message is Delivered, Returned, held (Queued) or parked inside grok, and in exactly one of them. grok's specific
     risks are the worker typing into a turn mngr still reports (its files lag grok), stop or the tap pressing Ctrl+C
-    into an idle grok (a second press quits it), a restart that loses what it took, a model switch merged into a
-    block, handed back by stop, or dropped, and a message grok already has typed again: a slash command it ran, one
-    it parked behind a turn, or one typed after a draft. Breaches that leave every message accounted for -- a message left Sending,
-    a restart after a cancel that landed -- are collected and reported together once the rounds are done.
+    into an idle grok (a second press quits it), a restart that loses what it took, a model switch merged into a block,
+    handed back by stop, or dropped, and a message grok already has typed again: a slash command it ran, one it parked
+    behind a turn, or one typed after a draft. Breaches that leave every message accounted for -- a message left
+    Sending, a restart after a cancel that landed -- are collected and reported together once the rounds are done.
     """
     ledger = _Ledger("grok")
     world = _GrokWorld(tmp_path / f"agent-{uuid4().hex}", ledger)
