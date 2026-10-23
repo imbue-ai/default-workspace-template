@@ -31,7 +31,6 @@ from app_manifest.testing import write_repo_file
 from app_manifest.testing import write_supervisord_conf
 from app_manifest.testing import write_supervisord_dropin
 
-
 # --- the news workspace every case below is built on ----------------------------
 
 

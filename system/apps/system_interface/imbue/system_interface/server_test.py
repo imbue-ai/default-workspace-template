@@ -13,8 +13,8 @@ from unittest.mock import patch
 
 import httpx
 import pytest
-from app_schema.testing import assert_api_schema_describes_app
 from app_manifest.testing import assert_document_policy_admits_page
+from app_schema.testing import assert_api_schema_describes_app
 from flask import Flask
 from flask.testing import FlaskClient
 from workspace_layout.primitives import ClientId

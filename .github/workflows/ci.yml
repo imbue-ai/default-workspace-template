@@ -132,6 +132,18 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --all-packages
 
+      # Opt-in through the ENFORCE_RUFF repository variable, like check-changelog:
+      # workspace repos made from the template inherit this workflow, and their
+      # own apps were never held to the template's lint. The root config excludes
+      # the chat app and the shell, so each is checked from its own directory
+      # under its own config.
+      - name: Lint Python (ruff check)
+        if: vars.ENFORCE_RUFF == 'true'
+        run: |
+          uv run --no-sync ruff check .
+          (cd system/apps/chat && uv run --no-sync ruff check .)
+          (cd system/apps/system_interface && uv run --no-sync ruff check .)
+
       - name: Install Playwright browsers
         if: steps.python_suites.outputs.on_runner == 'true'
         run: uv run playwright install --with-deps chromium

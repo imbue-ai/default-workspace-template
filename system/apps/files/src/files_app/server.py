@@ -33,8 +33,8 @@ from app_schema.api_schema import SchemalessRoute
 from app_schema.api_schema import register_api_schema_route
 from app_schema.routes import error_response
 from app_schema.routes import model_response
-from files_app.connections import SYNCED_FOLDERS
 from files_app.connections import Connections
+from files_app.connections import SYNCED_FOLDERS
 from files_app.connections import list_connections
 from files_app.device_files import DeviceFiles
 from files_app.gateway import Gateway

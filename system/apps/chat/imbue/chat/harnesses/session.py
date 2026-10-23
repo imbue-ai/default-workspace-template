@@ -150,7 +150,7 @@ class AgentHarnessSession(ABC):
 
     # Liveness
 
-    def ensure_live(self) -> None:
+    def ensure_live(self) -> None:  # noqa: B027
         """Bring up whatever live backend the harness needs (blocking OK). No-op default:
         a file harness has no daemon to connect."""
 
@@ -159,12 +159,12 @@ class AgentHarnessSession(ABC):
         connecting). Default: the harness's own ready marker says it has not finished starting."""
         return self._deps.is_harness_starting_up()
 
-    def on_lifecycle_dead(self) -> None:
+    def on_lifecycle_dead(self) -> None:  # noqa: B027
         """The agent's mngr lifecycle is positively dead; drop live state that died with it.
         Level-triggered: called on every recompute observing a dead lifecycle, and must stay
         idempotent. No-op default."""
 
-    def close(self) -> None:
+    def close(self) -> None:  # noqa: B027
         """Terminal teardown (the manager stopped tracking the agent). No-op default."""
 
     # Messages
@@ -216,7 +216,7 @@ class AgentHarnessSession(ABC):
         """The option set the switch endpoint validates against; static catalog by default."""
         return self._deps.catalog_options()
 
-    def note_offered_options(self, options: tuple[ModelOption, ...]) -> None:
+    def note_offered_options(self, options: tuple[ModelOption, ...]) -> None:  # noqa: B027
         """A picker-open fetch produced ``options``; a harness with a per-agent dynamic set
         records them (codex, D2 reconciliation). No-op default."""
 

@@ -6,9 +6,9 @@ import zipfile
 from pathlib import Path
 
 import httpx
-from app_schema.testing import assert_api_schema_describes_app
 from werkzeug.test import TestResponse
 
+from app_schema.testing import assert_api_schema_describes_app
 from files_app.connections import shared_paths
 from files_app.device_files import safe_content_disposition
 from files_app.server import create_app

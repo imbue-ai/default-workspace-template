@@ -63,7 +63,11 @@ from typing import Any
 from imbue.imbue_common.mutable_model import MutableModel
 from loguru import logger
 from pydantic import PrivateAttr
-from workspace_layout.windows import WindowClosedHint, read_app_window_paths, window_query_value
+from workspace_layout.windows import (
+    WindowClosedHint,
+    read_app_window_paths,
+    window_query_value,
+)
 
 from browser import chrome_launcher
 from browser import manifest as fleet_manifest

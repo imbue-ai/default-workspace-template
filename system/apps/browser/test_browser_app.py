@@ -13,7 +13,12 @@ from browser import session as bsession
 from browser.primitives import APP_NAME
 from imbue.mngr.utils.polling import wait_for
 from mock_cdp_client_test import TabClosingCdpClient
-from workspace_layout.testing import FAKE_WINDOW_ID, LoopbackShell, desktop_answer, fake_desktop
+from workspace_layout.testing import (
+    FAKE_WINDOW_ID,
+    LoopbackShell,
+    desktop_answer,
+    fake_desktop,
+)
 
 # The manifest the supervisord program line registers with ``forward_port.py --manifest``.
 _APP_MANIFEST_PATH = Path(__file__).parent / "app.toml"

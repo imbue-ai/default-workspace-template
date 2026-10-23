@@ -6,8 +6,8 @@ import pytest
 from flask import Flask
 from flask.testing import FlaskClient
 
-from app_schema.testing import assert_api_schema_describes_app
 from app_manifest.testing import assert_document_policy_admits_page
+from app_schema.testing import assert_api_schema_describes_app
 from getting_started.pages import build_pages_blueprint
 from getting_started.template_catalog import TemplateCatalogStore
 from getting_started.testing import FakeTemplateCatalogFetcher

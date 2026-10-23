@@ -7,11 +7,11 @@ import pytest
 
 from env_converge import template_manifest
 from env_converge.template_manifest import (
-    AdaptationRequirement,
     CURRENT_MANIFEST_FORMAT,
     MANIFEST_MARKDOWN_NAME,
     MANIFEST_THUMBNAIL_NAME,
     MANIFEST_TOML_NAME,
+    AdaptationRequirement,
     Requirements,
     TemplateManifest,
     TemplateManifestNotFoundError,
