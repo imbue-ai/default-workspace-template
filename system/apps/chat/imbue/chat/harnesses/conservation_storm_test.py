@@ -2215,7 +2215,7 @@ class _GrokChat:
             SessionDeps(
                 harness=HarnessType.GROK,
                 state_dir=world.dir,
-                model_state_path=world.dir / "model_state.json",
+                model_state_path=get_grok_model_state_path(world.dir),
                 send_to_harness=world.mngr_send,
                 notify_agents_changed=_do_nothing,
                 is_harness_starting_up=_is_never_true,
