@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_grok_policy_guards.py pre-tool-use",
+            "command": "test -f ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_grok_policy_guards.py && python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_grok_policy_guards.py pre-tool-use",
             "timeout": 60
           }
         ]
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_grok_policy_guards.py user-prompt-submit",
+            "command": "test -f ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_grok_policy_guards.py && python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_grok_policy_guards.py user-prompt-submit",
             "timeout": 30
           }
         ]

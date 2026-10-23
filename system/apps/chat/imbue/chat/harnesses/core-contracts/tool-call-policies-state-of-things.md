@@ -250,7 +250,10 @@ require-a-step check.
 * **Fail open.** Only a guard's exit 2 refuses. A crash, a missing script or a run past the
   hook's budget (`PRE_TOOL_USE_BUDGET_SECONDS`, under the hook's `timeout`) is logged to
   `grok_policy_guards.log` in the agent's state dir and the call goes ahead; so is anything the
-  dispatcher itself did not expect. grok fails a handler open when its `timeout` runs out (5 s
+  dispatcher itself did not expect. Each handler runs the dispatcher only when the file is there
+  (`test -f ... &&`): grok goes ahead after a hook's exit 1, while python3 exits 2 for a missing
+  script, and a session keeps the hooks it started with after an older commit is checked out.
+  grok fails a handler open when its `timeout` runs out (5 s
   for PreToolUse when unset) and never loads one whose `timeout` is negative or not a number, so
   every handler in `policy.json` sets one, in seconds.
 * **P7.** UserPromptSubmit records the turn (`grok_policy_turn.json`: `sessionId`, `promptId`) for

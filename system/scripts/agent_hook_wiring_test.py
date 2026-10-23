@@ -15,7 +15,9 @@ asserted here.
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -143,6 +145,25 @@ def test_grok_wires_the_dispatcher_for_pretooluse_and_userpromptsubmit() -> None
         assert len(commands) == 1, f"{event}: {commands}"
         assert _referenced_scripts(commands) == {_GROK_DISPATCHER_NAME}
         assert commands[0].split()[-1] == command
+
+
+def test_a_wired_grok_dispatcher_whose_script_is_gone_does_not_refuse(tmp_path: Path) -> None:
+    """grok keeps the hooks it started with, so a session can outlive the dispatcher (a worktree
+    checked out at an older commit). grok refuses a call on a PreToolUse exit 2, which python3 gives
+    for a missing script, and goes ahead after any other failure."""
+    grok = json.loads(_GROK_HOOKS.read_text())
+    for event in ("PreToolUse", "UserPromptSubmit"):
+        (command,) = _hook_commands(grok, event)
+        finished = subprocess.run(
+            ["sh", "-c", command],
+            input="{}",
+            text=True,
+            env=os.environ | {"MNGR_AGENT_WORK_DIR": str(tmp_path)},
+            cwd=tmp_path,
+            capture_output=True,
+            timeout=30,
+        )
+        assert finished.returncode != 2, f"{event}: {finished.stderr}"
 
 
 def test_every_grok_hook_carries_a_timeout_in_seconds() -> None:
