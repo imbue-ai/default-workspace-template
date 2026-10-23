@@ -1,6 +1,5 @@
 """Claude's account binding: the `CLAUDE_CONFIG_DIR` line of the agent's env file, and the sessions filed under it."""
 
-import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Final
@@ -8,8 +7,10 @@ from typing import Final
 from loguru import logger as _loguru_logger
 
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.harnesses.account_binding import AGENT_ENV_FILENAME
 from imbue.chat.harnesses.account_binding import AccountBinding
 from imbue.chat.harnesses.account_binding import DefaultCreateBinding
+from imbue.chat.harnesses.account_binding import rewrite_env_var
 from imbue.chat.harnesses.claude.session_files import claude_session_ids
 from imbue.chat.harnesses.claude.session_files import move_claude_sessions
 from imbue.mngr_claude.claude_config import auto_dismiss_claude_dialogs
@@ -18,9 +19,6 @@ from imbue.mngr_claude.claude_config import ensure_chat_cancel_tap_keybinding
 logger = _loguru_logger
 
 _CONFIG_DIR_ENV_VAR: Final = "CLAUDE_CONFIG_DIR"
-
-# mngr's per-agent env file, sourced into the agent's tmux session on every start.
-AGENT_ENV_FILENAME: Final = "env"
 
 
 class ClaudeAccountBinding(AccountBinding):
@@ -61,7 +59,7 @@ class ClaudeAccountBinding(AccountBinding):
 
     def rebind_agent(self, account_dir: Path, agent_state_dir: Path) -> None:
         # mngr sources the env file on every start and never rewrites it.
-        _rewrite_env_var(agent_state_dir / AGENT_ENV_FILENAME, _CONFIG_DIR_ENV_VAR, str(account_dir))
+        rewrite_env_var(agent_state_dir / AGENT_ENV_FILENAME, _CONFIG_DIR_ENV_VAR, str(account_dir))
 
     def move_sessions(
         self,
@@ -91,17 +89,3 @@ class ClaudeAccountBinding(AccountBinding):
                 )
         if recorded != target_account_dir:
             record_sessions_dir(target_account_dir)
-
-
-def _rewrite_env_var(env_path: Path, key: str, value: str) -> None:
-    """Set one ``KEY=VALUE`` line in an env file mngr wrote, keeping every other line as it is."""
-    lines = env_path.read_text().splitlines() if env_path.exists() else []
-    kept = [line for line in lines if not line.startswith(f"{key}=")]
-    # mngr's own quoting rule for the values it writes.
-    is_quoted = any(character in value for character in (" ", '"', "'", "\n"))
-    written = '"' + value.replace('"', '\\"') + '"' if is_quoted else value
-    temp_path = env_path.with_name(f"{env_path.name}.rebind-tmp")
-    temp_path.write_text("\n".join([*kept, f"{key}={written}"]) + "\n")
-    if env_path.exists():
-        temp_path.chmod(env_path.stat().st_mode & 0o777)
-    os.replace(temp_path, env_path)

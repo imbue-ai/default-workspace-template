@@ -22,6 +22,7 @@ Two properties the shapes forced:
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import json
 import os
 import re
@@ -35,6 +36,8 @@ from collections.abc import Callable
 from collections.abc import Generator
 from collections.abc import Mapping
 from collections.abc import Sequence
+from datetime import datetime
+from datetime import timezone
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -44,6 +47,7 @@ from typing import assert_never
 import pexpect
 from loguru import logger as _loguru_logger
 from pydantic import Field
+from pydantic import SecretStr
 
 from imbue.chat import accounts
 from imbue.chat.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
@@ -58,6 +62,7 @@ from imbue.chat.harnesses.codex.sign_in import SIGN_IN_FLOW_ENV_VAR
 from imbue.chat.harnesses.codex.sign_in import app_server_argv
 from imbue.chat.harnesses.codex.sign_in import connect_login_client
 from imbue.chat.harnesses.codex.sign_in import describe_login_failure
+from imbue.chat.harnesses.grok.account_binding import API_KEY_SCOPE as GROK_API_KEY_SCOPE
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import AppServerMethod
 from imbue.chat.harnesses.lanes import CodexLogin
@@ -94,7 +99,11 @@ from imbue.chat.harnesses.sign_in_relay import query_state
 from imbue.chat.harnesses.sign_in_relay import read_sign_in_url
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.harnesses.signed_in import is_signed_in
+from imbue.chat.harnesses.signed_in import probe_xai_api_key
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.mngr.utils.file_utils import atomic_write
+from imbue.mngr.utils.file_utils import read_json_dict
+from imbue.mngr.utils.polling import poll_until
 from imbue.mngr_codex.app_server_client import CodexAppServerError
 from imbue.mngr_codex.app_server_client import LoginCompleted
 
@@ -177,7 +186,7 @@ def flow_shape(method: SignInMethod) -> FlowShape:
         return FlowShape.PASTE
     if isinstance(method, AppServerMethod):
         return FlowShape.BROWSER if method.login is CodexLogin.BROWSER else FlowShape.CODE_THEN_WAIT
-    return FlowShape.URL_THEN_CODE
+    return FlowShape.URL_THEN_CODE if method.device_code_scrape is None else FlowShape.CODE_THEN_WAIT
 
 
 def _never_done(_buffer: str) -> bool:
@@ -248,7 +257,10 @@ class _Session:
         method = self.method
         if not isinstance(method, PtyMethod):
             return True
-        return _extract(buffer, method.scrape, method.frame_marker) is not None
+        if _extract(buffer, method.scrape, method.frame_marker) is None:
+            return False
+        code_scrape = method.device_code_scrape
+        return code_scrape is None or _extract(buffer, code_scrape, method.frame_marker) is not None
 
 
 def _new_session(lane: Lane, method: SignInMethod, account_id: str, minted: bool) -> _Session:
@@ -290,6 +302,8 @@ class AuthFlowService:
     _session: _Session | None
     _spawner: Callable[..., Any]
     _probe: Callable[[HarnessType, Path], SignedIn]
+    _probe_xai_key: Callable[[SecretStr], SignedIn]
+    _grok_auth_lock_wait_seconds: float
     _fetch_callback: CallbackFetcher
     _clock: Callable[[], float]
     _connect_login_client: Callable[[Path], CodexLoginClient]
@@ -305,13 +319,16 @@ class AuthFlowService:
         fetch_callback: CallbackFetcher | None = None,
         clock: Callable[[], float] | None = None,
         login_client_connector: Callable[[Path], CodexLoginClient] | None = None,
+        xai_key_probe: Callable[[SecretStr], SignedIn] | None = None,
+        grok_auth_lock_wait_seconds: float | None = None,
     ) -> "AuthFlowService":
-        """`spawner` stands in for `spawn_pty`, `probe` for `is_signed_in`.
+        """`spawner` stands in for `spawn_pty`, `probe` for `is_signed_in`, `xai_key_probe` for `probe_xai_api_key`.
 
         All injected rather than patched, matching ClaudeAuthService's `pexpect_spawner`.
         The probe in particular shells out to a real CLI, so a test that does not inject one
-        is quietly asserting on whatever this machine happens to have installed; the restart
-        shells out to mngr, which a test has even less business doing.
+        is quietly asserting on whatever this machine happens to have installed; the key probe
+        sends the key to xAI; the restart shells out to mngr, which a test has even less
+        business doing.
         """
         service = cls()
         service._home = home
@@ -320,6 +337,10 @@ class AuthFlowService:
         service._session = None
         service._spawner = spawner or spawn_pty
         service._probe = probe or is_signed_in
+        service._probe_xai_key = xai_key_probe or probe_xai_api_key
+        service._grok_auth_lock_wait_seconds = (
+            _GROK_AUTH_LOCK_WAIT_SECONDS if grok_auth_lock_wait_seconds is None else grok_auth_lock_wait_seconds
+        )
         service._restart_bound_agents = restart_bound_agents or (lambda _account_id: None)
         service._fetch_callback = fetch_callback or fetch_loopback_callback
         service._clock = clock or time.monotonic
@@ -474,12 +495,15 @@ class AuthFlowService:
     def _drive_locked(self, session: _Session, method: PtyMethod, account_path: Path) -> tuple[str | None, str | None]:
         """Spawn the CLI, get it to the point of showing something, and scrape it."""
         env = {**os.environ, **build_account_binding(session.lane.harness).account_env(account_path)}
+        code_scrape = method.device_code_scrape
         url_file: Path | None = None
-        if method.relays_browser_sign_in:
+        # A device sign-in's CLI opens its page itself; the shim records it instead of a browser opening here.
+        if method.relays_browser_sign_in or code_scrape is not None:
             session.scratch_dir = Path(tempfile.mkdtemp(prefix="minds-sign-in-"))
-            url_file = session.scratch_dir / SIGN_IN_URL_FILENAME
+            shim_url_file = session.scratch_dir / SIGN_IN_URL_FILENAME
             env[BROWSER_ENV_VAR] = str(self._work_dir / BROWSER_SHIM_RELATIVE_PATH)
-            env[SIGN_IN_URL_FILE_ENV_VAR] = str(url_file)
+            env[SIGN_IN_URL_FILE_ENV_VAR] = str(shim_url_file)
+            url_file = shim_url_file if method.relays_browser_sign_in else None
         drive_started_at = time.monotonic()
         binary = _binary_for(session.lane)
         session.process = self._spawner(
@@ -515,11 +539,13 @@ class AuthFlowService:
                 session.process, session.output, method.key_gap_s, method.key_gap_s * 2
             )
 
+        # A device sign-in prints its code after its page, so it is the code's prompt that is waited on.
+        trigger = method.scrape.trigger if code_scrape is None else code_scrape.trigger
         # Only wait on the stream if the trigger is not already in hand. Pacing the
         # keystrokes READS the PTY, so on a CLI that answers immediately the value can
         # already be in `session.output` -- and `expect` cannot match bytes something
         # else has consumed, so waiting on it would time out with the answer in hand.
-        if re.search(method.scrape.trigger, session.output) is None:
+        if re.search(trigger, session.output) is None:
             # The method's own failure lines are waited on ALONGSIDE the trigger. A CLI that is
             # failing never prints the trigger, so watching only for that means sitting out the
             # whole `scrape_timeout_s` -- thirty seconds of spinner -- and then reporting a
@@ -528,7 +554,7 @@ class AuthFlowService:
             # "Got an error: ..." and no URL, ever.
             failure_patterns = [re.compile(pattern) for pattern, _ in method.failures]
             index = session.process.expect(
-                [re.compile(method.scrape.trigger), *failure_patterns, pexpect.EOF, pexpect.TIMEOUT],
+                [re.compile(trigger), *failure_patterns, pexpect.EOF, pexpect.TIMEOUT],
                 timeout=method.scrape_timeout_s,
             )
             if 1 <= index <= len(failure_patterns):
@@ -551,7 +577,8 @@ class AuthFlowService:
         )
         session.output = drain_pty_stream(session.process, session.output, is_done)
         value = _extract(session.output, method.scrape, method.frame_marker)
-        if value is None:
+        code = None if code_scrape is None else _extract(session.output, code_scrape, method.frame_marker)
+        if value is None or (code_scrape is not None and code is None):
             self._fail_locked(session, "Could not read the sign-in details from the terminal.")
             raise FlowError(session.detail or "extraction failed")
         if url_file is not None:
@@ -569,7 +596,7 @@ class AuthFlowService:
             if relay_target is not None:
                 session.relay_url = relay_url
                 session.relay_target = relay_target
-        return value, None
+        return value, code
 
     # advancing
 
@@ -577,7 +604,8 @@ class AuthFlowService:
         with self._lock:
             session = self._require_locked(flow_id, must_be_pending=True)
             method = session.method
-            if not isinstance(method, PtyMethod):
+            # A device sign-in's code goes into the browser, never back into the CLI.
+            if not isinstance(method, PtyMethod) or method.device_code_scrape is not None:
                 raise FlowError("this sign-in does not take a code")
             # Two writes: the code, then Enter separately, or the paste heuristic swallows it.
             session.process.send(code)
@@ -607,12 +635,16 @@ class AuthFlowService:
                 if key_provider not in known:
                     raise FlowError(f"{session.lane.provider_name} has no key provider {key_provider!r}")
             path = accounts.account_dir(session.account_id, self._home)
+            if method.sink is PasteSink.GROK_AUTH_JSON:
+                return self._submit_xai_key_locked(session, method, path, api_key)
             # Write, ask, and put the old credential back if the answer is no. The probe needs
             # the file in place to answer at all, so the write has to happen first -- but on a
             # re-auth the folder is a LIVE account, and leaving a rejected key there would
             # quietly break every agent bound to it until each one's next turn.
             with _credentials_restored_on_error(_credential_paths(method.sink, path)) as before:
-                display = _write_paste(method.sink, path, api_key, key_provider, session.lane)
+                display = _write_paste(
+                    method.sink, path, api_key, key_provider, session.lane, self._grok_auth_lock_wait_seconds
+                )
                 # Writing the file is not the same as the harness accepting it. Ask before
                 # committing, so a key the harness cannot use fails here -- where the user is
                 # looking at the field they just typed into -- rather than later, as a chat that
@@ -627,6 +659,24 @@ class AuthFlowService:
             # blinked). That is not evidence against a key the user just pasted, and throwing
             # it away would be the worse mistake.
             return self._commit_locked(session, display)
+
+    def _submit_xai_key_locked(
+        self, session: _Session, method: PasteMethod, account_path: Path, api_key: str
+    ) -> FlowStatus:
+        """Ask xAI about the key itself, and only then make it the account's one credential.
+
+        Nothing lands for a key xAI refuses, so nothing is ever put back over a file every agent on the account
+        shares and refreshes. As with every key, UNKNOWN commits.
+        """
+        verdict = self._probe_xai_key(SecretStr(api_key))
+        session.last_verdict = verdict
+        if verdict is SignedIn.NO:
+            self._fail_locked(session, f"{session.lane.provider_name} did not accept that key.")
+            return FlowStatus(state=FlowState.FAILED, detail=session.detail)
+        display = _write_paste(
+            method.sink, account_path, api_key, None, session.lane, self._grok_auth_lock_wait_seconds
+        )
+        return self._commit_locked(session, display)
 
     def adopt_claude_credentials(self, pasted: str) -> accounts.Account:
         """Mint an account from a credential someone else obtained, with no flow involved.
@@ -790,7 +840,7 @@ class AuthFlowService:
                 self._fail_locked(session, "The sign-in finished without printing a token.")
                 return FlowStatus(state=FlowState.FAILED, detail=session.detail)
             with _credentials_restored_on_error(_credential_paths(method.result_sink, path)) as before:
-                _write_paste(method.result_sink, path, result, None, session.lane)
+                _write_paste(method.result_sink, path, result, None, session.lane, self._grok_auth_lock_wait_seconds)
                 session.last_verdict = self._probe(session.lane.harness, path)
                 if session.last_verdict is SignedIn.NO:
                     _restore_credentials(before)
@@ -840,8 +890,12 @@ class AuthFlowService:
             self._fail_locked(session, "That account was removed while you were signing in.")
             raise FlowError(session.detail or "account removed")
         method = session.method
-        if isinstance(method, PtyMethod) and method.result_sink is None and session.lane.harness is HarnessType.CLAUDE:
-            _drop_claude_env_credential(accounts.account_dir(session.account_id, self._home))
+        if isinstance(method, PtyMethod) and method.result_sink is None:
+            _drop_pasted_credential(
+                session.lane.harness,
+                accounts.account_dir(session.account_id, self._home),
+                self._grok_auth_lock_wait_seconds,
+            )
         account = accounts.commit_account(session.account_id, session.lane.id, display, self._home)
         # A re-auth is only worth doing if the chats on that account come back. They do not on
         # their own: claude reads its settings env at process start, and nothing shows codex's
@@ -1084,11 +1138,99 @@ def _drop_claude_env_credential(account_path: Path) -> None:
         write_claude_env(account_path, {})
 
 
+def _drop_pasted_credential(harness: HarnessType, account_path: Path, grok_auth_lock_wait_seconds: float) -> None:
+    """Remove a pasted credential that would compete with the sign-in a CLI just landed in the account."""
+    match harness:
+        case HarnessType.CLAUDE:
+            _drop_claude_env_credential(account_path)
+        case HarnessType.GROK:
+            _drop_grok_api_key(account_path / "auth.json", grok_auth_lock_wait_seconds)
+        case (
+            HarnessType.CODEX
+            | HarnessType.PI_CODING
+            | HarnessType.ANTIGRAVITY
+            | HarnessType.OPENCODE
+            | HarnessType.SEED
+        ):
+            # No lane of theirs pairs a terminal sign-in with a pasted credential.
+            pass
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+# grok's advisory lock beside its auth.json, which its own writers hold across each read and write.
+_GROK_AUTH_LOCK_FILENAME: Final = "auth.json.lock"
+# How long grok itself waits for that lock (`AUTH_LOCK_TIMEOUT`).
+_GROK_AUTH_LOCK_WAIT_SECONDS: Final = 10.0
+_GROK_AUTH_LOCK_POLL_SECONDS: Final = 0.05
+
+
+def _try_exclusive_lock(lock_fd: int) -> bool:
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    return True
+
+
+@contextlib.contextmanager
+def _grok_auth_file_locked(auth_path: Path, wait_seconds: float) -> Generator[bool, None, None]:
+    """Hold grok's own lock on its auth.json for the block, yielding whether it was taken in time.
+
+    Every agent on the account rewrites the shared file whole from what it read under this lock, and the refresh
+    token in it is single-use: an unlocked write can be lost under grok's, or put back a token grok has spent.
+    """
+    lock_fd = os.open(auth_path.with_name(_GROK_AUTH_LOCK_FILENAME), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        yield poll_until(lambda: _try_exclusive_lock(lock_fd), wait_seconds, _GROK_AUTH_LOCK_POLL_SECONDS)
+    finally:
+        # Closing releases the lock; the file stays, as grok's own lock file does.
+        os.close(lock_fd)
+
+
+def _write_grok_api_key(auth_path: Path, api_key: str, lock_wait_seconds: float) -> None:
+    """Make grok's auth.json hold the key alone, in its `xai::api_key` scope.
+
+    A session login left beside the key would outrank it. The entry is the one grok's own `store_api_key` writes
+    (xai-grok-login `storage.rs`), which grok 1.0.62 reads back as its key. It lands by temp file and rename.
+    """
+    with _grok_auth_file_locked(auth_path, lock_wait_seconds) as is_locked:
+        if not is_locked:
+            raise FlowError("xAI's sign-in file is in use. Try again in a moment.")
+        scope = {
+            "key": api_key,
+            "auth_mode": "api_key",
+            "create_time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            "user_id": "",
+            "email": None,
+            "coding_data_retention_opt_out": True,
+        }
+        atomic_write(auth_path, json.dumps({GROK_API_KEY_SCOPE: scope}, indent=2) + "\n")
+
+
+def _drop_grok_api_key(auth_path: Path, lock_wait_seconds: float) -> None:
+    """Remove the `xai::api_key` scope from grok's auth.json, keeping every other scope in it.
+
+    `grok login` leaves a stored key beside the login it adds, and grok turns to that key whenever the
+    login is not usable, so a device sign-in takes it away.
+    """
+    if GROK_API_KEY_SCOPE not in read_json_dict(auth_path):
+        return
+    with _grok_auth_file_locked(auth_path, lock_wait_seconds) as is_locked:
+        if not is_locked:
+            # As grok's own scope removal does when its lock is held: the login still outranks the key.
+            logger.warning("Left the {} scope in {}: grok held its lock", GROK_API_KEY_SCOPE, auth_path)
+            return
+        scopes = read_json_dict(auth_path)
+        scopes.pop(GROK_API_KEY_SCOPE, None)
+        atomic_write(auth_path, json.dumps(scopes, indent=2) + "\n")
+
+
 def _credential_paths(sink: PasteSink, account_path: Path) -> tuple[Path, ...]:
     """The files a sink writes, so a rejected credential can be rolled back."""
     match sink:
-        # pi and codex both name their credential auth.json; what differs is the shape inside it.
-        case PasteSink.PI_AUTH_JSON | PasteSink.CODEX_AUTH_JSON:
+        # pi, codex and grok all name their credential auth.json; what differs is the shape inside it.
+        case PasteSink.PI_AUTH_JSON | PasteSink.CODEX_AUTH_JSON | PasteSink.GROK_AUTH_JSON:
             return (account_path / "auth.json",)
         case PasteSink.CLAUDE_ENV:
             return (account_path / "settings.json",)
@@ -1150,7 +1292,14 @@ def _credentials_restored_on_error(paths: Sequence[Path]) -> Generator[Mapping[P
         raise
 
 
-def _write_paste(sink: PasteSink, account_path: Path, api_key: str, key_provider: str | None, lane: Lane) -> str:
+def _write_paste(
+    sink: PasteSink,
+    account_path: Path,
+    api_key: str,
+    key_provider: str | None,
+    lane: Lane,
+    grok_auth_lock_wait_seconds: float,
+) -> str:
     """Write a pasted credential and return the provider noun the account is named after."""
     match sink:
         case PasteSink.PI_AUTH_JSON:
@@ -1170,6 +1319,9 @@ def _write_paste(sink: PasteSink, account_path: Path, api_key: str, key_provider
             # The key alone would resolve the same way; naming the mode leaves nothing inferred.
             path.write_text(json.dumps({"auth_mode": "apikey", "OPENAI_API_KEY": api_key}, indent=2) + "\n")
             path.chmod(0o600)
+            return lane.provider_name
+        case PasteSink.GROK_AUTH_JSON:
+            _write_grok_api_key(account_path / "auth.json", api_key, grok_auth_lock_wait_seconds)
             return lane.provider_name
         case PasteSink.CLAUDE_ENV:
             write_claude_env(account_path, claude_env_from_paste(api_key))

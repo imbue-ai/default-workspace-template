@@ -6,20 +6,30 @@ belongs in a manual check against the actual binaries, not here -- a fake termin
 only assert that our fake behaves like our fake.
 """
 
+import contextlib
+import fcntl
 import itertools
 import json
+import os
+import re
+import threading
 from collections.abc import Callable
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
+from pydantic import SecretStr
 
 from imbue.chat.accounts import AccountError
+from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import harness_for
+from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import read_index
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.auth_flows import FlowError
 from imbue.chat.harnesses.auth_flows import FlowShape
 from imbue.chat.harnesses.auth_flows import FlowState
+from imbue.chat.harnesses.auth_flows import _auth_command_signatures
 from imbue.chat.harnesses.auth_flows import flow_shape
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import get_method
@@ -33,7 +43,9 @@ from imbue.chat.testing import FakePexpectProcess
 def service(tmp_path: Path) -> AuthFlowService:
     work_dir = tmp_path / "workspace"
     work_dir.mkdir()
-    return AuthFlowService.create(home=tmp_path, work_dir=work_dir, probe=lambda *_a: SignedIn.YES)
+    return AuthFlowService.create(
+        home=tmp_path, work_dir=work_dir, probe=lambda *_a: SignedIn.YES, xai_key_probe=lambda _key: SignedIn.YES
+    )
 
 
 # Full length on purpose: the agy scrape sets a min_length floor precisely so a wrapped
@@ -63,6 +75,9 @@ def test_the_shape_comes_from_the_method_not_the_harness() -> None:
     assert flow_shape(get_method("anthropic", "api_key")) is FlowShape.PASTE
     # The same lane as the device flow above, with the other shape.
     assert flow_shape(get_method("openai", "api_key")) is FlowShape.PASTE
+    # grok's device sign-in is a terminal one, and still shows a code rather than taking one back.
+    assert flow_shape(get_method("xai", "device")) is FlowShape.CODE_THEN_WAIT
+    assert flow_shape(get_method("xai", "api_key")) is FlowShape.PASTE
 
 
 def test_a_paste_flow_writes_pi_auth_json_and_commits(service: AuthFlowService, tmp_path: Path) -> None:
@@ -915,3 +930,369 @@ def test_the_cli_is_given_the_browser_shim(tmp_path: Path) -> None:
     service.start("anthropic", "console")
 
     assert browsers == [str(work_dir / "system" / "scripts" / "minds_browser_shim")]
+
+
+# grok's device sign-in, as `grok login --device-auth` 1.0.62 prints it on an 80-column PTY, with
+# xAI's own page in place of the loopback issuer it was measured against.
+
+_GROK_PAGE = "https://accounts.x.ai/oauth2/device?user_code=ABCD-1234"
+_GROK_CODE = "ABCD-1234"
+_GROK_PROMPT = (
+    f"\r\nTo sign in, open this URL in your browser:\r\n\r\n  {_GROK_PAGE}\r\n\r\n"
+    "Confirm this code in your browser:\r\n\r\n"
+)
+_GROK_DEVICE_SCREEN = (
+    f"{_GROK_PROMPT}  {_GROK_CODE}\r\n\r\n"
+    "\x1b[90mOnly continue with a code you requested. Don't share it with anyone.\x1b[0m\r\n\r\n"
+    "Waiting for authorization...\r\n"
+)
+# What it prints when xAI's page does not carry the code, and when no browser opens.
+_GROK_DEVICE_SCREEN_TO_TYPE = (
+    "\r\nTo sign in, open this URL in your browser:\r\n\r\n  https://accounts.x.ai/oauth2/device\r\n\r\n"
+    "  (Could not open browser automatically \u2014 open the URL above manually.)\r\n\r\n"
+    f"Then enter this code:\r\n\r\n  {_GROK_CODE}\r\n\r\n"
+    "Waiting for authorization...\r\n"
+)
+_GROK_SIGNED_IN = "\r\x1b[K\u2713 Signed in as someone@example.test\r\n\r\n"
+# A login scope as grok writes one: keyed `<issuer>::<client id>`.
+_GROK_LOGIN_SCOPE = "https://auth.x.ai::grok-client"
+_GROK_LOGIN = {"key": "access-token", "auth_mode": "oidc", "refresh_token": "refresh-token"}
+
+
+def _grok_service(
+    tmp_path: Path,
+    process: FakePexpectProcess | None = None,
+    restart_bound_agents: Callable[[str], None] = lambda _id: None,
+    probe: Callable[[HarnessType, Path], SignedIn] = lambda *_a: SignedIn.YES,
+    xai_key_probe: Callable[[SecretStr], SignedIn] = lambda _key: SignedIn.YES,
+    grok_auth_lock_wait_seconds: float | None = None,
+) -> AuthFlowService:
+    work_dir = tmp_path / "work"
+    work_dir.mkdir(exist_ok=True)
+    return AuthFlowService.create(
+        home=tmp_path,
+        work_dir=work_dir,
+        spawner=lambda *_a, **_k: process,
+        probe=probe,
+        restart_bound_agents=restart_bound_agents,
+        xai_key_probe=xai_key_probe,
+        grok_auth_lock_wait_seconds=grok_auth_lock_wait_seconds,
+    )
+
+
+def _grok_auth_path(tmp_path: Path, account_id: str) -> Path:
+    return tmp_path / ".minds" / "accounts" / account_id / "auth.json"
+
+
+def _grok_session_account(tmp_path: Path) -> tuple[str, Path]:
+    """A committed xAI account whose auth.json holds a session login alone, as `grok login` leaves one."""
+    account_id, account_dir = mint_account_dir(tmp_path)
+    path = account_dir / "auth.json"
+    path.write_text(json.dumps({_GROK_LOGIN_SCOPE: _GROK_LOGIN}))
+    commit_account(account_id, "xai", "xAI", tmp_path)
+    return account_id, path
+
+
+@contextlib.contextmanager
+def _grok_holds_its_lock(auth_path: Path) -> Generator[None, None, None]:
+    lock_fd = os.open(auth_path.with_name("auth.json.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(lock_fd, fcntl.LOCK_EX)
+    try:
+        yield
+    finally:
+        os.close(lock_fd)
+
+
+@pytest.mark.parametrize(
+    ("screen", "page"),
+    [
+        pytest.param(_GROK_DEVICE_SCREEN, _GROK_PAGE, id="page-carries-the-code"),
+        pytest.param(_GROK_DEVICE_SCREEN_TO_TYPE, "https://accounts.x.ai/oauth2/device", id="code-to-type"),
+    ],
+)
+def test_a_grok_device_sign_in_shows_the_page_and_the_code_and_waits(tmp_path: Path, screen: str, page: str) -> None:
+    process = FakePexpectProcess([(0, screen)])
+    service = _grok_service(tmp_path, process)
+
+    started = service.start("xai", "device")
+
+    assert started.shape is FlowShape.CODE_THEN_WAIT
+    assert (started.url, started.code) == (page, _GROK_CODE)
+    assert service.poll(started.flow_id).state is FlowState.PENDING
+
+
+def test_a_grok_device_sign_in_reads_on_until_the_code_has_arrived(tmp_path: Path) -> None:
+    """The code follows the page, so a screen showing only the page is not ready to read."""
+    service = _grok_service(tmp_path, FakePexpectProcess([(0, _GROK_DEVICE_SCREEN)]))
+    service.start("xai", "device")
+    session = service._session
+    assert session is not None
+
+    assert not session.is_value_ready(_GROK_PROMPT)
+    assert session.is_value_ready(_GROK_DEVICE_SCREEN)
+
+
+def test_a_grok_device_sign_in_gives_its_cli_the_browser_shim_and_relays_nothing(tmp_path: Path) -> None:
+    """grok opens its page itself, and the page has no loopback callback for the desktop app to relay."""
+    browsers: list[str] = []
+
+    def spawner(*_args: object, env: dict[str, str], **_kwargs: object) -> FakePexpectProcess:
+        browsers.append(env["BROWSER"])
+        Path(env["MINDS_SIGNIN_URL_FILE"]).write_text(_GROK_PAGE + "\n")
+        return FakePexpectProcess([(0, _GROK_DEVICE_SCREEN)])
+
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    service = AuthFlowService.create(home=tmp_path, work_dir=work_dir, spawner=spawner, probe=lambda *_a: SignedIn.YES)
+
+    started = service.start("xai", "device")
+
+    assert browsers == [str(work_dir / "system" / "scripts" / "minds_browser_shim")]
+    assert started.relay_url is None
+
+
+def test_a_grok_device_sign_in_takes_no_code_back(tmp_path: Path) -> None:
+    """Its code goes into the browser; typed into the CLI it would only cut the user's time to confirm it."""
+    process = FakePexpectProcess([(0, _GROK_DEVICE_SCREEN)])
+    service = _grok_service(tmp_path, process)
+    started = service.start("xai", "device")
+
+    with pytest.raises(FlowError):
+        service.submit_code(started.flow_id, _GROK_CODE)
+
+    assert process.send_calls == []
+
+
+@pytest.mark.parametrize(
+    ("output", "exitstatus", "state", "detail"),
+    [
+        pytest.param(_GROK_SIGNED_IN, 0, FlowState.OK, None, id="signed-in-as"),
+        pytest.param("\r\x1b[K\u2713 Signed in\r\n\r\n", 0, FlowState.OK, None, id="signed-in-without-an-email"),
+        pytest.param(
+            "Error: Authorization denied. The user rejected the request.\r\n",
+            1,
+            FlowState.FAILED,
+            "Access wasn't approved on xAI's page.",
+            id="denied",
+        ),
+        pytest.param(
+            "Error: Device code expired. Run `grok login --device-auth` again.\r\n",
+            1,
+            FlowState.FAILED,
+            "The code expired before it was confirmed. Start over to get a fresh one.",
+            id="expired",
+        ),
+        pytest.param(
+            "Error: Token exchange error: invalid grant\r\n",
+            1,
+            FlowState.FAILED,
+            "Token exchange error: invalid grant",
+            id="any-other-error-in-grok-s-words",
+        ),
+        pytest.param("", 1, FlowState.FAILED, "The sign-in did not complete.", id="an-error-exit-with-no-line"),
+    ],
+)
+def test_grok_decides_its_own_device_sign_in(
+    tmp_path: Path, output: str, exitstatus: int, state: FlowState, detail: str | None
+) -> None:
+    """Every line here is one `grok login --device-auth` 1.0.62 printed, and its exit is the one it made."""
+    probed: list[HarnessType] = []
+
+    def probe(harness: HarnessType, _path: Path) -> SignedIn:
+        probed.append(harness)
+        return SignedIn.YES
+
+    process = FakePexpectProcess([(0, _GROK_DEVICE_SCREEN)])
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    service = AuthFlowService.create(home=tmp_path, work_dir=work_dir, spawner=lambda *_a, **_k: process, probe=probe)
+    started = service.start("xai", "device")
+    process.print_output(output)
+    process.exit(exitstatus)
+
+    status = service.poll(started.flow_id)
+
+    assert (status.state, status.detail) == (state, detail)
+    assert probed == []
+
+
+def test_a_grok_device_sign_in_takes_away_a_pasted_key_and_keeps_the_login(tmp_path: Path) -> None:
+    """grok keeps a stored key beside the login it adds, and turns to the key whenever the login is not usable."""
+    restarted: list[str] = []
+    process = FakePexpectProcess([(0, _GROK_DEVICE_SCREEN)])
+    service = _grok_service(tmp_path, process, restart_bound_agents=restarted.append)
+    pasted = service.start("xai", "api_key")
+    service.submit_key(pasted.flow_id, "xai-old-key")
+    (account,) = read_index(tmp_path).accounts
+    auth_path = _grok_auth_path(tmp_path, account.id)
+
+    again = service.start("xai", "device", account_id=account.id)
+    scopes = json.loads(auth_path.read_text())
+    scopes[_GROK_LOGIN_SCOPE] = _GROK_LOGIN
+    auth_path.write_text(json.dumps(scopes))
+    process.print_output(_GROK_SIGNED_IN)
+    process.exit(0)
+
+    assert service.poll(again.flow_id).state is FlowState.OK
+    assert json.loads(auth_path.read_text()) == {_GROK_LOGIN_SCOPE: _GROK_LOGIN}
+    assert restarted == [account.id]
+
+
+def test_a_first_grok_device_sign_in_leaves_the_file_as_grok_wrote_it(tmp_path: Path) -> None:
+    process = FakePexpectProcess([(0, _GROK_DEVICE_SCREEN)])
+    service = _grok_service(tmp_path, process)
+    started = service.start("xai", "device")
+    session = service._session
+    assert session is not None
+    auth_path = _grok_auth_path(tmp_path, session.account_id)
+    written = json.dumps({_GROK_LOGIN_SCOPE: _GROK_LOGIN})
+    auth_path.write_text(written)
+    inode = auth_path.stat().st_ino
+    process.print_output(_GROK_SIGNED_IN)
+    process.exit(0)
+
+    assert service.poll(started.flow_id).state is FlowState.OK
+    assert auth_path.read_text() == written
+    assert auth_path.stat().st_ino == inode
+
+
+def test_a_grok_key_lands_in_the_scope_grok_keeps_a_key_in(service: AuthFlowService, tmp_path: Path) -> None:
+    """The entry grok's own key store writes, so grok reads it as an API key (measured on 1.0.62)."""
+    started = service.start("xai", "api_key")
+    assert started.shape is FlowShape.PASTE
+
+    status = service.submit_key(started.flow_id, "xai-test-123")
+
+    assert status.state is FlowState.OK
+    (account,) = read_index(tmp_path).accounts
+    assert account.display == "xAI"
+    assert harness_for(account) is HarnessType.GROK
+    path = _grok_auth_path(tmp_path, account.id)
+    (scope, entry), *others = json.loads(path.read_text()).items()
+    assert (scope, others) == ("xai::api_key", [])
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z", entry.pop("create_time"))
+    assert entry == {
+        "key": "xai-test-123",
+        "auth_mode": "api_key",
+        "user_id": "",
+        "email": None,
+        "coding_data_retention_opt_out": True,
+    }
+    assert path.stat().st_mode & 0o077 == 0
+
+
+def test_a_key_xai_refuses_never_touches_a_grok_account_s_file(tmp_path: Path) -> None:
+    """xAI judges the key itself, before anything lands. The login in the file, which would pass any key, never
+    decides, and nothing is put back over a file the account's agents share and refresh."""
+    judged: list[str] = []
+    probed: list[Path] = []
+
+    def xai_key_probe(key: SecretStr) -> SignedIn:
+        judged.append(key.get_secret_value())
+        return SignedIn.NO
+
+    def probe(_harness: HarnessType, path: Path) -> SignedIn:
+        probed.append(path)
+        return SignedIn.YES
+
+    service = _grok_service(tmp_path, probe=probe, xai_key_probe=xai_key_probe)
+    account_id, path = _grok_session_account(tmp_path)
+    before = (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns)
+
+    again = service.start("xai", "api_key", account_id=account_id)
+    status = service.submit_key(again.flow_id, "xai-typo-key")
+
+    assert (status.state, status.detail) == (FlowState.FAILED, "xAI did not accept that key.")
+    assert judged == ["xai-typo-key"]
+    assert probed == []
+    assert (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) == before
+    assert [account.id for account in read_index(tmp_path).accounts] == [account_id]
+
+
+def test_a_key_xai_accepts_replaces_an_expired_login_and_the_file_whole(tmp_path: Path) -> None:
+    """The login is usually why a key is pasted: it no longer works, and grok's probe of the account says no
+    whatever the key. Left in the file it would outrank the key. The file is renamed into place, since every agent
+    on the account reads it as it changes."""
+    restarted: list[str] = []
+    service = _grok_service(tmp_path, probe=lambda *_a: SignedIn.NO, restart_bound_agents=restarted.append)
+    account_id, path = _grok_session_account(tmp_path)
+    inode = path.stat().st_ino
+
+    again = service.start("xai", "api_key", account_id=account_id)
+    status = service.submit_key(again.flow_id, "xai-new-key")
+
+    assert status.state is FlowState.OK
+    after = json.loads(path.read_text())
+    assert list(after) == ["xai::api_key"]
+    assert after["xai::api_key"]["key"] == "xai-new-key"
+    assert path.stat().st_ino != inode
+    assert restarted == [account_id]
+
+
+def test_a_grok_key_is_refused_while_grok_holds_its_file_and_can_be_sent_again(tmp_path: Path) -> None:
+    service = _grok_service(tmp_path, grok_auth_lock_wait_seconds=0.2)
+    account_id, path = _grok_session_account(tmp_path)
+    before = (path.read_bytes(), path.stat().st_ino)
+    again = service.start("xai", "api_key", account_id=account_id)
+
+    with _grok_holds_its_lock(path):
+        with pytest.raises(FlowError, match="in use"):
+            service.submit_key(again.flow_id, "xai-new-key")
+        assert (path.read_bytes(), path.stat().st_ino) == before
+
+    assert service.submit_key(again.flow_id, "xai-new-key").state is FlowState.OK
+    assert json.loads(path.read_text())["xai::api_key"]["key"] == "xai-new-key"
+
+
+def test_a_grok_device_sign_in_leaves_the_key_while_grok_holds_its_file(tmp_path: Path) -> None:
+    """As grok's own scope removal does: the login just landed outranks the key anyway."""
+    process = FakePexpectProcess([(0, _GROK_DEVICE_SCREEN)])
+    service = _grok_service(tmp_path, process, grok_auth_lock_wait_seconds=0.2)
+    pasted = service.start("xai", "api_key")
+    service.submit_key(pasted.flow_id, "xai-old-key")
+    (account,) = read_index(tmp_path).accounts
+    auth_path = _grok_auth_path(tmp_path, account.id)
+    again = service.start("xai", "device", account_id=account.id)
+    scopes = json.loads(auth_path.read_text())
+    scopes[_GROK_LOGIN_SCOPE] = _GROK_LOGIN
+    auth_path.write_text(json.dumps(scopes))
+    written = auth_path.read_bytes()
+    process.print_output(_GROK_SIGNED_IN)
+    process.exit(0)
+
+    with _grok_holds_its_lock(auth_path):
+        assert service.poll(again.flow_id).state is FlowState.OK
+
+    assert auth_path.read_bytes() == written
+
+
+def test_a_grok_key_waits_out_grok_s_own_write_to_the_file(service: AuthFlowService, tmp_path: Path) -> None:
+    """grok holds its lock from reading the file to writing it back. A paste that did not wait for it would
+    have its key overwritten by what grok read before the paste."""
+    first = service.start("xai", "api_key")
+    service.submit_key(first.flow_id, "xai-old-key")
+    (account,) = read_index(tmp_path).accounts
+    path = _grok_auth_path(tmp_path, account.id)
+    lock_fd = os.open(path.with_name("auth.json.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(lock_fd, fcntl.LOCK_EX)
+    read_by_grok = json.loads(path.read_text())
+
+    def grok_writes_back_and_unlocks() -> None:
+        read_by_grok[_GROK_LOGIN_SCOPE] = _GROK_LOGIN
+        path.write_text(json.dumps(read_by_grok))
+        os.close(lock_fd)
+
+    again = service.start("xai", "api_key", account_id=account.id)
+    grok_write = threading.Timer(0.5, grok_writes_back_and_unlocks)
+    grok_write.start()
+    status = service.submit_key(again.flow_id, "xai-new-key")
+    grok_write.join()
+
+    assert status.state is FlowState.OK
+    after = json.loads(path.read_text())
+    assert list(after) == ["xai::api_key"]
+    assert after["xai::api_key"]["key"] == "xai-new-key"
+
+
+def test_an_orphaned_grok_sign_in_is_one_the_boot_sweep_recognises() -> None:
+    assert ("grok", "login", "--device-auth") in _auth_command_signatures()

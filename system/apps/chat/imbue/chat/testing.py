@@ -716,13 +716,15 @@ def build_test_state(
     # Match production: route the codex ledger's live user-turns onto the event fan-out.
     manager.set_transcript_broadcaster(event_queues.broadcast_batch)
     state = ChatAppState(
-        # Never the production probe: it shells out to whatever claude/codex/agy/pi this
-        # machine happens to have, over the network, from any test that reaches a sign-in
-        # route. UNKNOWN is the honest stand-in -- "the check could not run" -- and a test
-        # that cares about the verdict injects its own service.
+        # Never the production probes: they shell out to whatever claude/codex/agy/pi this
+        # machine happens to have, or send a pasted key to xAI, from any test that reaches a
+        # sign-in route. UNKNOWN is the honest stand-in -- "the check could not run" -- and a
+        # test that cares about the verdict injects its own service.
         auth_flows=auth_flows
         if auth_flows is not None
-        else AuthFlowService.create(probe=lambda *_args: SignedIn.UNKNOWN),
+        else AuthFlowService.create(
+            probe=lambda *_args: SignedIn.UNKNOWN, xai_key_probe=lambda _key: SignedIn.UNKNOWN
+        ),
         config=config if config is not None else Config(),
         provider_names=None,
         include_filters=(),

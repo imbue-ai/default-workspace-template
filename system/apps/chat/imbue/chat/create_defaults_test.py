@@ -45,6 +45,17 @@ def test_a_claude_account_binds_by_the_config_dir_variable(tmp_path: Path) -> No
     assert PROVISION_COMMAND_KEY not in settings
 
 
+def test_a_grok_account_binds_by_the_credential_path_variable_alone(tmp_path: Path) -> None:
+    """Every unqualified create gets this env line, so a GROK_HOME here would move every grok agent's home, and the
+    trust store and consent source mngr resolves from it, onto the account folder."""
+    settings = managed_create_settings(_defaults(HarnessType.GROK, tmp_path))
+
+    assert settings[TYPE_KEY] == "grok"
+    assert settings[ENV_KEY] == [f"GROK_AUTH_PATH={tmp_path / 'accounts' / 'acct1' / 'auth.json'}"]
+    assert settings[LABEL_KEY] == ["account=acct1"]
+    assert PROVISION_COMMAND_KEY not in settings
+
+
 @pytest.mark.parametrize(
     ("harness", "source", "agent_side"),
     (
@@ -151,7 +162,7 @@ def test_the_path_follows_mngrs_project_config_override(tmp_path: Path, monkeypa
     assert create_defaults_path() == Path(".mngr") / "settings.local.toml"
 
 
-@pytest.mark.parametrize("harness", (HarnessType.CLAUDE, HarnessType.CODEX))
+@pytest.mark.parametrize("harness", (HarnessType.CLAUDE, HarnessType.CODEX, HarnessType.GROK))
 def test_the_file_loads_beside_the_committed_settings_and_resolves_the_create_defaults(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, harness: HarnessType
 ) -> None:
@@ -179,7 +190,7 @@ def test_the_file_loads_beside_the_committed_settings_and_resolves_the_create_de
     expected = managed_create_settings(defaults)
     assert create["type"] == harness.value
     assert list(create["label"]) == expected[LABEL_KEY]
-    if harness is HarnessType.CLAUDE:
+    if ENV_KEY in expected:
         assert list(create["env"]) == expected[ENV_KEY]
     else:
         assert list(create["extra_provision_command"]) == expected[PROVISION_COMMAND_KEY]

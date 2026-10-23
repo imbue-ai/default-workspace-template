@@ -19,6 +19,9 @@ const GOOGLE = `<svg width="{S}" height="{S}" viewBox="0 0 24 24" aria-hidden="t
 // brand slot rather than an empty column.
 const OPENCODE = `<svg width="{S}" height="{S}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="4" width="19" height="16" rx="2.5"/><path d="m7 9.5 3 2.5-3 2.5"/><path d="M12.5 15h4.5"/></svg>`;
 
+// xAI's own mark has not been cleared for use, so its row gets a plain code glyph in the brand slot.
+const XAI = `<svg width="{S}" height="{S}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 7-5 5 5 5"/><path d="m16 7 5 5-5 5"/><path d="m14 4-4 16"/></svg>`;
+
 // A raw key, for "bring your own API key" -- deliberately not a brand, because the
 // row is not one provider.
 const API_KEY = `<svg width="{S}" height="{S}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4"/><path d="m10.5 12.5 8-8"/><path d="m16 7 2.5 2.5"/><path d="m13.5 9.5 2.5 2.5"/></svg>`;
@@ -31,6 +34,7 @@ const MARKS_BY_LANE: Readonly<Record<string, string>> = {
   anthropic: ANTHROPIC,
   openai: OPENAI,
   google: GOOGLE,
+  xai: XAI,
   "opencode-go": OPENCODE,
   openrouter: OPENROUTER,
   "api-key": API_KEY,

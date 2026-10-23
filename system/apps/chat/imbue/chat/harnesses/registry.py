@@ -57,6 +57,7 @@ from imbue.chat.harnesses.codex.session import CodexHarnessSession
 from imbue.chat.harnesses.codex.watcher import CodexSessionWatcher
 from imbue.chat.harnesses.codex.watcher import CodexTranscriptLoader
 from imbue.chat.harnesses.events import SpecialEventKind
+from imbue.chat.harnesses.grok.account_binding import GrokAccountBinding
 from imbue.chat.harnesses.grok.placeholder import GrokPlaceholderActivityTracker
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import InterruptToComposer
@@ -551,6 +552,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         startup_ready_marker=StartupReadyMarker(
             filename=GROK_SESSION_STARTED_MARKER_FILENAME, is_deleted_at_launch=True
         ),
+        binding_class=GrokAccountBinding,
         resolver_class=PlaceholderModelResolver,
         catalog_factory=lambda: EMPTY_CATALOG,
         # mngr_grok's status line writes model_state.json at the state-dir root.

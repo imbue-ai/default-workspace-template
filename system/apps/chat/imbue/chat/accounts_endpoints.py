@@ -34,6 +34,7 @@ from imbue.chat.harnesses.auth_flows import flow_shape
 from imbue.chat.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
 from imbue.chat.harnesses.claude.auth import ClaudeAuthError
 from imbue.chat.harnesses.claude.auth import read_managed_auth_env
+from imbue.chat.harnesses.grok.account_binding import read_sole_api_key
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import AppServerMethod
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
@@ -247,6 +248,8 @@ def _reauth_method_id(account: accounts.Account, harness: HarnessType) -> str:
             )
         case HarnessType.CODEX:
             is_key = _codex_auth_mode(folder) == "apikey"
+        case HarnessType.GROK:
+            is_key = read_sole_api_key(folder) is not None
         case _:
             is_key = False
     if is_key:
