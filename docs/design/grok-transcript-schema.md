@@ -43,6 +43,10 @@ with its own directory, named by its parent's `subagent_spawned` record.
 | `hook_annotation` | `message` | a Stop hook's continuation |
 | `compaction_checkpoint` | none | a top-level session's compaction, as the "Context was compacted" status; a child session's is dropped |
 
+A user turn that reads `The user sent a message while you were working:` followed by a
+`<user_query>...</user_query>` block is grok's send-now wrapper, and the chat shows the words inside
+it, as mngr's transcript converter does; no capture here holds one.
+
 Ignored: `hook_execution`, `retry_state`, `task_backgrounded`, `background_tasks`, `plan`,
 `available_commands_update`, `session_info_update`, the other compaction kinds and the rewind kinds.
 
@@ -58,8 +62,8 @@ one message. Text sent before a tool call in the same response is its own line a
 
 ## Tool results
 
-A call gets a status-less `tool_call_update` whose content is the call's description, then one
-`completed` or `failed` update. A foreground tool killed by a cancel gets no terminal update. The
+A call gets a status-less `tool_call_update` first (a shell call's content is its description, an
+edit's is a diff, every other tool's is empty), then one `completed` or `failed` update. A foreground tool killed by a cancel gets no terminal update. The
 text the model was given, read back from the stub's request log, is in `rawOutput` for some tools
 and only in the content blocks for others:
 
@@ -136,7 +140,7 @@ wrapped in `<system-reminder>` unless noted:
 | `task-completed-<task id>` | `Background task "<id>" completed (exit code: 0).` / `Description: <d> \| Duration: 8.0s` / a retrieval hint |
 | `task-completed-<monitor id>` | `Monitor "<id>" ended: [monitor ended: exited (code 0)].` / `Description: <d> \| Duration: 1.0s` |
 | `subagent-completed-<child id>` | `While you were idle, 1 background subagent completed:` / `- [<type>] "<d>" — completed successfully (16.4s, 0 tool calls)` / the child's report |
-| `notifications-<id>` | no reminder: `<monitor-event task_id="<id>">` / `[<d>] <line>` / `</monitor-event>` |
+| `notifications-<id>` | no reminder: `<monitor-event task_id="<monitor id>">` / `[<d>] <line>` / `</monitor-event>` |
 
 The binary names more prompt kinds (`parent-agent-message-`, `parent-message-`,
 `workflow-completed-`, `goal-summary-`, `plan-resume-`, `bash-completed-`, `monitor-completed-`),
