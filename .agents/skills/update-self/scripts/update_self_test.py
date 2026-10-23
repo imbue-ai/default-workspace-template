@@ -2187,8 +2187,11 @@ def _plan(paths: list[str]) -> update_classification.ApplyPlan:
         (update_layout.PLUGIN_MANIFEST_PATH, True, False),
         # Source an editable install already serves, and files no install reads.
         ("system/apps/browser/src/browser/runner.py", False, False),
+        ("system/apps/system_interface/imbue/system_interface/server.py", False, False),
         ("system/apps/chat/app.toml", False, False),
+        # Pyprojects nested where an app's would be, but deeper.
         ("system/apps/browser/src/browser/pyproject.toml", False, False),
+        ("system/apps/system_interface/imbue/pyproject.toml", False, False),
     ],
 )
 def test_plan_apply_resyncs_the_venv_when_any_apps_pyproject_changes(
@@ -2238,19 +2241,6 @@ def test_plan_apply_rebuilds_the_frontends_when_the_mngr_pin_moves() -> None:
     plan = _plan([update_layout.PYPROJECT_PATH, "uv.lock"])
 
     assert plan.frontend_src and plan.backend_manifest
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        # Not a manifest: a source file nested where one would be.
-        "system/apps/system_interface/imbue/system_interface/server.py",
-        # A pyproject that is not one of the roots the environment resolves from.
-        "system/apps/system_interface/imbue/pyproject.toml",
-    ],
-)
-def test_plan_apply_does_not_mistake_nested_paths_for_manifests(path: str) -> None:
-    assert not _plan([path]).resyncs_venv
 
 
 @pytest.mark.parametrize(
