@@ -240,7 +240,10 @@ class GrokTranscriptLoader(StoreBackedTranscriptLoader):
         """The complete records appended to the tail's log since it was last read, advancing the tail past them."""
         try:
             size = tail.updates_path.stat().st_size
-        except OSError:
+        except FileNotFoundError:
+            return []
+        except OSError as e:
+            logger.debug("Failed to stat the grok session log {}: {}", tail.updates_path, e)
             return []
         if size < tail.byte_offset:
             logger.warning("The grok session log {} shrank; reading it again from the start", tail.updates_path)
