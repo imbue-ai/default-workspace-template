@@ -113,8 +113,8 @@ from imbue.chat.testing import open_ws
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import seed_failed_chat
 from imbue.chat.testing import serve_app
-from imbue.chat.testing import utc_iso_seconds_ago
 from imbue.chat.testing import write_background_task_marker
+from imbue.chat.testing import utc_iso_seconds_ago
 from imbue.chat.testing import write_compacting_marker
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
