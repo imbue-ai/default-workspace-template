@@ -403,6 +403,24 @@ def test_an_unreadable_journal_reads_as_empty_and_an_unreadable_launch_marker_as
     ]
 
 
+def test_a_journal_that_cannot_be_removed_is_logged_and_the_emptied_queue_still_publishes(
+    tmp_path: Path, loguru_records: list[str]
+) -> None:
+    published: list[list[str]] = []
+    tracker = _tracker(tmp_path)
+    queued_id = tracker.enqueue("held", "t0", is_turn_open=True)
+    (tmp_path / OUTBOX_FILENAME).unlink()
+    (tmp_path / OUTBOX_FILENAME).mkdir()
+    tracker.attach(publish=lambda snapshot: published.append([str(e["content"]) for e in snapshot]), wake=lambda: None)
+
+    assert tracker.withdraw(queued_id) is True
+
+    assert published[-1] == []
+    assert [
+        record.split(" ", 1)[0] for record in loguru_records if "could not remove the queue journal" in record
+    ] == ["WARNING"]
+
+
 def test_republish_announces_the_queue_unchanged(tmp_path: Path) -> None:
     published: list[list[str]] = []
     tracker = _tracker(tmp_path)

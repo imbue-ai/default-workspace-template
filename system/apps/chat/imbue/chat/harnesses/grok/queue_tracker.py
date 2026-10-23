@@ -237,7 +237,10 @@ class GrokQueueTracker:
     def _write_journal_locked(self) -> None:
         entries = self._queued.snapshot()
         if not self._session_token or not entries:
-            self._outbox_path.unlink(missing_ok=True)
+            try:
+                self._outbox_path.unlink(missing_ok=True)
+            except OSError as error:
+                logger.opt(exception=error).warning("grok: could not remove the queue journal {}", self._outbox_path)
             return
         payload = "".join(json.dumps({"session": self._session_token, **entry}) + "\n" for entry in entries)
         tmp_path = self._outbox_path.with_suffix(self._outbox_path.suffix + ".tmp")
