@@ -140,7 +140,10 @@ def _decode_record(line: str | None) -> dict[str, Any] | None:
     except json.JSONDecodeError as e:
         logger.warning("Skipping an undecodable grok session-log line: {}", e)
         return None
-    return record if isinstance(record, dict) else None
+    if not isinstance(record, dict):
+        logger.warning("Skipping a grok session-log line that holds no JSON object: {!r}", line[:200])
+        return None
+    return record
 
 
 class GrokTranscriptLoader(StoreBackedTranscriptLoader):
@@ -243,6 +246,7 @@ class GrokTranscriptLoader(StoreBackedTranscriptLoader):
         try:
             size = tail.updates_path.stat().st_size
         except FileNotFoundError:
+            logger.trace("The grok session log {} does not exist yet", tail.updates_path)
             return []
         except OSError as e:
             logger.debug("Failed to stat the grok session log {}: {}", tail.updates_path, e)
