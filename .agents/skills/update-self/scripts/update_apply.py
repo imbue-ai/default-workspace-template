@@ -775,14 +775,16 @@ def _recover_running_state(
     that works afterwards is still worth knowing about (it is what lets the
     emergency record come down).
 
-    Restores are file copies (no network, no package manager, no ``mngr``);
-    rebuild/refresh fallbacks run only where there is no copy to put back. The
-    provisioner re-run is best-effort by design: a failure (often no network),
-    a hang past its budget, or a spawn failure still counts as recovered, with
-    the tools named as left ahead of the tree. Nothing here is tagged
-    expendable -- there is no further rollback to absorb a shed. Never raises:
-    this is the last line of defense, and the exit code is all the caller has
-    to go on.
+    Restores are file copies (no network, no ``mngr``); the one package-manager
+    step before them is ``uv tool uninstall`` of the tools whose app is not in
+    the restored tree (the merge's own), which frees the console scripts the
+    restored receipts link back. Rebuild/refresh fallbacks run only where there
+    is no copy to put back. The provisioner re-run is best-effort by design: a
+    failure (often no network), a hang past its budget, or a spawn failure
+    still counts as recovered, with the tools named as left ahead of the tree.
+    Nothing here is tagged expendable -- there is no further rollback to absorb
+    a shed. Never raises: this is the last line of defense, and the exit code
+    is all the caller has to go on.
     """
     try:
         # The merge's own apps are gone from the restored tree: their tool
