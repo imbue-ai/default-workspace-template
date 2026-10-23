@@ -40,8 +40,7 @@ _TRACKER_HARNESSES = (
 )
 
 # The harnesses on the shared placeholder watcher/tracker -- launchable, with no transcript
-# behind them. Emptying this tuple is what retires ``harnesses/placeholder.py``. antigravity
-# and grok have real watchers and trackers but still use the placeholder RESOLVER.
+# behind them. Emptying this tuple is what retires ``harnesses/placeholder.py``.
 _PLACEHOLDER_HARNESSES = (HarnessType.OPENCODE,)
 
 
