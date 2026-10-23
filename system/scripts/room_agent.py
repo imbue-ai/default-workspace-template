@@ -20,6 +20,7 @@ import json
 import os
 import re
 import sys
+import termios
 import uuid
 from collections.abc import Iterator
 from datetime import datetime, timezone
@@ -154,6 +155,26 @@ def read_messages(stdin: IO[bytes]) -> Iterator[str]:
         yield line.decode("utf-8", errors="replace").rstrip("\r\n")
 
 
+def unbuffer_tty(stdin: IO[bytes]) -> list[Any] | None:
+    """Take the pane's tty out of canonical mode, so a pasted paragraph longer than the line
+    discipline's buffer (4095 bytes on Linux, past which it drops input until a newline)
+    arrives whole; the attributes to restore, or None when ``stdin`` is not a tty."""
+    try:
+        fd = stdin.fileno()
+    except (AttributeError, OSError, ValueError):
+        return None
+    if not os.isatty(fd):
+        return None
+    saved = termios.tcgetattr(fd)
+    attrs = termios.tcgetattr(fd)
+    # Enter still ends a line (ICRNL stays), and the pane still echoes what it is typed.
+    attrs[3] &= ~termios.ICANON
+    attrs[6][termios.VMIN] = 1
+    attrs[6][termios.VTIME] = 0
+    termios.tcsetattr(fd, termios.TCSANOW, attrs)
+    return saved
+
+
 def state_dir_of(environ: dict[str, str]) -> Path:
     """The agent's state dir, as mngr names it to the agent (``MNGR_AGENT_STATE_DIR``), else by convention."""
     explicit = environ.get("MNGR_AGENT_STATE_DIR", "").strip()
@@ -174,6 +195,7 @@ def main(environ: dict[str, str], stdin: IO[bytes], stdout: IO[bytes]) -> int:
     state_dir = state_dir_of(environ)
     transcript_path = state_dir / TRANSCRIPT_RELATIVE_PATH
     ensure_header(transcript_path, agent_id)
+    saved_tty = unbuffer_tty(stdin)
     stdout.write(BRACKETED_PASTE_ENABLE)
     stdout.flush()
     try:
@@ -188,6 +210,8 @@ def main(environ: dict[str, str], stdin: IO[bytes], stdout: IO[bytes]) -> int:
     finally:
         stdout.write(BRACKETED_PASTE_DISABLE)
         stdout.flush()
+        if saved_tty is not None:
+            termios.tcsetattr(stdin.fileno(), termios.TCSANOW, saved_tty)
     return 0
 
 
