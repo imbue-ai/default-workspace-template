@@ -11,7 +11,8 @@ reach a process only through ``with_secrets.py``. mcpc's store is
 the link counts as a mention of the directory.
 
 * A **shell** command (claude's and codex's ``Bash``, pi's ``bash``, the
-  ``Bash`` payload the agy shim synthesises) is tokenized with the shared
+  ``Bash`` payload the agy shim synthesises and the one grok's policy dispatcher
+  builds for its shell tools) is tokenized with the shared
   ``tk_command_parsing`` parser, so a rationale that happens to mention the
   directory inside a quoted argument stays inside one token. Any segment whose
   words mention ``data/.secrets`` passes only when its program is the wrapper or
@@ -75,8 +76,9 @@ _PYTHON_PASSTHROUGH_FLAGS = frozenset(
 _SHELL_PROGRAMS = frozenset({"bash", "sh", "zsh", "dash"})
 _ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_]\w*=")
 
-# Tool names whose payload is a shell command: claude and codex ``Bash``, pi's
-# ``bash``, and the empty name the agy shim's synthesised payload may carry.
+# Tool names whose payload is a shell command: claude and codex ``Bash`` (and grok's
+# shell tools, as its policy dispatcher hands them over), pi's ``bash``, and the
+# empty name the agy shim's synthesised payload may carry.
 _SHELL_TOOL_NAMES = frozenset({"Bash", "bash", ""})
 # claude's file tools, pi's, and grok's (whose write and grep share pi's names);
 # codex edits files through apply_patch.
