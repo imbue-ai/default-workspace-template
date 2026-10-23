@@ -47,15 +47,9 @@ from loguru import logger as _loguru_logger
 from pydantic import Field
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
-from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.identity import is_owner_participant
 from workspace_layout.identity import participant_key_of
-from workspace_layout.interfaces import ShellLayoutInterface
-from workspace_layout.ops import ClientActivityReport
-from workspace_layout.primitives import ClientActivityKind
-from workspace_layout.primitives import ClientId
-from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
 from workspace_layout.shell_url import shell_base_url
 
@@ -99,6 +93,8 @@ from imbue.chat.chat_intakes import most_recently_messaged_chat_id
 from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.chat_transcript import ChatTranscript
 from imbue.chat.chat_transcript import TranscriptSegment
+from imbue.chat.client_activity import is_client_activity_reportable
+from imbue.chat.client_activity import record_client_message_activity
 from imbue.chat.compaction_status import compact_command_instructions
 from imbue.chat.compaction_status import is_compact_command
 from imbue.chat.compaction_status import is_context_compacted_event
@@ -202,7 +198,6 @@ from imbue.chat.models import parse_subagent_key
 from imbue.chat.naming import canonical_agent_name
 from imbue.chat.presence import PresenceReport
 from imbue.chat.presence import PresenceState
-from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import CHAT_ID_PATTERN
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatKind
@@ -1010,48 +1005,9 @@ def _send_message_endpoint(chat_id: str) -> Response:
 
 
 @pure
-def is_client_activity_reportable(send_message_request: SendMessageRequest) -> bool:
-    """Whether a send names the client and the desktop the shell's activity log keys on (a legacy or unframed caller names neither)."""
-    return send_message_request.client_id != "" and send_message_request.desktop_id != ""
-
-
-@pure
 def _held_send_origin(send_message_request: SendMessageRequest) -> HeldSendOrigin:
     """Who a send held during a handoff came from: a chat page names its client, anything else is a script."""
     return HeldSendOrigin.CLIENT if is_client_activity_reportable(send_message_request) else HeldSendOrigin.SCRIPT
-
-
-@pure
-def client_activity_report(chat_id: ChatId, send_message_request: SendMessageRequest) -> ClientActivityReport:
-    """The shell's client-activity report for one send (desktop contracts.md section 5.1), keyed by chat. Raises
-    InvalidLayoutValueError when the send's client or desktop is not an id the shell would take."""
-    return ClientActivityReport(
-        client_id=ClientId(send_message_request.client_id),
-        desktop_id=DesktopId(send_message_request.desktop_id),
-        kind=ClientActivityKind.MESSAGE,
-        app=str(CHAT_APP_NAME),
-        key=chat_id,
-        text=send_message_request.message,
-    )
-
-
-def record_client_message_activity(
-    shell: ShellLayoutInterface, chat_id: ChatId, send_message_request: SendMessageRequest, is_secondary: bool
-) -> None:
-    """Tell the shell which client (and desktop) a message came from, so agents can attribute requests through
-    ``workspace-layout context``. Callers naming no client or no desktop are not recorded, and neither is anything a
-    secondary chat (a preview) hears: the shell's activity log is the live chat's. Reported on its own thread:
-    the shell is a separate app, and a send must not wait on it."""
-    if is_secondary or not is_client_activity_reportable(send_message_request):
-        return
-    try:
-        report = client_activity_report(chat_id, send_message_request)
-    except InvalidLayoutValueError as e:
-        logger.warning("Skipped reporting a send of chat {} to the shell: {}", chat_id, e)
-        return
-    threading.Thread(
-        target=shell.record_client_activity, args=(report,), name="client-activity-report", daemon=True
-    ).start()
 
 
 def _get_harnesses_endpoint() -> Response:

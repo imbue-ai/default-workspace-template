@@ -38,6 +38,7 @@ from imbue.chat.authors import author_prefix
 from imbue.chat.authors import new_author_annotation
 from imbue.chat.authors import prefix_safe_name
 from imbue.chat.authors import prefix_safe_text
+from imbue.chat.client_activity import record_client_message_activity
 from imbue.chat.identity import request_identity
 from imbue.chat.identity import request_participant
 from imbue.chat.mention_parser import MentionTable
@@ -306,10 +307,12 @@ def append_room_message(
 def post_room_message(
     state: ChatAppState, room: RoomRecord, body: SendMessageRequest, identity: RequestIdentity
 ) -> None:
-    """A person's message into a room, from its page or the message route."""
+    """A person's message into a room, from its page or the message route; the client it came from is reported to the
+    shell as an agent chat's send is, since the shell's activity log is keyed by chat id and a room is a chat."""
     sender = participant_key_of(identity)
     message_id = body.message_id or uuid4().hex
     append_room_message(state, room, body.message, message_id, sender, _author_name(state, sender, identity), False)
+    record_client_message_activity(state.shell, room.id, body, state.is_secondary)
 
 
 def room_events_response(state: ChatAppState, room: RoomRecord, after: str | None) -> Response:

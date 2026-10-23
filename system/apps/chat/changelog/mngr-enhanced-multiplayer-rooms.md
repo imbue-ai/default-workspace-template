@@ -8,6 +8,8 @@ Chat rooms and mentions (the mngr repo's `specs/multiplayer-refinements/spec.md`
 
 - Mentioning `@agent` or a chat from a room sends that chat the message, marked as said in the room; the agent answers into the room with `python3 system/scripts/chat_room.py post <room> -m "..."`, and the room's row shows a working dot until it does. In an agent chat, `@agent` is just a word the agent reads.
 
+- A message sent into a room from a page is reported to the workspace shell's activity log like one sent to an agent chat, so an agent can attribute it to the client it came from.
+
 - Mentioning a person marks the chat's row with an `@` for them until they look at it, and tells the workspace's owner through the Imbue Studio app's feed.
 
 - New routes: `GET`/`POST /api/rooms`, `POST /api/rooms/lounge`, `POST /api/rooms/<id>/rename`, `DELETE /api/rooms/<id>`, `GET`/`POST /api/rooms/<id>/messages`, `POST /api/rooms/<id>/post` (loopback), `GET /api/mentions`, `GET /api/mentions/pending`, `POST /api/chats/awaiting/<id>/make-room`; the `rooms_updated` and `mentions_updated` pushes on `/api/ws`; `kind` on every chat snapshot.

@@ -67,6 +67,7 @@ from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_naming import chat_naming_prompt
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_transcript import agent_switch_event_id
+from imbue.chat.client_activity import client_activity_report
 from imbue.chat.config import Config
 from imbue.chat.errors import ChatAppError
 from imbue.chat.event_queues import AgentEventQueues
@@ -5445,6 +5446,28 @@ def test_a_room_message_streams_to_its_open_pages(app: Flask) -> None:
     finally:
         state.event_queues.unregister(room_id, stream)
     assert event is not None and event["content"] == "ping" and event["author"] == "owner"
+
+
+def test_a_rooms_send_reports_the_clients_activity_to_the_shell_as_an_agent_chats_does(
+    tmp_path: Path, messenger: RecordingMngrMessenger
+) -> None:
+    app = _peopled_app(tmp_path, messenger)
+    shell = state_of(app).shell
+    assert isinstance(shell, FakeShell)
+    client = app.test_client()
+    room_id = client.post("/api/rooms", json={"title": "Lounge"}).get_json()["id"]
+    framed = SendMessageRequest(message="hello all", message_id="m-1", client_id="c1", desktop_id="home")
+
+    # A script's send names no client, so the shell hears nothing of it.
+    unframed = client.post(f"/api/rooms/{room_id}/messages", json={"message": "from a script", "message_id": "m-0"})
+    posted = client.post(
+        f"/api/chats/{room_id}/message", json=framed.model_dump(mode="json"), headers=_identity_header(_VISITOR)
+    )
+
+    assert (unframed.status_code, posted.status_code) == (200, 200)
+    wait_until_true(lambda: len(shell.activities) == 1, 5.0, "the client-activity report")
+    assert shell.activities == [client_activity_report(ChatId(room_id), framed)]
+    assert str(shell.activities[0].key) == room_id
 
 
 def test_the_chat_document_names_the_rooms_kind(app: Flask, tmp_path: Path) -> None:
