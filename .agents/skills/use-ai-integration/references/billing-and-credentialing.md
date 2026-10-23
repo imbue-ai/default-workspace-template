@@ -45,7 +45,8 @@ nearly all of it (measured on this repo, Haiku, a one-line prompt):
 Workspace credentials live in a per-ACCOUNT config directory. Signing in through the provider
 chooser mints `~/.minds/accounts/<id>/`, and a chat is bound to one at create time by an env var
 naming that folder -- `CLAUDE_CONFIG_DIR` for claude, `CODEX_HOME` for codex, `HOME` for
-antigravity, `PI_CODING_AGENT_DIR` for pi. Nothing rebinds a chat afterwards.
+antigravity, `PI_CODING_AGENT_DIR` for pi, and `GROK_AUTH_PATH` (the folder's `auth.json`) for
+grok. Nothing rebinds a chat afterwards.
 
 This used to be one shared `~/.claude/settings.json` written by a single sign-in modal, which is
 why the resolver below still falls back to it when no account exists. The shared path is still what
