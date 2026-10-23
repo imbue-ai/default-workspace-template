@@ -1269,6 +1269,30 @@ def test_a_grok_device_sign_in_leaves_the_key_while_grok_holds_its_file(tmp_path
     assert auth_path.read_bytes() == written
 
 
+def test_a_grok_device_sign_in_leaves_a_file_grok_took_the_key_out_of_meanwhile(tmp_path: Path) -> None:
+    process = FakePexpectProcess([(0, _GROK_DEVICE_SCREEN)])
+    service = _grok_service(tmp_path, process)
+    flow_id, _account_id, auth_path = _start_device_reauth_over_a_pasted_key(service, tmp_path)
+    process.print_output(_GROK_SIGNED_IN)
+    process.exit(0)
+    lock_fd = _take_grok_lock(auth_path)
+    inode_by_grok: list[int] = []
+
+    def grok_drops_the_key_and_unlocks() -> None:
+        write_grok_auth(auth_path.parent, {GROK_SESSION_SCOPE: _GROK_LOGIN})
+        inode_by_grok.append(auth_path.stat().st_ino)
+        os.close(lock_fd)
+
+    grok_write = threading.Timer(0.5, grok_drops_the_key_and_unlocks)
+    grok_write.start()
+    status = service.poll(flow_id)
+    grok_write.join()
+
+    assert status.state is FlowState.OK
+    assert json.loads(auth_path.read_text()) == {GROK_SESSION_SCOPE: _GROK_LOGIN}
+    assert [auth_path.stat().st_ino] == inode_by_grok
+
+
 def test_a_grok_key_waits_out_grok_s_own_write_to_the_file(service: AuthFlowService, tmp_path: Path) -> None:
     """grok holds its lock from reading the file to writing it back. A paste that did not wait for it would
     have its key overwritten by what grok read before the paste."""

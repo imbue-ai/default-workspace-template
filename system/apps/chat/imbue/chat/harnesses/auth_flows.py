@@ -1223,7 +1223,9 @@ def _drop_grok_api_key(auth_path: Path, lock_wait_seconds: float) -> None:
             logger.warning("Left the {} scope in {}: grok held its lock", GROK_API_KEY_SCOPE, auth_path)
             return
         scopes = read_json_dict(auth_path)
-        scopes.pop(GROK_API_KEY_SCOPE, None)
+        if GROK_API_KEY_SCOPE not in scopes:
+            return
+        del scopes[GROK_API_KEY_SCOPE]
         atomic_write(auth_path, json.dumps(scopes, indent=2) + "\n")
 
 
