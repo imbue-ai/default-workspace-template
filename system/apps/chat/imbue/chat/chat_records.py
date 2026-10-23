@@ -265,6 +265,11 @@ class ChatRecord(FrozenModel):
         default=None,
         description="The display name a seeded chat was minted with, shown until its first agent carries one; None otherwise",
     )
+    chosen_name: str | None = Field(
+        default=None,
+        description="The name the user gave a seeded chat before its first agent existed, which that agent is created "
+        "with; None while it wears its seed title",
+    )
 
     @model_validator(mode="after")
     def _check_agents_are_the_chats_in_order(self) -> Self:

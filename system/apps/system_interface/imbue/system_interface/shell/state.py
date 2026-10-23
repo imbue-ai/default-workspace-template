@@ -362,8 +362,9 @@ class ShellState(MutableModel):
                         f"Window {str(window.id)} shows {str(window.app)!r}, not {str(request.app)!r}"
                     )
                 seen = effective_window(window, self.read_window_paths(desktop, request.client_id).get(window.id))
+                window_path = seen.path if request.target.sends_window_path else None
                 path = self.launch_destination(
-                    entry, launch_path, request.params, request.client_id, desktop.id, seen.path
+                    entry, launch_path, request.params, request.client_id, desktop.id, window_path
                 )
                 navigated = self.report_window_location(desktop.id, window.id, request.client_id, path, seen.title)
                 return LaunchOutcome(window=navigated, path=path, is_new=False)

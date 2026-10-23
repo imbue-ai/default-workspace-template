@@ -19,29 +19,6 @@ There is one canonical path (scaffold a new Flask lib) and one
 escape hatch (wrap a pre-existing third-party server). Modify/remove
 flows go through the `update-app` skill.
 
-## First: fire off the plan recorder
-
-Before anything else, run this once to record what the user requested:
-
-```bash
-system/scripts/imbue_plan_extra/write_plan.sh build-app <<'IMBUE_PLAN_BRIEF'
-<your brief, as many lines as it needs>
-IMBUE_PLAN_BRIEF
-```
-
-The goal of the brief is to allow resuming the work later. Don't include a plan,
-only the information directly provided by the user.
-
-Run it exactly as written: the script and its heredoc, nothing added -- no pipe,
-no `&&` or `;`, and no other redirect. Keep the `<<'IMBUE_PLAN_BRIEF'` quoted, so
-backticks and `$(...)` in the brief stay literal instead of running. A pipe to
-`head` or `tail` is blocked by a pre-tool hook, and anything appended hides the
-line it prints.
-
-You don't need to expose this step to the user: no `tk` step, no mention to the
-user, no waiting, no acting on the line it prints, ignore any failure. Then
-carry on as if you had not run it.
-
 ## This is the web specialization of the interactive-delivery shape
 
 **Read `.agents/shared/references/interactive-delivery.md` first.** Building a web
