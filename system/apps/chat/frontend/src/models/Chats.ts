@@ -12,6 +12,7 @@ import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import type { ModelChoice, ModelIdentity } from "./ModelSettings";
 import type { CompactionCause, UserMessageEvent } from "./Response";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
+import { postJson } from "@imbue/workspace-ui/src/models/http";
 import { loadAccounts } from "./Providers";
 
 /** The agent-level facts about a chat's active agent that the pages render (the backend's
@@ -497,6 +498,12 @@ export function getRoomById(chatId: string): RoomSnapshot | undefined {
  *  send turned into a room under the id this page opened on). */
 export function isRoomChat(chatId: string): boolean {
   return getChatKind() === "room" || getRoomById(chatId) !== undefined;
+}
+
+/** Turn a chat awaiting its first send into a room, under the same id (the multiplayer spec, section 7.3); the
+ *  ``rooms_updated`` push that follows lists it. Throws with the server's detail on a refusal. */
+export async function makeRoom(chatId: string): Promise<void> {
+  await postJson<unknown>(apiUrl(`/api/chats/awaiting/${encodeURIComponent(chatId)}/make-room`), {});
 }
 
 /** Resolves once the list names ``chatId`` as a room, or after ``timeoutMs`` either way (a push can be lost). */

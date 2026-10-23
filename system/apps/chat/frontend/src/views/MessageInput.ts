@@ -51,6 +51,7 @@ import {
   isHandoffCancellable,
   isRoomChat,
   launchChat,
+  makeRoom,
   whenChatRegistered,
   whenRoomListed,
 } from "../models/Chats";
@@ -62,7 +63,6 @@ import { ensureMentionHandles, matchingHandles } from "../models/Mentions";
 import type { MentionHandle } from "../models/Mentions";
 import { MENTION_ROW_CAP, insertMention, mentionDraftAt, mentionPopover } from "./MentionPopover";
 import type { MentionDraft } from "./MentionPopover";
-import { makeRoom } from "../root/verbs";
 import { icon, spinnerIcon, stopIcon } from "@imbue/workspace-ui/src/components/icons";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { ATTACHMENT_CHIP_HEIGHT_CLASS, AttachmentStrip } from "./AttachmentStrip";

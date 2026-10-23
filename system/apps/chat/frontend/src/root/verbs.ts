@@ -28,11 +28,6 @@ export async function startChat(chatId: string): Promise<void> {
   await postJson<unknown>(chatRoute(chatId, "start"), {});
 }
 
-/** Turn a chat awaiting its first send into a room, under the same id (the multiplayer spec, section 7.3). */
-export async function makeRoom(chatId: string): Promise<void> {
-  await postJson<unknown>(apiUrl(`/api/chats/awaiting/${encodeURIComponent(chatId)}/make-room`), {});
-}
-
 /** A new room, named the first free "Room N"; returns its id. */
 export async function createRoom(): Promise<string> {
   const room = await postJson<{ id: string }>(apiUrl("/api/rooms"), {});
