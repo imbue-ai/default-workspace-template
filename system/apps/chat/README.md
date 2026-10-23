@@ -571,8 +571,9 @@ asks mngr to compact the agent instead, through the same `request_compaction`
 call the sweep makes (`MngrMessenger.request_compaction`), passing any text after
 `/compact` as instructions (Pi uses them, Codex and Grok ignore them). For Grok,
 mngr types grok's own `/compact` and holds the agent's message lock until grok
-logs the compaction, so no held message is typed into it meanwhile. mngr records the compaction against the agent's idle period, so the sweep
-does not compact it again before its next turn. The chat shows the request before
+logs the compaction, so no held message is typed into it meanwhile. mngr records
+the compaction against the agent's idle period, so the sweep does not compact it
+again before its next turn. The chat shows the request before
 it asks mngr, since mngr's request for Grok returns only once the compaction is
 over, and withdraws it when mngr declines or fails it. The send answers 200 with
 `status: compaction_requested`, and the composer drops its "Sending…" bubble
