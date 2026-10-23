@@ -219,52 +219,16 @@ def test_stale_known_location_falls_back_to_discovery() -> None:
     assert send_calls == [(stale,), (fresh,)]
 
 
-def _typed_at_the_known_location_result(is_blocked: bool) -> MessageResult:
-    result = MessageResult()
-    if is_blocked:
-        result.blocked_agents.append(("alpha", "a dialog came up behind the message"))
-    else:
-        result.failures.append(
-            AgentSendFailure(
-                agent_name="alpha",
-                reason="Message submission was not confirmed",
-                kind=SendFailureKind.SUBMISSION_UNCONFIRMED,
-            )
-        )
-    return result
-
-
-@pytest.mark.usefixtures("isolated_mngr_env")
-@pytest.mark.parametrize("is_blocked", [False, True], ids=["unconfirmed", "landed_then_blocked"])
-def test_a_send_that_may_have_typed_at_the_known_location_is_not_sent_again(is_blocked: bool) -> None:
-    """Measured live: a grok send mngr could not confirm, sent again after discovery, reached grok twice."""
-    discover_calls: list[AgentId] = []
-    send_calls: list[tuple[AgentMatch, ...]] = []
-
-    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
-        discover_calls.append(agent_id)
-        return (_make_match(host="host-b"),)
-
-    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
-        send_calls.append(tuple(matches))
-        return _typed_at_the_known_location_result(is_blocked)
-
-    messenger = MngrMessenger(discover=_discover, send=_send)
-    failure = messenger.send_to_agent(_AGENT_ID, "hi", (_make_match(),))
-
-    assert failure is not None
-    assert failure.kind == ("input_blocked" if is_blocked else "submission_unconfirmed")
-    assert (len(send_calls), discover_calls) == (1, [])
-
-
 class _KnownLocationDeliveries:
     """A discovery that finds the agent on host-b, and a send or press that reaches it only there.
 
-    At the known location the delivery fails with ``failure_kind``, or matches nothing when it is None.
+    At the known location the delivery fails with ``failure_kind``, lands and then meets a dialog when
+    ``is_blocked``, or matches nothing when neither.
     """
 
-    def __init__(self, failure_kind: SendFailureKind | None) -> None:
+    def __init__(self, failure_kind: SendFailureKind | None, is_blocked: bool = False) -> None:
         self.failure_kind = failure_kind
+        self.is_blocked = is_blocked
         self.discover_calls: list[AgentId] = []
         self.delivery_calls: list[tuple[AgentMatch, ...]] = []
 
@@ -276,6 +240,8 @@ class _KnownLocationDeliveries:
         self.delivery_calls.append(tuple(matches))
         if str(matches[0].host_name) == "host-b":
             return MessageResult(successful_agents=[str(match.agent_id) for match in matches])
+        if self.is_blocked:
+            return MessageResult(blocked_agents=[("alpha", "no")])
         failures = (
             []
             if self.failure_kind is None
@@ -293,6 +259,7 @@ class _KnownLocationDeliveries:
     [
         pytest.param(SendFailureKind.INPUT_BLOCKED, False, id="refused"),
         pytest.param(SendFailureKind.AGENT_NOT_FOUND, True, id="agent_moved"),
+        pytest.param(SendFailureKind.AGENT_UNREACHABLE, True, id="pane_gone"),
         pytest.param(None, True, id="nothing_matched"),
     ],
 )
@@ -311,26 +278,30 @@ def test_a_press_falls_back_to_discovery_only_when_the_known_location_reached_no
 
 @pytest.mark.usefixtures("isolated_mngr_env")
 @pytest.mark.parametrize(
-    ("failure_kind", "is_sent_after_discovery"),
+    ("failure_kind", "is_blocked", "is_sent_after_discovery"),
     [
-        pytest.param(SendFailureKind.AGENT_BUSY, False, id="busy"),
-        pytest.param(SendFailureKind.INPUT_BLOCKED, False, id="blocked"),
-        pytest.param(SendFailureKind.NOT_READY, False, id="not_ready"),
-        pytest.param(SendFailureKind.UNKNOWN, False, id="unclassified"),
-        pytest.param(SendFailureKind.AGENT_NOT_FOUND, True, id="agent_moved"),
-        pytest.param(None, True, id="nothing_matched"),
+        pytest.param(SendFailureKind.AGENT_BUSY, False, False, id="busy"),
+        pytest.param(SendFailureKind.INPUT_BLOCKED, False, False, id="blocked"),
+        pytest.param(SendFailureKind.NOT_READY, False, False, id="not_ready"),
+        pytest.param(SendFailureKind.SUBMISSION_UNCONFIRMED, False, False, id="unconfirmed"),
+        pytest.param(SendFailureKind.UNKNOWN, False, False, id="unclassified"),
+        pytest.param(None, True, False, id="landed_then_blocked"),
+        pytest.param(SendFailureKind.AGENT_NOT_FOUND, False, True, id="agent_moved"),
+        pytest.param(SendFailureKind.AGENT_UNREACHABLE, False, True, id="pane_gone"),
+        pytest.param(None, False, True, id="nothing_matched"),
     ],
 )
 def test_a_send_falls_back_to_discovery_only_when_the_known_location_reached_no_agent(
-    failure_kind: SendFailureKind | None, is_sent_after_discovery: bool
+    failure_kind: SendFailureKind | None, is_blocked: bool, is_sent_after_discovery: bool
 ) -> None:
     """A grok send refused as busy, sent again after discovery, cost each REFUSE race a discovery and a second send."""
-    deliveries = _KnownLocationDeliveries(failure_kind)
+    deliveries = _KnownLocationDeliveries(failure_kind, is_blocked)
     messenger = MngrMessenger(discover=deliveries.discover, send=deliveries.deliver)
 
     failure = messenger.send_to_agent(_AGENT_ID, "hi", (_make_match(),))
 
-    assert failure == (None if is_sent_after_discovery else SendFailure(reason="no", kind=str(failure_kind)))
+    refusal_kind = SendFailureKind.INPUT_BLOCKED if is_blocked else failure_kind
+    assert failure == (None if is_sent_after_discovery else SendFailure(reason="no", kind=str(refusal_kind)))
     assert deliveries.call_counts() == ((2, 1) if is_sent_after_discovery else (1, 0))
 
 
