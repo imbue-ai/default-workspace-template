@@ -627,10 +627,10 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
     path.
     """
     # Ensure the watcher exists BEFORE the send, as the tap and stop endpoints already do. For
-    # a harness that holds its own queue (antigravity), the watcher owns the only thread that
-    # can ever deliver it -- so a send arriving here first (a headless client, or the first
-    # request after a restart) would otherwise enqueue a message with nothing running to drain
-    # it, and decide "is a turn open?" from an unpublished reading.
+    # a harness that holds its own queue, the watcher owns the only thread that can ever
+    # deliver it -- so a send arriving here first (a headless client, or the first request
+    # after a restart) would otherwise enqueue a message with nothing running to drain it, and
+    # decide "is a turn open?" from an unpublished reading.
     watcher = state.get_or_create_watcher(agent_info)
     agent_manager = state.agent_manager
     compact_handling = _composer_compact_handling_of(agent_info, text)
