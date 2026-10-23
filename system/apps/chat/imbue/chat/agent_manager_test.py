@@ -7219,6 +7219,9 @@ def test_a_withdrawn_compaction_request_stops_showing_and_leaves_no_record(
     assert agent_id not in agent_manager._compaction_pending_by_agent
     assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
     assert not (state_dir / COMPACTION_REQUEST_FILENAME).exists()
+    later_compaction = _compacted_event(seconds_ago=0.0)
+    agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [later_compaction])
+    assert later_compaction["compaction_cause"] is None
 
 
 def test_withdrawing_an_older_compaction_request_leaves_a_newer_one(

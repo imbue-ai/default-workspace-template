@@ -4968,6 +4968,8 @@ class AgentManager:
             if pending is None or pending[0] != requested_at:
                 return
             del self._compaction_pending_by_agent[agent_id]
+            self._compaction_cause_by_agent.pop(agent_id, None)
+            self._compaction_cause_seen_at_by_agent.pop(agent_id, None)
         try:
             (self._get_agent_state_dir(agent_id) / COMPACTION_REQUEST_FILENAME).unlink(missing_ok=True)
         except OSError as e:
