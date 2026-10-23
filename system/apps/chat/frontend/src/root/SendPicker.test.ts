@@ -34,9 +34,13 @@ afterEach(() => {
 });
 
 describe("pickableRows", () => {
-  it("offers the chats that are agents, narrowed by title, and neither a chat not yet an agent nor a room", () => {
-    expect(pickableRows(ROWS, "").map((candidate) => candidate.chatId)).toEqual(["agent-1", "agent-2"]);
-    expect(pickableRows(ROWS, "lounge")).toEqual([]);
+  it("offers the chats that can take a message, narrowed by title, and not a chat that is not an agent yet", () => {
+    expect(pickableRows(ROWS, "").map((candidate) => candidate.chatId)).toEqual([
+      "agent-1",
+      "agent-2",
+      "room-0123456789abcdef",
+    ]);
+    expect(pickableRows(ROWS, "lounge").map((candidate) => candidate.chatId)).toEqual(["room-0123456789abcdef"]);
     expect(pickableRows(ROWS, "tests").map((candidate) => candidate.chatId)).toEqual(["agent-2"]);
     expect(pickableRows(ROWS, "zzz")).toEqual([]);
   });
@@ -49,7 +53,11 @@ describe("SendPicker", () => {
     expect(picker.querySelector(".send-picker-text")!.textContent).toBe("“hello there”");
     expect(picker.querySelector("[data-send-picker]")!.getAttribute("aria-label")).toBe("Send to which chat?");
     const targets = Array.from(picker.querySelectorAll("[data-send-target]"));
-    expect(targets.map((target) => target.getAttribute("data-send-target"))).toEqual(["agent-1", "agent-2"]);
+    expect(targets.map((target) => target.getAttribute("data-send-target"))).toEqual([
+      "agent-1",
+      "agent-2",
+      "room-0123456789abcdef",
+    ]);
     expect(targets[0].getAttribute("aria-selected")).toBe("true");
     (targets[1] as HTMLElement).click();
     expect(onPick).toHaveBeenCalledWith("agent-2");

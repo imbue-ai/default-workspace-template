@@ -1,15 +1,9 @@
 Chat rooms and mentions (the mngr repo's `specs/multiplayer-refinements/spec.md`, section 7):
 
-- A room is a chat among the people in the workspace with no agent. "New room" beside "New chat" makes one; a chat waiting for its first send can become one instead of starting an agent ("Chat room (no provider)" in the provider chooser). Rooms sit in the chat list with the other chats, wearing a people glyph, and offer Rename and Delete.
+- A room is a chat among the people in the workspace with no AI agent. A chat waiting for its first send becomes one from its provider chooser ("Chat room (no provider)"), and any chat becomes a room, or a room becomes an agent chat, from the composer's provider menu: the switch keeps the conversation so far as the chat's earlier segments, and a chat leaving a room hands its new agent the room's transcript. Rooms sit in the chat list with the other chats, wearing a people glyph, and take every chat verb (rename, delete, stop, start).
 
-- A room's page is the chat page: every message is drawn as the person's turn, under their name and picture. The composer says "Message (tag @agent to ask the agent)" and the model bar reads "Chat room".
+- A room is an mngr agent of the template's new `room` type: its process reads what `mngr message <room>` types into its pane into the room's transcript, which `mngr transcript <room>` renders and the chat app tails. The chat app appends people's messages to the same transcript, so every message in a room is drawn as its author's turn under their name and picture, the owner's unmarked.
 
-- Typing `@` in any composer opens a list of handles: the people here, `@agent` for the workspace's agent, and every chat by its title (`@Main-chat`). Enter or a click inserts one.
+- Typing `@` in a room's composer opens a list of handles: the people here, `@agent` for the workspace's agent, and every chat by its title (`@Main-chat`). Mentioning `@agent` or a chat from a room sends that chat the message, marked as said in the room, and the room's row shows a working dot until the agent answers into the room. Mentioning a person marks the room's row with an `@` for them until they look at it, and tells the workspace's owner through the Imbue Studio app's feed as the room itself, so the notification opens the room. In an agent chat a handle is a word the agent reads, and the composer offers no popover.
 
-- Mentioning `@agent` or a chat from a room sends that chat the message, marked as said in the room; the agent answers into the room with `python3 system/scripts/chat_room.py post <room> -m "..."`, and the room's row shows a working dot until it does. In an agent chat, `@agent` is just a word the agent reads.
-
-- A message sent into a room from a page is reported to the workspace shell's activity log like one sent to an agent chat, so an agent can attribute it to the client it came from.
-
-- Mentioning a person marks the chat's row with an `@` for them until they look at it, and tells the workspace's owner through the Imbue Studio app's feed.
-
-- New routes: `GET`/`POST /api/rooms`, `POST /api/rooms/lounge`, `POST /api/rooms/<id>/rename`, `DELETE /api/rooms/<id>`, `GET`/`POST /api/rooms/<id>/messages`, `POST /api/rooms/<id>/post` (loopback), `GET /api/mentions`, `GET /api/mentions/pending`, `POST /api/chats/awaiting/<id>/make-room`; the `rooms_updated` and `mentions_updated` pushes on `/api/ws`; `kind` on every chat snapshot.
+- The chat snapshot carries `kind` (`agent` or `room`) and `awaiting_chat_ids`; `POST /api/chats/create` and `POST /api/chats/<id>/handoff` take `kind`; `GET /api/mentions` and `GET /api/mentions/pending` are new, with the `mentions_updated` push on `/api/ws`. There are no room-only routes, no room store, and no second chat id shape.

@@ -51,8 +51,6 @@ export interface ChatRailAttrs {
   isTouch: boolean;
   onPick: (chatId: string) => void;
   onNew: () => void;
-  /** New room: a chat among the workspace's people, with no agent (the multiplayer spec, section 7.3). */
-  onNewRoom: () => void;
   /** The scope a reference to a row carries (the root's handshake). */
   referenceScope: ReferenceScope;
   /** Where a row's "Explain..." drafts (element-reference-menu plan section 4.4). */
@@ -426,20 +424,6 @@ function railHead(attrs: ChatRailAttrs): m.Vnode {
         onclick: () => attrs.onNew(),
       },
       [plusGlyph(), m("span", "New chat")],
-    ),
-    m(
-      "button",
-      {
-        type: "button",
-        class: [
-          "chat-rail-new-room flex flex-none items-center gap-2 rounded-md px-2 py-1.5",
-          "text-(length:--font-size-row) text-secondary hover:bg-fill-hover hover:text-primary",
-        ].join(" "),
-        "aria-label": "New room",
-        ...hoverTooltipAttrs("A chat among the people here, with no agent", "below"),
-        onclick: () => attrs.onNewRoom(),
-      },
-      [peopleGlyph(16), m("span", "New room")],
     ),
   ]);
 }

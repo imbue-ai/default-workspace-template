@@ -58,7 +58,7 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { EmptySlot } from "./EmptySlot";
 import { uploadFilesToComposer } from "../models/ComposerAttachments";
 import { MessageInput } from "./MessageInput";
-import { ModelProviderMenu, roomChip } from "./ModelProviderMenu";
+import { ModelProviderMenu } from "./ModelProviderMenu";
 import { ConnectingIndicator } from "./ConnectingIndicator";
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
 import { chatFlipCard } from "./chat-flip";
@@ -437,9 +437,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     }
   }
 
-  /** Load the chat once; ``isFirstSendPlaced`` says its first send landed before this page had a stream to see it
-   *  arrive on, so the placed snapshot is what stands the send's "Sending…" bubble down. */
-  function ensureChatLoaded(chatId: string, isStreamed: boolean, isFirstSendPlaced = false): void {
+  /** Load the chat once. */
+  function ensureChatLoaded(chatId: string, isStreamed: boolean): void {
     if (chatId === currentChatId) {
       return;
     }
@@ -448,17 +447,11 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     // Resets all scroll state and loads this chat's persisted position (which
     // then steers the engine's fill toward it once the snapshot lands).
     engine.setChat(chatId);
-    const load = loadChat(chatId, isStreamed);
-    if (isFirstSendPlaced) {
-      void load.then(() => noteLoadedArrivals(chatId)).finally(() => m.redraw());
-    }
+    loadChat(chatId, isStreamed);
   }
 
   // A retry of the snapshot that 404'd is outstanding; only one at a time.
   let notFoundRetryInFlight = false;
-  // An unseeded chat this page showed awaiting its first send. That send can make it a room instead of launching
-  // an agent (section 7.3), and the room's message lands before the record's discard brings this page its stream.
-  let awaitingChatShown: string | null = null;
   // A seeded chat this page showed as provisional: once the chat list names it (its first agent
   // landed), the transcript is reloaded so the window covers the new segment, and that load
   // connects the stream, which had no agent to follow while the chat was provisional.
@@ -526,7 +519,6 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     // chat is the exception: its seed segment reads like any transcript, so the page loads it.
     const provisional = provisionalRecord(chatId);
     if (provisional !== null && !isSeededTranscriptShown(provisional)) {
-      if (provisional.phase === "awaiting_first_send") awaitingChatShown = chatId;
       return renderProvisional(chatId, provisional);
     }
     if (provisional !== null) {
@@ -535,10 +527,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       seededChatAwaitingReload = chatId;
       ensureChatLoaded(chatId, false);
     } else {
-      // An awaiting chat its first send made a room: the message is in the room already, so the snapshot places it.
-      const isRoomMadeBySend = awaitingChatShown === chatId && isRoomChat(chatId);
-      awaitingChatShown = null;
-      ensureChatLoaded(chatId, true, isRoomMadeBySend);
+      ensureChatLoaded(chatId, true);
       manageStreamConnection(chatId);
     }
 
@@ -838,15 +827,13 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 m(MessageInput, {
                   chatId,
                   leading:
-                    isCompact && isRoom
-                      ? roomChip()
-                      : isCompact && isListed
-                        ? m(ModelProviderMenu, {
-                            chatId,
-                            isCompact: true,
-                            sourceView: { on: isFlipped, onToggle: toggleSourceView },
-                          })
-                        : undefined,
+                    isCompact && isListed
+                      ? m(ModelProviderMenu, {
+                          chatId,
+                          isCompact: true,
+                          sourceView: { on: isFlipped, onToggle: toggleSourceView },
+                        })
+                      : undefined,
                 }),
                 // The under-bar is a sibling of the whole flip card, not part of this face: on
                 // a face it would rotate away with the face its own switch turns, and the flip
@@ -875,13 +862,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
               },
               [
                 // On a phone a chat with no agent yet still names its account here: it has no menu to open.
-                isRoom
-                  ? isCompact
-                    ? null
-                    : roomChip()
-                  : isCompact && isListed
-                    ? null
-                    : m(ModelProviderMenu, { chatId }),
+                isCompact && isListed ? null : m(ModelProviderMenu, { chatId }),
                 m(ConnectingIndicator, { chatId }),
                 m(FastModeNotice, { chatId }),
                 !isListed || isRoom || (isCompact && !isFlipped)

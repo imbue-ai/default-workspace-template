@@ -10,7 +10,7 @@
  * level deep, and the pair moves together.
  */
 
-import type { ChatSnapshot, ProvisionalChat, ProvisionalChatPhase, RoomSnapshot } from "../models/Chats";
+import type { ChatSnapshot, ProvisionalChat, ProvisionalChatPhase } from "../models/Chats";
 
 /** What a row is: a chat with an agent, one the app has minted but that is not an agent yet, or a room. */
 export type ChatRowKind = "agent" | "provisional" | "room";
@@ -41,46 +41,31 @@ const STATUS_BY_PROVISIONAL_PHASE: Readonly<Record<ProvisionalChatPhase, string>
 
 const PROVISIONAL_TITLE = "New chat";
 
-/** A room's status: working while an agent chat it asked (by mention) is still working on the answer. */
-function roomStatus(room: RoomSnapshot, chats: readonly ChatSnapshot[]): string {
+/** A room's status: working while an agent chat it asked (by mention) is still working on the answer, else its
+ *  own, which is idle. */
+function roomStatus(room: ChatSnapshot, chats: readonly ChatSnapshot[]): string {
   const isAsked = (chat: ChatSnapshot): boolean => room.awaiting_chat_ids.includes(chat.chat_id);
-  return chats.some((chat) => isAsked(chat) && chat.status === "working") ? "working" : "idle";
+  return chats.some((chat) => isAsked(chat) && chat.status === "working") ? "working" : room.status;
 }
 
 export function rowsFromSnapshots(
   chats: readonly ChatSnapshot[],
   provisional: readonly ProvisionalChat[],
   mainChatId: string | null,
-  rooms: readonly RoomSnapshot[] = [],
   mentionedChatIds: ReadonlySet<string> = new Set(),
 ): ChatRow[] {
   const known = new Set(chats.map((chat) => chat.chat_id));
   const rows: ChatRow[] = chats.map((chat) => ({
     chatId: chat.chat_id,
-    kind: "agent",
+    kind: chat.kind,
     title: chat.title,
-    status: chat.status,
+    status: chat.kind === "room" ? roomStatus(chat, chats) : chat.status,
     labels: chat.labels,
     agentIds: chat.agent_ids,
     lastActiveMs: chat.last_messaged_at === null ? null : chat.last_messaged_at * 1000,
     isMain: chat.chat_id === mainChatId,
     hasMention: mentionedChatIds.has(chat.chat_id),
   }));
-  for (const room of rooms) {
-    if (known.has(room.id)) continue;
-    known.add(room.id);
-    rows.push({
-      chatId: room.id,
-      kind: "room",
-      title: room.title,
-      status: roomStatus(room, chats),
-      labels: {},
-      agentIds: [],
-      lastActiveMs: room.last_messaged_at === null ? null : room.last_messaged_at * 1000,
-      isMain: false,
-      hasMention: mentionedChatIds.has(room.id),
-    });
-  }
   for (const chat of provisional) {
     if (known.has(chat.chat_id)) continue;
     rows.push({

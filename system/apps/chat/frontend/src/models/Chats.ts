@@ -12,7 +12,6 @@ import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import type { ModelChoice, ModelIdentity } from "./ModelSettings";
 import type { CompactionCause, UserMessageEvent } from "./Response";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
-import { postJson } from "@imbue/workspace-ui/src/models/http";
 import { loadAccounts } from "./Providers";
 
 /** The agent-level facts about a chat's active agent that the pages render (the backend's
@@ -119,10 +118,13 @@ export function isHandoffCancellable(handoff: HandoffState): boolean {
 }
 
 /** One chat as the pages see it (the backend's ``ChatSnapshot``, one entry of ``chats_updated``). */
+/** What a chat is (the backend's ``ChatKind``): a conversation with an agent, or a room, a message log among the
+ *  workspace's people whose agent is the room's reader (the multiplayer spec, section 7.3). */
+export type ChatKind = "agent" | "room";
+
 export interface ChatSnapshot {
   chat_id: string;
-  /** Always "agent": a room is listed by ``getRooms`` instead. */
-  kind?: "agent" | "room";
+  kind: ChatKind;
   // The name the user sees: the ``display_name`` label, else the mngr name.
   title: string;
   // The chat's canonical mngr name, the only way to address it by name.
@@ -142,6 +144,9 @@ export interface ChatSnapshot {
   // Epoch seconds of the chat's most recent message; null when it has never been messaged.
   // The chat root's list orders on it.
   last_messaged_at: number | null;
+  /** The chats a mention from this room sent to and has not heard back from: the room's row shows a working dot
+   *  while one of them works (section 7.4). Empty for an agent chat. */
+  awaiting_chat_ids: string[];
 }
 
 /** One message currently parked in an agent's harness queue (the wire shape of the backend
@@ -180,20 +185,8 @@ export interface ProvisionalChat {
   is_seeded: boolean;
 }
 
-/** A room as the chat app lists it (``rooms.py``): a chat among the workspace's people with no agent. */
-export interface RoomSnapshot {
-  id: string;
-  kind: "room";
-  title: string;
-  /** Epoch seconds of the room's most recent message, or null while it has none. */
-  last_messaged_at: number | null;
-  /** The agent chats a mention from the room sent to and has not heard back from. */
-  awaiting_chat_ids: string[];
-}
-
 type WsEvent =
   | { type: "chats_updated"; chats: ChatSnapshot[]; main_chat_id: string | null }
-  | { type: "rooms_updated"; rooms: RoomSnapshot[] }
   | { type: "mentions_updated" }
   | ({ type: "provisional_chat_created" } & ProvisionalChat)
   | { type: "provisional_chat_completed"; chat_id: string; success: boolean; error: string | null }
@@ -219,8 +212,6 @@ let mainChatId: string | null = null;
 // The JSON of the last chats_updated payload, to skip redundant identical pushes.
 let lastChatsSerialized = "";
 let provisionalChats: ProvisionalChat[] = [];
-let rooms: RoomSnapshot[] = [];
-let lastRoomsSerialized = "";
 // Whether the chat app has sent its chat list at least once: before that, a chat the page names
 // may simply not be known here yet.
 let isChatListReceived = false;
@@ -262,7 +253,6 @@ function connect(): void {
     // connection; the list ends the replay and must be handled even when nothing changed.
     replayedProvisionalIds = new Set();
     lastChatsSerialized = "";
-    lastRoomsSerialized = "";
     m.redraw();
   };
 
@@ -320,17 +310,6 @@ function handleEvent(event: WsEvent): void {
     case "accounts_updated":
       rereadAccounts();
       break;
-    case "rooms_updated": {
-      const serialized = JSON.stringify(event.rooms);
-      if (serialized === lastRoomsSerialized) break;
-      lastRoomsSerialized = serialized;
-      rooms = event.rooms;
-      // A room is a row of the same list, so the list's listeners hear of it as of any chat.
-      for (const listener of chatsUpdatedListeners) {
-        listener(getChats());
-      }
-      break;
-    }
     case "mentions_updated":
       notifyMentionsUpdated();
       break;
@@ -486,43 +465,11 @@ export function getShoulderTapAvailableForChat(chatId: string): boolean {
   return getChatById(chatId)?.active_agent.shoulder_tap_available === true;
 }
 
-/** The rooms as the chat app last listed them. */
-export function getRooms(): RoomSnapshot[] {
-  return rooms;
-}
-
-export function getRoomById(chatId: string): RoomSnapshot | undefined {
-  return rooms.find((room) => room.id === chatId);
-}
-
-/** Whether the page's chat is a room: its document says so, or the list names it as one (a chat awaiting its first
- *  send turned into a room under the id this page opened on). */
+/** Whether ``chatId`` is a room: the list says so, or, before the list has arrived, the page's own document does. */
 export function isRoomChat(chatId: string): boolean {
-  return getChatKind() === "room" || getRoomById(chatId) !== undefined;
-}
-
-/** Turn a chat awaiting its first send into a room, under the same id (the multiplayer spec, section 7.3); the
- *  ``rooms_updated`` push that follows lists it. Throws with the server's detail on a refusal. */
-export async function makeRoom(chatId: string): Promise<void> {
-  await postJson<unknown>(apiUrl(`/api/chats/awaiting/${encodeURIComponent(chatId)}/make-room`), {});
-}
-
-/** Resolves once the list names ``chatId`` as a room, or after ``timeoutMs`` either way (a push can be lost). */
-export function whenRoomListed(chatId: string, timeoutMs = 5000): Promise<void> {
-  if (getRoomById(chatId) !== undefined) return Promise.resolve();
-  return new Promise((resolve) => {
-    const listener: ChatsUpdatedListener = () => {
-      if (getRoomById(chatId) === undefined) return;
-      removeChatsUpdatedListener(listener);
-      clearTimeout(timer);
-      resolve();
-    };
-    const timer = setTimeout(() => {
-      removeChatsUpdatedListener(listener);
-      resolve();
-    }, timeoutMs);
-    addChatsUpdatedListener(listener);
-  });
+  const listed = getChatById(chatId);
+  if (listed !== undefined) return listed.kind === "room";
+  return getChatKind() === "room";
 }
 
 /** Notified when someone's pending mentions changed, so a page reads its own again. */
@@ -532,12 +479,6 @@ export function addMentionsUpdatedListener(listener: () => void): void {
 
 export function removeMentionsUpdatedListener(listener: () => void): void {
   mentionsUpdatedListeners = mentionsUpdatedListeners.filter((entry) => entry !== listener);
-}
-
-/** Make the room list a given one, without a push. Test-only. */
-export function setRoomsForTesting(list: RoomSnapshot[]): void {
-  rooms = list;
-  lastRoomsSerialized = "";
 }
 
 /** Every chat the app has minted that is not an agent yet, for the root's list. */
@@ -618,6 +559,7 @@ export interface CreatedChat {
  * shows up as provisional until mngr registers it). The display name is minted server-side.
  * ``projectId`` becomes the agent's ``project`` label and is empty for a chat started outside
  * any project; ``message`` is the chat's first message, sent once it runs (empty sends none).
+ * A ``kind`` of ``"room"`` starts a room instead, on no account and no model (section 7.3).
  * Throws a ``CreateChatRefusedError`` with the server's detail on rejection.
  */
 export function createChat(
@@ -625,9 +567,10 @@ export function createChat(
   accountId: string = "",
   message: string = "",
   pick: ModelIdentity | null = null,
+  kind: ChatKind = "agent",
 ): Promise<CreatedChat> {
   // No harness: the account decides it. An empty account_id takes the most recently used account.
-  return postCreateChat({ project_id: projectId, account_id: accountId, message, model: pick });
+  return postCreateChat({ project_id: projectId, account_id: accountId, message, model: pick, kind });
 }
 
 /** The chat a chat list with none to show opens on: one waiting for its first send, which launches it on the
@@ -641,14 +584,19 @@ export async function awaitingChatForEmptyList(): Promise<string> {
 
 /**
  * Launch a chat minted earlier (a seeded one awaiting its first send, or one whose create
- * failed) on ``accountId``: it keeps its id and name, so the window showing it becomes the chat.
+ * failed) on ``accountId``, or as a room when ``kind`` says so: it keeps its id and name, so the
+ * window showing it becomes the chat.
  */
-export function launchChat(chatId: string, accountId: string, message = ""): Promise<CreatedChat> {
+export function launchChat(
+  chatId: string,
+  accountId: string,
+  message = "",
+  kind: ChatKind = "agent",
+): Promise<CreatedChat> {
   // A seeded chat's launch brings the user's first message; a failed create's retry has none
   // to bring, so the field is left out then.
-  return postCreateChat(
-    message === "" ? { chat_id: chatId, account_id: accountId } : { chat_id: chatId, account_id: accountId, message },
-  );
+  const body = { chat_id: chatId, account_id: accountId, kind };
+  return postCreateChat(message === "" ? body : { ...body, message });
 }
 
 async function postCreateChat(body: Record<string, string | ModelIdentity | null>): Promise<CreatedChat> {

@@ -11,7 +11,6 @@ export function chatRailAttrsFixture(overrides: Partial<ChatRailAttrs> = {}): Ch
     isTouch: false,
     onPick: () => undefined,
     onNew: () => undefined,
-    onNewRoom: () => undefined,
     referenceScope: scopeOfHandshake(null),
     onDraftReference: () => undefined,
     isReferenceDraftAvailable: false,

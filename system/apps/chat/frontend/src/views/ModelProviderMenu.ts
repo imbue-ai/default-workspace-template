@@ -83,7 +83,7 @@ import {
   isAccountSignedOut,
   openProviderChooser,
 } from "../models/Providers";
-import { beginSwitchTo, beginSwitchToAccountId, openSwitchDialog, takeBackSwitch } from "./SwitchDialog";
+import { beginSwitchTo, beginSwitchToAccountId, openSwitchDialog, switchToRoom, takeBackSwitch } from "./SwitchDialog";
 import type { ProviderAccount } from "../models/Providers";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
@@ -151,18 +151,6 @@ function notConnectedChip(onSignedIn?: (accountId: string) => void): m.Vnode {
       onclick: () => openProviderChooser(onSignedIn === undefined ? {} : { onSignedIn }),
     },
     "Not connected",
-  );
-}
-
-/** The chip of a room (section 7.3): it says what the chat is, and opens nothing, since a room runs on no model. */
-export function roomChip(): m.Vnode {
-  return m(
-    "span",
-    {
-      class: `model-selector-room ${css.PROVISIONAL_CHIP}`,
-      ...hoverTooltipAttrs("A chat among the people here", "above"),
-    },
-    "Chat room",
   );
 }
 
@@ -828,6 +816,22 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
               });
             }),
       ),
+      // A chat among the people here instead (the multiplayer spec, section 7.6); a room is one already.
+      chat !== undefined && chat.kind !== "room"
+        ? m(
+            "button",
+            {
+              type: "button",
+              class: `model-provider-menu-room ${css.SUBMENU_ADD}`,
+              ...hoverTooltipAttrs("Make this a chat among the people here, with no AI agent", "above"),
+              onclick: () => {
+                menu.close();
+                void switchToRoom(chatId);
+              },
+            },
+            "Chat room",
+          )
+        : null,
       m(
         "button",
         {
@@ -970,8 +974,9 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       // No account to name and no model to show. With no provider signed in, say so; otherwise
       // the chip below stands in (its Provider row reads "No account") until the model arrives,
       // which for a chat whose agent is still connecting takes a while. A phone keeps its settings
-      // button, which is also its way to Source view and Stop agent.
-      if (account === null && matched === null && !isCompact) {
+      // button, which is also its way to Source view and Stop agent. A room runs on no account by
+      // design, so its chip names the room instead.
+      if (account === null && matched === null && !isCompact && chat.kind !== "room") {
         if (!areAccountsLoaded()) return loadingChip();
         if (getAccounts().length === 0) {
           return notConnectedChip((accountId) => {
@@ -1037,7 +1042,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
           : [
               // A dot joins the text parts; the bolt stands on the row's gap alone, since a glyph
               // is already read apart from the words.
-              m("span", matched?.label ?? account?.provider ?? "Model"),
+              m("span", matched?.label ?? account?.provider ?? (chat.kind === "room" ? "Chat room" : "Model")),
               shownEfforts.length > 1 && currentEffort !== null
                 ? [m("span", { class: css.TRIGGER_DOT }, "·"), m("span", capitalizeEffort(currentEffort))]
                 : null,

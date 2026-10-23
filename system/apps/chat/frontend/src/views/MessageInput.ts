@@ -51,9 +51,7 @@ import {
   isHandoffCancellable,
   isRoomChat,
   launchChat,
-  makeRoom,
   whenChatRegistered,
-  whenRoomListed,
 } from "../models/Chats";
 import { COMPACTING_STATE, isWorkingActivityState } from "../models/activityState";
 import { harnessLabel } from "./harness-labels";
@@ -350,6 +348,9 @@ function chooseProviderToContinue(chatId: string): void {
   openProviderChooser({ onSignedIn: (chosen) => beginSwitchToAccountId(chatId, chosen) });
 }
 
+/** What an awaiting chat's first send launches it as: a chat on an account, or a room. */
+type FirstSendChoice = { kind: "account"; id: string } | { kind: "room" };
+
 export function MessageInput(): m.Component<MessageInputAttrs> {
   let messageText = "";
   let currentChatId: string | null = null;
@@ -419,8 +420,13 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     return mentionDraft === null ? [] : matchingHandles(mentionDraft.query).slice(0, MENTION_ROW_CAP);
   }
 
-  /** Read the mention under the caret after the text changed or the caret moved; a fresh ``@`` asks for the table. */
+  /** Read the mention under the caret after the text changed or the caret moved; a fresh ``@`` asks for the table.
+   *  Only in a room (section 7.2): in an agent chat a handle is a word the agent reads like any other. */
   function updateMentionDraft(textarea: HTMLTextAreaElement): void {
+    if (currentChatId === null || !isRoomChat(currentChatId)) {
+      mentionDraft = null;
+      return;
+    }
     const previous = mentionDraft;
     mentionDraft = mentionDraftAt(textarea.value, textarea.selectionStart ?? textarea.value.length, previous);
     if (mentionDraft !== null && previous === null) void ensureMentionHandles().then(() => m.redraw());
@@ -779,8 +785,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // message rides the launch as the agent's first, so nothing is sent after it lands.
           const awaiting = getProvisionalChat(chatId);
           if (awaiting?.phase === "awaiting_first_send" && getChatById(chatId) === undefined) {
-            const accountId = await chooseAccountForFirstSend(awaiting);
-            if (accountId === null) {
+            const choice = await chooseAccountForFirstSend(awaiting);
+            if (choice === null) {
               // The chooser closed with no sign-in: nothing was launched, and the message is
               // the user's to keep.
               dropOutgoing(chatId, outgoingId);
@@ -788,15 +794,13 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
               m.redraw();
               return;
             }
-            if (accountId === "room") {
-              // The chat becomes a room under this id, and the message is its first.
-              await makeRoom(chatId);
-              await whenRoomListed(chatId);
-              await sendMessage(chatId, finalText, messageId);
-              refocusAfterSend();
-              return;
-            }
-            await launchChat(chatId, accountId, finalText);
+            // A room is launched like a chat on an account, on none: the message is appended once it is up.
+            await launchChat(
+              chatId,
+              choice.kind === "account" ? choice.id : "",
+              finalText,
+              choice.kind === "account" ? "agent" : "room",
+            );
             try {
               await whenChatRegistered(chatId);
             } catch (err) {
@@ -855,22 +859,22 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       }
 
       /**
-       * The account a chat's first send launches it on: the one the chat was minted for when it
+       * What a chat's first send launches it as: the account the chat was minted for when it
        * names one (an intake's), else the signed-in one when there is one, else whatever the
-       * provider chooser produces; ``"room"`` when the chooser's room row was picked instead
+       * provider chooser produces; a room when the chooser's room row was picked instead
        * (section 7.3), or null when the chooser closed with neither.
        */
-      async function chooseAccountForFirstSend(provisional: ProvisionalChat): Promise<string | "room" | null> {
+      async function chooseAccountForFirstSend(provisional: ProvisionalChat): Promise<FirstSendChoice | null> {
         await whenAccountsReadyToChoose();
         const account = accountForFirstSend(provisional.account_id);
         if (account !== null) {
-          return account.id;
+          return { kind: "account", id: account.id };
         }
         return new Promise((resolve) => {
           openProviderChooser({
-            onSignedIn: (accountId) => resolve(accountId),
+            onSignedIn: (accountId) => resolve({ kind: "account", id: accountId }),
             onDismissed: () => resolve(null),
-            onRoomChosen: () => resolve("room"),
+            onRoomChosen: () => resolve({ kind: "room" }),
           });
         });
       }
@@ -1434,15 +1438,15 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       /** In place of the composer while nothing is signed in that a new chat could start on. The chooser opens as the
        *  notice appears, and its button opens it again once dismissed. */
       function renderNoProviderNotice(): m.Children {
-        const open = (): void => openProviderChooser({ onRoomChosen: () => void makeRoomOf(chatId) });
+        const open = (): void => openProviderChooser({ onRoomChosen: () => void launchAsRoom(chatId) });
         return providerNotice("message-input-no-provider", "Connect an AI provider to start chatting.", open, open);
       }
 
-      /** The notice's room choice: the awaiting chat becomes a room, which the page then draws itself as. */
-      async function makeRoomOf(roomChatId: string | null): Promise<void> {
+      /** The notice's room choice: the awaiting chat is launched as a room, with nothing said yet. */
+      async function launchAsRoom(roomChatId: string | null): Promise<void> {
         if (roomChatId === null) return;
         try {
-          await makeRoom(roomChatId);
+          await launchChat(roomChatId, "", "", "room");
         } catch (error) {
           raiseFailureNotice(roomChatId, { title: "Couldn't make a room", detail: describeRequestError(error) });
         }

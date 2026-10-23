@@ -157,16 +157,4 @@ describe("ChatRail rooms", () => {
       label: "Delete room",
     });
   });
-
-  it("offers a new room beside a new chat", () => {
-    const onNewRoom = vi.fn();
-    const mounted = document.createElement("div");
-    document.body.appendChild(mounted);
-    root = mounted;
-    m.mount(mounted, { view: () => m(ChatRail, chatRailAttrsFixture({ onNewRoom })) });
-
-    mounted.querySelector<HTMLElement>(".chat-rail-new-room")?.click();
-
-    expect(onNewRoom).toHaveBeenCalledTimes(1);
-  });
 });

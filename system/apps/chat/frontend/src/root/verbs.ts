@@ -28,12 +28,6 @@ export async function startChat(chatId: string): Promise<void> {
   await postJson<unknown>(chatRoute(chatId, "start"), {});
 }
 
-/** A new room, named the first free "Room N"; returns its id. */
-export async function createRoom(): Promise<string> {
-  const room = await postJson<{ id: string }>(apiUrl("/api/rooms"), {});
-  return room.id;
-}
-
 /** End the chat's agent and remove its conversation; it cannot be undone. */
 export async function destroyChat(chatId: string): Promise<void> {
   await postJson<unknown>(chatRoute(chatId, "destroy"), {});

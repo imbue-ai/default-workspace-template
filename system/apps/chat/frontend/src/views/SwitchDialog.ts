@@ -130,6 +130,18 @@ export function beginSwitchToAccountId(chatId: string, accountId: string): void 
   if (account !== null) beginSwitchTo(chatId, account);
 }
 
+/** Make the chat a room (the multiplayer spec, section 7.6): a switch with nothing to hand over, since the room
+ *  takes no prompt; the conversation so far stays as the chat's earlier segments. Nothing to pick, so no dialog. */
+export async function switchToRoom(chatId: string): Promise<void> {
+  setPendingAccount(chatId, null);
+  try {
+    await switchChat(chatId, "", "", mintMessageId(), null, "room");
+  } catch (error) {
+    raiseFailureNotice(chatId, { title: "Couldn't make this chat a room", detail: describeRequestError(error) });
+  }
+  m.redraw();
+}
+
 async function switchFreshChat(chatId: string, target: ProviderAccount): Promise<void> {
   setPendingAccount(chatId, null);
   try {

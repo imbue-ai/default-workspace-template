@@ -36,8 +36,6 @@ import {
   getChats,
   getMainChatId,
   getProvisionalChats,
-  getRoomById,
-  getRooms,
   hasReceivedChatList,
   initChats,
   launchChat,
@@ -54,8 +52,6 @@ import type { ChatRailAttrs } from "./ChatRail";
 import { SendPicker } from "./SendPicker";
 import { initChatUnread, markRead, noteStatuses } from "./chatUnread";
 import { initRailWidth } from "./railWidth";
-import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
-import { createRoom } from "./verbs";
 import { startNewChat } from "./newChat";
 import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
@@ -93,7 +89,7 @@ let isDrawerOpen = false;
 
 function selectedTitle(): string {
   if (selectedChatId === null) return "";
-  return getChatById(selectedChatId)?.title ?? getRoomById(selectedChatId)?.title ?? "";
+  return getChatById(selectedChatId)?.title ?? "";
 }
 
 interface ReportedLocation {
@@ -120,9 +116,10 @@ let isOpeningChatForEmptyList = false;
 // empty after that brings no push to ask again on (an unchanged list is not passed on).
 const emptyListChatBackoff = new ReconnectBackoff();
 
-/** Every row's source: the chats, the chats not yet agents, the main chat, the rooms, and the viewer's mentions. */
+/** Every row's source: the chats (rooms among them), the chats not yet agents, the main chat, and the viewer's
+ *  mentions. */
 function allRows(): ChatRow[] {
-  return rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId(), getRooms(), getMentionedChatIds());
+  return rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId(), getMentionedChatIds());
 }
 
 /** The rail's rows in display order: the main chat first, then the most recent. */
@@ -196,18 +193,6 @@ async function openNewChat(): Promise<void> {
   if (outcome.kind === "created") startedHere.add(outcome.chatId);
   awaitingListing.add(outcome.chatId);
   select(outcome.chatId);
-}
-
-/** The New room button: a room named the first free "Room N", shown at once. */
-async function openNewRoom(): Promise<void> {
-  try {
-    const roomId = await createRoom();
-    awaitingListing.add(roomId);
-    select(roomId);
-  } catch (error) {
-    newChatRefusal = describeRequestError(error);
-    m.redraw();
-  }
 }
 
 /** Show ``chatId`` once the pending intake is applied or given up, reporting the selection even when it is the one
@@ -436,7 +421,6 @@ function railAttrs(rows: readonly ChatRow[], isCompact: boolean): ChatRailAttrs 
     isTouch: isCompact && touchQuery.matches,
     onPick: (chatId: string) => select(chatId),
     onNew: () => void openNewChat(),
-    onNewRoom: () => void openNewRoom(),
     referenceScope: scopeOfHandshake(handshake),
     onDraftReference: draftReference,
     isReferenceDraftAvailable: isReferenceDraftAvailable(),
