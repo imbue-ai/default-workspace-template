@@ -1018,9 +1018,8 @@ def test_a_rooms_mention_is_refused_by_a_chat_whose_account_was_signed_out(
     client, messenger = _client_with_account_labeled_chat(tmp_path, monkeypatch, agent_id, "signed-out-account-8814")
 
     with client.application.app_context():
-        refusal = _send_room_mention(
-            state_of(client.application), ChatId(agent_id), "[from: Bob in #Lounge] @agent hi", "m-1"
-        )
+        delivered = author_prefix("Bob", "Lounge") + "@agent hi"
+        refusal = _send_room_mention(state_of(client.application), ChatId(agent_id), delivered, "m-1")
 
     assert refusal is not None and "signed out" in refusal
     assert messenger.sent == []
