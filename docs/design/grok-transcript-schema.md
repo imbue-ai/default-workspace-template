@@ -63,9 +63,10 @@ one message. Text sent before a tool call in the same response is its own line a
 ## Tool results
 
 A call gets a status-less `tool_call_update` first (a shell call's content is its description, an
-edit's is a diff, every other tool's is empty), then one `completed` or `failed` update. A foreground tool killed by a cancel gets no terminal update. The
-text the model was given, read back from the stub's request log, is in `rawOutput` for some tools
-and only in the content blocks for others:
+edit's is a diff, every other tool's is empty), then one `completed` or `failed` update. A
+foreground tool killed by a cancel gets no terminal update. The text the model was given, read
+back from the stub's request log, is in `rawOutput` for some tools and only in the content blocks
+for others:
 
 | `rawOutput.type` | Text the model got | Content blocks |
 |---|---|---|
@@ -115,10 +116,10 @@ over 327 s, then `turn_completed{stop_reason: "error", agent_result: "empty resp
 (no_visible_content)"}`. A child session's turns end the same way inside its own log.
 
 A grok that exits mid-turn (measured with Ctrl+Q twice during a tool) writes nothing for that
-turn, and its killed tool gets no terminal update. When `--resume` next loads the session, grok closes the turn
-with `turn_completed{stop_reason: "interrupted", agent_result: "Grok stopped before this turn
-finished (the agent process exited or was restarted). Committed tool results were kept."}`, time
-stamped at the resume (`tui_sessions/resume_after_quit`).
+turn, and its killed tool gets no terminal update. When `--resume` next loads the session, grok
+closes the turn with `turn_completed{stop_reason: "interrupted", agent_result: "Grok stopped
+before this turn finished (the agent process exited or was restarted). Committed tool results were
+kept."}`, time stamped at the resume (`tui_sessions/resume_after_quit`).
 
 ## Background work
 

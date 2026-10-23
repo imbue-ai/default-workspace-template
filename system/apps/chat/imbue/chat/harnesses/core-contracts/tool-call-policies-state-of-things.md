@@ -197,15 +197,15 @@ claude's and codex's are.
 
 **Which command a guard sees.** The "rewriter runs last so blockers see the original" story is
 only true on **agy**, **pi** and **grok**, where the guards and the rewrite run in sequence in one
-script (agy, and grok's dispatcher) or one `tool_call` handler (pi). It is belt-and-braces on claude and codex and
-should not be relied on there: claude runs a matcher's hooks in PARALLEL
+script (agy, and grok's dispatcher) or one `tool_call` handler (pi). It is belt-and-braces on
+claude and codex and should not be relied on there: claude runs a matcher's hooks in PARALLEL
 (`agent_rewrite_bash_command.py` says so in its own comment), and codex does not thread
 `updatedInput` into later hooks of the same event (measured: a rewriting hook placed first, a
 logging hook second, and the logger saw the original). On pi, keep the rewrite inside
 `policy_guards.ts`'s handler: pi calls every extension's `tool_call` handler on one shared,
-mutable event, so a rewrite in another extension could land before the guards read the
-command, and the prefix (its own `;`-joined commands) would make the tk and permission-request
-checkers refuse every `tk start`/`tk close` and every filing as chained.
+mutable event, so a rewrite in another extension could land before the guards read the command,
+and the prefix (its own `;`-joined commands) would make the tk and permission-request checkers
+refuse every `tk start`/`tk close` and every filing as chained.
 
 The SDK is documented in the package's `dist/core/extensions/types.d.ts`; we do NOT modify it.
 
@@ -247,15 +247,15 @@ require-a-step check.
   exit 2. A rewrite is `updatedInput` with the tool's other fields kept; it needs no
   `permissionDecision`. grok's `updates.jsonl` records the original input on the `tool_call` and
   the rewritten one on every `tool_call_update`.
-* **Fail open.** Only a guard's exit 2 refuses. A crash, a missing script or a run past the
-  hook's budget (`PRE_TOOL_USE_BUDGET_SECONDS`, under the hook's `timeout`) is logged to
+* **Fail open.** Only a guard's exit 2 refuses. A crash, a missing script or a run past the hook's
+  budget (`PRE_TOOL_USE_BUDGET_SECONDS`, under the hook's `timeout`) is logged to
   `grok_policy_guards.log` in the agent's state dir and the call goes ahead; so is anything the
   dispatcher itself did not expect. Each handler runs the dispatcher only when the file is there
   (`test -f ... &&`): grok goes ahead after a hook's exit 1, while python3 exits 2 for a missing
-  script, and a session keeps the hooks it started with after an older commit is checked out.
-  grok fails a handler open when its `timeout` runs out (5 s
-  for PreToolUse when unset) and never loads one whose `timeout` is negative or not a number, so
-  every handler in `policy.json` sets one, in seconds.
+  script, and a session keeps the hooks it started with after an older commit is checked out. grok
+  fails a handler open when its `timeout` runs out (5 s for PreToolUse when unset) and never loads
+  one whose `timeout` is negative or not a number, so every handler in `policy.json` sets one, in
+  seconds.
 * **P7.** UserPromptSubmit records the turn (`grok_policy_turn.json`: `sessionId`, `promptId`) for
   a root session's prompt; a subagent's carries `subagentType` and records nothing. The first
   allowed PreToolUse with that `sessionId` claims the record by renaming it and runs

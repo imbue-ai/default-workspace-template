@@ -46,12 +46,11 @@ than no entry, because the next person plans around it.
   pending-wake placeholder included), waking on those files as well as on the idle edge. mngr's
   `busy_send_policy = "REFUSE"` refuses a send that finds a turn already started, so grok parks
   only a paste a turn starting inside mngr's send overtakes (E17), and its Ctrl+C rule presses
-  only into a cancellable turn. delivered = grok's
-  session log gaining a user turn that ends with our block, or mngr confirming the submission.
-  stop = one ctrl+c through mngr, then waiting for the turns it pressed into and handing back
-  what we hold, also when the restart fails. tap = the same press, then the worker delivers.
-  `/model` and `/effort` go through a control lane the worker sends alone, never merged into a
-  block or handed back.
+  only into a cancellable turn. delivered = grok's session log gaining a user turn that ends
+  with our block, or mngr confirming the submission. stop = one ctrl+c through mngr, then
+  waiting for the turns it pressed into and handing back what we hold, also when the restart
+  fails. tap = the same press, then the worker delivers. `/model` and `/effort` go through a
+  control lane the worker sends alone, never merged into a block or handed back.
 
 The target is to make them converge on the clean, single-path shape; claude's heuristic
 path is what most needs to move toward it.
