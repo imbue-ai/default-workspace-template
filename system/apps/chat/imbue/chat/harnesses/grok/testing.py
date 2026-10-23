@@ -5,8 +5,10 @@ The layout is mngr_grok's private one, written here by hand; ``watcher_test.py``
 """
 
 import json
+import os
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 from typing import Final
 
 from imbue.chat.agent_discovery import AgentInfo
@@ -27,6 +29,8 @@ FIXTURE_ROOTS_FILENAME: Final[str] = "roots"
 ROOTS_RELATIVE_PATH: Final[Path] = Path("plugin", "grok", "roots")
 # Where mngr_grok's hooks keep one file per top-level turn in flight, named by its session id.
 ROOT_TURNS_RELATIVE_PATH: Final[Path] = Path("plugin", "grok", "turns")
+# mngr_grok's record of the grok process's pid, which its SessionStart hook writes.
+GROK_PID_RELATIVE_PATH: Final[Path] = Path("plugin", "grok", "grok.pid")
 # The session bucket the fake agent's sessions are filed under: grok names a bucket after its work dir.
 FAKE_SESSION_BUCKET: Final[str] = "%2Ftmp%2Fgrok-fixtures"
 # The auth.json scope of a grok session login, named by its issuer and client id.
@@ -138,3 +142,24 @@ def make_grok_agent_info(agent_state_dir: Path, agent_id: str, name: str) -> Age
         claude_config_dir=agent_state_dir / "unused",
         harness=HarnessType.GROK,
     )
+
+
+def write_live_grok_pid(agent_state_dir: Path) -> None:
+    """Record this test process as the agent's running grok, as mngr_grok's SessionStart hook does."""
+    pid_path = agent_state_dir / GROK_PID_RELATIVE_PATH
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text(f"{os.getpid()}\n")
+
+
+def grok_update_line(session_id: str, update: dict[str, Any], timestamp_ms: int) -> bytes:
+    """One updates.jsonl record in the shape grok 1.0.62 writes it."""
+    record = {
+        "timestamp": timestamp_ms // 1000,
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": update,
+            "_meta": {"eventId": f"{session_id}-{timestamp_ms}", "agentTimestampMs": timestamp_ms},
+        },
+    }
+    return (json.dumps(record) + "\n").encode()

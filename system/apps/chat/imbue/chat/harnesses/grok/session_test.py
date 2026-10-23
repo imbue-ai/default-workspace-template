@@ -15,6 +15,7 @@ from imbue.chat.harnesses.grok.queue_tracker import drop_tracker
 from imbue.chat.harnesses.grok.queue_tracker import get_tracker
 from imbue.chat.harnesses.grok.queue_tracker import session_token
 from imbue.chat.harnesses.grok.session import GrokHarnessSession
+from imbue.chat.harnesses.grok.testing import write_live_grok_pid
 from imbue.chat.harnesses.grok.testing import write_root_turn
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import InterruptToComposer
@@ -23,15 +24,7 @@ from imbue.chat.harnesses.session import SessionDeps
 from imbue.mngr_grok.api import PROCESS_STARTED_MARKER_FILENAME
 from imbue.mngr_grok.api import read_grok_pid
 
-# mngr_grok's record of the grok process's pid, which its SessionStart hook writes.
-_GROK_PID_RELATIVE_PATH = Path("plugin", "grok", "grok.pid")
 _SESSION = "01a156d6-f927-7091-91a4-f6692a5800da"
-
-
-def _write_live_grok_pid(agent_state_dir: Path) -> None:
-    pid_path = agent_state_dir / _GROK_PID_RELATIVE_PATH
-    pid_path.parent.mkdir(parents=True, exist_ok=True)
-    pid_path.write_text(f"{os.getpid()}\n")
 
 
 def _unused_interrupter(agent_info: AgentInfo) -> InterruptToComposer:
@@ -44,7 +37,7 @@ def _session(
     agent_state_dir.mkdir(parents=True, exist_ok=True)
     drop_tracker(agent_state_dir.name)
     if is_grok_running:
-        _write_live_grok_pid(agent_state_dir)
+        write_live_grok_pid(agent_state_dir)
     session = GrokHarnessSession.build(
         SessionDeps(
             harness=HarnessType.GROK,
@@ -91,7 +84,7 @@ def _contents(tracker: GrokQueueTracker) -> list[str]:
 
 
 def test_the_pid_record_is_the_one_mngr_grok_reads(tmp_path: Path) -> None:
-    _write_live_grok_pid(tmp_path)
+    write_live_grok_pid(tmp_path)
 
     assert read_grok_pid(tmp_path) == os.getpid()
 

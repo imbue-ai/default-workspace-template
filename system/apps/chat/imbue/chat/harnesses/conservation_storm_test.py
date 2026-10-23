@@ -74,8 +74,12 @@ from imbue.chat.harnesses.grok.queue_tracker import get_tracker as get_grok_trac
 from imbue.chat.harnesses.grok.session import GrokHarnessSession
 from imbue.chat.harnesses.grok.tap import GrokAtomicShoulderTap
 from imbue.chat.harnesses.grok.tap import GrokInterruptToComposer
+from imbue.chat.harnesses.grok.testing import GROK_PID_RELATIVE_PATH
 from imbue.chat.harnesses.grok.testing import add_grok_session
 from imbue.chat.harnesses.grok.testing import append_grok_updates
+from imbue.chat.harnesses.grok.testing import grok_update_line
+from imbue.chat.harnesses.grok.testing import make_grok_agent_info
+from imbue.chat.harnesses.grok.testing import write_live_grok_pid
 from imbue.chat.harnesses.grok.testing import write_root_turn
 from imbue.chat.harnesses.grok.turn_state import drop_turn_state as drop_grok_turn_state
 from imbue.chat.harnesses.grok.turn_state import get_turn_state as get_grok_turn_state
@@ -1333,8 +1337,6 @@ def test_antigravity_tap_delivers_once_and_returns_nothing(tmp_path: Path) -> No
 # world plays grok AND mngr (its hooks, its send and its Ctrl+C rule), and everything on the chat's side of mngr is the
 # real code: the tracker, the flush worker, the session's send, stop, the tap and the model bar's control lane.
 
-# mngr_grok's record of the grok process's pid, which its SessionStart hook writes.
-_GROK_PID_RELATIVE_PATH = Path("plugin", "grok", "grok.pid")
 _GROK_PENDING_WAKE_PREFIX = "pending-wake:"
 _GROK_CONTROL_VERBS = frozenset({"/model", "/effort"})
 
@@ -1491,20 +1493,6 @@ def _grok_tap_must_not_send(_text: str) -> bool:
 
 def _grok_bar_must_not_type(_text: str) -> bool:
     raise AssertionError("the model bar must not type: its commands go through the flush worker's control lane")
-
-
-def _grok_update_line(session_id: str, update: dict[str, Any], timestamp_ms: int) -> bytes:
-    """One updates.jsonl record in the shape grok 1.0.62 writes it."""
-    record = {
-        "timestamp": timestamp_ms // 1000,
-        "method": "session/update",
-        "params": {
-            "sessionId": session_id,
-            "update": update,
-            "_meta": {"eventId": f"{session_id}-{timestamp_ms}", "agentTimestampMs": timestamp_ms},
-        },
-    }
-    return (json.dumps(record) + "\n").encode()
 
 
 class _GrokWorld:
@@ -1811,7 +1799,7 @@ class _GrokWorld:
                 return
             self.stats["exit"] += 1
             self.is_running = False
-            (self.dir / _GROK_PID_RELATIVE_PATH).unlink()
+            (self.dir / GROK_PID_RELATIVE_PATH).unlink()
             self._reset_process_state(is_gated=False)
             self._recompute_active()
 
@@ -1934,9 +1922,7 @@ class _GrokWorld:
         marker.touch()
         launched_at_ns = _GROK_PROCESS_CLOCK_BASE_NS + self._process_count * 1_000_000_000
         os.utime(marker, ns=(launched_at_ns, launched_at_ns))
-        pid_path = self.dir / _GROK_PID_RELATIVE_PATH
-        pid_path.parent.mkdir(parents=True, exist_ok=True)
-        pid_path.write_text(f"{os.getpid()}\n")
+        write_live_grok_pid(self.dir)
         self.is_running = True
         self._reset_process_state(is_gated=is_gated)
         if not is_gated:
@@ -1972,7 +1958,7 @@ class _GrokWorld:
 
     def _log(self, update: dict[str, Any]) -> None:
         self._record_ms += 1
-        append_grok_updates(self.dir, self.session_id, _grok_update_line(self.session_id, update, self._record_ms))
+        append_grok_updates(self.dir, self.session_id, grok_update_line(self.session_id, update, self._record_ms))
 
     def _write_turn_file(self, prompt_id: str, tail: str) -> None:
         write_root_turn(self.dir, self.session_id, prompt_id, tail)
@@ -2204,14 +2190,7 @@ class _GrokChat:
         self.world = world
         self.ledger = world.ledger
         agent_id = world.dir.name
-        self.agent_info = AgentInfo(
-            id=agent_id,
-            name=agent_id,
-            state="RUNNING",
-            agent_state_dir=world.dir,
-            claude_config_dir=world.dir / "unused",
-            harness=HarnessType.GROK,
-        )
+        self.agent_info = make_grok_agent_info(world.dir, agent_id, agent_id)
         drop_grok_tracker(agent_id)
         drop_grok_turn_state(agent_id)
         # mngr spaces two presses itself, and the world keeps that spacing on its logical clock.

@@ -16,6 +16,7 @@ from imbue.chat.harnesses.grok.testing import add_grok_session
 from imbue.chat.harnesses.grok.testing import append_grok_updates
 from imbue.chat.harnesses.grok.testing import find_fixture_scenario
 from imbue.chat.harnesses.grok.testing import get_fake_session_dir
+from imbue.chat.harnesses.grok.testing import grok_update_line
 from imbue.chat.harnesses.grok.testing import make_grok_agent_info
 from imbue.chat.harnesses.grok.testing import read_fixture_root_ids
 from imbue.chat.harnesses.grok.testing import read_fixture_updates
@@ -446,20 +447,6 @@ def test_an_agent_with_no_session_yet_reads_empty(tmp_path: Path) -> None:
 _PLAIN_ROOT = "01a156d6-f927-7091-91a4-f6692a5800da"
 
 
-def _update_line(session_id: str, update: dict[str, Any], timestamp_ms: int) -> bytes:
-    """One updates.jsonl record in the shape grok 1.0.62 writes it."""
-    record = {
-        "timestamp": timestamp_ms // 1000,
-        "method": "session/update",
-        "params": {
-            "sessionId": session_id,
-            "update": update,
-            "_meta": {"eventId": f"{session_id}-{timestamp_ms}", "agentTimestampMs": timestamp_ms},
-        },
-    }
-    return (json.dumps(record) + "\n").encode()
-
-
 def _committed_turn_lines(session_id: str, prompt: str, prompt_index: int, timestamp_ms: int) -> bytes:
     """The records grok logs for a submitted prompt it answers: its user chunk, a reply and the turn's end."""
     user_chunk = {
@@ -470,7 +457,7 @@ def _committed_turn_lines(session_id: str, prompt: str, prompt_index: int, times
     reply = {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "STUB_REPLY: ok"}}
     turn_end = {"sessionUpdate": "turn_completed", "prompt_id": f"prompt-{prompt_index}", "stop_reason": "end_turn"}
     return b"".join(
-        _update_line(session_id, update, timestamp_ms + step)
+        grok_update_line(session_id, update, timestamp_ms + step)
         for step, update in enumerate((user_chunk, reply, turn_end))
     )
 
