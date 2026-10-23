@@ -1582,7 +1582,7 @@ class AgentManager:
 
     def make_main_chat(self, chat_id: ChatId) -> bool:
         """Star ``chat_id`` as the workspace's main chat, and push the list that shows it; False when the chat
-        cannot be the main chat (a helper another agent started, or no chat this app lists)."""
+        cannot be the main chat (a helper another agent started, a room, or no chat this app lists)."""
         with self._lock:
             if not any(candidate.chat_id == chat_id for candidate in self._main_chat_candidates_locked()):
                 return False
@@ -1591,8 +1591,8 @@ class AgentManager:
         return True
 
     def _main_chat_candidates_locked(self) -> list[MainChatCandidate]:
-        """The chats that can be the main chat: every listed chat a user started, and every chat still provisional.
-        Lock held."""
+        """The chats that can be the main chat: every listed chat a user started that is not a room (the main chat
+        is never a room, S3), and every chat still provisional. Lock held."""
         last_messaged = self._message_stamps.read()
         candidate_ids = [
             chat.chat_id
