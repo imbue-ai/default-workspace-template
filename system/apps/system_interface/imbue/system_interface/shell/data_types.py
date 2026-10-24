@@ -21,6 +21,7 @@ from workspace_layout.primitives import IfPresent
 from workspace_layout.primitives import ShowOutcome
 from workspace_layout.primitives import UserId
 from workspace_layout.primitives import WindowId
+from workspace_layout.primitives import WindowPage
 from workspace_layout.primitives import WindowPath
 from workspace_layout.primitives import WindowTitle
 from workspace_layout.records import ClientRecord
@@ -232,6 +233,19 @@ class WindowOpenRequest(FrozenModel):
     )
     minimized: bool = Field(
         default=False, description="Whether a window this open creates is placed minimized for the client"
+    )
+
+
+class PageShowRequest(FrozenModel):
+    """The body of ``POST /api/clients/<id>/show`` (desktop contracts.md section 5.3): the ``show`` op's arguments."""
+
+    app: AppName = Field(description="The app whose page to show")
+    path: WindowPath = Field(description="The path to put on the client's screen")
+    showing: tuple[WindowPath, ...] = Field(
+        default=(), description="The app's other paths that count as already showing it"
+    )
+    repoint: tuple[WindowPage, ...] = Field(
+        default=(), description="The pages whose windows the shell may point at the path"
     )
 
 

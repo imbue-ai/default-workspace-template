@@ -1878,6 +1878,47 @@ def _pull_out(
     assert saved.status_code == 200
 
 
+def test_a_page_shows_a_path_for_its_own_client_through_the_show_route(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A shell page, which cannot reach the loopback op route, runs the same ``show`` for its own client: with nothing
+    showing the path and no window on a repointable page, the pinned window is pointed at it for that client alone."""
+    app = _pinned_shell(tmp_path, broadcaster, pin=("/", "plain", "independent", "bar"))
+    client = app.test_client()
+    client_queue = _register_client(app, "c1", "home")
+    _register_client(app, "c2", "home")
+    pinned_id = next(window["id"] for window in _desktop_windows(client) if window["is_pinned"])
+    drain_messages(client_queue)
+
+    shown = client.post(
+        "/api/clients/c1/show",
+        json={"app": "buddy", "path": _SHOW_PATH, "repoint": [_REPOINTABLE_PAGE]},
+        environ_base=_NOT_LOOPBACK,
+    )
+
+    assert shown.status_code == 200
+    answer = shown.get_json()
+    assert (answer["shown"], answer["window_id"], answer["client_id"]) == ("pinned", pinned_id, "c1")
+    assert answer["layout"]["window_paths"][pinned_id]["path"] == _SHOW_PATH
+    assert client.get("/api/placements/home?client=c2").get_json()["window_paths"] == {}
+    assert len([window for window in _desktop_windows(client) if window["app"] == "buddy"]) == 1
+    assert _show_messages(client_queue) == [({"window": pinned_id, "is_detached": False}, "c1", "")]
+
+
+def test_the_show_route_refuses_a_repoint_entry_that_is_not_a_page(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    app = _pinned_shell(tmp_path, broadcaster, pin=("/", "plain", "independent", "bar"))
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    paths_before = _paths_by_window(client)
+
+    refused = client.post("/api/clients/c1/show", json={"app": "buddy", "path": _SHOW_PATH, "repoint": ["/?a=b"]})
+
+    assert refused.status_code == 400
+    assert _paths_by_window(client) == paths_before
+
+
 def _show_messages(client_queue: "queue.Queue[str | None]") -> list[tuple[Any, Any, Any]]:
     return [(args, target, requester) for op, args, target, requester in _layout_ops(client_queue) if op == "show"]
 

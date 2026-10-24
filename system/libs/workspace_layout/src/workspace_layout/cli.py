@@ -280,11 +280,14 @@ def _retired_spelling_message(value: str) -> str:
         else:
             hint = f"give the app name on its own: '{_COMMAND} open {name or '<app>'}'"
     elif prefix == "chat:":
-        hint = f"a chat's window is the chat app at its page: '{_COMMAND} open chat --path \"/?chat=<chat-id>\"'"
+        hint = (
+            f"a chat's window is the chat app at its page, shown in the pinned chat window: "
+            f'\'{_COMMAND} show chat --path "/?chat=<chat-id>" --showing "/<chat-id>" --repoint /\''
+        )
     elif prefix == "chat-terminal:":
         hint = (
-            f"an agent's terminal is the back face of its chat: open the chat's page, "
-            f"'{_COMMAND} open chat --path \"/?chat=<chat-id>\"'"
+            f"an agent's terminal is the back face of its chat: show the chat's page, "
+            f'\'{_COMMAND} show chat --path "/?chat=<chat-id>" --showing "/<chat-id>" --repoint /\''
         )
     elif prefix == "terminal:":
         hint = (
@@ -1021,8 +1024,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--path",
         default=None,
         help="The page to open, a path under the app's origin: 'open files --path /home/user/workspace/data/notes/' "
-        "opens a folder, "
-        "'open chat --path \"/?chat=<id>\"' a chat. Without it, a launch path is used.",
+        "opens a folder (a chat goes through 'show', which uses the pinned chat window). Without it, a launch path "
+        "is used.",
     )
     p_open.add_argument(
         "--launch",
