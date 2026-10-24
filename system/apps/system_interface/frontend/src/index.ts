@@ -150,6 +150,7 @@ function bootstrap(): void {
       opensExternalLinks: message.opensExternalLinks === true,
       opensCustomSchemeLinks: message.opensCustomSchemeLinks === true,
     });
+    desktopStore.setOpensLocalFiles(message.opensLocalFiles === true);
   });
   setEmbedderMessageHandler(REATTACH_WINDOW, (message) => {
     const windowId = message.windowId;
