@@ -175,13 +175,13 @@ export function renderHandoffNode(
 }
 
 /** The node for a handoff the transcript does not show yet: the chat is draining, or the summary request has not
- *  reached the stream. Null once the transcript carries the request, when nothing is converging, and for a switch
- *  with no summary to show (a restart on another account, or a fresh start): the activity line by the composer is
- *  the one place that says it is under way. */
-export function renderHandoffTailNode(chatId: string, hasOpenRequest: boolean): m.Vnode | null {
+ *  reached the stream. Null once the transcript carries the request or the landed switch (``isOnTranscript``), when
+ *  nothing is converging, and for a switch with no summary to show (a restart on another account, or a fresh start):
+ *  the activity line by the composer is the one place that says it is under way. */
+export function renderHandoffTailNode(chatId: string, isOnTranscript: boolean): m.Vnode | null {
   const chat = getChatById(chatId);
   const handoff = chat?.handoff ?? null;
-  if (handoff === null || handoff.kind === "rebind" || handoff.is_fresh_start || hasOpenRequest) return null;
+  if (handoff === null || handoff.kind === "rebind" || handoff.is_fresh_start || isOnTranscript) return null;
   const node: HandoffNode = { key: `live-${chatId}`, request: null, events: [], switch: null, prompt: null };
   // Keyed like its siblings in the message list: a keyed list refuses an unkeyed member.
   return m(

@@ -539,6 +539,20 @@ export function hasOpenHandoffRequest(events: readonly TranscriptEvent[], handof
   return false;
 }
 
+/** Whether the live switch has already landed on the transcript: its ``agent_switch`` marker is there while the
+ *  chat still delivers to the successor. The walk's node for that switch is then the one showing it, done. */
+export function hasLandedLiveSwitch(events: readonly TranscriptEvent[], handoff: HandoffState | null): boolean {
+  if (handoff === null) return false;
+  const startedAt = Date.parse(handoff.started_at);
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (event.type !== "agent_switch") continue;
+    const switchedAt = Date.parse(event.timestamp);
+    return !Number.isNaN(switchedAt) && !Number.isNaN(startedAt) && switchedAt >= startedAt;
+  }
+  return false;
+}
+
 /** Whether the tail turn renders as settled (no frontier spinner, closing prose as the reply) for
  *  an agent in this activity state. A compaction counts as settled: an idle compaction runs with no
  *  turn open, and one inside a running turn only hides that turn's frontier until it resumes. */

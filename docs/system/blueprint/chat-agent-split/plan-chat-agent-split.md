@@ -258,7 +258,7 @@ Name reuse is not load-bearing for correctness: nothing may depend on reaching t
 The retiring agent is renamed to `archived-<seq>-<canonical>-<agent-id>` with one `mngr rename` whose `-l` flags carry every label in the same atomic write: `display_name="<title> (archived <seq>)"`, `chat_id`, `chat_seq`, and `archived_at` (the label `mngr archive` would set; the rename sets it itself, so the archive is one mngr call rather than three).
 The archival prefix sorts archived agents together and the sequence number orders them; the agent id keeps the name unique for the life of the host.
 `AgentName` allows letters, digits, dashes, and underscores with no length cap, so the name (about 115 characters at most) is valid.
-The rename happens after `mngr stop`, so no tmux session carries the archival name, and an archived agent is never started; tmux's acceptance of a name that long only matters to someone starting one by hand.
+The rename happens just before `mngr stop`, since the successor is created under the chat's name while the old agent stops, so the stopping agent's tmux session carries the archival name for those seconds (tmux takes a name that long); an archived agent is never started.
 
 Chat rename updates the active agent only, exactly as today's rename does, and leaves archived agents alone.
 The taken-names check (`_taken_names_locked`) treats an archived name as taken, which it is.
@@ -477,10 +477,11 @@ The sequence:
    Otherwise, if the active agent is stopped, start it.
    Then send the summary request through the chat's normal send path and wait (5.5).
    Cancel is still possible here.
-3. **switching**: `mngr stop` the old agent (the chat app reaps its session's live state, codex's app-server connection included), then rename and archive it (4.3), record its final event count, and create the new agent (5.8).
+3. **switching**: rename and archive the old agent (4.3), then `mngr stop` it (the chat app reaps its session's live state, codex's app-server connection included) while the new agent is created (5.8), and record the old agent's final event count once the stop is done. The stop and the create share no host lock, so the switch costs the longer of the two rather than their sum. A refused rename still stops the old agent before the switch fails.
    The queue was already returned in draining (5.3) and the open tk steps carry over (5.9), so nothing else is captured or closed here.
    Entering this phase is the point of no return.
 4. **active**: the record's `handoff` is cleared, the new agent is the last member, the switch chip is emitted, held sends are delivered, and the chat snapshot is pushed.
+   Between the new agent becoming the last member and the deliveries finishing, the switch has *landed*: the snapshot's `handoff` carries `has_landed`, the chat reads as the new agent (its status, its activity, a Stop for its turn), and an interrupt waits for the deliveries to finish instead of being refused, since its restart would otherwise race one.
 
 Step 3 fails into **failed** (5.10) when the create fails, and, since phase 8, when any other step of it is refused (a stop, the archival rename, the record write): past the point of no return no verb but destroy answers the chat and only the failed phase has a retry, so a refusal left in `switching` would wedge the chat until the next chat-app restart. A refusal in `draining` or `summarizing` keeps its phase, where cancel is still possible. The one exception is a successor the observe stream has not listed yet at delivery time, which is no refusal: the record keeps `switching` for the next resume.
 
@@ -568,7 +569,7 @@ The record's `handoff` entry persists the phase, the target, the pre-minted id, 
 
 - `draining` resumes by re-checking the queue.
 - `summarizing` resumes by re-checking the summary's freshness, then the proceed conditions.
-- `switching` resumes by checking, in order: is the old agent stopped (else stop it); does it carry the archival name (else the one rename that also sets its labels); is `final_event_count` recorded; does an agent with the pre-minted id exist.
+- `switching` resumes by checking, in order: does the old agent carry the archival name (else the one rename that also sets its labels); is it stopped (else stop it, alongside the next check); does an agent with the pre-minted id exist; is `final_event_count` recorded.
 - If an agent with the pre-minted id exists and is running or stopped, it is adopted as the new active agent and the handoff completes.
   If the create left something mngr refuses to reuse (`mngr create --id` raises `DuplicateAgentIdOnHostError` for an id present on the host), the partial agent is destroyed and the create rerun under the same id.
 - `failed` resumes as failed.

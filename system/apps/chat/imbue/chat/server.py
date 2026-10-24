@@ -251,6 +251,17 @@ def _converging_response(handoff: HandoffState) -> Response:
     return model_response(ConvergingResponse(detail=detail, phase=handoff.phase), 409)
 
 
+def _wait_for_landed_switch(chat_id: str) -> None:
+    """Hold a request to a chat whose handoff has landed until the deliveries to its successor are done.
+
+    The successor is already the chat's agent then, so the page offers it the ordinary verbs; the wait keeps
+    one of them (an interrupt restarts the agent) from racing a delivery the switch still owes it.
+    """
+    parsed = parse_chat_ref(chat_id)
+    if parsed is not None:
+        get_state().agent_manager.wait_for_landed_switch(parsed, LANDED_SWITCH_WAIT_TIMEOUT_SECONDS)
+
+
 def _refuse_while_converging(chat_id: str) -> Response | None:
     """The 409 every verb but destroy and message answers while the chat converges (spec 4.4), or None."""
     parsed = parse_chat_ref(chat_id)
@@ -261,6 +272,10 @@ def _refuse_while_converging(chat_id: str) -> Response | None:
         return None
     return _converging_response(handoff)
 
+
+# How long a request to a chat whose handoff has landed waits for the deliveries to its successor. Each delivery
+# is a send the successor confirms within seconds; past this the request is refused as converging.
+LANDED_SWITCH_WAIT_TIMEOUT_SECONDS: Final[float] = 60.0
 
 # Default number of events for tail-first loading
 _DEFAULT_TAIL_COUNT = 50
@@ -1210,6 +1225,7 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
     agent_info = _find_active_agent(chat_id)
     if agent_info is None:
         return _chat_not_found_response(chat_id)
+    _wait_for_landed_switch(chat_id)
     converging = _refuse_while_converging(chat_id)
     if converging is not None:
         return converging

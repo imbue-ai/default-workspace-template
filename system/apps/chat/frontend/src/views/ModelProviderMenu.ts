@@ -116,9 +116,10 @@ function clampEffort(option: CatalogModelOption, currentEffort: string | null): 
 }
 
 /** The model a switch in progress is taking the chat to, as the chip reads it; null when the chat
- *  is not converging, the switch failed, or it picked no model, all of which leave the chip on the
- *  live choice. A failed switch still carries its pick, for the retry to rerun the model step from,
- *  but never applied it.
+ *  is not converging, the switch failed, or it is a rebind that picked no model, all of which leave the
+ *  chip on the live choice. A failed switch still carries its pick, for the retry to rerun the model step
+ *  from, but never applied it. A handoff that picked no model names its target harness: until it lands,
+ *  the live choice reads the agent the chat is leaving, then the successor's settings one write at a time.
  *
  *  Named from the target harness's catalog, and by its raw id for a harness whose option set is per
  *  agent (codex), which no catalog holds -- an id the user has not seen spelled that way, but the
@@ -126,7 +127,8 @@ function clampEffort(option: CatalogModelOption, currentEffort: string | null): 
 function convergingPickLabel(chat: ChatSnapshot): string | null {
   const converging = chat.handoff;
   const pick = converging?.model_pick ?? null;
-  if (converging === null || converging.phase === "failed" || pick === null) return null;
+  if (converging === null || converging.phase === "failed") return null;
+  if (pick === null) return converging.kind === "handoff" ? converging.target_label : null;
   const options = getHarnessCatalog(converging.target_harness)?.options ?? [];
   const option = options.find((each) => each.id === pick.model_id);
   return modelPickLabel(option?.label ?? pick.model_id, pick.effort, pick.fast);

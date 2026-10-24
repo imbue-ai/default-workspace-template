@@ -1643,10 +1643,11 @@ def test_a_chat_with_no_user_turn_switches_at_once_and_leaves_no_handoff_node(tm
         _open_provider_menu(chat)
         chat.locator('[data-menu-part="submenu"] button', has_text="OpenAI").first.click()
 
-        # Nothing to hand over, so nothing asks and nothing is armed: the switch runs at once, and only the
-        # line by the composer reports it while it does.
+        # Nothing to hand over, so nothing asks and nothing is armed: the switch runs at once, only the line by
+        # the composer reports it while it does, and the chip names Codex rather than the model it is leaving.
         expect(chat.locator('.agent-activity-indicator[data-state^="HANDOFF_"]')).to_contain_text("Starting Codex")
         expect(chat.locator("[data-handoff-status]")).to_have_count(0)
+        expect(chat.locator(".model-selector-trigger")).to_contain_text("Codex")
         expect(chat.locator(".modal-card")).to_have_count(0)
         expect(chat.locator(".message-input-switch-strip")).to_have_count(0)
 

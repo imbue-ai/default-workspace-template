@@ -230,11 +230,11 @@ A handoff (`chat_handoffs.py`) is how a chat moves to another harness:
 `POST /api/chats/<chat-id>/handoff` with an `account_id` and the message typed
 for the new agent. The chat app stops the current agent's turn and hands its
 queue back (draining), asks the agent for a summary through the
-`handoff-summary` skill unless a fresh one exists (summarizing), then stops and
-archives it under `archived-<seq>-<name>-<id>` with one `mngr rename`, records
-its segment's length, and creates the successor under a pre-minted id with the
-chat's name, the account's binding and `chat_id`/`chat_seq` labels, carrying no
-message of its own (switching); the prompt filled in from
+`handoff-summary` skill unless a fresh one exists (summarizing), then archives
+it under `archived-<seq>-<name>-<id>` with one `mngr rename`, stops it while it
+creates the successor under a pre-minted id with the chat's name, the account's
+binding and `chat_id`/`chat_seq` labels, carrying no message of its own, and
+records the retiring segment's length once the stop is done (switching); the prompt filled in from
 `.agents/shared/references/continue-chat.md` follows through the send path. The
 prompt carries the summary in full when it is 64 KB or under
 (`INLINE_SUMMARY_MAX_BYTES`) and otherwise only its path, which the successor is
@@ -244,7 +244,12 @@ handoff where it stopped. While a chat converges it stays listed as
 `working` from the retiring agent; stop, start, rename, interrupt, the queue
 actions, and the model change answer 409; a send is held (202, `{"status":
 "held"}`) and delivered to the successor in order once it runs; destroy
-proceeds. `POST .../handoff/cancel` calls it off before switching begins and
+proceeds. Once a handoff has landed (the successor is the chat's last member and
+only the prompt and the held sends are left to deliver), the snapshot's `handoff`
+says so (`has_landed`), the chat is listed with the successor's own status, the
+page shows that agent's activity and its Stop, and an interrupt waits (up to
+`LANDED_SWITCH_WAIT_TIMEOUT_SECONDS`) for the deliveries to finish rather than
+answering 409, so its restart cannot race one. `POST .../handoff/cancel` calls it off before switching begins and
 returns the confirming message for the composer; a step that fails past the
 point of no return -- the create, the model pick, a delivery, or one mngr
 refuses -- leaves the chat in the `failed` phase with the reason and the step
@@ -307,7 +312,8 @@ progress ("Handing off to Codex...", then "Handed off from Claude Code to Codex"
 expandable to the summary turn and the handoff prompt, with a rule under it
 once the switch has landed; a fresh start, which asked for no summary and sent
 no prompt, leaves no node once it has landed), the activity strip and the placeholder say
-what is happening, and for a handoff the Stop button is "Cancel switch" until
+what is happening, the model chip names the target (the picked model, else the
+harness) until the switch lands, and for a handoff the Stop button is "Cancel switch" until
 the old agent is stopped; a failed start or a model pick the successor cannot
 take shows its reason over the composer with a retry (on any signed-in account
 after a handoff, on the same harness and lane after a rebind) and "Start a new
