@@ -30,6 +30,7 @@ function styleOf(tokens: Record<string, string>): { getPropertyValue: (name: str
 
 const CONTRACT_TOKENS: Record<string, string> = {
   "--desk-title-bar-height": "36px",
+  "--desk-window-radius": "12px",
   "--desk-taskbar-height": "48px",
   "--desk-cell-width": "96px",
   "--desk-cell-height": "112px",

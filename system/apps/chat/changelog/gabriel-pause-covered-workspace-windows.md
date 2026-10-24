@@ -1,0 +1,1 @@
+The minimized-chat e2e test follows the shell's new way of hiding pages: a minimized chat keeps its real size while hidden, so the test checks that it stays at its place without waiting for the page to collapse to zero height.
