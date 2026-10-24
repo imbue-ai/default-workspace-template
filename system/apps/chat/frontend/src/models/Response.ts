@@ -280,7 +280,7 @@ export interface ResponseItem {
   output_tokens: number | null;
 }
 
-interface EventsResponse {
+export interface EventsResponse {
   events: TranscriptEvent[];
   // Global index of the first returned event within the full transcript, and the
   // transcript's total length. Together they place the loaded window in the whole
@@ -939,6 +939,16 @@ export async function fetchForwardEvents(chatId: string, limit: number): Promise
   } catch (error) {
     console.warn(`Failed to load newer events for chat ${chatId}`, error);
   }
+}
+
+/** The events after `afterEventId` in the chat's transcript, with where they sit in it; nothing is applied. */
+export function requestEventsAfter(chatId: string, afterEventId: string, limit: number): Promise<EventsResponse> {
+  return m.request<EventsResponse>({
+    method: "GET",
+    url: apiUrl("/api/chats/:chatId/events"),
+    params: { chatId, after: afterEventId, limit: String(limit) },
+    config: applyEventsRequestTimeout,
+  });
 }
 
 /** The full deferred payloads of one event, fetched on demand from the detail endpoint. */
