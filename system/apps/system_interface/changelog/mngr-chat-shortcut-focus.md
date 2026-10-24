@@ -1,0 +1,1 @@
+A desktop shortcut to an app's pinned page (the Chat icon) now raises the pinned window instead of opening another window at that page, whatever mode the shortcut was saved with, so desktops made before this change stop collecting duplicate chat lists too. The shortcut's menu no longer offers a mode switch for such a shortcut, since the mode no longer changes what it does.

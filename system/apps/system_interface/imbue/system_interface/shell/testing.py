@@ -238,7 +238,7 @@ def builtin_chat_row_toml() -> str:
         is_critical=True,
         is_system=True,
         launcher_rank=10,
-        default_shortcut=("root", "new"),
+        default_shortcut=("root", "focus"),
         launch_paths=[("root", "Chat", "/"), ("new", "New Chat", "/api/chats/intake")],
         launch_methods={"new": "POST"},
         pin=("/", "avatar", "independent", "floating"),
