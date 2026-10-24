@@ -12,6 +12,7 @@ const STORED = {
   is_fast_mode_notice_shown: false,
   autocompact_default: true,
   is_autocompact_notice_shown: false,
+  retained_chat_limit: 12,
 };
 
 /** A fresh copy of the module, its settings already loaded as STORED. */
@@ -86,9 +87,37 @@ describe("updateChatSettings", () => {
 
     expect(await pending).toEqual(answered);
     expect(mockRequest).toHaveBeenLastCalledWith(
-      expect.objectContaining({ method: "PUT", url: "/api/settings", body: { ...STORED, fast_mode_turn_limit: 2 } }),
+      expect.objectContaining({ method: "PATCH", url: "/api/settings", body: { fast_mode_turn_limit: 2 } }),
     );
     expect(chatSettings.getChatSettings()).toEqual(answered);
+  });
+
+  it("sends only the retention preference when keeping all opened chats", async () => {
+    const chatSettings = await loadWithSettings();
+    mockRequest.mockResolvedValueOnce({ settings: { ...STORED, retained_chat_limit: null } });
+
+    await chatSettings.updateChatSettings({ ...STORED, retained_chat_limit: null });
+
+    expect(mockRequest).toHaveBeenLastCalledWith(
+      expect.objectContaining({ method: "PATCH", body: { retained_chat_limit: null } }),
+    );
+  });
+
+  it("saves quick successive changes in order and keeps the newest choice on screen", async () => {
+    const chatSettings = await loadWithSettings();
+    let finishFirst: (answer: { settings: typeof STORED }) => void = () => undefined;
+    mockRequest.mockImplementationOnce(() => new Promise((resolve) => (finishFirst = resolve)));
+    mockRequest.mockResolvedValueOnce({ settings: { ...STORED, retained_chat_limit: null } });
+
+    const first = chatSettings.updateChatSettings({ ...STORED, retained_chat_limit: 5 });
+    const second = chatSettings.updateChatSettings({ ...STORED, retained_chat_limit: null });
+    await vi.waitFor(() => expect(mockRequest).toHaveBeenCalledTimes(2));
+    expect(chatSettings.getChatSettings()?.retained_chat_limit).toBeNull();
+    finishFirst({ settings: { ...STORED, retained_chat_limit: 5 } });
+
+    await Promise.all([first, second]);
+    expect(mockRequest).toHaveBeenCalledTimes(3);
+    expect(chatSettings.getChatSettings()?.retained_chat_limit).toBeNull();
   });
 
   it("puts the previous settings back when the write fails, without rejecting", async () => {

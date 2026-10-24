@@ -86,6 +86,7 @@ from imbue.chat.chat_intakes import chat_id_selected_by_window_path
 from imbue.chat.chat_intakes import intake_path
 from imbue.chat.chat_intakes import most_recently_messaged_chat_id
 from imbue.chat.chat_settings import ChatSettings
+from imbue.chat.chat_settings import ChatSettingsPatch
 from imbue.chat.chat_transcript import ChatTranscript
 from imbue.chat.chat_transcript import TranscriptSegment
 from imbue.chat.compaction_status import compact_command_instructions
@@ -1149,6 +1150,18 @@ def _put_settings_endpoint() -> Response:
     """
     settings = parse_request_body(ChatSettings)
     get_state().chat_settings.write(settings)
+    return model_response(ChatSettingsResponse(settings=settings))
+
+
+def _patch_settings_endpoint() -> Response:
+    """``PATCH /api/settings``: change named preferences without overwriting other chat pages' writes."""
+    changes = parse_request_body(ChatSettingsPatch).model_dump(mode="json", exclude_unset=True)
+    if not changes:
+        return model_response(ErrorResponse(detail="Provide chat settings to update"), 400)
+    try:
+        settings = get_state().chat_settings.update(changes)
+    except ValueError as e:
+        return model_response(ErrorResponse(detail=str(e)), 400)
     return model_response(ChatSettingsResponse(settings=settings))
 
 
@@ -2442,6 +2455,7 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ("DELETE", "/api/uploads/{relative_path}"): RouteModels(response_model=OkResponse),
     ("GET", "/api/settings"): RouteModels(response_model=ChatSettingsResponse),
     ("PUT", "/api/settings"): RouteModels(request_model=ChatSettings, response_model=ChatSettingsResponse),
+    ("PATCH", "/api/settings"): RouteModels(request_model=ChatSettingsPatch, response_model=ChatSettingsResponse),
     ("POST", "/api/chats/{chat_id}/destroy"): RouteModels(response_model=DestroyAgentResponse),
     ("POST", "/api/chats/{chat_id}/rename"): RouteModels(
         request_model=RenameChatRequest, response_model=RenameChatResponse
@@ -2582,6 +2596,9 @@ def create_application(state: ChatAppState) -> Flask:
     application.add_url_rule("/api/settings", view_func=_get_settings_endpoint, methods=["GET"])
     application.add_url_rule(
         "/api/settings", view_func=_put_settings_endpoint, methods=["PUT"], endpoint="_put_settings_endpoint"
+    )
+    application.add_url_rule(
+        "/api/settings", view_func=_patch_settings_endpoint, methods=["PATCH"], endpoint="_patch_settings_endpoint"
     )
     application.add_url_rule("/api/harnesses", view_func=_get_harnesses_endpoint, methods=["GET"])
     application.add_url_rule("/api/uploads", view_func=_upload_attachment, methods=["POST"])

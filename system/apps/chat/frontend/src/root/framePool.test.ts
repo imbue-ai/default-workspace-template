@@ -20,7 +20,6 @@ const HANDSHAKE: ShellHandshake = {
 
 let container: HTMLElement;
 let pool: InnerFramePool;
-let now = 1_000;
 
 function frames(): HTMLIFrameElement[] {
   return [...container.querySelectorAll("iframe")];
@@ -55,9 +54,6 @@ function loadPage(chatId: string): { [K in keyof ChatPageEmbedApi | "posted"]: R
 const HANDSHAKE_MESSAGE = { type: SHELL_HANDSHAKE, ...HANDSHAKE };
 
 beforeEach(() => {
-  now = 1_000;
-  // Each show happens later than the last, so eviction has an order to go on.
-  vi.spyOn(Date, "now").mockImplementation(() => (now += 1));
   container = document.createElement("div");
   document.body.appendChild(container);
   pool = new InnerFramePool(container);
@@ -69,6 +65,48 @@ afterEach(() => {
 });
 
 describe("InnerFramePool", () => {
+  it("keeps twelve visited chat documents ready, then evicts the oldest hidden one", () => {
+    expect(MAX_HELD_FRAMES).toBe(12);
+    const chatIds = Array.from({ length: 12 }, (_, index) => `agent-${index}`);
+    const documents = new Map<string, HTMLIFrameElement>();
+    for (const chatId of chatIds) {
+      pool.show(chatId);
+      documents.set(chatId, frameOf(chatId));
+    }
+
+    expect(frames()).toHaveLength(12);
+    pool.show("agent-0");
+    expect(frameOf("agent-0")).toBe(documents.get("agent-0"));
+    pool.show("agent-12");
+
+    expect(frames()).toHaveLength(12);
+    expect(pool.heldChatIds()).not.toContain("agent-1");
+    expect(frameOf("agent-0")).toBe(documents.get("agent-0"));
+    expect(frameOf("agent-12")).toBeDefined();
+    expect(visibleChatIds()).toEqual(["agent-12"]);
+    for (const chatId of chatIds.slice(2)) expect(frameOf(chatId)).toBe(documents.get(chatId));
+  });
+
+  it("applies a smaller limit immediately and keeps every opened chat when asked", () => {
+    for (let index = 0; index < 5; index++) pool.show(`agent-${index}`);
+    const first = frameOf("agent-0");
+    pool.show("agent-0");
+
+    pool.setRetainedChatLimit(3);
+    expect(pool.heldChatIds()).toEqual(["agent-0", "agent-3", "agent-4"]);
+    expect(frameOf("agent-0")).toBe(first);
+    expect(visibleChatIds()).toEqual(["agent-0"]);
+
+    pool.setRetainedChatLimit(null);
+    for (let index = 5; index < 20; index++) pool.show(`agent-${index}`);
+    expect(pool.heldChatIds()).toHaveLength(18);
+    expect(frameOf("agent-0")).toBe(first);
+
+    pool.setRetainedChatLimit(1);
+    expect(pool.heldChatIds()).toEqual(["agent-19"]);
+    expect(visibleChatIds()).toEqual(["agent-19"]);
+  });
+
   it("makes one frame per chat at its page, shows the selected one and hides the rest", () => {
     pool.show("agent-a");
     pool.show("agent-b");

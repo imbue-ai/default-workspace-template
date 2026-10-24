@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.chat_settings import ChatSettingsStore
 from imbue.chat.chat_settings import DEFAULT_FAST_MODE_TURN_LIMIT
+from imbue.chat.chat_settings import DEFAULT_RETAINED_CHAT_LIMIT
 from imbue.chat.chat_settings import FastModeMode
 
 
@@ -14,6 +15,7 @@ def test_an_absent_settings_file_reads_as_the_defaults(tmp_path: Path) -> None:
     assert store.read() == ChatSettings(
         fast_mode_default=FastModeMode.OFF,
         fast_mode_turn_limit=DEFAULT_FAST_MODE_TURN_LIMIT,
+        retained_chat_limit=DEFAULT_RETAINED_CHAT_LIMIT,
         is_fast_mode_notice_shown=False,
         autocompact_default=True,
         is_autocompact_notice_shown=False,
@@ -63,6 +65,25 @@ def test_a_turn_limit_below_one_is_refused() -> None:
     """Off is a mode of its own, so a limit of zero has no meaning left."""
     with pytest.raises(ValidationError):
         ChatSettings(fast_mode_turn_limit=0)
+
+
+def test_retained_chat_limit_accepts_keep_all_and_rejects_invalid_counts() -> None:
+    assert ChatSettings(retained_chat_limit=None).retained_chat_limit is None
+    for value in (0, -1, 1.5, "12", True):
+        with pytest.raises(ValidationError):
+            ChatSettings.model_validate({"retained_chat_limit": value})
+
+
+def test_partial_updates_preserve_other_preferences_across_store_instances(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    first = ChatSettingsStore(path=path)
+    second = ChatSettingsStore(path=path)
+
+    first.update({"retained_chat_limit": None})
+    second.update({"fast_mode_default": "on"})
+
+    assert first.read().retained_chat_limit is None
+    assert first.read().fast_mode_default == FastModeMode.ON
 
 
 def test_a_store_without_a_path_keeps_the_settings_in_memory() -> None:

@@ -51,6 +51,7 @@ const { DEFAULT_CHAT_SETTINGS, chatSettingsState, settingsWrites } = vi.hoisted(
     is_fast_mode_notice_shown: false,
     autocompact_default: true,
     is_autocompact_notice_shown: false,
+    retained_chat_limit: 12,
   };
   return {
     DEFAULT_CHAT_SETTINGS: defaults,
@@ -972,6 +973,7 @@ describe("the combo card", () => {
     chatSettingsState.settings = {
       ...DEFAULT_CHAT_SETTINGS,
       fast_mode_turn_limit: 3,
+      retained_chat_limit: 12,
       is_fast_mode_notice_shown: true,
     };
     fastModeState.state = { mode: "auto", is_switched: true };

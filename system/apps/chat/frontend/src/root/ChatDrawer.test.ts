@@ -35,9 +35,19 @@ const PANEL_WIDTH = 300;
 let root: HTMLElement | null = null;
 let onPick = vi.fn<(chatId: string) => void>();
 let onDismiss = vi.fn<() => void>();
+let onRetainedChatLimitChange = vi.fn<(limit: number | null) => void>();
+let retainedChatLimit: number | null = 12;
 
 function rail(isTouch: boolean): ChatRailAttrs {
-  return chatRailAttrsFixture({ rows: ROWS, selectedChatId: "agent-1", isInDrawer: true, isTouch, onPick });
+  return chatRailAttrsFixture({
+    rows: ROWS,
+    selectedChatId: "agent-1",
+    isInDrawer: true,
+    isTouch,
+    onPick,
+    retainedChatLimit,
+    onRetainedChatLimitChange,
+  });
 }
 
 function mount(isCovered = false, isTouch = true): HTMLElement {
@@ -93,6 +103,11 @@ function mountUnderMouse({ storedWidth, drawnWidth }: { storedWidth?: number; dr
 beforeEach(() => {
   onPick = vi.fn();
   onDismiss = vi.fn();
+  retainedChatLimit = 12;
+  onRetainedChatLimitChange = vi.fn((limit: number | null) => {
+    retainedChatLimit = limit;
+    m.redraw();
+  });
   vi.clearAllMocks();
   initRailWidth();
 });
@@ -108,6 +123,29 @@ afterEach(() => {
 });
 
 describe("ChatDrawer", () => {
+  it("offers a ready-chat count and keeps all opened chats when chosen", () => {
+    const panel = mount();
+    const input = panel.querySelector<HTMLInputElement>("[data-retained-chat-limit]");
+    const keepAll = panel.querySelector<HTMLInputElement>("[data-keep-all-opened-chats]");
+    if (input === null || keepAll === null) throw new Error("retention controls missing");
+
+    expect(input.value).toBe("12");
+    input.value = "5";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    m.redraw.sync();
+    expect(input.value).toBe("5");
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onRetainedChatLimitChange).toHaveBeenCalledWith(5);
+
+    keepAll.click();
+    expect(onRetainedChatLimitChange).toHaveBeenLastCalledWith(null);
+    m.redraw.sync();
+    expect(panel.querySelector<HTMLInputElement>("[data-retained-chat-limit]")?.disabled).toBe(true);
+
+    panel.querySelector<HTMLInputElement>("[data-keep-all-opened-chats]")?.click();
+    expect(onRetainedChatLimitChange).toHaveBeenLastCalledWith(5);
+  });
+
   it("gives every row a kebab that opens its verbs without picking it, and runs the one chosen", () => {
     const panel = mount();
     expect(panel.querySelector(".chat-rail-new")?.getAttribute("aria-label")).toBe("New chat");

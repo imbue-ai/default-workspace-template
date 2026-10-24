@@ -2,8 +2,7 @@
  * The chat root's inner frames: one iframe of ``/<chat-id>`` per chat the root has shown this
  * session, the selected one visible and the rest hidden, so switching back is instant.
  *
- * Bounded: past ``MAX_HELD_FRAMES`` the frame shown longest ago is destroyed. Each page is handed
- * the shell's handshake to the root through the relay, as it loads. A hidden frame is
+ * Bounded by the workspace preference: past the limit the frame shown longest ago is destroyed. A hidden frame is
  * told ``hidden`` and a shown one ``shown`` through the page's embed API (the two documents
  * share an origin), which is what the page keys its presence reports on, so a chat held here
  * but not on screen counts as open-but-hidden, like a minimized window's page.
@@ -14,7 +13,7 @@ import { getBasePath } from "@imbue/workspace-ui/src/base-path";
 import type { ChatPageEmbedApi } from "../embedApi";
 import { handHandshakeDown } from "./relay";
 
-export const MAX_HELD_FRAMES = 4;
+export const MAX_HELD_FRAMES = 12;
 
 // What the shell grants an app page's frame (the PAGE_FRAME_SANDBOX of its live pages layer); a
 // nested frame can hold no more than its parent, so this asks for the same.
@@ -24,7 +23,7 @@ const FRAME_ALLOW = "clipboard-read; clipboard-write";
 
 interface HeldFrame {
   frame: HTMLIFrameElement;
-  lastShownAt: number;
+  lastShownOrder: number;
   isLoaded: boolean;
 }
 
@@ -34,8 +33,17 @@ export class InnerFramePool {
   private handshake: ShellHandshake | null = null;
   private isRootShown = false;
   private isCompact = false;
+  private retainedChatLimit: number | null = MAX_HELD_FRAMES;
+  private nextShownOrder = 0;
 
   constructor(private readonly container: HTMLElement) {}
+
+  /** Apply the workspace limit to pages already held as well as pages visited later. */
+  setRetainedChatLimit(limit: number | null): void {
+    if (limit !== null && (!Number.isSafeInteger(limit) || limit < 1)) throw new Error("Invalid retained chat limit");
+    this.retainedChatLimit = limit;
+    this.evict();
+  }
 
   /** Whether ``source`` is the window of one of this pool's frames. */
   isInnerWindow(source: MessageEventSource | null): boolean {
@@ -66,7 +74,7 @@ export class InnerFramePool {
     }
     if (chatId !== null) {
       const held = this.held.get(chatId);
-      if (held !== undefined) held.lastShownAt = Date.now();
+      if (held !== undefined) held.lastShownOrder = ++this.nextShownOrder;
       if (this.isRootShown) this.tell(chatId, "shown");
     }
     this.evict();
@@ -112,7 +120,7 @@ export class InnerFramePool {
     frame.className = "chat-root-frame absolute inset-0 h-full w-full border-0";
     frame.dataset.chatId = chatId;
     frame.hidden = true;
-    const held: HeldFrame = { frame, lastShownAt: Date.now(), isLoaded: false };
+    const held: HeldFrame = { frame, lastShownOrder: 0, isLoaded: false };
     frame.addEventListener("load", () => {
       held.isLoaded = true;
       this.api(chatId)?.setCompact(this.isCompact);
@@ -153,11 +161,11 @@ export class InnerFramePool {
   }
 
   private evict(): void {
-    while (this.held.size > MAX_HELD_FRAMES) {
+    while (this.retainedChatLimit !== null && this.held.size > this.retainedChatLimit) {
       let oldest: [string, HeldFrame] | null = null;
       for (const entry of this.held) {
         if (entry[0] === this.shownChatId) continue;
-        if (oldest === null || entry[1].lastShownAt < oldest[1].lastShownAt) oldest = entry;
+        if (oldest === null || entry[1].lastShownOrder < oldest[1].lastShownOrder) oldest = entry;
       }
       if (oldest === null) return;
       this.destroy(oldest[0]);

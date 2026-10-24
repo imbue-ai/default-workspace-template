@@ -50,6 +50,8 @@ export interface ChatRailAttrs {
   isTouch: boolean;
   onPick: (chatId: string) => void;
   onNew: () => void;
+  retainedChatLimit: number | null;
+  onRetainedChatLimitChange: (limit: number | null) => void;
   /** The scope a reference to a row carries (the root's handshake). */
   referenceScope: ReferenceScope;
   /** Where a row's "Explain..." drafts (element-reference-menu plan section 4.4). */
@@ -320,6 +322,7 @@ export const ChatRail: m.Component<ChatRailAttrs> = {
           railGroups(attrs),
         ),
         attrs.isTouch ? null : resizeHandle(),
+        retentionSettings(attrs),
         menuRow === undefined ? null : railMenu.view(rowMenuRows(attrs, menuRow, menuReferenceRows)),
       ],
     );
@@ -404,6 +407,60 @@ function resizeHandle(): m.Vnode {
       saveRailWidth();
     },
   });
+}
+
+let lastFiniteRetainedChatLimit = 12;
+let retainedChatLimitDraft: string | null = null;
+
+function retentionSettings(attrs: ChatRailAttrs): m.Vnode {
+  if (attrs.retainedChatLimit !== null) lastFiniteRetainedChatLimit = attrs.retainedChatLimit;
+  return m(
+    "div",
+    {
+      class:
+        "chat-rail-retention flex-none border-t border-default px-3 py-2 text-(length:--font-size-row) text-secondary",
+    },
+    [
+      m("label", { class: "flex items-center justify-between gap-2" }, [
+        m("span", "Chats kept ready"),
+        m("input", {
+          type: "number",
+          min: 1,
+          step: 1,
+          disabled: attrs.retainedChatLimit === null,
+          value: retainedChatLimitDraft ?? attrs.retainedChatLimit ?? 12,
+          class: "w-14 rounded border border-default bg-page px-1 py-0.5 text-right text-primary disabled:opacity-50",
+          "aria-label": "Number of chats kept ready",
+          "data-retained-chat-limit": "",
+          oninput: (event: Event) => {
+            retainedChatLimitDraft = (event.currentTarget as HTMLInputElement).value;
+          },
+          onchange: (event: Event) => {
+            const value = Number((event.currentTarget as HTMLInputElement).value);
+            retainedChatLimitDraft = null;
+            if (Number.isSafeInteger(value) && value >= 1) {
+              lastFiniteRetainedChatLimit = value;
+              attrs.onRetainedChatLimitChange(value);
+            } else (event.currentTarget as HTMLInputElement).value = String(attrs.retainedChatLimit ?? 12);
+          },
+        }),
+      ]),
+      m("label", { class: "mt-1.5 flex items-center gap-2" }, [
+        m("input", {
+          type: "checkbox",
+          checked: attrs.retainedChatLimit === null,
+          "data-keep-all-opened-chats": "",
+          onchange: (event: Event) => {
+            retainedChatLimitDraft = null;
+            attrs.onRetainedChatLimitChange(
+              (event.currentTarget as HTMLInputElement).checked ? null : lastFiniteRetainedChatLimit,
+            );
+          },
+        }),
+        "Keep all opened chats",
+      ]),
+    ],
+  );
 }
 
 function railHead(attrs: ChatRailAttrs): m.Vnode {

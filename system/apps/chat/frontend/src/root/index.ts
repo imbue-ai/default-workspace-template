@@ -60,6 +60,12 @@ import type { ChatRow } from "./rows";
 import { intakeTokenFromSearch, rootPathFor, selectionFromSearch, slotFill } from "./selection";
 import type { SlotFill } from "./selection";
 import { prependToComposer } from "../views/MessageInput";
+import {
+  DEFAULT_CHAT_SETTINGS,
+  ensureChatSettings,
+  getChatSettings,
+  updateChatSettings,
+} from "../models/ChatSettings";
 
 const ROOT_TITLE = "Chats";
 
@@ -68,6 +74,23 @@ let connection: ShellConnection | null = null;
 let handshake: ShellHandshake | null = null;
 let isRootShown = true;
 let pool: InnerFramePool | null = null;
+let retainedChatLimit: number | null = DEFAULT_CHAT_SETTINGS.retained_chat_limit;
+let latestRetainedChatLimitChange = 0;
+
+function applyRetainedChatLimit(limit: number | null): void {
+  retainedChatLimit = limit;
+  pool?.setRetainedChatLimit(limit);
+  m.redraw();
+}
+
+async function changeRetainedChatLimit(limit: number | null): Promise<void> {
+  const changeNumber = ++latestRetainedChatLimitChange;
+  const current = getChatSettings() ?? (await ensureChatSettings());
+  if (changeNumber !== latestRetainedChatLimitChange) return;
+  applyRetainedChatLimit(limit);
+  const saved = await updateChatSettings({ ...current, retained_chat_limit: limit });
+  if (changeNumber === latestRetainedChatLimitChange) applyRetainedChatLimit(saved.retained_chat_limit);
+}
 // The intake the root's URL named and has not yet applied or given up (waiting for the chats, fetched, offered
 // through the picker); null otherwise. While one is pending the shell holds the window at the token path it put it
 // at, and the root reports no other location, so a reload or another client finds the token too.
@@ -352,6 +375,7 @@ const ChatRoot: m.Component = {
             // The frames are the pool's DOM, not mithril's: never reconciled.
             oncreate: ({ dom }: m.VnodeDOM) => {
               pool = new InnerFramePool(dom as HTMLElement);
+              pool.setRetainedChatLimit(retainedChatLimit);
               pool.setCompact(isCompact);
               if (handshake !== null) pool.setHandshake(handshake);
               pool.setRootShown(isRootShown);
@@ -414,6 +438,8 @@ function railAttrs(rows: readonly ChatRow[], isCompact: boolean): ChatRailAttrs 
     isTouch: isCompact && touchQuery.matches,
     onPick: (chatId: string) => select(chatId),
     onNew: () => void openNewChat(),
+    retainedChatLimit,
+    onRetainedChatLimitChange: (limit) => void changeRetainedChatLimit(limit),
     referenceScope: scopeOfHandshake(handshake),
     onDraftReference: draftReference,
     isReferenceDraftAvailable: isReferenceDraftAvailable(),
@@ -478,6 +504,7 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
 function bootstrap(): void {
   initChatUnread();
   initRailWidth();
+  void ensureChatSettings().then((settings) => applyRetainedChatLimit(settings.retained_chat_limit));
   initChats();
   const accountsLoaded = loadAccountsWithRetry();
   addChatsUpdatedListener(onChatsUpdated);

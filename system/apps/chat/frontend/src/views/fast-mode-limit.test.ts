@@ -19,7 +19,12 @@ vi.mock("mithril", () => ({ default: { redraw: vi.fn() } }));
 vi.mock("../models/ModelSettings", () => ({ getChatFastMode: vi.fn(), setFastMode: vi.fn() }));
 vi.mock("../models/HarnessCatalog", () => ({ hasFastModeLimit: vi.fn() }));
 vi.mock("../models/ChatSettings", () => ({
-  DEFAULT_CHAT_SETTINGS: { fast_mode_default: "auto", fast_mode_turn_limit: 2, is_fast_mode_notice_shown: false },
+  DEFAULT_CHAT_SETTINGS: {
+    fast_mode_default: "auto",
+    fast_mode_turn_limit: 2,
+    retained_chat_limit: 12,
+    is_fast_mode_notice_shown: false,
+  },
   getChatSettings: vi.fn(),
   ensureChatSettings: vi.fn(),
   updateChatSettings: vi.fn(),
@@ -46,6 +51,7 @@ const SETTINGS = {
   is_fast_mode_notice_shown: false,
   autocompact_default: true,
   is_autocompact_notice_shown: false,
+  retained_chat_limit: 12,
 };
 
 function userMsg(content: string, id: string, extra: Partial<UserMessageEvent> = {}): UserMessageEvent {

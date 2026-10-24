@@ -3153,6 +3153,7 @@ def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: F
         "settings": {
             "fast_mode_default": "off",
             "fast_mode_turn_limit": 2,
+            "retained_chat_limit": 12,
             "is_fast_mode_notice_shown": False,
             "autocompact_default": True,
             "is_autocompact_notice_shown": False,
@@ -3169,7 +3170,7 @@ def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: F
     response = client.put("/api/settings", json=replacement)
 
     assert response.status_code == 200
-    assert client.get("/api/settings").get_json() == {"settings": replacement}
+    assert client.get("/api/settings").get_json() == {"settings": {**replacement, "retained_chat_limit": 12}}
 
 
 def test_the_chat_settings_refuse_a_turn_limit_below_one_and_an_unknown_mode(client: FlaskClient) -> None:
@@ -3201,6 +3202,17 @@ def test_a_chats_idle_compaction_defaults_to_the_workspaces_and_is_replaced_whol
     assert client.put("/api/chats/agent-compact/autocompact", data="not json").status_code == 400
     assert client.get("/api/chats/agent-unknown/autocompact").status_code == 404
     assert client.put("/api/chats/agent-unknown/autocompact", json={"is_enabled": True}).status_code == 404
+
+
+def test_partial_chat_settings_updates_keep_other_changes_and_validate_retention(client: FlaskClient) -> None:
+    assert client.patch("/api/settings", json={"retained_chat_limit": None}).status_code == 200
+    response = client.patch("/api/settings", json={"fast_mode_default": "on"})
+    assert response.get_json()["settings"]["retained_chat_limit"] is None
+    assert response.get_json()["settings"]["fast_mode_default"] == "on"
+    assert client.patch("/api/settings", json={"retained_chat_limit": 0}).status_code == 400
+    assert client.patch("/api/settings", json={"retained_chat_limit": "12"}).status_code == 400
+    assert client.patch("/api/settings", json={"unknown_setting": True}).status_code == 400
+    assert client.get("/api/settings").get_json()["settings"]["retained_chat_limit"] is None
 
 
 def test_a_chats_fast_mode_defaults_to_the_workspaces_and_is_replaced_whole(tmp_path: Path) -> None:

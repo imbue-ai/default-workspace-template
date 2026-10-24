@@ -12,6 +12,8 @@ export interface ChatSettings {
   fast_mode_default: FastModeMode;
   // User turns a chat in auto mode runs fast for before it is switched to standard speed.
   fast_mode_turn_limit: number;
+  // Visited chats whose pages stay loaded in this window; null keeps all opened chats.
+  retained_chat_limit: number | null;
   is_fast_mode_notice_shown: boolean;
   // Whether a new chat starts with auto-compact on.
   autocompact_default: boolean;
@@ -22,6 +24,7 @@ export interface ChatSettings {
 export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
   fast_mode_default: "off",
   fast_mode_turn_limit: 2,
+  retained_chat_limit: 12,
   is_fast_mode_notice_shown: false,
   autocompact_default: true,
   is_autocompact_notice_shown: false,
@@ -29,6 +32,8 @@ export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
 
 let settings: ChatSettings | null = null;
 let loading: Promise<ChatSettings> | null = null;
+let writeQueue: Promise<void> = Promise.resolve();
+let latestWrite = 0;
 // After a failed load, when the backend may be asked again. The callers ask on every render,
 // so a failure has to hold them off rather than be retried by the next redraw.
 let retryNotBefore = 0;
@@ -68,27 +73,40 @@ export function ensureChatSettings(): Promise<ChatSettings> {
 }
 
 /**
- * Replace the settings, on the page at once and on the backend; the backend's answer is what
+ * Update changed fields, on the page at once and on the backend; the backend's answer is what
  * stays. A write the backend refuses or never receives puts the previous settings back, so the
  * page never shows a limit that does not apply to the next chat, and resolves with them.
  */
 export async function updateChatSettings(next: ChatSettings): Promise<ChatSettings> {
   const previous = settings;
+  const changes = Object.fromEntries(
+    (Object.keys(next) as (keyof ChatSettings)[])
+      .filter((key) => previous === null || next[key] !== previous[key])
+      .map((key) => [key, next[key]]),
+  );
+  if (Object.keys(changes).length === 0) return previous ?? DEFAULT_CHAT_SETTINGS;
+  const writeNumber = ++latestWrite;
   settings = next;
   m.redraw();
-  try {
-    const response = await m.request<{ settings: ChatSettings }>({
-      method: "PUT",
-      url: apiUrl("/api/settings"),
-      body: next,
-    });
-    settings = response.settings;
-  } catch (error) {
-    console.warn("Failed to save the chat settings", error);
-    settings = previous;
-  }
-  m.redraw();
-  return settings ?? DEFAULT_CHAT_SETTINGS;
+  const write = writeQueue.then(async () => {
+    try {
+      const response = await m.request<{ settings: ChatSettings }>({
+        method: "PATCH",
+        url: apiUrl("/api/settings"),
+        body: changes,
+      });
+      if (writeNumber === latestWrite) settings = response.settings;
+      return response.settings;
+    } catch (error) {
+      console.warn("Failed to save the chat settings", error);
+      if (writeNumber === latestWrite) settings = previous;
+      return settings ?? DEFAULT_CHAT_SETTINGS;
+    } finally {
+      if (writeNumber === latestWrite) m.redraw();
+    }
+  });
+  writeQueue = write.then(() => undefined);
+  return write;
 }
 
 /** Forget what was loaded, so the next read fetches afresh (tests). */
@@ -96,4 +114,6 @@ export function resetChatSettingsForTests(): void {
   settings = null;
   loading = null;
   retryNotBefore = 0;
+  writeQueue = Promise.resolve();
+  latestWrite = 0;
 }

@@ -11,6 +11,8 @@ export function chatRailAttrsFixture(overrides: Partial<ChatRailAttrs> = {}): Ch
     isTouch: false,
     onPick: () => undefined,
     onNew: () => undefined,
+    retainedChatLimit: 12,
+    onRetainedChatLimitChange: () => undefined,
     referenceScope: scopeOfHandshake(null),
     onDraftReference: () => undefined,
     isReferenceDraftAvailable: false,
