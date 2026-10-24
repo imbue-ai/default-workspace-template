@@ -26,8 +26,9 @@
  * Once a shell frames a page, its link clicks follow one rule, so no app carries link code of its own
  * (``followLinkClick``): a link to the page's own origin navigates the page, or opens a window
  * of its app for a new-window click; any other link (a local URL, another app's address, a
- * ``file:`` URL, an external web, ``mailto:`` or ``tel:`` link) goes to the shell, which opens it
- * where it belongs: an external one in the app registered for it, else outside the workspace.
+ * ``file:`` URL, an external web, ``mailto:``, ``tel:`` or custom-scheme link) goes to the shell,
+ * which opens it where it belongs: an external one in the app registered for it, else outside the
+ * workspace.
  *
  * Its script popups (``window.open``) follow the same rule for what the workspace
  * opens itself (``popupHandedOn``): a page of its own app opens a window of the app, and a local
@@ -67,8 +68,8 @@ export const SHELL_DRAFT_TEXT = "shell:draft-text";
  *  contracts.md section 5.6), so a page says what it wants done without naming the app that does it. */
 export const SHELL_MESSAGE = "shell:message";
 /** App to shell: open a link that is not the page's own -- a local URL, one of the workspace's app addresses (another
- *  app's page) or another workspace's, a ``file:`` URL, an external web, ``mailto:`` or ``tel:`` link -- which only
- *  the shell can put where it belongs: it opens the app's window there (for a local URL, the app on whose
+ *  app's page) or another workspace's, a ``file:`` URL, an external web, ``mailto:``, ``tel:`` or custom-scheme link
+ *  -- which only the shell can put where it belongs: it opens the app's window there (for a local URL, the app on whose
  *  ``<label>.localhost`` host or registered port it is, else the workspace's browser), the file in Files, an
  *  external link in the app registered for it or else outside the workspace, or says why it cannot. */
 export const SHELL_OPEN_LINK = "shell:open-link";
@@ -83,6 +84,32 @@ export function isExternalUrl(url: URL): boolean {
   if (url.protocol !== "http:" && url.protocol !== "https:") return false;
   const host = url.hostname.toLowerCase();
   return !LOCAL_HOSTNAMES.has(host) && !host.endsWith(".localhost");
+}
+
+/** Schemes a browser loads, or refuses, itself. */
+const IN_BROWSER_SCHEMES: ReadonlySet<string> = new Set([
+  "http:",
+  "https:",
+  "ws:",
+  "wss:",
+  "file:",
+  "data:",
+  "blob:",
+  "about:",
+  "javascript:",
+  "filesystem:",
+  "chrome:",
+  "chrome-untrusted:",
+  "chrome-extension:",
+  "devtools:",
+  "view-source:",
+]);
+
+/** Whether ``url`` is a custom-scheme link (``slack:``, ``vscode:``), which the app it belongs to opens unless an app
+ *  of the workspace takes it: exactly Imbue Studio's ``isCustomSchemeUrl`` (``link-externality-vectors.json`` keeps
+ *  the two in step). */
+export function isCustomSchemeUrl(url: URL): boolean {
+  return !IN_BROWSER_SCHEMES.has(url.protocol) && url.protocol !== "mailto:" && url.protocol !== "tel:";
 }
 
 /** A label that starts a workspace coordinate: ``host-<hex>`` (``agent-`` is
@@ -168,7 +195,7 @@ export interface ShellConnection {
   sendMessage(type: string, fields: Readonly<Record<string, unknown>>): void;
   /** Ask the shell to open a local URL (as the window of the app on its ``<label>.localhost`` host or at its port, else
    *  in the workspace's browser), an address of the workspace's apps (or another workspace's) as a window, a ``file:``
-   *  URL in Files, or an external web, ``mailto:`` or ``tel:`` link in the app registered for it, else
+   *  URL in Files, or an external web, ``mailto:``, ``tel:`` or custom-scheme link in the app registered for it, else
    *  outside the workspace. */
   openLink(url: string): void;
   /** Stop listening to the shell. */
@@ -210,9 +237,13 @@ function checkedCapabilities(handlers: ShellConnectionHandlers): ShellCapabiliti
   return capabilities;
 }
 
-/** The schemes a framed page hands on when a link to them is clicked; any other (``javascript:``, ``blob:``,
- *  ``data:``) is left to the page. */
+/** The browser's own schemes a framed page hands on when a link to them is clicked, as it does every custom-scheme
+ *  link; any other (``javascript:``, ``blob:``, ``data:``) is left to the page. */
 const HANDED_ON_SCHEMES: ReadonlySet<string> = new Set(["http:", "https:", "file:", "mailto:", "tel:"]);
+
+function isHandedOn(url: URL): boolean {
+  return HANDED_ON_SCHEMES.has(url.protocol) || isCustomSchemeUrl(url);
+}
 const PRIMARY_BUTTON = 0;
 const MIDDLE_BUTTON = 1;
 
@@ -265,7 +296,7 @@ function followLinkClick(
   } catch {
     return;
   }
-  if (!HANDED_ON_SCHEMES.has(url.protocol)) return;
+  if (!isHandedOn(url)) return;
   const isNewWindow = isNewWindowClick(event, link);
   if (url.origin === view.location.origin) {
     if (!isNewWindow) return;
@@ -295,7 +326,7 @@ function popupHandedOn(
   }
   const openLink = { type: SHELL_OPEN_LINK, payload: { url: target.href } };
   if (name.toLowerCase() === "_self") {
-    return HANDED_ON_SCHEMES.has(target.protocol) && target.origin !== view.location.origin ? openLink : null;
+    return isHandedOn(target) && target.origin !== view.location.origin ? openLink : null;
   }
   if (target.protocol === "file:") return openLink;
   if (target.protocol !== "http:" && target.protocol !== "https:") return null;

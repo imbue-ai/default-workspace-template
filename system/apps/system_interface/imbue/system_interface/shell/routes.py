@@ -85,6 +85,8 @@ from imbue.system_interface.shell.route_helpers import HTTP_PRECONDITION_FAILED
 from imbue.system_interface.shell.route_helpers import detail_response
 from imbue.system_interface.shell.route_helpers import require_loopback
 from imbue.system_interface.shell.state import ShellState
+from imbue.system_interface.shell.tour import TOUR_ROUTE
+from imbue.system_interface.shell.tour import TourProgress
 
 
 def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
@@ -401,6 +403,17 @@ def layout_broadcast() -> ResponseReturnValue:
     return dispatch_desktop_op(_shell(), parse_op_body(body))
 
 
+def get_tour() -> ResponseReturnValue:
+    """Whether the show-around tour has run in this workspace, and the card it resumes at."""
+    return model_response(get_state().shell.tour.read())
+
+
+def set_tour() -> ResponseReturnValue:
+    """Record that the tour has run and where it resumes (or clear both, so a fresh visit offers it again)."""
+    get_state().shell.tour.write(parse_request_body(TourProgress))
+    return model_response(get_state().shell.tour.read())
+
+
 def register_shell_routes(application: Flask) -> None:
     """Register every shell route of desktop contracts.md sections 5, 6, and 8 on ``application``."""
     application.register_error_handler(ShellError, _answer_shell_error)
@@ -430,6 +443,8 @@ def register_shell_routes(application: Flask) -> None:
         methods=["POST"],
         endpoint="rollback_pending_update",
     )
+    application.add_url_rule(TOUR_ROUTE, view_func=get_tour, methods=["GET"], endpoint="get_tour")
+    application.add_url_rule(TOUR_ROUTE, view_func=set_tour, methods=["POST"], endpoint="set_tour")
     application.add_url_rule(
         "/api/apps/<name>/stop",
         view_func=stop_app,

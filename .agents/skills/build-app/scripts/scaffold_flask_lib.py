@@ -245,7 +245,7 @@ def _pick_port(
 
 
 def _format_dep_list(extras: Iterable[str]) -> str:
-    base = ['"app-schema"', '"flask>=3.0"', '"flask-sock>=0.7"', '"imbue-common"', '"pydantic>=2.0"', '"werkzeug>=3.0"']
+    base = ['"app-schema"', '"flask>=3.0"', '"flask-sock>=0.7"', '"imbue-common"', '"loguru>=0.7"', '"pydantic>=2.0"', '"werkzeug>=3.0"']
     extras_lines = [f'"{dep}"' for dep in extras]
     all_lines = base + extras_lines
     return ",\n    ".join(all_lines)
@@ -332,7 +332,6 @@ WebSockets.
 import base64
 import hashlib
 import os
-import sys
 from pathlib import Path
 
 from app_schema.api_schema import (
@@ -345,6 +344,8 @@ from app_schema.api_schema import (
 from app_schema.routes import model_response
 from flask import Flask, Response, abort, request, send_file
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.logging import setup_logging
+from loguru import logger
 from pydantic import Field
 from werkzeug.serving import run_simple
 
@@ -466,8 +467,7 @@ def index() -> Response:
 
 @app.route("/_csp-report", methods=["POST"])
 def content_security_policy_report() -> Response:
-    # The browser's report of one thing the policy blocked on a page. A block
-    # caused by a browser extension is the policy doing its job and is not logged.
+    """Where the browser reports what the page's security policy blocked."""
     body = request.get_json(force=True, silent=True)
     report = body.get("csp-report") if isinstance(body, dict) else None
     if not isinstance(report, dict):
@@ -476,6 +476,7 @@ def content_security_policy_report() -> Response:
         str(report.get(key, ""))[:500]
         for key in ("blocked-uri", "document-uri", "source-file", "effective-directive", "line-number", "script-sample")
     )
+    # A block caused by a browser extension is the policy doing its job and is not logged.
     if blocked.startswith(BROWSER_EXTENSION_SCHEMES) or source.startswith(BROWSER_EXTENSION_SCHEMES):
         return Response(status=204)
     # An inline script or style is reported as "inline": say where it is and how it starts instead.
@@ -486,10 +487,8 @@ def content_security_policy_report() -> Response:
         if blocked == "inline"
         else "add its origin to CONTENT_SECURITY_POLICY if the page needs it"
     )
-    print(
-        f"ERROR Content-Security-Policy blocked {{blocked!r}} on {{page!r}} ({{directive}}){{where}}{{starting}}; {{remedy}}",
-        file=sys.stderr,
-        flush=True,
+    logger.error(
+        "Content-Security-Policy blocked {{!r}} on {{!r}} ({{}}){{}}{{}}; {{}}", blocked, page, directive, where, starting, remedy
     )
     return Response(status=204)
 
@@ -515,6 +514,7 @@ def health() -> Response:
 
 
 def main() -> None:
+    setup_logging()
     run_simple(
         "127.0.0.1", PORT, app, threaded=True, use_reloader=False, use_debugger=False
     )
@@ -1007,7 +1007,7 @@ def main() -> None:
         f"{program_path.relative_to(repo_root)}; the window renders at the service's "
         f"own origin, http://{args.name}.<workspace-host>/). "
         f"Next: implement your routes in src/{package}/runner.py, then verify per "
-        f"references/verify.md (smoketest_app.py or curl + Playwright against http://127.0.0.1:{port}/)."
+        f"references/verify.md (verify_app.py or curl + Playwright against http://127.0.0.1:{port}/)."
     )
 
 

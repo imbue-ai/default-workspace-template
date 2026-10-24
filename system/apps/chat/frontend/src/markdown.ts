@@ -12,10 +12,11 @@ const marked = new Marked({
 
 const TOOL_CALL_PREFIX = "Tool call: ";
 
-// DOMPurify's own default (3.x ``IS_ALLOWED_URI``) plus ``file:``, so a message's ``file:`` link reaches
+// DOMPurify's own default (3.x ``IS_ALLOWED_URI``) plus ``file:`` and every other scheme but the script-running
+// ``javascript:``, ``vbscript:`` and ``data:``, so a message's ``file:`` or custom-scheme (``slack:``) link reaches
 // ``rewritePathLinks`` rather than losing its target.
 const ALLOWED_URI_REGEXP =
-  /^(?:(?:(?:f|ht)tps?|file|mailto|tel|callto|sms|cid|xmpp|matrix):|[^a-z]|[a-z+.-]+(?:[^a-z+.:-]|$))/i;
+  /^(?:(?:(?:f|ht)tps?|file|mailto|tel|callto|sms|cid|xmpp|matrix):|[^a-z]|[a-z+.-]+(?:[^a-z+.:-]|$)|(?!(?:javascript|vbscript|data):)[a-z][a-z0-9+.-]*:)/i;
 
 export function renderMarkdown(source: string): string {
   const rawHtml = marked.parse(source) as string;
@@ -35,7 +36,8 @@ export function renderMarkdown(source: string): string {
  * ``file:`` URL, which the app contract hands to the shell to open in Files, as it does a local URL; every
  * other link keeps its real target, so hovering it and copying its address show where it goes, and opens in a new
  * browsing context should nothing route it (a chat opened on its own). Anything else (a relative path, a fragment,
- * another scheme) cannot open anything, so it is unwrapped to its text.
+ * a file and line, a host and port with no scheme, another of the browser's own schemes) cannot open anything, so it
+ * is unwrapped to its text.
  */
 function rewritePathLinks(root: DocumentFragment): void {
   for (const anchor of Array.from(root.querySelectorAll("a"))) {

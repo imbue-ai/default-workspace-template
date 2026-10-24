@@ -5,7 +5,7 @@ signed off on a shape in the foreground, put in the thorough, expensive effort
 to turn it into a hardened, committed, reviewed creation -- in the background,
 off the interactive path. This contract is the part that is identical across
 every operation (crystallize, update, heal) and every creation (a reusable
-skill, an app, a service, the system interface).
+skill, an app, a service).
 
 ## The premise and the bar
 
@@ -44,66 +44,107 @@ and full test suites at the end of hardening.
 
 ## The scope file
 
-Every run over a creation with a footprint -- an app with an `app.toml`, or a
-skill -- computes that footprint and writes it to the path the task
-frontmatter's `scope_file` names -- Step 1's `eval` exposes it as
-`SCOPE_FILE`, and it sits beside your task file at
+Every run computes the pass's footprint -- every creation in `CREATIONS` -- and
+writes it to `SCOPE_FILE`, beside your task file at
 `data/.tasks/harden/<slug>/scope.json`. Compute it before any other work when
-the creation already exists on disk; for a skill you are building from scratch
-(a skill `crystallize`), compute it as soon as the skill directory exists,
-since the command refuses a path that is not there:
+the creations already exist on disk; when you are building one from scratch (a
+skill `crystallize`), compute it as soon as its directory exists, since the
+command refuses a creation that is not there:
 
 ```bash
-mkdir -p "$(dirname "$SCOPE_FILE")"
-
-# TYPE app (an app with an app.toml) -- from the manifest:
-uv run app-manifest footprint system/apps/<package>/app.toml \
-    --diff-base "$DIFF_BASE" --out "$SCOPE_FILE"
-
-# TYPE skill -- by path:
-uv run app-manifest footprint --for-path .agents/skills/<name> \
-    --diff-base "$DIFF_BASE" --out "$SCOPE_FILE"
+LEAD_HEAD=$(git -C "${LEAD_WORK_DIR:-$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")}" \
+    rev-parse HEAD) || exit 1
+uv run app-manifest pass-scope $(printf -- '--creation %s ' $CREATIONS) \
+    --diff-base "$DIFF_BASE" --lead-ref "$LEAD_HEAD" --out "$SCOPE_FILE"
 ```
 
 `DIFF_BASE` comes from the task frontmatter's `diff_base`: the commit the lead
 recorded at dispatch as the one *before* the work being hardened began, so the
 scope file's `diff` covers the committed change you are verifying, and -- once
-you regenerate it -- your own commits too. Fail loudly if it is unset.
+you regenerate it -- your own commits too. The lead commits on a branch other
+chats commit to as well, so that diff also holds their work, landed between
+`DIFF_BASE` and your dispatch. `--lead-ref` names the lead's checkout's `HEAD`
+(`LEAD_WORK_DIR`; the repo's main worktree when it is unset), and from it the
+command finds where your branch forked: the newest commit of the lead's
+first-parent history your branch holds. The pass's own changes are what your
+branch changes relative to that commit, every file of your own commits, and
+every file of a commit the lead made in the window before it that touched a
+creation in the pass: that is how
+the change you are hardening reached your branch, and a commit of another
+chat's that touched none of them is not yours. A milestone the lead merged
+from you does not move the fork point, and a commit of the lead's you merged
+in does, so the lead's work that came in with that merge is not yours unless
+it touched a creation in the pass; your own commits from before it stay yours.
 
-A creation with no manifest -- a pre-manifest app, a standalone service, the
-system interface -- has nothing to resolve: its footprint is its own directory
-plus its supervisord section, and the run carries no scope file.
-
-The file records `primary` (the creation's own directories), `wiring` (the
-supervisord program blocks that run it, in the files that declare them),
-`references` (what its manifest claims outside its directory -- a skill that
-drives it, a script, a doc), `context` (paths to read but never change),
-`conventions`, `exclude` (a hard denylist of globs), and `diff` (the branch's
-changed files, split into those inside the footprint and `outside_footprint`).
-The freshness check the lead runs before merging reads it
-(`.agents/shared/references/harden-contention.md`). Regenerate it whenever the
-footprint moves under you -- when you register a `[[references]]` entry, or
-when you add a supervisord section -- and once more immediately before your
-final report, after committing everything, so the `diff` it carries includes
-every commit you made (the diff reads commits only; an uncommitted edit is
-invisible to it).
+The file holds one entry per creation under `creations` -- its `primary` (its
+own directories), `wiring` (the supervisord program blocks that run it, in the
+files that declare them), `references` (what its manifest claims outside its
+directory -- a skill that drives it, a script, a doc), `context` (paths to read
+but never change), `conventions`, and `exclude` (a hard denylist of globs) --
+and one `diff` for the whole pass: the changed files, split into those some
+creation's footprint accounts for, `outside_footprint` (your own changes none
+does), and `others` (the rest: other work in the window, which is not yours
+to explain or test). `system/libs/app_manifest/README.md` describes both. The freshness check
+the lead runs before merging reads the same footprints
+(`.agents/shared/references/harden-contention.md`). Regenerate the file
+whenever a footprint moves under you -- when you register a `[[references]]`
+entry, or when you add a supervisord section -- and once more immediately
+before your final report, after committing everything, so the `diff` it carries
+includes every commit you made (the diff reads commits only; an uncommitted
+edit is invisible to it).
 
 A non-empty `diff.outside_footprint` in that final scope file is a claim to
 settle before you report. For each path, either add a `[[references]]` entry to
-the app's `app.toml` -- when the file genuinely belongs to the creation -- or
-name it in your final report under `Outside footprint:`, one line each on why it
+the owning app's `app.toml` -- when the file genuinely belongs to it -- or name
+it in your final report under `Outside footprint:`, one line each on why it
 changed on this branch. A skill run's one sanctioned edit inside an app
-directory, the `[[references]]` entry it adds to that app's manifest, sits under
-the scope file's `context` and is counted as inside the footprint.
+directory, the `[[references]]` entry it adds to that app's manifest, sits
+under the skill's `context` and is counted as inside the footprint.
+
+## Carried work from a superseded pass
+
+A task body with a `## Carried work` section replaces an earlier pass that
+ended without being merged, and names the branches its lead kept that pass's
+commits on (`harden-contention.md`, "Superseding a pass whose worker is
+gone"). That work is part of your change. When the section also names a
+revert of a milestone the earlier pass had merged, revert that revert first: a
+merge cannot bring back commits the lead's `HEAD` already holds, and a carried
+branch's later edits to the milestone merge cleanly only onto the milestone
+itself, so merging them before the revert would set them against its removal.
+What returns is carried work like the rest:
+
+```bash
+git revert --no-edit <the revert commit>
+```
+
+Then merge each branch into yours before you start hardening:
+
+```bash
+git merge --no-ff <the carried branch> -m "Carry over <the carried branch>"
+```
+
+Resolve a conflict as a catch-up does (step 2 of "Catching up to a moved
+base"), except that here your side is the newer one: the carried commits are
+older work to fit around what the user has done since. Then harden them under
+this whole contract like the rest of the change. Keep each one that still
+holds, fix one that does not, and `git revert` one the current base has made
+wrong, so every carried commit ends up merged either way. From then on they
+are commits on your branch, so the scope file's diff and the test gate cover
+them with nothing extra. Your `done` report gets a `Carried:` section: each
+carried commit, and whether you kept, changed or reverted it, and why.
+
 ## Splitting the pass across sub-workers
 
-Split the pass across sibling sub-workers when the creation has two or more
+Split the pass across sibling sub-workers when the change has two or more
 parts a user would name separately and each is a whole job once tested;
 otherwise harden it yourself, since every sibling pays a venv converge and a
 plugin install before it does any work. A page with three views over an ingested
 export splits: the interface is one worker's job and the ingestion is another's.
 Two unrelated features split too. A single page whose backend only serves it
-does not, nor do a few small files or a script.
+does not, nor do a few small files or a script. Split by job, not by creation:
+a pass over two apps edited to work together is one job (the seam between them
+is what most needs testing, and only a worker holding both sides can test it),
+while a pass over two creations changed for unrelated reasons may be two.
 
 Launch each sibling with the launch-task skill exactly as a chat agent would
 (`.agents/skills/launch-task/SKILL.md`). Name each sibling with your own worker
@@ -116,10 +157,10 @@ yourself": answer a sibling's `question` yourself or re-raise it to your own
 lead, merge exactly one level with `--no-ff`, destroy a merged sibling and stop
 a stuck one, and await it with `--timeout 60m`.
 
-- Each sibling's task file carries the same `operation` and `type` as yours plus
-  its boundary in prose, and your `diff_base`; when your run carries a scope
-  file, also give the sibling its own `scope_file` path beside its task file,
-  since Step 1 fails loudly without them. Say in the body that it runs only its
+- Each sibling's task file carries the same `operation` as yours, the
+  `creations` its boundary touches, its own `scope_file` beside its task file
+  (Step 1 fails loudly without them), its boundary in prose, and your
+  `diff_base`. Say in the body that it runs only its
   scope's tests and **skips the "Review gates" section below**, because you run
   that verification once on the merged result, and that a small out-of-scope
   edit is allowed but must be listed in its `done` report.
@@ -284,14 +325,24 @@ clones, fetched pages, thumbnails, model or package caches -- mark it:
 
 ### The test gate
 
-The gate is whatever the change can reach, and a command prints it. From the
-repo root, after committing everything (the selector reads commits, like the
-scope file, and refuses to run while the working tree holds an uncommitted or
-untracked change, naming it):
+The gate is whatever the pass's change can reach, and a command prints it.
+From the repo root, after committing everything, regenerate the scope file
+with the command in "The scope file" above, then:
 
 ```bash
-uv run app-manifest select-tests --diff-base "$DIFF_BASE"
+uv run app-manifest select-tests --scope-file "$SCOPE_FILE"
 ```
+
+The change it selects for is what the pass is responsible for: the changed
+files some creation's footprint accounts for, and every one of the pass's own
+changes, inside a footprint or not: what your branch changed and the files of
+the change you are hardening ("The scope file" above). Other work that landed in the window (the
+scope file's `others`) selects nothing, except that the lead's work you merged
+in runs the suites of the pass's creations it reaches ("Catching up to a moved
+base"). The selector reads commits, like the
+scope file. It refuses to run while the working tree holds an uncommitted or
+untracked change, naming it, and refuses a scope file whose diff does not run
+to `HEAD`; regenerate the file and run it again.
 
 It prints shell lines, each under a comment naming the changed paths behind
 it. Run every line, in order, each as its own command: they include the
@@ -302,9 +353,10 @@ changed packages' and skills' own suites with their ratchets, the suites of
 whatever declares a dependency on them, the browser tests too of an app whose
 Python changed, only the `browser` and `frontend` tests of the chat app or the
 shell when its frontend alone changed (any other app runs whole), each changed
-test file of those two on its own, and the frontend checks. A changed path outside every package and skill, or in a
-package the root project depends on, brings in the full root suite; that is
-the gate working, not a gap. Do not drop any line of it.
+test file of those two on its own, and the frontend checks. A path of the
+pass's outside every package and skill, or in a package the root project
+depends on, brings in the full root suite; that is the gate working, not a
+gap. Do not drop any line of it.
 
 **A failing test.** Rerun only the tests that failed (their node ids, from the
 same directory the line ran in) before anything else. Add `--no-cov` when the
@@ -318,7 +370,8 @@ Check the shed ledger for its run first (below): a failure the ledger shows
 was shed is a shed, handled as one, not a flaky test. Other than a shed
 command's rerun, a suite runs whole again only after you commit a fix, and
 then as whatever the fix reaches:
-`select-tests --diff-base <the commit before the fix>`. Those lines are that
+`select-tests --diff-base <the commit before the fix>`. Everything in that
+range is your own commits, so it needs no scope file. Those lines are that
 commit's whole gate; a suite they did not print is a widening, and goes
 through the `question` gate like any other.
 
@@ -394,6 +447,95 @@ result -- the scoped-sibling case above -- run your own scope's tests and skip
 the rest of this section.
 
 When complete, report back to the lead.
+
+## Catching up to a moved base
+
+After your `done`, the lead may find that its `HEAD` moved before it could
+merge you, and reply asking you to catch up to a named commit
+(`.agents/shared/references/harden-contention.md`, "Catching up a stale
+pass"). Your verified work stands; extend it to the new base rather than
+starting over.
+
+1. Commit anything outstanding and merge the lead's commit into your branch:
+
+   ```bash
+   git merge --no-ff <the commit the lead named> -m "Catch up to <its short sha>"
+   ```
+
+2. Resolve every conflict on your branch. Regenerate a lockfile from its
+   merged manifest (`uv lock`, `npm install --package-lock-only`), never pick
+   a side of it. For anything else, the commits you are bringing in are the
+   user's latest word: keep what they do and fit your hardening around them.
+   A conflict whose answer depends on intent you cannot see is a `question`
+   gate. Conclude the merge with `git commit --no-edit`, which keeps the
+   subject step 4 finds it by.
+3. **Harden what came in.** Commits that touch a creation in the pass are now
+   part of the change you are hardening, under this whole contract: tests
+   that cover their behavior, the invariants above, and anything your
+   operation reference requires of a change (a critical app's bundles are
+   rebuilt and re-reported, `type-app.md`). Commits that touch none of them
+   need nothing from you. When the reply names creations to add to the pass
+   (another chat's change reached past what yours covers), add each to the
+   `creations` line of your task file's frontmatter (`$TASK_FILE`), so every
+   later parse includes it, load its type's reference if no creation of that
+   type was in the pass, and harden it as part of the change.
+4. **Re-run the test gate over what the catch-up changed for the pass**,
+   after committing. Not over everything since `$PRE`, your branch's tip
+   before the catch-up merge: in a shared workspace most of what came in is
+   other chats' work on other creations, which step 3 leaves alone. Write a
+   scope file for the catch-up alone, beside `$SCOPE_FILE` rather than over
+   it, and run the gate from that:
+
+   ```bash
+   MERGE=$(git log --first-parent --merges -1 --format=%H --fixed-strings --grep "Catch up to")
+   PRE=$(git rev-parse "$MERGE^1")
+   LEAD_HEAD=$(git -C "${LEAD_WORK_DIR:-$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")}" \
+       rev-parse HEAD) || exit 1
+   CATCH_UP_SCOPE="$(dirname "$SCOPE_FILE")/catch-up-scope.json"
+   uv run app-manifest pass-scope $(printf -- '--creation %s ' $CREATIONS) \
+       --diff-base "$PRE" --lead-ref "$LEAD_HEAD" --out "$CATCH_UP_SCOPE" || exit 1
+   uv run app-manifest select-tests --scope-file "$CATCH_UP_SCOPE"
+   ```
+
+   The commit you merged is the fork point now, so what came in with it is
+   the lead's work. It selects where a commit of it touched a creation in the
+   pass (step 3's), where your branch changed the same file (every conflict
+   is one), and, through the scope file's `incoming`, where it reaches a
+   creation in the pass through something that creation depends on (a
+   package, a `uv.lock` upgrade, a shared frontend package, or the root
+   project's own `pyproject.toml` or `conftest.py` for a creation the root
+   project collects): that runs the creation's own suite and nothing else,
+   or for a shared script, which has none, the full root suite.
+   What you committed after the merge is yours, selected like any change. A
+   selection with nothing to run means no part of the pass moved. Do not
+   re-run the gate over `$DIFF_BASE`: what it already passed still stands,
+   unless step 3 added a creation, whose changes before `$PRE` this window
+   does not hold; then run the gate from the regenerated `$SCOPE_FILE`
+   instead, as in "The test gate". For a test that fails in this run, the
+   tree before your change ("A failing test you would change") is the commit
+   you merged, the catch-up merge's second parent, not `$DIFF_BASE`: a test
+   that fails there was already failing at the lead's `HEAD`, and one absent
+   there is your pass's own.
+5. Regenerate `$SCOPE_FILE` and report `done` again, with a `Caught up:`
+   section naming the commit you merged, each conflict and how you resolved
+   it, any creation you added, and what the re-run gate ran. The lead's work
+   that came in is in the scope file's `others`, not your
+   `outside_footprint`.
+
+## A reverted milestone
+
+When the lead reverts a milestone it merged, its reply names the revert
+commit and says why. Bring the milestone back on your branch as
+`worker-reporting.md`'s "A milestone the lead reverted" says, resolve any
+conflict as step 2 of "Catching up to a moved base" says, then fix the
+milestone's work per the lead's reply.
+
+The revert of the revert is yours, selected like any change, so your test
+gate covers the milestone's work again. A pass still under way goes on as
+before; one that had already reported `done` finishes with steps 3 to 5 of
+that section, where the tree before your change is the lead's revert commit,
+not the merge's second parent, which holds the milestone again. Either way
+the work reaches the lead only with the next report of yours it merges.
 
 ## If you need to give up
 

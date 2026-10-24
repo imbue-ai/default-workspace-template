@@ -29,15 +29,11 @@ from its own uv tool environment (`system/scripts/build_workspace.sh`), serving 
 - `GET /_static/app_contract.js`: the shell's browser-side contract module, served from this
   origin as every app serves it.
 
-On startup it registers `app.toml` and its port through `forward_port.py`, and starts the
-first-visit opener (`first_window.py`): while `data/.state/getting-started/first_window.json`
-does not say the window was delivered, it polls the shell's client list and, for the first
-connected client, posts an `open` of `/` on the first desktop and a `place` at the left
-complement of the pinned chat's frame through the loopback op route, then records the
-delivery. A window the `open` finds popped out into its own Imbue Studio window is on screen
-already: it is left there, with no `place`, and the delivery recorded. The shell seeds
-nothing for it; this is the same shape the chat app's auto-open takes for the welcome chat.
-A boot with `--no-register` does neither, since both would reach
+On startup it registers `app.toml` and its port through `forward_port.py`. It opens no
+window of its own: a new workspace opens on the welcome chat, and the desktop's tour
+introduces the apps (a workspace made before this kept the window it was given; the ledger
+that recorded it, `data/.state/getting-started/first_window.json`, is left alone).
+A boot with `--no-register` skips the registration, which would reach
 the live workspace: that is how its `[preview]` table boots it (`getting-started --no-register
 --state-dir {scratch}/state` on a free port, what `update-app`'s `preview_app.py` runs), with
 the catalog cache in the scratch state directory.

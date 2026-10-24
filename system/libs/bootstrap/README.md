@@ -62,8 +62,10 @@ writes separate, rotated, container-local logs under
 
 To add, change, or remove a service, add/edit/delete its own
 `system/supervisord.conf.d/<name>.conf` and run
-`supervisorctl reread && supervisorctl update` (and `supervisorctl restart
-<name>` to bounce one). See the `update-app` skill, or
+`supervisorctl reread && supervisorctl update`. To bounce an app after a code
+change use `python3 system/scripts/verify_app.py <name> --restart`, which
+does not wait out a scaffolded app's `startsecs=30`; `supervisorctl restart
+<name>` is for a daemon with no port. See the `update-app` skill, or
 `.agents/shared/references/service-processes.md`, for details.
 
 ## Environment convergence (env-converge)

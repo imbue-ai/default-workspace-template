@@ -61,7 +61,8 @@ describe("the launcher menu", () => {
   it("draws the launch-path rows then the primary text row, the first highlighted and wearing Enter", () => {
     const { root } = render(launcherRowsOf(stateWithWindows(), ""));
     expect(root.querySelector("[data-launcher-overlay]")).not.toBeNull();
-    expect(rowKeys(root)).toEqual(["launch:chatty:root", "launch:terminal:new", "text:chatty:new"]);
+    expect(rowKeys(root)).toEqual(["launch:chatty:root", "launch:terminal:new", "tour", "text:chatty:new"]);
+    expect(root.querySelector("[data-tour-row]")!.textContent).toContain("Show me around");
     const first = root.querySelector('[data-launch="chatty:root"]')!;
     expect(first.getAttribute("data-highlighted")).toBe("true");
     expect(first.querySelector('[data-key="enter"]')!.textContent).toBe("Enter");
@@ -115,7 +116,9 @@ describe("the launcher menu", () => {
     (root.querySelector('[data-launch="terminal:new"]') as HTMLElement).click();
     expect(attrs.onRun).toHaveBeenCalledWith(expect.objectContaining({ key: "launch:terminal:new" }));
     root.querySelector('[data-text-action="primary"]')!.dispatchEvent(new PointerEvent("pointerenter"));
-    expect(attrs.onHighlight).toHaveBeenCalledWith(2);
+    expect(attrs.onHighlight).toHaveBeenCalledWith(3);
+    (root.querySelector("[data-tour-row]") as HTMLElement).click();
+    expect(attrs.onRun).toHaveBeenCalledWith(expect.objectContaining({ kind: "tour" }));
     unmountViews();
     // A GET free-text row over the path bound is the disabled row; the chat-like app's POST rows never are.
     const bounded = desktopStateWithApps([getMethodFreeTextAppRecord("noting", ["new", "send"])]);

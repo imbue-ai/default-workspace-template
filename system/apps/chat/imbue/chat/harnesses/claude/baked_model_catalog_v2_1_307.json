@@ -4,14 +4,17 @@
       "id": "claude-3-5-haiku",
       "family": "haiku",
       "display_name": "Haiku 3.5",
-      "capabilities": []
+      "capabilities": [
+        "total_tokens_reminder"
+      ]
     },
     {
       "id": "claude-haiku-4-5",
       "family": "haiku",
       "display_name": "Haiku 4.5",
       "capabilities": [
-        "context_management"
+        "context_management",
+        "total_tokens_reminder"
       ]
     },
     {
@@ -29,27 +32,33 @@
         "per_turn_effort",
         "lean_prompt",
         "org_locked_thinking",
-        "haiku_5_5_early_stopping_guidance"
+        "haiku_5_5_early_stopping_guidance",
+        "total_tokens_reminder"
       ]
     },
     {
       "id": "claude-3-5-sonnet",
       "family": "sonnet",
       "display_name": "Sonnet 3.5",
-      "capabilities": []
+      "capabilities": [
+        "total_tokens_reminder"
+      ]
     },
     {
       "id": "claude-3-7-sonnet",
       "family": "sonnet",
       "display_name": "Sonnet 3.7",
-      "capabilities": []
+      "capabilities": [
+        "total_tokens_reminder"
+      ]
     },
     {
       "id": "claude-sonnet-4-0",
       "family": "sonnet",
       "display_name": "Sonnet 4",
       "capabilities": [
-        "context_management"
+        "context_management",
+        "total_tokens_reminder"
       ]
     },
     {
@@ -57,7 +66,8 @@
       "family": "sonnet",
       "display_name": "Sonnet 4.5",
       "capabilities": [
-        "context_management"
+        "context_management",
+        "total_tokens_reminder"
       ]
     },
     {
@@ -68,7 +78,8 @@
         "effort",
         "max_effort",
         "adaptive_thinking",
-        "context_management"
+        "context_management",
+        "total_tokens_reminder"
       ]
     },
     {
@@ -80,7 +91,8 @@
         "max_effort",
         "xhigh_effort",
         "adaptive_thinking",
-        "context_management"
+        "context_management",
+        "total_tokens_reminder"
       ]
     },
     {
@@ -100,7 +112,8 @@
         "lean_prompt",
         "refusal_fallback",
         "silent_turn_reminder",
-        "org_locked_thinking"
+        "org_locked_thinking",
+        "total_tokens_reminder"
       ]
     },
     {
@@ -108,7 +121,8 @@
       "family": "opus",
       "display_name": "Opus 4",
       "capabilities": [
-        "context_management"
+        "context_management",
+        "total_tokens_reminder"
       ]
     },
     {
@@ -116,7 +130,8 @@
       "family": "opus",
       "display_name": "Opus 4.1",
       "capabilities": [
-        "context_management"
+        "context_management",
+        "total_tokens_reminder"
       ]
     },
     {
@@ -124,7 +139,8 @@
       "family": "opus",
       "display_name": "Opus 4.5",
       "capabilities": [
-        "context_management"
+        "context_management",
+        "total_tokens_reminder"
       ]
     },
     {
@@ -135,7 +151,8 @@
         "effort",
         "max_effort",
         "adaptive_thinking",
-        "context_management"
+        "context_management",
+        "total_tokens_reminder"
       ]
     },
     {
@@ -147,7 +164,8 @@
         "max_effort",
         "xhigh_effort",
         "adaptive_thinking",
-        "context_management"
+        "context_management",
+        "total_tokens_reminder"
       ]
     },
     {
@@ -162,7 +180,8 @@
         "mid_conv_tool_change",
         "context_management",
         "fast_mode",
-        "lean_prompt"
+        "lean_prompt",
+        "total_tokens_reminder"
       ]
     },
     {
@@ -180,7 +199,8 @@
         "fast_mode",
         "lean_prompt",
         "refusal_fallback",
-        "opus_5_prompt_bundle"
+        "opus_5_prompt_bundle",
+        "total_tokens_reminder"
       ]
     },
     {
@@ -200,7 +220,8 @@
         "fast_mode",
         "lean_prompt",
         "refusal_fallback",
-        "opus_5_5_prompt_bundle"
+        "opus_5_5_prompt_bundle",
+        "total_tokens_reminder"
       ]
     },
     {
@@ -217,7 +238,8 @@
         "context_management",
         "lean_prompt",
         "fable_5_mitigations",
-        "refusal_fallback"
+        "refusal_fallback",
+        "total_tokens_reminder"
       ]
     },
     {
@@ -237,14 +259,17 @@
         "lean_prompt",
         "fable_5_mitigations",
         "refusal_fallback",
-        "fable_5_1_prompt_bundle"
+        "fable_5_1_prompt_bundle",
+        "total_tokens_reminder"
       ]
     },
     {
       "id": "claude-mythos-5",
       "family": "mythos",
       "display_name": "Mythos 5",
-      "capabilities": []
+      "capabilities": [
+        "total_tokens_reminder"
+      ]
     },
     {
       "id": "claude-mythos-5-1",
@@ -261,7 +286,8 @@
         "context_management",
         "lean_prompt",
         "fable_5_mitigations",
-        "fable_5_1_prompt_bundle"
+        "fable_5_1_prompt_bundle",
+        "total_tokens_reminder"
       ]
     }
   ],

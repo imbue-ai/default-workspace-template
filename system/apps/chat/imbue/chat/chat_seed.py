@@ -180,6 +180,12 @@ def seed_transcript(events: list[dict[str, Any]]) -> str:
     return "\n".join(blocks).replace(f"</{SEED_CONTEXT_TAG}>", f"</ {SEED_CONTEXT_TAG}>")
 
 
+def is_slash_command(message: str) -> bool:
+    """Whether a harness would run ``message`` as a command: only when the slash leads it, so anything put
+    ahead of such a message (a seed's context block) would turn the command into prose."""
+    return message.lstrip().startswith("/")
+
+
 def seed_context_message(chat_dir: Path, message: str) -> str:
     """A seeded chat's first send as its first agent receives it: the conversation, then the words.
 
@@ -193,7 +199,7 @@ def seed_context_message(chat_dir: Path, message: str) -> str:
     message as a command only when it begins with the slash, so a block ahead of it would turn the
     command into prose.
     """
-    if message.lstrip().startswith("/"):
+    if is_slash_command(message):
         return message
     events = read_seed_events(chat_dir)
     transcript = seed_transcript(events)

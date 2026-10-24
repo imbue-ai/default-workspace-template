@@ -1,8 +1,8 @@
 # Composing the user-facing messages
 
 These rules govern every user-facing message the update-self flow produces:
-the results message after the apply, the Step 4 customization hold, and a
-`stuck` result. Whenever the update cannot simply proceed, the message names
+the results message after the apply, the decision message a Step 4 hold ends
+on, a `stuck` result, and the note each paused chat gets when it resumes. Whenever the update cannot simply proceed, the message names
 the blocker in plain terms and **proposes a way forward, or invites the user to
 resolve it with you** -- it never dead-ends. What varies is how much mechanism
 to keep: the results message drops technical detail the user cannot act on; a
@@ -35,33 +35,72 @@ Write it for a non-technical reader skimming top to bottom, in this order:
 4. **Your customizations** -- anything the report classed intact-but-changed:
    what moved or changed (before/after, with the worker's evidence when the
    surface supports it) and the offer to restore the old arrangement. A
-   cannot-be-kept creation never reaches this message unresolved; it stopped
-   the pass at the Step 4 hold.
+   cannot-be-kept creation never reaches this message unresolved; it ended
+   the pass at the Step 4 hold, with the decision message instead.
 5. **Validation** -- did the suites pass; is any failure pre-existing or
    unrelated. When the worker's rule ran none of them (the update touched
    nothing of theirs), say that the release arrived exactly as it was shipped
    and tested -- never that checks ran and passed.
-6. **Caveats** -- only if any: rebuild-only items, incomplete provisioning, a
+6. **What I did to make room** -- only if any: every action the pass took on
+   the user's behalf under Step 1's licence, each with its undo still on
+   offer (below).
+7. **Caveats** -- only if any: rebuild-only items the running workspace still
+   lacks until a recreate (never one the report marks covered live: a
+   recreate would land in the same state), incomplete provisioning, a
    missing backup, unfinished work from an earlier update attempt that Step 3b
    set aside, a deviation the worker disclosed that could not be closed.
-7. **Pre-existing issues** -- only if any, and only after verifying
+8. **Pre-existing issues** -- only if any, and only after verifying
    attribution (worker guide §4a): whether each lives in **built-in** code
    (present at the target ref -> report upstream) or the **user's own** code.
    Never call built-in code "workspace-added".
-8. **The offer** -- see the language rules.
+9. **The offer** -- see the language rules.
 
 When the report marks a surface's merge work nontrivial (the system interface,
 a user app), name that surface, say what was reconciled, and attach the
 rollback offer to exactly that piece: the live workspace is the review surface,
 since the unattended pass stands up no previews.
 
+## What the pass did on the user's behalf
+
+The licence in SKILL.md Step 1 lets the pass act without asking; the results
+message is where the user learns of every such action, and how to undo it.
+List each, in plain terms:
+
+- **Each chat and background agent it paused** (the lines `run-status
+  stop-chats` printed): that it was paused for the update and has carried on,
+  and for a background agent, that its chat was told to pick it back up. Name
+  any that could not be started again, and that sending it a message brings it
+  back.
+- **Each background command that was stopped** with a paused chat: that it was
+  interrupted and its chat was told to run it again.
+- **Each cache, old worktree, or snapshot it pruned**, with what it held: a
+  cache refills on its own the next time it is needed; a worktree or snapshot
+  is gone, so say what was in it.
+- **The work-in-progress commit**: that unfinished work from other chats was
+  saved as it stood, so nothing was lost, and that you can split it up or put
+  it back uncommitted if they prefer.
+- **The browser or an app it stopped**: that it starts again the next time
+  they open it.
+
+## The resume note
+
+`run-status resume-chats` sends each chat the pass paused one note
+(`scripts/update_resume_note.py` composes it), so you never write it by hand.
+The chat shows the user only its summary line, as a notice labelled "Workspace
+updated" (or "Workspace update not applied" when the update did not land),
+saying the chat was paused for the update and is carrying on. The rest is for
+the chat's agent: the version that landed, that files may have changed so it
+should re-read before it continues, the commit that saved any uncommitted work,
+the background commands of its that were stopped, and the background agents of
+its that were started again and need a message to carry on.
+
 ## Language rules
 
 Include only what the user is likely to care about or have an opinion on. A
-deferred item with no consequence they can see (a rebuild-only flag that
-changes nothing until the workspace is someday recreated) is one line at most,
-or nothing; a change to something they built, or a decision they might have
-made differently, always makes the cut.
+deferred item with no consequence they can see (a pending-recreate item whose
+difference they would not notice) is one line at most, or nothing; a change to
+something they built, or a decision they might have made differently, always
+makes the cut.
 
 Detail in the informational sections (2-5); plain language at the decision
 points -- the headline, any caveat that needs the user's action, and the
@@ -86,10 +125,14 @@ report and logs under `data/.tasks/update-self/reports/`. Never leave the user
 at a dead end, and never hand them a failure too vague to be useful in a bug
 report.
 
-## The customization hold
+## The decision message
 
-From the user's point of view: what they built, what the update does to it,
-the worker's before/after evidence, and the concrete choices -- apply the
-update and lose it, skip the update, or the worker's best adaptation -- with a
-recommendation. Reassure that nothing has been applied and the workspace is
-untouched.
+What a Step 4 hold ends on. From the user's point of view: what they built,
+what the update does to it, the worker's before/after evidence, and the
+concrete choices -- apply the update and lose it, skip the update, or the
+worker's best adaptation -- with a recommendation. Reassure that nothing has
+been applied and the workspace is untouched, and that nothing is waiting on
+them: the workspace runs as usual, and whenever they answer here, the update
+picks up from where it stopped (`resuming-after-a-decision.md`). Name
+anything the pass did on their behalf before it stopped, as the results
+message would.

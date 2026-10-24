@@ -65,6 +65,7 @@ from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
 from imbue.system_interface.shell.route_helpers import request_identity
 from imbue.system_interface.shell.routes import register_shell_routes
 from imbue.system_interface.shell.state import ShellState
+from imbue.system_interface.shell.tour import ONBOARDING_MEDIA_ORIGIN
 from imbue.system_interface.update_staleness import PREVIEW_META_CONTENT
 from imbue.system_interface.update_staleness import PREVIEW_META_TAG
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
@@ -812,7 +813,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     # static assets explicitly below.
     application = Flask(__name__, static_folder=None)
     attach_state(application, state)
-    attach_document_policy(application)
+    attach_document_policy(application, {"img-src": f"'self' data: blob: {ONBOARDING_MEDIA_ORIGIN}"})
     application.register_error_handler(Exception, handle_unhandled_exception)
     sock = build_sock(application)
 

@@ -51,6 +51,7 @@ import type { GestureListener, GestureSource } from "../gestures/pointerGestures
 import { LivePagesLayer, WINDOW_ID_ATTRIBUTE } from "../pages/livePages";
 import type { MountPolicy } from "../pages/livePages";
 import type { DesktopStore } from "../store/DesktopStore";
+import type { TourController } from "../model/tour";
 import { AVATAR_DESIGN_PROMPT, AvatarChooserDialog } from "./AvatarChooserDialog";
 import { Backdrop } from "./Backdrop";
 import { DesktopSettingsDialog, isSameWallpaper } from "./DesktopSettingsDialog";
@@ -62,6 +63,7 @@ import { SNAP_PREVIEW_ATTRIBUTE, applySnapPreviewStyle } from "./SnapPreview";
 import { PhoneLayout, phoneMountPolicy } from "./phone/PhoneLayout";
 import { SoloView } from "./SoloView";
 import { Taskbar } from "./Taskbar";
+import { TourCard } from "./TourCard";
 import type { WindowControl } from "./TitleBar";
 import { UpdateNoticeBanner } from "./UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "./UpdateStalenessBanner";
@@ -138,6 +140,8 @@ interface AvatarChooserState {
 export interface AppAttrs {
   readonly store: DesktopStore;
   readonly gestures: GestureSource;
+  /** The show-around tour: what it shows, and the row that runs it. */
+  readonly tour: TourController;
   /** The shell document's host and protocol, which every page URL derives from. */
   readonly host: string;
   readonly protocol: string;
@@ -173,6 +177,7 @@ export function App(): m.Component<AppAttrs> {
   let gestureRoot: HTMLElement | null = null;
   let uninstallContextMenu: (() => void) | null = null;
   let store: DesktopStore | null = null;
+  let tour: TourController | null = null;
 
   // The one menu the desktop ever has open. Which menu it is and what it was opened for is
   // ``openMenu``; opening, placing, dismissing and closing are the component's, and its
@@ -885,7 +890,20 @@ export function App(): m.Component<AppAttrs> {
       case "text":
         void current.runFreeText(row.app.name, row.launchPath.id, row.text);
         return;
+      case "tour":
+        tour?.start();
+        return;
     }
+  }
+
+  /** The tour's card or exit badge over the desktop, while one is shown. */
+  function tourCardView(current: DesktopStore, shownTour: TourController): m.Children {
+    if (shownTour.getState().phase === "idle") return null;
+    return m(TourCard, {
+      tour: shownTour,
+      avatarDesign: current.getState().avatar.design,
+      openLink: (url) => void current.openLink(url, window.location.host, SHELL_APP_NAME),
+    });
   }
 
   function runHighlightedRow(current: DesktopStore): void {
@@ -987,6 +1005,7 @@ export function App(): m.Component<AppAttrs> {
     view(vnode) {
       const current = vnode.attrs.store;
       store = current;
+      tour = vnode.attrs.tour;
       const state = current.getState();
       const soloWindowId = current.getSoloWindowId();
       if (soloWindowId !== null) {
@@ -1173,6 +1192,7 @@ export function App(): m.Component<AppAttrs> {
           settingsDialog === null ? null : settingsDialogView(current, settingsDialog),
           replacedDesktopNotice(current),
           avatarChooser === null ? null : avatarChooserView(current, avatarChooser),
+          tourCardView(current, vnode.attrs.tour),
         ],
       );
     },

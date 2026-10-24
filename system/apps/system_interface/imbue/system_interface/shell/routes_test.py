@@ -726,7 +726,7 @@ def test_a_pinned_window_first_shows_at_the_pinned_frame_and_a_restore_writes_it
     (placement,) = client.get("/api/placements/home?client=c1").get_json()["placements"]
     assert placement["window_id"] == pinned["id"]
     assert placement["is_minimized"] is True
-    assert placement["frame"] == {"x": 0.46, "y": 0.05, "width": 0.5, "height": 0.9}
+    assert placement["frame"] == {"x": 0.05, "y": 0.05, "width": 0.9, "height": 0.9}
     answer = client.post(
         "/api/layout/broadcast",
         json={"op": "restore", "args": {"window": pinned["id"], "client": "c1"}, "requester": None},
@@ -734,7 +734,7 @@ def test_a_pinned_window_first_shows_at_the_pinned_frame_and_a_restore_writes_it
     assert answer.status_code == 200
     (written,) = client.get("/api/placements/home?client=c1").get_json()["placements"]
     assert written["is_minimized"] is False
-    assert written["frame"] == {"x": 0.46, "y": 0.05, "width": 0.5, "height": 0.9}
+    assert written["frame"] == {"x": 0.05, "y": 0.05, "width": 0.9, "height": 0.9}
 
 
 def test_an_independent_window_keeps_a_path_per_client_and_its_shared_path_stays_the_home_path(
@@ -2717,3 +2717,17 @@ def test_an_open_op_at_a_post_launch_path_posts_for_its_page_with_and_without_a_
     assert unplaced.status_code == 200, unplaced.get_json()
     assert unplaced.get_json()["client_id"] is None
     assert poster.posts[1].body == {"target": "new_chat", "message": "later"}
+
+
+def test_the_tour_record_is_unseen_until_posted_and_round_trips(client: FlaskClient) -> None:
+    assert client.get("/api/tour").get_json() == {"is_seen": False, "resume_index": None}
+    assert client.post("/api/tour", json={"is_seen": True}).get_json() == {"is_seen": True, "resume_index": None}
+    assert client.post("/api/tour", json={"is_seen": True, "resume_index": 3}).get_json() == {
+        "is_seen": True,
+        "resume_index": 3,
+    }
+    assert client.get("/api/tour").get_json() == {"is_seen": True, "resume_index": 3}
+    assert client.post("/api/tour", json={"is_seen": False}).get_json() == {"is_seen": False, "resume_index": None}
+    assert client.post("/api/tour", json={"is_seen": "not a flag"}).status_code == 400
+    assert client.post("/api/tour", json={"is_seen": True, "resume_index": "three"}).status_code == 400
+    assert client.post("/api/tour", json={"is_seen": True, "resume_index": -1}).status_code == 400

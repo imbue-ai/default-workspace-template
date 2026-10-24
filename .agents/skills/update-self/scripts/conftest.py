@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from agents_testing import FakeAgents
 from messenger_testing import RecordingMessengers
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -50,3 +51,16 @@ def recording_messengers(
     messengers = RecordingMessengers(bin_dir, tmp_path / "messenger-calls.jsonl")
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     return messengers
+
+
+@pytest.fixture
+def fake_agents(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeAgents:
+    """The workspace's agents behind a fake ``mngr`` on PATH, with a recording chat messenger
+    in the ``tmp_path`` tree; the lead is ``update-to-minds-v0-9-0`` (``agent-lead``)."""
+    bin_dir = tmp_path / "fake-agents-bin"
+    agents = FakeAgents(bin_dir, tmp_path, tmp_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-lead")
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-to-minds-v0-9-0")
+    monkeypatch.setenv("MINDS_CHAT_ID", "agent-lead")
+    return agents

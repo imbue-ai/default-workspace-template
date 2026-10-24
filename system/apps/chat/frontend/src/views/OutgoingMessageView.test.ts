@@ -32,4 +32,20 @@ describe("the optimistic outgoing bubble", () => {
     expect(rows).toHaveLength(2);
     expect(rows.every((row) => row.classList.contains("mb-5"))).toBe(true);
   });
+
+  it("draws a message the backend decided is a notice (a held background-task report) as that notice", () => {
+    const chatId = `agent-${Math.random().toString(36).slice(2)}`;
+    addOutgoing(
+      chatId,
+      "<background-task-report>\n<summary>Build (finished)</summary>\nbuilt\n</background-task-report>",
+      "m-report",
+      { display: "notice", display_label: "Background task", display_body: "Build (finished)" },
+    );
+    const root = document.createElement("div");
+
+    m.render(root, renderOutgoingMessages(chatId));
+
+    expect(root.querySelector(".message-notice")?.textContent).toBe("Background task: Build (finished)");
+    expect(root.querySelector(".message-user-bubble")).toBeNull();
+  });
 });
